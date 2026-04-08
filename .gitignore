@@ -1,0 +1,17 @@
+bin/
+coverage.out
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+.env
+.env.*
+ui/dist/
+ui/node_modules/
+internal/api/ui/dist/
+vendor/
+*.test
+__debug_bin*
+.DS_Store
+architecture/

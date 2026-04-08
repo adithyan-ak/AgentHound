@@ -1,0 +1,189 @@
+{
+  "meta": {
+    "version": 1,
+    "type": "agenthound-ingest",
+    "collector": "config",
+    "collector_version": "0.1.0",
+    "timestamp": "2026-04-07T09:00:00Z",
+    "scan_id": "scan-config-001"
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "sha256:55ded6ce9a6992962ab8989d228fccd4a1ba9d2c8bf241bec3c5f8e9523f5397",
+        "kinds": ["ConfigFile"],
+        "properties": {
+          "path": "/Users/dev/.config/claude/claude_desktop_config.json",
+          "client": "claude-desktop",
+          "server_count": 2,
+          "objectid": "sha256:55ded6ce9a6992962ab8989d228fccd4a1ba9d2c8bf241bec3c5f8e9523f5397"
+        }
+      },
+      {
+        "id": "sha256:55555669cfdb8a62247a7d5b857df9dfbac760df7330fdf454b07e422ea384d4",
+        "kinds": ["AgentInstance"],
+        "properties": {
+          "name": "claude-desktop",
+          "framework": "claude",
+          "config_path": "/Users/dev/.config/claude/claude_desktop_config.json",
+          "objectid": "sha256:55555669cfdb8a62247a7d5b857df9dfbac760df7330fdf454b07e422ea384d4"
+        }
+      },
+      {
+        "id": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "kinds": ["MCPServer"],
+        "properties": {
+          "name": "postgres-server",
+          "endpoint": "npx",
+          "transport": "stdio",
+          "auth_method": "apiKey",
+          "is_pinned": false,
+          "objectid": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a"
+        }
+      },
+      {
+        "id": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3",
+        "kinds": ["MCPServer"],
+        "properties": {
+          "name": "slack-server",
+          "endpoint": "npx",
+          "transport": "stdio",
+          "auth_method": "none",
+          "is_pinned": false,
+          "objectid": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3"
+        }
+      },
+      {
+        "id": "sha256:54f40d14e157405da76434d4b84b46d25e0705309db224694439a463d1cb3867",
+        "kinds": ["Identity"],
+        "properties": {
+          "type": "apiKey",
+          "scope": "postgres-access",
+          "is_static": true,
+          "objectid": "sha256:54f40d14e157405da76434d4b84b46d25e0705309db224694439a463d1cb3867"
+        }
+      },
+      {
+        "id": "sha256:3911bb77e94767de23f943d45df97118c1ac33e0221194f6f433022d8dac22c7",
+        "kinds": ["Credential"],
+        "properties": {
+          "type": "envVar",
+          "name": "POSTGRES_API_KEY",
+          "source": "/Users/dev/.config/claude/claude_desktop_config.json",
+          "is_exposed": false,
+          "high_entropy": true,
+          "objectid": "sha256:3911bb77e94767de23f943d45df97118c1ac33e0221194f6f433022d8dac22c7"
+        }
+      },
+      {
+        "id": "sha256:e064ba278c66ee6985b52020aba0cd6fc426a8a1369191333fd6fdae688acd3a",
+        "kinds": ["Host"],
+        "properties": {
+          "hostname": "localhost",
+          "is_local": true,
+          "is_private": true,
+          "is_public": false,
+          "objectid": "sha256:e064ba278c66ee6985b52020aba0cd6fc426a8a1369191333fd6fdae688acd3a"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "source": "sha256:55555669cfdb8a62247a7d5b857df9dfbac760df7330fdf454b07e422ea384d4",
+        "target": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "kind": "TRUSTS_SERVER",
+        "properties": {
+          "scan_id": "scan-config-001",
+          "last_seen": "2026-04-07T09:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.3,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:55555669cfdb8a62247a7d5b857df9dfbac760df7330fdf454b07e422ea384d4",
+        "target": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3",
+        "kind": "TRUSTS_SERVER",
+        "properties": {
+          "scan_id": "scan-config-001",
+          "last_seen": "2026-04-07T09:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.1,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "target": "sha256:55ded6ce9a6992962ab8989d228fccd4a1ba9d2c8bf241bec3c5f8e9523f5397",
+        "kind": "CONFIGURED_IN",
+        "properties": {
+          "scan_id": "scan-config-001",
+          "last_seen": "2026-04-07T09:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.0,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3",
+        "target": "sha256:55ded6ce9a6992962ab8989d228fccd4a1ba9d2c8bf241bec3c5f8e9523f5397",
+        "kind": "CONFIGURED_IN",
+        "properties": {
+          "scan_id": "scan-config-001",
+          "last_seen": "2026-04-07T09:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.0,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "target": "sha256:54f40d14e157405da76434d4b84b46d25e0705309db224694439a463d1cb3867",
+        "kind": "AUTHENTICATES_WITH",
+        "properties": {
+          "scan_id": "scan-config-001",
+          "last_seen": "2026-04-07T09:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.3,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:54f40d14e157405da76434d4b84b46d25e0705309db224694439a463d1cb3867",
+        "target": "sha256:3911bb77e94767de23f943d45df97118c1ac33e0221194f6f433022d8dac22c7",
+        "kind": "USES_CREDENTIAL",
+        "properties": {
+          "scan_id": "scan-config-001",
+          "last_seen": "2026-04-07T09:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.5,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "target": "sha256:e064ba278c66ee6985b52020aba0cd6fc426a8a1369191333fd6fdae688acd3a",
+        "kind": "RUNS_ON",
+        "properties": {
+          "scan_id": "scan-config-001",
+          "last_seen": "2026-04-07T09:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.0,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3",
+        "target": "sha256:e064ba278c66ee6985b52020aba0cd6fc426a8a1369191333fd6fdae688acd3a",
+        "kind": "RUNS_ON",
+        "properties": {
+          "scan_id": "scan-config-001",
+          "last_seen": "2026-04-07T09:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.0,
+          "is_composite": false
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,144 @@
+{
+  "meta": {
+    "version": 1,
+    "type": "agenthound-ingest",
+    "collector": "a2a",
+    "collector_version": "0.1.0",
+    "timestamp": "2026-04-07T11:00:00Z",
+    "scan_id": "scan-a2a-001"
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1",
+        "kinds": ["A2AAgent"],
+        "properties": {
+          "name": "research-agent",
+          "description": "An AI agent that performs web research and document summarization",
+          "url": "https://research.example.com",
+          "provider": "ExampleCorp",
+          "version": "1.0.0",
+          "protocol_versions": ["0.3.0", "1.0"],
+          "capabilities": ["streaming", "pushNotifications"],
+          "security_schemes": ["apiKey"],
+          "auth_method": "apiKey",
+          "is_signed": true,
+          "signature_valid": true,
+          "card_hash": "d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5",
+          "objectid": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1"
+        }
+      },
+      {
+        "id": "sha256:f29d41afd3993adb0740cf7f7c3f302033e31316c541d57c2b1d2254eb6fbc64",
+        "kinds": ["A2AAgent"],
+        "properties": {
+          "name": "crawler-agent",
+          "description": "An AI agent that crawls web pages and extracts structured data",
+          "url": "https://crawler.example.com",
+          "provider": "ExampleCorp",
+          "version": "0.9.0",
+          "protocol_versions": ["0.3.0"],
+          "capabilities": ["streaming"],
+          "security_schemes": ["none"],
+          "auth_method": "none",
+          "is_signed": false,
+          "signature_valid": false,
+          "card_hash": "e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6",
+          "objectid": "sha256:f29d41afd3993adb0740cf7f7c3f302033e31316c541d57c2b1d2254eb6fbc64"
+        }
+      },
+      {
+        "id": "sha256:71cb852609a93c46e4056ddcc5fa594a92973b1b40ef64acafb871bfb90cff44",
+        "kinds": ["A2ASkill"],
+        "properties": {
+          "id": "web-research",
+          "name": "Web Research",
+          "description": "Search the web and synthesize findings into a structured report",
+          "input_modes": ["text/plain"],
+          "output_modes": ["text/plain", "application/json"],
+          "description_hash": "f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1",
+          "has_injection_patterns": false,
+          "objectid": "sha256:71cb852609a93c46e4056ddcc5fa594a92973b1b40ef64acafb871bfb90cff44"
+        }
+      },
+      {
+        "id": "sha256:1ae605b1d92096ac3219d2d2fe89a4bc22c53f3afbf6c1f849e2b2a5ff4e1f01",
+        "kinds": ["A2ASkill"],
+        "properties": {
+          "id": "summarize-docs",
+          "name": "Document Summarization",
+          "description": "Summarize documents and extract key insights",
+          "input_modes": ["text/plain", "application/pdf"],
+          "output_modes": ["text/plain"],
+          "description_hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+          "has_injection_patterns": false,
+          "objectid": "sha256:1ae605b1d92096ac3219d2d2fe89a4bc22c53f3afbf6c1f849e2b2a5ff4e1f01"
+        }
+      },
+      {
+        "id": "sha256:bbbf6ea338f40203f99d7f2f980812a47d0b452e157dc2349e40e10a99383d8f",
+        "kinds": ["A2ASkill"],
+        "properties": {
+          "id": "crawl-page",
+          "name": "Page Crawler",
+          "description": "Crawl a web page and extract structured data",
+          "input_modes": ["text/plain"],
+          "output_modes": ["application/json"],
+          "description_hash": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
+          "has_injection_patterns": false,
+          "objectid": "sha256:bbbf6ea338f40203f99d7f2f980812a47d0b452e157dc2349e40e10a99383d8f"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "source": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1",
+        "target": "sha256:71cb852609a93c46e4056ddcc5fa594a92973b1b40ef64acafb871bfb90cff44",
+        "kind": "ADVERTISES_SKILL",
+        "properties": {
+          "scan_id": "scan-a2a-001",
+          "last_seen": "2026-04-07T11:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.1,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1",
+        "target": "sha256:1ae605b1d92096ac3219d2d2fe89a4bc22c53f3afbf6c1f849e2b2a5ff4e1f01",
+        "kind": "ADVERTISES_SKILL",
+        "properties": {
+          "scan_id": "scan-a2a-001",
+          "last_seen": "2026-04-07T11:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.1,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:f29d41afd3993adb0740cf7f7c3f302033e31316c541d57c2b1d2254eb6fbc64",
+        "target": "sha256:bbbf6ea338f40203f99d7f2f980812a47d0b452e157dc2349e40e10a99383d8f",
+        "kind": "ADVERTISES_SKILL",
+        "properties": {
+          "scan_id": "scan-a2a-001",
+          "last_seen": "2026-04-07T11:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.1,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1",
+        "target": "sha256:f29d41afd3993adb0740cf7f7c3f302033e31316c541d57c2b1d2254eb6fbc64",
+        "kind": "DELEGATES_TO",
+        "properties": {
+          "scan_id": "scan-a2a-001",
+          "last_seen": "2026-04-07T11:00:00Z",
+          "confidence": 0.9,
+          "risk_weight": 0.1,
+          "is_composite": false
+        }
+      }
+    ]
+  }
+}

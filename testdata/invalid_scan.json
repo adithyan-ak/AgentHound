@@ -1,0 +1,54 @@
+{
+  "meta": {
+    "version": 1,
+    "type": "wrong",
+    "collector": "config",
+    "collector_version": "0.1.0",
+    "timestamp": "2026-04-07T12:00:00Z",
+    "scan_id": "scan-invalid-001"
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "",
+        "kinds": ["MCPServer"],
+        "properties": {
+          "name": "empty-id-server",
+          "objectid": ""
+        }
+      },
+      {
+        "id": "sha256:aabbccdd",
+        "kinds": ["NotANode"],
+        "properties": {
+          "name": "invalid-kind-node",
+          "objectid": "sha256:aabbccdd"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "source": "sha256:aabbccdd",
+        "target": "sha256:eeff0011",
+        "kind": "FAKE_EDGE",
+        "properties": {
+          "scan_id": "scan-invalid-001",
+          "last_seen": "2026-04-07T12:00:00Z",
+          "confidence": 1.0,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:aabbccdd",
+        "target": "",
+        "kind": "PROVIDES_TOOL",
+        "properties": {
+          "scan_id": "scan-invalid-001",
+          "last_seen": "2026-04-07T12:00:00Z",
+          "confidence": 1.0,
+          "is_composite": false
+        }
+      }
+    ]
+  }
+}

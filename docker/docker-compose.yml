@@ -1,0 +1,58 @@
+services:
+  graph-db:
+    image: neo4j:4.4-community
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/agenthound
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+      NEO4J_dbms_memory_heap_initial__size: 512m
+      NEO4J_dbms_memory_heap_max__size: 1G
+    volumes:
+      - neo4j-data:/data
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "agenthound", "RETURN 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app-db:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: agenthound
+      POSTGRES_PASSWORD: agenthound
+      POSTGRES_DB: agenthound
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agenthound"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  agenthound:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      AGENTHOUND_NEO4J_URI: bolt://graph-db:7687
+      AGENTHOUND_NEO4J_USER: neo4j
+      AGENTHOUND_NEO4J_PASSWORD: agenthound
+      AGENTHOUND_PG_URI: postgres://agenthound:agenthound@app-db:5432/agenthound?sslmode=disable
+      AGENTHOUND_API_PORT: "8080"
+      AGENTHOUND_LOG_LEVEL: info
+    depends_on:
+      graph-db:
+        condition: service_healthy
+      app-db:
+        condition: service_healthy
+
+volumes:
+  neo4j-data:
+  pg-data:

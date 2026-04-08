@@ -1,0 +1,132 @@
+{
+  "meta": {
+    "version": 1,
+    "type": "agenthound-ingest",
+    "collector": "mcp",
+    "collector_version": "0.1.0",
+    "timestamp": "2026-04-07T10:00:00Z",
+    "scan_id": "scan-mcp-001"
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "kinds": ["MCPServer"],
+        "properties": {
+          "name": "postgres-server",
+          "endpoint": "npx",
+          "transport": "stdio",
+          "protocol_version": "2025-03-26",
+          "instructions": "PostgreSQL database access server",
+          "capabilities": ["tools", "resources"],
+          "is_pinned": false,
+          "objectid": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a"
+        }
+      },
+      {
+        "id": "sha256:c7643babec3a0e4decac50b10f5ac55c447889fafa7111db7396ce9e84e798d1",
+        "kinds": ["MCPTool"],
+        "properties": {
+          "name": "execute_sql",
+          "description": "Execute a SQL query against the connected PostgreSQL database",
+          "input_schema": "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}",
+          "description_hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+          "capability_surface": ["database_access"],
+          "has_injection_patterns": false,
+          "has_cross_references": false,
+          "objectid": "sha256:c7643babec3a0e4decac50b10f5ac55c447889fafa7111db7396ce9e84e798d1"
+        }
+      },
+      {
+        "id": "sha256:c92f8070b897a5dfd92b63ccf36bf5a7354bf28f8f8a2fadcf58b3ebbe163838",
+        "kinds": ["MCPTool"],
+        "properties": {
+          "name": "list_tables",
+          "description": "List all tables in the connected PostgreSQL database",
+          "input_schema": "{\"type\":\"object\",\"properties\":{}}",
+          "description_hash": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
+          "capability_surface": ["database_access"],
+          "has_injection_patterns": false,
+          "has_cross_references": false,
+          "objectid": "sha256:c92f8070b897a5dfd92b63ccf36bf5a7354bf28f8f8a2fadcf58b3ebbe163838"
+        }
+      },
+      {
+        "id": "sha256:7d2feed0e1c6dac8d78d92959042d1d2ebfc53f95c74dc7ea301c19eabc804f3",
+        "kinds": ["MCPTool"],
+        "properties": {
+          "name": "get_schema",
+          "description": "Get the schema of a specific table in the PostgreSQL database",
+          "input_schema": "{\"type\":\"object\",\"properties\":{\"table\":{\"type\":\"string\"}},\"required\":[\"table\"]}",
+          "description_hash": "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+          "capability_surface": ["database_access"],
+          "has_injection_patterns": false,
+          "has_cross_references": false,
+          "objectid": "sha256:7d2feed0e1c6dac8d78d92959042d1d2ebfc53f95c74dc7ea301c19eabc804f3"
+        }
+      },
+      {
+        "id": "sha256:c09c8a9fc626c6441d26f56147c073d644d38a12931bdd4cd524fe6ef647af55",
+        "kinds": ["MCPResource"],
+        "properties": {
+          "uri": "postgres://prod-db:5432/customers",
+          "name": "customers-database",
+          "mime_type": "application/x-postgresql",
+          "uri_scheme": "postgres",
+          "sensitivity": "critical",
+          "objectid": "sha256:c09c8a9fc626c6441d26f56147c073d644d38a12931bdd4cd524fe6ef647af55"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "target": "sha256:c7643babec3a0e4decac50b10f5ac55c447889fafa7111db7396ce9e84e798d1",
+        "kind": "PROVIDES_TOOL",
+        "properties": {
+          "scan_id": "scan-mcp-001",
+          "last_seen": "2026-04-07T10:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.1,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "target": "sha256:c92f8070b897a5dfd92b63ccf36bf5a7354bf28f8f8a2fadcf58b3ebbe163838",
+        "kind": "PROVIDES_TOOL",
+        "properties": {
+          "scan_id": "scan-mcp-001",
+          "last_seen": "2026-04-07T10:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.1,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "target": "sha256:7d2feed0e1c6dac8d78d92959042d1d2ebfc53f95c74dc7ea301c19eabc804f3",
+        "kind": "PROVIDES_TOOL",
+        "properties": {
+          "scan_id": "scan-mcp-001",
+          "last_seen": "2026-04-07T10:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.1,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "target": "sha256:c09c8a9fc626c6441d26f56147c073d644d38a12931bdd4cd524fe6ef647af55",
+        "kind": "PROVIDES_RESOURCE",
+        "properties": {
+          "scan_id": "scan-mcp-001",
+          "last_seen": "2026-04-07T10:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.2,
+          "is_composite": false
+        }
+      }
+    ]
+  }
+}

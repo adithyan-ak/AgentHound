@@ -1,0 +1,422 @@
+{
+  "meta": {
+    "version": 1,
+    "type": "agenthound-ingest",
+    "collector": "config",
+    "collector_version": "0.1.0",
+    "timestamp": "2026-04-07T12:00:00Z",
+    "scan_id": "scan-merged-001"
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "sha256:55ded6ce9a6992962ab8989d228fccd4a1ba9d2c8bf241bec3c5f8e9523f5397",
+        "kinds": ["ConfigFile"],
+        "properties": {
+          "path": "/Users/dev/.config/claude/claude_desktop_config.json",
+          "client": "claude-desktop",
+          "server_count": 2,
+          "objectid": "sha256:55ded6ce9a6992962ab8989d228fccd4a1ba9d2c8bf241bec3c5f8e9523f5397"
+        }
+      },
+      {
+        "id": "sha256:55555669cfdb8a62247a7d5b857df9dfbac760df7330fdf454b07e422ea384d4",
+        "kinds": ["AgentInstance"],
+        "properties": {
+          "name": "claude-desktop",
+          "framework": "claude",
+          "config_path": "/Users/dev/.config/claude/claude_desktop_config.json",
+          "objectid": "sha256:55555669cfdb8a62247a7d5b857df9dfbac760df7330fdf454b07e422ea384d4"
+        }
+      },
+      {
+        "id": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "kinds": ["MCPServer"],
+        "properties": {
+          "name": "postgres-server",
+          "endpoint": "npx",
+          "transport": "stdio",
+          "auth_method": "apiKey",
+          "protocol_version": "2025-03-26",
+          "instructions": "PostgreSQL database access server",
+          "capabilities": ["tools", "resources"],
+          "is_pinned": false,
+          "objectid": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a"
+        }
+      },
+      {
+        "id": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3",
+        "kinds": ["MCPServer"],
+        "properties": {
+          "name": "slack-server",
+          "endpoint": "npx",
+          "transport": "stdio",
+          "auth_method": "none",
+          "is_pinned": false,
+          "objectid": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3"
+        }
+      },
+      {
+        "id": "sha256:54f40d14e157405da76434d4b84b46d25e0705309db224694439a463d1cb3867",
+        "kinds": ["Identity"],
+        "properties": {
+          "type": "apiKey",
+          "scope": "postgres-access",
+          "is_static": true,
+          "objectid": "sha256:54f40d14e157405da76434d4b84b46d25e0705309db224694439a463d1cb3867"
+        }
+      },
+      {
+        "id": "sha256:3911bb77e94767de23f943d45df97118c1ac33e0221194f6f433022d8dac22c7",
+        "kinds": ["Credential"],
+        "properties": {
+          "type": "envVar",
+          "name": "POSTGRES_API_KEY",
+          "source": "/Users/dev/.config/claude/claude_desktop_config.json",
+          "is_exposed": false,
+          "high_entropy": true,
+          "objectid": "sha256:3911bb77e94767de23f943d45df97118c1ac33e0221194f6f433022d8dac22c7"
+        }
+      },
+      {
+        "id": "sha256:e064ba278c66ee6985b52020aba0cd6fc426a8a1369191333fd6fdae688acd3a",
+        "kinds": ["Host"],
+        "properties": {
+          "hostname": "localhost",
+          "is_local": true,
+          "is_private": true,
+          "is_public": false,
+          "objectid": "sha256:e064ba278c66ee6985b52020aba0cd6fc426a8a1369191333fd6fdae688acd3a"
+        }
+      },
+      {
+        "id": "sha256:c7643babec3a0e4decac50b10f5ac55c447889fafa7111db7396ce9e84e798d1",
+        "kinds": ["MCPTool"],
+        "properties": {
+          "name": "execute_sql",
+          "description": "Execute a SQL query against the connected PostgreSQL database",
+          "input_schema": "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}",
+          "description_hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+          "capability_surface": ["database_access"],
+          "has_injection_patterns": false,
+          "has_cross_references": false,
+          "objectid": "sha256:c7643babec3a0e4decac50b10f5ac55c447889fafa7111db7396ce9e84e798d1"
+        }
+      },
+      {
+        "id": "sha256:c92f8070b897a5dfd92b63ccf36bf5a7354bf28f8f8a2fadcf58b3ebbe163838",
+        "kinds": ["MCPTool"],
+        "properties": {
+          "name": "list_tables",
+          "description": "List all tables in the connected PostgreSQL database",
+          "input_schema": "{\"type\":\"object\",\"properties\":{}}",
+          "description_hash": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
+          "capability_surface": ["database_access"],
+          "has_injection_patterns": false,
+          "has_cross_references": false,
+          "objectid": "sha256:c92f8070b897a5dfd92b63ccf36bf5a7354bf28f8f8a2fadcf58b3ebbe163838"
+        }
+      },
+      {
+        "id": "sha256:7d2feed0e1c6dac8d78d92959042d1d2ebfc53f95c74dc7ea301c19eabc804f3",
+        "kinds": ["MCPTool"],
+        "properties": {
+          "name": "get_schema",
+          "description": "Get the schema of a specific table in the PostgreSQL database",
+          "input_schema": "{\"type\":\"object\",\"properties\":{\"table\":{\"type\":\"string\"}},\"required\":[\"table\"]}",
+          "description_hash": "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+          "capability_surface": ["database_access"],
+          "has_injection_patterns": false,
+          "has_cross_references": false,
+          "objectid": "sha256:7d2feed0e1c6dac8d78d92959042d1d2ebfc53f95c74dc7ea301c19eabc804f3"
+        }
+      },
+      {
+        "id": "sha256:c09c8a9fc626c6441d26f56147c073d644d38a12931bdd4cd524fe6ef647af55",
+        "kinds": ["MCPResource"],
+        "properties": {
+          "uri": "postgres://prod-db:5432/customers",
+          "name": "customers-database",
+          "mime_type": "application/x-postgresql",
+          "uri_scheme": "postgres",
+          "sensitivity": "critical",
+          "objectid": "sha256:c09c8a9fc626c6441d26f56147c073d644d38a12931bdd4cd524fe6ef647af55"
+        }
+      },
+      {
+        "id": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1",
+        "kinds": ["A2AAgent"],
+        "properties": {
+          "name": "research-agent",
+          "description": "An AI agent that performs web research and document summarization",
+          "url": "https://research.example.com",
+          "provider": "ExampleCorp",
+          "version": "1.0.0",
+          "protocol_versions": ["0.3.0", "1.0"],
+          "capabilities": ["streaming", "pushNotifications"],
+          "security_schemes": ["apiKey"],
+          "auth_method": "apiKey",
+          "is_signed": true,
+          "signature_valid": true,
+          "card_hash": "d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5",
+          "objectid": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1"
+        }
+      },
+      {
+        "id": "sha256:f29d41afd3993adb0740cf7f7c3f302033e31316c541d57c2b1d2254eb6fbc64",
+        "kinds": ["A2AAgent"],
+        "properties": {
+          "name": "crawler-agent",
+          "description": "An AI agent that crawls web pages and extracts structured data",
+          "url": "https://crawler.example.com",
+          "provider": "ExampleCorp",
+          "version": "0.9.0",
+          "protocol_versions": ["0.3.0"],
+          "capabilities": ["streaming"],
+          "security_schemes": ["none"],
+          "auth_method": "none",
+          "is_signed": false,
+          "signature_valid": false,
+          "card_hash": "e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6",
+          "objectid": "sha256:f29d41afd3993adb0740cf7f7c3f302033e31316c541d57c2b1d2254eb6fbc64"
+        }
+      },
+      {
+        "id": "sha256:71cb852609a93c46e4056ddcc5fa594a92973b1b40ef64acafb871bfb90cff44",
+        "kinds": ["A2ASkill"],
+        "properties": {
+          "id": "web-research",
+          "name": "Web Research",
+          "description": "Search the web and synthesize findings into a structured report",
+          "input_modes": ["text/plain"],
+          "output_modes": ["text/plain", "application/json"],
+          "description_hash": "f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1",
+          "has_injection_patterns": false,
+          "objectid": "sha256:71cb852609a93c46e4056ddcc5fa594a92973b1b40ef64acafb871bfb90cff44"
+        }
+      },
+      {
+        "id": "sha256:1ae605b1d92096ac3219d2d2fe89a4bc22c53f3afbf6c1f849e2b2a5ff4e1f01",
+        "kinds": ["A2ASkill"],
+        "properties": {
+          "id": "summarize-docs",
+          "name": "Document Summarization",
+          "description": "Summarize documents and extract key insights",
+          "input_modes": ["text/plain", "application/pdf"],
+          "output_modes": ["text/plain"],
+          "description_hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+          "has_injection_patterns": false,
+          "objectid": "sha256:1ae605b1d92096ac3219d2d2fe89a4bc22c53f3afbf6c1f849e2b2a5ff4e1f01"
+        }
+      },
+      {
+        "id": "sha256:bbbf6ea338f40203f99d7f2f980812a47d0b452e157dc2349e40e10a99383d8f",
+        "kinds": ["A2ASkill"],
+        "properties": {
+          "id": "crawl-page",
+          "name": "Page Crawler",
+          "description": "Crawl a web page and extract structured data",
+          "input_modes": ["text/plain"],
+          "output_modes": ["application/json"],
+          "description_hash": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
+          "has_injection_patterns": false,
+          "objectid": "sha256:bbbf6ea338f40203f99d7f2f980812a47d0b452e157dc2349e40e10a99383d8f"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "source": "sha256:55555669cfdb8a62247a7d5b857df9dfbac760df7330fdf454b07e422ea384d4",
+        "target": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "kind": "TRUSTS_SERVER",
+        "properties": {
+          "scan_id": "scan-merged-001",
+          "last_seen": "2026-04-07T12:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.3,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:55555669cfdb8a62247a7d5b857df9dfbac760df7330fdf454b07e422ea384d4",
+        "target": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3",
+        "kind": "TRUSTS_SERVER",
+        "properties": {
+          "scan_id": "scan-merged-001",
+          "last_seen": "2026-04-07T12:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.1,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "target": "sha256:55ded6ce9a6992962ab8989d228fccd4a1ba9d2c8bf241bec3c5f8e9523f5397",
+        "kind": "CONFIGURED_IN",
+        "properties": {
+          "scan_id": "scan-merged-001",
+          "last_seen": "2026-04-07T12:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.0,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3",
+        "target": "sha256:55ded6ce9a6992962ab8989d228fccd4a1ba9d2c8bf241bec3c5f8e9523f5397",
+        "kind": "CONFIGURED_IN",
+        "properties": {
+          "scan_id": "scan-merged-001",
+          "last_seen": "2026-04-07T12:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.0,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "target": "sha256:54f40d14e157405da76434d4b84b46d25e0705309db224694439a463d1cb3867",
+        "kind": "AUTHENTICATES_WITH",
+        "properties": {
+          "scan_id": "scan-merged-001",
+          "last_seen": "2026-04-07T12:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.3,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:54f40d14e157405da76434d4b84b46d25e0705309db224694439a463d1cb3867",
+        "target": "sha256:3911bb77e94767de23f943d45df97118c1ac33e0221194f6f433022d8dac22c7",
+        "kind": "USES_CREDENTIAL",
+        "properties": {
+          "scan_id": "scan-merged-001",
+          "last_seen": "2026-04-07T12:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.5,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "target": "sha256:e064ba278c66ee6985b52020aba0cd6fc426a8a1369191333fd6fdae688acd3a",
+        "kind": "RUNS_ON",
+        "properties": {
+          "scan_id": "scan-merged-001",
+          "last_seen": "2026-04-07T12:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.0,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3",
+        "target": "sha256:e064ba278c66ee6985b52020aba0cd6fc426a8a1369191333fd6fdae688acd3a",
+        "kind": "RUNS_ON",
+        "properties": {
+          "scan_id": "scan-merged-001",
+          "last_seen": "2026-04-07T12:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.0,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "target": "sha256:c7643babec3a0e4decac50b10f5ac55c447889fafa7111db7396ce9e84e798d1",
+        "kind": "PROVIDES_TOOL",
+        "properties": {
+          "scan_id": "scan-merged-001",
+          "last_seen": "2026-04-07T12:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.1,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "target": "sha256:c92f8070b897a5dfd92b63ccf36bf5a7354bf28f8f8a2fadcf58b3ebbe163838",
+        "kind": "PROVIDES_TOOL",
+        "properties": {
+          "scan_id": "scan-merged-001",
+          "last_seen": "2026-04-07T12:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.1,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "target": "sha256:7d2feed0e1c6dac8d78d92959042d1d2ebfc53f95c74dc7ea301c19eabc804f3",
+        "kind": "PROVIDES_TOOL",
+        "properties": {
+          "scan_id": "scan-merged-001",
+          "last_seen": "2026-04-07T12:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.1,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "target": "sha256:c09c8a9fc626c6441d26f56147c073d644d38a12931bdd4cd524fe6ef647af55",
+        "kind": "PROVIDES_RESOURCE",
+        "properties": {
+          "scan_id": "scan-merged-001",
+          "last_seen": "2026-04-07T12:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.2,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1",
+        "target": "sha256:71cb852609a93c46e4056ddcc5fa594a92973b1b40ef64acafb871bfb90cff44",
+        "kind": "ADVERTISES_SKILL",
+        "properties": {
+          "scan_id": "scan-merged-001",
+          "last_seen": "2026-04-07T12:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.1,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1",
+        "target": "sha256:1ae605b1d92096ac3219d2d2fe89a4bc22c53f3afbf6c1f849e2b2a5ff4e1f01",
+        "kind": "ADVERTISES_SKILL",
+        "properties": {
+          "scan_id": "scan-merged-001",
+          "last_seen": "2026-04-07T12:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.1,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:f29d41afd3993adb0740cf7f7c3f302033e31316c541d57c2b1d2254eb6fbc64",
+        "target": "sha256:bbbf6ea338f40203f99d7f2f980812a47d0b452e157dc2349e40e10a99383d8f",
+        "kind": "ADVERTISES_SKILL",
+        "properties": {
+          "scan_id": "scan-merged-001",
+          "last_seen": "2026-04-07T12:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.1,
+          "is_composite": false
+        }
+      },
+      {
+        "source": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1",
+        "target": "sha256:f29d41afd3993adb0740cf7f7c3f302033e31316c541d57c2b1d2254eb6fbc64",
+        "kind": "DELEGATES_TO",
+        "properties": {
+          "scan_id": "scan-merged-001",
+          "last_seen": "2026-04-07T12:00:00Z",
+          "confidence": 0.9,
+          "risk_weight": 0.1,
+          "is_composite": false
+        }
+      }
+    ]
+  }
+}
