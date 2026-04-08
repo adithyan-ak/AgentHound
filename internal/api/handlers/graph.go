@@ -69,6 +69,8 @@ func (h *GraphHandler) HandleListEdges(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, edges)
 }
 
+const maxQueryLimit = 10000
+
 func parseIntParam(r *http.Request, key string, defaultVal int) int {
 	s := r.URL.Query().Get(key)
 	if s == "" {
@@ -77,6 +79,9 @@ func parseIntParam(r *http.Request, key string, defaultVal int) int {
 	v, err := strconv.Atoi(s)
 	if err != nil || v <= 0 {
 		return defaultVal
+	}
+	if v > maxQueryLimit {
+		return maxQueryLimit
 	}
 	return v
 }

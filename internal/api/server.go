@@ -2,7 +2,10 @@ package api
 
 import (
 	"context"
+	"embed"
 	"fmt"
+	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"time"
@@ -16,6 +19,9 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+//go:embed all:ui/dist
+var uiFS embed.FS
 
 type Server struct {
 	router     *chi.Mux
@@ -56,6 +62,27 @@ func NewServer(graphDB graph.GraphDB, reader *graph.Reader, pgPool *pgxpool.Pool
 
 		r.Get("/scans", scanH.HandleList)
 		r.Get("/scans/{id}", scanH.HandleGet)
+	})
+
+	uiContent, _ := fs.Sub(uiFS, "ui/dist")
+	fileServer := http.FileServer(http.FS(uiContent))
+
+	r.Handle("/assets/*", fileServer)
+	r.Get("/*", func(w http.ResponseWriter, req *http.Request) {
+		f, err := uiContent.Open(req.URL.Path[1:])
+		if err == nil {
+			f.Close()
+			fileServer.ServeHTTP(w, req)
+			return
+		}
+		index, err := uiContent.Open("index.html")
+		if err != nil {
+			http.Error(w, "index.html not found", http.StatusInternalServerError)
+			return
+		}
+		defer index.Close()
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		io.Copy(w, index)
 	})
 
 	return &Server{router: r}
