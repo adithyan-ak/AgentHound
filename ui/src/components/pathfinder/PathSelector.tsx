@@ -6,7 +6,15 @@ import {
   useWeightedPath,
 } from "@/hooks/usePathfinding";
 import type { PathResponse, NodeKind } from "@/api/types";
-import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
 
 const NODE_KINDS: NodeKind[] = [
   "MCPServer",
@@ -75,71 +83,71 @@ export function PathSelector({ onResults }: PathSelectorProps) {
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label className="block text-xs font-medium text-zinc-400 mb-1">
+        <label className="block text-xs font-medium text-muted-foreground mb-1">
           Source Kind
         </label>
-        <select
-          value={sourceKind}
-          onChange={(e) => setSourceKind(e.target.value as NodeKind)}
-          className="w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-primary"
-        >
-          {NODE_KINDS.map((k) => (
-            <option key={k} value={k}>
-              {k}
-            </option>
-          ))}
-        </select>
+        <Select value={sourceKind} onValueChange={(v) => setSourceKind(v as NodeKind)}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {NODE_KINDS.map((k) => (
+              <SelectItem key={k} value={k}>
+                {k}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       <div>
-        <label className="block text-xs font-medium text-zinc-400 mb-1">
+        <label className="block text-xs font-medium text-muted-foreground mb-1">
           Source Name
         </label>
-        <input
+        <Input
           type="text"
           value={sourceName}
           onChange={(e) => setSourceName(e.target.value)}
           placeholder="e.g. claude-desktop"
-          className="w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-primary"
           required
         />
       </div>
 
       <div>
-        <label className="block text-xs font-medium text-zinc-400 mb-1">
+        <label className="block text-xs font-medium text-muted-foreground mb-1">
           Target Kind
-          <span className="ml-1 text-zinc-500">(optional)</span>
+          <span className="ml-1 text-muted-foreground">(optional)</span>
         </label>
-        <select
-          value={targetKind}
-          onChange={(e) => setTargetKind(e.target.value as NodeKind | "")}
-          className="w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-primary"
-        >
-          <option value="">Any</option>
-          {NODE_KINDS.map((k) => (
-            <option key={k} value={k}>
-              {k}
-            </option>
-          ))}
-        </select>
+        <Select value={targetKind || "__any__"} onValueChange={(v) => setTargetKind(v === "__any__" ? "" : v as NodeKind)}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__any__">Any</SelectItem>
+            {NODE_KINDS.map((k) => (
+              <SelectItem key={k} value={k}>
+                {k}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       <div>
-        <label className="block text-xs font-medium text-zinc-400 mb-1">
+        <label className="block text-xs font-medium text-muted-foreground mb-1">
           Target Name
-          <span className="ml-1 text-zinc-500">(optional - leave empty for any)</span>
+          <span className="ml-1 text-muted-foreground">(optional - leave empty for any)</span>
         </label>
-        <input
+        <Input
           type="text"
           value={targetName}
           onChange={(e) => setTargetName(e.target.value)}
           placeholder="e.g. prod-database"
-          className="w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-primary"
         />
       </div>
 
       <div>
-        <label className="block text-xs font-medium text-zinc-400 mb-2">
+        <label className="block text-xs font-medium text-muted-foreground mb-2">
           Algorithm
         </label>
         <div className="flex gap-3">
@@ -153,14 +161,14 @@ export function PathSelector({ onResults }: PathSelectorProps) {
                 onChange={() => setAlgorithm(alg)}
                 className="accent-primary"
               />
-              <span className="text-sm text-zinc-300 capitalize">{alg}</span>
+              <span className="text-sm text-muted-foreground capitalize">{alg}</span>
             </label>
           ))}
         </div>
       </div>
 
       <div>
-        <label className="block text-xs font-medium text-zinc-400 mb-1">
+        <label className="block text-xs font-medium text-muted-foreground mb-1">
           Max Hops: {maxHops}
         </label>
         <input
@@ -179,19 +187,14 @@ export function PathSelector({ onResults }: PathSelectorProps) {
         </div>
       )}
 
-      <button
+      <Button
         type="submit"
         disabled={isPending || !sourceName.trim()}
-        className={cn(
-          "flex w-full items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors",
-          isPending
-            ? "bg-zinc-700 text-zinc-400 cursor-wait"
-            : "bg-primary text-primary-foreground hover:bg-primary/90",
-        )}
+        className="w-full"
       >
         <Search className="h-4 w-4" />
         {isPending ? "Searching..." : "Find Paths"}
-      </button>
+      </Button>
     </form>
   );
 }

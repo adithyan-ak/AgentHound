@@ -40,7 +40,7 @@ function scoreColor(score: number): string {
 export function RiskBreakdown({ properties, kind }: RiskBreakdownProps) {
   if (!SUPPORTED_KINDS.has(kind)) {
     return (
-      <div className="py-4 text-sm text-zinc-500 text-center">
+      <div className="py-4 text-sm text-muted-foreground text-center">
         Risk breakdown not available for {kind}
       </div>
     );
@@ -53,14 +53,14 @@ export function RiskBreakdown({ properties, kind }: RiskBreakdownProps) {
     <div className="space-y-4">
       <div>
         <div className="flex items-center justify-between mb-1">
-          <span className="text-xs font-medium text-zinc-400">
+          <span className="text-xs font-medium text-muted-foreground">
             Overall Risk Score
           </span>
-          <span className="text-sm font-semibold text-zinc-100">
+          <span className="text-sm font-semibold text-foreground">
             {totalScore.toFixed(0)}
           </span>
         </div>
-        <div className="h-3 rounded-full bg-zinc-700 overflow-hidden">
+        <div className="h-3 rounded-full bg-muted overflow-hidden">
           <div
             className={cn("h-full rounded-full transition-all", scoreColor(totalScore))}
             style={{ width: `${Math.min(totalScore, 100)}%` }}
@@ -74,10 +74,10 @@ export function RiskBreakdown({ properties, kind }: RiskBreakdownProps) {
           return (
             <div key={key}>
               <div className="flex items-center justify-between mb-0.5">
-                <span className="text-xs text-zinc-400">{label}</span>
-                <span className="text-xs text-zinc-300">{value.toFixed(0)}</span>
+                <span className="text-xs text-muted-foreground">{label}</span>
+                <span className="text-xs text-foreground">{value.toFixed(0)}</span>
               </div>
-              <div className="h-1.5 rounded-full bg-zinc-700 overflow-hidden">
+              <div className="h-1.5 rounded-full bg-muted overflow-hidden">
                 <div
                   className={cn("h-full rounded-full", scoreColor(value))}
                   style={{ width: `${Math.min(value, 100)}%` }}

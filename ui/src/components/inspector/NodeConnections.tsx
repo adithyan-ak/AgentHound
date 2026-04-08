@@ -2,6 +2,9 @@ import { ArrowUpRight, ArrowDownLeft } from "lucide-react";
 import type { APIEdge } from "@/api/types";
 import { useGraphStore } from "@/store/graph";
 import { useUIStore } from "@/store/ui";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 
 interface NodeConnectionsProps {
   edges: APIEdge[];
@@ -14,7 +17,7 @@ export function NodeConnections({ edges, nodeId }: NodeConnectionsProps) {
 
   if (edges.length === 0) {
     return (
-      <div className="py-4 text-sm text-zinc-500 text-center">
+      <div className="py-4 text-sm text-muted-foreground text-center">
         No connections
       </div>
     );
@@ -33,13 +36,17 @@ export function NodeConnections({ edges, nodeId }: NodeConnectionsProps) {
     openSidebar();
   }
 
+  const groupEntries = Array.from(grouped.entries());
+
   return (
     <div className="space-y-3">
-      {Array.from(grouped.entries()).map(([kind, kindEdges]) => (
+      {groupEntries.map(([kind, kindEdges], groupIdx) => (
         <div key={kind}>
           <div className="flex items-center justify-between mb-1">
-            <span className="text-xs font-medium text-zinc-400">{kind}</span>
-            <span className="text-[10px] text-zinc-500">{kindEdges.length}</span>
+            <Badge variant="outline" className="text-[10px]">
+              {kind}
+            </Badge>
+            <span className="text-[10px] text-muted-foreground">{kindEdges.length}</span>
           </div>
           <div className="space-y-0.5">
             {kindEdges.map((edge, i) => {
@@ -51,26 +58,28 @@ export function NodeConnections({ edges, nodeId }: NodeConnectionsProps) {
                   : edge.properties?.source_name) ?? otherId.slice(0, 12);
 
               return (
-                <button
+                <Button
                   key={`${edge.kind}-${i}`}
+                  variant="ghost"
                   onClick={() => handleClick(edge)}
-                  className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-zinc-700/50 transition-colors"
+                  className="flex w-full items-center gap-2 h-auto px-2 py-1 justify-start text-xs"
                 >
                   {isOutgoing ? (
-                    <ArrowUpRight className="h-3 w-3 text-zinc-500 flex-shrink-0" />
+                    <ArrowUpRight className="h-3 w-3 text-muted-foreground flex-shrink-0" />
                   ) : (
-                    <ArrowDownLeft className="h-3 w-3 text-zinc-500 flex-shrink-0" />
+                    <ArrowDownLeft className="h-3 w-3 text-muted-foreground flex-shrink-0" />
                   )}
-                  <span className="text-zinc-300 truncate">
+                  <span className="text-foreground truncate">
                     {String(otherName)}
                   </span>
-                  <span className="ml-auto text-[10px] text-zinc-600">
+                  <span className="ml-auto text-[10px] text-muted-foreground">
                     {isOutgoing ? "out" : "in"}
                   </span>
-                </button>
+                </Button>
               );
             })}
           </div>
+          {groupIdx < groupEntries.length - 1 && <Separator className="mt-3" />}
         </div>
       ))}
     </div>

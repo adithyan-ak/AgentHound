@@ -1,4 +1,12 @@
 import type { PreBuiltQuery } from "@/api/types";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
 
 interface QueryResultProps {
   rows: Record<string, unknown>[];
@@ -16,7 +24,7 @@ function formatCell(value: unknown): string {
 export function QueryResult({ rows, query }: QueryResultProps) {
   if (rows.length === 0) {
     return (
-      <div className="py-4 text-sm text-zinc-500 text-center">
+      <div className="py-4 text-sm text-muted-foreground text-center">
         No results for "{query.name}"
       </div>
     );
@@ -26,38 +34,35 @@ export function QueryResult({ rows, query }: QueryResultProps) {
 
   return (
     <div>
-      <div className="text-xs text-zinc-400 mb-2">
+      <div className="text-xs text-muted-foreground mb-2">
         {rows.length} row{rows.length !== 1 ? "s" : ""}
       </div>
-      <div className="overflow-x-auto rounded-md border border-zinc-700">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-zinc-700 bg-zinc-800/50">
+      <div className="rounded-md border">
+        <Table>
+          <TableHeader>
+            <TableRow>
               {columns.map((col) => (
-                <th
-                  key={col}
-                  className="px-3 py-1.5 text-left text-xs font-medium text-zinc-400"
-                >
+                <TableHead key={col} className="text-xs h-8 px-3">
                   {col}
-                </th>
+                </TableHead>
               ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-zinc-700/50">
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {rows.map((row, i) => (
-              <tr key={i} className="hover:bg-zinc-800/30">
+              <TableRow key={i}>
                 {columns.map((col) => (
-                  <td
+                  <TableCell
                     key={col}
-                    className="px-3 py-1.5 text-xs text-zinc-300 max-w-[300px] truncate"
+                    className="px-3 py-1.5 text-xs max-w-[300px] truncate"
                   >
                     {formatCell(row[col])}
-                  </td>
+                  </TableCell>
                 ))}
-              </tr>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
     </div>
   );

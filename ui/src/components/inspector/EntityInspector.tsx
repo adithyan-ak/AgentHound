@@ -1,21 +1,19 @@
-import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Crosshair } from "lucide-react";
 import { fetchNode } from "@/api/graph";
 import { useGraphStore } from "@/store/graph";
 import { NODE_COLORS } from "@/lib/node-styles";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { NodeProperties } from "./NodeProperties";
 import { NodeConnections } from "./NodeConnections";
 import { RiskBreakdown } from "./RiskBreakdown";
 import { NodeFindings } from "./NodeFindings";
 
-const TABS = ["Properties", "Connections", "Risk", "Findings"] as const;
-type Tab = (typeof TABS)[number];
-
 export function EntityInspector() {
   const selectedNodeId = useGraphStore((s) => s.selectedNodeId);
-  const [activeTab, setActiveTab] = useState<Tab>("Properties");
 
   const { data, isLoading } = useQuery({
     queryKey: ["node", selectedNodeId],
@@ -27,23 +25,30 @@ export function EntityInspector() {
   if (!selectedNodeId) {
     return (
       <div className="flex flex-col items-center justify-center p-8 text-center">
-        <Crosshair className="h-8 w-8 text-zinc-600 mb-3" />
-        <p className="text-sm text-zinc-500">Click a node to inspect it</p>
+        <Crosshair className="h-8 w-8 text-muted-foreground/50 mb-3" />
+        <p className="text-sm text-muted-foreground">Click a node to inspect it</p>
       </div>
     );
   }
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center p-8">
-        <div className="text-sm text-zinc-500 animate-pulse">Loading...</div>
+      <div className="space-y-3 p-4">
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-3 w-3 rounded-full" />
+          <Skeleton className="h-5 w-16 rounded-full" />
+        </div>
+        <Skeleton className="h-4 w-3/4" />
+        <Skeleton className="h-1.5 w-full" />
+        <Skeleton className="h-8 w-full" />
+        <Skeleton className="h-24 w-full" />
       </div>
     );
   }
 
   if (!data) {
     return (
-      <div className="p-4 text-sm text-zinc-500">Node not found</div>
+      <div className="p-4 text-sm text-muted-foreground">Node not found</div>
     );
   }
 
@@ -66,17 +71,17 @@ export function EntityInspector() {
             className="h-3 w-3 rounded-full flex-shrink-0"
             style={{ backgroundColor: NODE_COLORS[kind] ?? "#999" }}
           />
-          <span className="inline-flex items-center rounded-full bg-zinc-700 px-2 py-0.5 text-[10px] font-medium text-zinc-300">
+          <Badge variant="secondary" className="text-[10px]">
             {kind}
-          </span>
+          </Badge>
         </div>
-        <h3 className="text-sm font-semibold text-zinc-100 break-all">
+        <h3 className="text-sm font-semibold text-foreground break-all">
           {name}
         </h3>
         {riskScore > 0 && (
           <div className="mt-1.5 flex items-center gap-2">
-            <span className="text-xs text-zinc-400">Risk:</span>
-            <div className="flex-1 h-1.5 rounded-full bg-zinc-700 overflow-hidden">
+            <span className="text-xs text-muted-foreground">Risk:</span>
+            <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
               <div
                 className={cn(
                   "h-full rounded-full",
@@ -91,38 +96,39 @@ export function EntityInspector() {
                 style={{ width: `${Math.min(riskScore, 100)}%` }}
               />
             </div>
-            <span className="text-xs text-zinc-300">{riskScore.toFixed(0)}</span>
+            <span className="text-xs text-foreground">{riskScore.toFixed(0)}</span>
           </div>
         )}
       </div>
 
-      <div className="flex border-b border-zinc-700 mb-3">
-        {TABS.map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={cn(
-              "px-3 py-1.5 text-xs font-medium transition-colors border-b-2 -mb-px",
-              activeTab === tab
-                ? "border-primary text-primary"
-                : "border-transparent text-zinc-400 hover:text-zinc-200",
-            )}
-          >
-            {tab}
-          </button>
-        ))}
-      </div>
-
-      {activeTab === "Properties" && (
-        <NodeProperties properties={node.properties} />
-      )}
-      {activeTab === "Connections" && (
-        <NodeConnections edges={edges} nodeId={node.id} />
-      )}
-      {activeTab === "Risk" && (
-        <RiskBreakdown properties={node.properties} kind={kind} />
-      )}
-      {activeTab === "Findings" && <NodeFindings nodeId={node.id} />}
+      <Tabs defaultValue="Properties">
+        <TabsList className="w-full">
+          <TabsTrigger value="Properties" className="flex-1 text-xs">
+            Properties
+          </TabsTrigger>
+          <TabsTrigger value="Connections" className="flex-1 text-xs">
+            Connections
+          </TabsTrigger>
+          <TabsTrigger value="Risk" className="flex-1 text-xs">
+            Risk
+          </TabsTrigger>
+          <TabsTrigger value="Findings" className="flex-1 text-xs">
+            Findings
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="Properties">
+          <NodeProperties properties={node.properties} />
+        </TabsContent>
+        <TabsContent value="Connections">
+          <NodeConnections edges={edges} nodeId={node.id} />
+        </TabsContent>
+        <TabsContent value="Risk">
+          <RiskBreakdown properties={node.properties} kind={kind} />
+        </TabsContent>
+        <TabsContent value="Findings">
+          <NodeFindings nodeId={node.id} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts";
 import { fetchNodes } from "@/api/graph";
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 
 const AUTH_COLORS: Record<string, string> = {
   none: "#ef4444",
@@ -38,39 +40,43 @@ export function AuthCoverage() {
   const total = chartData.reduce((sum, d) => sum + d.value, 0);
 
   return (
-    <div className="rounded-lg border border-zinc-700 bg-zinc-800 p-4">
-      <h3 className="mb-4 text-sm font-medium text-zinc-300">Auth Coverage</h3>
-      {isLoading ? (
-        <div className="flex h-48 items-center justify-center text-zinc-500">Loading...</div>
-      ) : total === 0 ? (
-        <div className="flex h-48 items-center justify-center text-zinc-500">No data</div>
-      ) : (
-        <ResponsiveContainer width="100%" height={200}>
-          <PieChart>
-            <Pie
-              data={chartData}
-              dataKey="value"
-              nameKey="name"
-              cx="50%"
-              cy="50%"
-              innerRadius={50}
-              outerRadius={80}
-              paddingAngle={2}
-              strokeWidth={0}
-            >
-              {chartData.map((entry) => (
-                <Cell key={entry.name} fill={AUTH_COLORS[entry.name] ?? FALLBACK_COLOR} />
-              ))}
-            </Pie>
-            <Tooltip
-              contentStyle={{ backgroundColor: "#27272a", border: "1px solid #3f3f46", borderRadius: 6, color: "#e4e4e7" }}
-            />
-            <Legend
-              formatter={(value: string) => <span className="text-xs text-zinc-300">{value}</span>}
-            />
-          </PieChart>
-        </ResponsiveContainer>
-      )}
-    </div>
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm font-medium">Auth Coverage</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-48 w-full" />
+        ) : total === 0 ? (
+          <div className="flex h-48 items-center justify-center text-muted-foreground">No data</div>
+        ) : (
+          <ResponsiveContainer width="100%" height={200}>
+            <PieChart>
+              <Pie
+                data={chartData}
+                dataKey="value"
+                nameKey="name"
+                cx="50%"
+                cy="50%"
+                innerRadius={50}
+                outerRadius={80}
+                paddingAngle={2}
+                strokeWidth={0}
+              >
+                {chartData.map((entry) => (
+                  <Cell key={entry.name} fill={AUTH_COLORS[entry.name] ?? FALLBACK_COLOR} />
+                ))}
+              </Pie>
+              <Tooltip
+                contentStyle={{ backgroundColor: "#27272a", border: "1px solid #3f3f46", borderRadius: 6, color: "#e4e4e7" }}
+              />
+              <Legend
+                formatter={(value: string) => <span className="text-xs text-muted-foreground">{value}</span>}
+              />
+            </PieChart>
+          </ResponsiveContainer>
+        )}
+      </CardContent>
+    </Card>
   );
 }

@@ -1,21 +1,29 @@
 import type { Scan } from "@/api/types";
-import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
 
 interface ScanHistoryProps {
   scans: Scan[];
 }
 
-const STATUS_STYLES: Record<string, string> = {
-  completed: "bg-green-900/40 text-green-300",
-  running: "bg-blue-900/40 text-blue-300",
-  pending: "bg-yellow-900/40 text-yellow-300",
-  failed: "bg-red-900/40 text-red-300",
+const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
+  completed: "default",
+  running: "secondary",
+  pending: "outline",
+  failed: "destructive",
 };
 
-const COLLECTOR_STYLES: Record<string, string> = {
-  config: "bg-zinc-700 text-zinc-300",
-  mcp: "bg-emerald-900/40 text-emerald-300",
-  a2a: "bg-purple-900/40 text-purple-300",
+const COLLECTOR_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
+  config: "secondary",
+  mcp: "default",
+  a2a: "outline",
 };
 
 function formatDate(dateStr: string | undefined): string {
@@ -26,7 +34,7 @@ function formatDate(dateStr: string | undefined): string {
 export function ScanHistory({ scans }: ScanHistoryProps) {
   if (scans.length === 0) {
     return (
-      <div className="flex items-center justify-center py-12 text-sm text-zinc-500">
+      <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
         No scans recorded yet
       </div>
     );
@@ -34,60 +42,50 @@ export function ScanHistory({ scans }: ScanHistoryProps) {
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-zinc-700 text-left">
-            <th className="px-3 py-2 text-xs font-medium text-zinc-400">ID</th>
-            <th className="px-3 py-2 text-xs font-medium text-zinc-400">Collector</th>
-            <th className="px-3 py-2 text-xs font-medium text-zinc-400">Status</th>
-            <th className="px-3 py-2 text-xs font-medium text-zinc-400">Started</th>
-            <th className="px-3 py-2 text-xs font-medium text-zinc-400">Completed</th>
-            <th className="px-3 py-2 text-xs font-medium text-zinc-400 text-right">Nodes</th>
-            <th className="px-3 py-2 text-xs font-medium text-zinc-400 text-right">Edges</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-zinc-700/50">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="text-xs">ID</TableHead>
+            <TableHead className="text-xs">Collector</TableHead>
+            <TableHead className="text-xs">Status</TableHead>
+            <TableHead className="text-xs">Started</TableHead>
+            <TableHead className="text-xs">Completed</TableHead>
+            <TableHead className="text-xs text-right">Nodes</TableHead>
+            <TableHead className="text-xs text-right">Edges</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {scans.map((scan) => (
-            <tr key={scan.id} className="hover:bg-zinc-800/50">
-              <td className="px-3 py-2 font-mono text-xs text-zinc-300">
+            <TableRow key={scan.id}>
+              <TableCell className="font-mono text-xs">
                 {scan.id.slice(0, 8)}
-              </td>
-              <td className="px-3 py-2">
-                <span
-                  className={cn(
-                    "inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium",
-                    COLLECTOR_STYLES[scan.collector] ?? "bg-zinc-700 text-zinc-300",
-                  )}
-                >
+              </TableCell>
+              <TableCell>
+                <Badge variant={COLLECTOR_VARIANT[scan.collector] ?? "secondary"} className="text-[10px]">
                   {scan.collector}
-                </span>
-              </td>
-              <td className="px-3 py-2">
-                <span
-                  className={cn(
-                    "inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium",
-                    STATUS_STYLES[scan.status] ?? "bg-zinc-700 text-zinc-300",
-                  )}
-                >
+                </Badge>
+              </TableCell>
+              <TableCell>
+                <Badge variant={STATUS_VARIANT[scan.status] ?? "secondary"} className="text-[10px]">
                   {scan.status}
-                </span>
-              </td>
-              <td className="px-3 py-2 text-xs text-zinc-400">
+                </Badge>
+              </TableCell>
+              <TableCell className="text-xs text-muted-foreground">
                 {formatDate(scan.started_at)}
-              </td>
-              <td className="px-3 py-2 text-xs text-zinc-400">
+              </TableCell>
+              <TableCell className="text-xs text-muted-foreground">
                 {formatDate(scan.completed_at)}
-              </td>
-              <td className="px-3 py-2 text-xs text-zinc-300 text-right">
+              </TableCell>
+              <TableCell className="text-xs text-right">
                 {scan.node_count}
-              </td>
-              <td className="px-3 py-2 text-xs text-zinc-300 text-right">
+              </TableCell>
+              <TableCell className="text-xs text-right">
                 {scan.edge_count}
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 }

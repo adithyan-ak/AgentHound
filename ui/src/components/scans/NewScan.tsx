@@ -1,5 +1,14 @@
-import { X, Terminal, Copy, Check } from "lucide-react";
+import { Terminal, Copy, Check } from "lucide-react";
 import { useState, useCallback } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 
 interface NewScanProps {
   open: boolean;
@@ -33,65 +42,52 @@ export function NewScan({ open, onClose }: NewScanProps) {
     setTimeout(() => setCopiedIdx(null), 2000);
   }, []);
 
-  if (!open) return null;
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="fixed inset-0 bg-black/60" onClick={onClose} />
-      <div className="relative w-full max-w-lg rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl">
-        <div className="flex items-center justify-between border-b border-zinc-700 px-4 py-3">
-          <div className="flex items-center gap-2">
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
             <Terminal className="h-4 w-4 text-primary" />
-            <span className="text-sm font-medium text-zinc-100">
-              Trigger a Scan
-            </span>
-          </div>
-          <button
-            onClick={onClose}
-            className="rounded-md p-1 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="p-4">
-          <p className="text-sm text-zinc-400 mb-4">
+            Trigger a Scan
+          </DialogTitle>
+          <DialogDescription>
             Scans are triggered from the CLI. Run one of these commands to
             collect data and ingest it into the graph.
-          </p>
+          </DialogDescription>
+        </DialogHeader>
 
-          <div className="space-y-3">
-            {COMMANDS.map((cmd, i) => (
-              <div
-                key={i}
-                className="rounded-md border border-zinc-700 bg-zinc-800 p-3"
-              >
+        <div className="space-y-3">
+          {COMMANDS.map((cmd, i) => (
+            <Card key={i}>
+              <CardContent className="p-3">
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-medium text-zinc-300">
+                  <span className="text-xs font-medium text-foreground">
                     {cmd.label}
                   </span>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
                     onClick={() => handleCopy(cmd.command, i)}
-                    className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200"
                   >
                     {copiedIdx === i ? (
                       <Check className="h-3 w-3 text-green-400" />
                     ) : (
                       <Copy className="h-3 w-3" />
                     )}
-                  </button>
+                  </Button>
                 </div>
-                <code className="block text-xs text-zinc-200 font-mono bg-zinc-900/50 rounded px-2 py-1.5">
+                <code className="block text-xs text-foreground font-mono bg-background/50 rounded px-2 py-1.5">
                   {cmd.command}
                 </code>
-                <p className="mt-1.5 text-[10px] text-zinc-500">
+                <p className="mt-1.5 text-[10px] text-muted-foreground">
                   {cmd.description}
                 </p>
-              </div>
-            ))}
-          </div>
+              </CardContent>
+            </Card>
+          ))}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

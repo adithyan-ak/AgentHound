@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { fetchNodes } from "@/api/graph";
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 
 const BUCKETS = [
   { label: "0-20", min: 0, max: 20, color: "#22c55e" },
@@ -26,27 +28,31 @@ export function RiskChart() {
   });
 
   return (
-    <div className="rounded-lg border border-zinc-700 bg-zinc-800 p-4">
-      <h3 className="mb-4 text-sm font-medium text-zinc-300">Risk Score Distribution</h3>
-      {isLoading ? (
-        <div className="flex h-48 items-center justify-center text-zinc-500">Loading...</div>
-      ) : (
-        <ResponsiveContainer width="100%" height={200}>
-          <BarChart data={bucketCounts}>
-            <XAxis dataKey="name" tick={{ fill: "#a1a1aa", fontSize: 12 }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fill: "#a1a1aa", fontSize: 12 }} axisLine={false} tickLine={false} allowDecimals={false} />
-            <Tooltip
-              contentStyle={{ backgroundColor: "#27272a", border: "1px solid #3f3f46", borderRadius: 6, color: "#e4e4e7" }}
-              cursor={{ fill: "rgba(255,255,255,0.05)" }}
-            />
-            <Bar dataKey="count" radius={[4, 4, 0, 0]}>
-              {bucketCounts.map((entry) => (
-                <Cell key={entry.name} fill={entry.color} />
-              ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      )}
-    </div>
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm font-medium">Risk Score Distribution</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-48 w-full" />
+        ) : (
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={bucketCounts}>
+              <XAxis dataKey="name" tick={{ fill: "#a1a1aa", fontSize: 12 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: "#a1a1aa", fontSize: 12 }} axisLine={false} tickLine={false} allowDecimals={false} />
+              <Tooltip
+                contentStyle={{ backgroundColor: "#27272a", border: "1px solid #3f3f46", borderRadius: 6, color: "#e4e4e7" }}
+                cursor={{ fill: "rgba(255,255,255,0.05)" }}
+              />
+              <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                {bucketCounts.map((entry) => (
+                  <Cell key={entry.name} fill={entry.color} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </CardContent>
+    </Card>
   );
 }

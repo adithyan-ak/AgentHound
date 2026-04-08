@@ -3,15 +3,18 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { BookOpen, Play, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { fetchPreBuiltQueries, runPreBuiltQuery } from "@/api/analysis";
 import type { PreBuiltQuery } from "@/api/types";
-import { cn } from "@/lib/utils";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Separator } from "@/components/ui/separator";
 import { QueryResult } from "./QueryResult";
 
-const SEVERITY_STYLES: Record<string, string> = {
-  critical: "bg-red-900/40 text-red-300",
-  high: "bg-orange-900/40 text-orange-300",
-  medium: "bg-yellow-900/40 text-yellow-300",
-  low: "bg-blue-900/40 text-blue-300",
-  info: "bg-zinc-700 text-zinc-300",
+const SEVERITY_VARIANT: Record<string, "destructive" | "default" | "secondary" | "outline"> = {
+  critical: "destructive",
+  high: "destructive",
+  medium: "default",
+  low: "secondary",
+  info: "outline",
 };
 
 const CATEGORY_ORDER = [
@@ -66,20 +69,26 @@ export function QueryLibrary() {
 
   return (
     <div className="p-6">
-      <h2 className="flex items-center gap-2 text-lg font-semibold text-zinc-100 mb-6">
+      <h2 className="flex items-center gap-2 text-lg font-semibold text-foreground mb-6">
         <BookOpen className="h-5 w-5 text-primary" />
         Query Library
       </h2>
 
       {isLoading ? (
-        <div className="flex items-center justify-center py-12 text-sm text-zinc-500 animate-pulse">
-          Loading queries...
+        <div className="space-y-4">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="space-y-2">
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-16 w-full" />
+              <Skeleton className="h-16 w-full" />
+            </div>
+          ))}
         </div>
       ) : (
         <div className="space-y-6">
           {sortedCategories.map((category) => (
             <div key={category}>
-              <h3 className="text-xs font-medium text-zinc-400 uppercase tracking-wide mb-3">
+              <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-3">
                 {category}
               </h3>
               <div className="space-y-2">
@@ -89,72 +98,70 @@ export function QueryLibrary() {
                     runQuery.isPending && expandedId === query.id;
 
                   return (
-                    <div
-                      key={query.id}
-                      className="rounded-lg border border-zinc-700 bg-zinc-800"
-                    >
+                    <Card key={query.id}>
                       <button
                         onClick={() => handleToggle(query)}
                         className="flex w-full items-center gap-3 px-4 py-3 text-left"
                       >
-                        <Play className="h-3.5 w-3.5 text-zinc-500 flex-shrink-0" />
+                        <Play className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-0.5">
-                            <span className="text-sm font-medium text-zinc-200">
+                            <span className="text-sm font-medium text-foreground">
                               {query.name}
                             </span>
-                            <span
-                              className={cn(
-                                "inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-medium",
-                                SEVERITY_STYLES[query.severity] ??
-                                  SEVERITY_STYLES.info,
-                              )}
+                            <Badge
+                              variant={SEVERITY_VARIANT[query.severity] ?? "outline"}
+                              className="text-[10px] px-1.5 py-0"
                             >
                               {query.severity}
-                            </span>
+                            </Badge>
                           </div>
-                          <p className="text-xs text-zinc-500 truncate">
+                          <p className="text-xs text-muted-foreground truncate">
                             {query.description}
                           </p>
                           {query.owasp_map && query.owasp_map.length > 0 && (
                             <div className="flex gap-1 mt-1">
                               {query.owasp_map.map((tag) => (
-                                <span
+                                <Badge
                                   key={tag}
-                                  className="inline-flex rounded bg-zinc-700 px-1 py-0.5 text-[9px] font-mono text-zinc-400"
+                                  variant="secondary"
+                                  className="rounded px-1 py-0 text-[9px] font-mono"
                                 >
                                   {tag}
-                                </span>
+                                </Badge>
                               ))}
                             </div>
                           )}
                         </div>
                         {isExpanded ? (
-                          <ChevronUp className="h-4 w-4 text-zinc-500 flex-shrink-0" />
+                          <ChevronUp className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                         ) : (
-                          <ChevronDown className="h-4 w-4 text-zinc-500 flex-shrink-0" />
+                          <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                         )}
                       </button>
 
                       {isExpanded && (
-                        <div className="border-t border-zinc-700 px-4 py-3">
-                          {isRunning ? (
-                            <div className="flex items-center justify-center gap-2 py-4 text-sm text-zinc-500">
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                              Running query...
-                            </div>
-                          ) : runQuery.isError && expandedId === query.id ? (
-                            <div className="rounded-md bg-red-900/30 border border-red-800 px-3 py-2 text-sm text-red-300">
-                              {runQuery.error instanceof Error
-                                ? runQuery.error.message
-                                : "Query failed"}
-                            </div>
-                          ) : activeQuery ? (
-                            <QueryResult rows={resultRows} query={activeQuery} />
-                          ) : null}
-                        </div>
+                        <>
+                          <Separator />
+                          <CardContent className="px-4 py-3">
+                            {isRunning ? (
+                              <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                Running query...
+                              </div>
+                            ) : runQuery.isError && expandedId === query.id ? (
+                              <div className="rounded-md bg-red-900/30 border border-red-800 px-3 py-2 text-sm text-red-300">
+                                {runQuery.error instanceof Error
+                                  ? runQuery.error.message
+                                  : "Query failed"}
+                              </div>
+                            ) : activeQuery ? (
+                              <QueryResult rows={resultRows} query={activeQuery} />
+                            ) : null}
+                          </CardContent>
+                        </>
                       )}
-                    </div>
+                    </Card>
                   );
                 })}
               </div>

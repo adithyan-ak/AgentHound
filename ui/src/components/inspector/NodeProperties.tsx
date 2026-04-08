@@ -1,3 +1,10 @@
+import {
+  Table,
+  TableBody,
+  TableRow,
+  TableCell,
+} from "@/components/ui/table";
+
 interface NodePropertiesProps {
   properties: Record<string, unknown>;
 }
@@ -21,24 +28,26 @@ export function NodeProperties({ properties }: NodePropertiesProps) {
 
   if (entries.length === 0) {
     return (
-      <div className="py-4 text-sm text-zinc-500 text-center">
+      <div className="py-4 text-sm text-muted-foreground text-center">
         No properties
       </div>
     );
   }
 
   return (
-    <div className="divide-y divide-zinc-700/50">
-      {entries.map(([key, value]) => (
-        <div key={key} className="flex justify-between gap-4 py-1.5 px-1">
-          <span className="text-xs text-zinc-400 font-mono flex-shrink-0">
-            {key}
-          </span>
-          <span className="text-xs text-zinc-200 text-right break-all">
-            {formatValue(value)}
-          </span>
-        </div>
-      ))}
-    </div>
+    <Table>
+      <TableBody>
+        {entries.map(([key, value]) => (
+          <TableRow key={key}>
+            <TableCell className="text-xs text-muted-foreground font-mono py-1.5 px-1">
+              {key}
+            </TableCell>
+            <TableCell className="text-xs text-foreground text-right break-all py-1.5 px-1">
+              {formatValue(value)}
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   );
 }
