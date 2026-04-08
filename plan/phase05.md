@@ -501,7 +501,11 @@ A full end-to-end test that:
 
 ### 6.3 E2E UI Tests (Playwright)
 
-Already defined in Phase 4. Full suite:
+**Deferred from Phase 4.** E2E tests require the full stack (Neo4j + Postgres + seeded data + running server). Phase 4 delivered component tests (vitest + RTL, 34 tests) but not Playwright E2E. This section must implement them from scratch.
+
+**Setup:** Install Playwright, configure `playwright.config.ts`, add `docker compose up` as test fixture, seed test data via `scripts/seed-test-data.sh`.
+
+**Required tests (8):**
 - Dashboard loads with data
 - Graph Explorer renders
 - Node click → Inspector
