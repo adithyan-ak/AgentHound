@@ -59,10 +59,13 @@ jobs:
       - run: go tool cover -func=coverage.out
       - name: Check coverage threshold
         run: |
-          COVERAGE=$(go tool cover -func=coverage.out | grep ^total: | awk '{print $3}' | tr -d '%')
-          echo "Total coverage: ${COVERAGE}%"
-          if [ "$(echo "$COVERAGE < 55" | bc -l)" -eq 1 ]; then
-            echo "::error::Coverage ${COVERAGE}% is below 55% threshold"
+          TOTAL=$(go tool cover -func=coverage.out | grep ^total: | awk '{print $3}' | tr -d '%')
+          echo "Total coverage: ${TOTAL}%"
+          echo "::notice::Total coverage: ${TOTAL}% — raise threshold as tests are added to appdb, graph, cli"
+          # Threshold: current floor to prevent regressions.
+          # Ratchet up as untested packages gain tests.
+          if [ "$(echo "$TOTAL < 55" | bc -l)" -eq 1 ]; then
+            echo "::error::Coverage ${TOTAL}% is below 55% threshold"
             exit 1
           fi
       - name: Run govulncheck
