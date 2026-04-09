@@ -1,7 +1,11 @@
 package cli
 
 import (
+	"encoding/json"
+	"io"
+	"os"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -115,4 +119,147 @@ func searchSubstring(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// --- Capture helpers for stdout/stderr ---
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+
+	fn()
+
+	_ = w.Close()
+	os.Stdout = old
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+
+	fn()
+
+	_ = w.Close()
+	os.Stderr = old
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
+// --- printRows tests ---
+
+func TestPrintRows_Empty(t *testing.T) {
+	out := captureStdout(t, func() {
+		err := printRows(nil, "table")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	if !strings.Contains(out, "(no results)") {
+		t.Errorf("expected stdout to contain %q, got %q", "(no results)", out)
+	}
+}
+
+func TestPrintRows_Table(t *testing.T) {
+	rows := []map[string]any{
+		{"name": "server-a", "count": float64(3)},
+		{"name": "server-b", "count": float64(7)},
+	}
+
+	var stderrOut string
+	stdoutOut := captureStdout(t, func() {
+		stderrOut = captureStderr(t, func() {
+			err := printRows(rows, "table")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	})
+
+	if !strings.Contains(stdoutOut, "server-a") {
+		t.Errorf("stdout missing %q: %q", "server-a", stdoutOut)
+	}
+	if !strings.Contains(stdoutOut, "server-b") {
+		t.Errorf("stdout missing %q: %q", "server-b", stdoutOut)
+	}
+	if !strings.Contains(stderrOut, "2 row(s)") {
+		t.Errorf("stderr missing row count: %q", stderrOut)
+	}
+}
+
+func TestPrintRows_JSON(t *testing.T) {
+	rows := []map[string]any{
+		{"id": "node-1", "score": float64(85)},
+	}
+
+	out := captureStdout(t, func() {
+		err := printRows(rows, "json")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	var decoded []map[string]any
+	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
+		t.Fatalf("output is not valid JSON: %v\nraw: %q", err, out)
+	}
+	if len(decoded) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(decoded))
+	}
+	if decoded[0]["id"] != "node-1" {
+		t.Errorf("expected id %q, got %v", "node-1", decoded[0]["id"])
+	}
+}
+
+// --- printJSON tests ---
+
+func TestPrintJSON(t *testing.T) {
+	input := map[string]any{"tool": "nmap", "version": float64(7)}
+
+	out := captureStdout(t, func() {
+		err := printJSON(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
+		t.Fatalf("output is not valid JSON: %v\nraw: %q", err, out)
+	}
+	if decoded["tool"] != "nmap" {
+		t.Errorf("expected tool %q, got %v", "nmap", decoded["tool"])
+	}
+}
+
+// --- printPrebuiltList tests ---
+
+func TestPrintPrebuiltList(t *testing.T) {
+	out := captureStderr(t, func() {
+		printPrebuiltList()
+	})
+
+	if !strings.Contains(out, "ID") {
+		t.Errorf("expected header %q in output: %q", "ID", out)
+	}
+	if !strings.Contains(out, "agents-shell-access") {
+		t.Errorf("expected %q in output: %q", "agents-shell-access", out)
+	}
 }
