@@ -3,11 +3,13 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/adithyan-ak/agenthound/internal/analysis"
 	"github.com/adithyan-ak/agenthound/internal/analysis/prebuilt"
+	"github.com/adithyan-ak/agenthound/internal/audit"
 	"github.com/adithyan-ak/agenthound/internal/graph"
 	"github.com/adithyan-ak/agenthound/internal/model"
 	"github.com/go-chi/chi/v5"
@@ -15,10 +17,11 @@ import (
 
 type AnalysisHandler struct {
 	graphDB graph.GraphDB
+	audit   *audit.Logger
 }
 
-func NewAnalysisHandler(db graph.GraphDB) *AnalysisHandler {
-	return &AnalysisHandler{graphDB: db}
+func NewAnalysisHandler(db graph.GraphDB, auditLog *audit.Logger) *AnalysisHandler {
+	return &AnalysisHandler{graphDB: db, audit: auditLog}
 }
 
 var allowedNodeLabels = func() map[string]bool {
@@ -62,6 +65,10 @@ func (h *AnalysisHandler) HandleShortestPath(w http.ResponseWriter, r *http.Requ
 		WriteValidationError(w, "invalid target_kind: "+targetKind)
 		return
 	}
+
+	h.auditLog(r, "analysis.shortest_path", map[string]any{
+		"source": req.Source, "target": req.Target, "source_kind": req.SourceKind,
+	})
 
 	maxHops := clamp(req.MaxHops, 1, 20, 10)
 
@@ -308,6 +315,8 @@ func (h *AnalysisHandler) HandlePreBuilt(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	h.auditLog(r, "query.prebuilt", map[string]any{"query_id": id})
+
 	rows, err := h.graphDB.Query(r.Context(), q.Cypher, nil)
 	if err != nil {
 		WriteInternalError(w, r, fmt.Errorf("prebuilt query %s: %w", id, err))
@@ -341,4 +350,13 @@ func clamp(val, min, max, defaultVal int) int {
 		return max
 	}
 	return val
+}
+
+func (h *AnalysisHandler) auditLog(r *http.Request, action string, details map[string]any) {
+	if h.audit == nil {
+		return
+	}
+	if err := h.audit.Log(r.Context(), action, details); err != nil {
+		slog.Warn("audit log failed", "action", action, "error", err)
+	}
 }

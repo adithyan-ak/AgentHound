@@ -56,6 +56,13 @@ func (h *IngestHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		}); err != nil {
 			slog.Warn("audit log failed", "error", err)
 		}
+		if err := h.audit.Log(r.Context(), "scan.complete", map[string]any{
+			"scan_id":    result.ScanID,
+			"node_count": result.NodesWritten,
+			"edge_count": result.EdgesWritten,
+		}); err != nil {
+			slog.Warn("audit log failed", "error", err)
+		}
 	}
 
 	WriteJSON(w, http.StatusOK, result)

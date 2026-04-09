@@ -60,7 +60,7 @@ func NewServer(deps ServerDeps) *Server {
 	graphH := handlers.NewGraphHandler(deps.Reader)
 	ingestH := handlers.NewIngestHandler(deps.Pipeline, auditLog)
 	queryH := handlers.NewQueryHandler(deps.Reader, auditLog)
-	analysisH := handlers.NewAnalysisHandler(deps.GraphDB)
+	analysisH := handlers.NewAnalysisHandler(deps.GraphDB, auditLog)
 	scanH := handlers.NewScanHandler(deps.ScanStore, auditLog)
 	authH := handlers.NewAuthHandler(deps.UserStore, deps.TokenStore, deps.JWTSecret, auditLog)
 	auditH := handlers.NewAuditHandler(deps.AuditStore)
