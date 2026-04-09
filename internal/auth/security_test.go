@@ -1,6 +1,9 @@
 package auth
 
 import (
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -179,5 +182,62 @@ func TestJWTSigningMethodHS256(t *testing.T) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		t.Fatalf("JWT parts = %d, want 3", len(parts))
+	}
+}
+
+func TestNoHardcodedAPITokens(t *testing.T) {
+	root := findRepoRoot(t)
+	var matches []string
+
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			base := info.Name()
+			if base == "vendor" || base == "node_modules" || base == ".git" || base == "testdata" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		for i, line := range strings.Split(string(data), "\n") {
+			if strings.Contains(line, `"ah_`) && !strings.Contains(line, `"ah_"`) {
+				rel, _ := filepath.Rel(root, path)
+				matches = append(matches, rel+":"+strings.TrimSpace(line)+" (line "+strconv.Itoa(i+1)+")")
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if len(matches) > 0 {
+		t.Errorf("found hardcoded ah_ tokens in non-test Go files:\n%s", strings.Join(matches, "\n"))
+	}
+}
+
+func findRepoRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("could not find repo root (no go.mod)")
+		}
+		dir = parent
 	}
 }
