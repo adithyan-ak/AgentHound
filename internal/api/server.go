@@ -61,7 +61,7 @@ func NewServer(deps ServerDeps) *Server {
 	ingestH := handlers.NewIngestHandler(deps.Pipeline, auditLog)
 	queryH := handlers.NewQueryHandler(deps.Reader, auditLog)
 	analysisH := handlers.NewAnalysisHandler(deps.GraphDB)
-	scanH := handlers.NewScanHandler(deps.ScanStore)
+	scanH := handlers.NewScanHandler(deps.ScanStore, auditLog)
 	authH := handlers.NewAuthHandler(deps.UserStore, deps.TokenStore, deps.JWTSecret, auditLog)
 	auditH := handlers.NewAuditHandler(deps.AuditStore)
 
@@ -94,7 +94,7 @@ func NewServer(deps ServerDeps) *Server {
 			r.Use(auth.RequireRole(auth.RoleAnalyst))
 
 			r.With(httprate.LimitByIP(20, time.Minute)).Post("/ingest", ingestH.Handle)
-			r.Post("/scans", scanH.HandleList) // POST for triggering scans
+			r.Post("/scans", scanH.HandleCreate)
 			r.Post("/analysis/shortest-path", analysisH.HandleShortestPath)
 			r.Post("/analysis/all-paths", analysisH.HandleAllPaths)
 			r.Post("/analysis/weighted-path", analysisH.HandleWeightedPath)
@@ -111,6 +111,7 @@ func NewServer(deps ServerDeps) *Server {
 			r.With(httprate.LimitByIP(10, time.Minute)).Post("/query", queryH.Handle)
 			r.Post("/auth/users", authH.HandleCreateUser)
 			r.Get("/auth/users", authH.HandleListUsers)
+			r.Delete("/auth/users/{id}", authH.HandleDeleteUser)
 			r.Get("/audit", auditH.HandleList)
 		})
 	})
