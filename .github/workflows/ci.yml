@@ -64,8 +64,8 @@ jobs:
           echo "::notice::Total coverage: ${TOTAL}% — raise threshold as tests are added to appdb, graph, cli"
           # Threshold: current floor to prevent regressions.
           # Ratchet up as untested packages gain tests.
-          if [ "$(echo "$TOTAL < 55" | bc -l)" -eq 1 ]; then
-            echo "::error::Coverage ${TOTAL}% is below 55% threshold"
+          if [ "$(echo "$TOTAL < 60" | bc -l)" -eq 1 ]; then
+            echo "::error::Coverage ${TOTAL}% is below 60% threshold"
             exit 1
           fi
       - name: Run govulncheck
