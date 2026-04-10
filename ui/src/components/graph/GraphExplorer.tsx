@@ -1,3 +1,4 @@
+import { Component, type ReactNode } from "react";
 import { MultiDirectedGraph } from "graphology";
 import { SigmaContainer } from "@react-sigma/core";
 import "@react-sigma/core/lib/style.css";
@@ -32,6 +33,37 @@ const sigmaSettings = {
     | undefined,
 };
 
+interface ErrorBoundaryState {
+  error: Error | null;
+}
+
+class GraphErrorBoundary extends Component<
+  { children: ReactNode },
+  ErrorBoundaryState
+> {
+  state: ErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="absolute inset-0 flex items-center justify-center bg-background">
+          <div className="text-center space-y-2 p-4">
+            <p className="text-destructive font-medium">Graph rendering error</p>
+            <pre className="text-xs text-muted-foreground max-w-lg whitespace-pre-wrap">
+              {this.state.error.message}
+            </pre>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export function GraphExplorer() {
   const hoveredNode = useGraphStore((s) => s.hoveredNodeId);
   const selectedNode = useGraphStore((s) => s.selectedNodeId);
@@ -46,16 +78,18 @@ export function GraphExplorer() {
 
   return (
     <div className="relative h-full w-full">
-      <SigmaContainer
-        graph={MultiDirectedGraph}
-        settings={settings}
-        className="h-full w-full"
-      >
-        <GraphDataLoader />
-        <GraphEvents />
-        <GraphSearch />
-      </SigmaContainer>
-      <GraphControls />
+      <GraphErrorBoundary>
+        <SigmaContainer
+          graph={MultiDirectedGraph}
+          settings={settings}
+          className="h-full w-full"
+        >
+          <GraphDataLoader />
+          <GraphEvents />
+          <GraphSearch />
+          <GraphControls />
+        </SigmaContainer>
+      </GraphErrorBoundary>
       <GraphFilters />
       <GraphLegend />
     </div>

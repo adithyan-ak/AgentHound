@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/adithyan-ak/agenthound/internal/graph"
@@ -39,7 +40,12 @@ func (h *GraphHandler) HandleListNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *GraphHandler) HandleGetNode(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	raw := chi.URLParam(r, "id")
+	id, err := url.PathUnescape(raw)
+	if err != nil {
+		WriteValidationError(w, "invalid node id")
+		return
+	}
 	node, edges, err := h.reader.GetNode(r.Context(), id)
 	if err != nil {
 		WriteInternalError(w, r, err)
