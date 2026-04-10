@@ -1,28 +1,43 @@
 import type { APIEdge } from "@/api/types";
 
-export const EDGE_COLORS: Record<string, string> = {
-  TRUSTS_SERVER: "#4A90D9",
-  PROVIDES_TOOL: "#50C878",
-  PROVIDES_RESOURCE: "#27AE60",
-  PROVIDES_PROMPT: "#2ECC71",
-  ADVERTISES_SKILL: "#7B68EE",
-  DELEGATES_TO: "#9B59B6",
-  AUTHENTICATES_WITH: "#8E8E93",
-  USES_CREDENTIAL: "#BDC3C7",
-  RUNS_ON: "#2C3E50",
-  CONFIGURED_IN: "#95A5A6",
-  HAS_ENV_VAR: "#E67E22",
-  LOADS_INSTRUCTIONS: "#3498DB",
-  SAME_AUTH_DOMAIN: "#1ABC9C",
-  HAS_ACCESS_TO: "#F5A623",
-  CAN_EXECUTE: "#E74C3C",
-  SHADOWS: "#FF6B6B",
-  POISONED_DESCRIPTION: "#FF0000",
-  CAN_REACH: "#D0021B",
-  CAN_EXFILTRATE_VIA: "#FF0000",
-  CAN_IMPERSONATE: "#8E44AD",
-  POISONED_INSTRUCTIONS: "#C0392B",
+export type EdgeCategory = "attack" | "trust" | "structure";
+
+export const EDGE_CATEGORY_COLORS: Record<EdgeCategory, string> = {
+  attack: "#FF2D2D",
+  trust: "#4A90D9",
+  structure: "#666666",
 };
+
+export const EDGE_CATEGORY_MAP: Record<string, EdgeCategory> = {
+  CAN_REACH: "attack",
+  CAN_EXFILTRATE_VIA: "attack",
+  CAN_EXECUTE: "attack",
+  SHADOWS: "attack",
+  POISONED_DESCRIPTION: "attack",
+  POISONED_INSTRUCTIONS: "attack",
+  CAN_IMPERSONATE: "attack",
+  TRUSTS_SERVER: "trust",
+  AUTHENTICATES_WITH: "trust",
+  DELEGATES_TO: "trust",
+  SAME_AUTH_DOMAIN: "trust",
+  HAS_ACCESS_TO: "trust",
+  PROVIDES_TOOL: "structure",
+  PROVIDES_RESOURCE: "structure",
+  PROVIDES_PROMPT: "structure",
+  ADVERTISES_SKILL: "structure",
+  RUNS_ON: "structure",
+  CONFIGURED_IN: "structure",
+  HAS_ENV_VAR: "structure",
+  USES_CREDENTIAL: "structure",
+  LOADS_INSTRUCTIONS: "structure",
+};
+
+export const EDGE_COLORS: Record<string, string> = Object.fromEntries(
+  Object.entries(EDGE_CATEGORY_MAP).map(([kind, cat]) => [
+    kind,
+    EDGE_CATEGORY_COLORS[cat],
+  ]),
+);
 
 const COMPOSITE_EDGES = new Set([
   "HAS_ACCESS_TO",
@@ -35,14 +50,20 @@ const COMPOSITE_EDGES = new Set([
   "POISONED_INSTRUCTIONS",
 ]);
 
+export function getEdgeCategory(kind: string): EdgeCategory {
+  return EDGE_CATEGORY_MAP[kind] ?? "structure";
+}
+
 export function getEdgeColor(kind: string): string {
-  return EDGE_COLORS[kind] ?? "#CCCCCC";
+  return EDGE_CATEGORY_COLORS[getEdgeCategory(kind)];
 }
 
 export function getEdgeSize(edge: APIEdge): number {
+  const cat = getEdgeCategory(edge.kind);
   const weight = Number(edge.properties?.risk_weight ?? 0.5);
-  if (COMPOSITE_EDGES.has(edge.kind)) return 1.5 + weight * 2;
-  return 1;
+  if (cat === "attack") return 2.5 + weight * 2;
+  if (cat === "trust") return 1.5;
+  return 0.8;
 }
 
 export function isCompositeEdge(kind: string): boolean {
