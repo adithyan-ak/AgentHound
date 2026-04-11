@@ -6,6 +6,7 @@ import { Legend } from "./Legend";
 import { StatusStrip } from "./StatusStrip";
 import { ChainRibbon } from "./ChainRibbon";
 import { BlastRadiusRings } from "./BlastRadiusRings";
+import { NodeDetailDrawer } from "./NodeDetailDrawer";
 
 export function ExplorerPage() {
   return (
@@ -17,6 +18,7 @@ export function ExplorerPage() {
         <InfoCard />
         <Legend />
         <ChainRibbon />
+        <NodeDetailDrawer />
         <StatusStrip />
       </ReactFlowProvider>
     </div>
