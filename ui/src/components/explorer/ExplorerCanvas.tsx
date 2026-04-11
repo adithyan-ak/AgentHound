@@ -15,6 +15,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useExplorerGraph } from "@/hooks/useExplorerGraph";
+import { useBlastRadius } from "@/hooks/useBlastRadius";
 import { useExplorerStore } from "@/store/explorer";
 import { getLens } from "@/lib/explorer/lens-config";
 import {
@@ -22,6 +23,10 @@ import {
   type HexNodeData,
   type LensEdgeData,
 } from "@/lib/explorer/graph-builder";
+import {
+  computeChokepoints,
+  chokepointsToSizeMap,
+} from "@/lib/explorer/chokepoints";
 import { computeExplorerLayout } from "@/lib/explorer/layout";
 import { HexNode } from "./nodes/HexNode";
 import { LensEdge } from "./edges/LensEdge";
@@ -53,6 +58,16 @@ export function ExplorerCanvas() {
   const selectEdge = useExplorerStore((s) => s.selectEdge);
   const openDrawer = useExplorerStore((s) => s.openDrawer);
   const clearSelection = useExplorerStore((s) => s.clearSelection);
+  const setBlastRadiusSource = useExplorerStore((s) => s.setBlastRadiusSource);
+  const blastRadiusSourceId = useExplorerStore((s) => s.blastRadiusSourceId);
+  const blastDirection = useExplorerStore((s) => s.blastRadiusDirection);
+  const blastMaxHops = useExplorerStore((s) => s.blastRadiusMaxHops);
+
+  const { data: blastData } = useBlastRadius(
+    activeLens === "blast-radius" ? blastRadiusSourceId : null,
+    blastDirection,
+    blastMaxHops,
+  );
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<HexNodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge<LensEdgeData>>([]);
@@ -66,6 +81,21 @@ export function ExplorerCanvas() {
   const built = useMemo(() => {
     if (!data) return null;
     const lens = getLens(activeLens);
+
+    const chokepointMap =
+      activeLens === "chokepoints"
+        ? chokepointsToSizeMap(computeChokepoints(data.edges, 20))
+        : undefined;
+
+    const blastRadius =
+      activeLens === "blast-radius" && blastData && blastRadiusSourceId
+        ? {
+            sourceId: blastRadiusSourceId,
+            nodeIds: blastData.nodeIdSet,
+            edgeKeys: blastData.edgeKeySet,
+          }
+        : undefined;
+
     return buildExplorerGraph(
       { nodes: data.nodes, edges: data.edges },
       {
@@ -73,9 +103,11 @@ export function ExplorerCanvas() {
         activeLensId: activeLens,
         subPresets,
         findings: data.findings,
+        blastRadius,
+        chokepoints: chokepointMap,
       },
     );
-  }, [data, activeLens, subPresets]);
+  }, [data, activeLens, subPresets, blastData, blastRadiusSourceId]);
 
   useEffect(() => {
     if (!built) return;
@@ -113,9 +145,12 @@ export function ExplorerCanvas() {
   const onNodeClick: NodeMouseHandler = useCallback(
     (_, node) => {
       selectNode(node.id);
+      if (activeLens === "blast-radius") {
+        setBlastRadiusSource(node.id);
+      }
       openDrawer();
     },
-    [selectNode, openDrawer],
+    [selectNode, openDrawer, activeLens, setBlastRadiusSource],
   );
 
   const onEdgeClick: EdgeMouseHandler = useCallback(
