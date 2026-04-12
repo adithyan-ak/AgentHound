@@ -18,6 +18,12 @@ export type DrawerTab =
 
 export type BlastDirection = "out" | "in" | "both";
 
+export interface HighlightState {
+  nodeIds: string[];
+  edgeIds: string[];
+  title?: string;
+}
+
 interface ExplorerState {
   activeLens: LensId;
   subPresets: Record<LensId, string[]>;
@@ -30,6 +36,12 @@ interface ExplorerState {
   blastRadiusDirection: BlastDirection;
   blastRadiusMaxHops: number;
   showOrphans: boolean;
+  highlight: HighlightState | null;
+  contextMenu: {
+    nodeId: string;
+    x: number;
+    y: number;
+  } | null;
 }
 
 interface ExplorerActions {
@@ -48,6 +60,10 @@ interface ExplorerActions {
   setBlastRadiusMaxHops: (hops: number) => void;
   clearBlastRadius: () => void;
   toggleShowOrphans: () => void;
+  setHighlight: (highlight: HighlightState | null) => void;
+  clearHighlight: () => void;
+  openContextMenu: (nodeId: string, x: number, y: number) => void;
+  closeContextMenu: () => void;
 }
 
 const DEFAULT_SUB_PRESETS: Record<LensId, string[]> = {
@@ -88,6 +104,8 @@ export const useExplorerStore = create<ExplorerState & ExplorerActions>()(
     blastRadiusDirection: "out",
     blastRadiusMaxHops: 6,
     showOrphans: false,
+    highlight: null,
+    contextMenu: null,
 
     setActiveLens: (lens) => set({ activeLens: lens }),
 
@@ -118,6 +136,8 @@ export const useExplorerStore = create<ExplorerState & ExplorerActions>()(
         selectedNodeId: null,
         selectedEdgeId: null,
         drawerOpen: false,
+        highlight: null,
+        contextMenu: null,
       }),
 
     openDrawer: (tab) =>
@@ -142,5 +162,14 @@ export const useExplorerStore = create<ExplorerState & ExplorerActions>()(
 
     toggleShowOrphans: () =>
       set((state) => ({ showOrphans: !state.showOrphans })),
+
+    setHighlight: (highlight) => set({ highlight }),
+
+    clearHighlight: () => set({ highlight: null }),
+
+    openContextMenu: (nodeId, x, y) =>
+      set({ contextMenu: { nodeId, x, y } }),
+
+    closeContextMenu: () => set({ contextMenu: null }),
   }),
 );

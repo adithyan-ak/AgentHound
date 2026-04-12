@@ -1,5 +1,6 @@
 import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { Crown, Target } from "lucide-react";
 import {
   getHexConfig,
   HEX_POLYGON_POINTS,
@@ -87,6 +88,33 @@ function HexNodeComponent({ data, selected }: NodeProps) {
             strokeWidth={2}
           />
         </div>
+
+        {d.highValue && (
+          <div
+            className="absolute flex h-5 w-5 items-center justify-center rounded-full bg-slate-950 ring-1 ring-yellow-500/80 shadow-[0_0_8px_rgba(234,179,8,0.65)] pointer-events-none"
+            style={{ left: -2, top: 14 }}
+            title="High value target"
+          >
+            <Crown
+              className="h-3 w-3 text-yellow-400"
+              strokeWidth={2.5}
+              fill="currentColor"
+              fillOpacity={0.25}
+            />
+          </div>
+        )}
+        {d.owned && (
+          <div
+            className="absolute flex h-5 w-5 items-center justify-center rounded-full bg-slate-950 ring-1 ring-red-500/85 shadow-[0_0_8px_rgba(239,68,68,0.75)] pointer-events-none"
+            style={{ right: -2, top: 14 }}
+            title="Owned — attacker controlled"
+          >
+            <Target
+              className="h-3 w-3 text-red-400"
+              strokeWidth={2.75}
+            />
+          </div>
+        )}
 
         {HEX_VERTICES.map((v) => (
           <Handle

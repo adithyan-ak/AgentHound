@@ -14,6 +14,8 @@ export interface HexNodeData extends Record<string, unknown> {
   dim: boolean;
   emphasized: boolean;
   sizeMultiplier: number;
+  owned: boolean;
+  highValue: boolean;
 }
 
 export interface OrphanClusterData extends Record<string, unknown> {
@@ -185,6 +187,25 @@ export interface BuildOptions {
    * are hidden entirely. Only applies to lenses with dimOthers=false.
    */
   showOrphans?: boolean;
+  /**
+   * Set of objectids marked as Owned (red target overlay). Persisted via
+   * the graph store.
+   */
+  ownedSet?: Set<string>;
+  /**
+   * Set of objectids marked as High Value (yellow crown overlay).
+   * Persisted via the graph store.
+   */
+  highValueSet?: Set<string>;
+  /**
+   * User-driven highlight scope. When non-null, all nodes and edges not
+   * in the highlight are dimmed. Used by the right-click menu's
+   * "Focus 2-hop" / "Show reach" actions.
+   */
+  highlight?: {
+    nodeIds: Set<string>;
+    edgeIds: Set<string>;
+  } | null;
 }
 
 /**
@@ -204,6 +225,9 @@ export function buildExplorerGraph(
     blastRadius,
     chokepoints,
     showOrphans = false,
+    ownedSet,
+    highValueSet,
+    highlight,
   } = opts;
   const findingIndex = buildFindingIndex(findings);
 
@@ -293,7 +317,9 @@ export function buildExplorerGraph(
     // Dim priority:
     // 1. Critical lens: edges not in critical findings are dimmed.
     // 2. Blast Radius lens: edges outside the blast scope are dimmed.
-    // 3. Otherwise not dimmed (the edge is in scope by virtue of being in
+    // 3. Right-click highlight: edges not in the highlight set are dimmed
+    //    regardless of lens.
+    // 4. Otherwise not dimmed (the edge is in scope by virtue of being in
     //    selectedEdges).
     let dim = false;
     const isInScope =
@@ -304,9 +330,6 @@ export function buildExplorerGraph(
           : true;
     if (!isInScope && lens.dimOthers) dim = true;
 
-    touchedNodeIds.add(primary.source);
-    touchedNodeIds.add(primary.target);
-
     const isSelfLoop = primary.source === primary.target;
     const edgeType = isSelfLoop
       ? "self-loop"
@@ -314,8 +337,22 @@ export function buildExplorerGraph(
         ? "lens-cross"
         : "lens";
 
+    const edgeId = `${key}:${primary.kind}${group.length > 1 ? `+${group.length}` : ""}`;
+
+    // Apply user highlight: if active, only edges in the highlight set stay
+    // bright. Highlight takes priority over lens-level dimming.
+    if (highlight) {
+      const inHighlight =
+        highlight.nodeIds.has(primary.source) &&
+        highlight.nodeIds.has(primary.target);
+      dim = !inHighlight;
+    }
+
+    touchedNodeIds.add(primary.source);
+    touchedNodeIds.add(primary.target);
+
     rfEdges.push({
-      id: `${key}:${primary.kind}${group.length > 1 ? `+${group.length}` : ""}`,
+      id: edgeId,
       source: primary.source,
       target: primary.target,
       type: edgeType,
@@ -380,9 +417,22 @@ export function buildExplorerGraph(
       dim = !touched && !isPoisonedSource(n);
     }
 
+    // Right-click highlight takes priority over lens-level dimming: nodes
+    // in the highlight set stay bright; everything else is dimmed. We do
+    // NOT set emphasized=true here because emphasized triggers the 1.35x
+    // scale reserved for the blast radius source — highlight is a subtler
+    // effect that only toggles dim.
+    if (highlight) {
+      if (highlight.nodeIds.has(n.id)) {
+        dim = false;
+      } else {
+        dim = true;
+      }
+    }
+
     // Orphan handling: only for lenses with dimOthers=false. For dimOthers=true
     // lenses we keep the existing dim behavior so the ghost-context is preserved.
-    if (!inScope && !lens.dimOthers) {
+    if (!inScope && !lens.dimOthers && !highlight) {
       orphanCount++;
       if (!orphanByKind[kind]) orphanByKind[kind] = [];
       orphanByKind[kind].push(n);
@@ -408,6 +458,8 @@ export function buildExplorerGraph(
         dim,
         emphasized,
         sizeMultiplier,
+        owned: ownedSet?.has(n.id) ?? false,
+        highValue: highValueSet?.has(n.id) ?? false,
       } satisfies HexNodeData,
     });
   }

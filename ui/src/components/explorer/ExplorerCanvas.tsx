@@ -16,6 +16,7 @@ import "@xyflow/react/dist/style.css";
 import { useExplorerGraph } from "@/hooks/useExplorerGraph";
 import { useBlastRadius } from "@/hooks/useBlastRadius";
 import { useExplorerStore } from "@/store/explorer";
+import { useGraphStore } from "@/store/graph";
 import { getLens } from "@/lib/explorer/lens-config";
 import {
   buildExplorerGraph,
@@ -56,6 +57,12 @@ export function ExplorerCanvas() {
   const blastDirection = useExplorerStore((s) => s.blastRadiusDirection);
   const blastMaxHops = useExplorerStore((s) => s.blastRadiusMaxHops);
   const showOrphans = useExplorerStore((s) => s.showOrphans);
+  const highlight = useExplorerStore((s) => s.highlight);
+  const openContextMenu = useExplorerStore((s) => s.openContextMenu);
+  const closeContextMenu = useExplorerStore((s) => s.closeContextMenu);
+  const clearHighlight = useExplorerStore((s) => s.clearHighlight);
+  const ownedNodeIds = useGraphStore((s) => s.ownedNodeIds);
+  const highValueNodeIds = useGraphStore((s) => s.highValueNodeIds);
 
   const { data: blastData } = useBlastRadius(
     activeLens === "blast-radius" ? blastRadiusSourceId : null,
@@ -72,6 +79,20 @@ export function ExplorerCanvas() {
   reactFlowRef.current = reactFlow;
   const hasInitialLayoutRef = useRef(false);
   const prevShowOrphansRef = useRef(showOrphans);
+
+  const ownedSet = useMemo(() => new Set(ownedNodeIds), [ownedNodeIds]);
+  const highValueSet = useMemo(
+    () => new Set(highValueNodeIds),
+    [highValueNodeIds],
+  );
+
+  const highlightSets = useMemo(() => {
+    if (!highlight) return null;
+    return {
+      nodeIds: new Set(highlight.nodeIds),
+      edgeIds: new Set(highlight.edgeIds),
+    };
+  }, [highlight]);
 
   const built = useMemo(() => {
     if (!data) return null;
@@ -101,9 +122,22 @@ export function ExplorerCanvas() {
         blastRadius,
         chokepoints: chokepointMap,
         showOrphans,
+        ownedSet,
+        highValueSet,
+        highlight: highlightSets,
       },
     );
-  }, [data, activeLens, subPresets, blastData, blastRadiusSourceId, showOrphans]);
+  }, [
+    data,
+    activeLens,
+    subPresets,
+    blastData,
+    blastRadiusSourceId,
+    showOrphans,
+    ownedSet,
+    highValueSet,
+    highlightSets,
+  ]);
 
   useEffect(() => {
     if (!built) return;
@@ -132,11 +166,13 @@ export function ExplorerCanvas() {
       if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA") return;
       if (e.key === "Escape") {
         clearSelection();
+        closeContextMenu();
+        clearHighlight();
       }
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [clearSelection]);
+  }, [clearSelection, closeContextMenu, clearHighlight]);
 
   // When the user toggles "show clusters" on, pan/zoom to the cluster strip
   // once the layout has rendered the new cluster nodes. Transition detected
@@ -184,9 +220,20 @@ export function ExplorerCanvas() {
     [selectEdge],
   );
 
+  const onNodeContextMenu: NodeMouseHandler = useCallback(
+    (event, node) => {
+      event.preventDefault();
+      if (node.type !== "hex") return;
+      openContextMenu(node.id, event.clientX, event.clientY);
+    },
+    [openContextMenu],
+  );
+
   const onPaneClick = useCallback(() => {
     clearSelection();
-  }, [clearSelection]);
+    closeContextMenu();
+    clearHighlight();
+  }, [clearSelection, closeContextMenu, clearHighlight]);
 
   if (error) {
     return (
@@ -217,6 +264,7 @@ export function ExplorerCanvas() {
       onEdgesChange={onEdgesChange}
       onNodeClick={onNodeClick}
       onEdgeClick={onEdgeClick}
+      onNodeContextMenu={onNodeContextMenu}
       onPaneClick={onPaneClick}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}

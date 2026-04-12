@@ -7,6 +7,7 @@ import { StatusStrip } from "./StatusStrip";
 import { ChainRibbon } from "./ChainRibbon";
 import { BlastRadiusRings } from "./BlastRadiusRings";
 import { NodeDetailDrawer } from "./NodeDetailDrawer";
+import { ExplorerNodeContextMenu } from "./ExplorerNodeContextMenu";
 
 export function ExplorerPage() {
   return (
@@ -20,6 +21,7 @@ export function ExplorerPage() {
         <ChainRibbon />
         <NodeDetailDrawer />
         <StatusStrip />
+        <ExplorerNodeContextMenu />
       </ReactFlowProvider>
     </div>
   );
