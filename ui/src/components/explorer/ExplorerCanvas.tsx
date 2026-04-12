@@ -27,6 +27,7 @@ import {
   chokepointsToSizeMap,
 } from "@/lib/explorer/chokepoints";
 import { computeExplorerLayout } from "@/lib/explorer/layout";
+import { computeClickNeighbors } from "@/lib/explorer/click-neighbors";
 import { HexNode } from "./nodes/HexNode";
 import { OrphanClusterNode } from "./nodes/OrphanClusterNode";
 import { LensEdge } from "./edges/LensEdge";
@@ -202,6 +203,8 @@ export function ExplorerCanvas() {
     }
   }, [nodes, showOrphans, layoutReady]);
 
+  const setHighlight = useExplorerStore((s) => s.setHighlight);
+
   const onNodeClick: NodeMouseHandler = useCallback(
     (_, node) => {
       selectNode(node.id);
@@ -209,8 +212,16 @@ export function ExplorerCanvas() {
         setBlastRadiusSource(node.id);
       }
       openDrawer();
+      if (data && node.type === "hex") {
+        const neighbors = computeClickNeighbors(
+          node.id,
+          data.edges,
+          activeLens,
+        );
+        setHighlight(neighbors);
+      }
     },
-    [selectNode, openDrawer, activeLens, setBlastRadiusSource],
+    [selectNode, openDrawer, activeLens, setBlastRadiusSource, data, setHighlight],
   );
 
   const onEdgeClick: EdgeMouseHandler = useCallback(

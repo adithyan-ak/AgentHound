@@ -107,7 +107,7 @@ export const useExplorerStore = create<ExplorerState & ExplorerActions>()(
     highlight: null,
     contextMenu: null,
 
-    setActiveLens: (lens) => set({ activeLens: lens }),
+    setActiveLens: (lens) => set({ activeLens: lens, highlight: null, contextMenu: null }),
 
     setSubPresets: (lens, presets) =>
       set((state) => ({

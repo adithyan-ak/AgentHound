@@ -43,6 +43,7 @@ export interface LensEdgeData extends Record<string, unknown> {
   properties: Record<string, unknown>;
   dim: boolean;
   emphasized: boolean;
+  showFlowDot: boolean;
 }
 
 export interface BundledEdge {
@@ -341,11 +342,13 @@ export function buildExplorerGraph(
 
     // Apply user highlight: if active, only edges in the highlight set stay
     // bright. Highlight takes priority over lens-level dimming.
+    let showFlowDot = false;
     if (highlight) {
       const inHighlight =
         highlight.nodeIds.has(primary.source) &&
         highlight.nodeIds.has(primary.target);
       dim = !inHighlight;
+      showFlowDot = inHighlight;
     }
 
     touchedNodeIds.add(primary.source);
@@ -372,6 +375,7 @@ export function buildExplorerGraph(
         properties: primary.properties ?? {},
         dim,
         emphasized: false,
+        showFlowDot,
       },
     });
   }
