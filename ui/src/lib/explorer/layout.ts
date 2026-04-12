@@ -1,29 +1,36 @@
 import ELK, { type ElkNode, type ElkExtendedEdge } from "elkjs/lib/elk-api.js";
 import ElkWorker from "elkjs/lib/elk-worker.min.js?worker";
 import type { Node, Edge } from "@xyflow/react";
-import { HEX_NODE_WIDTH, HEX_TOTAL_HEIGHT } from "./hex-config";
+import { getHexConfig, HEX_NODE_WIDTH, HEX_TOTAL_HEIGHT } from "./hex-config";
 
 const elk = new ELK({
   workerFactory: () => new ElkWorker() as unknown as Worker,
 });
 
 /**
- * ELK options for top-to-bottom flow. Layers are horizontal ROWS; nodes
- * at the same depth spread horizontally within each row. No forced
- * partitioning — ELK assigns layers based on edge topology, so nodes
- * from different subgraphs land side-by-side in the same row, making
- * the graph wide and short instead of tall and narrow.
+ * ELK options for top-to-bottom flow with partitioning. This is a true
+ * transpose of the original LEFT-TO-RIGHT layout: the same partitions
+ * that created vertical columns now create horizontal rows. Within each
+ * row, nodes spread horizontally with generous spacing.
+ *
+ * Partitions (rows from top to bottom):
+ *   0: AgentInstance, A2AAgent
+ *   1: MCPServer
+ *   2: MCPTool, A2ASkill, MCPPrompt
+ *   3: Host, Identity, Credential, TrustZone
+ *   4: MCPResource, ConfigFile, InstructionFile
  */
 const ELK_OPTIONS: Record<string, string> = {
   "elk.algorithm": "layered",
   "elk.direction": "DOWN",
+  "elk.partitioning.activate": "true",
   "elk.layered.layering.strategy": "NETWORK_SIMPLEX",
   "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
   "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
-  "elk.spacing.nodeNode": "40",
-  "elk.layered.spacing.nodeNodeBetweenLayers": "120",
+  "elk.spacing.nodeNode": "60",
+  "elk.layered.spacing.nodeNodeBetweenLayers": "140",
   "elk.layered.spacing.edgeNodeBetweenLayers": "30",
-  "elk.spacing.edgeNode": "16",
+  "elk.spacing.edgeNode": "20",
 };
 
 export interface LayoutResult<T extends Node = Node> {
@@ -74,11 +81,19 @@ export async function computeExplorerLayout<T extends Node = Node>(
   let mainMinX = Number.POSITIVE_INFINITY;
 
   if (connectedNodes.length > 0) {
-    const elkChildren: ElkNode[] = connectedNodes.map((n) => ({
-      id: n.id,
-      width: HEX_NODE_WIDTH,
-      height: HEX_TOTAL_HEIGHT,
-    }));
+    const elkChildren: ElkNode[] = connectedNodes.map((n) => {
+      const data = n.data as Record<string, unknown> | undefined;
+      const kind = typeof data?.kind === "string" ? data.kind : "";
+      const config = getHexConfig(kind);
+      return {
+        id: n.id,
+        width: HEX_NODE_WIDTH,
+        height: HEX_TOTAL_HEIGHT,
+        layoutOptions: {
+          "elk.partitioning.partition": String(config.column),
+        },
+      };
+    });
 
     const connectedIds = new Set(connectedNodes.map((n) => n.id));
     const elkEdges: ElkExtendedEdge[] = [];
