@@ -230,35 +230,31 @@ function OrphanClusterNodeComponent({ data }: NodeProps) {
       </div>
 
       <Handle
+        id="h-top"
+        type="target"
+        position={Position.Top}
+        style={{ position: "absolute", left: 42, top: 4, width: 1, height: 1, background: "transparent", border: "none", pointerEvents: "none" }}
+        isConnectable={false}
+      />
+      <Handle
+        id="h-bottom"
+        type="source"
+        position={Position.Bottom}
+        style={{ position: "absolute", left: 42, top: 92, width: 1, height: 1, background: "transparent", border: "none", pointerEvents: "none" }}
+        isConnectable={false}
+      />
+      <Handle
         id="h-left"
         type="target"
         position={Position.Left}
-        style={{
-          position: "absolute",
-          left: 2,
-          top: 48,
-          width: 1,
-          height: 1,
-          background: "transparent",
-          border: "none",
-          pointerEvents: "none",
-        }}
+        style={{ position: "absolute", left: 2, top: 48, width: 1, height: 1, background: "transparent", border: "none", pointerEvents: "none" }}
         isConnectable={false}
       />
       <Handle
         id="h-right"
         type="source"
         position={Position.Right}
-        style={{
-          position: "absolute",
-          left: 82,
-          top: 48,
-          width: 1,
-          height: 1,
-          background: "transparent",
-          border: "none",
-          pointerEvents: "none",
-        }}
+        style={{ position: "absolute", left: 82, top: 48, width: 1, height: 1, background: "transparent", border: "none", pointerEvents: "none" }}
         isConnectable={false}
       />
     </div>

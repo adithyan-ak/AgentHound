@@ -359,8 +359,8 @@ export function buildExplorerGraph(
       source: primary.source,
       target: primary.target,
       type: edgeType,
-      sourceHandle: "h-right",
-      targetHandle: "h-left",
+      sourceHandle: "h-bottom",
+      targetHandle: "h-top",
       data: {
         kind: primary.kind,
         sourceKind: srcKind,

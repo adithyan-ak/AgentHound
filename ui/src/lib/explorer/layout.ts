@@ -1,33 +1,29 @@
 import ELK, { type ElkNode, type ElkExtendedEdge } from "elkjs/lib/elk-api.js";
 import ElkWorker from "elkjs/lib/elk-worker.min.js?worker";
 import type { Node, Edge } from "@xyflow/react";
-import { getHexConfig, HEX_NODE_WIDTH, HEX_TOTAL_HEIGHT } from "./hex-config";
+import { HEX_NODE_WIDTH, HEX_TOTAL_HEIGHT } from "./hex-config";
 
 const elk = new ELK({
   workerFactory: () => new ElkWorker() as unknown as Worker,
 });
 
-const COLUMN_SPACING = 260;
-const ROW_SPACING = 48;
-
 /**
- * ELK options for strict left-to-right column layout. Uses the `layered`
- * algorithm with partitioning so each node kind sits in its designated
- * column index (set per-node via `layoutOptions.partitioning.partition`).
+ * ELK options for top-to-bottom flow. Layers are horizontal ROWS; nodes
+ * at the same depth spread horizontally within each row. No forced
+ * partitioning — ELK assigns layers based on edge topology, so nodes
+ * from different subgraphs land side-by-side in the same row, making
+ * the graph wide and short instead of tall and narrow.
  */
 const ELK_OPTIONS: Record<string, string> = {
   "elk.algorithm": "layered",
-  "elk.direction": "RIGHT",
-  "elk.partitioning.activate": "true",
+  "elk.direction": "DOWN",
   "elk.layered.layering.strategy": "NETWORK_SIMPLEX",
   "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
   "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
-  "elk.layered.crossingMinimization.forceNodeModelOrder": "true",
-  "elk.spacing.nodeNode": String(ROW_SPACING),
-  "elk.layered.spacing.nodeNodeBetweenLayers": String(COLUMN_SPACING),
-  "elk.layered.spacing.edgeNodeBetweenLayers": "36",
-  "elk.spacing.edgeNode": "20",
-  "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
+  "elk.spacing.nodeNode": "40",
+  "elk.layered.spacing.nodeNodeBetweenLayers": "120",
+  "elk.layered.spacing.edgeNodeBetweenLayers": "30",
+  "elk.spacing.edgeNode": "16",
 };
 
 export interface LayoutResult<T extends Node = Node> {
@@ -78,19 +74,11 @@ export async function computeExplorerLayout<T extends Node = Node>(
   let mainMinX = Number.POSITIVE_INFINITY;
 
   if (connectedNodes.length > 0) {
-    const elkChildren: ElkNode[] = connectedNodes.map((n) => {
-      const data = n.data as Record<string, unknown> | undefined;
-      const kind = typeof data?.kind === "string" ? data.kind : "";
-      const config = getHexConfig(kind);
-      return {
-        id: n.id,
-        width: HEX_NODE_WIDTH,
-        height: HEX_TOTAL_HEIGHT,
-        layoutOptions: {
-          "elk.partitioning.partition": String(config.column),
-        },
-      };
-    });
+    const elkChildren: ElkNode[] = connectedNodes.map((n) => ({
+      id: n.id,
+      width: HEX_NODE_WIDTH,
+      height: HEX_TOTAL_HEIGHT,
+    }));
 
     const connectedIds = new Set(connectedNodes.map((n) => n.id));
     const elkEdges: ElkExtendedEdge[] = [];
