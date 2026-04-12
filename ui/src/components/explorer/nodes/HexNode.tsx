@@ -147,7 +147,7 @@ function HexNodeComponent({ data, selected }: NodeProps) {
           id="h-bottom"
           type="source"
           position={Position.Bottom}
-          style={{ position: "absolute", left: 42, top: 92, width: 1, height: 1, background: "transparent", border: "none", pointerEvents: "none" }}
+          style={{ position: "absolute", left: 42, top: 134, width: 1, height: 1, background: "transparent", border: "none", pointerEvents: "none" }}
           isConnectable={false}
         />
         <Handle
