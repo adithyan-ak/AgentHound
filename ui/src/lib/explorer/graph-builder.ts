@@ -151,7 +151,12 @@ export function isCrossProtocolEdge(
 
 function nodeLabel(node: APINode): string {
   const props = node.properties ?? {};
-  const name = (props.name as string) || (props.uri as string) || (props.path as string);
+  const name =
+    (props.name as string) ||
+    (props.hostname as string) ||
+    (props.ip as string) ||
+    (props.uri as string) ||
+    (props.path as string);
   if (name && name.length > 40) return name.slice(0, 38) + "…";
   return name || node.id.slice(0, 12);
 }
