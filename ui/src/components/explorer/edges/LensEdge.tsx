@@ -69,6 +69,8 @@ function LensEdgeComponent(props: EdgeProps) {
           transition: "opacity 250ms ease-out, stroke-width 250ms ease-out",
         }}
       />
+      <circle cx={sourceX} cy={sourceY} r={DOT_RADIUS} fill={color} opacity={opacity} />
+      <circle cx={targetX} cy={targetY} r={DOT_RADIUS} fill={color} opacity={opacity} />
       {d.showFlowDot && (
         <>
           <defs>
