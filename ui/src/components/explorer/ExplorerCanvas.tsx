@@ -4,7 +4,6 @@ import {
   Background,
   BackgroundVariant,
   Controls,
-  MiniMap,
   useEdgesState,
   useNodesState,
   useReactFlow,
@@ -31,7 +30,6 @@ import { computeExplorerLayout } from "@/lib/explorer/layout";
 import { HexNode } from "./nodes/HexNode";
 import { LensEdge } from "./edges/LensEdge";
 import { SelfLoopEdge } from "./edges/SelfLoopEdge";
-import { getHexConfig } from "@/lib/explorer/hex-config";
 
 const nodeTypes = {
   hex: HexNode,
@@ -42,12 +40,6 @@ const edgeTypes = {
   "lens-cross": LensEdge,
   "self-loop": SelfLoopEdge,
 };
-
-function minimapColor(node: Node): string {
-  const kind = (node.data as HexNodeData)?.kind;
-  if (!kind) return "#64748B";
-  return getHexConfig(kind).strokeColor;
-}
 
 export function ExplorerCanvas() {
   const { data, isLoading, error } = useExplorerGraph();
@@ -215,13 +207,6 @@ export function ExplorerCanvas() {
         position="bottom-right"
         showInteractive={false}
         className="!bg-slate-900 !border-slate-700 !shadow-lg"
-      />
-      <MiniMap
-        nodeColor={minimapColor}
-        maskColor="rgba(3,7,18,0.85)"
-        className="!bg-slate-900 !border-slate-700"
-        style={{ height: 140, width: 220 }}
-        position="top-right"
       />
     </ReactFlow>
   );
