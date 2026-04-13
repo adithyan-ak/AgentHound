@@ -387,4 +387,23 @@ describe("buildExplorerGraph", () => {
     const clusters = result.nodes.filter((n) => n.type === "orphan-cluster");
     expect(clusters.length).toBe(0);
   });
+
+  it("handles empty graph data without crashing", () => {
+    const lens = getLens("topology");
+    const result = buildExplorerGraph(
+      { nodes: [], edges: [] },
+      {
+        lens,
+        activeLensId: "topology",
+        subPresets: [...lens.edgeKinds],
+        findings: [],
+      },
+    );
+    expect(result.nodes).toHaveLength(0);
+    expect(result.edges).toHaveLength(0);
+    expect(result.metrics.visibleNodeCount).toBe(0);
+    expect(result.metrics.visibleEdgeCount).toBe(0);
+    expect(result.metrics.orphanCount).toBe(0);
+    expect(result.metrics.criticalCount).toBe(0);
+  });
 });

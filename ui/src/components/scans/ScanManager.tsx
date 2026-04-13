@@ -11,7 +11,7 @@ import { NewScan } from "./NewScan";
 export function ScanManager() {
   const [showNewScan, setShowNewScan] = useState(false);
 
-  const { data: scans, isLoading } = useQuery({
+  const { data: scans, isLoading, refetch } = useQuery({
     queryKey: ["scans"],
     queryFn: () => fetchScans(),
     staleTime: 30_000,
@@ -39,7 +39,7 @@ export function ScanManager() {
               <Skeleton className="h-4 w-3/4" />
             </div>
           ) : (
-            <ScanHistory scans={scans ?? []} />
+            <ScanHistory scans={scans ?? []} onDeleted={() => refetch()} />
           )}
         </CardContent>
       </Card>

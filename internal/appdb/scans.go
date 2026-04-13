@@ -84,3 +84,14 @@ func (s *ScanStore) ListScans(ctx context.Context, limit, offset int) ([]model.S
 	}
 	return scans, rows.Err()
 }
+
+func (s *ScanStore) DeleteScan(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM scans WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("delete scan: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("scan not found")
+	}
+	return nil
+}

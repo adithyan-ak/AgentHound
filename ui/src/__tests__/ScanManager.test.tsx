@@ -118,7 +118,7 @@ describe("ScanManager", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/agenthound collect config/i),
+        screen.getByText(/agenthound scan --config/i),
       ).toBeInTheDocument();
     });
   });

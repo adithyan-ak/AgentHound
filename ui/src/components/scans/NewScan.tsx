@@ -17,18 +17,23 @@ interface NewScanProps {
 
 const COMMANDS = [
   {
+    label: "Full Scan",
+    command: "agenthound scan",
+    description: "Discover configs, enumerate MCP servers, ingest, and analyze",
+  },
+  {
     label: "Config Discovery",
-    command: "agenthound collect config --discover | agenthound ingest -",
+    command: "agenthound scan --config",
     description: "Discover all MCP client configs on this machine",
   },
   {
     label: "MCP Enumeration",
-    command: "agenthound collect mcp --discover | agenthound ingest -",
+    command: "agenthound scan --mcp",
     description: "Enumerate all discovered MCP servers",
   },
   {
     label: "A2A Agent Card",
-    command: "agenthound collect a2a --target <url> | agenthound ingest -",
+    command: "agenthound scan --a2a --target <url>",
     description: "Fetch and ingest an A2A agent card",
   },
 ];

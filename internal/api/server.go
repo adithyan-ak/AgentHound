@@ -61,7 +61,7 @@ func NewServer(deps ServerDeps) *Server {
 	ingestH := handlers.NewIngestHandler(deps.Pipeline, auditLog)
 	queryH := handlers.NewQueryHandler(deps.Reader, auditLog)
 	analysisH := handlers.NewAnalysisHandler(deps.GraphDB, auditLog)
-	scanH := handlers.NewScanHandler(deps.ScanStore, auditLog)
+	scanH := handlers.NewScanHandler(deps.ScanStore, deps.GraphDB, auditLog)
 	authH := handlers.NewAuthHandler(deps.UserStore, deps.TokenStore, deps.JWTSecret, auditLog)
 	auditH := handlers.NewAuditHandler(deps.AuditStore)
 
@@ -100,6 +100,7 @@ func NewServer(deps ServerDeps) *Server {
 
 			r.With(httprate.LimitByIP(20, time.Minute)).Post("/ingest", ingestH.Handle)
 			r.Post("/scans", scanH.HandleCreate)
+			r.Delete("/scans/{id}", scanH.HandleDelete)
 			r.Post("/analysis/shortest-path", analysisH.HandleShortestPath)
 			r.Post("/analysis/all-paths", analysisH.HandleAllPaths)
 			r.Post("/analysis/weighted-path", analysisH.HandleWeightedPath)
@@ -150,7 +151,7 @@ func (s *Server) ListenAndServe(port int) error {
 		Addr:         fmt.Sprintf(":%d", port),
 		Handler:      s.router,
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
+		WriteTimeout: 180 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
 	slog.Info("starting API server", "port", port)

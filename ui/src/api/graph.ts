@@ -11,7 +11,8 @@ export async function fetchNodes(
 ): Promise<APINode[]> {
   const params: Record<string, string> = { limit: String(limit) };
   if (kind) params["kind"] = kind;
-  return api.get("graph/nodes", { searchParams: params }).json<APINode[]>();
+  const result = await api.get("graph/nodes", { searchParams: params }).json<APINode[] | null>();
+  return result ?? [];
 }
 
 export async function fetchNode(
@@ -28,7 +29,8 @@ export async function fetchEdges(
 ): Promise<APIEdge[]> {
   const params: Record<string, string> = { limit: String(limit) };
   if (kind) params["kind"] = kind;
-  return api.get("graph/edges", { searchParams: params }).json<APIEdge[]>();
+  const result = await api.get("graph/edges", { searchParams: params }).json<APIEdge[] | null>();
+  return result ?? [];
 }
 
 export interface SearchResult {

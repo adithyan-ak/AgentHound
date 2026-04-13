@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/adithyan-ak/agenthound/internal/graph"
+	"github.com/adithyan-ak/agenthound/internal/model"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -35,6 +36,9 @@ func (h *GraphHandler) HandleListNodes(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		WriteInternalError(w, r, fmt.Errorf("list nodes: %w", err))
 		return
+	}
+	if nodes == nil {
+		nodes = []model.Node{}
 	}
 	WriteJSON(w, http.StatusOK, nodes)
 }
@@ -71,6 +75,9 @@ func (h *GraphHandler) HandleListEdges(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		WriteInternalError(w, r, fmt.Errorf("list edges: %w", err))
 		return
+	}
+	if edges == nil {
+		edges = []model.Edge{}
 	}
 	if len(edges) >= limit {
 		w.Header().Set("X-Truncated", "true")

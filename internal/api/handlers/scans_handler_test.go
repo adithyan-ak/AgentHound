@@ -8,7 +8,7 @@ import (
 )
 
 func TestHandleCreateScan_MissingCollector(t *testing.T) {
-	h := NewScanHandler(nil, nil)
+	h := NewScanHandler(nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := newTestRequest(http.MethodPost, "/api/v1/scans", []byte(`{}`))
 	h.HandleCreate(w, r)
@@ -26,7 +26,7 @@ func TestHandleCreateScan_MissingCollector(t *testing.T) {
 }
 
 func TestHandleGetScan_EmptyID(t *testing.T) {
-	h := NewScanHandler(nil, nil)
+	h := NewScanHandler(nil, nil, nil)
 	w := httptest.NewRecorder()
 	r := newTestRequest(http.MethodGet, "/api/v1/scans/", nil)
 	r = withChiURLParam(r, "id", "")
