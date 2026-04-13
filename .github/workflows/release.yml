@@ -60,7 +60,8 @@ jobs:
         id: meta
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/build-push-action@v6
+      - name: Push slim image (for docker-compose)
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile
@@ -69,3 +70,14 @@ jobs:
           tags: |
             ghcr.io/adithyan-ak/agenthound:${{ steps.meta.outputs.version }}
             ghcr.io/adithyan-ak/agenthound:latest
+
+      - name: Push all-in-one image (for install.sh)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.allinone
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ghcr.io/adithyan-ak/agenthound:${{ steps.meta.outputs.version }}-allinone
+            ghcr.io/adithyan-ak/agenthound:allinone

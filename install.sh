@@ -2,7 +2,7 @@
 set -e
 
 REPO="ghcr.io/adithyan-ak/agenthound"
-TAG="latest"
+TAG="allinone"
 NAME="agenthound"
 PORT="${AGENTHOUND_PORT:-8080}"
 
