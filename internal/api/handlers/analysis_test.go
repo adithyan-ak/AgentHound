@@ -1,11 +1,16 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
+	"github.com/adithyan-ak/agenthound/internal/analysis"
+	"github.com/adithyan-ak/agenthound/internal/graph"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -218,5 +223,166 @@ func TestHandleWeightedPath_MissingFields(t *testing.T) {
 	}
 	if resp.Error.Code != "VALIDATION_ERROR" {
 		t.Fatalf("expected VALIDATION_ERROR, got %s", resp.Error.Code)
+	}
+}
+
+// --- HandleFindingDetail tests using graph.MockGraphDB with QueryFunc ---
+
+// findingID for CAN_REACH|src001|tgt001 = SHA256("CAN_REACH|src001|tgt001")[:16] = "9fd26fdabddf168f"
+const testFindingID = "9fd26fdabddf168f"
+
+func findingsRow() map[string]any {
+	return map[string]any{
+		"source_id":          "src001",
+		"source_name":        "test-agent",
+		"source_kind":        "AgentInstance",
+		"target_id":          "tgt001",
+		"target_name":        "prod-db",
+		"target_kind":        "MCPResource",
+		"edge_kind":          "CAN_REACH",
+		"confidence":         0.9,
+		"cross_protocol":     false,
+		"target_sensitivity": "critical",
+	}
+}
+
+func pathRow() map[string]any {
+	return map[string]any{
+		"nodes": []any{
+			map[string]any{"id": "src001", "name": "test-agent", "kinds": []any{"AgentInstance"}, "properties": map[string]any{}},
+			map[string]any{"id": "srv001", "name": "test-server", "kinds": []any{"MCPServer"}, "properties": map[string]any{}},
+			map[string]any{"id": "tool001", "name": "test-tool", "kinds": []any{"MCPTool"}, "properties": map[string]any{}},
+			map[string]any{"id": "tgt001", "name": "prod-db", "kinds": []any{"MCPResource"}, "properties": map[string]any{}},
+		},
+		"edges": []any{
+			map[string]any{"kind": "TRUSTS_SERVER", "source": "src001", "target": "srv001", "properties": map[string]any{"risk_weight": 0.1}},
+			map[string]any{"kind": "PROVIDES_TOOL", "source": "srv001", "target": "tool001", "properties": map[string]any{"risk_weight": 0.1}},
+			map[string]any{"kind": "HAS_ACCESS_TO", "source": "tool001", "target": "tgt001", "properties": map[string]any{"risk_weight": 0.2}},
+		},
+	}
+}
+
+func TestHandleFindingDetail_Success(t *testing.T) {
+	var callCount atomic.Int32
+	mock := &graph.MockGraphDB{
+		QueryFunc: func(_ context.Context, _ string, _ map[string]any) ([]map[string]any, error) {
+			n := callCount.Add(1)
+			if n == 1 {
+				return []map[string]any{findingsRow()}, nil
+			}
+			if n == 2 {
+				return []map[string]any{{"props": map[string]any{"evidence": "test"}}}, nil
+			}
+			return []map[string]any{pathRow()}, nil
+		},
+	}
+	h := NewAnalysisHandler(mock, nil)
+	w := httptest.NewRecorder()
+	r := newTestRequest(http.MethodGet, "/api/v1/analysis/findings/"+testFindingID, nil)
+	r = withChiURLParam(r, "id", testFindingID)
+	h.HandleFindingDetail(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp analysis.FindingDetail
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Finding.ID != testFindingID {
+		t.Errorf("finding ID: got %q, want %q", resp.Finding.ID, testFindingID)
+	}
+	if resp.Finding.EdgeKind != "CAN_REACH" {
+		t.Errorf("edge kind: got %q, want CAN_REACH", resp.Finding.EdgeKind)
+	}
+	if resp.AttackPath == nil {
+		t.Error("expected non-nil attack_path")
+	}
+	if resp.Remediation == nil {
+		t.Error("expected non-nil remediation")
+	}
+	if resp.Impact == nil {
+		t.Error("expected non-nil impact")
+	}
+}
+
+func TestHandleFindingDetail_InvalidID_TooShort(t *testing.T) {
+	h := NewAnalysisHandler(&mockGraphDB{}, nil)
+	w := httptest.NewRecorder()
+	r := newTestRequest(http.MethodGet, "/api/v1/analysis/findings/abc123", nil)
+	r = withChiURLParam(r, "id", "abc123")
+	h.HandleFindingDetail(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	var resp ErrorResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error.Code != "VALIDATION_ERROR" {
+		t.Errorf("expected VALIDATION_ERROR, got %s", resp.Error.Code)
+	}
+}
+
+func TestHandleFindingDetail_InvalidID_NonHex(t *testing.T) {
+	h := NewAnalysisHandler(&mockGraphDB{}, nil)
+	w := httptest.NewRecorder()
+	r := newTestRequest(http.MethodGet, "/api/v1/analysis/findings/zzzzzzzzzzzzzzzz", nil)
+	r = withChiURLParam(r, "id", "zzzzzzzzzzzzzzzz")
+	h.HandleFindingDetail(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	var resp ErrorResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error.Code != "VALIDATION_ERROR" {
+		t.Errorf("expected VALIDATION_ERROR, got %s", resp.Error.Code)
+	}
+}
+
+func TestHandleFindingDetail_NotFound(t *testing.T) {
+	mock := &graph.MockGraphDB{
+		QueryFunc: func(_ context.Context, _ string, _ map[string]any) ([]map[string]any, error) {
+			return nil, nil
+		},
+	}
+	h := NewAnalysisHandler(mock, nil)
+	w := httptest.NewRecorder()
+	validHexID := "aabbccdd11223344"
+	r := newTestRequest(http.MethodGet, "/api/v1/analysis/findings/"+validHexID, nil)
+	r = withChiURLParam(r, "id", validHexID)
+	h.HandleFindingDetail(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp ErrorResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error.Code != "NOT_FOUND" {
+		t.Errorf("expected NOT_FOUND, got %s", resp.Error.Code)
+	}
+}
+
+func TestHandleFindingDetail_QueryError(t *testing.T) {
+	mock := &graph.MockGraphDB{
+		QueryFunc: func(_ context.Context, _ string, _ map[string]any) ([]map[string]any, error) {
+			return nil, errors.New("neo4j connection refused")
+		},
+	}
+	h := NewAnalysisHandler(mock, nil)
+	w := httptest.NewRecorder()
+	validHexID := "aabbccdd11223344"
+	r := newTestRequest(http.MethodGet, "/api/v1/analysis/findings/"+validHexID, nil)
+	r = withChiURLParam(r, "id", validHexID)
+	h.HandleFindingDetail(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
 	}
 }
