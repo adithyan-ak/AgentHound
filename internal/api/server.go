@@ -86,6 +86,7 @@ func NewServer(deps ServerDeps) *Server {
 			r.Get("/graph/nodes/{id}/blast-radius", graphH.HandleBlastRadius)
 			r.Get("/graph/edges", graphH.HandleListEdges)
 			r.Get("/analysis/findings", analysisH.HandleFindings)
+			r.Get("/analysis/findings/{id}", analysisH.HandleFindingDetail)
 			r.Get("/analysis/prebuilt", analysisH.HandleListPreBuilt)
 			r.Get("/analysis/prebuilt/{id}", analysisH.HandlePreBuilt)
 			r.Get("/scans", scanH.HandleList)

@@ -15,6 +15,18 @@ const ExplorerPage = lazy(() =>
   })),
 );
 
+const FindingsListPage = lazy(() =>
+  import("@/components/findings/FindingsListPage").then((m) => ({
+    default: m.FindingsListPage,
+  })),
+);
+
+const FindingDetailPage = lazy(() =>
+  import("@/components/findings/FindingDetailPage").then((m) => ({
+    default: m.FindingDetailPage,
+  })),
+);
+
 function ExplorerFallback() {
   return (
     <div className="flex h-full items-center justify-center">
@@ -42,6 +54,22 @@ export function App() {
             element={
               <Suspense fallback={<ExplorerFallback />}>
                 <ExplorerPage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/findings"
+            element={
+              <Suspense fallback={<div className="flex h-full items-center justify-center"><p className="text-sm text-muted-foreground">Loading Findings…</p></div>}>
+                <FindingsListPage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/findings/:findingId"
+            element={
+              <Suspense fallback={<div className="flex h-full items-center justify-center"><p className="text-sm text-muted-foreground">Loading Finding…</p></div>}>
+                <FindingDetailPage />
               </Suspense>
             }
           />

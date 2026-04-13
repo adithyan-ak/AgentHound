@@ -4,6 +4,7 @@ import {
   LayoutDashboard,
   Network,
   Compass,
+  AlertTriangle,
   ScanSearch,
   BookOpen,
   Shield,
@@ -20,6 +21,7 @@ const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/graph", label: "Graph", icon: Network },
   { to: "/explorer", label: "Explorer", icon: Compass },
+  { to: "/findings", label: "Findings", icon: AlertTriangle },
   { to: "/scans", label: "Scans", icon: ScanSearch },
   { to: "/queries", label: "Queries", icon: BookOpen },
 ];

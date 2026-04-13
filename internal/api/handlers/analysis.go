@@ -321,6 +321,53 @@ func (h *AnalysisHandler) HandleFindings(w http.ResponseWriter, r *http.Request)
 	WriteJSON(w, http.StatusOK, findings)
 }
 
+func (h *AnalysisHandler) HandleFindingDetail(w http.ResponseWriter, r *http.Request) {
+	findingID := chi.URLParam(r, "id")
+	if len(findingID) != 16 {
+		WriteValidationError(w, "finding ID must be a 16-character hex string")
+		return
+	}
+	for _, c := range findingID {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			WriteValidationError(w, "finding ID must be a 16-character hex string")
+			return
+		}
+	}
+
+	h.auditLog(r, "analysis.finding_detail", map[string]any{"finding_id": findingID})
+
+	finding, err := analysis.GetFindingByID(r.Context(), h.graphDB, findingID)
+	if err != nil {
+		WriteInternalError(w, r, fmt.Errorf("get finding: %w", err))
+		return
+	}
+	if finding == nil {
+		WriteNotFound(w, "finding not found: "+findingID)
+		return
+	}
+
+	compositeProps, err := analysis.GetCompositeEdgeProps(r.Context(), h.graphDB, finding)
+	if err != nil {
+		slog.Warn("failed to get composite edge props", "error", err)
+	}
+
+	attackPath, err := analysis.ReconstructAttackPath(r.Context(), h.graphDB, finding, compositeProps)
+	if err != nil {
+		slog.Warn("attack path reconstruction failed", "error", err)
+	}
+
+	remediation := analysis.BuildRemediation(attackPath, finding)
+	impact := analysis.BuildImpact(finding, attackPath, compositeProps)
+
+	WriteJSON(w, http.StatusOK, analysis.FindingDetail{
+		Finding:        *finding,
+		CompositeProps: compositeProps,
+		AttackPath:     attackPath,
+		Remediation:    remediation,
+		Impact:         impact,
+	})
+}
+
 func (h *AnalysisHandler) HandleListPreBuilt(w http.ResponseWriter, _ *http.Request) {
 	WriteJSON(w, http.StatusOK, prebuilt.List())
 }

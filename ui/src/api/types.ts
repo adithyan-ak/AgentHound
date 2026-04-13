@@ -161,3 +161,44 @@ export interface APIToken {
   expires_at?: string;
   last_used?: string;
 }
+
+export interface AttackPathNode {
+  id: string;
+  kinds: string[];
+  properties: Record<string, unknown>;
+}
+
+export interface AttackPathEdge {
+  source: string;
+  target: string;
+  kind: string;
+  properties: Record<string, unknown>;
+}
+
+export interface AttackPath {
+  nodes: AttackPathNode[];
+  edges: AttackPathEdge[];
+  total_risk_weight: number;
+}
+
+export interface RemediationStep {
+  step: number;
+  title: string;
+  description: string;
+  edge_kind: string;
+  commands?: string[];
+}
+
+export interface Impact {
+  summary: string;
+  blast_radius: string;
+  data_sensitivity?: string;
+}
+
+export interface FindingDetail {
+  finding: Finding;
+  composite_props?: Record<string, unknown>;
+  attack_path: AttackPath | null;
+  remediation: RemediationStep[];
+  impact: Impact | null;
+}

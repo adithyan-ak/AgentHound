@@ -1,6 +1,7 @@
 import { api } from "./client";
 import type {
   Finding,
+  FindingDetail,
   PathRequest,
   PathResponse,
   PreBuiltQuery,
@@ -12,6 +13,10 @@ export async function fetchFindings(severity?: string): Promise<Finding[]> {
   return api
     .get("analysis/findings", { searchParams: params })
     .json<Finding[]>();
+}
+
+export async function fetchFindingDetail(id: string): Promise<FindingDetail> {
+  return api.get(`analysis/findings/${id}`).json<FindingDetail>();
 }
 
 export async function fetchPreBuiltQueries(): Promise<PreBuiltQuery[]> {
