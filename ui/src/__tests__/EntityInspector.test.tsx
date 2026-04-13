@@ -34,7 +34,7 @@ describe("EntityInspector", () => {
 
   it("shows empty state when no node is selected", () => {
     render(<EntityInspector />, { wrapper: createWrapper() });
-    expect(screen.getByText("Click a node to inspect it")).toBeInTheDocument();
+    expect(screen.getByText("Click a node or edge to inspect it")).toBeInTheDocument();
   });
 
   it("renders node details when a node is selected", async () => {
@@ -61,8 +61,8 @@ describe("EntityInspector", () => {
 
     expect(screen.getByText("MCPServer")).toBeInTheDocument();
     expect(screen.getAllByText("75").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Properties")).toBeInTheDocument();
-    expect(screen.getByText("Connections")).toBeInTheDocument();
+    expect(screen.getByText("Props")).toBeInTheDocument();
+    expect(screen.getByText("Links")).toBeInTheDocument();
     expect(screen.getByText("Risk")).toBeInTheDocument();
     expect(screen.getByText("Findings")).toBeInTheDocument();
   });
