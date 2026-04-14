@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { InfoTip } from "./InfoTip";
 
 interface MetricRow {
   icon: React.ReactNode;
@@ -32,7 +33,10 @@ export function CredentialExposure() {
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-medium">Credential Exposure</CardTitle>
+          <CardTitle className="flex items-center gap-1.5 text-sm font-medium">
+            Credential Exposure
+            <InfoTip text="Counts of hardcoded credentials, high-entropy secrets (likely API keys), and unpinned MCP server packages in your configs." />
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <Skeleton className="h-28 w-full" />

@@ -1,4 +1,5 @@
 import { Bot, Server, Users, Wrench, Shield } from "lucide-react";
+import { InfoTip } from "./InfoTip";
 import type { LucideIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useGraphStats } from "@/hooks/useGraph";
@@ -64,7 +65,10 @@ function ExposureCard() {
           </div>
           <div>
             <p className={cn("font-mono text-2xl font-bold", scoreColor)}>{score}</p>
-            <p className="text-sm text-muted-foreground">Exposure</p>
+            <p className="flex items-center gap-1 text-sm text-muted-foreground">
+              Exposure
+              <InfoTip text="Composite risk score based on critical findings, high-severity findings, and unauthenticated servers. Lower is better." />
+            </p>
           </div>
         </div>
       </CardContent>

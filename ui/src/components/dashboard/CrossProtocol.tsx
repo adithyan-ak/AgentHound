@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { InfoTip } from "./InfoTip";
 
 interface PivotPath {
   agent: string;
@@ -128,6 +129,7 @@ export function CrossProtocol() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-sm font-medium">
           Cross-Protocol Pivots
+          <InfoTip text="Attack paths where an A2A agent can reach MCP resources by pivoting through shared hosts. This is the cross-protocol boundary that no single-protocol scanner detects." />
           {!isLoading && pivots.length > 0 && (
             <Badge
               variant="outline"

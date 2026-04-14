@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchNodes } from "@/api/graph";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { InfoTip } from "./InfoTip";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -62,7 +63,10 @@ export function TopRiskyEntities() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium">Top Risky Entities</CardTitle>
+        <CardTitle className="flex items-center gap-1.5 text-sm font-medium">
+          Top Risky Entities
+          <InfoTip text="The 5 agents, servers, or tools with the highest risk scores. Risk is computed from auth posture, blast radius, poisoning exposure, and credential handling." />
+        </CardTitle>
       </CardHeader>
       <CardContent>
         {isLoading ? (

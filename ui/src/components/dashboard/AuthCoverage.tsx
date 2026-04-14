@@ -3,6 +3,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recha
 import { fetchNodes } from "@/api/graph";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { InfoTip } from "./InfoTip";
 
 const AUTH_COLORS: Record<string, string> = {
   none: "#ef4444",
@@ -42,7 +43,10 @@ export function AuthCoverage() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium">Auth Coverage</CardTitle>
+        <CardTitle className="flex items-center gap-1.5 text-sm font-medium">
+          Auth Coverage
+          <InfoTip text="Authentication method distribution across MCP servers and A2A agents. Red (none) means no authentication — these are your highest-priority targets." />
+        </CardTitle>
       </CardHeader>
       <CardContent>
         {isLoading ? (

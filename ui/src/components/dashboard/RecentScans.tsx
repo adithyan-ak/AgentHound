@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { InfoTip } from "./InfoTip";
 import {
   Table,
   TableHeader,
@@ -42,7 +43,10 @@ export function RecentScans() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium">Recent Scans</CardTitle>
+        <CardTitle className="flex items-center gap-1.5 text-sm font-medium">
+          Recent Scans
+          <InfoTip text="Last 5 scan runs showing collector type, status, and how many nodes and edges were discovered. Run 'agenthound scan' to trigger a new scan." />
+        </CardTitle>
       </CardHeader>
       <CardContent>
         {isLoading ? (

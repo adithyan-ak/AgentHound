@@ -2,6 +2,7 @@ import { useMemo, useCallback, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchFindings } from "@/api/analysis";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { InfoTip } from "./InfoTip";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const SEVERITY_RANK: Record<string, number> = {
@@ -44,57 +45,69 @@ interface Rect {
   h: number;
 }
 
+interface SizedItem {
+  name: string;
+  count: number;
+  worst: string;
+  area: number;
+}
+
+function worstAspectRatio(row: SizedItem[], rowLen: number): number {
+  let worst = 0;
+  for (const r of row) {
+    const itemLen = r.area / rowLen;
+    const ratio = Math.max(rowLen / itemLen, itemLen / rowLen);
+    if (ratio > worst) worst = ratio;
+  }
+  return worst;
+}
+
 function squarify(
   items: { name: string; count: number; worst: string }[],
-  containerW: number,
-  containerH: number,
+  W: number,
+  H: number,
 ): Rect[] {
-  if (items.length === 0 || containerW <= 0 || containerH <= 0) return [];
+  if (items.length === 0 || W <= 0 || H <= 0) return [];
 
-  const total = items.reduce((s, d) => s + d.count, 0);
-  if (total === 0) return [];
+  const totalCount = items.reduce((s, d) => s + d.count, 0);
+  if (totalCount === 0) return [];
 
-  const dampened = items.map((d) => ({ ...d, size: Math.max(d.count, 2) }));
-  const dampenedTotal = dampened.reduce((s, d) => s + d.size, 0);
-  const areas = dampened.map((d) => ({
+  const totalArea = W * H;
+  const sized: SizedItem[] = items.map((d) => ({
     ...d,
-    area: (d.size / dampenedTotal) * containerW * containerH,
+    area: (d.count / totalCount) * totalArea,
   }));
 
   const rects: Rect[] = [];
-  let x = 0;
-  let y = 0;
-  let w = containerW;
-  let h = containerH;
-  let remaining = [...areas];
+  let x = 0, y = 0, w = W, h = H;
+  let i = 0;
 
-  while (remaining.length > 0) {
+  while (i < sized.length) {
+    const first = sized[i]!;
     const isWide = w >= h;
     const side = isWide ? h : w;
-    const row: typeof areas = [];
-    let rowArea = 0;
 
-    let bestRatio = Infinity;
-    for (const item of remaining) {
-      row.push(item);
-      rowArea += item.area;
-      const rowLen = rowArea / side;
-      let worstRatio = 0;
-      for (const r of row) {
-        const rLen = r.area / rowLen;
-        const ratio = Math.max(rowLen / rLen, rLen / rowLen);
-        if (ratio > worstRatio) worstRatio = ratio;
-      }
-      if (worstRatio > bestRatio && row.length > 1) {
-        row.pop();
-        rowArea -= item.area;
-        break;
-      }
-      bestRatio = worstRatio;
+    const row: SizedItem[] = [first];
+    let rowArea = first.area;
+    let rowLen = rowArea / side;
+    let ratio = worstAspectRatio(row, rowLen);
+    i++;
+
+    while (i < sized.length) {
+      const next = sized[i]!;
+      const candidate = [...row, next];
+      const candArea = rowArea + next.area;
+      const candLen = candArea / side;
+      const candRatio = worstAspectRatio(candidate, candLen);
+
+      if (candRatio > ratio) break;
+
+      row.push(next);
+      rowArea = candArea;
+      rowLen = candLen;
+      ratio = candRatio;
+      i++;
     }
-
-    remaining = remaining.slice(row.length);
-    const rowLen = rowArea / side;
 
     let offset = 0;
     for (const item of row) {
@@ -159,7 +172,10 @@ export function RiskChart() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium">Findings by Category</CardTitle>
+        <CardTitle className="flex items-center gap-1.5 text-sm font-medium">
+          Findings by Category
+          <InfoTip text="Treemap of security findings grouped by category. Rectangle size shows finding count. Color indicates worst severity in that category." />
+        </CardTitle>
       </CardHeader>
       <CardContent>
         {isLoading ? (
@@ -173,7 +189,7 @@ export function RiskChart() {
             {rects.map((r) => (
               <div
                 key={r.name}
-                className="absolute flex flex-col items-center justify-center overflow-hidden"
+                className="absolute overflow-hidden"
                 style={{
                   left: r.x,
                   top: r.y,
@@ -186,16 +202,17 @@ export function RiskChart() {
                   className="flex h-full w-full flex-col items-center justify-center rounded-md"
                   style={{ background: getFill(r.worst) }}
                 >
-                  {r.w > 70 && r.h > 44 && (
-                    <span className="px-1 text-center text-[11px] font-medium leading-tight text-white/90">
+                  {r.w > 55 && r.h > 40 && (
+                    <span className="px-1 text-center text-[11px] font-medium leading-tight text-white/80">
                       {r.name}
                     </span>
                   )}
-                  {r.w > 36 && r.h > 28 && (
-                    <span className="font-mono text-lg font-bold text-white">
-                      {r.count}
-                    </span>
-                  )}
+                  <span
+                    className="font-mono font-bold text-white"
+                    style={{ fontSize: Math.min(Math.max(r.h * 0.25, 14), 28) }}
+                  >
+                    {r.count}
+                  </span>
                 </div>
               </div>
             ))}

@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { InfoTip } from "./InfoTip";
 
 const SEVERITY_STYLE: Record<string, string> = {
   critical: "bg-red-900/60 text-red-300 border-red-700",
@@ -45,7 +46,10 @@ export function TopFindings() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium">Top Findings</CardTitle>
+        <CardTitle className="flex items-center gap-1.5 text-sm font-medium">
+          Top Findings
+          <InfoTip text="Most critical security findings sorted by severity and confidence. Click any finding to see the full attack path, evidence, and remediation steps." />
+        </CardTitle>
       </CardHeader>
       <CardContent>
         {isLoading ? (
