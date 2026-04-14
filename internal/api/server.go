@@ -19,7 +19,6 @@ import (
 	"github.com/adithyan-ak/agenthound/internal/ingest"
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
-	"github.com/go-chi/httprate"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -52,7 +51,6 @@ func NewServer(deps ServerDeps) *Server {
 	r.Use(apimw.Logger)
 	r.Use(chimw.Recoverer)
 	r.Use(apimw.CORS(deps.CORSOrigins))
-	r.Use(httprate.LimitByIP(100, time.Minute))
 
 	auditLog := audit.NewLogger(deps.AuditStore)
 
@@ -98,7 +96,7 @@ func NewServer(deps ServerDeps) *Server {
 			r.Use(authMW.Authenticate)
 			r.Use(auth.RequireRole(auth.RoleAnalyst))
 
-			r.With(httprate.LimitByIP(20, time.Minute)).Post("/ingest", ingestH.Handle)
+			r.Post("/ingest", ingestH.Handle)
 			r.Post("/scans", scanH.HandleCreate)
 			r.Delete("/scans/{id}", scanH.HandleDelete)
 			r.Post("/analysis/shortest-path", analysisH.HandleShortestPath)
@@ -114,7 +112,7 @@ func NewServer(deps ServerDeps) *Server {
 			r.Use(authMW.Authenticate)
 			r.Use(auth.RequireRole(auth.RoleAdmin))
 
-			r.With(httprate.LimitByIP(10, time.Minute)).Post("/query", queryH.Handle)
+			r.Post("/query", queryH.Handle)
 			r.Post("/auth/users", authH.HandleCreateUser)
 			r.Get("/auth/users", authH.HandleListUsers)
 			r.Delete("/auth/users/{id}", authH.HandleDeleteUser)
