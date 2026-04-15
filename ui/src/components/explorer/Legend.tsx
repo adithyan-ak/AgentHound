@@ -66,10 +66,10 @@ export function Legend() {
     <div
       className={cn(
         "pointer-events-auto absolute left-6 bottom-12 z-20 rounded-lg",
-        "border border-slate-800/80 bg-slate-950/90 px-3 py-2.5 shadow-xl backdrop-blur",
+        "glass px-3 py-2.5 shadow-xl",
       )}
     >
-      <div className="mb-2 text-[9px] font-semibold uppercase tracking-widest text-slate-500">
+      <div className="mb-2 text-[9px] font-semibold uppercase tracking-widest text-muted-foreground">
         {lens.shortLabel} legend
       </div>
       <div className="space-y-1.5">
@@ -97,7 +97,7 @@ export function Legend() {
                 />
               )}
             </svg>
-            <div className="text-[10px] text-slate-300">{item.label}</div>
+            <div className="text-[10px] text-foreground">{item.label}</div>
           </div>
         ))}
       </div>

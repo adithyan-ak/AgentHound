@@ -150,7 +150,7 @@ export function QueryLibrary() {
                                 Running query...
                               </div>
                             ) : runQuery.isError && expandedId === query.id ? (
-                              <div className="rounded-md bg-red-900/30 border border-red-800 px-3 py-2 text-sm text-red-300">
+                              <div className="rounded-md bg-destructive/10 border border-destructive/30 px-3 py-2 text-sm text-destructive">
                                 {runQuery.error instanceof Error
                                   ? runQuery.error.message
                                   : "Query failed"}

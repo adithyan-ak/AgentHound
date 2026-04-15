@@ -7,8 +7,8 @@ import { cn } from "@/lib/utils";
 import type { AttackPath } from "@/api/types";
 
 const CATEGORY_BADGE: Record<string, string> = {
-  attack: "border-red-500/50 bg-red-950/40 text-red-300",
-  trust: "border-blue-500/50 bg-blue-950/40 text-blue-300",
+  attack: `border-red-500/50 bg-red-950/40 text-red-300`,
+  trust: `border-blue-500/50 bg-blue-950/40 text-blue-300`,
   structure: "border-border bg-muted text-muted-foreground",
 };
 
@@ -62,10 +62,10 @@ export function HopEvidenceTimeline({ path }: HopEvidenceTimelineProps) {
           const tgtName = (tgtNode?.properties?.name as string) || edge.target.slice(0, 16);
 
           return (
-            <div key={i} className="rounded-lg border border-slate-800 overflow-hidden">
+            <div key={i} className="rounded-lg border border-border overflow-hidden">
               <button
                 onClick={() => toggle(i)}
-                className="flex items-center w-full gap-2 px-3 py-2.5 text-left hover:bg-slate-800/40 transition-colors"
+                className="flex items-center w-full gap-2 px-3 py-2.5 text-left hover:bg-muted/40 transition-colors"
               >
                 {isOpen ? (
                   <ChevronDown className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
@@ -79,13 +79,13 @@ export function HopEvidenceTimeline({ path }: HopEvidenceTimelineProps) {
                 >
                   {edge.kind.replace(/_/g, " ")}
                 </Badge>
-                <span className="text-xs text-slate-400 truncate">
+                <span className="text-xs text-muted-foreground truncate">
                   {srcName} &rarr; {tgtName}
                 </span>
               </button>
 
               {isOpen && (
-                <div className="px-3 pb-3 pt-1 border-t border-slate-800/50 space-y-2">
+                <div className="px-3 pb-3 pt-1 border-t border-border/50 space-y-2">
                   {edge.properties && Object.keys(edge.properties).length > 0 && (
                     <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                       {Object.entries(edge.properties).map(([key, val]) => {

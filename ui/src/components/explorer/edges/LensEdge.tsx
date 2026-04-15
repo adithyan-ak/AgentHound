@@ -2,17 +2,18 @@ import { memo, useId } from "react";
 import { BaseEdge, getBezierPath, type EdgeProps } from "@xyflow/react";
 import type { LensEdgeData } from "@/lib/explorer/graph-builder";
 import type { SeverityLevel } from "@/lib/explorer/lens-config";
+import { SEVERITY, EDGE_COLORS, NODE_KIND_COLORS } from "@/theme/tokens";
 
 const SEVERITY_COLORS: Record<SeverityLevel, string> = {
-  critical: "#EF4444",
-  high: "#F97316",
-  medium: "#EAB308",
-  low: "#94A3B8",
-  info: "#64748B",
+  critical: SEVERITY.critical!.solid,
+  high: SEVERITY.high!.solid,
+  medium: SEVERITY.medium!.solid,
+  low: SEVERITY.low!.solid,
+  info: SEVERITY.info!.solid,
 };
 
-const NEUTRAL_COLOR = "#334155";
-const CROSS_PROTOCOL_COLOR = "#A855F7";
+const NEUTRAL_COLOR: string = EDGE_COLORS.structure;
+const CROSS_PROTOCOL_COLOR: string = NODE_KIND_COLORS.A2AAgent ?? "#A855F7";
 
 function edgeColor(data: LensEdgeData): string {
   if (data.isCrossProtocol) return CROSS_PROTOCOL_COLOR;

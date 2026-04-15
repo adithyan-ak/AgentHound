@@ -4,6 +4,7 @@ import { fetchNodes } from "@/api/graph";
 import { fetchScans } from "@/api/scans";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { riskColor } from "@/theme/tokens";
 
 function timeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -50,7 +51,7 @@ export function ExposureScore() {
 
   const score = Math.min(100, criticalCount * 8 + highCount * 3 + unauthServerCount * 5);
 
-  const color = score >= 75 ? "#ef4444" : score >= 40 ? "#f59e0b" : "#22c55e";
+  const color = riskColor(score);
   const bgClass =
     score >= 75
       ? "bg-red-500/5 border-red-500/20"

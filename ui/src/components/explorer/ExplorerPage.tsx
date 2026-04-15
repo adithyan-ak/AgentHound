@@ -11,7 +11,7 @@ import { ExplorerNodeContextMenu } from "./ExplorerNodeContextMenu";
 
 export function ExplorerPage() {
   return (
-    <div className="relative h-full w-full overflow-hidden bg-[#050B18]">
+    <div className="relative h-full w-full overflow-hidden bg-explorer-canvas">
       <ReactFlowProvider>
         <ExplorerCanvas />
         <BlastRadiusRings />

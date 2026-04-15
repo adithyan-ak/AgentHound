@@ -3,16 +3,11 @@ import { ArrowLeft, ArrowRight, Compass, Copy, Check } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { SeverityBadge } from "@/components/ui/severity-badge";
 import { MiniHexIcon } from "./MiniHexIcon";
 import { cn } from "@/lib/utils";
+import { SEVERITY } from "@/theme/tokens";
 import type { FindingDetail } from "@/api/types";
-
-const SEVERITY_COLORS: Record<string, { badge: string; border: string; bg: string }> = {
-  critical: { badge: "bg-red-600 text-white", border: "border-l-4 border-red-500", bg: "bg-red-950/10" },
-  high: { badge: "bg-orange-600 text-white", border: "border-l-4 border-orange-500", bg: "bg-orange-950/10" },
-  medium: { badge: "bg-yellow-600 text-black", border: "border-l-4 border-yellow-500", bg: "bg-yellow-950/10" },
-  low: { badge: "bg-slate-600 text-white", border: "border-l-4 border-slate-500", bg: "" },
-};
 
 interface FindingHeaderProps {
   detail: FindingDetail;
@@ -24,7 +19,7 @@ interface FindingHeaderProps {
 export function FindingHeader({ detail, prevId, nextId, onCopyReport }: FindingHeaderProps) {
   const navigate = useNavigate();
   const f = detail.finding;
-  const colors = SEVERITY_COLORS[f.severity] ?? SEVERITY_COLORS.low!;
+  const sev = SEVERITY[f.severity] ?? SEVERITY.low!;
   const [copied, setCopied] = useState(false);
 
   const hops = detail.composite_props?.hops;
@@ -36,7 +31,7 @@ export function FindingHeader({ detail, prevId, nextId, onCopyReport }: FindingH
   }
 
   return (
-    <div className={cn("rounded-lg p-5", colors.border, colors.bg)}>
+    <div className={cn("rounded-lg p-5 border-l-4", sev.borderLeftClass)}>
       {/* Breadcrumb + nav */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -73,9 +68,7 @@ export function FindingHeader({ detail, prevId, nextId, onCopyReport }: FindingH
       {/* Severity + title + actions */}
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1">
-          <Badge className={cn("text-xs font-bold uppercase mb-2", colors.badge)}>
-            {f.severity}
-          </Badge>
+          <SeverityBadge severity={f.severity} className="mb-2 text-xs font-bold uppercase" />
           <h1 className="text-xl font-semibold text-foreground mb-2">{f.title}</h1>
 
           {/* Source -> Target */}

@@ -1,6 +1,7 @@
 import { useStore, ViewportPortal } from "@xyflow/react";
 import { useExplorerStore } from "@/store/explorer";
 import { useBlastRadius } from "@/hooks/useBlastRadius";
+import { NODE_KIND_COLORS } from "@/theme/tokens";
 import { useMemo } from "react";
 
 /**
@@ -78,7 +79,7 @@ export function BlastRadiusRings() {
               cy={maxRadius * 1.2}
               r={r.radius}
               fill="none"
-              stroke="#10B981"
+              stroke={NODE_KIND_COLORS.MCPServer}
               strokeWidth={1.5}
               strokeDasharray="6 6"
               opacity={0.35}
@@ -86,7 +87,7 @@ export function BlastRadiusRings() {
             <text
               x={maxRadius * 1.2 + r.radius - 4}
               y={maxRadius * 1.2 - 6}
-              fill="#10B981"
+              fill={NODE_KIND_COLORS.MCPServer}
               fontSize={11}
               fontWeight={600}
               textAnchor="end"
@@ -103,14 +104,14 @@ export function BlastRadiusRings() {
 
 function NoSourceHint() {
   return (
-    <div className="pointer-events-none absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-xl border border-emerald-900/50 bg-slate-950/90 px-6 py-5 text-center shadow-2xl backdrop-blur">
+    <div className="pointer-events-none absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-xl glass border-emerald-900/50 px-6 py-5 text-center shadow-2xl">
       <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-emerald-400">
         Blast Radius
       </div>
-      <div className="text-sm text-white">
+      <div className="text-sm text-foreground">
         Click any node to see what it can reach
       </div>
-      <div className="mt-1 text-[10px] text-slate-400">
+      <div className="mt-1 text-[10px] text-muted-foreground">
         Concentric rings show hop distance from the source
       </div>
     </div>

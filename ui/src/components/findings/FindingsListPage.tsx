@@ -8,13 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MiniHexIcon } from "@/components/findings/MiniHexIcon";
 import { cn } from "@/lib/utils";
-
-const SEVERITY_COLORS: Record<string, string> = {
-  critical: "bg-red-900/60 text-red-300 border-red-700",
-  high: "bg-orange-900/60 text-orange-300 border-orange-700",
-  medium: "bg-yellow-900/60 text-yellow-300 border-yellow-700",
-  low: "bg-slate-800 text-slate-300 border-slate-600",
-};
+import { SEVERITY } from "@/theme/tokens";
 
 const SEVERITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
@@ -97,7 +91,7 @@ export function FindingsListPage() {
             className={cn(
               "rounded-full border px-3 py-1 text-xs font-medium capitalize transition-colors",
               activeSeverities.has(level)
-                ? SEVERITY_COLORS[level]
+                ? (SEVERITY[level]?.badgeClass ?? SEVERITY.info!.badgeClass)
                 : "bg-card text-muted-foreground border-border hover:text-foreground hover:border-foreground/30",
             )}
           >
@@ -172,7 +166,7 @@ function FindingRow({ finding: f, onClick }: { finding: Finding; onClick: () => 
           variant="outline"
           className={cn(
             "text-[10px] font-semibold uppercase",
-            SEVERITY_COLORS[f.severity] ?? SEVERITY_COLORS.low,
+            (SEVERITY[f.severity] ?? SEVERITY.low!).badgeClass,
           )}
         >
           {f.severity}

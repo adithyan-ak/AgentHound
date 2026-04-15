@@ -30,7 +30,7 @@ export function AttackPathDiagram({
     ];
 
     return (
-      <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-6">
+      <div className="rounded-lg border border-border bg-background/50 p-6">
         <div className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-4">
           Attack Path
         </div>
@@ -49,7 +49,7 @@ export function AttackPathDiagram({
   const orderedNodes = orderNodesFromEdges(path);
 
   return (
-    <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-6">
+    <div className="rounded-lg border border-border bg-background/50 p-6">
       <div className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-4">
         Attack Path
       </div>

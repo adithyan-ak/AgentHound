@@ -4,14 +4,8 @@ import { Badge } from "@/components/ui/badge";
 import { fetchFindings } from "@/api/analysis";
 import { OWASP_TITLES } from "@/lib/findings/owasp-titles";
 import { cn } from "@/lib/utils";
+import { SEVERITY } from "@/theme/tokens";
 import type { Finding } from "@/api/types";
-
-const SEVERITY_DOT: Record<string, string> = {
-  critical: "bg-red-500",
-  high: "bg-orange-500",
-  medium: "bg-yellow-500",
-  low: "bg-slate-500",
-};
 
 interface FindingReferencesProps {
   finding: Finding;
@@ -35,7 +29,7 @@ export function FindingReferences({ finding }: FindingReferencesProps) {
   ).slice(0, 5);
 
   return (
-    <div className="rounded-lg border border-slate-800 p-4">
+    <div className="rounded-lg border border-border p-4">
       <div className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-3">
         References
       </div>
@@ -67,9 +61,9 @@ export function FindingReferences({ finding }: FindingReferencesProps) {
               <button
                 key={rf.id}
                 onClick={() => navigate(`/findings/${rf.id}`)}
-                className="flex items-center gap-2 w-full text-left px-2 py-1.5 rounded hover:bg-slate-800/50 transition-colors text-xs"
+                className="flex items-center gap-2 w-full text-left px-2 py-1.5 rounded hover:bg-muted/50 transition-colors text-xs"
               >
-                <div className={cn("h-2 w-2 rounded-full flex-shrink-0", SEVERITY_DOT[rf.severity])} />
+                <div className={cn("h-2 w-2 rounded-full flex-shrink-0", (SEVERITY[rf.severity] ?? SEVERITY.low!).dotClass)} />
                 <span className="text-[10px] uppercase font-bold text-muted-foreground w-14">
                   {rf.severity}
                 </span>

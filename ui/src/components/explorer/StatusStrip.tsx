@@ -13,7 +13,7 @@ export function StatusStrip() {
 
   return (
     <div
-      className="pointer-events-none absolute bottom-0 left-0 right-0 z-10 flex h-7 items-center justify-between border-t border-slate-800/70 bg-slate-950/70 px-4 text-[10px] text-slate-400 backdrop-blur-sm"
+      className="pointer-events-none absolute bottom-0 left-0 right-0 z-10 flex h-7 items-center justify-between glass px-4 text-[10px] text-muted-foreground"
     >
       <div className="flex items-center gap-4">
         <span className="flex items-center gap-1.5">
@@ -25,11 +25,11 @@ export function StatusStrip() {
             {lens.label}
           </span>
         </span>
-        <span className="text-slate-600">·</span>
+        <span className="text-muted-foreground/70">·</span>
         <span>{nodeCount} nodes</span>
-        <span className="text-slate-600">·</span>
+        <span className="text-muted-foreground/70">·</span>
         <span>{edgeCount} edges</span>
-        <span className="text-slate-600">·</span>
+        <span className="text-muted-foreground/70">·</span>
         <span>{findingCount} findings</span>
       </div>
       <div className="flex items-center gap-3">

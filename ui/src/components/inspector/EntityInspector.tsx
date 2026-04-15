@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Crosshair, Crown, Target } from "lucide-react";
 import { fetchNode } from "@/api/graph";
 import { useGraphStore } from "@/store/graph";
-import { NODE_COLORS } from "@/lib/node-styles";
+import { NODE_KIND_COLORS, riskBgClass } from "@/theme/tokens";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -104,7 +104,7 @@ export function EntityInspector() {
         <div className="flex items-center gap-2 mb-1">
           <span
             className="h-3 w-3 rounded-full flex-shrink-0"
-            style={{ backgroundColor: NODE_COLORS[kind] ?? "#999" }}
+            style={{ backgroundColor: NODE_KIND_COLORS[kind] ?? "#999" }}
           />
           <Badge variant="secondary" className="text-[10px]">
             {kind}
@@ -130,13 +130,7 @@ export function EntityInspector() {
               <div
                 className={cn(
                   "h-full rounded-full",
-                  riskScore >= 80
-                    ? "bg-red-500"
-                    : riskScore >= 60
-                      ? "bg-orange-500"
-                      : riskScore >= 40
-                        ? "bg-yellow-500"
-                        : "bg-green-500",
+                  riskBgClass(riskScore),
                 )}
                 style={{ width: `${Math.min(riskScore, 100)}%` }}
               />
@@ -152,7 +146,7 @@ export function EntityInspector() {
             variant={isOwned ? "default" : "outline"}
             className={cn(
               "h-7 text-[11px] flex-1",
-              isOwned && "bg-red-600 hover:bg-red-700",
+              isOwned && "bg-destructive hover:bg-destructive/90",
             )}
             onClick={() => toggleOwned(node.id)}
           >
@@ -164,7 +158,7 @@ export function EntityInspector() {
             variant={isHighValue ? "default" : "outline"}
             className={cn(
               "h-7 text-[11px] flex-1",
-              isHighValue && "bg-yellow-500 hover:bg-yellow-600 text-black",
+              isHighValue && "bg-severity-medium hover:bg-severity-medium/90 text-black",
             )}
             onClick={() => toggleHighValue(node.id)}
           >

@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchScans } from "@/api/scans";
-import { cn } from "@/lib/utils";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,12 +12,18 @@ import {
   TableHead,
   TableCell,
 } from "@/components/ui/table";
+import { FEEDBACK } from "@/theme/tokens";
 
-const STATUS_STYLE: Record<string, string> = {
-  completed: "bg-green-900/60 text-green-300",
-  running: "bg-yellow-900/60 text-yellow-300",
-  failed: "bg-red-900/60 text-red-300",
-  pending: "bg-muted text-muted-foreground",
+interface StatusStyle {
+  bg: string;
+  text: string;
+}
+
+const STATUS_STYLE: Record<string, StatusStyle> = {
+  completed: { bg: FEEDBACK.success.bg, text: FEEDBACK.success.text },
+  running: { bg: FEEDBACK.warning.bg, text: FEEDBACK.warning.text },
+  failed: { bg: FEEDBACK.error.bg, text: FEEDBACK.error.text },
+  pending: { bg: "transparent", text: "" },
 };
 
 function timeAgo(iso: string): string {
@@ -69,18 +74,21 @@ export function RecentScans() {
                 <TableRow key={scan.id}>
                   <TableCell className="text-foreground">{scan.collector}</TableCell>
                   <TableCell>
-                    <Badge
-                      variant="outline"
-                      className={cn(
-                        "text-[10px] font-semibold uppercase",
-                        STATUS_STYLE[scan.status] ?? STATUS_STYLE.pending,
-                      )}
-                    >
-                      {scan.status}
-                    </Badge>
+                    {(() => {
+                      const style = STATUS_STYLE[scan.status] ?? STATUS_STYLE.pending!;
+                      return (
+                        <Badge
+                          variant="outline"
+                          className="text-[10px] font-semibold uppercase"
+                          style={style.text ? { backgroundColor: style.bg, color: style.text } : undefined}
+                        >
+                          {scan.status}
+                        </Badge>
+                      );
+                    })()}
                   </TableCell>
-                  <TableCell className="text-muted-foreground">{scan.node_count}</TableCell>
-                  <TableCell className="text-muted-foreground">{scan.edge_count}</TableCell>
+                  <TableCell className="font-mono text-muted-foreground">{scan.node_count}</TableCell>
+                  <TableCell className="font-mono text-muted-foreground">{scan.edge_count}</TableCell>
                   <TableCell className="text-muted-foreground">{timeAgo(scan.started_at)}</TableCell>
                 </TableRow>
               ))}

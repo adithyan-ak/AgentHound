@@ -2,6 +2,7 @@ import { memo } from "react";
 import { getHexConfig } from "@/lib/explorer/hex-config";
 import { getPropertyChips } from "@/lib/findings/property-chips";
 import { cn } from "@/lib/utils";
+import { SEVERITY } from "@/theme/tokens";
 import type { AttackPathNode } from "@/api/types";
 
 interface PathHexNodeProps {
@@ -12,15 +13,9 @@ interface PathHexNodeProps {
 }
 
 const SEVERITY_GLOW: Record<string, string> = {
-  critical: "shadow-[0_0_12px_rgba(239,68,68,0.4)]",
-  high: "shadow-[0_0_10px_rgba(249,115,22,0.35)]",
-  medium: "shadow-[0_0_8px_rgba(234,179,8,0.3)]",
-};
-
-const SEVERITY_BORDER: Record<string, string> = {
-  critical: "border-red-500/70",
-  high: "border-orange-500/70",
-  medium: "border-yellow-500/70",
+  critical: `shadow-[0_0_12px_${SEVERITY.critical!.border}]`,
+  high: `shadow-[0_0_10px_${SEVERITY.high!.border}]`,
+  medium: `shadow-[0_0_8px_${SEVERITY.medium!.border}]`,
 };
 
 const SCALE = 64 / 84;
@@ -42,17 +37,17 @@ function PathHexNodeComponent({ node, isFirst, isLast, severity }: PathHexNodePr
   return (
     <div
       className={cn(
-        "flex flex-col items-center rounded-lg border bg-slate-900/40 px-3 py-3",
+        "flex flex-col items-center rounded-lg border bg-muted/40 px-3 py-3",
         "w-[140px] flex-shrink-0",
         isFirst && "border-l-2",
-        isLast && SEVERITY_BORDER[severity ?? ""] ? `border-l-2 ${SEVERITY_BORDER[severity ?? ""]}` : "border-slate-700/50",
+        isLast && severity && SEVERITY[severity] ? `border-l-2 ${SEVERITY[severity]!.borderLeftClass.replace("border-l-", "border-")}` : "border-border/50",
         isLast && SEVERITY_GLOW[severity ?? ""],
       )}
       style={isFirst && !isLast ? { borderLeftColor: config.strokeColor } : undefined}
     >
       <div
         className="text-[9px] uppercase tracking-widest font-bold mb-2 text-center truncate w-full"
-        style={{ color: isLast && severity === "critical" ? "#EF4444" : config.strokeColor }}
+        style={{ color: isLast && severity === "critical" ? SEVERITY.critical!.solid : config.strokeColor }}
       >
         {categoryLabel}
       </div>
@@ -89,10 +84,10 @@ function PathHexNodeComponent({ node, isFirst, isLast, severity }: PathHexNodePr
               className={cn(
                 "text-[9px] px-1.5 py-0.5 rounded",
                 chip === "critical" || chip === "exposed"
-                  ? "bg-red-900/50 text-red-300"
+                  ? SEVERITY.critical!.badgeClass
                   : chip === "high"
-                    ? "bg-orange-900/50 text-orange-300"
-                    : "bg-slate-800 text-slate-300",
+                    ? SEVERITY.high!.badgeClass
+                    : "bg-muted text-foreground",
               )}
             >
               {chip}

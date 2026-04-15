@@ -6,6 +6,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InfoTip } from "./InfoTip";
+import { SEVERITY } from "@/theme/tokens";
 
 interface MetricRow {
   icon: React.ReactNode;
@@ -61,19 +62,19 @@ export function CredentialExposure() {
 
   const rows: MetricRow[] = [
     {
-      icon: <AlertTriangle className="h-4 w-4 text-red-400" />,
+      icon: <AlertTriangle className="h-4 w-4" style={{ color: SEVERITY.critical!.text }} />,
       label: "Hardcoded / Exposed",
       count: hardcoded,
       severity: "critical",
     },
     {
-      icon: <Lock className="h-4 w-4 text-orange-400" />,
+      icon: <Lock className="h-4 w-4" style={{ color: SEVERITY.high!.text }} />,
       label: "High-Entropy Secrets",
       count: highEntropy,
       severity: "high",
     },
     {
-      icon: <Package className="h-4 w-4 text-yellow-400" />,
+      icon: <Package className="h-4 w-4" style={{ color: SEVERITY.medium!.text }} />,
       label: "Unpinned Packages",
       count: unpinned,
       severity: "medium",
@@ -81,9 +82,9 @@ export function CredentialExposure() {
   ];
 
   const SEVERITY_STYLE: Record<string, string> = {
-    critical: "bg-red-900/60 text-red-300 border-red-700",
-    high: "bg-orange-900/60 text-orange-300 border-orange-700",
-    medium: "bg-yellow-900/60 text-yellow-300 border-yellow-700",
+    critical: SEVERITY.critical!.badgeClass,
+    high: SEVERITY.high!.badgeClass,
+    medium: SEVERITY.medium!.badgeClass,
   };
 
   return (

@@ -59,7 +59,7 @@ export function NodeDetailDrawer() {
     <div
       className={cn(
         "pointer-events-auto absolute bottom-0 left-0 right-0 z-30",
-        "border-t border-slate-800 bg-slate-950/98 shadow-[0_-8px_40px_-8px_rgba(0,0,0,0.8)] backdrop-blur-md",
+        "glass border-t shadow-[0_-8px_40px_-8px_rgba(0,0,0,0.8)]",
         "animate-in slide-in-from-bottom-4 fade-in duration-200",
       )}
       style={{ height: "40vh", minHeight: 320 }}
@@ -67,7 +67,7 @@ export function NodeDetailDrawer() {
       aria-label={`Details for ${name}`}
     >
       <div className="flex h-full flex-col">
-        <div className="flex items-center border-b border-slate-800 bg-slate-900/60 px-4 py-3">
+        <div className="flex items-center border-b border-border bg-muted/60 px-4 py-3">
           <div className="flex items-center gap-3">
             <div
               className="flex h-9 w-9 items-center justify-center rounded-md border"
@@ -83,10 +83,10 @@ export function NodeDetailDrawer() {
               />
             </div>
             <div className="flex flex-col">
-              <div className="text-[10px] uppercase tracking-widest text-slate-500">
+              <div className="text-[10px] uppercase tracking-widest text-muted-foreground">
                 {config.kindTag}
               </div>
-              <div className="font-semibold text-white">{name}</div>
+              <div className="font-semibold text-foreground">{name}</div>
             </div>
           </div>
 
@@ -95,15 +95,15 @@ export function NodeDetailDrawer() {
             onValueChange={(v) => setDrawerTab(v as DrawerTab)}
             className="ml-8"
           >
-            <TabsPrimitive.List className="flex gap-1 rounded-full bg-slate-800/60 p-1">
+            <TabsPrimitive.List className="flex gap-1 rounded-full bg-muted p-1">
               {TABS.map((t) => (
                 <TabsPrimitive.Trigger
                   key={t.id}
                   value={t.id}
                   className={cn(
                     "rounded-full px-3 py-1 text-xs font-medium transition-colors",
-                    "data-[state=active]:bg-blue-500 data-[state=active]:text-white",
-                    "data-[state=inactive]:text-slate-400 data-[state=inactive]:hover:text-white",
+                    "data-[state=active]:bg-primary data-[state=active]:text-white",
+                    "data-[state=inactive]:text-muted-foreground data-[state=inactive]:hover:text-foreground",
                   )}
                 >
                   {t.label}
@@ -114,7 +114,7 @@ export function NodeDetailDrawer() {
 
           <button
             onClick={closeDrawer}
-            className="ml-auto flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
+            className="ml-auto flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             aria-label="Close details drawer"
           >
             <X className="h-4 w-4" />
@@ -123,11 +123,11 @@ export function NodeDetailDrawer() {
 
         <div className="flex-1 overflow-auto px-6 py-5">
           {isLoading ? (
-            <div className="flex items-center justify-center py-10 text-sm text-slate-500">
+            <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
               Loading node details…
             </div>
           ) : !node ? (
-            <div className="flex items-center justify-center py-10 text-sm text-slate-500">
+            <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
               Node not found.
             </div>
           ) : (

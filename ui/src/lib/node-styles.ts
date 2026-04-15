@@ -1,21 +1,7 @@
 import type { APINode } from "@/api/types";
+import { NODE_KIND_COLORS } from "@/theme/tokens";
 
-export const NODE_COLORS: Record<string, string> = {
-  AgentInstance: "#4A90D9",
-  MCPServer: "#50C878",
-  MCPTool: "#F5A623",
-  MCPResource: "#D0021B",
-  MCPPrompt: "#E67E22",
-  A2AAgent: "#7B68EE",
-  A2ASkill: "#9B59B6",
-  Identity: "#8E8E93",
-  Credential: "#FF6B6B",
-  ConfigFile: "#95A5A6",
-  Host: "#2C3E50",
-  InstructionFile: "#BDC3C7",
-  ResourceGroup: "#708090",
-  TrustZone: "#556B2F",
-};
+export const NODE_COLORS: Record<string, string> = NODE_KIND_COLORS;
 
 const BASE_SIZE = 6;
 const MAX_SIZE = 20;

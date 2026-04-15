@@ -15,10 +15,10 @@ export function CopyableCodeBlock({ code }: CopyableCodeBlockProps) {
   }
 
   return (
-    <div className="relative rounded border border-slate-700 bg-slate-900/80 p-2.5 mt-1.5">
+    <div className="relative rounded border border-border bg-muted/80 p-2.5 mt-1.5">
       <button
         onClick={handleCopy}
-        className="absolute top-1.5 right-1.5 p-1 rounded hover:bg-slate-700 transition-colors"
+        className="absolute top-1.5 right-1.5 p-1 rounded hover:bg-muted transition-colors"
         title="Copy to clipboard"
       >
         {copied ? (

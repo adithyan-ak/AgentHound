@@ -76,7 +76,7 @@ export function NewScan({ open, onClose }: NewScanProps) {
                     onClick={() => handleCopy(cmd.command, i)}
                   >
                     {copiedIdx === i ? (
-                      <Check className="h-3 w-3 text-green-400" />
+                      <Check className="h-3 w-3 text-emerald-400" />
                     ) : (
                       <Copy className="h-3 w-3" />
                     )}

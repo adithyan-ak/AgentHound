@@ -25,7 +25,7 @@ export function RemediationTab({
           <Shield className="h-4 w-4" strokeWidth={2.25} />
           <span className="text-sm font-semibold">No action required</span>
         </div>
-        <p className="text-xs text-slate-400">
+        <p className="text-xs text-muted-foreground">
           No active remediation items detected for this node. It does not
           currently participate in any composite attack path.
         </p>
@@ -60,9 +60,9 @@ function RemediationCard({ item }: { item: RemediationItem }) {
       text: "text-yellow-400",
     },
     low: {
-      border: "border-slate-800",
-      bg: "bg-slate-900/40",
-      text: "text-slate-400",
+      border: "border-border",
+      bg: "bg-muted/40",
+      text: "text-muted-foreground",
     },
   } as const;
 
@@ -75,9 +75,9 @@ function RemediationCard({ item }: { item: RemediationItem }) {
         <div className={cn("text-[10px] uppercase tracking-widest font-bold", c.text)}>
           {item.severity}
         </div>
-        <div className="text-sm font-semibold text-white">{item.title}</div>
+        <div className="text-sm font-semibold text-foreground">{item.title}</div>
       </div>
-      <p className="ml-6 text-xs text-slate-300 leading-relaxed">{item.body}</p>
+      <p className="ml-6 text-xs text-foreground leading-relaxed">{item.body}</p>
     </div>
   );
 }

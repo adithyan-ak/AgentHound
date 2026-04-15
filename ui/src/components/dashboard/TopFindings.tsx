@@ -6,12 +6,13 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InfoTip } from "./InfoTip";
+import { SEVERITY } from "@/theme/tokens";
 
 const SEVERITY_STYLE: Record<string, string> = {
-  critical: "bg-red-900/60 text-red-300 border-red-700",
-  high: "bg-orange-900/60 text-orange-300 border-orange-700",
-  medium: "bg-yellow-900/60 text-yellow-300 border-yellow-700",
-  low: "bg-muted text-muted-foreground border-border",
+  critical: SEVERITY.critical!.badgeClass,
+  high: SEVERITY.high!.badgeClass,
+  medium: SEVERITY.medium!.badgeClass,
+  low: SEVERITY.low!.badgeClass,
 };
 
 const SEVERITY_RANK: Record<string, number> = {

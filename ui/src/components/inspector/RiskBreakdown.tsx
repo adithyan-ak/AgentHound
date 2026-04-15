@@ -1,3 +1,4 @@
+import { riskBgClass } from "@/theme/tokens";
 import { cn } from "@/lib/utils";
 
 interface RiskBreakdownProps {
@@ -29,14 +30,6 @@ const COMPONENT_KEYS: Record<string, { label: string; key: string }[]> = {
 
 const SUPPORTED_KINDS = new Set(Object.keys(COMPONENT_KEYS));
 
-function scoreColor(score: number): string {
-  if (score >= 80) return "bg-red-500";
-  if (score >= 60) return "bg-orange-500";
-  if (score >= 40) return "bg-yellow-500";
-  if (score >= 20) return "bg-blue-500";
-  return "bg-green-500";
-}
-
 export function RiskBreakdown({ properties, kind }: RiskBreakdownProps) {
   if (!SUPPORTED_KINDS.has(kind)) {
     return (
@@ -62,7 +55,7 @@ export function RiskBreakdown({ properties, kind }: RiskBreakdownProps) {
         </div>
         <div className="h-3 rounded-full bg-muted overflow-hidden">
           <div
-            className={cn("h-full rounded-full transition-all", scoreColor(totalScore))}
+            className={cn("h-full rounded-full transition-all", riskBgClass(totalScore))}
             style={{ width: `${Math.min(totalScore, 100)}%` }}
           />
         </div>
@@ -79,7 +72,7 @@ export function RiskBreakdown({ properties, kind }: RiskBreakdownProps) {
               </div>
               <div className="h-1.5 rounded-full bg-muted overflow-hidden">
                 <div
-                  className={cn("h-full rounded-full", scoreColor(value))}
+                  className={cn("h-full rounded-full", riskBgClass(value))}
                   style={{ width: `${Math.min(value, 100)}%` }}
                 />
               </div>

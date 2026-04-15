@@ -1,10 +1,11 @@
+import type { CSSProperties } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle } from "lucide-react";
 import { fetchFindings } from "@/api/analysis";
 import { useGraphStore } from "@/store/graph";
+import { SEVERITY } from "@/theme/tokens";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { cn } from "@/lib/utils";
 
 interface NodeFindingsProps {
   nodeId: string;
@@ -21,13 +22,11 @@ const SEVERITY_BADGE_VARIANT: Record<
   info: "outline",
 };
 
-const SEVERITY_CARD_STYLES: Record<string, string> = {
-  critical: "border-red-800 bg-red-900/40",
-  high: "border-orange-800 bg-orange-900/40",
-  medium: "border-yellow-800 bg-yellow-900/40",
-  low: "border-blue-800 bg-blue-900/40",
-  info: "border-border bg-muted/40",
-};
+function severityCardInlineStyle(level: string): CSSProperties {
+  const s = SEVERITY[level];
+  if (!s) return {};
+  return { borderColor: s.border, backgroundColor: s.bg };
+}
 
 export function NodeFindings({ nodeId }: NodeFindingsProps) {
   const highlightPath = useGraphStore((s) => s.highlightPath);
@@ -75,11 +74,8 @@ export function NodeFindings({ nodeId }: NodeFindingsProps) {
           title="Show this path on the graph"
         >
           <Card
-            className={cn(
-              "transition-colors hover:brightness-125 cursor-pointer",
-              SEVERITY_CARD_STYLES[finding.severity] ??
-                SEVERITY_CARD_STYLES.info,
-            )}
+            className="transition-colors hover:brightness-125 cursor-pointer"
+            style={severityCardInlineStyle(finding.severity)}
           >
             <CardContent className="px-3 py-2">
               <div className="flex items-start gap-2">

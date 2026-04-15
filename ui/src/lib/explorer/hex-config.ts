@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   Hexagon,
 } from "lucide-react";
+import { SEVERITY } from "@/theme/tokens";
 import type { SeverityLevel } from "./lens-config";
 
 export interface HexKindConfig {
@@ -169,10 +170,10 @@ export const SEVERITY_HALO: Record<Exclude<SeverityLevel, "info">, string> = {
 };
 
 export const SEVERITY_STROKE_COLOR: Record<Exclude<SeverityLevel, "info">, string> = {
-  critical: "#EF4444",
-  high: "#F97316",
-  medium: "#EAB308",
-  low: "#94A3B8",
+  critical: SEVERITY.critical!.solid,
+  high: SEVERITY.high!.solid,
+  medium: SEVERITY.medium!.solid,
+  low: SEVERITY.low!.solid,
 };
 
 /**

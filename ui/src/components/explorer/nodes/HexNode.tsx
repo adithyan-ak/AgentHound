@@ -45,7 +45,7 @@ function HexNodeComponent({ data, selected }: NodeProps) {
       <div
         className={cn(
           "relative",
-          selected && "ring-2 ring-white ring-offset-2 ring-offset-[#050B18] rounded-full",
+          selected && "ring-2 ring-white ring-offset-2 ring-offset-explorer-canvas rounded-full",
         )}
         style={{
           width: HEX_NODE_WIDTH,
@@ -91,7 +91,7 @@ function HexNodeComponent({ data, selected }: NodeProps) {
 
         {d.highValue && (
           <div
-            className="absolute flex h-5 w-5 items-center justify-center rounded-full bg-slate-950 ring-1 ring-yellow-500/80 shadow-[0_0_8px_rgba(234,179,8,0.65)] pointer-events-none"
+            className="absolute flex h-5 w-5 items-center justify-center rounded-full bg-background ring-1 ring-yellow-500/80 shadow-[0_0_8px_rgba(234,179,8,0.65)] pointer-events-none"
             style={{ left: -2, top: 14 }}
             title="High value target"
           >
@@ -105,7 +105,7 @@ function HexNodeComponent({ data, selected }: NodeProps) {
         )}
         {d.owned && (
           <div
-            className="absolute flex h-5 w-5 items-center justify-center rounded-full bg-slate-950 ring-1 ring-red-500/85 shadow-[0_0_8px_rgba(239,68,68,0.75)] pointer-events-none"
+            className="absolute flex h-5 w-5 items-center justify-center rounded-full bg-background ring-1 ring-red-500/85 shadow-[0_0_8px_rgba(239,68,68,0.75)] pointer-events-none"
             style={{ right: -2, top: 14 }}
             title="Owned — attacker controlled"
           >
@@ -173,7 +173,7 @@ function HexNodeComponent({ data, selected }: NodeProps) {
         >
           {d.label}
         </div>
-        <div className="text-[8px] tracking-[0.12em] text-slate-400 font-medium mt-0.5">
+        <div className="text-[8px] tracking-[0.12em] text-muted-foreground font-medium mt-0.5">
           {d.kindTag}
         </div>
       </div>

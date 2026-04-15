@@ -6,6 +6,7 @@ import {
   extractCriticalChains,
   type CriticalChain,
 } from "@/lib/explorer/critical-chains";
+import { SEVERITY } from "@/theme/tokens";
 import { cn } from "@/lib/utils";
 
 export function ChainRibbon() {
@@ -42,16 +43,16 @@ export function ChainRibbon() {
     <div
       className={cn(
         "pointer-events-auto absolute bottom-7 left-1/2 z-20 -translate-x-1/2",
-        "max-w-[calc(100vw-48px)] rounded-xl border border-red-900/40 bg-slate-950/92 p-3 shadow-2xl backdrop-blur-md",
+        "max-w-[calc(100vw-48px)] rounded-xl glass border-red-900/40 p-3 shadow-2xl",
       )}
-      style={{ borderTopColor: "#EF4444", borderTopWidth: 3 }}
+      style={{ borderTopColor: SEVERITY.critical!.solid, borderTopWidth: 3 }}
     >
       <div className="mb-2 flex items-center gap-2 px-1">
         <AlertOctagon className="h-3.5 w-3.5 text-red-400" strokeWidth={2.5} />
         <div className="text-[10px] font-semibold uppercase tracking-widest text-red-400">
           {chains.length} critical attack path{chains.length === 1 ? "" : "s"}
         </div>
-        <div className="text-[10px] text-slate-500">
+        <div className="text-[10px] text-muted-foreground">
           · click a card to focus the path on the graph
         </div>
       </div>
@@ -89,7 +90,7 @@ function ChainCard({
         "transition-all duration-150 ease-out",
         selected
           ? "border-red-500 bg-red-950/50 shadow-[0_0_20px_-4px_rgba(239,68,68,0.6)]"
-          : "border-slate-800 bg-slate-900/60 hover:border-red-800 hover:bg-slate-900",
+          : "border-border bg-muted/60 hover:border-red-800 hover:bg-muted",
       )}
     >
       <div className="mb-1.5 flex items-center justify-between">
@@ -99,18 +100,18 @@ function ChainCard({
             Critical
           </span>
         </div>
-        <span className="text-[9px] text-slate-500 tabular-nums">
+        <span className="text-[9px] text-muted-foreground tabular-nums">
           {(chain.confidence * 100).toFixed(0)}% conf
         </span>
       </div>
-      <div className="mb-1.5 text-xs font-semibold text-white line-clamp-2">
+      <div className="mb-1.5 text-xs font-semibold text-foreground line-clamp-2">
         {chain.title}
       </div>
-      <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
+      <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
         <span className="max-w-[80px] truncate">{chain.sourceName}</span>
         <ArrowRight className="h-2.5 w-2.5 text-red-400 flex-shrink-0" />
         <span className="max-w-[80px] truncate">{chain.targetName}</span>
-        <span className="ml-auto text-[9px] uppercase text-slate-500">
+        <span className="ml-auto text-[9px] uppercase text-muted-foreground">
           {chain.edgeKind.replace(/_/g, " ")}
         </span>
       </div>

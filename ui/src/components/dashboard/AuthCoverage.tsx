@@ -4,16 +4,17 @@ import { fetchNodes } from "@/api/graph";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InfoTip } from "./InfoTip";
+import { CHART_THEME } from "@/theme/tokens";
 
 const AUTH_COLORS: Record<string, string> = {
-  none: "#ef4444",
-  apiKey: "#eab308",
-  bearer: "#3b82f6",
-  oauth: "#22c55e",
-  mTLS: "#14b8a6",
+  none: CHART_THEME.series[6],
+  apiKey: CHART_THEME.series[3],
+  bearer: CHART_THEME.series[5],
+  oauth: CHART_THEME.series[2],
+  mTLS: CHART_THEME.series[0],
 };
 
-const FALLBACK_COLOR = "#6b7280";
+const FALLBACK_COLOR = CHART_THEME.axis;
 
 export function AuthCoverage() {
   const { data: nodes, isLoading } = useQuery({
@@ -72,7 +73,7 @@ export function AuthCoverage() {
                 ))}
               </Pie>
               <Tooltip
-                contentStyle={{ backgroundColor: "#27272a", border: "1px solid #3f3f46", borderRadius: 6, color: "#e4e4e7" }}
+                contentStyle={{ backgroundColor: CHART_THEME.tooltip.bg, border: `1px solid ${CHART_THEME.tooltip.border}`, borderRadius: 6, color: CHART_THEME.tooltip.text }}
               />
               <Legend
                 formatter={(value: string) => <span className="text-xs text-muted-foreground">{value}</span>}

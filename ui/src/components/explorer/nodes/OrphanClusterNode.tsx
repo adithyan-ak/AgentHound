@@ -134,7 +134,7 @@ function OrphanClusterNodeComponent({ data }: NodeProps) {
           />
           <div
             className={cn(
-              "absolute left-1/2 -translate-x-1/2 w-[300px] rounded-lg border border-slate-700/80 bg-slate-950/98 shadow-2xl backdrop-blur-md",
+              "absolute left-1/2 -translate-x-1/2 w-[300px] rounded-lg glass shadow-2xl",
               "z-[60] overflow-hidden",
               "animate-in fade-in zoom-in-95 duration-150",
             )}
@@ -143,7 +143,7 @@ function OrphanClusterNodeComponent({ data }: NodeProps) {
             onMouseLeave={scheduleClose}
           >
           <div
-            className="flex items-center gap-2 border-b border-slate-800 px-3 py-2.5"
+            className="flex items-center gap-2 border-b border-border px-3 py-2.5"
             style={{ borderTopColor: strokeColor, borderTopWidth: 2 }}
           >
             <Icon
@@ -152,31 +152,31 @@ function OrphanClusterNodeComponent({ data }: NodeProps) {
               strokeWidth={2.25}
             />
             <div className="flex flex-col">
-              <div className="text-[10px] uppercase tracking-widest text-slate-500">
+              <div className="text-[10px] uppercase tracking-widest text-muted-foreground">
                 Unconnected
               </div>
-              <div className="text-sm font-semibold text-white">
+              <div className="text-sm font-semibold text-foreground">
                 {d.count} {d.kindTag.toLowerCase()}
               </div>
             </div>
           </div>
 
           {d.orphanNodes.length > 8 && (
-            <div className="flex items-center gap-2 border-b border-slate-800 bg-slate-900/50 px-3 py-2">
-              <Search className="h-3 w-3 text-slate-500" strokeWidth={2.5} />
+            <div className="flex items-center gap-2 border-b border-border bg-muted/50 px-3 py-2">
+              <Search className="h-3 w-3 text-muted-foreground" strokeWidth={2.5} />
               <input
                 autoFocus
                 placeholder="Filter…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="w-full bg-transparent text-xs text-white placeholder:text-slate-600 focus:outline-none"
+                className="w-full bg-transparent text-xs text-foreground placeholder:text-muted-foreground/70 focus:outline-none"
               />
             </div>
           )}
 
           <div className="max-h-[320px] overflow-y-auto py-1">
             {filtered.length === 0 ? (
-              <div className="px-3 py-4 text-center text-xs text-slate-500">
+              <div className="px-3 py-4 text-center text-xs text-muted-foreground">
                 No matches.
               </div>
             ) : (
@@ -191,23 +191,23 @@ function OrphanClusterNodeComponent({ data }: NodeProps) {
                   }}
                   className={cn(
                     "group/row flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs",
-                    "transition-colors hover:bg-slate-800/60",
+                    "transition-colors hover:bg-muted",
                   )}
                 >
                   <div
                     className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
                     style={{ background: strokeColor }}
                   />
-                  <span className="flex-1 truncate text-slate-200 group-hover/row:text-white">
+                  <span className="flex-1 truncate text-foreground group-hover/row:text-foreground">
                     {n.name}
                   </span>
-                  <ChevronRight className="h-3 w-3 flex-shrink-0 text-slate-600 group-hover/row:text-slate-400" />
+                  <ChevronRight className="h-3 w-3 flex-shrink-0 text-muted-foreground/70 group-hover/row:text-muted-foreground" />
                 </button>
               ))
             )}
           </div>
 
-          <div className="border-t border-slate-800 bg-slate-900/40 px-3 py-1.5 text-[9px] uppercase tracking-widest text-slate-600">
+          <div className="border-t border-border bg-muted/40 px-3 py-1.5 text-[9px] uppercase tracking-widest text-muted-foreground/70">
             Hover to browse · click a row to inspect
           </div>
           </div>
@@ -224,7 +224,7 @@ function OrphanClusterNodeComponent({ data }: NodeProps) {
         >
           {d.count} UNCONNECTED
         </div>
-        <div className="text-[8px] tracking-[0.12em] text-slate-500 font-medium mt-0.5">
+        <div className="text-[8px] tracking-[0.12em] text-muted-foreground font-medium mt-0.5">
           {d.kindTag}
         </div>
       </div>

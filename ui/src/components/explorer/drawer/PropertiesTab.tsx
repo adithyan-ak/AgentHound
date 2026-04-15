@@ -16,7 +16,7 @@ export function PropertiesTab({ node }: { node: APINode }) {
 
   if (entries.length === 0) {
     return (
-      <div className="text-sm text-slate-500">No properties recorded.</div>
+      <div className="text-sm text-muted-foreground">No properties recorded.</div>
     );
   }
 
@@ -24,10 +24,10 @@ export function PropertiesTab({ node }: { node: APINode }) {
     <div className="grid grid-cols-2 gap-x-8 gap-y-3 max-w-4xl">
       {entries.map(([k, v]) => (
         <div key={k} className="flex flex-col gap-0.5 min-w-0">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-medium">
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
             {k.replace(/_/g, " ")}
           </div>
-          <div className="truncate text-[13px] text-white font-mono">
+          <div className="truncate text-[13px] text-foreground font-mono">
             {renderValue(v)}
           </div>
         </div>

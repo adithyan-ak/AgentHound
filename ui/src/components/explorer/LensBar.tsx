@@ -25,7 +25,7 @@ function LensPill({ lens, active, onClick }: LensPillProps) {
     "whitespace-nowrap select-none",
     active
       ? cn(lens.accentClass, "border-transparent shadow-lg")
-      : "bg-slate-900/60 text-slate-300 border-slate-700/60 hover:bg-slate-800 hover:text-white hover:border-slate-600",
+      : "bg-muted/60 text-foreground border-border hover:bg-muted hover:text-foreground hover:border-border",
   );
 
   const pillStyle = active
@@ -65,15 +65,15 @@ function LensPill({ lens, active, onClick }: LensPillProps) {
           align="start"
           sideOffset={8}
           className={cn(
-            "min-w-[240px] rounded-lg border border-slate-700/80 bg-slate-900/98 p-1.5 shadow-2xl",
-            "backdrop-blur",
+            "min-w-[240px] rounded-lg glass p-1.5 shadow-2xl",
+            "",
             "data-[state=open]:animate-in data-[state=closed]:animate-out",
             "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
             "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
             "data-[side=bottom]:slide-in-from-top-2 z-50",
           )}
         >
-          <div className="px-2 py-1.5 text-[10px] uppercase tracking-widest text-slate-500">
+          <div className="px-2 py-1.5 text-[10px] uppercase tracking-widest text-muted-foreground">
             {lens.label} · sub-presets
           </div>
           {lens.subPresets.map((sp) => {
@@ -87,7 +87,7 @@ function LensPill({ lens, active, onClick }: LensPillProps) {
                 }}
                 className={cn(
                   "group/item flex cursor-pointer items-start gap-2 rounded-md px-2 py-2 text-xs",
-                  "outline-none focus:bg-slate-800/80 data-[highlighted]:bg-slate-800/80",
+                  "outline-none focus:bg-muted data-[highlighted]:bg-muted",
                   "transition-colors",
                 )}
               >
@@ -96,7 +96,7 @@ function LensPill({ lens, active, onClick }: LensPillProps) {
                     "mt-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-sm border",
                     enabled
                       ? "bg-blue-500 border-blue-400"
-                      : "border-slate-600 bg-transparent",
+                      : "border-border bg-transparent",
                   )}
                 >
                   {enabled && (
@@ -104,8 +104,8 @@ function LensPill({ lens, active, onClick }: LensPillProps) {
                   )}
                 </div>
                 <div className="flex flex-col">
-                  <span className="font-medium text-white">{sp.label}</span>
-                  <span className="text-[10px] text-slate-400 leading-tight">
+                  <span className="font-medium text-foreground">{sp.label}</span>
+                  <span className="text-[10px] text-muted-foreground leading-tight">
                     {sp.description}
                   </span>
                 </div>
@@ -126,11 +126,11 @@ export function LensBar() {
     <div className="pointer-events-auto absolute left-1/2 top-4 z-30 -translate-x-1/2">
       <div
         className={cn(
-          "flex items-center gap-1.5 rounded-full border border-slate-800/80 bg-slate-950/90 px-2 py-1.5",
-          "shadow-2xl backdrop-blur-md",
+          "flex items-center gap-1.5 rounded-full glass px-2 py-1.5",
+          "shadow-2xl",
         )}
       >
-        <div className="px-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+        <div className="px-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
           Lens
         </div>
         {LENS_LIST.map((lens) => (

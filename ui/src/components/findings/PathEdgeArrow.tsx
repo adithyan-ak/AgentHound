@@ -1,12 +1,7 @@
 import { memo } from "react";
 import { getEdgeCategory } from "@/lib/edge-styles";
 import { ChevronRight } from "lucide-react";
-
-const CATEGORY_COLORS: Record<string, string> = {
-  attack: "#EF4444",
-  trust: "#3B82F6",
-  structure: "#475569",
-};
+import { EDGE_COLORS } from "@/theme/tokens";
 
 interface PathEdgeArrowProps {
   kind: string;
@@ -14,12 +9,12 @@ interface PathEdgeArrowProps {
 
 function PathEdgeArrowComponent({ kind }: PathEdgeArrowProps) {
   const category = getEdgeCategory(kind);
-  const color = CATEGORY_COLORS[category] ?? "#475569";
+  const color = EDGE_COLORS[category as keyof typeof EDGE_COLORS] ?? EDGE_COLORS.structure;
 
   return (
     <div className="flex flex-col items-center justify-center flex-shrink-0 min-w-[60px] px-1">
       <div
-        className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded bg-slate-950/90 mb-1 whitespace-nowrap"
+        className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded glass mb-1 whitespace-nowrap"
         style={{ color }}
       >
         {kind.replace(/_/g, " ")}

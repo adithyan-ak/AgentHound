@@ -88,7 +88,7 @@ export function NavBar() {
           <div
             className={cn(
               "h-2 w-2 rounded-full",
-              isHealthy ? "bg-green-500" : "bg-red-500",
+              isHealthy ? "bg-emerald-500" : "bg-destructive",
             )}
             title={isHealthy ? "All systems operational" : "Service degraded"}
           />

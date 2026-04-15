@@ -12,14 +12,24 @@ const SEVERITY_RANK: Record<string, number> = {
   low: 3,
 };
 
+import { SEVERITY } from "@/theme/tokens";
+
+function severityGradient(solid: string): string {
+  const r = parseInt(solid.slice(1, 3), 16);
+  const g = parseInt(solid.slice(3, 5), 16);
+  const b = parseInt(solid.slice(5, 7), 16);
+  const darker = `rgb(${Math.round(r * 0.7)},${Math.round(g * 0.7)},${Math.round(b * 0.7)})`;
+  return `linear-gradient(135deg, ${solid} 0%, ${darker} 100%)`;
+}
+
 const SEVERITY_FILL: Record<string, string> = {
-  critical: "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)",
-  high: "linear-gradient(135deg, #d97706 0%, #b45309 100%)",
-  medium: "linear-gradient(135deg, #a16207 0%, #854d0e 100%)",
-  low: "linear-gradient(135deg, #475569 0%, #334155 100%)",
+  critical: severityGradient(SEVERITY.critical!.solid),
+  high: severityGradient(SEVERITY.high!.solid),
+  medium: severityGradient(SEVERITY.medium!.solid),
+  low: severityGradient(SEVERITY.low!.solid),
 };
 
-const DEFAULT_FILL = "linear-gradient(135deg, #475569 0%, #334155 100%)";
+const DEFAULT_FILL = severityGradient(SEVERITY.low!.solid);
 
 function getFill(sev: string): string {
   return SEVERITY_FILL[sev] ?? DEFAULT_FILL;

@@ -17,7 +17,7 @@ export function ConnectionsTab({
 
   if (edges.length === 0) {
     return (
-      <div className="text-sm text-slate-500">No connected edges found.</div>
+      <div className="text-sm text-muted-foreground">No connected edges found.</div>
     );
   }
 
@@ -26,7 +26,7 @@ export function ConnectionsTab({
       <div>
         <div className="mb-2 flex items-center gap-2">
           <ArrowDown className="h-3 w-3 text-cyan-400" />
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
             Incoming · {incoming.length}
           </div>
         </div>
@@ -47,7 +47,7 @@ export function ConnectionsTab({
       <div>
         <div className="mb-2 flex items-center gap-2">
           <ArrowUp className="h-3 w-3 text-orange-400" />
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
             Outgoing · {outgoing.length}
           </div>
         </div>
@@ -88,8 +88,8 @@ function EdgeRow({
     <button
       onClick={onClick}
       className={cn(
-        "flex w-full items-center gap-2 rounded-md border border-slate-800 bg-slate-900/40 px-2.5 py-2 text-left",
-        "transition-colors hover:border-slate-700 hover:bg-slate-900/80",
+        "flex w-full items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-2 text-left",
+        "transition-colors hover:border-border hover:bg-muted",
       )}
     >
       <div
@@ -99,19 +99,19 @@ function EdgeRow({
             ? direction === "in"
               ? "bg-cyan-400"
               : "bg-orange-400"
-            : "bg-slate-600",
+            : "bg-muted-foreground/70",
         )}
       />
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="text-[11px] font-medium text-white truncate">
+        <div className="text-[11px] font-medium text-foreground truncate">
           {edge.kind.replace(/_/g, " ")}
         </div>
-        <div className="text-[10px] text-slate-500 truncate">
+        <div className="text-[10px] text-muted-foreground truncate">
           {otherKind ?? "Node"} · {otherId.slice(0, 16)}
         </div>
       </div>
       {confidence > 0 && (
-        <div className="text-[9px] text-slate-500 tabular-nums flex-shrink-0">
+        <div className="text-[9px] text-muted-foreground tabular-nums flex-shrink-0">
           {(confidence * 100).toFixed(0)}%
         </div>
       )}

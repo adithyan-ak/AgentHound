@@ -1,11 +1,12 @@
 import type { APIEdge } from "@/api/types";
+import { EDGE_COLORS as TOKEN_EDGE_COLORS } from "@/theme/tokens";
 
 export type EdgeCategory = "attack" | "trust" | "structure";
 
 export const EDGE_CATEGORY_COLORS: Record<EdgeCategory, string> = {
-  attack: "#FF2D2D",
-  trust: "#4A90D9",
-  structure: "#666666",
+  attack: TOKEN_EDGE_COLORS.attack,
+  trust: TOKEN_EDGE_COLORS.trust,
+  structure: TOKEN_EDGE_COLORS.structure,
 };
 
 export const EDGE_CATEGORY_MAP: Record<string, EdgeCategory> = {

@@ -5,6 +5,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { InfoTip } from "./InfoTip";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { riskColor } from "@/theme/tokens";
 
 const KIND_LABEL: Record<string, string> = {
   AgentInstance: "Agent",
@@ -22,12 +23,6 @@ const KIND_VARIANT: Record<string, "default" | "secondary" | "outline" | "destru
   MCPResource: "destructive",
 };
 
-function riskColor(score: number): string {
-  if (score >= 75) return "#ef4444";
-  if (score >= 50) return "#f59e0b";
-  if (score >= 25) return "#eab308";
-  return "#22c55e";
-}
 
 interface RiskyEntity {
   id: string;

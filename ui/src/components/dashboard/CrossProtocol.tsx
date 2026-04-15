@@ -6,6 +6,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InfoTip } from "./InfoTip";
+import { NODE_KIND_COLORS, SEVERITY } from "@/theme/tokens";
 
 interface PivotPath {
   agent: string;
@@ -86,7 +87,7 @@ function MiniSankey({ pivots }: { pivots: PivotPath[] }) {
 
       {agents.map((name, i) => (
         <g key={`a-${name}`}>
-          <rect x={col1X} y={agentYs[i]} width={colW} height={nodeH} rx={4} fill="#7B68EE" fillOpacity={0.25} stroke="#7B68EE" strokeWidth={1} />
+          <rect x={col1X} y={agentYs[i]} width={colW} height={nodeH} rx={4} fill={NODE_KIND_COLORS.A2AAgent} fillOpacity={0.25} stroke={NODE_KIND_COLORS.A2AAgent} strokeWidth={1} />
           <text x={col1X + 6} y={(agentYs[i] ?? 0) + 15} fill="#c4b5fd" fontSize={10} className="select-none">
             {name.length > 14 ? name.slice(0, 13) + "\u2026" : name}
           </text>
@@ -95,7 +96,7 @@ function MiniSankey({ pivots }: { pivots: PivotPath[] }) {
 
       {hosts.map((name, i) => (
         <g key={`h-${name}`}>
-          <rect x={col2X} y={hostYs[i]} width={colW} height={nodeH} rx={4} fill="#2C3E50" fillOpacity={0.5} stroke="#4a5568" strokeWidth={1} />
+          <rect x={col2X} y={hostYs[i]} width={colW} height={nodeH} rx={4} fill={NODE_KIND_COLORS.Host} fillOpacity={0.5} stroke="#4a5568" strokeWidth={1} />
           <text x={col2X + 6} y={(hostYs[i] ?? 0) + 15} fill="#a1a1aa" fontSize={10} className="select-none">
             {name.length > 14 ? name.slice(0, 13) + "\u2026" : name}
           </text>
@@ -104,7 +105,7 @@ function MiniSankey({ pivots }: { pivots: PivotPath[] }) {
 
       {resources.map((name, i) => (
         <g key={`r-${name}`}>
-          <rect x={col3X} y={resourceYs[i]} width={colW} height={nodeH} rx={4} fill="#D0021B" fillOpacity={0.2} stroke="#D0021B" strokeWidth={1} />
+          <rect x={col3X} y={resourceYs[i]} width={colW} height={nodeH} rx={4} fill={NODE_KIND_COLORS.MCPResource} fillOpacity={0.2} stroke={NODE_KIND_COLORS.MCPResource} strokeWidth={1} />
           <text x={col3X + 6} y={(resourceYs[i] ?? 0) + 15} fill="#fca5a5" fontSize={10} className="select-none">
             {name.length > 14 ? name.slice(0, 13) + "\u2026" : name}
           </text>
@@ -133,7 +134,7 @@ export function CrossProtocol() {
           {!isLoading && pivots.length > 0 && (
             <Badge
               variant="outline"
-              className="bg-red-900/60 text-red-300 border-red-700 text-[10px] font-semibold"
+              className={cn(SEVERITY.critical!.badgeClass, "text-[10px] font-semibold")}
             >
               {pivots.length}
             </Badge>

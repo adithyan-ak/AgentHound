@@ -248,7 +248,7 @@ export function ExplorerCanvas() {
 
   if (error) {
     return (
-      <div className="flex h-full items-center justify-center bg-[#050B18]">
+      <div className="flex h-full items-center justify-center bg-explorer-canvas">
         <p className="text-sm text-red-400">
           Failed to load Explorer: {error.message}
         </p>
@@ -258,13 +258,13 @@ export function ExplorerCanvas() {
 
   if (!isLoading && data && data.nodes.length === 0 && data.edges.length === 0) {
     return (
-      <div className="flex h-full items-center justify-center bg-[#050B18]">
+      <div className="flex h-full items-center justify-center bg-explorer-canvas">
         <div className="flex flex-col items-center gap-3 text-center">
-          <div className="text-4xl text-slate-600">&#x2B22;</div>
-          <p className="text-sm font-medium text-slate-300">
+          <div className="text-4xl text-muted-foreground/70">&#x2B22;</div>
+          <p className="text-sm font-medium text-foreground">
             No graph data yet
           </p>
-          <p className="max-w-xs text-xs text-slate-500">
+          <p className="max-w-xs text-xs text-muted-foreground">
             Run a scan or ingest collector output to populate the graph.
           </p>
         </div>
@@ -274,8 +274,8 @@ export function ExplorerCanvas() {
 
   if (isLoading || !built || !layoutReady) {
     return (
-      <div className="flex h-full items-center justify-center bg-[#050B18]">
-        <div className="flex items-center gap-2 text-sm text-slate-400">
+      <div className="flex h-full items-center justify-center bg-explorer-canvas">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-cyan-400" />
           <span>{isLoading ? "Fetching graph…" : "Computing layout…"}</span>
         </div>
@@ -308,12 +308,12 @@ export function ExplorerCanvas() {
         variant={BackgroundVariant.Dots}
         gap={20}
         size={1.4}
-        color="#1E293B"
+        color="hsl(215 25% 17%)"
       />
       <Controls
         position="bottom-right"
         showInteractive={false}
-        className="!bg-slate-900 !border-slate-700 !shadow-lg"
+        className="!bg-card !border-border !shadow-lg"
       />
     </ReactFlow>
   );
