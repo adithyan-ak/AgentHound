@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/adithyan-ak/agenthound/internal/collector/common"
+	"github.com/adithyan-ak/agenthound/internal/rules"
 )
 
 type InstructionFileInfo struct {
@@ -32,13 +33,13 @@ var userTargets = []instructionTarget{
 	{filepath.Join(".claude", "CLAUDE.md"), "claude.md"},
 }
 
-func DiscoverInstructionFiles(homeDir, projectDir string) []InstructionFileInfo {
+func DiscoverInstructionFiles(homeDir, projectDir string, engine *rules.Engine) []InstructionFileInfo {
 	var results []InstructionFileInfo
 
 	if projectDir != "" {
 		for _, t := range projectTargets {
 			fullPath := filepath.Join(projectDir, t.relPath)
-			if info := tryReadAndAnalyze(fullPath, t.fileType); info != nil {
+			if info := tryReadAndAnalyze(fullPath, t.fileType, engine); info != nil {
 				results = append(results, *info)
 			}
 		}
@@ -47,7 +48,7 @@ func DiscoverInstructionFiles(homeDir, projectDir string) []InstructionFileInfo 
 	if homeDir != "" {
 		for _, t := range userTargets {
 			fullPath := filepath.Join(homeDir, t.relPath)
-			if info := tryReadAndAnalyze(fullPath, t.fileType); info != nil {
+			if info := tryReadAndAnalyze(fullPath, t.fileType, engine); info != nil {
 				results = append(results, *info)
 			}
 		}
@@ -56,9 +57,29 @@ func DiscoverInstructionFiles(homeDir, projectDir string) []InstructionFileInfo 
 	return results
 }
 
-func AnalyzeInstructionFile(path string, data []byte, fileType string) InstructionFileInfo {
+func AnalyzeInstructionFile(path string, data []byte, fileType string, engine *rules.Engine) InstructionFileInfo {
 	text := string(data)
-	patterns := common.DetectInstructionPoisoning(text)
+
+	var patterns []common.PatternMatch
+	matches := engine.EvaluateAll("config", map[string]string{
+		"instruction.content": text,
+	})
+	for _, m := range matches {
+		if m.Emit.FindingType == "has_injection_patterns" {
+			label := ""
+			if len(m.Labels) > 0 {
+				label = m.Labels[0]
+			} else {
+				label = m.RuleID
+			}
+			patterns = append(patterns, common.PatternMatch{
+				Name:     label,
+				Severity: m.Severity,
+				Offset:   m.Offset,
+				Text:     m.Text,
+			})
+		}
+	}
 
 	return InstructionFileInfo{
 		Path:         path,
@@ -69,11 +90,11 @@ func AnalyzeInstructionFile(path string, data []byte, fileType string) Instructi
 	}
 }
 
-func tryReadAndAnalyze(path, fileType string) *InstructionFileInfo {
+func tryReadAndAnalyze(path, fileType string, engine *rules.Engine) *InstructionFileInfo {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
-	info := AnalyzeInstructionFile(path, data, fileType)
+	info := AnalyzeInstructionFile(path, data, fileType, engine)
 	return &info
 }

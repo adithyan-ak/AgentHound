@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/adithyan-ak/agenthound/internal/model"
+	"github.com/adithyan-ak/agenthound/internal/rules"
 )
 
 type Collector interface {
@@ -27,4 +28,5 @@ type CollectOptions struct {
 	Insecure                bool
 	AuthToken               string
 	ScanID                  string
+	RulesEngine             *rules.Engine // nil = default engine constructed automatically
 }

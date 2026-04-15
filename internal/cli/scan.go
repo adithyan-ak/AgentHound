@@ -15,6 +15,7 @@ import (
 	mcpcollector "github.com/adithyan-ak/agenthound/internal/collector/mcp"
 	"github.com/adithyan-ak/agenthound/internal/config"
 	"github.com/adithyan-ak/agenthound/internal/model"
+	"github.com/adithyan-ak/agenthound/internal/rules"
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
@@ -399,6 +400,16 @@ func runScanAPI(ctx context.Context, clientCfg *config.ClientConfig, start time.
 	return nil
 }
 
+func loadRulesEngineOrNil() *rules.Engine {
+	engine, err := buildRulesEngine()
+	if err != nil {
+		slog.Warn("failed to load rules engine, falling back to legacy patterns", "error", err)
+		return nil
+	}
+	slog.Info("rules engine loaded", "rules", engine.RuleCount())
+	return engine
+}
+
 func collectConfig(ctx context.Context, path string, paths []string, projectDir string, includeCredValues bool) (*model.IngestData, error) {
 	c := configcollector.NewConfigCollector()
 	opts := collector.CollectOptions{
@@ -407,6 +418,7 @@ func collectConfig(ctx context.Context, path string, paths []string, projectDir 
 		ConfigPaths:             paths,
 		ProjectDir:              projectDir,
 		IncludeCredentialValues: includeCredValues,
+		RulesEngine:             loadRulesEngineOrNil(),
 	}
 	slog.Info("running config collector", "discover", opts.Discover, "path", path)
 	return c.Collect(ctx, opts)
@@ -423,9 +435,10 @@ func collectMCP(ctx context.Context, url string, concurrency int, timeout time.D
 
 	c := mcpcollector.NewMCPCollector(mcpOpts...)
 	opts := collector.CollectOptions{
-		Discover:  url == "",
-		TargetURL: url,
-		Insecure:  insecure,
+		Discover:    url == "",
+		TargetURL:   url,
+		Insecure:    insecure,
+		RulesEngine: loadRulesEngineOrNil(),
 	}
 	slog.Info("running mcp collector", "discover", opts.Discover, "url", url)
 	return c.Collect(ctx, opts)
@@ -451,6 +464,7 @@ func collectA2A(ctx context.Context, target string, targets []string, targetsFil
 		TargetURLsFile: targetsFile,
 		AuthToken:      authToken,
 		Insecure:       insecure,
+		RulesEngine:    loadRulesEngineOrNil(),
 	}
 	slog.Info("running a2a collector", "target", target, "targets", len(targets))
 	return c.Collect(ctx, opts)

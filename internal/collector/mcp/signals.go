@@ -3,11 +3,13 @@ package mcp
 import (
 	"encoding/json"
 	"net/url"
+	"sort"
 	"strings"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/adithyan-ak/agenthound/internal/collector/common"
+	"github.com/adithyan-ak/agenthound/internal/rules"
 )
 
 type ToolSignals struct {
@@ -23,14 +25,43 @@ type ResourceSignals struct {
 	Sensitivity string
 }
 
-func computeToolSignals(tool *mcpsdk.Tool, allToolNames map[string]bool) ToolSignals {
+func computeToolSignals(tool *mcpsdk.Tool, allToolNames map[string]bool, engine *rules.Engine) ToolSignals {
 	schemaMap := inputSchemaAsMap(tool.InputSchema)
 
 	sig := ToolSignals{
-		DescriptionHash:   common.DescriptionHash(tool.Name, tool.Description, schemaMap),
-		CapabilitySurface: common.ClassifyCapabilities(tool.Name, tool.Description, schemaMap),
-		HasInjection:      common.HasInjectionPatterns(tool.Description),
+		DescriptionHash: common.DescriptionHash(tool.Name, tool.Description, schemaMap),
 	}
+
+	combined := tool.Name + " " + tool.Description
+	if schemaMap != nil {
+		if props, ok := schemaMap["properties"].(map[string]any); ok {
+			for key := range props {
+				combined += " " + key
+			}
+		}
+	}
+	fields := map[string]string{
+		"tool.description": tool.Description,
+		"tool.name":        tool.Name,
+		"tool.combined":    combined,
+	}
+	matches := engine.EvaluateAll("mcp", fields)
+
+	capSet := make(map[string]bool)
+	for _, m := range matches {
+		switch m.Emit.FindingType {
+		case "has_injection_patterns":
+			sig.HasInjection = true
+		case "capability_classification":
+			if v, ok := m.Emit.PropertyValue.(string); ok {
+				capSet[v] = true
+			}
+		}
+	}
+	for cap := range capSet {
+		sig.CapabilitySurface = append(sig.CapabilitySurface, cap)
+	}
+	sort.Strings(sig.CapabilitySurface)
 
 	if tool.Description != "" {
 		descLower := strings.ToLower(tool.Description)
@@ -66,10 +97,35 @@ func flattenAnnotations(ann *mcpsdk.ToolAnnotations) map[string]any {
 	return m
 }
 
-func computeResourceSignals(uri string) ResourceSignals {
-	sig := ResourceSignals{
-		Sensitivity: string(common.ClassifyResourceSensitivity(uri)),
+func computeResourceSignals(uri string, engine *rules.Engine) ResourceSignals {
+	var sig ResourceSignals
+
+	fields := map[string]string{"resource.uri": uri}
+	matches := engine.EvaluateAll("mcp", fields)
+
+	bestSeverity := ""
+	severityRank := map[string]int{"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+	for _, m := range matches {
+		if !strings.Contains(m.Emit.FindingType, "sensitivity") {
+			continue
+		}
+		sev := ""
+		if v, ok := m.Emit.PropertyValue.(string); ok {
+			sev = v
+		}
+		if bestSeverity == "" {
+			bestSeverity = sev
+		} else if rank, ok := severityRank[sev]; ok {
+			if bestRank, ok2 := severityRank[bestSeverity]; ok2 && rank < bestRank {
+				bestSeverity = sev
+			}
+		}
 	}
+	if bestSeverity == "" {
+		bestSeverity = "low"
+	}
+	sig.Sensitivity = bestSeverity
 
 	if u, err := url.Parse(uri); err == nil && u.Scheme != "" {
 		sig.URIScheme = u.Scheme

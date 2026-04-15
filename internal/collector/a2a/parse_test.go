@@ -3,7 +3,18 @@ package a2a
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/adithyan-ak/agenthound/internal/rules"
 )
+
+func testA2AEngine(t *testing.T) *rules.Engine {
+	t.Helper()
+	engine, err := rules.NewEngine(rules.LoadOptions{})
+	if err != nil {
+		t.Fatalf("failed to create rules engine: %v", err)
+	}
+	return engine
+}
 
 func mustParseFixture(t *testing.T, name string) map[string]any {
 	t.Helper()
@@ -38,8 +49,9 @@ func TestDetectVersion_NoAuth(t *testing.T) {
 }
 
 func TestParseV030(t *testing.T) {
+	engine := testA2AEngine(t)
 	m := mustParseFixture(t, "agent_card_v030.json")
-	card, err := ParseV030(m, "testhash123")
+	card, err := parseV030(m, "testhash123", engine)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -94,8 +106,9 @@ func TestParseV030(t *testing.T) {
 }
 
 func TestParseV10(t *testing.T) {
+	engine := testA2AEngine(t)
 	m := mustParseFixture(t, "agent_card_v10.json")
-	card, err := ParseV10(m, "v10hash")
+	card, err := parseV10(m, "v10hash", engine)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -132,8 +145,9 @@ func TestParseV10(t *testing.T) {
 }
 
 func TestParseV030_NoAuth(t *testing.T) {
+	engine := testA2AEngine(t)
 	m := mustParseFixture(t, "agent_card_no_auth.json")
-	card, err := ParseV030(m, "noauthhash")
+	card, err := parseV030(m, "noauthhash", engine)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -150,27 +164,30 @@ func TestParseV030_NoAuth(t *testing.T) {
 }
 
 func TestParseV030_MissingName(t *testing.T) {
+	engine := testA2AEngine(t)
 	raw := map[string]any{
 		"url":         "https://example.com",
 		"description": "no name",
 	}
-	_, err := ParseV030(raw, "hash")
+	_, err := parseV030(raw, "hash", engine)
 	if err == nil {
 		t.Fatal("expected error for missing name")
 	}
 }
 
 func TestParseV10_MissingName(t *testing.T) {
+	engine := testA2AEngine(t)
 	raw := map[string]any{
 		"supportedInterfaces": []any{},
 	}
-	_, err := ParseV10(raw, "hash")
+	_, err := parseV10(raw, "hash", engine)
 	if err == nil {
 		t.Fatal("expected error for missing name")
 	}
 }
 
 func TestParseAgentCard_Dispatch(t *testing.T) {
+	engine := testA2AEngine(t)
 	tests := []struct {
 		fixture  string
 		version  string
@@ -195,7 +212,7 @@ func TestParseAgentCard_Dispatch(t *testing.T) {
 				Version:  DetectVersion(parsed),
 				CardHash: "abc123",
 			}
-			card, err := ParseAgentCard(raw)
+			card, err := ParseAgentCard(raw, engine)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -207,8 +224,9 @@ func TestParseAgentCard_Dispatch(t *testing.T) {
 }
 
 func TestParseV030_SignedCard(t *testing.T) {
+	engine := testA2AEngine(t)
 	m := mustParseFixture(t, "agent_card_signed.json")
-	card, err := ParseV030(m, "signedhash")
+	card, err := parseV030(m, "signedhash", engine)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

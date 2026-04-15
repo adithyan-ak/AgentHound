@@ -12,6 +12,7 @@ import (
 	collector "github.com/adithyan-ak/agenthound/internal/collector"
 	"github.com/adithyan-ak/agenthound/internal/collector/common"
 	"github.com/adithyan-ak/agenthound/internal/model"
+	"github.com/adithyan-ak/agenthound/internal/rules"
 )
 
 type MCPCollector struct {
@@ -20,6 +21,7 @@ type MCPCollector struct {
 	initTimeout time.Duration
 	maxItems    int
 	insecure    bool
+	engine      *rules.Engine
 }
 
 type Option func(*MCPCollector)
@@ -76,6 +78,14 @@ func (c *MCPCollector) Name() string { return "mcp" }
 func (c *MCPCollector) Collect(ctx context.Context, opts collector.CollectOptions) (*model.IngestData, error) {
 	if opts.Insecure {
 		c.insecure = true
+	}
+	c.engine = opts.RulesEngine
+	if c.engine == nil {
+		var engineErr error
+		c.engine, engineErr = rules.NewEngine(rules.LoadOptions{})
+		if engineErr != nil {
+			return nil, fmt.Errorf("rules engine: %w", engineErr)
+		}
 	}
 
 	specs, err := c.buildServerList(opts)

@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/adithyan-ak/agenthound/internal/collector/common"
+	"github.com/adithyan-ak/agenthound/internal/rules"
 )
 
 type CredentialInfo struct {
@@ -16,38 +17,28 @@ type CredentialInfo struct {
 	Format      string // "openai", "anthropic", "github", "slack", "aws", "generic"
 }
 
-var credentialNamePatterns = []string{
-	"KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH", "API_KEY",
-}
-
-var vaultPrefixes = []string{
-	"vault://",
-	"ssm://",
-	"arn:aws:secretsmanager",
-}
-
-func ExtractCredentials(env map[string]string, headers map[string]string, source string, includeValues bool) []CredentialInfo {
+func ExtractCredentials(env map[string]string, headers map[string]string, source string, includeValues bool, engine *rules.Engine) []CredentialInfo {
 	var creds []CredentialInfo
 
 	for name, value := range env {
-		if !isCredentialName(name) {
+		if !isCredentialName(name, engine) {
 			continue
 		}
-		creds = append(creds, classifyAndBuild(name, value, source, includeValues))
+		creds = append(creds, classifyAndBuild(name, value, source, includeValues, engine))
 	}
 
 	for name, value := range headers {
-		if !isCredentialName(name) {
+		if !isCredentialName(name, engine) {
 			continue
 		}
-		creds = append(creds, classifyAndBuild(name, value, source, includeValues))
+		creds = append(creds, classifyAndBuild(name, value, source, includeValues, engine))
 	}
 
 	return creds
 }
 
-func ClassifyCredentialType(name, value string) string {
-	if isVaultRef(value) {
+func classifyCredentialType(name, value string, engine *rules.Engine) string {
+	if isVaultRef(value, engine) {
 		return "vaultRef"
 	}
 	if isEnvRef(value) {
@@ -56,12 +47,12 @@ func ClassifyCredentialType(name, value string) string {
 	return "hardcoded"
 }
 
-func classifyAndBuild(name, value, source string, includeValues bool) CredentialInfo {
+func classifyAndBuild(name, value, source string, includeValues bool, engine *rules.Engine) CredentialInfo {
 	ci := CredentialInfo{
 		Name:   name,
 		Source: source,
-		Format: detectFormat(value),
-		Type:   ClassifyCredentialType(name, value),
+		Format: detectFormat(value, engine),
+		Type:   classifyCredentialType(name, value, engine),
 	}
 
 	switch ci.Type {
@@ -83,21 +74,27 @@ func classifyAndBuild(name, value, source string, includeValues bool) Credential
 	return ci
 }
 
-func isCredentialName(name string) bool {
-	upper := strings.ToUpper(name)
-	for _, pattern := range credentialNamePatterns {
-		if strings.Contains(upper, pattern) {
+func isCredentialName(name string, engine *rules.Engine) bool {
+	matches := engine.EvaluateAll("config", map[string]string{
+		"credential.name": name,
+	})
+	for _, m := range matches {
+		if m.Emit.FindingType == "credential_detected" {
 			return true
 		}
 	}
 	return false
 }
 
-func isVaultRef(value string) bool {
-	lower := strings.ToLower(value)
-	for _, prefix := range vaultPrefixes {
-		if strings.HasPrefix(lower, prefix) {
-			return true
+func isVaultRef(value string, engine *rules.Engine) bool {
+	matches := engine.EvaluateAll("config", map[string]string{
+		"credential.value": value,
+	})
+	for _, m := range matches {
+		if m.Emit.FindingType == "credential_type" {
+			if v, ok := m.Emit.PropertyValue.(string); ok && v == "vaultRef" {
+				return true
+			}
 		}
 	}
 	return false
@@ -107,20 +104,32 @@ func isEnvRef(value string) bool {
 	return strings.HasPrefix(value, "$") || strings.HasPrefix(value, "${")
 }
 
-func detectFormat(value string) string {
-	if strings.HasPrefix(value, "sk-ant-") {
+func detectFormat(value string, engine *rules.Engine) string {
+	matches := engine.EvaluateAll("config", map[string]string{
+		"credential.value": value,
+	})
+	for _, m := range matches {
+		if m.Emit.FindingType == "credential_format" {
+			return formatFromMatchedText(m.Text)
+		}
+	}
+	return "generic"
+}
+
+func formatFromMatchedText(text string) string {
+	if strings.HasPrefix(text, "sk-ant-") {
 		return "anthropic"
 	}
-	if strings.HasPrefix(value, "sk-") {
+	if strings.HasPrefix(text, "sk-") {
 		return "openai"
 	}
-	if strings.HasPrefix(value, "xoxb-") || strings.HasPrefix(value, "xoxp-") || strings.HasPrefix(value, "xoxs-") {
+	if strings.HasPrefix(text, "xoxb-") || strings.HasPrefix(text, "xoxp-") || strings.HasPrefix(text, "xoxs-") {
 		return "slack"
 	}
-	if strings.HasPrefix(value, "ghp_") || strings.HasPrefix(value, "gho_") || strings.HasPrefix(value, "ghs_") {
+	if strings.HasPrefix(text, "ghp_") || strings.HasPrefix(text, "gho_") || strings.HasPrefix(text, "ghs_") {
 		return "github"
 	}
-	if strings.HasPrefix(value, "AKIA") {
+	if strings.HasPrefix(text, "AKIA") {
 		return "aws"
 	}
 	return "generic"

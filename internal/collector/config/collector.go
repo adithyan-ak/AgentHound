@@ -12,6 +12,7 @@ import (
 	collector "github.com/adithyan-ak/agenthound/internal/collector"
 	"github.com/adithyan-ak/agenthound/internal/collector/common"
 	"github.com/adithyan-ak/agenthound/internal/model"
+	"github.com/adithyan-ak/agenthound/internal/rules"
 )
 
 type ConfigCollector struct {
@@ -42,6 +43,15 @@ var _ collector.Collector = (*ConfigCollector)(nil)
 func (c *ConfigCollector) Name() string { return "config" }
 
 func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOptions) (*model.IngestData, error) {
+	engine := opts.RulesEngine
+	if engine == nil {
+		var engineErr error
+		engine, engineErr = rules.NewEngine(rules.LoadOptions{})
+		if engineErr != nil {
+			return nil, fmt.Errorf("rules engine: %w", engineErr)
+		}
+	}
+
 	scanID := opts.ScanID
 	if scanID == "" {
 		scanID = common.GenerateScanID("config")
@@ -142,7 +152,7 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 			addEdge(common.NewEdge(serverID, hostID, "RUNS_ON", "MCPServer", "Host",
 				common.DefaultEdgeProps(scanID)))
 
-			creds := ExtractCredentials(srv.Env, srv.Headers, srv.Name, opts.IncludeCredentialValues)
+			creds := ExtractCredentials(srv.Env, srv.Headers, srv.Name, opts.IncludeCredentialValues, engine)
 			for _, cred := range creds {
 				identityType := credToIdentityType(cred)
 				identityID := model.ComputeNodeID("Identity", serverID, identityType)
@@ -177,7 +187,7 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 		}
 	}
 
-	instructions := DiscoverInstructionFiles(homeDir, opts.ProjectDir)
+	instructions := DiscoverInstructionFiles(homeDir, opts.ProjectDir, engine)
 	for _, inst := range instructions {
 		absPath, _ := filepath.Abs(inst.Path)
 		instrID := model.ComputeNodeID("InstructionFile", absPath)

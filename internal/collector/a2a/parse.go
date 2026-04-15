@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/adithyan-ak/agenthound/internal/collector/common"
+	"github.com/adithyan-ak/agenthound/internal/rules"
 )
 
 type AgentCardData struct {
@@ -49,10 +50,10 @@ func DetectVersion(raw map[string]any) string {
 	return "v0.3.0"
 }
 
-func ParseAgentCard(raw *RawCard) (*AgentCardData, error) {
+func ParseAgentCard(raw *RawCard, engine *rules.Engine) (*AgentCardData, error) {
 	switch raw.Version {
 	case "v1.0":
-		card, err := ParseV10(raw.Parsed, raw.CardHash)
+		card, err := parseV10(raw.Parsed, raw.CardHash, engine)
 		if err != nil {
 			return nil, err
 		}
@@ -62,7 +63,7 @@ func ParseAgentCard(raw *RawCard) (*AgentCardData, error) {
 		card.SignatureValid = valid
 		return card, nil
 	default:
-		card, err := ParseV030(raw.Parsed, raw.CardHash)
+		card, err := parseV030(raw.Parsed, raw.CardHash, engine)
 		if err != nil {
 			return nil, err
 		}
@@ -74,7 +75,7 @@ func ParseAgentCard(raw *RawCard) (*AgentCardData, error) {
 	}
 }
 
-func ParseV030(raw map[string]any, cardHash string) (*AgentCardData, error) {
+func parseV030(raw map[string]any, cardHash string, engine *rules.Engine) (*AgentCardData, error) {
 	card := &AgentCardData{
 		Name:        getString030(raw, "name"),
 		Description: getString030(raw, "description"),
@@ -119,7 +120,7 @@ func ParseV030(raw map[string]any, cardHash string) (*AgentCardData, error) {
 			if !ok {
 				continue
 			}
-			skill := parseSkillV030(sObj)
+			skill := parseSkillV030(sObj, engine)
 			card.Skills = append(card.Skills, skill)
 		}
 	}
@@ -127,7 +128,7 @@ func ParseV030(raw map[string]any, cardHash string) (*AgentCardData, error) {
 	return card, nil
 }
 
-func ParseV10(raw map[string]any, cardHash string) (*AgentCardData, error) {
+func parseV10(raw map[string]any, cardHash string, engine *rules.Engine) (*AgentCardData, error) {
 	card := &AgentCardData{
 		Name:        getString030(raw, "name"),
 		Description: getString030(raw, "description"),
@@ -177,7 +178,7 @@ func ParseV10(raw map[string]any, cardHash string) (*AgentCardData, error) {
 			if !ok {
 				continue
 			}
-			skill := parseSkillV10(sObj)
+			skill := parseSkillV10(sObj, engine)
 			card.Skills = append(card.Skills, skill)
 		}
 	}
@@ -213,7 +214,7 @@ func getSecurityRefs(raw map[string]any) []any {
 	return sec
 }
 
-func parseSkillV030(s map[string]any) SkillData {
+func parseSkillV030(s map[string]any, engine *rules.Engine) SkillData {
 	id := getString030(s, "id")
 	name := getString030(s, "name")
 	desc := getString030(s, "description")
@@ -229,7 +230,17 @@ func parseSkillV030(s map[string]any) SkillData {
 	}
 
 	descHash := common.DescriptionHash(name, desc, nil)
-	hasInj := common.HasInjectionPatterns(desc)
+
+	hasInj := false
+	matches := engine.EvaluateAll("a2a", map[string]string{
+		"skill.description": desc,
+	})
+	for _, m := range matches {
+		if m.Emit.FindingType == "has_injection_patterns" {
+			hasInj = true
+			break
+		}
+	}
 
 	return SkillData{
 		ID:              id,
@@ -242,7 +253,7 @@ func parseSkillV030(s map[string]any) SkillData {
 	}
 }
 
-func parseSkillV10(s map[string]any) SkillData {
+func parseSkillV10(s map[string]any, engine *rules.Engine) SkillData {
 	id := getString030(s, "id")
 	name := getString030(s, "name")
 	desc := getString030(s, "description")
@@ -251,7 +262,17 @@ func parseSkillV10(s map[string]any) SkillData {
 	outputModes := toStrSlice(s["outputModes"])
 
 	descHash := common.DescriptionHash(name, desc, nil)
-	hasInj := common.HasInjectionPatterns(desc)
+
+	hasInj := false
+	matches := engine.EvaluateAll("a2a", map[string]string{
+		"skill.description": desc,
+	})
+	for _, m := range matches {
+		if m.Emit.FindingType == "has_injection_patterns" {
+			hasInj = true
+			break
+		}
+	}
 
 	return SkillData{
 		ID:              id,

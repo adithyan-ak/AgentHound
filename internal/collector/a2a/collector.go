@@ -13,6 +13,7 @@ import (
 	collector "github.com/adithyan-ak/agenthound/internal/collector"
 	"github.com/adithyan-ak/agenthound/internal/collector/common"
 	"github.com/adithyan-ak/agenthound/internal/model"
+	"github.com/adithyan-ak/agenthound/internal/rules"
 )
 
 type A2ACollector struct {
@@ -57,6 +58,15 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 		return nil, fmt.Errorf("no targets specified: provide --target, --targets, or --targets-file")
 	}
 
+	engine := opts.RulesEngine
+	if engine == nil {
+		var engineErr error
+		engine, engineErr = rules.NewEngine(rules.LoadOptions{})
+		if engineErr != nil {
+			return nil, fmt.Errorf("rules engine: %w", engineErr)
+		}
+	}
+
 	scanID := opts.ScanID
 	if scanID == "" {
 		scanID = common.GenerateScanID("a2a")
@@ -89,7 +99,7 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 			}
 			raw.URL = tgt
 
-			card, err := ParseAgentCard(raw)
+			card, err := ParseAgentCard(raw, engine)
 			if err != nil {
 				results[idx] = cardResult{url: tgt, err: err}
 				return

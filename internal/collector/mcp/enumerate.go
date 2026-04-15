@@ -13,6 +13,7 @@ import (
 
 	"github.com/adithyan-ak/agenthound/internal/collector/common"
 	"github.com/adithyan-ak/agenthound/internal/model"
+	"github.com/adithyan-ak/agenthound/internal/rules"
 )
 
 type ServerResult struct {
@@ -55,7 +56,7 @@ func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, sca
 
 	initResult := session.InitializeResult()
 
-	serverNode := buildServerNode(serverID, spec, initResult)
+	serverNode := buildServerNode(serverID, spec, initResult, c.engine)
 	result.Nodes = append(result.Nodes, serverNode)
 
 	if spec.Transport == "http" && spec.URL != "" {
@@ -126,7 +127,7 @@ func (c *MCPCollector) retryWithSSE(ctx context.Context, spec ServerSpec, scanID
 
 	initResult := session.InitializeResult()
 
-	serverNode := buildServerNode(serverID, spec, initResult)
+	serverNode := buildServerNode(serverID, spec, initResult, c.engine)
 	result.Nodes = append(result.Nodes, serverNode)
 
 	if spec.URL != "" {
@@ -191,7 +192,7 @@ func (c *MCPCollector) enumerateTools(ctx context.Context, session *mcpsdk.Clien
 	}
 
 	for _, tool := range tools {
-		signals := computeToolSignals(tool, allNames)
+		signals := computeToolSignals(tool, allNames, c.engine)
 		toolID := model.ComputeNodeID("MCPTool", serverID, tool.Name)
 
 		props := map[string]any{
@@ -231,7 +232,7 @@ func (c *MCPCollector) enumerateResources(ctx context.Context, session *mcpsdk.C
 			break
 		}
 
-		signals := computeResourceSignals(res.URI)
+		signals := computeResourceSignals(res.URI, c.engine)
 		resID := model.ComputeNodeID("MCPResource", serverID, res.URI)
 
 		result.nodes = append(result.nodes, common.NewNode(resID, []string{"MCPResource"}, map[string]any{
@@ -265,7 +266,7 @@ func (c *MCPCollector) enumerateResourceTemplates(ctx context.Context, session *
 			break
 		}
 
-		signals := computeResourceSignals(tmpl.URITemplate)
+		signals := computeResourceSignals(tmpl.URITemplate, c.engine)
 		resID := model.ComputeNodeID("MCPResource", serverID, tmpl.URITemplate)
 
 		result.nodes = append(result.nodes, common.NewNode(resID, []string{"MCPResource"}, map[string]any{
@@ -323,7 +324,7 @@ func computeServerID(spec ServerSpec) string {
 	return model.ComputeMCPServerID("stdio", spec.Command, sorted...)
 }
 
-func buildServerNode(serverID string, spec ServerSpec, initResult *mcpsdk.InitializeResult) model.Node {
+func buildServerNode(serverID string, spec ServerSpec, initResult *mcpsdk.InitializeResult, engine *rules.Engine) model.Node {
 	endpoint := spec.Command
 	if spec.Transport == "http" {
 		endpoint = spec.URL
@@ -370,7 +371,17 @@ func buildServerNode(serverID string, spec ServerSpec, initResult *mcpsdk.Initia
 	}
 
 	if initResult.Instructions != "" {
-		props["instructions_has_injection"] = common.HasInjectionPatterns(initResult.Instructions)
+		hasInjection := false
+		matches := engine.EvaluateAll("mcp", map[string]string{
+			"server.instructions": initResult.Instructions,
+		})
+		for _, m := range matches {
+			if m.Emit.FindingType == "has_injection_patterns" {
+				hasInjection = true
+				break
+			}
+		}
+		props["instructions_has_injection"] = hasInjection
 		props["instructions_hash"] = common.HashSHA256(initResult.Instructions)
 	}
 

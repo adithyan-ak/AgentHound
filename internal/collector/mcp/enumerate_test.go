@@ -4,9 +4,21 @@ import (
 	"testing"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/adithyan-ak/agenthound/internal/rules"
 )
 
+func testEnumerateEngine(t *testing.T) *rules.Engine {
+	t.Helper()
+	engine, err := rules.NewEngine(rules.LoadOptions{})
+	if err != nil {
+		t.Fatalf("failed to create rules engine: %v", err)
+	}
+	return engine
+}
+
 func TestBuildServerNodeInstructionSignals(t *testing.T) {
+	engine := testEnumerateEngine(t)
 	spec := ServerSpec{
 		Name:      "test-server",
 		Transport: "stdio",
@@ -20,7 +32,7 @@ func TestBuildServerNodeInstructionSignals(t *testing.T) {
 			ServerInfo:      &mcpsdk.Implementation{Name: "test", Version: "1.0"},
 		}
 
-		node := buildServerNode("sha256:abc123", spec, initResult)
+		node := buildServerNode("sha256:abc123", spec, initResult, engine)
 
 		hasInjection, ok := node.Properties["instructions_has_injection"].(bool)
 		if !ok {
@@ -43,7 +55,7 @@ func TestBuildServerNodeInstructionSignals(t *testing.T) {
 			ServerInfo:      &mcpsdk.Implementation{Name: "test", Version: "1.0"},
 		}
 
-		node := buildServerNode("sha256:abc123", spec, initResult)
+		node := buildServerNode("sha256:abc123", spec, initResult, engine)
 
 		hasInjection, ok := node.Properties["instructions_has_injection"].(bool)
 		if !ok {
@@ -66,7 +78,7 @@ func TestBuildServerNodeInstructionSignals(t *testing.T) {
 			ServerInfo:      &mcpsdk.Implementation{Name: "test", Version: "1.0"},
 		}
 
-		node := buildServerNode("sha256:abc123", spec, initResult)
+		node := buildServerNode("sha256:abc123", spec, initResult, engine)
 
 		if _, ok := node.Properties["instructions_has_injection"]; ok {
 			t.Error("instructions_has_injection should not be set for empty instructions")

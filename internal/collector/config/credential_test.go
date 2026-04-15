@@ -4,16 +4,27 @@ import (
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/internal/collector/common"
+	"github.com/adithyan-ak/agenthound/internal/rules"
 )
 
+func testCredEngine(t *testing.T) *rules.Engine {
+	t.Helper()
+	engine, err := rules.NewEngine(rules.LoadOptions{})
+	if err != nil {
+		t.Fatalf("failed to create rules engine: %v", err)
+	}
+	return engine
+}
+
 func TestExtractCredentials_EnvVars(t *testing.T) {
+	engine := testCredEngine(t)
 	env := map[string]string{
 		"OPENAI_API_KEY": "sk-test1234567890abcdef",
 		"PGHOST":         "localhost",
 		"DB_PASSWORD":    "mysecret",
 	}
 
-	creds := ExtractCredentials(env, nil, "/test/config.json", false)
+	creds := ExtractCredentials(env, nil, "/test/config.json", false, engine)
 	if len(creds) != 2 {
 		t.Fatalf("expected 2 creds (KEY and PASSWORD match), got %d", len(creds))
 	}
@@ -47,12 +58,13 @@ func TestExtractCredentials_EnvVars(t *testing.T) {
 }
 
 func TestExtractCredentials_Headers(t *testing.T) {
+	engine := testCredEngine(t)
 	headers := map[string]string{
 		"Authorization": "Bearer ghp_abc123def456",
 		"Content-Type":  "application/json",
 	}
 
-	creds := ExtractCredentials(nil, headers, "/test/config.json", true)
+	creds := ExtractCredentials(nil, headers, "/test/config.json", true, engine)
 
 	found := false
 	for _, c := range creds {
@@ -69,11 +81,12 @@ func TestExtractCredentials_Headers(t *testing.T) {
 }
 
 func TestExtractCredentials_IncludeValues(t *testing.T) {
+	engine := testCredEngine(t)
 	env := map[string]string{
 		"SECRET_KEY": "mysecretvalue",
 	}
 
-	creds := ExtractCredentials(env, nil, "/test", true)
+	creds := ExtractCredentials(env, nil, "/test", true, engine)
 	if len(creds) != 1 {
 		t.Fatalf("expected 1 cred, got %d", len(creds))
 	}
@@ -83,11 +96,12 @@ func TestExtractCredentials_IncludeValues(t *testing.T) {
 }
 
 func TestExtractCredentials_HashByDefault(t *testing.T) {
+	engine := testCredEngine(t)
 	env := map[string]string{
 		"API_KEY": "testvalue",
 	}
 
-	creds := ExtractCredentials(env, nil, "/test", false)
+	creds := ExtractCredentials(env, nil, "/test", false, engine)
 	if len(creds) != 1 {
 		t.Fatalf("expected 1 cred, got %d", len(creds))
 	}
@@ -99,6 +113,7 @@ func TestExtractCredentials_HashByDefault(t *testing.T) {
 }
 
 func TestClassifyCredentialType(t *testing.T) {
+	engine := testCredEngine(t)
 	tests := []struct {
 		name  string
 		value string
@@ -114,15 +129,16 @@ func TestClassifyCredentialType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ClassifyCredentialType("SOME_KEY", tt.value)
+			got := classifyCredentialType("SOME_KEY", tt.value, engine)
 			if got != tt.want {
-				t.Errorf("ClassifyCredentialType(%q) = %q, want %q", tt.value, got, tt.want)
+				t.Errorf("classifyCredentialType(%q) = %q, want %q", tt.value, got, tt.want)
 			}
 		})
 	}
 }
 
 func TestDetectFormat(t *testing.T) {
+	engine := testCredEngine(t)
 	tests := []struct {
 		value string
 		want  string
@@ -142,7 +158,7 @@ func TestDetectFormat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.value, func(t *testing.T) {
-			got := detectFormat(tt.value)
+			got := detectFormat(tt.value, engine)
 			if got != tt.want {
 				t.Errorf("detectFormat(%q) = %q, want %q", tt.value, got, tt.want)
 			}
@@ -151,11 +167,12 @@ func TestDetectFormat(t *testing.T) {
 }
 
 func TestExtractCredentials_EnvRefNotExposed(t *testing.T) {
+	engine := testCredEngine(t)
 	env := map[string]string{
 		"API_TOKEN": "$REAL_TOKEN",
 	}
 
-	creds := ExtractCredentials(env, nil, "/test", false)
+	creds := ExtractCredentials(env, nil, "/test", false, engine)
 	if len(creds) != 1 {
 		t.Fatalf("expected 1 cred, got %d", len(creds))
 	}
@@ -168,11 +185,12 @@ func TestExtractCredentials_EnvRefNotExposed(t *testing.T) {
 }
 
 func TestExtractCredentials_VaultRefNotExposed(t *testing.T) {
+	engine := testCredEngine(t)
 	env := map[string]string{
 		"SECRET_KEY": "vault://secrets/mykey",
 	}
 
-	creds := ExtractCredentials(env, nil, "/test", false)
+	creds := ExtractCredentials(env, nil, "/test", false, engine)
 	if len(creds) != 1 {
 		t.Fatalf("expected 1 cred, got %d", len(creds))
 	}
@@ -185,6 +203,7 @@ func TestExtractCredentials_VaultRefNotExposed(t *testing.T) {
 }
 
 func TestExtractCredentials_NonCredentialNamesSkipped(t *testing.T) {
+	engine := testCredEngine(t)
 	env := map[string]string{
 		"HOME":       "/home/user",
 		"PATH":       "/usr/bin",
@@ -194,7 +213,7 @@ func TestExtractCredentials_NonCredentialNamesSkipped(t *testing.T) {
 		"AUTH_TOKEN": "val3",
 	}
 
-	creds := ExtractCredentials(env, nil, "/test", false)
+	creds := ExtractCredentials(env, nil, "/test", false, engine)
 	names := make(map[string]bool)
 	for _, c := range creds {
 		names[c.Name] = true
@@ -209,11 +228,12 @@ func TestExtractCredentials_NonCredentialNamesSkipped(t *testing.T) {
 }
 
 func TestExtractCredentials_HighEntropy(t *testing.T) {
+	engine := testCredEngine(t)
 	env := map[string]string{
 		"API_KEY": "aB3dE6gH9jKlMnOpQrStUvWxYz012345",
 	}
 
-	creds := ExtractCredentials(env, nil, "/test", false)
+	creds := ExtractCredentials(env, nil, "/test", false, engine)
 	if len(creds) != 1 {
 		t.Fatalf("expected 1 cred, got %d", len(creds))
 	}
