@@ -11,7 +11,7 @@ import (
 
 func loadFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile("../../../testdata/a2a/" + name)
+	data, err := os.ReadFile("../../testdata/a2a/" + name)
 	if err != nil {
 		t.Fatalf("load fixture %s: %v", name, err)
 	}
