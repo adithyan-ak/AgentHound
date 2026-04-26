@@ -64,7 +64,9 @@ standard:
 	docker build -f docker/Dockerfile.standard -t agenthound:latest .
 
 standard-run:
-	docker run -d --name agenthound -p 8080:8080 -v agenthound-data:/data --restart unless-stopped agenthound:latest
+	# Bind on loopback only — the server has no application-layer auth.
+	# Override with -p 0.0.0.0:8080:8080 only inside a network you trust.
+	docker run -d --name agenthound -p 127.0.0.1:8080:8080 -v agenthound-data:/data --restart unless-stopped agenthound:latest
 
 standard-stop:
 	docker stop agenthound && docker rm agenthound
