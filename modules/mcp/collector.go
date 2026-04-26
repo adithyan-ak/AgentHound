@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	collector "github.com/adithyan-ak/agenthound/internal/collector"
-	"github.com/adithyan-ak/agenthound/internal/model"
+	"github.com/adithyan-ak/agenthound/sdk/collector"
 	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
 )
 
@@ -75,7 +75,7 @@ var _ collector.Collector = (*MCPCollector)(nil)
 
 func (c *MCPCollector) Name() string { return "mcp" }
 
-func (c *MCPCollector) Collect(ctx context.Context, opts collector.CollectOptions) (*model.IngestData, error) {
+func (c *MCPCollector) Collect(ctx context.Context, opts collector.CollectOptions) (*ingest.IngestData, error) {
 	if opts.Insecure {
 		c.insecure = true
 	}

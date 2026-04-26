@@ -4,13 +4,13 @@ import (
 	"context"
 	"time"
 
-	"github.com/adithyan-ak/agenthound/internal/model"
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
 )
 
 type Collector interface {
 	Name() string
-	Collect(ctx context.Context, opts CollectOptions) (*model.IngestData, error)
+	Collect(ctx context.Context, opts CollectOptions) (*ingest.IngestData, error)
 }
 
 type CollectOptions struct {

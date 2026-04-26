@@ -9,9 +9,9 @@ import (
 	"sort"
 	"strings"
 
-	collector "github.com/adithyan-ak/agenthound/internal/collector"
-	"github.com/adithyan-ak/agenthound/internal/model"
+	"github.com/adithyan-ak/agenthound/sdk/collector"
 	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
 )
 
@@ -42,7 +42,7 @@ var _ collector.Collector = (*ConfigCollector)(nil)
 
 func (c *ConfigCollector) Name() string { return "config" }
 
-func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOptions) (*model.IngestData, error) {
+func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOptions) (*ingest.IngestData, error) {
 	engine := opts.RulesEngine
 	if engine == nil {
 		var engineErr error
@@ -69,14 +69,14 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 	}
 
 	seen := make(map[string]bool)
-	addNode := func(n model.Node) {
+	addNode := func(n ingest.Node) {
 		if seen[n.ID] {
 			return
 		}
 		seen[n.ID] = true
 		data.Graph.Nodes = append(data.Graph.Nodes, n)
 	}
-	addEdge := func(e model.Edge) {
+	addEdge := func(e ingest.Edge) {
 		data.Graph.Edges = append(data.Graph.Edges, e)
 	}
 
@@ -84,7 +84,7 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 
 	for _, cfg := range configs {
 		absPath, _ := filepath.Abs(cfg.Path)
-		configFileID := model.ComputeNodeID("ConfigFile", absPath)
+		configFileID := ingest.ComputeNodeID("ConfigFile", absPath)
 
 		activeCount := 0
 		for _, s := range cfg.Servers {
@@ -99,7 +99,7 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 			"server_count": activeCount,
 		}))
 
-		agentID := model.ComputeNodeID("AgentInstance", configFileID, cfg.Client)
+		agentID := ingest.ComputeNodeID("AgentInstance", configFileID, cfg.Client)
 		addNode(common.NewNode(agentID, []string{"AgentInstance"}, map[string]any{
 			"name":        cfg.Client,
 			"framework":   cfg.Client,
@@ -155,14 +155,14 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 			creds := ExtractCredentials(srv.Env, srv.Headers, srv.Name, opts.IncludeCredentialValues, engine)
 			for _, cred := range creds {
 				identityType := credToIdentityType(cred)
-				identityID := model.ComputeNodeID("Identity", serverID, identityType)
+				identityID := ingest.ComputeNodeID("Identity", serverID, identityType)
 				addNode(common.NewNode(identityID, []string{"Identity"}, map[string]any{
 					"type":      identityType,
 					"scope":     srv.Name,
 					"is_static": cred.Type == "hardcoded",
 				}))
 
-				credID := model.ComputeNodeID("Credential", cred.Source, cred.Name)
+				credID := ingest.ComputeNodeID("Credential", cred.Source, cred.Name)
 				addNode(common.NewNode(credID, []string{"Credential"}, map[string]any{
 					"type":         cred.Type,
 					"name":         cred.Name,
@@ -190,7 +190,7 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 	instructions := DiscoverInstructionFiles(homeDir, opts.ProjectDir, engine)
 	for _, inst := range instructions {
 		absPath, _ := filepath.Abs(inst.Path)
-		instrID := model.ComputeNodeID("InstructionFile", absPath)
+		instrID := ingest.ComputeNodeID("InstructionFile", absPath)
 		addNode(common.NewNode(instrID, []string{"InstructionFile"}, map[string]any{
 			"path":          absPath,
 			"type":          inst.Type,
@@ -272,12 +272,12 @@ func (c *ConfigCollector) tryParsers(path string, data []byte) *ParsedConfig {
 
 func computeServerID(srv ServerDef) string {
 	if srv.Transport == "http" {
-		return model.ComputeMCPServerID("http", srv.URL)
+		return ingest.ComputeMCPServerID("http", srv.URL)
 	}
 	sorted := make([]string, len(srv.Args))
 	copy(sorted, srv.Args)
 	sort.Strings(sorted)
-	return model.ComputeMCPServerID("stdio", srv.Command, sorted...)
+	return ingest.ComputeMCPServerID("stdio", srv.Command, sorted...)
 }
 
 func hostForServer(srv ServerDef) string {

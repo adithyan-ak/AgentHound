@@ -7,8 +7,8 @@ import (
 	"sort"
 	"testing"
 
-	collector "github.com/adithyan-ak/agenthound/internal/collector"
-	"github.com/adithyan-ak/agenthound/internal/model"
+	"github.com/adithyan-ak/agenthound/sdk/collector"
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
 func TestConfigCollector_Name(t *testing.T) {
@@ -137,7 +137,7 @@ func TestConfigCollector_DeterministicServerIDs(t *testing.T) {
 		t.Errorf("server IDs not deterministic: %q vs %q", s1.ID, s2.ID)
 	}
 
-	expectedID := model.ComputeMCPServerID("stdio", "npx", "-y", "@modelcontextprotocol/server-postgres")
+	expectedID := ingest.ComputeMCPServerID("stdio", "npx", "-y", "@modelcontextprotocol/server-postgres")
 	if s1.ID != expectedID {
 		t.Errorf("server ID = %q, want %q", s1.ID, expectedID)
 	}
@@ -263,7 +263,7 @@ func TestConfigCollector_UnpinnedPackageDetection(t *testing.T) {
 		t.Fatalf("expected 2 MCPServer nodes, got %d", len(servers))
 	}
 
-	byName := map[string]model.Node{}
+	byName := map[string]ingest.Node{}
 	for _, n := range servers {
 		if name, ok := n.Properties["name"].(string); ok {
 			byName[name] = n
@@ -831,7 +831,7 @@ func writeJSON(t *testing.T, path, content string) {
 	}
 }
 
-func countNodesByKind(d *model.IngestData) map[string]int {
+func countNodesByKind(d *ingest.IngestData) map[string]int {
 	m := make(map[string]int)
 	for _, n := range d.Graph.Nodes {
 		for _, k := range n.Kinds {
@@ -841,7 +841,7 @@ func countNodesByKind(d *model.IngestData) map[string]int {
 	return m
 }
 
-func countEdgesByKind(d *model.IngestData) map[string]int {
+func countEdgesByKind(d *ingest.IngestData) map[string]int {
 	m := make(map[string]int)
 	for _, e := range d.Graph.Edges {
 		m[e.Kind]++
@@ -849,7 +849,7 @@ func countEdgesByKind(d *model.IngestData) map[string]int {
 	return m
 }
 
-func findNodeByKind(d *model.IngestData, kind string) *model.Node {
+func findNodeByKind(d *ingest.IngestData, kind string) *ingest.Node {
 	for i, n := range d.Graph.Nodes {
 		for _, k := range n.Kinds {
 			if k == kind {
@@ -860,8 +860,8 @@ func findNodeByKind(d *model.IngestData, kind string) *model.Node {
 	return nil
 }
 
-func findNodesByKind(d *model.IngestData, kind string) []model.Node {
-	var out []model.Node
+func findNodesByKind(d *ingest.IngestData, kind string) []ingest.Node {
+	var out []ingest.Node
 	for _, n := range d.Graph.Nodes {
 		for _, k := range n.Kinds {
 			if k == kind {
@@ -877,7 +877,7 @@ func findNodesByKind(d *model.IngestData, kind string) []model.Node {
 	return out
 }
 
-func findNodeByKindAndProp(d *model.IngestData, kind, propKey string, propVal any) *model.Node {
+func findNodeByKindAndProp(d *ingest.IngestData, kind, propKey string, propVal any) *ingest.Node {
 	for i, n := range d.Graph.Nodes {
 		for _, k := range n.Kinds {
 			if k == kind && n.Properties[propKey] == propVal {
@@ -888,7 +888,7 @@ func findNodeByKindAndProp(d *model.IngestData, kind, propKey string, propVal an
 	return nil
 }
 
-func findEdgeByKind(d *model.IngestData, kind string) *model.Edge {
+func findEdgeByKind(d *ingest.IngestData, kind string) *ingest.Edge {
 	for i, e := range d.Graph.Edges {
 		if e.Kind == kind {
 			return &d.Graph.Edges[i]

@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	collector "github.com/adithyan-ak/agenthound/internal/collector"
-	"github.com/adithyan-ak/agenthound/internal/model"
+	"github.com/adithyan-ak/agenthound/sdk/collector"
 	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
 )
 
@@ -49,7 +49,7 @@ func NewA2ACollector(opts ...Option) *A2ACollector {
 
 func (c *A2ACollector) Name() string { return "a2a" }
 
-func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOptions) (*model.IngestData, error) {
+func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOptions) (*ingest.IngestData, error) {
 	targets, err := buildTargetList(opts)
 	if err != nil {
 		return nil, fmt.Errorf("build target list: %w", err)
@@ -206,9 +206,9 @@ func readURLsFile(path string) ([]string, error) {
 	return urls, scanner.Err()
 }
 
-func buildGraph(card *AgentCardData, scanID string) ([]model.Node, []model.Edge) {
-	var nodes []model.Node
-	var edges []model.Edge
+func buildGraph(card *AgentCardData, scanID string) ([]ingest.Node, []ingest.Edge) {
+	var nodes []ingest.Node
+	var edges []ingest.Edge
 
 	agentID := agentNodeID(card)
 
@@ -237,7 +237,7 @@ func buildGraph(card *AgentCardData, scanID string) ([]model.Node, []model.Edge)
 	nodes = append(nodes, common.NewNode(agentID, []string{"A2AAgent"}, agentProps))
 
 	for _, skill := range card.Skills {
-		skillID := model.ComputeNodeID("A2ASkill", agentID, skill.ID)
+		skillID := ingest.ComputeNodeID("A2ASkill", agentID, skill.ID)
 		skillProps := map[string]any{
 			"id":                     skill.ID,
 			"name":                   skill.Name,
@@ -274,7 +274,7 @@ func buildGraph(card *AgentCardData, scanID string) ([]model.Node, []model.Edge)
 	}
 
 	if card.AuthMethod != "none" {
-		identityID := model.ComputeNodeID("Identity", agentID, card.AuthMethod)
+		identityID := ingest.ComputeNodeID("Identity", agentID, card.AuthMethod)
 		identityProps := map[string]any{
 			"type":      card.AuthMethod,
 			"is_static": card.AuthMethod == "apiKey",
@@ -289,7 +289,7 @@ func buildGraph(card *AgentCardData, scanID string) ([]model.Node, []model.Edge)
 }
 
 func agentNodeID(card *AgentCardData) string {
-	return model.ComputeNodeID("A2AAgent", normalizeBaseURL(card.URL))
+	return ingest.ComputeNodeID("A2AAgent", normalizeBaseURL(card.URL))
 }
 
 func hasAuth(cards []*AgentCardData, agentID string) bool {

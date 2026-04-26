@@ -9,10 +9,10 @@ import (
 
 	"github.com/adithyan-ak/agenthound/collector/apiclient"
 	"github.com/adithyan-ak/agenthound/collector/internal/clientcfg"
-	icollector "github.com/adithyan-ak/agenthound/internal/collector"
 	a2acollector "github.com/adithyan-ak/agenthound/modules/a2a"
 	configcollector "github.com/adithyan-ak/agenthound/modules/config"
 	mcpcollector "github.com/adithyan-ak/agenthound/modules/mcp"
+	icollector "github.com/adithyan-ak/agenthound/sdk/collector"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
 	"github.com/google/uuid"

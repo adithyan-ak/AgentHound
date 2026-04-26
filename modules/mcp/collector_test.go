@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adithyan-ak/agenthound/internal/model"
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
 func TestNewMCPCollectorDefaults(t *testing.T) {
@@ -86,7 +86,7 @@ func TestComputeServerID(t *testing.T) {
 		}
 		id := computeServerID(spec)
 
-		expected := model.ComputeMCPServerID("stdio", "npx", "-y", "@modelcontextprotocol/server-postgres")
+		expected := ingest.ComputeMCPServerID("stdio", "npx", "-y", "@modelcontextprotocol/server-postgres")
 		if id != expected {
 			t.Errorf("stdio server ID mismatch:\n  got  %s\n  want %s", id, expected)
 		}
@@ -99,7 +99,7 @@ func TestComputeServerID(t *testing.T) {
 		}
 		id := computeServerID(spec)
 
-		expected := model.ComputeMCPServerID("http", "http://localhost:8080/mcp")
+		expected := ingest.ComputeMCPServerID("http", "http://localhost:8080/mcp")
 		if id != expected {
 			t.Errorf("http server ID mismatch:\n  got  %s\n  want %s", id, expected)
 		}

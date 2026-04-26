@@ -11,14 +11,14 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/adithyan-ak/agenthound/internal/model"
 	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
 )
 
 type ServerResult struct {
-	Nodes []model.Node
-	Edges []model.Edge
+	Nodes []ingest.Node
+	Edges []ingest.Edge
 	Error error
 }
 
@@ -164,8 +164,8 @@ func (c *MCPCollector) retryWithSSE(ctx context.Context, spec ServerSpec, scanID
 }
 
 type enumResult struct {
-	nodes []model.Node
-	edges []model.Edge
+	nodes []ingest.Node
+	edges []ingest.Edge
 }
 
 func (c *MCPCollector) enumerateTools(ctx context.Context, session *mcpsdk.ClientSession, serverID, scanID string) enumResult {
@@ -193,7 +193,7 @@ func (c *MCPCollector) enumerateTools(ctx context.Context, session *mcpsdk.Clien
 
 	for _, tool := range tools {
 		signals := computeToolSignals(tool, allNames, c.engine)
-		toolID := model.ComputeNodeID("MCPTool", serverID, tool.Name)
+		toolID := ingest.ComputeNodeID("MCPTool", serverID, tool.Name)
 
 		props := map[string]any{
 			"name":                   tool.Name,
@@ -233,7 +233,7 @@ func (c *MCPCollector) enumerateResources(ctx context.Context, session *mcpsdk.C
 		}
 
 		signals := computeResourceSignals(res.URI, c.engine)
-		resID := model.ComputeNodeID("MCPResource", serverID, res.URI)
+		resID := ingest.ComputeNodeID("MCPResource", serverID, res.URI)
 
 		result.nodes = append(result.nodes, common.NewNode(resID, []string{"MCPResource"}, map[string]any{
 			"uri":         res.URI,
@@ -267,7 +267,7 @@ func (c *MCPCollector) enumerateResourceTemplates(ctx context.Context, session *
 		}
 
 		signals := computeResourceSignals(tmpl.URITemplate, c.engine)
-		resID := model.ComputeNodeID("MCPResource", serverID, tmpl.URITemplate)
+		resID := ingest.ComputeNodeID("MCPResource", serverID, tmpl.URITemplate)
 
 		result.nodes = append(result.nodes, common.NewNode(resID, []string{"MCPResource"}, map[string]any{
 			"uri":         tmpl.URITemplate,
@@ -300,7 +300,7 @@ func (c *MCPCollector) enumeratePrompts(ctx context.Context, session *mcpsdk.Cli
 			break
 		}
 
-		promptID := model.ComputeNodeID("MCPPrompt", serverID, prompt.Name)
+		promptID := ingest.ComputeNodeID("MCPPrompt", serverID, prompt.Name)
 
 		result.nodes = append(result.nodes, common.NewNode(promptID, []string{"MCPPrompt"}, map[string]any{
 			"name":        prompt.Name,
@@ -316,15 +316,15 @@ func (c *MCPCollector) enumeratePrompts(ctx context.Context, session *mcpsdk.Cli
 
 func computeServerID(spec ServerSpec) string {
 	if spec.Transport == "http" {
-		return model.ComputeMCPServerID("http", spec.URL)
+		return ingest.ComputeMCPServerID("http", spec.URL)
 	}
 	sorted := make([]string, len(spec.Args))
 	copy(sorted, spec.Args)
 	sort.Strings(sorted)
-	return model.ComputeMCPServerID("stdio", spec.Command, sorted...)
+	return ingest.ComputeMCPServerID("stdio", spec.Command, sorted...)
 }
 
-func buildServerNode(serverID string, spec ServerSpec, initResult *mcpsdk.InitializeResult, engine *rules.Engine) model.Node {
+func buildServerNode(serverID string, spec ServerSpec, initResult *mcpsdk.InitializeResult, engine *rules.Engine) ingest.Node {
 	endpoint := spec.Command
 	if spec.Transport == "http" {
 		endpoint = spec.URL
@@ -388,7 +388,7 @@ func buildServerNode(serverID string, spec ServerSpec, initResult *mcpsdk.Initia
 	return common.NewNode(serverID, []string{"MCPServer"}, props)
 }
 
-func buildUnreachableServerNode(serverID string, spec ServerSpec, errMsg string) model.Node {
+func buildUnreachableServerNode(serverID string, spec ServerSpec, errMsg string) ingest.Node {
 	endpoint := spec.Command
 	if spec.Transport == "http" {
 		endpoint = spec.URL
@@ -404,8 +404,8 @@ func buildUnreachableServerNode(serverID string, spec ServerSpec, errMsg string)
 }
 
 type hostResult struct {
-	nodes []model.Node
-	edges []model.Edge
+	nodes []ingest.Node
+	edges []ingest.Edge
 }
 
 func buildHostNodes(serverID, serverURL, scanID string) hostResult {

@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	collector "github.com/adithyan-ak/agenthound/internal/collector"
+	"github.com/adithyan-ak/agenthound/sdk/collector"
 )
 
 func TestCollector_Name(t *testing.T) {
