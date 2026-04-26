@@ -34,10 +34,13 @@ services:
       timeout: 5s
       retries: 5
 
+  # Service name 'agenthound' kept unchanged: keeps existing volumes / muscle
+  # memory; the binary inside is now agenthound-server, but the compose service
+  # is the operator-facing handle.
   agenthound:
     build:
       context: ..
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/Dockerfile.agenthound-server
     ports:
       - "8080:8080"
     environment:
@@ -45,9 +48,11 @@ services:
       AGENTHOUND_NEO4J_USER: neo4j
       AGENTHOUND_NEO4J_PASSWORD: agenthound
       AGENTHOUND_PG_URI: postgres://agenthound:agenthound@app-db:5432/agenthound?sslmode=disable
-      AGENTHOUND_API_PORT: "8080"
+      # Bind on all interfaces inside the container; the compose port mapping
+      # above (8080:8080) is what actually exposes it. The binary defaults to
+      # 127.0.0.1:8080, which would not be reachable from the host.
+      AGENTHOUND_BIND: 0.0.0.0:8080
       AGENTHOUND_LOG_LEVEL: info
-      AGENTHOUND_JWT_SECRET: changeme-in-production
     depends_on:
       graph-db:
         condition: service_healthy

@@ -5,7 +5,6 @@ set -e
 export PATH="/usr/lib/postgresql/13/bin:$PATH"
 
 PGDATA=/data/postgres
-JWT_FILE=/data/.jwt_secret
 
 # ── PostgreSQL initialization ──
 if [ ! -f "$PGDATA/PG_VERSION" ]; then
@@ -34,11 +33,3 @@ else
   echo "[init-db] Neo4j data directory exists, skipping init"
 fi
 
-# ── JWT secret persistence ──
-if [ ! -f "$JWT_FILE" ]; then
-  head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$JWT_FILE"
-  chmod 600 "$JWT_FILE"
-  echo "[init-db] Generated persistent JWT secret"
-else
-  echo "[init-db] JWT secret exists, reusing"
-fi

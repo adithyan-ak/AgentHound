@@ -1,4 +1,4 @@
-.PHONY: build build-collector build-server build-all test lint docker up down clean seed demo release ui-build ui-dev ui-test standard standard-run standard-stop deps-check size-check
+.PHONY: build build-collector build-server build-all test lint docker docker-collector docker-server docker-standard up down clean seed demo release ui-build ui-dev ui-test standard standard-run standard-stop deps-check size-check
 
 ui-build:
 	cd server/ui && npm install && npm run build
@@ -29,8 +29,18 @@ test:
 lint:
 	golangci-lint run ./...
 
-docker:
-	docker build -f docker/Dockerfile -t agenthound:dev .
+docker-collector:
+	docker build -f docker/Dockerfile.agenthound -t agenthound:collector .
+
+docker-server:
+	docker build -f docker/Dockerfile.agenthound-server -t agenthound:server .
+
+docker-standard:
+	docker build -f docker/Dockerfile.standard -t agenthound:standard .
+
+# `docker` builds both split images (server + collector). The all-in-one
+# standard image is built explicitly via `make docker-standard` (or `make standard`).
+docker: docker-collector docker-server
 
 up:
 	docker compose -f docker/docker-compose.yml up -d

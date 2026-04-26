@@ -1,19 +1,20 @@
 # ── Stage 1: Build React UI ──
 FROM node:20-alpine AS ui-builder
 WORKDIR /ui
-COPY ui/package.json ui/package-lock.json ./
+COPY server/ui/package.json server/ui/package-lock.json ./
 RUN npm ci
-COPY ui/ .
+COPY server/ui/ .
 RUN npm run build
 
-# ── Stage 2: Build Go binary ──
+# ── Stage 2: Build Go binaries (server + collector) ──
 FROM golang:1.25-alpine AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-COPY --from=ui-builder /ui/dist ./internal/api/ui/dist
-RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/agenthound ./cmd/agenthound
+COPY --from=ui-builder /ui/dist ./server/internal/api/ui/dist
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /bin/agenthound-server ./server/cmd/agenthound-server
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /bin/agenthound        ./collector/cmd/agenthound
 
 # ── Stage 3: All-in-one runtime ──
 # Bullseye has OpenJDK 11 (required by Neo4j 4.4) + PostgreSQL 13
@@ -59,8 +60,11 @@ COPY docker/s6-rc/ /etc/s6-overlay/s6-rc.d/
 COPY docker/init-db.sh /etc/s6-overlay/scripts/init-db
 RUN chmod +x /etc/s6-overlay/scripts/init-db
 
-# AgentHound binary
-COPY --from=builder /bin/agenthound /usr/local/bin/agenthound
+# AgentHound binaries: server (HTTP API + UI) and collector (field tool).
+# Both live on PATH so `docker exec <id> agenthound scan` and `agenthound-server …`
+# both work inside the all-in-one image.
+COPY --from=builder /bin/agenthound-server /usr/local/bin/agenthound-server
+COPY --from=builder /bin/agenthound        /usr/local/bin/agenthound
 
 # Data volume
 RUN mkdir -p /data

@@ -1,13 +1,12 @@
 #!/bin/sh
 export PATH="/usr/lib/postgresql/13/bin:$PATH"
 
-# Read persisted JWT secret
-export AGENTHOUND_JWT_SECRET=$(cat /data/.jwt_secret 2>/dev/null || echo "")
 export AGENTHOUND_NEO4J_URI=bolt://127.0.0.1:7687
 export AGENTHOUND_NEO4J_USER=neo4j
 export AGENTHOUND_NEO4J_PASSWORD=agenthound
 export AGENTHOUND_PG_URI="postgres://agenthound@127.0.0.1:5432/agenthound?sslmode=disable"
-export AGENTHOUND_API_PORT=8080
+# Bind on all interfaces inside the container so the host port mapping reaches us.
+export AGENTHOUND_BIND=0.0.0.0:8080
 
 # Wait for Neo4j bolt port
 echo "[agenthound] Waiting for Neo4j..."
@@ -32,4 +31,4 @@ while [ $TRIES -lt 15 ]; do
 done
 
 echo "[agenthound] Starting AgentHound..."
-exec /usr/local/bin/agenthound serve
+exec /usr/local/bin/agenthound-server serve
