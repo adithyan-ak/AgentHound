@@ -7,10 +7,10 @@ coverage.out
 *.dylib
 .env
 .env.*
-ui/dist/
-ui/node_modules/
+server/ui/dist/
+server/ui/node_modules/
 *.tsbuildinfo
-internal/api/ui/dist/
+server/internal/api/ui/dist/
 vendor/
 *.test
 __debug_bin*

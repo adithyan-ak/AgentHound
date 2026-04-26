@@ -1,19 +1,27 @@
-.PHONY: build test lint docker up down clean seed demo release ui-build ui-dev ui-test standard standard-run standard-stop
+.PHONY: build build-collector build-server build-all test lint docker up down clean seed demo release ui-build ui-dev ui-test standard standard-run standard-stop
 
 ui-build:
-	cd ui && npm install && npm run build
-	rm -rf internal/api/ui/dist
-	mkdir -p internal/api/ui
-	cp -r ui/dist internal/api/ui/dist
+	cd server/ui && npm install && npm run build
+	rm -rf server/internal/api/ui/dist
+	mkdir -p server/internal/api/ui
+	cp -r server/ui/dist server/internal/api/ui/dist
 
 ui-dev:
-	cd ui && npm run dev
+	cd server/ui && npm run dev
 
 ui-test:
-	cd ui && npm test
+	cd server/ui && npm test
 
-build: ui-build
-	go build -o bin/agenthound ./cmd/agenthound
+build-collector:
+	go build -o bin/agenthound ./collector/cmd/agenthound
+
+build-server: ui-build
+	go build -o bin/agenthound-server ./server/cmd/agenthound-server
+
+build-all: build-collector build-server
+
+# `build` keeps its name and now produces both binaries.
+build: build-all
 
 test:
 	go test ./... -v -race -count=1
@@ -31,7 +39,7 @@ down:
 	docker compose -f docker/docker-compose.yml down
 
 clean:
-	rm -rf bin/ coverage.out ui/dist internal/api/ui/dist
+	rm -rf bin/ coverage.out server/ui/dist server/internal/api/ui/dist
 
 seed:
 	@bash scripts/seed-test-data.sh
