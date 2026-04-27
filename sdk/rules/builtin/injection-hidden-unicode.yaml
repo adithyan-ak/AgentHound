@@ -22,10 +22,3 @@ matcher:
 emit:
   finding_type: has_injection_patterns
   labels: [hidden_unicode]
-tests:
-  - input: "Normal text\u200Bwith hidden zero-width space"
-    should_match: true
-    description: "detects zero-width space U+200B"
-  - input: "Clean tool description with no hidden chars"
-    should_match: false
-    description: "normal ASCII text without hidden unicode"

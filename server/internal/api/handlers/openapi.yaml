@@ -2,22 +2,26 @@ openapi: 3.0.3
 info:
   title: AgentHound API
   description: >-
-    REST API for `agenthound-server`. The API has no application-layer
-    authentication; it binds to 127.0.0.1:8080 by default. AgentHound is a
-    graph-based security tool that enumerates MCP servers and A2A agents,
-    builds trust graphs in Neo4j, and discovers attack paths across protocol
-    boundaries.
+    REST API for `agenthound-server`. The server binds to 127.0.0.1:8080
+    by default and is single-user. Mutating endpoints are gated by a
+    localhost token: the server generates a 32-byte token at startup
+    and writes it to `~/.agenthound/server.token` (override with
+    `AGENTHOUND_TOKEN_PATH`). The embedded React UI fetches the token
+    from `GET /api/v1/auth/local-token` on first load and includes it
+    in subsequent mutating requests as `Authorization: Bearer <token>`.
 
 
-    Note: this server runs without auth. Generated client code should not
-    attempt Bearer authentication or send Authorization headers.
+    Read-only endpoints (graph reads, findings, prebuilt queries,
+    rules, health, docs) are intentionally open. Single-user posture
+    means localhost reads are fine; gating them would force the UI to
+    plumb auth headers through every read for no security gain.
 
 
-    The `/ingest` endpoint is consumed primarily by the embedded React UI's
-    "Scan Manager → Import scan" drag-drop dialog. The `agenthound` collector
-    binary writes JSON to a file or stdout and does NOT call this endpoint
-    directly — operators ingest scans via `agenthound-server ingest <file>`,
-    `agenthound-server ingest -` (stdin), or the UI uploader.
+    The `/ingest` endpoint is consumed primarily by the embedded React
+    UI's "Scan Manager → Import scan" drag-drop dialog. The
+    `agenthound` collector binary writes JSON to a file or stdout; CLI
+    ingest (`agenthound-server ingest <file>`) bypasses HTTP entirely
+    and does not require the localhost token.
   version: "0.1.0"
   license:
     name: Apache 2.0
@@ -26,9 +30,21 @@ servers:
   - url: /api/v1
     description: Default
 
+# Mutating endpoints require the localhost Bearer token. Read endpoints
+# omit `security` and remain open.
 security: []
 
 components:
+  securitySchemes:
+    LocalhostToken:
+      type: http
+      scheme: bearer
+      bearerFormat: hex
+      description: >-
+        32-byte hex token loaded from `~/.agenthound/server.token` (or
+        `$AGENTHOUND_TOKEN_PATH`). Fetch via `GET /auth/local-token`
+        from the same origin; do not embed the token in client code.
+
   schemas:
     ErrorResponse:
       type: object
@@ -62,6 +78,14 @@ components:
         postgres:
           type: string
           enum: [ok, unavailable]
+
+    LocalTokenResponse:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          description: Bearer token for use on mutating endpoints
 
     GraphStats:
       type: object
@@ -118,6 +142,49 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Edge"
+
+    SearchResult:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/Node"
+
+    NeighborhoodResponse:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/Node"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/Edge"
+
+    BlastRadiusResponse:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/Node"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/Edge"
+        rings:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        direction:
+          type: string
+          enum: [out, in, both]
+        max_hops:
+          type: integer
 
     PathRequest:
       type: object
@@ -228,6 +295,15 @@ components:
           items:
             type: string
 
+    FindingDetail:
+      type: object
+      properties:
+        finding:
+          $ref: "#/components/schemas/Finding"
+        evidence:
+          type: object
+          additionalProperties: true
+
     PreBuiltQuery:
       type: object
       properties:
@@ -256,6 +332,41 @@ components:
           items:
             type: object
             additionalProperties: true
+
+    Rule:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        version:
+          type: integer
+        enabled:
+          type: boolean
+        severity:
+          type: string
+        scope:
+          type: object
+          properties:
+            collector:
+              type: string
+            targets:
+              type: array
+              items:
+                type: string
+        owasp:
+          type: array
+          items:
+            type: string
+        tags:
+          type: array
+          items:
+            type: string
+        source:
+          type: string
 
     IngestResult:
       type: object
@@ -350,8 +461,8 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
-    RateLimited:
-      description: Too many requests
+    Unauthorized:
+      description: Localhost token missing or invalid
       content:
         application/json:
           schema:
@@ -392,6 +503,26 @@ paths:
               schema:
                 type: string
 
+  /auth/local-token:
+    get:
+      summary: Fetch the localhost Bearer token
+      description: >-
+        Returns the server's auto-generated localhost token. The
+        embedded UI calls this on first load and caches the value;
+        subsequent mutating requests must include
+        `Authorization: Bearer <token>`. CORS is configured with
+        `AllowCredentials: false`, so a third-party tab cannot use
+        a credentialed fetch to read the token.
+      operationId: getLocalToken
+      tags: [Public]
+      responses:
+        "200":
+          description: Token retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LocalTokenResponse"
+
   /graph/stats:
     get:
       summary: Graph statistics
@@ -405,6 +536,33 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GraphStats"
+
+  /graph/search:
+    get:
+      summary: Search graph nodes
+      description: Free-text search over node properties.
+      operationId: searchGraph
+      tags: [Graph]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 10000
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResult"
 
   /graph/nodes:
     get:
@@ -457,6 +615,77 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /graph/nodes/{id}/neighborhood:
+    get:
+      summary: Node neighborhood
+      description: Returns the immediate (or N-hop) neighborhood of a node.
+      operationId: getNodeNeighborhood
+      tags: [Graph]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: hops
+          in: query
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+            maximum: 5
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 200
+      responses:
+        "200":
+          description: Neighborhood subgraph
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NeighborhoodResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /graph/nodes/{id}/blast-radius:
+    get:
+      summary: Node blast radius
+      description: >-
+        Returns nodes reachable from (or to) the given node up to
+        `max_hops`, grouped by ring distance.
+      operationId: getNodeBlastRadius
+      tags: [Graph]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: direction
+          in: query
+          schema:
+            type: string
+            enum: [out, in, both]
+            default: out
+        - name: max_hops
+          in: query
+          schema:
+            type: integer
+            default: 3
+            minimum: 1
+            maximum: 10
+      responses:
+        "200":
+          description: Blast radius subgraph
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BlastRadiusResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /graph/edges:
     get:
       summary: List edges
@@ -502,9 +731,11 @@ paths:
       description: >-
         Upload collector JSON. Runs the full pipeline: validate, normalize,
         deduplicate, write to Neo4j, post-process composite edges.
-        Rate limited to 20 requests/minute. Max body 100 MB.
+        Max body 100 MB.
       operationId: ingest
       tags: [Ingest]
+      security:
+        - LocalhostToken: []
       requestBody:
         required: true
         content:
@@ -521,8 +752,8 @@ paths:
                 $ref: "#/components/schemas/IngestResult"
         "400":
           $ref: "#/components/responses/ValidationError"
-        "429":
-          $ref: "#/components/responses/RateLimited"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   /analysis/shortest-path:
     post:
@@ -530,6 +761,8 @@ paths:
       description: Find the shortest path between two nodes in the graph.
       operationId: shortestPath
       tags: [Analysis]
+      security:
+        - LocalhostToken: []
       requestBody:
         required: true
         content:
@@ -545,6 +778,8 @@ paths:
                 $ref: "#/components/schemas/PathResponse"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   /analysis/all-paths:
     post:
@@ -552,6 +787,8 @@ paths:
       description: Enumerate all paths between two nodes (bounded by max_hops and limit).
       operationId: allPaths
       tags: [Analysis]
+      security:
+        - LocalhostToken: []
       requestBody:
         required: true
         content:
@@ -567,6 +804,8 @@ paths:
                 $ref: "#/components/schemas/PathResponse"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   /analysis/weighted-path:
     post:
@@ -576,6 +815,8 @@ paths:
         shortestPath+reduce fallback. Response includes the algorithm used.
       operationId: weightedPath
       tags: [Analysis]
+      security:
+        - LocalhostToken: []
       requestBody:
         required: true
         content:
@@ -591,6 +832,8 @@ paths:
                 $ref: "#/components/schemas/PathResponse"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   /analysis/findings:
     get:
@@ -613,6 +856,28 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Finding"
+
+  /analysis/findings/{id}:
+    get:
+      summary: Finding detail
+      description: Returns evidence and context for a single finding.
+      operationId: getFindingDetail
+      tags: [Analysis]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Finding detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FindingDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /analysis/prebuilt:
     get:
@@ -683,6 +948,8 @@ paths:
       description: Register a new scan.
       operationId: createScan
       tags: [Scans]
+      security:
+        - LocalhostToken: []
       requestBody:
         required: true
         content:
@@ -698,6 +965,8 @@ paths:
                 $ref: "#/components/schemas/Scan"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   /scans/{id}:
     get:
@@ -720,15 +989,93 @@ paths:
                 $ref: "#/components/schemas/Scan"
         "404":
           $ref: "#/components/responses/NotFound"
+    delete:
+      summary: Delete scan
+      description: >-
+        Delete a scan from the scan history and remove all graph
+        nodes and edges that were exclusively owned by this scan.
+      operationId: deleteScan
+      tags: [Scans]
+      security:
+        - LocalhostToken: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Scan deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /rules:
+    get:
+      summary: List detection rules
+      description: Returns metadata for every loaded detection rule (builtin and custom).
+      operationId: listRules
+      tags: [Rules]
+      parameters:
+        - name: collector
+          in: query
+          schema:
+            type: string
+            enum: [mcp, a2a, config, all]
+        - name: severity
+          in: query
+          schema:
+            type: string
+            enum: [critical, high, medium, low, info]
+        - name: tag
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Rule list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Rule"
+
+  /rules/{id}:
+    get:
+      summary: Get rule
+      description: Returns the full definition of a single detection rule.
+      operationId: getRule
+      tags: [Rules]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Rule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Rule"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /query:
     post:
       summary: Raw Cypher query
       description: >-
-        Execute a raw Cypher query against Neo4j.
-        Rate limited to 10 requests/minute.
+        Execute a raw Cypher query against Neo4j. Gated behind the
+        localhost Bearer token; CLI users bypass HTTP entirely via
+        `agenthound-server query`.
       operationId: rawQuery
       tags: [Admin]
+      security:
+        - LocalhostToken: []
       requestBody:
         required: true
         content:
@@ -744,5 +1091,5 @@ paths:
                 $ref: "#/components/schemas/QueryResponse"
         "400":
           $ref: "#/components/responses/ValidationError"
-        "429":
-          $ref: "#/components/responses/RateLimited"
+        "401":
+          $ref: "#/components/responses/Unauthorized"

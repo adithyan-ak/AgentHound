@@ -279,27 +279,60 @@ All collectors output the same JSON schema (the wire contract lives in `sdk/inge
 
 ## API Endpoints (server)
 
-All endpoints are unauthenticated. Network scope is the security boundary.
+Single-user posture: network scope (127.0.0.1 by default) is the primary security boundary.
+Mutating endpoints additionally require a localhost Bearer token to defeat browser drive-by attacks.
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/v1/health` | GET | Neo4j + PG connectivity |
-| `/api/v1/graph/stats` | GET | Node/edge counts by kind |
-| `/api/v1/graph/nodes` | GET | List nodes (filter: kind, limit) |
-| `/api/v1/graph/nodes/{id}` | GET | Node + connected edges |
-| `/api/v1/graph/edges` | GET | List edges (filter: kind, source, target) |
-| `/api/v1/ingest` | POST | Upload collector JSON → pipeline → post-process |
-| `/api/v1/query` | POST | Raw Cypher |
-| `/api/v1/analysis/shortest-path` | POST | `{source, target, max_hops, algorithm}` |
-| `/api/v1/analysis/all-paths` | POST | Bounded path enumeration |
-| `/api/v1/analysis/weighted-path` | POST | Dijkstra via APOC |
-| `/api/v1/analysis/findings` | GET | All composite edges as findings with severity |
-| `/api/v1/analysis/prebuilt/{id}` | GET | 17 pre-built queries |
-| `/api/v1/scans` | GET/POST | List history / trigger scan |
-| `/api/v1/scans/{id}` | GET | Scan status |
-| `/api/v1/rules` | GET | List active detection rules |
+The token is auto-generated at first server startup, persisted to `~/.agenthound/server.token`
+(0o600), and reused on subsequent restarts. The path is configurable via `AGENTHOUND_TOKEN_PATH`
+or `XDG_CONFIG_HOME`. The embedded UI fetches it from `GET /api/v1/auth/local-token` on first
+load. CLI tools (`agenthound-server ingest`, `query`) bypass HTTP entirely and don't need
+the token.
 
-There is intentionally no `/api/v1/auth/*`, no `/api/v1/audit`, no `/api/v1/auth/users`. See `docs/adr/0001-two-binary-split.md`.
+CORS uses `AllowCredentials: false` — the server has no credentials to send anyway, and this
+prevents a hostile origin from reading the token endpoint via a credentialed fetch.
+
+| Endpoint | Method | Auth | Purpose |
+|----------|--------|------|---------|
+| `/api/v1/health` | GET | open | Neo4j + PG connectivity |
+| `/api/v1/auth/local-token` | GET | open | UI token bootstrap (same-origin via CORS) |
+| `/api/v1/graph/stats` | GET | open | Node/edge counts by kind |
+| `/api/v1/graph/search` | GET | open | Free-text node search |
+| `/api/v1/graph/nodes` | GET | open | List nodes (filter: kind, limit) |
+| `/api/v1/graph/nodes/{id}` | GET | open | Node + connected edges |
+| `/api/v1/graph/nodes/{id}/neighborhood` | GET | open | N-hop neighborhood |
+| `/api/v1/graph/nodes/{id}/blast-radius` | GET | open | Reachable subgraph by ring |
+| `/api/v1/graph/edges` | GET | open | List edges (filter: kind, source, target) |
+| `/api/v1/ingest` | POST | **token** | Upload collector JSON → pipeline → post-process |
+| `/api/v1/query` | POST | **token** | Raw Cypher |
+| `/api/v1/analysis/shortest-path` | POST | **token** | `{source, target, max_hops, algorithm}` |
+| `/api/v1/analysis/all-paths` | POST | **token** | Bounded path enumeration |
+| `/api/v1/analysis/weighted-path` | POST | **token** | Dijkstra via APOC |
+| `/api/v1/analysis/findings` | GET | open | All composite edges as findings with severity |
+| `/api/v1/analysis/findings/{id}` | GET | open | Finding evidence detail |
+| `/api/v1/analysis/prebuilt` | GET | open | List of 17 pre-built queries |
+| `/api/v1/analysis/prebuilt/{id}` | GET | open | Run pre-built query |
+| `/api/v1/scans` | GET | open | List scan history |
+| `/api/v1/scans` | POST | **token** | Register a new scan |
+| `/api/v1/scans/{id}` | GET | open | Scan status |
+| `/api/v1/scans/{id}` | DELETE | **token** | Delete scan (and owned edges/nodes) |
+| `/api/v1/rules` | GET | open | List active detection rules |
+| `/api/v1/rules/{id}` | GET | open | Rule definition |
+| `/api/v1/docs` | GET | open | OpenAPI 3.0 spec (YAML) |
+
+The OpenAPI spec at `server/internal/api/handlers/openapi.yaml` declares a `LocalhostToken`
+security scheme on the gated endpoints; routes and spec are kept in sync (verified by
+`diff` in CI).
+
+There is intentionally no JWT, no bcrypt-password user store, no RBAC, and no rate limiting.
+See `docs/adr/0001-two-binary-split.md` and `docs/security.md`.
+
+### Test fixtures and AV-bait scrubbing
+
+Detection-rule YAML test fixtures (`sdk/rules/builtin_tests/<id>.yaml`) live OUTSIDE the
+runtime `//go:embed builtin` path. Strings like `"https://attacker.io/steal?secret=..."`
+exist only in source for unit tests; they never ship in the runtime binary, so EDRs
+don't see them. Production rules are read from `sdk/rules/builtin/*.yaml` which contain
+no `tests:` blocks.
 
 ## CLI Commands
 

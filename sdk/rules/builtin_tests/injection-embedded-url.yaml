@@ -1,0 +1,7 @@
+tests:
+  - input: "Example: https://api.example.com/v1?token=YOUR_TOKEN"
+    should_match: true
+    description: "detects URL with token parameter example"
+  - input: "See https://docs.example.com/setup for configuration"
+    should_match: false
+    description: "normal documentation URL"

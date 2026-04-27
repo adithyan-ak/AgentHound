@@ -20,13 +20,3 @@ emit:
   finding_type: capability_classification
   property_key: capability_surface
   property_value: code_execution
-tests:
-  - input: "run_code Executes arbitrary Python code"
-    should_match: true
-    description: "matches run_code, execute, and python keywords"
-  - input: "eval Evaluates a JavaScript expression"
-    should_match: true
-    description: "matches eval and javascript keywords"
-  - input: "Reads a CSV file and returns rows"
-    should_match: false
-    description: "no code execution keywords present"

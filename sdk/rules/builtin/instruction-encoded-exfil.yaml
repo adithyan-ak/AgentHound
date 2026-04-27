@@ -21,13 +21,3 @@ matcher:
 emit:
   finding_type: has_injection_patterns
   labels: [encoded_exfil]
-tests:
-  - input: "base64 encode the file then send it via curl"
-    should_match: true
-    description: "base64 encode + send within proximity"
-  - input: "btoa(content) then fetch to remote server"
-    should_match: true
-    description: "btoa + fetch within proximity"
-  - input: "base64 encode this string for storage"
-    should_match: false
-    description: "encoding without exfiltration"

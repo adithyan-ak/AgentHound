@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
@@ -13,7 +14,18 @@ import (
 	"github.com/adithyan-ak/agenthound/server/model"
 )
 
+// Pipeline serializes ingests through a single mutex.
+//
+// The post-processing stage's stale-edge cleanup deletes composite
+// edges where scan_id != current AND source_collector IN current. Two
+// concurrent mcp ingests would both run that DELETE, each treating the
+// other's freshly-written edges as stale, producing edge-flapping or
+// duplicate work. For a single-user server, serializing ingests is the
+// correct trade-off: ingest is rare (operator-driven), the lock holds
+// for the duration of a single scan, and concurrent UI uploads are not
+// a target scenario.
 type Pipeline struct {
+	mu         sync.Mutex
 	validator  *Validator
 	normalizer *Normalizer
 	writer     *graph.Writer
@@ -32,6 +44,10 @@ func NewPipeline(writer *graph.Writer, graphDB graph.GraphDB, scanStore *appdb.S
 }
 
 func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdkingest.IngestResult, error) {
+	// Serialize ingests; see Pipeline doc-comment for why.
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	start := time.Now()
 	result := &sdkingest.IngestResult{
 		ScanID: data.Meta.ScanID,

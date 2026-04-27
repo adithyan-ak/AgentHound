@@ -40,12 +40,13 @@ The following are out of scope:
 AgentHound handles sensitive data (credentials, infrastructure topology, attack paths). Key security measures:
 
 - **Credential hashing:** Config Collector hashes credential values by default (SHA-256). Raw values require explicit `--include-credential-values` flag.
-- **Authentication:** bcrypt password hashing, JWT with HMAC-SHA256, API tokens with secure random generation
-- **Authorization:** Role-based access control (admin/analyst/viewer) on all API endpoints
-- **Audit logging:** All security-relevant actions are logged with actor, action, resource, and timestamp
-- **Rate limiting:** API endpoints are rate-limited to prevent abuse
-- **Input validation:** All API inputs are validated. Cypher queries are admin-only.
-- **Container security:** Non-root user, minimal base image (alpine:3.19), no unnecessary packages
+- **Single-user posture:** `agenthound-server` binds to `127.0.0.1:8080` by default and has no application-layer auth. Remote access is the operator's responsibility (SSH tunnel, WireGuard, Tailscale, mTLS reverse proxy).
+- **Localhost token on mutating endpoints:** the server generates a 32-byte token at startup, persisted at `~/.agenthound/server.token` (or `$AGENTHOUND_TOKEN_PATH`). All mutating HTTP routes require `Authorization: Bearer <token>`. The embedded UI fetches it transparently from `GET /api/v1/auth/local-token`. CLI tools (`agenthound-server ingest`, `query`) bypass HTTP entirely.
+- **CORS:** `AllowCredentials: false`. The server has no credentials to send; this prevents drive-by browser attackers from riding ambient context to read the token endpoint.
+- **Input validation:** All API inputs are validated. The `/query` endpoint requires the localhost token; node/edge kinds are checked against an allowlist before being interpolated into Cypher.
+- **Container security:** Non-root user, minimal base image, no unnecessary packages.
+
+For the full threat model see [`docs/security.md`](docs/security.md).
 
 ## Supported versions
 

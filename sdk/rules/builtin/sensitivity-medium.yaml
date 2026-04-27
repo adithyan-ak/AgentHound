@@ -19,19 +19,3 @@ emit:
   finding_type: sensitivity_classification
   property_key: sensitivity
   property_value: medium
-tests:
-  - input: "file:///app/data/report.csv"
-    should_match: true
-    description: "local file path"
-  - input: "https://api.example.com/v1/data"
-    should_match: true
-    description: "HTTPS URL"
-  - input: "s3://my-bucket/data.csv"
-    should_match: true
-    description: "S3 cloud storage"
-  - input: "ftp://files.example.com/doc.pdf"
-    should_match: false
-    description: "FTP scheme not classified as medium"
-  - input: "custom://internal/resource"
-    should_match: false
-    description: "custom scheme not classified"

@@ -44,31 +44,3 @@ emit:
   finding_type: sensitivity_classification
   property_key: sensitivity
   property_value: critical
-tests:
-  - input: "postgres://prod-db.internal:5432/payments"
-    should_match: true
-    description: "production postgres database"
-  - input: "file:///etc/shadow"
-    should_match: true
-    description: "system shadow file"
-  - input: "file:///root/.bashrc"
-    should_match: true
-    description: "root home directory"
-  - input: "file:///app/config/secrets/db.yaml"
-    should_match: true
-    description: "critical path segment /secrets"
-  - input: "file:///app/.ssh/id_rsa"
-    should_match: true
-    description: "SSH directory"
-  - input: "file:///app/config/database.env"
-    should_match: true
-    description: "critical .env extension"
-  - input: "s3://prod-bucket/data"
-    should_match: true
-    description: "production S3 bucket"
-  - input: "postgres://dev-db:5432/testdb"
-    should_match: false
-    description: "non-production database"
-  - input: "file:///app/src/main.go"
-    should_match: false
-    description: "normal source file"

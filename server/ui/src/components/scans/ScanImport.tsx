@@ -25,6 +25,26 @@ function readFileAsText(file: File): Promise<string> {
   });
 }
 
+// Pre-upload validation. The dropzone's `accept` attribute is advisory
+// and ignored on drag-drop, so a 4 GB binary or a .exe rename would
+// otherwise be loaded into memory and hang the browser.
+const MAX_SCAN_BYTES = 100 * 1024 * 1024; // 100 MB matches server cap
+
+export function validateScanFile(file: File): string | null {
+  if (file.size > MAX_SCAN_BYTES) {
+    return "File too large; max 100 MB.";
+  }
+  if (!file.name.toLowerCase().endsWith(".json")) {
+    return "File must be a .json file.";
+  }
+  // file.type may be empty on some browsers/OSes (especially drag-drop
+  // from Finder/Explorer). Only reject if a wrong type is explicitly set.
+  if (file.type && file.type !== "application/json") {
+    return "File must be a .json file.";
+  }
+  return null;
+}
+
 type Status =
   | { kind: "idle" }
   | { kind: "uploading"; fileName: string }
@@ -48,6 +68,14 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
 
   const processFile = useCallback(
     async (file: File) => {
+      // Reject oversize / wrong-type files BEFORE reading them into
+      // memory. A 4 GB binary loaded into a string would hang the tab.
+      const validationError = validateScanFile(file);
+      if (validationError) {
+        setStatus({ kind: "error", message: validationError });
+        return;
+      }
+
       setStatus({ kind: "uploading", fileName: file.name });
 
       // Read the file as text using FileReader. We use FileReader (rather

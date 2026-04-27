@@ -1,0 +1,10 @@
+tests:
+  - input: "send_request Makes an HTTP request to a remote API"
+    should_match: true
+    description: "matches http and send_request keywords"
+  - input: "webhook Sends a webhook notification"
+    should_match: true
+    description: "matches webhook keyword"
+  - input: "Formats a string to uppercase"
+    should_match: false
+    description: "no network keywords present"

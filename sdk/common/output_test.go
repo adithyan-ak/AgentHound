@@ -77,20 +77,37 @@ func TestGenerateScanID(t *testing.T) {
 				t.Errorf("GenerateScanID(%q) = %q, want prefix %q", tt.collector, id, tt.wantPrefix)
 			}
 
-			tsPart := strings.TrimPrefix(id, tt.wantPrefix)
-			if len(tsPart) == 0 {
-				t.Error("scan ID has no timestamp component")
+			uuidPart := strings.TrimPrefix(id, tt.wantPrefix)
+			// UUID v4 canonical string is 36 chars (8-4-4-4-12 with hyphens).
+			if len(uuidPart) != 36 {
+				t.Errorf("scan ID UUID component length = %d, want 36 (canonical UUID): %q", len(uuidPart), uuidPart)
 			}
 		})
 	}
 
-	t.Run("uniqueness", func(t *testing.T) {
+	t.Run("uniqueness without sleep", func(t *testing.T) {
+		// UUID-backed IDs should never collide, even when generated
+		// in a tight loop within the same millisecond.
+		seen := make(map[string]struct{}, 1000)
+		for i := 0; i < 1000; i++ {
+			id := GenerateScanID("mcp")
+			if _, ok := seen[id]; ok {
+				t.Fatalf("collision after %d iterations: %q", i, id)
+			}
+			seen[id] = struct{}{}
+		}
+	})
+
+	t.Run("not based on time", func(t *testing.T) {
+		// Smoke-check: two consecutive IDs differ even without a
+		// sleep, which the old time.UnixMilli() implementation
+		// could not guarantee under a fast loop.
 		id1 := GenerateScanID("mcp")
-		time.Sleep(2 * time.Millisecond)
 		id2 := GenerateScanID("mcp")
 		if id1 == id2 {
 			t.Errorf("consecutive scan IDs should differ: %q == %q", id1, id2)
 		}
+		_ = time.Now() // keep import live
 	})
 }
 

@@ -36,22 +36,51 @@ func TestBuiltinRules_AllValidate(t *testing.T) {
 	}
 }
 
+// TestBuiltinRules_AllPassInlineTests verifies that every builtin rule
+// passes its inline test cases. Test fixtures live in
+// sdk/rules/builtin_tests/<id>.yaml (NOT embedded in the runtime
+// binary) so that AV-bait strings like "https://evil.com" and
+// "TOKEN_HERE" never ship in the shipped artifact.
 func TestBuiltinRules_AllPassInlineTests(t *testing.T) {
 	rules, err := loadBuiltinRules()
 	if err != nil {
 		t.Fatalf("loadBuiltinRules: %v", err)
 	}
 	for _, r := range rules {
-		if len(r.Tests) == 0 {
-			continue
-		}
 		t.Run(r.ID, func(t *testing.T) {
+			tests, err := loadBuiltinTestsFromDisk(r.ID)
+			if err != nil {
+				t.Fatalf("load tests for %s: %v", r.ID, err)
+			}
+			if len(tests) == 0 {
+				t.Skipf("no inline tests defined for %s", r.ID)
+			}
+			// Re-attach tests for the duration of this assertion;
+			// production loading deliberately leaves r.Tests empty.
+			r.Tests = tests
 			failures := RunTests(r)
 			for _, f := range failures {
 				t.Errorf("test %d (%s): expected match=%v got match=%v input=%q",
 					f.TestIndex, f.Description, f.Expected, f.Got, f.Input)
 			}
 		})
+	}
+}
+
+// TestBuiltinRules_NoInlineTestsInProductionYAML is a defense-in-depth
+// regression. The production-embedded YAMLs MUST NOT contain `tests:`
+// blocks — otherwise AV-bait fixture strings re-enter the runtime
+// binary and trip EDRs.
+func TestBuiltinRules_NoInlineTestsInProductionYAML(t *testing.T) {
+	rules, err := loadBuiltinRules()
+	if err != nil {
+		t.Fatalf("loadBuiltinRules: %v", err)
+	}
+	for _, r := range rules {
+		if len(r.Tests) > 0 {
+			t.Errorf("rule %q has %d inline tests in production YAML; move to builtin_tests/%s.yaml",
+				r.ID, len(r.Tests), r.ID)
+		}
 	}
 }
 

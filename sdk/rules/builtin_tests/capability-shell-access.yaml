@@ -1,0 +1,10 @@
+tests:
+  - input: "run_shell_command Runs a command in the system shell"
+    should_match: true
+    description: "matches shell keyword in tool name"
+  - input: "execute bash script on the server"
+    should_match: true
+    description: "matches bash keyword"
+  - input: "Formats the input text nicely"
+    should_match: false
+    description: "no capability keywords present"

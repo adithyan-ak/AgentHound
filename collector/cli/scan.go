@@ -90,8 +90,11 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	output, _ := cmd.Flags().GetString("scan-output")
 	if output == "" {
-		// Fall back to root --output flag.
-		if v, _ := cmd.Root().PersistentFlags().GetString("output"); v != "" {
+		// Fall back to the root --output persistent flag (and its
+		// AGENTHOUND_OUTPUT env-var resolution, which lives on cfg).
+		if cfg != nil && cfg.Output != "" {
+			output = cfg.Output
+		} else if v, _ := cmd.Root().PersistentFlags().GetString("output"); v != "" {
 			output = v
 		}
 	}

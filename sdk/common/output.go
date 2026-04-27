@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
+	"github.com/google/uuid"
 )
 
 const CollectorVersion = "0.1.0"
@@ -29,8 +30,15 @@ func NewIngestData(collector, scanID string) *ingest.IngestData {
 	}
 }
 
+// GenerateScanID returns a globally unique identifier for a scan.
+//
+// Format: "scan-<collector>-<uuid-v4>". The UUID component eliminates
+// collisions when two collectors run in the same millisecond on the
+// same machine (the prior time.UnixMilli() form had visible collisions
+// in fast-loop tests). The collector prefix is preserved because tools
+// downstream (UI, scan history, log greppers) parse it.
 func GenerateScanID(collector string) string {
-	return fmt.Sprintf("scan-%s-%d", collector, time.Now().UnixMilli())
+	return fmt.Sprintf("scan-%s-%s", collector, uuid.NewString())
 }
 
 func NewEdgeProps(scanID string, confidence, riskWeight float64) map[string]any {

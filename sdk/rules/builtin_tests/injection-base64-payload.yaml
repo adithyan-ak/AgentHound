@@ -1,0 +1,7 @@
+tests:
+  - input: "Decode this: SGVsbG8gV29ybGQgZnJvbSBiYXNlNjQ="
+    should_match: true
+    description: "detects base64 encoded string"
+  - input: "This tool reads files."
+    should_match: false
+    description: "short text without base64 payload"

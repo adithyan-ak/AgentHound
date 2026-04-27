@@ -26,8 +26,8 @@ against systems they have been authorized to assess.
 `agenthound-server` binds to `127.0.0.1:8080` by default. This is the
 primary security control:
 
-- Anyone with network access to the bound interface has full access
-  to the API. There is no login, no token, no RBAC.
+- Anyone with network access to the bound interface can read the
+  graph: there is no login, no RBAC, no per-user data scoping.
 - For remote access, use a control mechanism the operator already
   trusts: WireGuard / Tailscale / OpenVPN, an SSH tunnel
   (`ssh -L 8080:localhost:8080 host`), or a reverse proxy with mTLS
@@ -39,6 +39,43 @@ primary security control:
 If a multi-tenant team server is what you need, fork before this
 commit (auth lived in `internal/auth/` until then) — but expect to
 maintain it yourself. The project direction is single-user-first.
+
+## Localhost token on mutating endpoints
+
+Although the server is single-user, the operator's *browser* is not.
+A malicious tab open in the same browser session can issue same-origin
+POSTs to `127.0.0.1:8080` and run arbitrary Cypher or upload
+attacker-chosen ingest data. To shut that drive-by path:
+
+- The server generates a random 32-byte token at first startup and
+  persists it to `~/.agenthound/server.token` with `0o600` perms.
+  Override the path via `AGENTHOUND_TOKEN_PATH`. If `XDG_CONFIG_HOME`
+  is set, the default becomes
+  `$XDG_CONFIG_HOME/agenthound/server.token`. The token is reused on
+  subsequent restarts (idempotent).
+- All mutating HTTP routes require
+  `Authorization: Bearer <token>`. Specifically: `POST /ingest`,
+  `POST /query`, `POST /scans`, `DELETE /scans/{id}`, and the three
+  `POST /analysis/*-path` endpoints.
+- Read endpoints (graph reads, findings, prebuilt queries, rules,
+  health, docs) stay open. Localhost-only reads on a single-user box
+  are fine; gating them would force the UI to plumb auth through
+  every TanStack Query call for no security gain.
+- `GET /api/v1/auth/local-token` returns the token to same-origin
+  callers. The embedded UI fetches it once on first load and caches
+  it in memory. Same-origin enforcement is provided by CORS:
+  `AllowCredentials: false` and `AllowedOrigins` is the
+  operator-set allowlist (default `http://localhost:8080`), so a
+  third-party tab cannot use a credentialed fetch to read the
+  response.
+- `agenthound-server` CLI subcommands (`ingest`, `query`) call the
+  pipeline / reader directly and do **not** speak HTTP, so they
+  bypass the token entirely. No CLI plumbing changes are required.
+
+To revoke the token (e.g. you suspect another user on the box read
+the file), delete `~/.agenthound/server.token` and restart the
+server. The next startup generates a fresh token; any open UI tab
+will need a refresh to re-fetch.
 
 ## Collector network behaviour
 

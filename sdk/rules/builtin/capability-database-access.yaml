@@ -20,13 +20,3 @@ emit:
   finding_type: capability_classification
   property_key: capability_surface
   property_value: database_access
-tests:
-  - input: "execute_sql Runs a SQL query against the production database"
-    should_match: true
-    description: "matches sql, query, database, and execute_sql keywords"
-  - input: "mongodb_find Queries a MongoDB collection"
-    should_match: true
-    description: "matches mongodb and collection keywords"
-  - input: "Reads a file from disk"
-    should_match: false
-    description: "no database keywords present"

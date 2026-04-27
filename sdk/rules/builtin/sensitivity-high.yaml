@@ -29,22 +29,3 @@ emit:
   finding_type: sensitivity_classification
   property_key: sensitivity
   property_value: high
-tests:
-  - input: "postgres://dev-db:5432/myapp"
-    should_match: true
-    description: "any postgres connection is high sensitivity"
-  - input: "redis://cache.internal:6379"
-    should_match: true
-    description: "any redis connection is high sensitivity"
-  - input: "file:///var/log/syslog"
-    should_match: true
-    description: "system log directory"
-  - input: "file:///app/config/secrets.yaml"
-    should_match: true
-    description: "config file with secret in name"
-  - input: "file:///app/src/main.go"
-    should_match: false
-    description: "normal source file"
-  - input: "https://api.example.com/v1"
-    should_match: false
-    description: "HTTP URL is medium, not high"

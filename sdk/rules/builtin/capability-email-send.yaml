@@ -20,13 +20,3 @@ emit:
   finding_type: capability_classification
   property_key: capability_surface
   property_value: email_send
-tests:
-  - input: "send_email Sends an email via SMTP"
-    should_match: true
-    description: "matches email, smtp, and send_email keywords"
-  - input: "notify Send a notification to the user"
-    should_match: true
-    description: "matches notify keyword"
-  - input: "Compresses a file to zip format"
-    should_match: false
-    description: "no email keywords present"

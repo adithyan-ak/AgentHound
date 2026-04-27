@@ -20,13 +20,3 @@ emit:
   finding_type: capability_classification
   property_key: capability_surface
   property_value: file_write
-tests:
-  - input: "write_file Writes content to a file on disk"
-    should_match: true
-    description: "matches write_file keyword"
-  - input: "save_file saves the current state"
-    should_match: true
-    description: "matches save_file keyword"
-  - input: "Queries the database for records"
-    should_match: false
-    description: "no file write keywords present"

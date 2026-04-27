@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/adithyan-ak/agenthound/collector/internal/clientcfg"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/spf13/cobra"
 )
@@ -116,6 +117,49 @@ func TestRunScan_DefaultOutputCWD(t *testing.T) {
 	}
 	if got.Meta.Collector != "scan" {
 		t.Errorf("meta.collector = %q, want scan", got.Meta.Collector)
+	}
+}
+
+// TestRunScan_HonoursAgentHoundOutputEnv verifies that runScan resolves
+// the destination path via cfg.Output, which is populated from the
+// AGENTHOUND_OUTPUT env var by clientcfg. Regression for the dead-code
+// state where cfg.Output existed but runScan never read it.
+func TestRunScan_HonoursAgentHoundOutputEnv(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "env-output.json")
+
+	// Stand up a Config the same way root.go's PersistentPreRunE would,
+	// then assign the package-level cfg used by runScan.
+	t.Setenv("AGENTHOUND_OUTPUT", target)
+	prev := cfg
+	defer func() { cfg = prev }()
+	cfg = clientcfg.Load()
+	if cfg.Output != target {
+		t.Fatalf("cfg.Output = %q, want %q", cfg.Output, target)
+	}
+
+	cmd := newScanCmdForTest()
+	_ = cmd.Flags().Set("config", "true")
+	_ = cmd.Flags().Set("path", filepath.Join(dir, "no-such-config.json"))
+
+	if err := runScan(cmd, nil); err != nil {
+		t.Fatalf("runScan: %v", err)
+	}
+
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("expected scan written to %s (from AGENTHOUND_OUTPUT): %v", target, err)
+	}
+
+	raw, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read scan: %v", err)
+	}
+	var got ingest.IngestData
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Meta.Type != "agenthound-ingest" {
+		t.Errorf("meta.type = %q, want agenthound-ingest", got.Meta.Type)
 	}
 }
 

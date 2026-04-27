@@ -20,13 +20,3 @@ emit:
   finding_type: capability_classification
   property_key: capability_surface
   property_value: file_read
-tests:
-  - input: "read_file Opens and reads a file from disk"
-    should_match: true
-    description: "matches read_file keyword"
-  - input: "list_directory shows contents of a directory"
-    should_match: true
-    description: "matches list_directory keyword"
-  - input: "Sends an email notification"
-    should_match: false
-    description: "no file read keywords present"

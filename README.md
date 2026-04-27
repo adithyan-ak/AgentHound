@@ -9,16 +9,16 @@
   </p>
 </p>
 
-AgentHound enumerates MCP servers, A2A agents, and AI-agent client configurations, builds a directed trust graph in Neo4j, and uses shortest-path algorithms to discover attack paths across protocol boundaries.
+**AgentHound is the BloodHound for MCP/A2A config sprawl.** It enumerates MCP servers, A2A agents, and AI-agent client configurations across an operator's environment, builds a directed trust graph in Neo4j, and uses shortest-path algorithms to surface multi-hop attack paths the configuration files alone never reveal.
 
 It ships as **two binaries** in the SharpHound/BloodHound style:
 
 - **`agenthound`** — a lean field collector. ~9 MiB stripped on linux/amd64. No Neo4j, no Postgres, no UI. Drops on a target host, enumerates, writes JSON to a file or stdout. The collector is offline-by-default — it does not phone home.
 - **`agenthound-server`** — the operator's single-user ingest + analysis server. Runs Neo4j-backed graph storage, post-processors, the REST API, and the React UI. Operators move scan JSON to the server via file copy, an SSH pipe, or the UI's drag-drop import.
 
-Open-source graph-based attack-path analysis spanning MCP + A2A + agent-client configs. Other tools analyze each protocol in isolation; the graph model lets AgentHound surface paths like `A2A Agent → DELEGATES_TO → A2A Agent → MCP Server → MCPTool (shell_access) → Host` that a single-protocol scanner can't see.
+The marquee detection is **credential-chain CAN_REACH**: multi-hop paths where Server A reads a credential, Server B uses that credential, and an agent reaches B's resources without trusting B directly. The graph model is what makes this feasible — single-file static analyzers cannot see the path because no individual config declares it.
 
-Prior art on adjacent problems: Snyk Toxic Flow Analysis (Jul 2025) for static MCP code analysis, and Invariant Labs (Apr 2025) for runtime tool-call inspection. AgentHound's contribution is the cross-protocol graph + collector/server split optimized for red-team workflows.
+Prior art on adjacent problems: Snyk Toxic Flow Analysis (Jul 2025) for static MCP code analysis, and Invariant Labs (Apr 2025) for runtime tool-call inspection. AgentHound's contribution is the credential-chain graph + collector/server split optimized for red-team workflows.
 
 ---
 
@@ -28,11 +28,10 @@ AgentHound discovers security issues across your AI agent infrastructure, mapped
 
 | Finding | Severity | What it means |
 |---------|----------|---------------|
+| **Credential-chain paths** | Critical | Multi-hop paths where Server A reads a credential, Server B uses that credential, and an agent reaches B's resources without trusting B directly. The genuine "no other tool finds this" attack path — config-file scanners never see the chain. |
 | Shell access paths | Critical | An agent can reach tools with arbitrary command execution |
 | Database access paths | Critical | An agent can reach production database resources |
 | Data exfiltration routes | Critical | An agent can read sensitive data AND send it outbound |
-| Cross-protocol attack paths | Critical | An A2A agent can pivot through host co-location to reach MCP resources |
-| Credential chain paths | Critical | Multi-hop paths that traverse shared credential boundaries |
 | Tool poisoning | High | Tool descriptions contain prompt injection patterns |
 | Tool shadowing | High | A malicious tool mimics a legitimate tool to hijack actions |
 | Rug pull detection | High | A tool's description changed between scans (supply chain attack) |
@@ -41,6 +40,9 @@ AgentHound discovers security issues across your AI agent infrastructure, mapped
 | Hardcoded secrets | High | High-entropy strings (API keys) in config files |
 | Unpinned packages | Medium | `npx -y @pkg` without version pin — supply chain risk |
 | Unsigned agent cards | Medium | A2A agents without JWS signatures |
+| Cross-protocol attack paths[^xprotocol] | Critical | An A2A agent can pivot through host co-location to reach MCP resources |
+
+[^xprotocol]: Cross-protocol pivot detection is the academically-novel piece, but in practice it fires rarely because most A2A and MCP deployments don't share hosts. It exists; the credential-chain detection above is what most operators will actually use.
 
 All 17 findings are exposed as pre-built queries from the CLI and UI.
 

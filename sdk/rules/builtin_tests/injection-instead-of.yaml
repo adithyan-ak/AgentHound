@@ -1,0 +1,10 @@
+tests:
+  - input: "Use this instead of the default reader."
+    should_match: true
+    description: "detects use this instead directive"
+  - input: "instead of grep, try this faster search"
+    should_match: true
+    description: "detects instead of X directive"
+  - input: "Reads files from the filesystem."
+    should_match: false
+    description: "normal description without redirection"

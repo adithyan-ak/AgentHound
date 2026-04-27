@@ -36,6 +36,10 @@ type ServerDeps struct {
 	ScanStore   *appdb.ScanStore
 	RulesEngine *rules.Engine
 	CORSOrigins []string
+	// LocalToken gates all mutating endpoints with a Bearer token. The
+	// embedded UI fetches the token from /api/v1/auth/local-token on
+	// load. Required; callers should construct via apimw.NewLocalToken.
+	LocalToken *apimw.LocalToken
 }
 
 func NewServer(deps ServerDeps) *Server {
@@ -56,8 +60,19 @@ func NewServer(deps ServerDeps) *Server {
 	rulesH := handlers.NewRulesHandler(deps.RulesEngine)
 
 	r.Route("/api/v1", func(r chi.Router) {
+		// Open read endpoints. Single-user posture means localhost
+		// reads are fine; gating them would force the UI to plumb
+		// auth headers through every TanStack Query for no security
+		// gain.
 		r.Get("/health", healthH.Handle)
 		r.Get("/docs", handlers.HandleOpenAPIDocs)
+
+		// auth/local-token is the bootstrap path the embedded UI uses
+		// to discover the token. Same-origin is enforced via CORS
+		// (AllowCredentials: false, AllowedOrigins allowlist).
+		if deps.LocalToken != nil {
+			r.Get("/auth/local-token", apimw.LocalTokenHandler(deps.LocalToken))
+		}
 
 		r.Get("/graph/stats", graphH.HandleStats)
 		r.Get("/graph/search", graphH.HandleSearch)
@@ -71,20 +86,32 @@ func NewServer(deps ServerDeps) *Server {
 		r.Get("/analysis/findings/{id}", analysisH.HandleFindingDetail)
 		r.Get("/analysis/prebuilt", analysisH.HandleListPreBuilt)
 		r.Get("/analysis/prebuilt/{id}", analysisH.HandlePreBuilt)
-		r.Post("/analysis/shortest-path", analysisH.HandleShortestPath)
-		r.Post("/analysis/all-paths", analysisH.HandleAllPaths)
-		r.Post("/analysis/weighted-path", analysisH.HandleWeightedPath)
 
 		r.Get("/scans", scanH.HandleList)
 		r.Get("/scans/{id}", scanH.HandleGet)
-		r.Post("/scans", scanH.HandleCreate)
-		r.Delete("/scans/{id}", scanH.HandleDelete)
 
 		r.Get("/rules", rulesH.HandleList)
 		r.Get("/rules/{id}", rulesH.HandleGet)
 
-		r.Post("/ingest", ingestH.Handle)
-		r.Post("/query", queryH.Handle)
+		// Gated mutating endpoints. The localtoken middleware
+		// requires Authorization: Bearer <token>. CLI tools (ingest,
+		// query) bypass HTTP entirely by calling the pipeline /
+		// reader directly — no token needed for CLI use.
+		gate := passThrough
+		if deps.LocalToken != nil {
+			gate = deps.LocalToken.Middleware
+		}
+
+		r.Group(func(r chi.Router) {
+			r.Use(gate)
+			r.Post("/ingest", ingestH.Handle)
+			r.Post("/query", queryH.Handle)
+			r.Post("/scans", scanH.HandleCreate)
+			r.Delete("/scans/{id}", scanH.HandleDelete)
+			r.Post("/analysis/shortest-path", analysisH.HandleShortestPath)
+			r.Post("/analysis/all-paths", analysisH.HandleAllPaths)
+			r.Post("/analysis/weighted-path", analysisH.HandleWeightedPath)
+		})
 	})
 
 	uiContent, _ := fs.Sub(uiFS, "ui/dist")
@@ -109,6 +136,12 @@ func NewServer(deps ServerDeps) *Server {
 	})
 
 	return &Server{router: r}
+}
+
+// passThrough is the no-op middleware used when no LocalToken is
+// configured (test setups). Production always wires a LocalToken.
+func passThrough(next http.Handler) http.Handler {
+	return next
 }
 
 // ListenAndServe binds the HTTP server to the given host:port string.
