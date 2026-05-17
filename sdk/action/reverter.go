@@ -15,3 +15,10 @@ type Reverter interface {
 // concrete receipt type (PoisonReceipt, ImplantReceipt) that satisfies
 // Receipt and carries whatever metadata that action needs to undo itself.
 type Receipt interface{}
+
+// RevertAuthTokenKey is the context key for an optional auth token
+// supplied at revert time (via `agenthound revert --auth-token`). Modules
+// that need authentication for their revert HTTP calls read this from the
+// context rather than storing credentials in receipt files (no secrets at
+// rest — see docs/security.md).
+type RevertAuthTokenKey struct{}

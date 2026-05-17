@@ -1,0 +1,32 @@
+# MLflow fingerprint rule (v0.4).
+#
+# MLflow Tracking Server (default port 5000) serves both an HTML
+# console at "/" and a REST API under "/api/2.0/mlflow/...". The
+# canonical anonymous probe is GET /api/2.0/mlflow/experiments/search
+# which on a default deployment returns:
+#   {"experiments":[...]}  (200 OK, possibly with empty list)
+#
+# Auth: MLflow has no built-in auth. Network-perimeter or a reverse
+# proxy is the deployment-time control; default deployments expose the
+# API anonymously, which is what this rule catches.
+id: mlflow
+name: MLflow Tracking Server
+description: 'Identifies MLflow by GET /api/2.0/mlflow/experiments/search returning the canonical experiments JSON'
+version: 2
+service_kind: mlflow
+probes:
+  - method: GET
+    path: /api/2.0/mlflow/experiments/search
+    matchers:
+      - type: http_status
+        status_code: 200
+      - type: body_contains
+        value: '"experiments"'
+emit:
+  node_kinds:
+    - MLflowServer
+    - AIService
+  properties:
+    service_kind: mlflow
+    auth_method: none
+    is_anonymous_loot: "true"

