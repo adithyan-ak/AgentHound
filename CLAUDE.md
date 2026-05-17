@@ -411,7 +411,7 @@ Phases 1–5 of the original PRD shipped as the single-binary AgentHound. The tw
 
 AgentHound maps all findings to OWASP MCP Top 10 (MCP01-MCP10) and OWASP Agentic Top 10 (ASI01-ASI10). Full/partial coverage documented in `docs/detection-rules.md`.
 
-## Pre-Built Queries (17)
+## Pre-Built Queries (18)
 
 | ID | Category |
 |----|----------|
@@ -420,6 +420,7 @@ AgentHound maps all findings to OWASP MCP Top 10 (MCP01-MCP10) and OWASP Agentic
 | `cross-protocol-paths` | Critical Paths |
 | `exfiltration-routes` | Critical Paths |
 | `credential-chain` | Critical Paths |
+| `litellm-credential-leak` | Critical Paths |
 | `poisoned-tools` | Vulnerabilities |
 | `tool-shadowing` | Vulnerabilities |
 | `no-auth-servers` | Vulnerabilities |
