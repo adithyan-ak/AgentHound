@@ -217,3 +217,71 @@ func TestPoison_TargetNotFound(t *testing.T) {
 		t.Errorf("expected not-found error, got %v", err)
 	}
 }
+
+func TestRevert_AuthTokenFromContext(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "POST" && r.URL.Path == "/":
+			gotAuth = r.Header.Get("Authorization")
+			if gotAuth == "" {
+				w.WriteHeader(401)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			body, _ := json.Marshal(map[string]any{
+				"jsonrpc": "2.0", "id": 1,
+				"result": map[string]any{"tools": []map[string]any{
+					{"name": "tool1", "description": "original desc"},
+				}},
+			})
+			_, _ = w.Write(body)
+		case r.Method == "PUT" && strings.HasPrefix(r.URL.Path, "/admin/tools/"):
+			if r.Header.Get("Authorization") == "" {
+				w.WriteHeader(401)
+				return
+			}
+			w.WriteHeader(204)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	p := newPoisonerWithTempState(t)
+	receipt := &action.PoisonReceipt{
+		ModuleID:        "mcp.poison",
+		EngagementID:    "AUTH-TEST",
+		TargetID:        "tool1",
+		OriginalContent: "original desc",
+		InjectedContent: "poisoned",
+		Mode:            "replace",
+		DryRun:          false,
+		Target:          action.Target{Address: strings.TrimPrefix(srv.URL, "http://")},
+		Extra: map[string]any{
+			"update_method": "PUT",
+			"update_path":   "/admin/tools/{id}",
+			"list_path":     "/",
+			"base_url":      srv.URL,
+		},
+	}
+
+	// Without auth token in context — should fail with 401.
+	err := p.Revert(context.Background(), receipt)
+	if err == nil {
+		t.Fatal("expected 401 error when no auth token in context")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("expected 401 in error, got: %v", err)
+	}
+
+	// With auth token in context — should succeed.
+	ctx := context.WithValue(context.Background(), action.RevertAuthTokenKey{}, "Bearer test-secret")
+	err = p.Revert(ctx, receipt)
+	if err != nil {
+		t.Fatalf("Revert with auth token: %v", err)
+	}
+	if gotAuth != "Bearer Bearer test-secret" && gotAuth != "Bearer test-secret" {
+		t.Errorf("server received Authorization = %q, want Bearer test-secret", gotAuth)
+	}
+}
