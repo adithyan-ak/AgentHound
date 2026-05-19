@@ -2,6 +2,7 @@ package module_test
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -117,6 +118,52 @@ func TestDefaultStateDir_RejectsBadModuleID(t *testing.T) {
 		if _, err := module.DefaultStateDir(bad); err == nil {
 			t.Errorf("expected error for module ID %q", bad)
 		}
+	}
+}
+
+func TestReadReceipts_CorruptedJSON(t *testing.T) {
+	tmp := t.TempDir()
+	setStateRoot(t, tmp)
+
+	s := module.NewFileStatefulModule("mcp.poison")
+	// Write garbage to the receipts file.
+	dir := filepath.Join(tmp, "mcp.poison")
+	_ = os.MkdirAll(dir, 0o700)
+	path := filepath.Join(dir, "CORRUPT.json")
+	_ = os.WriteFile(path, []byte("this is not json{{{"), 0o600)
+
+	_, err := s.ReadReceipts("CORRUPT")
+	if err == nil {
+		t.Error("expected error on corrupted JSON receipts file")
+	}
+}
+
+func TestReadReceipts_UnknownReceiptType(t *testing.T) {
+	tmp := t.TempDir()
+	setStateRoot(t, tmp)
+
+	s := module.NewFileStatefulModule("future.module")
+	dir := filepath.Join(tmp, "future.module")
+	_ = os.MkdirAll(dir, 0o700)
+	// Write a receipt with a type we don't recognize yet.
+	data := `[{"module_id":"future.module","type":"future-thing","receipt":{"custom_field":"value123"}}]`
+	path := filepath.Join(dir, "FWD-COMPAT.json")
+	_ = os.WriteFile(path, []byte(data), 0o600)
+
+	got, err := s.ReadReceipts("FWD-COMPAT")
+	if err != nil {
+		t.Fatalf("ReadReceipts with unknown type should not error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 receipt, got %d", len(got))
+	}
+	// The unknown receipt should be preserved as a map.
+	m, ok := got[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any for unknown receipt type, got %T", got[0])
+	}
+	if m["custom_field"] != "value123" {
+		t.Errorf("custom_field = %v, want value123", m["custom_field"])
 	}
 }
 

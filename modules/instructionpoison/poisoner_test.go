@@ -217,3 +217,49 @@ func TestPoison_RepeatedSameEngagement_ReplacesBlock(t *testing.T) {
 		t.Errorf("expected exactly 1 sentinel start; got %d", c)
 	}
 }
+
+func TestRevert_CorruptedSentinel_StartWithoutEnd(t *testing.T) {
+	p := newPoisoner(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+	// Write a file with a DIFFERENT engagement-id's START but no END.
+	// This simulates corruption from another engagement that crashed mid-write.
+	// Our engagement "ENG-CLEAN" should work cleanly despite the stale dangling
+	// sentinel from "ENG-OTHER".
+	corrupted := originalCLAUDE + "<!-- agenthound-poison-START engagement=ENG-OTHER -->\nDANGLING FROM OTHER ENGAGEMENT\n"
+	if err := os.WriteFile(path, []byte(corrupted), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	receipt, err := p.Poison(context.Background(), action.Target{},
+		action.PoisonPayload{
+			InjectionContent: "our clean injection",
+			EngagementID:     "ENG-CLEAN",
+			Extras:           map[string]any{"file": path},
+		})
+	if err != nil {
+		t.Fatalf("Poison on file with other engagement's corrupted sentinel: %v", err)
+	}
+
+	// The file should now have both: the dangling OTHER block (untouched)
+	// AND our clean ENG-CLEAN bracket.
+	got, _ := os.ReadFile(path)
+	if !strings.Contains(string(got), "DANGLING FROM OTHER ENGAGEMENT") {
+		t.Error("our poison should not have touched the other engagement's dangling block")
+	}
+	if !strings.Contains(string(got), "our clean injection") {
+		t.Error("our poison block should be present")
+	}
+
+	// Revert our engagement — should strip OUR block, leave the dangling one.
+	if err := p.Revert(context.Background(), receipt); err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+	got, _ = os.ReadFile(path)
+	if !strings.Contains(string(got), "DANGLING FROM OTHER ENGAGEMENT") {
+		t.Error("revert should not have touched the other engagement's dangling block")
+	}
+	if strings.Contains(string(got), "our clean injection") {
+		t.Error("revert should have removed our ENG-CLEAN block")
+	}
+}
