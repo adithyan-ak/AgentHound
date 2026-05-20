@@ -83,7 +83,7 @@ agenthound revert DC35-DEMO
 --auth-token    <bearer>              Optional auth token sent on both list and update
 ```
 
-The defaults match the v0.3 demo MCP-stub at `docker/demo/v0.3/mcp-stub/`. Real MCP servers vary in their admin surface — there is no standard MCP "tools/update" RPC. For production engagements:
+The defaults match the v0.3 demo MCP-stub at `docker/demo/mcp-stub/`. Real MCP servers vary in their admin surface — there is no standard MCP "tools/update" RPC. For production engagements:
 
 - Inspect the target's admin surface (HTTP, gRPC, file-based config reload).
 - If the target accepts a JSON body of shape `{"description": "..."}` against an HTTP endpoint, the existing module works — pass `--update-method` and `--update-path` to point at it.

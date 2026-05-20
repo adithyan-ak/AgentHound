@@ -1,118 +1,100 @@
 #!/usr/bin/env bash
-# AgentHound v0.2 demo seed.
+# AgentHound demo seed.
 #
-# Brings up the docker-compose lab, runs the collector against the lab
-# CIDR + the operator's MCP config, runs the LiteLLM looter, and pipes
-# all three ingest envelopes into the analysis server. After this
-# completes, the Findings panel in the UI surfaces the
-# cross_service_credential_chain finding tying the agent's env-var
-# credential to the LiteLLM-extracted upstream provider keys.
+# Brings up the demo lab (AI services + MCP discovery
+# target + operator), preloads Ollama with a "support-agent-v3" tag for
+# the modelfile-leak narrative beat, runs scan + discover + loot for
+# both LiteLLM and Ollama, and pipes all envelopes into agenthound-server.
+#
+# After this completes, the Findings panel surfaces:
+#   - cross_service_credential_chain (v0.2 carry-over)
+#   - the :EXPOSES edge from Open WebUI to its Ollama backend
+#   - one :AIModel per Ollama tag with PROVIDES_MODEL edges
+#   - one :MCPServer node discovered via protoscan
 #
 # Prerequisites:
 #   - Docker Compose installed
 #   - agenthound-server running on http://localhost:8080
-#     (start with `docker compose -f docker/docker-compose.yml up -d`)
 #   - bin/agenthound and bin/agenthound-server built (`make build`)
-#
-# Idempotent: re-running this script tears down the lab cleanly and
-# starts fresh. Use --keep to skip teardown.
-#
-# v0.1 LEGACY: previous versions of this script ingested pre-baked
-# testdata/demo/{config,mcp,a2a}_scan.json fixtures. v0.2 generates
-# real ingest envelopes from a live lab so the credential-chain demo
-# uses authentic data — see docs/plans/v0.2-implementation.md
-# Phase 7 acceptance criteria.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LAB_COMPOSE="$REPO_ROOT/docker/demo/docker-compose.yml"
-LAB_CIDR="172.20.0.0/24"
-LITELLM_HOST="172.20.0.20:4000"
+LAB_CIDR="172.30.0.0/24"
+LITELLM_HOST="172.30.0.20:4000"
+OLLAMA_HOST="172.30.0.10:11434"
 MASTER_KEY="sk-DEMO-CHAIN-KEY-NOT-REAL"
-OPERATOR_CONFIG="$REPO_ROOT/docker/demo/operator-config/claude_desktop_config.json"
-ENGAGEMENT_ID="V02-DEMO-LOCAL"
+ENGAGEMENT_ID="DEMO-LOCAL"
 
 CMD_AGENTHOUND="$REPO_ROOT/bin/agenthound"
 CMD_SERVER="$REPO_ROOT/bin/agenthound-server"
 
 if [[ ! -x "$CMD_AGENTHOUND" || ! -x "$CMD_SERVER" ]]; then
     echo "[seed-demo] error: bin/agenthound and bin/agenthound-server must exist."
-    echo "[seed-demo]        run: cd $REPO_ROOT && make build"
+    echo "                 run 'make build' first."
     exit 1
 fi
 
 KEEP=0
-if [[ "${1:-}" == "--keep" ]]; then
-    KEEP=1
-    shift
-fi
-
-mkdir -p "$REPO_ROOT/testdata/demo"
-
-echo "[seed-demo] tearing down any prior lab state..."
-docker compose -f "$LAB_COMPOSE" down -v --remove-orphans >/dev/null 2>&1 || true
-
-echo "[seed-demo] starting demo lab (Ollama + LiteLLM stub + operator)..."
-docker compose -f "$LAB_COMPOSE" up -d --build
-
-echo "[seed-demo] waiting for litellm stub to come up..."
-for i in $(seq 1 30); do
-    if docker compose -f "$LAB_COMPOSE" exec -T litellm-stub curl -fsS http://127.0.0.1:4000/health/liveliness >/dev/null 2>&1; then
-        echo "[seed-demo] litellm stub healthy."
-        break
-    fi
-    sleep 1
+for arg in "$@"; do
+    case "$arg" in
+        --keep) KEEP=1 ;;
+    esac
 done
 
-# 1. Network scan against the lab CIDR. Phase 2/3 fingerprinters fire
-#    on the open ports for both Ollama (11434) and LiteLLM (4000) and
-#    emit multi-label :OllamaInstance:AIService and
-#    :LiteLLMGateway:AIService nodes.
-SCAN_OUT="$REPO_ROOT/testdata/demo/scan-output.json"
-echo "[seed-demo] running network scan against $LAB_CIDR..."
-"$CMD_AGENTHOUND" scan "$LAB_CIDR" --output "$SCAN_OUT" --network-scan-concurrency 10 \
-    --timeout 5s
+if [[ "$KEEP" -ne 1 ]]; then
+    echo "[seed-demo] tearing down any prior lab"
+    docker compose -f "$LAB_COMPOSE" down --volumes --remove-orphans 2>/dev/null || true
+fi
 
-# 2. Config collector against the operator's MCP config. Emits the
-#    :Credential node with value_hash matching the master Credential
-#    the looter is about to emit — the load-bearing cross-collector
-#    merge.
-CONFIG_OUT="$REPO_ROOT/testdata/demo/config-output.json"
-echo "[seed-demo] running config collector against operator config..."
-"$CMD_AGENTHOUND" scan --config --path "$OPERATOR_CONFIG" --output "$CONFIG_OUT"
+echo "[seed-demo] starting lab"
+docker compose -f "$LAB_COMPOSE" up -d --build
 
-# 3. LiteLLM Looter against the stub gateway. Use --master-key sugar
-#    rather than --credential KEY=VALUE because that's the documented
-#    operator workflow.
-LOOT_OUT="$REPO_ROOT/testdata/demo/loot-output.json"
-echo "[seed-demo] running litellm looter against $LITELLM_HOST..."
-# AUTHORIZED prompt sentinel — first invocation prompts; subsequent
-# invocations skip. Pipe AUTHORIZED unconditionally so seed-demo.sh
-# is idempotent on a fresh machine.
+echo "[seed-demo] waiting for services to be healthy"
+sleep 8
+
+# Preload Ollama with the small `tinyllama` and tag a fine-tune-flavored
+# alias on top so the demo has both a "stock" model and a "fine-tune"
+# (different name → different value_hash). This is best-effort — if
+# `ollama pull` fails (network, etc.) the demo still runs against
+# whatever Ollama happens to have on disk.
+echo "[seed-demo] preloading Ollama with tinyllama + a fake fine-tune tag"
+docker exec agenthound-demo-v3-ollama ollama pull tinyllama || true
+docker exec agenthound-demo-v3-ollama sh -c '
+    cat > /tmp/Modelfile-finetune <<EOF
+FROM tinyllama
+SYSTEM """You are SupportBot for Acme Corp. Internal triage assistant only."""
+EOF
+    ollama create support-agent-v3 -f /tmp/Modelfile-finetune
+' || true
+
+OUT_DIR=$(mktemp -d)
+trap 'rm -rf "$OUT_DIR"' EXIT
+
+echo "[seed-demo] running agenthound scan against $LAB_CIDR"
+"$CMD_AGENTHOUND" scan "$LAB_CIDR" --output "$OUT_DIR/scan.json"
+
+echo "[seed-demo] running agenthound discover against $LAB_CIDR"
+"$CMD_AGENTHOUND" discover "$LAB_CIDR" --output "$OUT_DIR/discover.json"
+
+echo "[seed-demo] running agenthound loot --type litellm"
 echo "AUTHORIZED" | "$CMD_AGENTHOUND" loot "$LITELLM_HOST" \
     --type litellm \
     --master-key "$MASTER_KEY" \
     --engagement-id "$ENGAGEMENT_ID" \
-    --output "$LOOT_OUT"
+    --output "$OUT_DIR/loot-litellm.json"
 
-# 4. Ingest all three envelopes into the running analysis server.
-echo "[seed-demo] ingesting scan envelope..."
-"$CMD_SERVER" ingest "$SCAN_OUT"
-echo "[seed-demo] ingesting config envelope..."
-"$CMD_SERVER" ingest "$CONFIG_OUT"
-echo "[seed-demo] ingesting loot envelope..."
-"$CMD_SERVER" ingest "$LOOT_OUT"
+echo "[seed-demo] running agenthound loot --type ollama"
+echo "AUTHORIZED" | "$CMD_AGENTHOUND" loot "$OLLAMA_HOST" \
+    --type ollama \
+    --engagement-id "$ENGAGEMENT_ID" \
+    --output "$OUT_DIR/loot-ollama.json"
 
-echo
-echo "[seed-demo] done. Open http://localhost:8080 → Findings →"
-echo "[seed-demo]   look for 'litellm-credential-leak' in Critical Paths."
-echo
-echo "[seed-demo] credential-chain check (raw API):"
-echo "[seed-demo]   curl -s localhost:8080/api/v1/analysis/findings | \\"
-echo "[seed-demo]     jq '.[] | select(.processor==\"cross_service_credential_chain\")'"
-echo
+echo "[seed-demo] ingesting envelopes"
+for f in scan discover loot-litellm loot-ollama; do
+    "$CMD_SERVER" ingest "$OUT_DIR/$f.json"
+done
 
-if [[ "$KEEP" -eq 0 ]]; then
-    echo "[seed-demo] (lab containers still running; 'docker compose -f $LAB_COMPOSE down' to stop)"
-fi
+echo "[seed-demo] complete."
+echo "[seed-demo] open http://localhost:8080 to explore the graph."

@@ -1,37 +1,32 @@
-# AgentHound v0.2 demo lab.
+# AgentHound demo lab.
 #
-# Two AI services on a private subnet plus an "operator" container with
-# a Claude Desktop config that references LiteLLM via an env var. The
-# Config Collector + LiteLLM Looter together produce the credential-chain
-# finding — matching value_hash on the LITELLM_MASTER_KEY env var emitted
-# by the config side and the master Credential emitted by the looter.
+# Covers the full DC35 demo arc: scan → discover → loot → poison → revert.
+# Lightweight Python stubs serve the canonical responses each fingerprinter
+# and Looter expects; production fingerprinting against real instances is
+# the operator's path.
 #
-# Subnet 172.20.0.0/24:
-#   172.20.0.10 — ollama       (port 11434)
-#   172.20.0.20 — litellm-stub (port 4000) — see Dockerfile in same dir
-#   172.20.0.30 — operator     (mounted MCP config; not serving anything)
+# Subnet 172.30.0.0/24:
+#   172.30.0.10 — ollama         (port 11434)
+#   172.30.0.20 — litellm-stub   (port 4000)
+#   172.30.0.30 — operator        (mounted MCP config)
+#   172.30.0.40 — vllm-stub      (port 8000)
+#   172.30.0.50 — openwebui-stub  (port 3000, proxies to ollama)
+#   172.30.0.60 — jupyter-stub   (port 8888)
+#   172.30.0.70 — mcp-stub       (port 8080, poison/revert target)
+#   172.30.0.80 — a2a-stub       (port 8080, discovery target)
 #
-# Run end-to-end demo:
-#
+# Run:
 #   docker compose -f docker/demo/docker-compose.yml up -d
 #   ./scripts/seed-demo.sh
-#   open http://localhost:8080  # connects to the analysis server, not the lab
-#
-# v0.2 ships with a stub LiteLLM (a small Python FastAPI app) rather
-# than the real LiteLLM image because the real image needs a Postgres
-# backend and provider keys we'd have to hand-roll. The stub serves
-# /health/liveliness, /model/info, and /key/list with deterministic
-# payloads so the fingerprinter and looter both succeed without
-# external dependencies.
+#   open http://localhost:8080
 
-version: "3.9"
 
 networks:
   demo-lab:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.20.0.0/24
+        - subnet: 172.30.0.0/24
 
 services:
   ollama:
@@ -39,17 +34,9 @@ services:
     container_name: agenthound-demo-ollama
     networks:
       demo-lab:
-        ipv4_address: 172.20.0.10
-    # Bind on 0.0.0.0 inside the container's network namespace; the
-    # demo CIDR is private and the only way to reach this is through
-    # the agenthound scanner running against 172.20.0.0/24.
+        ipv4_address: 172.30.0.10
     environment:
       - OLLAMA_HOST=0.0.0.0:11434
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
 
   litellm-stub:
     build:
@@ -57,30 +44,61 @@ services:
     container_name: agenthound-demo-litellm
     networks:
       demo-lab:
-        ipv4_address: 172.20.0.20
+        ipv4_address: 172.30.0.20
     environment:
       - LITELLM_MASTER_KEY=sk-DEMO-CHAIN-KEY-NOT-REAL
-    # The stub binds its FastAPI app on :4000 inside the container; the
-    # scanner detects it via the LiteLLM fingerprinter rule.
-    healthcheck:
-      test: ["CMD", "curl", "-fsSL", "http://127.0.0.1:4000/health/liveliness"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
 
   operator:
     image: alpine:3.20
     container_name: agenthound-demo-operator
     networks:
       demo-lab:
-        ipv4_address: 172.20.0.30
-    # The operator container holds an MCP client config that
-    # references the LiteLLM master key by env var. The Config
-    # Collector reads this when seed-demo.sh runs (mounting the
-    # config into the host's filesystem), emitting a :Credential node
-    # whose value_hash matches the master Credential the LiteLLM
-    # Looter emits — the cross-collector merge that lights up the
-    # credential-chain finding.
+        ipv4_address: 172.30.0.30
     volumes:
       - ./operator-config:/operator/config:ro
     command: ["sh", "-c", "tail -f /dev/null"]
+
+  vllm-stub:
+    build:
+      context: ./vllm-stub
+    container_name: agenthound-demo-vllm
+    networks:
+      demo-lab:
+        ipv4_address: 172.30.0.40
+
+  openwebui-stub:
+    build:
+      context: ./openwebui-stub
+    container_name: agenthound-demo-openwebui
+    networks:
+      demo-lab:
+        ipv4_address: 172.30.0.50
+    environment:
+      # Stub will surface this as ollama.base_url in /api/config so the
+      # OpenWebUI fingerprinter emits the EXPOSES edge to the Ollama
+      # backend at 172.30.0.10.
+      - OLLAMA_BASE_URL=http://172.30.0.10:11434
+
+  jupyter-stub:
+    build:
+      context: ./jupyter-stub
+    container_name: agenthound-demo-jupyter
+    networks:
+      demo-lab:
+        ipv4_address: 172.30.0.60
+
+  mcp-stub:
+    build:
+      context: ./mcp-stub
+    container_name: agenthound-demo-mcp
+    networks:
+      demo-lab:
+        ipv4_address: 172.30.0.70
+
+  a2a-stub:
+    build:
+      context: ./a2a-stub
+    container_name: agenthound-demo-a2a
+    networks:
+      demo-lab:
+        ipv4_address: 172.30.0.80

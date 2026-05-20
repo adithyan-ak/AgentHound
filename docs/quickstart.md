@@ -218,10 +218,10 @@ The v0.3 demo lab spins up a full vulnerable environment (Ollama, LiteLLM, vLLM,
 
 ```bash
 # Start the lab
-docker compose -f docker/demo/v0.3/docker-compose.yml up -d --build
+docker compose -f docker/demo/docker-compose.yml up -d --build
 
 # Run the full demo arc (scan + discover + loot + ingest)
-./scripts/seed-demo-v0.3.sh
+./scripts/seed-demo.sh
 
 # Open the UI
 open http://localhost:8080
@@ -232,7 +232,7 @@ The seed script runs the complete chain: network scan, protocol discovery, LiteL
 Tear down when done:
 
 ```bash
-docker compose -f docker/demo/v0.3/docker-compose.yml down --volumes
+docker compose -f docker/demo/docker-compose.yml down --volumes
 ```
 
 ## Environment Variables

@@ -85,8 +85,8 @@ The "broaden the scan surface, harden the operations" milestone. v0.2 turned the
 
 ### Demo lab
 
-- New `docker/demo/v0.3/docker-compose.yml` adds vLLM stub, Open WebUI stub (proxying to the v0.2 Ollama service), Jupyter stub, and an MCP discovery target on subnet 172.30.0.0/24 (distinct from v0.2's 172.20.0.0/24 so both labs coexist).
-- `scripts/seed-demo-v0.3.sh` drives the full v0.3 demo arc: scan + discover + LiteLLM loot + Ollama loot, with a preloaded `support-agent-v3` fine-tune for the modelfile-leak narrative beat.
+- New `docker/demo/docker-compose.yml` adds vLLM stub, Open WebUI stub (proxying to the v0.2 Ollama service), Jupyter stub, and an MCP discovery target on subnet 172.30.0.0/24 (distinct from v0.2's 172.20.0.0/24 so both labs coexist).
+- `scripts/seed-demo.sh` drives the full v0.3 demo arc: scan + discover + LiteLLM loot + Ollama loot, with a preloaded `support-agent-v3` fine-tune for the modelfile-leak narrative beat.
 - DEF CON 35 main-stage CFP abstract draft in `docs/cfp/defcon-35-abstract.md`.
 
 ### Hardening
