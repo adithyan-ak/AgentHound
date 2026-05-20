@@ -58,7 +58,7 @@ func TestImplant_AddsServerAndRevertRemoves(t *testing.T) {
 	if err := json.Unmarshal(got, &parsed); err != nil {
 		t.Fatalf("decode after implant: %v", err)
 	}
-	servers := parsed["mcpServers"].(map[string]any)
+	servers, _ := parsed["mcpServers"].(map[string]any)
 	if _, ok := servers["legit-postgres"]; !ok {
 		t.Error("legit-postgres entry was clobbered")
 	}
@@ -75,7 +75,7 @@ func TestImplant_AddsServerAndRevertRemoves(t *testing.T) {
 	if err := json.Unmarshal(got2, &afterRevert); err != nil {
 		t.Fatalf("decode after revert: %v", err)
 	}
-	servers2 := afterRevert["mcpServers"].(map[string]any)
+	servers2, _ := afterRevert["mcpServers"].(map[string]any)
 	if _, ok := servers2[implantName]; ok {
 		t.Errorf("implant entry %q still present after revert", implantName)
 	}
@@ -202,7 +202,7 @@ func TestImplant_NewFileWhenAbsent(t *testing.T) {
 	if err := json.Unmarshal(got, &parsed); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	servers := parsed["mcpServers"].(map[string]any)
+	servers, _ := parsed["mcpServers"].(map[string]any)
 	if len(servers) != 0 {
 		t.Errorf("revert left non-empty servers: %v", servers)
 	}

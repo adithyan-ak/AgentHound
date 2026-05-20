@@ -7,23 +7,14 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/module"
 )
 
-// fingerprinterInstance is the registered module. We lazy-init it via
-// New(); init-time failure logs a warning and registers a stub that
-// always returns Matched=false. That keeps a malformed rule YAML from
-// making the binary fail to start — operators see the warning and the
-// scanner continues with the remaining fingerprinters.
-var fingerprinterInstance *Fingerprinter
-
 func init() {
 	f, err := New()
 	if err != nil {
 		slog.Warn("ollama fingerprinter init failed; service will not be detected",
 			"error", err)
-		// Register a no-op so callers find *something* by target.
 		module.Register(&disabledFingerprinter{})
 		return
 	}
-	fingerprinterInstance = f
 	module.Register(f)
 }
 
