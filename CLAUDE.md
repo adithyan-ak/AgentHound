@@ -13,6 +13,8 @@ go test ./... -race         # All tests pass with race detector
 
 CI also runs: `golangci-lint` (errcheck + gofmt), `govulncheck`, `go-licenses check`, `scripts/deps-check.sh`, `scripts/size-check.sh`.
 
+IMPORTANT: Before any release tag, run `make prerelease` — it gates on all 8 checks (gofmt, vet, build, test -race, deps-check, size-check, UI build, cross-compile). Never tag without a passing `make prerelease`.
+
 ## Key Constraints
 
 - **Deps boundary:** Collector binary MUST NOT link `chi`, `pgx`, `neo4j-go-driver`, or any `server/internal/` code. Enforced by `scripts/deps-check.sh`. Every new module needs its package added to `scripts/collector-allowlist.txt`.
