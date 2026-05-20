@@ -1,4 +1,4 @@
-.PHONY: build build-collector build-server build-all test lint docker docker-collector docker-server docker-standard up down clean seed demo release ui-build ui-dev ui-test standard standard-run standard-stop deps-check size-check
+.PHONY: build build-collector build-server build-all test lint docker docker-collector docker-server docker-standard up down clean seed demo release ui-build ui-dev ui-test standard standard-run standard-stop deps-check size-check prerelease
 
 ui-build:
 	cd server/ui && npm ci --ignore-scripts && npm run build
@@ -80,3 +80,27 @@ deps-check:
 
 size-check:
 	@bash scripts/size-check.sh
+
+# Pre-release gate — run BEFORE tagging a release. Covers everything CI
+# checks across all job types (push + PR). Fails fast on first error.
+# Usage: make prerelease
+prerelease:
+	@echo "=== [1/8] gofmt ==="
+	@test -z "$$(gofmt -l .)" || (echo "FAIL: gofmt found unformatted files:" && gofmt -l . && exit 1)
+	@echo "=== [2/8] go vet ==="
+	go vet ./...
+	@echo "=== [3/8] go build ==="
+	go build ./...
+	@echo "=== [4/8] go test -race -short ==="
+	go test ./... -race -short -count=1
+	@echo "=== [5/8] deps-check ==="
+	@bash scripts/deps-check.sh
+	@echo "=== [6/8] size-check ==="
+	@bash scripts/size-check.sh
+	@echo "=== [7/8] UI build ==="
+	cd server/ui && npm run build
+	@echo "=== [8/8] cross-compile (linux/amd64 + darwin/arm64) ==="
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o /dev/null ./collector/cmd/agenthound
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o /dev/null ./collector/cmd/agenthound
+	@echo ""
+	@echo "=== ALL GATES PASS — safe to tag ==="
