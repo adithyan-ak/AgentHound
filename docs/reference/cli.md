@@ -359,9 +359,23 @@ agenthound rules test
 
 ---
 
-### `agenthound extract` (STUB)
+### `agenthound extract`
 
-Reserved verb for v0.5: extract source data from derived artifacts. Currently prints a redirect to `docs/future-modules.md` and exits 1.
+Extract training signals from model artifacts (v0.5). Parses GGUF weight files and detects statistical outlier embeddings likely added during fine-tuning.
+
+```bash
+agenthound extract <source-node-id> --type embedding-invert \
+    --artifact /tmp/loot/model.bin --commit --engagement-id DC35-DEMO
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--type` | (required) | Extractor kind (`embedding-invert`) |
+| `--artifact` | (required) | Path to artifact file (from `--include-weights`) |
+| `--commit` | `false` | Emit ingest data (default: dry-run summary) |
+| `--engagement-id` | (required) | Engagement correlation key |
+| `--confidence-threshold` | `3.0` | Z-score threshold for outlier detection |
+| `--max-signals` | `1000` | Cap on emitted ExtractedTrainingSignal nodes |
 
 ---
 

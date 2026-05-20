@@ -120,7 +120,6 @@ Negative / accepted:
 
 ## References
 
-- `docs/security.md` — threat model and operational posture.
-- `docs/future-modules.md` — deferred surface and planning notes.
+- `docs/operator/security.md` — threat model and operational posture.
 - `sdk/ingest/doc.go` — SDK stability policy.
 - `scripts/deps-check.sh` — enforcement of the dep boundary.
