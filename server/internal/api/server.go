@@ -54,7 +54,10 @@ func NewServer(deps ServerDeps) *Server {
 	r := chi.NewRouter()
 
 	r.Use(chimw.RequestID)
-	r.Use(chimw.RealIP)
+	// RealIP intentionally omitted: it rewrites RemoteAddr from spoofable
+	// X-Forwarded-For / X-Real-IP headers (GHSA-3fxj-6jh8-hvhx). The server
+	// is localhost-only and nothing reads RemoteAddr, so it adds spoofing
+	// surface for zero benefit.
 	r.Use(apimw.Logger)
 	r.Use(chimw.Recoverer)
 	r.Use(apimw.CORS(deps.CORSOrigins))
