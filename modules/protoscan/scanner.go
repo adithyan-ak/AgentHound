@@ -40,6 +40,7 @@ import (
 
 	"github.com/adithyan-ak/agenthound/modules/networkscan"
 	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
@@ -341,14 +342,15 @@ func EmitDiscoveryNodes(targets []action.Target) ingest.GraphData {
 			if cardURL == "" {
 				cardURL = t.Meta["url"]
 			}
-			id := ingest.ComputeNodeID("A2AAgent", cardURL)
+			idInput := common.NormalizeA2ABaseURL(cardURL)
+			id := ingest.ComputeNodeID("A2AAgent", idInput)
 			out.Nodes = append(out.Nodes, ingest.Node{
 				ID:    id,
 				Kinds: []string{"A2AAgent"},
 				Properties: map[string]any{
 					"objectid":       id,
 					"agent_card_url": cardURL,
-					"endpoint":       t.Meta["url"],
+					"endpoint":       idInput,
 					"discovered_via": "protoscan",
 					"protocol":       "a2a",
 				},

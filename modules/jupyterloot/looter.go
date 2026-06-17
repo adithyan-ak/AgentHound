@@ -32,8 +32,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
@@ -49,12 +47,8 @@ const (
 type Looter struct{}
 
 func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOptions) (*action.LootResult, error) {
-	host, port := splitHostPort(t.Address, DefaultPort)
-	scheme := "http"
-	if s, ok := t.Meta["scheme"]; ok && s != "" {
-		scheme = s
-	}
-	baseURL := fmt.Sprintf("%s://%s:%d", scheme, host, port)
+	_, host, port := action.EndpointParts(t, DefaultPort, "http")
+	baseURL := action.EndpointBaseURL(t, DefaultPort, "http")
 	jupyterID := ingest.ComputeNodeID("JupyterServer", baseURL)
 
 	timeout := opts.Timeout
@@ -127,6 +121,23 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 					"sensitivity": "high",
 				},
 			})
+			res.IngestData.Graph.Edges = append(res.IngestData.Graph.Edges,
+				ingest.Edge{
+					Source:     jupyterID,
+					Target:     resID,
+					Kind:       "PROVIDES_RESOURCE",
+					SourceKind: "JupyterServer",
+					TargetKind: "MCPResource",
+					Properties: map[string]any{
+						"confidence":  1.0,
+						"risk_weight": 0.2,
+						"evidence": map[string]any{
+							"endpoint":      baseURL,
+							"source":        "api/contents",
+							"engagement_id": opts.EngagementID,
+						},
+					},
+				})
 			res.Summary.CredentialsFound++
 		}
 	}
@@ -210,26 +221,6 @@ func getJSON(ctx context.Context, client *http.Client, url string) ([]byte, erro
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
 	return body, nil
-}
-
-func splitHostPort(addr string, defaultPort int) (string, int) {
-	addr = strings.TrimSpace(addr)
-	if strings.Contains(addr, "://") {
-		if u, err := url.Parse(addr); err == nil && u.Host != "" {
-			return splitHostPort(u.Host, defaultPort)
-		}
-	}
-	if i := strings.LastIndexByte(addr, ':'); i > 0 {
-		host := addr[:i]
-		var p int
-		_, _ = fmt.Sscanf(addr[i+1:], "%d", &p)
-		if p > 0 {
-			host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
-			return host, p
-		}
-	}
-	host := strings.TrimPrefix(strings.TrimSuffix(addr, "]"), "[")
-	return host, defaultPort
 }
 
 var _ action.Looter = (*Looter)(nil)

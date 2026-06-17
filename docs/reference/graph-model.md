@@ -72,7 +72,7 @@ This enables queries like `MATCH (n:AIService)` to find all AI infrastructure re
 |------|--------|--------|-----------|---------|
 | `TRUSTS_SERVER` | AgentInstance | MCPServer | Config | Agent trusts this server to provide tools |
 | `PROVIDES_TOOL` | MCPServer | MCPTool | MCP | Server exposes this tool |
-| `PROVIDES_RESOURCE` | MCPServer | MCPResource | MCP | Server exposes this resource |
+| `PROVIDES_RESOURCE` | MCPServer / JupyterServer | MCPResource | MCP / Jupyter Looter | Server exposes this resource |
 | `PROVIDES_PROMPT` | MCPServer | MCPPrompt | MCP | Server exposes this prompt template |
 | `ADVERTISES_SKILL` | A2AAgent | A2ASkill | A2A | Agent advertises this skill |
 | `DELEGATES_TO` | A2AAgent | A2AAgent | A2A | Agent delegates tasks to another agent |
@@ -138,7 +138,7 @@ All node IDs are deterministic, content-based SHA-256 hashes. This ensures ident
 | `MCPTool` | `SHA-256("MCPTool:" + server_id + ":" + tool_name)` |
 | `MCPResource` | `SHA-256("MCPResource:" + server_id + ":" + resource_uri)` |
 | `MCPPrompt` | `SHA-256("MCPPrompt:" + server_id + ":" + prompt_name)` |
-| `A2AAgent` | `SHA-256("A2AAgent:" + agent_card_url)` |
+| `A2AAgent` | `SHA-256("A2AAgent:" + normalized_agent_base_url)` |
 | `A2ASkill` | `SHA-256("A2ASkill:" + agent_id + ":" + skill_id)` |
 | `AgentInstance` | `SHA-256("AgentInstance:" + config_file_id + ":" + client_name)` |
 | `ConfigFile` | `SHA-256("ConfigFile:" + absolute_path)` |

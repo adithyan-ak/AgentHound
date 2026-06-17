@@ -299,7 +299,7 @@ func readQ8_0Embeddings(r io.Reader, vocabSize, embedDim int) ([][]float32, erro
 		for b := 0; b < blocksPerRow; b++ {
 			blockStart := b * blockBytes
 			scaleBits := binary.LittleEndian.Uint16(buf[blockStart : blockStart+2])
-			scale := float32(math.Float32frombits(uint32(scaleBits) << 16))
+			scale := float16ToFloat32(scaleBits)
 			for j := 0; j < blockSize; j++ {
 				idx := b*blockSize + j
 				if idx >= embedDim {
@@ -312,4 +312,30 @@ func readQ8_0Embeddings(r io.Reader, vocabSize, embedDim int) ([][]float32, erro
 		out[i] = row
 	}
 	return out, nil
+}
+
+func float16ToFloat32(h uint16) float32 {
+	sign := uint32(h&0x8000) << 16
+	exp := uint32((h >> 10) & 0x1f)
+	frac := uint32(h & 0x03ff)
+
+	switch exp {
+	case 0:
+		if frac == 0 {
+			return math.Float32frombits(sign)
+		}
+		// Normalize subnormal half precision values.
+		exp32 := int32(127 - 15 + 1)
+		for frac&0x0400 == 0 {
+			frac <<= 1
+			exp32--
+		}
+		frac &= 0x03ff
+		return math.Float32frombits(sign | (uint32(exp32) << 23) | (frac << 13))
+	case 0x1f:
+		return math.Float32frombits(sign | 0x7f800000 | (frac << 13))
+	}
+
+	exp32 := exp + (127 - 15)
+	return math.Float32frombits(sign | (exp32 << 23) | (frac << 13))
 }

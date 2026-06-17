@@ -210,6 +210,93 @@ func TestParseConfigForSpecsVSCode(t *testing.T) {
 	}
 }
 
+func TestParseConfigForSpecsVSCodeDottedKey(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "settings.json")
+	configJSON := `{
+		"mcp.servers": {
+			"puppeteer": {
+				"command": "npx",
+				"args": ["-y", "@modelcontextprotocol/server-puppeteer"]
+			}
+		}
+	}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	specs, err := parseConfigForSpecs(configPath)
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("expected 1 spec, got %d", len(specs))
+	}
+	if specs[0].Name != "puppeteer" || specs[0].Command != "npx" {
+		t.Fatalf("unexpected spec: %+v", specs[0])
+	}
+}
+
+func TestParseConfigForSpecsVSCodeNestedMCPServers(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "settings.json")
+	configJSON := `{
+		"mcp": {
+			"servers": {
+				"sqlite": {
+					"command": "uvx",
+					"args": ["mcp-server-sqlite"]
+				}
+			}
+		}
+	}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	specs, err := parseConfigForSpecs(configPath)
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("expected 1 spec, got %d", len(specs))
+	}
+	if specs[0].Name != "sqlite" || specs[0].Command != "uvx" {
+		t.Fatalf("unexpected spec: %+v", specs[0])
+	}
+}
+
+func TestParseConfigForSpecsContinueYAML(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	configYAML := `mcpServers:
+  - name: filesystem
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem"]
+    env:
+      ROOT: /tmp
+  - name: remote
+    url: https://example.com/mcp
+    headers:
+      Authorization: Bearer token
+`
+	if err := os.WriteFile(configPath, []byte(configYAML), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	specs, err := parseConfigForSpecs(configPath)
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	if len(specs) != 2 {
+		t.Fatalf("expected 2 specs, got %d", len(specs))
+	}
+	if specs[0].Name != "filesystem" || specs[0].Command != "npx" || specs[0].Env["ROOT"] != "/tmp" {
+		t.Fatalf("unexpected first spec: %+v", specs[0])
+	}
+	if specs[1].Name != "remote" || specs[1].URL != "https://example.com/mcp" ||
+		specs[1].Headers["Authorization"] != "Bearer token" {
+		t.Fatalf("unexpected second spec: %+v", specs[1])
+	}
+}
+
 func TestParseConfigForSpecsZed(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "settings.json")

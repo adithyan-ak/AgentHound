@@ -164,23 +164,25 @@ func runPoison(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("poison: %w", err)
 	}
 
-	// Persist receipt — even for dry-run. A dry-run receipt's revert is
-	// a no-op, but writing it makes the audit trail complete and lets
-	// the operator inspect what would have been written.
 	state := stateful.Stateful()
-	path, werr := state.WriteReceipt(engagementID, receipt)
-	if werr != nil {
-		// Receipt write failed — if --commit was set we already issued
-		// the mutating write, so we MUST surface this loudly. The
-		// operator can recover by reading the original from logs and
-		// constructing a manual revert.
-		slog.Error("poison: receipt persistence failed",
-			"module", mod.ID(),
-			"engagement_id", engagementID,
-			"target_id", targetID,
-			"committed", commit,
-			"error", werr)
-		return fmt.Errorf("poison applied but receipt persistence failed: %w", werr)
+	path := receiptPath(state, engagementID)
+	if commit {
+		if _, statErr := os.Stat(path); statErr != nil {
+			return fmt.Errorf("poison applied but pre-mutation receipt is missing: %w", statErr)
+		}
+	} else {
+		// Persist dry-run receipts here. Committed mutations persist inside
+		// the module before mutation so the CLI must not append a duplicate.
+		var werr error
+		path, werr = state.WriteReceipt(engagementID, receipt)
+		if werr != nil {
+			slog.Error("poison: dry-run receipt persistence failed",
+				"module", mod.ID(),
+				"engagement_id", engagementID,
+				"target_id", targetID,
+				"error", werr)
+			return fmt.Errorf("poison dry-run receipt persistence failed: %w", werr)
+		}
 	}
 
 	if commit {
@@ -199,6 +201,10 @@ func runPoison(cmd *cobra.Command, args []string) error {
 
 	_ = receipt // silence unused warning when commit=false short-circuits before any reference
 	return nil
+}
+
+func receiptPath(state module.StatefulModule, engagementID string) string {
+	return filepath.Join(state.StateDir(), engagementID+".json")
 }
 
 // requirePoisonAcknowledged is the poison-specific authorization gate.

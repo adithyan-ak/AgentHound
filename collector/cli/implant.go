@@ -143,15 +143,22 @@ func runImplant(cmd *cobra.Command, args []string) error {
 	}
 
 	state := stateful.Stateful()
-	path, werr := state.WriteReceipt(engagementID, receipt)
-	if werr != nil {
-		slog.Error("implant: receipt persistence failed",
-			"module", mod.ID(),
-			"engagement_id", engagementID,
-			"target_id", targetID,
-			"committed", commit,
-			"error", werr)
-		return fmt.Errorf("implant applied but receipt persistence failed: %w", werr)
+	path := receiptPath(state, engagementID)
+	if commit {
+		if _, statErr := os.Stat(path); statErr != nil {
+			return fmt.Errorf("implant applied but pre-mutation receipt is missing: %w", statErr)
+		}
+	} else {
+		var werr error
+		path, werr = state.WriteReceipt(engagementID, receipt)
+		if werr != nil {
+			slog.Error("implant: dry-run receipt persistence failed",
+				"module", mod.ID(),
+				"engagement_id", engagementID,
+				"target_id", targetID,
+				"error", werr)
+			return fmt.Errorf("implant dry-run receipt persistence failed: %w", werr)
+		}
 	}
 
 	if commit {

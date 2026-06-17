@@ -44,6 +44,9 @@ func TestLoot_JupyterHappy(t *testing.T) {
 	if got := len(res.IngestData.Graph.Nodes); got != 3 {
 		t.Errorf("nodes: got %d, want 3 (1 JupyterServer + 2 resources)", got)
 	}
+	if got := len(res.IngestData.Graph.Edges); got != 2 {
+		t.Errorf("edges: got %d, want 2 PROVIDES_RESOURCE edges", got)
+	}
 	if res.IngestData.Graph.Nodes[0].Kinds[0] != "JupyterServer" {
 		t.Errorf("first node kind = %v, want JupyterServer", res.IngestData.Graph.Nodes[0].Kinds)
 	}
@@ -53,6 +56,14 @@ func TestLoot_JupyterHappy(t *testing.T) {
 		}
 		if uri, _ := n.Properties["uri"].(string); !strings.HasPrefix(uri, "jupyter://") {
 			t.Errorf("uri = %q, want jupyter:// prefix", uri)
+		}
+	}
+	for _, e := range res.IngestData.Graph.Edges {
+		if e.Kind != "PROVIDES_RESOURCE" {
+			t.Errorf("edge kind = %q, want PROVIDES_RESOURCE", e.Kind)
+		}
+		if e.SourceKind != "JupyterServer" || e.TargetKind != "MCPResource" {
+			t.Errorf("edge endpoints = %s -> %s, want JupyterServer -> MCPResource", e.SourceKind, e.TargetKind)
 		}
 	}
 }
