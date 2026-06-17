@@ -80,9 +80,11 @@ Confidence: 1.0, risk_weight: 0.1.
 
 **Computes:** `MCPTool -[SHADOWS]-> MCPTool` (cross-server)
 
-Detects tool shadowing: a tool on one server references another server's tool by name in its description, or has `has_cross_references=true`.
+Detects tool shadowing: a tool on one server names another server's tool in its description (`toLower(t1.description) CONTAINS toLower(t2.name)`), which lets it impersonate or override that tool.
 
-Pattern requires `s1 <> s2` and `t1 <> t2`. Confidence scales with injection patterns: 0.9 when `has_injection_patterns=true`, 0.6 otherwise. Risk weight: 0.4.
+Pattern requires `s1 <> s2` and `t1 <> t2`. The match is intentionally target-specific — `t1`'s description must reference `t2` by name. It does **not** branch on the `has_cross_references` node flag: that flag is target-blind (true if `t1` references *any* sibling tool, see `modules/mcp/signals.go`), so OR-ing it in made one flagged tool shadow every tool on every other server (a cartesian fan-out of false positives). `has_cross_references` still feeds tool risk scoring as a node property (`server/internal/analysis/riskscore/tool.go`).
+
+Confidence scales with injection patterns: 0.9 when `has_injection_patterns=true`, 0.6 otherwise. Risk weight: 0.4.
 
 ## 4. poisoned_description
 

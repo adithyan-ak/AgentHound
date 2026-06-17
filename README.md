@@ -321,7 +321,7 @@ make demo
 bash scripts/seed-demo.sh
 ```
 
-Three pre-built scan files cover: critical attack paths, data exfiltration routes, cross-protocol pivots, tool poisoning, credential chains, unpinned packages, unsigned A2A agents, and instruction file poisoning.
+This stands up a multi-host Docker lab (MCP server, A2A agent, LiteLLM gateway, Ollama, vLLM, Open WebUI, Jupyter) and runs a live `scan` → `discover` → `loot` against it, ingesting the results into the server. The seeded graph covers: critical attack paths, data exfiltration routes, cross-protocol pivots, tool poisoning, credential chains, unpinned packages, unsigned A2A agents, and instruction file poisoning.
 
 ---
 
