@@ -26,6 +26,7 @@ MERGE (ext)-[e:CAN_REACH]->(r)
 SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true,
     e.cross_protocol = true, e.source_collector = 'a2a',
     e.via_mcp_server = s.name, e.via_mcp_tool = t.name,
+    e.via_host = h.hostname,
     e.confidence = 0.5, e.risk_weight = 0.1
 RETURN count(*) AS written`
 
