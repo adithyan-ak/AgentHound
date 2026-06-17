@@ -7,6 +7,9 @@ import (
 	"net/url"
 	"strconv"
 	"testing"
+
+	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
 const initializeOK = `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","serverInfo":{"name":"demo-mcp","version":"0.0.1"},"capabilities":{}}}`
@@ -142,6 +145,29 @@ func TestEmitDiscoveryNodes_MCP(t *testing.T) {
 	}
 	if got, _ := n.Properties["discovered_via"].(string); got != "protoscan" {
 		t.Errorf("discovered_via = %q, want protoscan", got)
+	}
+}
+
+func TestEmitDiscoveryNodes_A2AUsesBaseURLID(t *testing.T) {
+	targets := []action.Target{{
+		Kind:    "host",
+		Address: "agent.example.com:443",
+		Meta: map[string]string{
+			"protocol":       "a2a",
+			"url":            "https://agent.example.com",
+			"agent_card_url": "https://agent.example.com/.well-known/agent-card.json",
+		},
+	}}
+	g := EmitDiscoveryNodes(targets)
+	if len(g.Nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(g.Nodes))
+	}
+	want := ingest.ComputeNodeID("A2AAgent", "https://agent.example.com")
+	if g.Nodes[0].ID != want {
+		t.Fatalf("A2A ID = %s, want %s", g.Nodes[0].ID, want)
+	}
+	if got, _ := g.Nodes[0].Properties["endpoint"].(string); got != "https://agent.example.com" {
+		t.Errorf("endpoint = %q, want normalized base URL", got)
 	}
 }
 

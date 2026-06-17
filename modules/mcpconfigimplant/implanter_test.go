@@ -141,26 +141,28 @@ func TestImplant_ServersKeyOverride(t *testing.T) {
 	}
 }
 
-func TestImplant_RefusesPriorEntryRevert(t *testing.T) {
-	// Operator implants on top of an existing entry of the same name.
-	// Revert must refuse rather than delete the legitimate prior entry.
+func TestImplant_RejectsExistingServerName(t *testing.T) {
+	// The implanter must not overwrite an existing entry because the
+	// receipt cannot restore arbitrary prior JSON safely.
 	i := newImplanter(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mcp.json")
-	if err := os.WriteFile(path, []byte(`{"mcpServers":{"agenthound-implant-ENG-X":{"command":"legit"}}}`), 0o600); err != nil {
+	original := `{"mcpServers":{"agenthound-implant-ENG-X":{"command":"legit"}}}`
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	receipt, err := i.Implant(context.Background(), action.Target{},
+	_, err := i.Implant(context.Background(), action.Target{},
 		action.ImplantPayload{
 			InjectionContent: evilEntry,
 			EngagementID:     "ENG-X",
 			Extras:           map[string]any{"file": path},
 		})
-	if err != nil {
-		t.Fatalf("Implant: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected existing-server error, got %v", err)
 	}
-	if err := i.Revert(context.Background(), receipt); err == nil {
-		t.Error("expected Revert to refuse when prior_entry_was_present=true")
+	got, _ := os.ReadFile(path)
+	if string(got) != original {
+		t.Errorf("collision rejection mutated file: %s", string(got))
 	}
 }
 

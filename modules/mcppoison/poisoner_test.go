@@ -202,6 +202,13 @@ func TestPoison_RejectsBadMode(t *testing.T) {
 	}
 }
 
+func TestTargetBaseURLPreservesURLAddress(t *testing.T) {
+	got := targetBaseURL(action.Target{Address: "https://mcp.example.com"})
+	if got != "https://mcp.example.com" {
+		t.Fatalf("targetBaseURL = %q, want https://mcp.example.com", got)
+	}
+}
+
 func TestPoison_TargetNotFound(t *testing.T) {
 	srv, _ := mcpPoisonStub(t)
 	defer srv.Close()

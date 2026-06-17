@@ -85,11 +85,7 @@ func main() {
 				values[j] = int8(100 + j%28) // magnitude per element: 10.0-12.7
 			}
 		}
-		// Encode f16 scale: we store the upper 16 bits of the f32
-		// representation (this is the convention used by readQ8_0Embeddings)
-		scaleBits := math.Float32bits(scale)
-		scaleF16 := uint16(scaleBits >> 16)
-		binary.Write(f, binary.LittleEndian, scaleF16)
+		binary.Write(f, binary.LittleEndian, float32ToFloat16(scale))
 		binary.Write(f, binary.LittleEndian, values)
 	}
 }
@@ -97,4 +93,25 @@ func main() {
 func writeString(f *os.File, s string) {
 	binary.Write(f, binary.LittleEndian, uint64(len(s)))
 	f.Write([]byte(s))
+}
+
+func float32ToFloat16(f float32) uint16 {
+	bits := math.Float32bits(f)
+	sign := uint16((bits >> 16) & 0x8000)
+	exp := int32((bits>>23)&0xff) - 127 + 15
+	frac := bits & 0x7fffff
+
+	switch {
+	case exp <= 0:
+		if exp < -10 {
+			return sign
+		}
+		frac |= 0x800000
+		shift := uint32(14 - exp)
+		return sign | uint16(frac>>shift)
+	case exp >= 0x1f:
+		return sign | 0x7c00
+	default:
+		return sign | uint16(exp<<10) | uint16(frac>>13)
+	}
 }

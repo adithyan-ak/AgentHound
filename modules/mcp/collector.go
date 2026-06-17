@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
+	"gopkg.in/yaml.v3"
 )
 
 type MCPCollector struct {
@@ -207,6 +209,10 @@ func parseConfigForSpecs(path string) ([]ServerSpec, error) {
 		return nil, err
 	}
 
+	if ext := filepath.Ext(path); ext == ".yaml" || ext == ".yml" {
+		return parseContinueYAMLForSpecs(path, data)
+	}
+
 	var raw map[string]any
 	if err := json.Unmarshal(common.StripJSONComments(data), &raw); err != nil {
 		return nil, fmt.Errorf("invalid JSON in %s: %w", path, err)
@@ -218,24 +224,15 @@ func parseConfigForSpecs(path string) ([]ServerSpec, error) {
 		if !ok {
 			continue
 		}
-		servers, ok := serversRaw.(map[string]any)
-		if !ok {
-			continue
-		}
-		for name, entry := range servers {
-			obj, ok := entry.(map[string]any)
-			if !ok {
-				continue
-			}
+		specs = append(specs, specsFromServerMap(serversRaw)...)
+	}
 
-			if disabled, ok := obj["disabled"].(bool); ok && disabled {
-				continue
-			}
-
-			spec := specFromServerObj(name, obj)
-			if spec != nil {
-				specs = append(specs, *spec)
-			}
+	if serversRaw, ok := raw["mcp.servers"]; ok {
+		specs = append(specs, specsFromServerMap(serversRaw)...)
+	}
+	if mcpRaw, ok := raw["mcp"].(map[string]any); ok {
+		if serversRaw, ok := mcpRaw["servers"]; ok {
+			specs = append(specs, specsFromServerMap(serversRaw)...)
 		}
 	}
 
@@ -264,6 +261,64 @@ func parseConfigForSpecs(path string) ([]ServerSpec, error) {
 		}
 	}
 
+	return specs, nil
+}
+
+func specsFromServerMap(raw any) []ServerSpec {
+	servers, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	var specs []ServerSpec
+	for name, entry := range servers {
+		obj, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		if disabled, ok := obj["disabled"].(bool); ok && disabled {
+			continue
+		}
+		spec := specFromServerObj(name, obj)
+		if spec != nil {
+			specs = append(specs, *spec)
+		}
+	}
+	return specs
+}
+
+func parseContinueYAMLForSpecs(path string, data []byte) ([]ServerSpec, error) {
+	var cfg struct {
+		MCPServers []struct {
+			Name    string            `yaml:"name"`
+			Command string            `yaml:"command"`
+			Args    []string          `yaml:"args"`
+			Env     map[string]string `yaml:"env"`
+			URL     string            `yaml:"url"`
+			Headers map[string]string `yaml:"headers"`
+		} `yaml:"mcpServers"`
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("invalid YAML in %s: %w", path, err)
+	}
+	var specs []ServerSpec
+	for _, s := range cfg.MCPServers {
+		spec := ServerSpec{
+			Name:    s.Name,
+			Args:    append([]string(nil), s.Args...),
+			Env:     s.Env,
+			Headers: s.Headers,
+		}
+		if s.URL != "" {
+			spec.Transport = "http"
+			spec.URL = s.URL
+		} else if s.Command != "" {
+			spec.Transport = "stdio"
+			spec.Command = s.Command
+		} else {
+			continue
+		}
+		specs = append(specs, spec)
+	}
 	return specs, nil
 }
 
@@ -325,7 +380,11 @@ func discoverAllConfigs() ([]ServerSpec, error) {
 		homeDir + "/.config/cursor/mcp.json",
 		homeDir + "/.codeium/windsurf/mcp_config.json",
 		homeDir + "/.cline/mcp_settings.json",
+		homeDir + "/.continue/config.yaml",
+		homeDir + "/.continue/config.yml",
 		homeDir + "/.continue/config.json",
+		homeDir + "/Library/Application Support/Code/User/settings.json",
+		homeDir + "/Library/Application Support/Code - Insiders/User/settings.json",
 	}
 
 	xdg := os.Getenv("XDG_CONFIG_HOME")

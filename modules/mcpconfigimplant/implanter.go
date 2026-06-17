@@ -133,9 +133,8 @@ func (i *Implanter) Implant(ctx context.Context, t action.Target, payload action
 	if !ok {
 		return nil, fmt.Errorf("config %q at key %q is not an object (got %T) — refusing to clobber", path, serversKey, serversRaw)
 	}
-	priorEntryWasPresent := false
 	if _, exists := servers[serverName]; exists {
-		priorEntryWasPresent = true
+		return nil, fmt.Errorf("mcp config implant: server %q already exists under %q in %s; choose a different --server-name", serverName, serversKey, path)
 	}
 	servers[serverName] = serverEntry
 	configMap[serversKey] = servers
@@ -158,10 +157,9 @@ func (i *Implanter) Implant(ctx context.Context, t action.Target, payload action
 		AppliedAt:        time.Now().UTC(),
 		DryRun:           payload.DryRun,
 		Extra: map[string]any{
-			"file":                    path,
-			"servers_key":             serversKey,
-			"server_name":             serverName,
-			"prior_entry_was_present": priorEntryWasPresent,
+			"file":        path,
+			"servers_key": serversKey,
+			"server_name": serverName,
 		},
 	}
 
@@ -202,7 +200,6 @@ func (i *Implanter) Revert(ctx context.Context, receipt action.Receipt) error {
 	path, _ := r.Extra["file"].(string)
 	serversKey, _ := r.Extra["servers_key"].(string)
 	serverName, _ := r.Extra["server_name"].(string)
-	priorWasPresent, _ := r.Extra["prior_entry_was_present"].(bool)
 	if path == "" || serversKey == "" || serverName == "" {
 		return errors.New("mcp config implant revert: receipt missing path / servers_key / server_name")
 	}
@@ -230,14 +227,6 @@ func (i *Implanter) Revert(ctx context.Context, receipt action.Receipt) error {
 	if _, exists := servers[serverName]; !exists {
 		// Already reverted out-of-band.
 		return nil
-	}
-	if priorWasPresent {
-		// Defensive: the operator implanted on top of an existing entry
-		// of the same name. Without the original entry preserved on the
-		// receipt we cannot restore it. Surface as an error so the
-		// operator can resolve manually rather than silently destroying
-		// pre-existing legitimate state.
-		return fmt.Errorf("mcp config implant revert: receipt indicates prior entry existed for %q — refusing to delete (manual revert required)", serverName)
 	}
 	delete(servers, serverName)
 	configMap[serversKey] = servers

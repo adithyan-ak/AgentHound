@@ -37,7 +37,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,12 +88,8 @@ func (l *Looter) RegisterFlags(fs *pflag.FlagSet) {
 //	"weights-dir"         string — local directory for weight artifacts
 //	"include-embeddings"  bool   — gate POST /api/embeddings probe
 func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOptions) (*action.LootResult, error) {
-	host, port := splitHostPort(t.Address, DefaultPort)
-	scheme := "http"
-	if s, ok := t.Meta["scheme"]; ok && s != "" {
-		scheme = s
-	}
-	baseURL := fmt.Sprintf("%s://%s:%d", scheme, host, port)
+	_, host, _ := action.EndpointParts(t, DefaultPort, "http")
+	baseURL := action.EndpointBaseURL(t, DefaultPort, "http")
 	ollamaID := ingest.ComputeNodeID("OllamaInstance", baseURL)
 
 	timeout := opts.Timeout
@@ -477,28 +472,6 @@ func safeDigestFragment(d string) string {
 		return d[:12]
 	}
 	return d
-}
-
-// splitHostPort mirrors modules/ollamafp's parser; duplicated for the
-// usual reason (per-target default ports).
-func splitHostPort(addr string, defaultPort int) (string, int) {
-	addr = strings.TrimSpace(addr)
-	if strings.Contains(addr, "://") {
-		if u, err := url.Parse(addr); err == nil && u.Host != "" {
-			return splitHostPort(u.Host, defaultPort)
-		}
-	}
-	if i := strings.LastIndexByte(addr, ':'); i > 0 {
-		host := addr[:i]
-		var p int
-		_, _ = fmt.Sscanf(addr[i+1:], "%d", &p)
-		if p > 0 {
-			host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
-			return host, p
-		}
-	}
-	host := strings.TrimPrefix(strings.TrimSuffix(addr, "]"), "[")
-	return host, defaultPort
 }
 
 var _ action.Looter = (*Looter)(nil)

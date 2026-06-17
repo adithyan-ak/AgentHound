@@ -1,6 +1,9 @@
 package embeddinginvert
 
 import (
+	"bytes"
+	"encoding/binary"
+	"math"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -46,6 +49,50 @@ func TestParseGGUF_InvalidMagic(t *testing.T) {
 	_, err := ParseGGUF("/dev/null")
 	if err == nil {
 		t.Error("expected error on /dev/null")
+	}
+}
+
+func TestFloat16ToFloat32KnownValues(t *testing.T) {
+	tests := []struct {
+		name string
+		in   uint16
+		want float32
+	}{
+		{name: "one", in: 0x3c00, want: 1.0},
+		{name: "half", in: 0x3800, want: 0.5},
+		{name: "negative_two", in: 0xc000, want: -2.0},
+		{name: "zero", in: 0x0000, want: 0.0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := float16ToFloat32(tt.in)
+			if got != tt.want {
+				t.Fatalf("float16ToFloat32(%#04x) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReadQ8_0EmbeddingsExactScale(t *testing.T) {
+	var block bytes.Buffer
+	if err := binary.Write(&block, binary.LittleEndian, uint16(0x3c00)); err != nil {
+		t.Fatal(err)
+	}
+	values := [32]int8{}
+	values[0] = 1
+	values[1] = -2
+	if err := binary.Write(&block, binary.LittleEndian, values); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := readQ8_0Embeddings(bytes.NewReader(block.Bytes()), 1, 32)
+	if err != nil {
+		t.Fatalf("readQ8_0Embeddings: %v", err)
+	}
+	if got := rows[0][0]; got != 1.0 {
+		t.Fatalf("first value = %v, want 1.0", got)
+	}
+	if got := rows[0][1]; math.Abs(float64(got-(-2.0))) > 1e-6 {
+		t.Fatalf("second value = %v, want -2.0", got)
 	}
 }
 

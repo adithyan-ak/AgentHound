@@ -70,12 +70,8 @@ func (f *Fingerprinter) Fingerprint(ctx context.Context, t action.Target) (*acti
 	if f.rule == nil {
 		return nil, errors.New("ollama fingerprinter: rule not loaded")
 	}
-	host, port := splitHostPort(t.Address, DefaultPort)
-	scheme := "http"
-	if s, ok := t.Meta["scheme"]; ok && s != "" {
-		scheme = s
-	}
-	baseURL := fmt.Sprintf("%s://%s:%d", scheme, host, port)
+	_, host, _ := action.EndpointParts(t, DefaultPort, "http")
+	baseURL := action.EndpointBaseURL(t, DefaultPort, "http")
 
 	client := rules.DefaultFingerprintHTTPClient(DefaultProbeTimeout)
 	res, err := rules.RunFingerprint(ctx, client, baseURL, *f.rule)

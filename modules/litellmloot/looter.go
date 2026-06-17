@@ -31,7 +31,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -63,12 +62,7 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		return nil, errors.New("litellm loot: --master-key (or --credential master_key=...) is required")
 	}
 
-	host, port := splitHostPort(t.Address, DefaultPort)
-	scheme := "http"
-	if s, ok := t.Meta["scheme"]; ok && s != "" {
-		scheme = s
-	}
-	baseURL := fmt.Sprintf("%s://%s:%d", scheme, host, port)
+	baseURL := action.EndpointBaseURL(t, DefaultPort, "http")
 	gatewayObjectID := ingest.ComputeNodeID("LiteLLMGateway", baseURL)
 
 	timeout := opts.Timeout
@@ -423,28 +417,6 @@ func redact(secret string) string {
 		return "***"
 	}
 	return secret[:8] + "..."
-}
-
-// splitHostPort is duplicated from modules/ollamafp / modules/litellmfp;
-// refactor to a shared helper when fingerprinter / looter #3 ships.
-func splitHostPort(addr string, defaultPort int) (string, int) {
-	addr = strings.TrimSpace(addr)
-	if strings.Contains(addr, "://") {
-		if u, err := url.Parse(addr); err == nil && u.Host != "" {
-			return splitHostPort(u.Host, defaultPort)
-		}
-	}
-	if i := strings.LastIndexByte(addr, ':'); i > 0 {
-		host := addr[:i]
-		var p int
-		_, _ = fmt.Sscanf(addr[i+1:], "%d", &p)
-		if p > 0 {
-			host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
-			return host, p
-		}
-	}
-	host := strings.TrimPrefix(strings.TrimSuffix(addr, "]"), "[")
-	return host, defaultPort
 }
 
 var _ action.Looter = (*Looter)(nil)

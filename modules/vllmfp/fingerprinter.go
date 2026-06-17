@@ -12,8 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
@@ -62,12 +60,8 @@ func (f *Fingerprinter) Fingerprint(ctx context.Context, t action.Target) (*acti
 	if f.rule == nil {
 		return nil, errors.New("vllm fingerprinter: rule not loaded")
 	}
-	host, port := splitHostPort(t.Address, DefaultPort)
-	scheme := "http"
-	if s, ok := t.Meta["scheme"]; ok && s != "" {
-		scheme = s
-	}
-	baseURL := fmt.Sprintf("%s://%s:%d", scheme, host, port)
+	_, host, _ := action.EndpointParts(t, DefaultPort, "http")
+	baseURL := action.EndpointBaseURL(t, DefaultPort, "http")
 
 	client := rules.DefaultFingerprintHTTPClient(DefaultProbeTimeout)
 	res, err := rules.RunFingerprint(ctx, client, baseURL, *f.rule)
@@ -114,30 +108,6 @@ func (f *Fingerprinter) Fingerprint(ctx context.Context, t action.Target) (*acti
 		IngestData:  out,
 		Properties:  res.Properties,
 	}, nil
-}
-
-// splitHostPort mirrors modules/ollamafp's parser. Duplicated rather than
-// extracted to a shared helper because each fingerprinter has its own
-// default port and tying them to a shared package would require passing
-// the default through every call.
-func splitHostPort(addr string, defaultPort int) (string, int) {
-	addr = strings.TrimSpace(addr)
-	if strings.Contains(addr, "://") {
-		if u, err := url.Parse(addr); err == nil && u.Host != "" {
-			return splitHostPort(u.Host, defaultPort)
-		}
-	}
-	if i := strings.LastIndexByte(addr, ':'); i > 0 {
-		host := addr[:i]
-		var p int
-		_, _ = fmt.Sscanf(addr[i+1:], "%d", &p)
-		if p > 0 {
-			host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
-			return host, p
-		}
-	}
-	host := strings.TrimPrefix(strings.TrimSuffix(addr, "]"), "[")
-	return host, defaultPort
 }
 
 var _ action.Fingerprinter = (*Fingerprinter)(nil)

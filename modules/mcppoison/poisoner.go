@@ -269,14 +269,7 @@ func composeContent(original, injection, mode string) string {
 // Looks for an explicit "url" override in Target.Meta first, then falls
 // back to Address with scheme inferred from Meta["scheme"] (default http).
 func targetBaseURL(t action.Target) string {
-	if u, ok := t.Meta["url"]; ok && u != "" {
-		return u
-	}
-	scheme := "http"
-	if s, ok := t.Meta["scheme"]; ok && s != "" {
-		scheme = s
-	}
-	return scheme + "://" + t.Address
+	return action.EndpointBaseURL(t, 0, "http")
 }
 
 // fetchToolDescription issues a JSON-RPC tools/list request and pulls

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/common"
@@ -22,8 +21,8 @@ type RawCard struct {
 }
 
 const (
-	v10Path    = "/.well-known/agent-card.json"
-	v030Path   = "/.well-known/agent.json"
+	v10Path    = common.A2AWellKnownCardPath
+	v030Path   = common.A2AWellKnownLegacyPath
 	maxBodyLen = 5 * 1024 * 1024
 )
 
@@ -118,12 +117,5 @@ func fetchCard(ctx context.Context, client *http.Client, url string, authToken s
 }
 
 func normalizeBaseURL(rawURL string) string {
-	rawURL = strings.TrimSpace(rawURL)
-	if !strings.Contains(rawURL, "://") {
-		rawURL = "https://" + rawURL
-	}
-	rawURL = strings.TrimRight(rawURL, "/")
-	rawURL = strings.TrimSuffix(rawURL, v10Path)
-	rawURL = strings.TrimSuffix(rawURL, v030Path)
-	return rawURL
+	return common.NormalizeA2ABaseURL(rawURL)
 }
