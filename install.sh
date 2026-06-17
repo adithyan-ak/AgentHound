@@ -63,14 +63,14 @@ else
   exit 1
 fi
 
-# Optional: cosign signature verification
+# Optional: cosign signature verification.
+# cosign v3 bundles the signature + Fulcio certificate into one
+# checksums.txt.sigstore.json (the old separate .sig/.pem are gone).
 if command -v cosign >/dev/null 2>&1; then
   echo "Verifying cosign signature..."
-  curl -sSfL -o "${TMPDIR}/checksums.txt.sig" "${BASE_URL}/checksums.txt.sig"
-  curl -sSfL -o "${TMPDIR}/checksums.txt.pem" "${BASE_URL}/checksums.txt.pem"
+  curl -sSfL -o "${TMPDIR}/checksums.txt.sigstore.json" "${BASE_URL}/checksums.txt.sigstore.json"
   cosign verify-blob \
-    --certificate "${TMPDIR}/checksums.txt.pem" \
-    --signature   "${TMPDIR}/checksums.txt.sig" \
+    --bundle "${TMPDIR}/checksums.txt.sigstore.json" \
     --certificate-identity "https://github.com/${GITHUB_REPO}/.github/workflows/release.yml@refs/tags/${VERSION}" \
     --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
     "${TMPDIR}/checksums.txt"
@@ -81,8 +81,7 @@ NOTE: cosign not found on PATH; skipping signature verification.
 To verify manually, install cosign and run:
 
   cosign verify-blob \\
-    --certificate ${BASE_URL}/checksums.txt.pem \\
-    --signature   ${BASE_URL}/checksums.txt.sig \\
+    --bundle ${BASE_URL}/checksums.txt.sigstore.json \\
     --certificate-identity 'https://github.com/${GITHUB_REPO}/.github/workflows/release.yml@refs/tags/${VERSION}' \\
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
     checksums.txt

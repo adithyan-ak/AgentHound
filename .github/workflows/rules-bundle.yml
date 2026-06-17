@@ -90,9 +90,11 @@ jobs:
           TARBALL: ${{ steps.pack.outputs.tarball }}
         run: |
           set -euo pipefail
+          # cosign v3 (cosign-installer v4+) replaced --output-signature /
+          # --output-certificate with a single self-contained bundle that
+          # carries both the signature and the Fulcio certificate.
           cosign sign-blob --yes \
-            --output-signature "${TARBALL}.sig" \
-            --output-certificate "${TARBALL}.pem" \
+            --bundle "${TARBALL}.sigstore.json" \
             "${TARBALL}"
 
       - name: Create GitHub release
@@ -107,8 +109,7 @@ jobs:
           Verify with:
 
               cosign verify-blob \\
-                --certificate agenthound-rules-${TAG}.tar.gz.pem \\
-                --signature agenthound-rules-${TAG}.tar.gz.sig \\
+                --bundle agenthound-rules-${TAG}.tar.gz.sigstore.json \\
                 --certificate-identity-regexp 'https://github.com/.*' \\
                 --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \\
                 agenthound-rules-${TAG}.tar.gz"
@@ -117,5 +118,4 @@ jobs:
             --notes "${notes}" \
             "${TARBALL}" \
             "${TARBALL}.sha256" \
-            "${TARBALL}.sig" \
-            "${TARBALL}.pem"
+            "${TARBALL}.sigstore.json"

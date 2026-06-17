@@ -39,16 +39,18 @@ checksum:
   name_template: 'checksums.txt'
 
 # Sign the checksums file ONLY (one signature gates all artifacts via the checksums).
+# cosign v3 (installed by cosign-installer v4+) dropped --output-signature /
+# --output-certificate in favour of a single self-contained bundle. The
+# .sigstore.json holds both the signature and the Fulcio certificate; verify
+# with: cosign verify-blob --bundle checksums.txt.sigstore.json checksums.txt
 signs:
   - cmd: cosign
     artifacts: checksum
-    signature: "${artifact}.sig"
-    certificate: "${artifact}.pem"
+    signature: "${artifact}.sigstore.json"
     args:
       - "sign-blob"
       - "--yes"
-      - "--output-signature=${signature}"
-      - "--output-certificate=${certificate}"
+      - "--bundle=${signature}"
       - "${artifact}"
 
 sboms:

@@ -171,8 +171,7 @@ gh release download rules-v2026.06.01 \
 
 # Verify the cosign signature BEFORE running anything.
 cosign verify-blob \
-    --certificate agenthound-rules-rules-v2026.06.01.tar.gz.pem \
-    --signature agenthound-rules-rules-v2026.06.01.tar.gz.sig \
+    --bundle agenthound-rules-rules-v2026.06.01.tar.gz.sigstore.json \
     --certificate-identity-regexp 'https://github.com/.*' \
     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
     agenthound-rules-rules-v2026.06.01.tar.gz
@@ -257,8 +256,7 @@ The release artifacts:
 
 - `agenthound-rules-<tag>.tar.gz` — the bundle.
 - `agenthound-rules-<tag>.tar.gz.sha256` — checksum.
-- `agenthound-rules-<tag>.tar.gz.sig` — cosign keyless signature.
-- `agenthound-rules-<tag>.tar.gz.pem` — cosign keyless certificate.
+- `agenthound-rules-<tag>.tar.gz.sigstore.json` — cosign keyless bundle (signature + certificate, cosign v3 format).
 
 ---
 
