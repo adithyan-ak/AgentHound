@@ -13,15 +13,15 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
         with:
           go-version: "1.25.11"
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
         with:
           node-version: "20"
           cache: npm
@@ -33,22 +33,22 @@ jobs:
       - name: Copy frontend dist for embedding
         run: mkdir -p server/internal/api/ui/dist && cp -r server/ui/dist/* server/internal/api/ui/dist/
 
-      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
 
       - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610  # v0.24.0
 
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3.7.0
+      - uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3  # v4.1.0
 
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
 
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a  # v6.4.0
+        uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89  # v7.2.2
         with:
           version: '~> v2'
           args: release --clean
