@@ -1,21 +1,44 @@
 version: 2
+# Low-noise version updates: monthly, capped, grouped, majors ignored.
+# Security fixes are handled separately by Dependabot security updates
+# (repo setting), which open a PR only when a real CVE affects a dependency
+# regardless of the schedule/cap below.
 updates:
   - package-ecosystem: gomod
     directory: "/"
     schedule:
-      interval: daily
+      interval: monthly
+    open-pull-requests-limit: 5
     groups:
-      go-chi:
-        patterns: ["github.com/go-chi/*"]
-      jackc:
-        patterns: ["github.com/jackc/*"]
-      golang-x:
-        patterns: ["golang.org/x/*"]
+      go-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # Majors carry breaking changes; bump them deliberately, not via bot.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      actions-all:
+        applies-to: version-updates
+        patterns: ["*"]
+
   - package-ecosystem: npm
     directory: "/server/ui"
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
