@@ -6,7 +6,6 @@ import {
   AlertTriangle,
   ScanSearch,
   BookOpen,
-  Shield,
   ShieldCheck,
   PanelRight,
 } from "lucide-react";
@@ -40,7 +39,7 @@ export function NavBar() {
   return (
     <header className="flex h-12 items-center border-b bg-card px-4">
       <div className="flex items-center gap-2 mr-8">
-        <Shield className="h-5 w-5 text-primary" />
+        <img src="/logo-192.png" alt="AgentHound" className="h-6 w-6" />
         <span className="font-semibold text-sm">AgentHound</span>
       </div>
       <nav className="flex items-center gap-1">
