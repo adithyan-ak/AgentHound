@@ -16,9 +16,15 @@ interface PivotPath {
 
 function parsePivots(rows: Record<string, unknown>[]): PivotPath[] {
   return rows.slice(0, 8).map((row) => ({
-    agent: String(row["agent"] ?? row["source"] ?? row["a2a_agent"] ?? "Unknown"),
-    host: String(row["host"] ?? row["shared_host"] ?? "shared"),
-    resource: String(row["resource"] ?? row["target"] ?? row["mcp_resource"] ?? "Unknown"),
+    agent: String(
+      row["source_name"] ?? row["agent"] ?? row["source"] ?? row["a2a_agent"] ?? "Unknown",
+    ),
+    host: String(
+      row["via_host"] ?? row["via_mcp_server"] ?? row["host"] ?? row["shared_host"] ?? "shared",
+    ),
+    resource: String(
+      row["target_resource"] ?? row["resource"] ?? row["target"] ?? row["mcp_resource"] ?? "Unknown",
+    ),
   }));
 }
 
