@@ -1,10 +1,23 @@
-.PHONY: build build-collector build-server build-all test lint docker docker-collector docker-server docker-standard up down clean seed demo release ui-build ui-dev ui-test standard standard-run standard-stop deps-check size-check prerelease
+.PHONY: build build-collector build-server build-all test lint docker docker-collector docker-server docker-standard up down clean seed demo release ui-build ui-dev ui-test standard standard-run standard-stop deps-check size-check prerelease preflight-build preflight-collector preflight-server
+
+# Preflight gates. Verify required tools are present and at the expected
+# major versions BEFORE attempting a build, so newcomers get a friendly
+# error instead of a cryptic "command not found" deep in the chain.
+# Set AGENTHOUND_SKIP_PREFLIGHT=1 to bypass.
+preflight-build:
+	@bash scripts/preflight.sh build
+
+preflight-collector:
+	@bash scripts/preflight.sh build-collector
+
+preflight-server:
+	@bash scripts/preflight.sh build-server
 
 ui-build:
 	cd server/ui && npm ci --ignore-scripts && npm run build
 	# Preserve dist/.gitkeep (committed so go:embed all:ui/dist works on
 	# fresh clones); clear other contents and copy in the freshly-built UI.
-	find server/internal/api/ui/dist -mindepth 1 -not -name .gitkeep -delete 2>/dev/null || true
+	find server/internal/api/ui/dist -mindepth 1 -not -name .gitkeep -delete
 	mkdir -p server/internal/api/ui/dist
 	cp -r server/ui/dist/. server/internal/api/ui/dist/
 
@@ -14,10 +27,10 @@ ui-dev:
 ui-test:
 	cd server/ui && npm test
 
-build-collector:
+build-collector: preflight-collector
 	go build -o bin/agenthound ./collector/cmd/agenthound
 
-build-server: ui-build
+build-server: preflight-server ui-build
 	go build -o bin/agenthound-server ./server/cmd/agenthound-server
 
 build-all: build-collector build-server
