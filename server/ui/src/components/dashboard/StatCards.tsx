@@ -33,9 +33,9 @@ export function StatCards() {
 
   if (isLoading) {
     return (
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
         {Array.from({ length: 5 }).map((_, i) => (
-          <Skeleton key={i} className="h-[108px] w-full rounded-xl" />
+          <Skeleton key={i} className="h-[96px] w-full rounded-md" />
         ))}
       </div>
     );
@@ -66,7 +66,7 @@ export function StatCards() {
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
       {tiles.map((t) => (
         <StatTile
           key={t.kind}

@@ -16,6 +16,13 @@ const config: Config = {
         "title-sm": ["1rem", { lineHeight: "1.3", fontWeight: "600" }],
         label: ["0.6875rem", { lineHeight: "1.3", fontWeight: "600", letterSpacing: "0.06em" }],
         overline: ["0.625rem", { lineHeight: "1.3", fontWeight: "600", letterSpacing: "0.12em" }],
+        // Mono instrument readouts — tactical SOC numerics.
+        metric: ["2.75rem", { lineHeight: "1", fontWeight: "700", letterSpacing: "-0.02em" }],
+        "metric-lg": ["3.75rem", { lineHeight: "0.95", fontWeight: "700", letterSpacing: "-0.03em" }],
+        "metric-sm": ["1.75rem", { lineHeight: "1", fontWeight: "600", letterSpacing: "-0.01em" }],
+        // Console section labels: [ THREAT SEVERITY ]
+        console: ["0.6875rem", { lineHeight: "1.2", fontWeight: "600", letterSpacing: "0.18em" }],
+        tick: ["0.625rem", { lineHeight: "1.2", fontWeight: "500", letterSpacing: "0.08em" }],
       },
       colors: {
         // Semantic tokens — resolve to Radix-mauve / cyan / tomato steps
@@ -106,6 +113,28 @@ const config: Config = {
           info: "#64748B",
         },
         explorer: { canvas: "rgb(var(--explorer-canvas) / <alpha-value>)" },
+        // OBSIDIAN TERMINAL signature accents. Amber "phosphor" is the single
+        // dominant accent; "signal" green is reserved for operational/OK.
+        // Both literal — they are brand identity, not a neutral ramp.
+        phosphor: {
+          DEFAULT: "#F5A623",
+          bright: "#FFB020",
+          dim: "#7A5A1E",
+          glow: "rgb(245 166 35 / 0.14)",
+        },
+        signal: {
+          DEFAULT: "#3FB950",
+          dim: "#1E6E2E",
+        },
+        // Carbon canvas steps — pure near-black instrument surfaces.
+        carbon: {
+          950: "#0A0A0B",
+          900: "#0C0D0F",
+          850: "#121316",
+          800: "#16171B",
+          700: "#1C1E22",
+          600: "#26292F",
+        },
       },
       boxShadow: {
         "glow-cyan":
@@ -115,6 +144,11 @@ const config: Config = {
         "glow-orange": "0 0 0 1px rgb(249 115 22 / 0.40), 0 0 24px -4px rgb(249 115 22 / 0.25)",
         "glow-critical":
           "0 0 0 1px rgb(var(--tomato-9-raw) / 0.40), 0 0 20px -4px rgb(var(--tomato-9-raw) / 0.30)",
+        // Tactical instrument panel: crisp 1px frame + a faint inner top
+        // keyline (single light source) — no puffy blur.
+        panel: "0 1px 0 0 rgb(255 255 255 / 0.03) inset, 0 1px 2px 0 rgb(0 0 0 / 0.5)",
+        "phosphor-edge":
+          "0 0 0 1px rgb(245 166 35 / 0.35), 0 0 16px -6px rgb(245 166 35 / 0.5)",
       },
       keyframes: {
         "slide-in-from-bottom-4": {
@@ -126,19 +160,37 @@ const config: Config = {
           "100%": { opacity: "1" },
         },
         "fade-up": {
-          "0%": { transform: "translateY(10px)", opacity: "0" },
+          "0%": { transform: "translateY(6px)", opacity: "0" },
           "100%": { transform: "translateY(0)", opacity: "1" },
         },
         shimmer: {
           "0%": { backgroundPosition: "-200% 0" },
           "100%": { backgroundPosition: "200% 0" },
         },
+        // Console caret blink — mechanical, hard steps.
+        blink: {
+          "0%, 49%": { opacity: "1" },
+          "50%, 100%": { opacity: "0" },
+        },
+        // Live status LED — a slow operational breathe (no scale bounce).
+        "led-pulse": {
+          "0%, 100%": { opacity: "1" },
+          "50%": { opacity: "0.35" },
+        },
+        // Scanning sweep — a faint amber line traversing the strip.
+        "scan-sweep": {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(100%)" },
+        },
       },
       animation: {
         "slide-in-from-bottom-4": "slide-in-from-bottom-4 200ms ease-out",
         "fade-in": "fade-in 150ms ease-out",
-        "fade-up": "fade-up 420ms cubic-bezier(0.22,1,0.36,1) both",
+        "fade-up": "fade-up 300ms cubic-bezier(0.33,0,0.2,1) both",
         shimmer: "shimmer 2s linear infinite",
+        blink: "blink 1.1s steps(1) infinite",
+        "led-pulse": "led-pulse 2.4s ease-in-out infinite",
+        "scan-sweep": "scan-sweep 3.2s linear infinite",
       },
       borderRadius: {
         xl: "calc(var(--radius) + 4px)",

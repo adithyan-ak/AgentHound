@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 
 interface MiniRingProps {
@@ -27,7 +27,6 @@ export function MiniRing({
   strokeWidth = 8,
   className,
 }: MiniRingProps) {
-  const glowId = useId();
   const clamped = Math.max(0, Math.min(1, fraction));
   const [animated, setAnimated] = useState(0);
   useEffect(() => {
@@ -47,15 +46,6 @@ export function MiniRing({
       style={{ width: size, height: size }}
     >
       <svg width={size} height={size} className="-rotate-90">
-        <defs>
-          <filter id={glowId} x="-40%" y="-40%" width="180%" height="180%">
-            <feGaussianBlur stdDeviation="2.5" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
         <circle
           cx={cx}
           cy={cy}
@@ -71,11 +61,10 @@ export function MiniRing({
           fill="none"
           stroke={color}
           strokeWidth={strokeWidth}
-          strokeLinecap="round"
+          strokeLinecap="butt"
           strokeDasharray={circumference}
           strokeDashoffset={offset}
-          filter={`url(#${glowId})`}
-          style={{ transition: "stroke-dashoffset 900ms cubic-bezier(0.22,1,0.36,1)" }}
+          style={{ transition: "stroke-dashoffset 900ms cubic-bezier(0.33,0,0.2,1)" }}
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">

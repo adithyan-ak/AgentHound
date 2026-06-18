@@ -16,23 +16,26 @@ import { RecentScans } from "./RecentScans";
 
 function EmptyState() {
   return (
-    <div className="card-elevated mt-6 flex flex-col items-center justify-center gap-4 rounded-xl px-6 py-16 text-center">
-      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 ring-1 ring-inset ring-primary/20">
-        <ScanSearch className="h-7 w-7 text-primary" />
+    <div className="card-elevated relative mt-4 flex flex-col items-center justify-center gap-4 overflow-hidden rounded-md px-6 py-16 text-center">
+      <span aria-hidden className="absolute left-0 top-0 h-px w-16 bg-primary/80" />
+      <div className="flex h-12 w-12 items-center justify-center rounded-[4px] bg-primary/10 ring-1 ring-inset ring-primary/30">
+        <ScanSearch className="h-6 w-6 text-primary" />
       </div>
       <div className="space-y-1.5">
-        <h2 className="text-lg font-semibold text-foreground">No attack surface mapped yet</h2>
-        <p className="max-w-md text-sm text-muted-foreground">
+        <h2 className="font-mono text-base font-semibold uppercase tracking-[0.08em] text-foreground">
+          No attack surface mapped
+        </h2>
+        <p className="mx-auto max-w-md text-sm text-muted-foreground">
           Run a scan to discover your agent, MCP, and A2A infrastructure. Once ingested, your
           exposure index, findings, and attack paths will appear here.
         </p>
       </div>
-      <code className="rounded-md border border-white/[0.08] bg-black/40 px-3 py-1.5 font-mono text-sm text-primary">
-        agenthound scan
+      <code className="rounded-[3px] border border-border bg-black/50 px-3 py-1.5 font-mono text-sm text-primary">
+        <span className="text-muted-foreground">$</span> agenthound scan
       </code>
       <Link
         to="/scans"
-        className="inline-flex items-center gap-1.5 text-sm font-medium text-primary transition-colors hover:text-primary/80"
+        className="inline-flex items-center gap-1.5 font-mono text-xs uppercase tracking-[0.1em] text-primary transition-colors hover:text-primary/80"
       >
         Go to Scans <ArrowRight className="h-3.5 w-3.5" />
       </Link>
@@ -47,29 +50,29 @@ export function Dashboard() {
   const isEmpty = !isLoading && (stats?.total_nodes ?? 0) === 0;
 
   return (
-    <div className="dashboard-bg min-h-full p-4 sm:p-6">
-      <div className="mx-auto max-w-[1600px] space-y-5">
+    <div className="dashboard-bg min-h-full p-3 sm:p-4 lg:p-5">
+      <div className="mx-auto max-w-[1600px] space-y-3">
         <DashboardHeader />
 
         {isEmpty ? (
           <EmptyState />
         ) : (
           <>
-            <div className={ROW} style={{ animationDelay: "40ms" }}>
+            <div className={ROW} style={{ animationDelay: "30ms" }}>
               <StatCards />
             </div>
 
-            <div className={`grid gap-4 lg:grid-cols-3 ${ROW}`} style={{ animationDelay: "100ms" }}>
+            <div className={`grid gap-3 lg:grid-cols-3 ${ROW}`} style={{ animationDelay: "80ms" }}>
               <div className="lg:col-span-1">
                 <ExposureGauge />
               </div>
-              <div className="grid gap-4 lg:col-span-2">
+              <div className="grid gap-3 lg:col-span-2">
                 <SeverityRings />
                 <InventoryTrend />
               </div>
             </div>
 
-            <div className={`grid gap-4 lg:grid-cols-3 ${ROW}`} style={{ animationDelay: "160ms" }}>
+            <div className={`grid gap-3 lg:grid-cols-3 ${ROW}`} style={{ animationDelay: "130ms" }}>
               <div className="lg:col-span-2">
                 <CategoryBreakdown />
               </div>
@@ -78,17 +81,17 @@ export function Dashboard() {
               </div>
             </div>
 
-            <div className={`grid gap-4 lg:grid-cols-2 ${ROW}`} style={{ animationDelay: "220ms" }}>
+            <div className={`grid gap-3 lg:grid-cols-2 ${ROW}`} style={{ animationDelay: "180ms" }}>
               <TopRiskyEntities />
               <TopFindings />
             </div>
 
-            <div className={`grid gap-4 lg:grid-cols-2 ${ROW}`} style={{ animationDelay: "280ms" }}>
+            <div className={`grid gap-3 lg:grid-cols-2 ${ROW}`} style={{ animationDelay: "230ms" }}>
               <CrossProtocol />
               <Chokepoints />
             </div>
 
-            <div className={ROW} style={{ animationDelay: "340ms" }}>
+            <div className={ROW} style={{ animationDelay: "280ms" }}>
               <RecentScans />
             </div>
           </>

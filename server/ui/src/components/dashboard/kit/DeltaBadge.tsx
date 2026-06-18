@@ -11,7 +11,7 @@ interface DeltaBadgeProps {
   className?: string;
 }
 
-/** Small directional delta chip with honest up/down semantics. */
+/** Mono directional delta chip with honest up/down semantics. */
 export function DeltaBadge({ value, invert = false, suffix, className }: DeltaBadgeProps) {
   if (value === null || value === undefined) return null;
 
@@ -20,19 +20,25 @@ export function DeltaBadge({ value, invert = false, suffix, className }: DeltaBa
   const Icon = isFlat ? Minus : value > 0 ? ArrowUpRight : ArrowDownRight;
 
   const tone = isFlat
-    ? "text-muted-foreground"
+    ? "text-muted-foreground ring-white/10 bg-white/[0.04]"
     : isBad
-      ? "text-red-400"
-      : "text-emerald-400";
+      ? "text-red-400 ring-red-500/25 bg-red-500/10"
+      : "text-emerald-400 ring-emerald-500/25 bg-emerald-500/10";
 
   return (
-    <span className={cn("inline-flex items-center gap-1 text-xs font-medium", tone, className)}>
-      <Icon className="h-3.5 w-3.5" />
-      <span className="font-mono tabular-nums">
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-[2px] px-1.5 py-0.5 font-mono text-[10px] font-semibold tabular-nums ring-1 ring-inset",
+        tone,
+        className,
+      )}
+    >
+      <Icon className="h-3 w-3" />
+      <span>
         {value > 0 ? "+" : ""}
         {value.toLocaleString()}
       </span>
-      {suffix && <span className="text-muted-foreground">{suffix}</span>}
+      {suffix && <span className="font-normal text-muted-foreground">{suffix}</span>}
     </span>
   );
 }

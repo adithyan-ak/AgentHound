@@ -44,12 +44,12 @@ function Sparkline({ values }: { values: number[] }) {
     <svg width={w} height={h} className="overflow-visible" aria-hidden>
       <defs>
         <linearGradient id="spark-fill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#06B6D4" stopOpacity={0.35} />
-          <stop offset="100%" stopColor="#06B6D4" stopOpacity={0} />
+          <stop offset="0%" stopColor="#F5A623" stopOpacity={0.3} />
+          <stop offset="100%" stopColor="#F5A623" stopOpacity={0} />
         </linearGradient>
       </defs>
       <polygon points={area} fill="url(#spark-fill)" />
-      <polyline points={line} fill="none" stroke="#06B6D4" strokeWidth={1.5} strokeLinejoin="round" />
+      <polyline points={line} fill="none" stroke="#F5A623" strokeWidth={1.5} strokeLinejoin="round" />
     </svg>
   );
 }
@@ -76,29 +76,31 @@ export function RecentScans() {
       action={<Sparkline values={sparkValues} />}
       flush
     >
-      <div className="px-5 pb-5">
+      <div className="px-3.5 pb-3.5">
         {isLoading ? (
           <Skeleton className="h-48 w-full" />
         ) : recent.length === 0 ? (
-          <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
+          <div className="flex h-32 items-center justify-center font-mono text-xs uppercase tracking-wider text-muted-foreground">
             No scans yet
           </div>
         ) : (
           <Table>
             <TableHeader>
-              <TableRow className="border-white/[0.06] hover:bg-transparent">
-                <TableHead className="h-9 px-3 text-[11px] uppercase tracking-wide">Collector</TableHead>
-                <TableHead className="h-9 px-3 text-[11px] uppercase tracking-wide">Status</TableHead>
-                <TableHead className="h-9 px-3 text-right text-[11px] uppercase tracking-wide">Nodes</TableHead>
-                <TableHead className="h-9 px-3 text-right text-[11px] uppercase tracking-wide">Edges</TableHead>
-                <TableHead className="h-9 px-3 text-right text-[11px] uppercase tracking-wide">When</TableHead>
+              <TableRow className="border-border/70 hover:bg-transparent">
+                <TableHead className="h-8 px-3 font-mono text-[10px] uppercase tracking-[0.12em]">Collector</TableHead>
+                <TableHead className="h-8 px-3 font-mono text-[10px] uppercase tracking-[0.12em]">Status</TableHead>
+                <TableHead className="h-8 px-3 text-right font-mono text-[10px] uppercase tracking-[0.12em]">Nodes</TableHead>
+                <TableHead className="h-8 px-3 text-right font-mono text-[10px] uppercase tracking-[0.12em]">Edges</TableHead>
+                <TableHead className="h-8 px-3 text-right font-mono text-[10px] uppercase tracking-[0.12em]">When</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {recent.map((scan) => (
-                <TableRow key={scan.id} className="border-white/[0.05] hover:bg-white/[0.03]">
-                  <TableCell className="px-3 py-2.5 font-medium text-foreground">{scan.collector}</TableCell>
-                  <TableCell className="px-3 py-2.5">
+                <TableRow key={scan.id} className="border-border/50 hover:bg-white/[0.025]">
+                  <TableCell className="px-3 py-2 font-mono text-[12px] font-medium text-foreground">
+                    {scan.collector}
+                  </TableCell>
+                  <TableCell className="px-3 py-2">
                     <StatusPill
                       tone={STATUS_TONE[scan.status] ?? "neutral"}
                       pulse={scan.status === "running"}
@@ -106,13 +108,13 @@ export function RecentScans() {
                       {scan.status}
                     </StatusPill>
                   </TableCell>
-                  <TableCell className="px-3 py-2.5 text-right font-mono tabular-nums text-muted-foreground">
+                  <TableCell className="px-3 py-2 text-right font-mono text-[12px] tabular-nums text-foreground/80">
                     {scan.node_count.toLocaleString()}
                   </TableCell>
-                  <TableCell className="px-3 py-2.5 text-right font-mono tabular-nums text-muted-foreground">
+                  <TableCell className="px-3 py-2 text-right font-mono text-[12px] tabular-nums text-foreground/80">
                     {scan.edge_count.toLocaleString()}
                   </TableCell>
-                  <TableCell className="px-3 py-2.5 text-right text-muted-foreground">
+                  <TableCell className="px-3 py-2 text-right font-mono text-[11px] text-muted-foreground">
                     {timeAgo(scan.started_at)}
                   </TableCell>
                 </TableRow>

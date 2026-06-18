@@ -143,24 +143,36 @@ export const FEEDBACK = {
   info: { solid: "#3B82F6", bg: "rgba(59,130,246,0.12)", text: "#60A5FA", border: "rgba(59,130,246,0.30)" },
 } as const;
 
-// Recharts theme constants
+// ----------------------------------------------------------------------
+// OBSIDIAN TERMINAL — signature accents.
+// ONE primary accent (amber "terminal phosphor") + ONE functional OK
+// signal (cool green). Everything else stays monochrome carbon. These are
+// the only non-severity hues allowed on the dashboard chrome.
+// ----------------------------------------------------------------------
+export const ACCENT = "#F5A623"; // amber phosphor — primary highlight / hero metric
+export const ACCENT_BRIGHT = "#FFB020"; // hotter amber — focus / leading edge
+export const ACCENT_DIM = "#7A5A1E"; // amber, recessed — unfilled instrument ticks
+export const SIGNAL_OK = "#3FB950"; // operational / OK only
+
+// Recharts theme constants — carbon panel surfaces, amber-led series.
 export const CHART_THEME = {
   tooltip: {
-    bg: "#18181B",
-    border: "#27272A",
-    text: "#FAFAFA",
+    bg: "#121316",
+    border: "#2A2D33",
+    text: "#E9ECF0",
   },
-  grid: "rgba(255,255,255,0.05)",
-  axis: "#71717A",
-  series: ["#06B6D4", "#A855F7", "#10B981", "#F59E0B", "#EC4899", "#3B82F6", "#EF4444", "#22D3EE"],
+  grid: "rgba(255,255,255,0.045)",
+  axis: "#7A828E",
+  series: ["#F5A623", "#6E7B91", "#3FB950", "#E5484D", "#C79A3A", "#5C9EAD", "#A8B0BD", "#FFB020"],
 } as const;
 
-// Risk score -> color utility
+// Risk score -> color utility. Bands keep their severity semantics; only the
+// "clear" band adopts the theme's operational green.
 export function riskColor(score: number): string {
   if (score >= 75) return "#EF4444";
   if (score >= 50) return "#F97316";
   if (score >= 25) return "#EAB308";
-  return "#22C55E";
+  return SIGNAL_OK;
 }
 
 // Canonical severity ordering (worst first) for dashboards and legends.

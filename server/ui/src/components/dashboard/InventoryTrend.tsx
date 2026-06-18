@@ -4,15 +4,15 @@ import { useDashboardScans } from "@/hooks/useDashboardData";
 import { Skeleton } from "@/components/ui/skeleton";
 import { WidgetCard, AreaTrend } from "./kit";
 import type { TrendSeries } from "./kit";
-import { NODE_KIND_COLORS } from "@/theme/tokens";
+import { ACCENT } from "@/theme/tokens";
 import { shortDate } from "@/lib/format";
 
 const INFO =
   "Nodes and edges discovered per scan over time, drawn from the scan history — your attack surface's growth.";
 
 const SERIES: TrendSeries[] = [
-  { key: "nodes", label: "Nodes", color: NODE_KIND_COLORS.AgentInstance ?? "#06B6D4" },
-  { key: "edges", label: "Edges", color: NODE_KIND_COLORS.A2AAgent ?? "#A855F7" },
+  { key: "nodes", label: "Nodes", color: ACCENT },
+  { key: "edges", label: "Edges", color: "#6E7B91" },
 ];
 
 export function InventoryTrend() {
@@ -31,11 +31,29 @@ export function InventoryTrend() {
   }, [scans]);
 
   return (
-    <WidgetCard title="Surface Growth" info={INFO} icon={TrendingUp} accent="#06B6D4">
+    <WidgetCard
+      title="Surface Growth"
+      info={INFO}
+      icon={TrendingUp}
+      accent={ACCENT}
+      action={
+        <div className="flex items-center gap-3">
+          {SERIES.map((s) => (
+            <span
+              key={s.key}
+              className="flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.1em] text-muted-foreground"
+            >
+              <span className="h-2 w-2 rounded-[1px]" style={{ backgroundColor: s.color }} />
+              {s.label}
+            </span>
+          ))}
+        </div>
+      }
+    >
       {isLoading ? (
         <Skeleton className="h-44 w-full" />
       ) : data.length === 0 ? (
-        <div className="flex h-44 items-center justify-center text-sm text-muted-foreground">
+        <div className="flex h-44 items-center justify-center font-mono text-xs uppercase tracking-wider text-muted-foreground">
           No completed scans yet
         </div>
       ) : (

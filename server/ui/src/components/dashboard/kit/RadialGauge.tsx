@@ -1,10 +1,10 @@
-import { useEffect, useId, useState } from "react";
 import { cn } from "@/lib/utils";
+import { useCountUp } from "@/lib/useCountUp";
 
 interface RadialGaugeProps {
   /** 0-100. */
   value: number;
-  /** Color for the readout number + needle. Defaults to the gradient end. */
+  /** Severity color for the value-position pointer + scale marker. */
   valueColor?: string;
   /** Large readout shown inside the arc. Defaults to the rounded value. */
   readout?: string;
@@ -14,12 +14,15 @@ interface RadialGaugeProps {
   className?: string;
 }
 
-const TRACK = "rgba(255,255,255,0.07)";
+const PHOSPHOR = "#F5A623";
+const TICK_OFF = "rgba(255,255,255,0.09)";
+const SEGMENTS = 40;
 
 /**
- * Semicircular speedometer gauge drawn in pure SVG (no chart dependency).
- * The arc reveals a green->amber->red risk scale up to `value`, and a needle
- * points to the same position. Animates on mount via a CSS transition.
+ * Segmented semicircular instrument gauge drawn in pure SVG (no chart dep).
+ * Reads like a control-panel dial: discrete amber "phosphor" tick marks fill
+ * up to `value`, a severity-colored pointer marks the current position, and a
+ * large mono numeral types in on mount. Mechanical, precise, no glow.
  */
 export function RadialGauge({
   value,
@@ -29,32 +32,46 @@ export function RadialGauge({
   size = 208,
   className,
 }: RadialGaugeProps) {
-  const gradientId = useId();
-  const glowId = useId();
   const clamped = Math.max(0, Math.min(100, value));
+  const animated = useCountUp(clamped, 950);
+  const pointer = valueColor ?? PHOSPHOR;
 
-  const [animated, setAnimated] = useState(0);
-  useEffect(() => {
-    const frame = requestAnimationFrame(() => setAnimated(clamped));
-    return () => cancelAnimationFrame(frame);
-  }, [clamped]);
-
-  const strokeWidth = 16;
-  const pad = strokeWidth / 2 + 6;
+  const pad = 16;
   const cx = size / 2;
   const cy = size / 2;
-  const r = size / 2 - pad;
-  const height = cy + 34;
+  const rOuter = size / 2 - pad;
+  const tickLen = 15;
+  const rInner = rOuter - tickLen;
+  const height = cy + 36;
 
-  const arcPath = `M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`;
+  const ticks = Array.from({ length: SEGMENTS }, (_, i) => {
+    const frac = i / (SEGMENTS - 1);
+    const pct = frac * 100;
+    const angle = (180 - frac * 180) * (Math.PI / 180);
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const filled = pct <= animated;
+    const leading = filled && (i + 1) / (SEGMENTS - 1) * 100 > animated;
+    return {
+      x1: cx + rInner * cos,
+      y1: cy - rInner * sin,
+      x2: cx + rOuter * cos,
+      y2: cy - rOuter * sin,
+      filled,
+      leading,
+    };
+  });
 
-  // Needle: value 0 -> 180deg (left), value 100 -> 0deg (right), over the top.
-  const needleR = r - strokeWidth / 2 - 2;
-  const angle = (180 - 1.8 * animated) * (Math.PI / 180);
-  const tipX = cx + needleR * Math.cos(angle);
-  const tipY = cy - needleR * Math.sin(angle);
+  // severity pointer notch at the current value angle
+  const pAngle = (180 - (animated / 100) * 180) * (Math.PI / 180);
+  const pCos = Math.cos(pAngle);
+  const pSin = Math.sin(pAngle);
+  const pTipX = cx + (rInner - 3) * pCos;
+  const pTipY = cy - (rInner - 3) * pSin;
+  const pBaseX = cx + (rInner - 12) * pCos;
+  const pBaseY = cy - (rInner - 12) * pSin;
 
-  const display = readout ?? String(Math.round(clamped));
+  const display = readout ?? String(Math.round(animated));
 
   return (
     <div className={cn("relative", className)}>
@@ -65,73 +82,60 @@ export function RadialGauge({
         role="img"
         aria-label={caption ? `${caption}: ${display}` : display}
       >
-        <defs>
-          <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#22C55E" />
-            <stop offset="45%" stopColor="#EAB308" />
-            <stop offset="75%" stopColor="#F97316" />
-            <stop offset="100%" stopColor="#EF4444" />
-          </linearGradient>
-          <filter id={glowId} x="-30%" y="-30%" width="160%" height="160%">
-            <feGaussianBlur stdDeviation="4" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
+        {ticks.map((t, i) => (
+          <line
+            key={i}
+            x1={t.x1}
+            y1={t.y1}
+            x2={t.x2}
+            y2={t.y2}
+            stroke={t.leading ? pointer : t.filled ? PHOSPHOR : TICK_OFF}
+            strokeWidth={t.filled ? 3 : 2}
+            strokeLinecap="butt"
+            opacity={t.filled ? 1 : 0.9}
+          />
+        ))}
 
-        <path
-          d={arcPath}
-          fill="none"
-          stroke={TRACK}
-          strokeWidth={strokeWidth}
-          strokeLinecap="round"
-        />
-        <path
-          d={arcPath}
-          fill="none"
-          stroke={`url(#${gradientId})`}
-          strokeWidth={strokeWidth}
-          strokeLinecap="round"
-          pathLength={100}
-          strokeDasharray={`${animated} 100`}
-          filter={`url(#${glowId})`}
-          style={{ transition: "stroke-dasharray 900ms cubic-bezier(0.22,1,0.36,1)" }}
-        />
-
+        {/* severity pointer */}
         <line
-          x1={cx}
-          y1={cy}
-          x2={tipX}
-          y2={tipY}
-          stroke={valueColor ?? "#EDF0F3"}
-          strokeWidth={3}
+          x1={pBaseX}
+          y1={pBaseY}
+          x2={pTipX}
+          y2={pTipY}
+          stroke={pointer}
+          strokeWidth={2.5}
           strokeLinecap="round"
-          style={{ transition: "all 900ms cubic-bezier(0.22,1,0.36,1)" }}
         />
-        <circle cx={cx} cy={cy} r={6} fill={valueColor ?? "#EDF0F3"} />
-        <circle cx={cx} cy={cy} r={11} fill="none" stroke={TRACK} strokeWidth={2} />
 
+        {/* scale end labels */}
+        <text x={cx - rOuter} y={cy + 16} textAnchor="middle" className="font-mono" style={{ fontSize: 9, fill: "#5C636E", letterSpacing: "0.1em" }}>
+          0
+        </text>
+        <text x={cx + rOuter} y={cy + 16} textAnchor="middle" className="font-mono" style={{ fontSize: 9, fill: "#5C636E", letterSpacing: "0.1em" }}>
+          100
+        </text>
+
+        {/* readout */}
         <text
           x={cx}
-          y={cy - 14}
+          y={cy - 6}
           textAnchor="middle"
           className="font-mono font-bold"
-          style={{ fontSize: 38, fill: valueColor ?? "#EDF0F3" }}
+          style={{ fontSize: 46, fill: PHOSPHOR, letterSpacing: "-0.02em" }}
         >
           {display}
         </text>
         {caption && (
           <text
             x={cx}
-            y={cy + 22}
+            y={cy + 18}
             textAnchor="middle"
+            className="font-mono"
             style={{
-              fontSize: 11,
-              letterSpacing: "0.12em",
+              fontSize: 10,
+              letterSpacing: "0.22em",
               textTransform: "uppercase",
-              fill: "#64788F",
+              fill: "#7A828E",
             }}
           >
             {caption}
