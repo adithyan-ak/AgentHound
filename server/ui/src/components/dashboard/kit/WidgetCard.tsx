@@ -9,7 +9,7 @@ interface WidgetCardProps {
   info?: string;
   /** Optional leading icon for the header. */
   icon?: LucideIcon;
-  /** Color for the leading icon + top accent hairline. */
+  /** Color for the leading icon + top keyline accent. Defaults to amber. */
   accent?: string;
   /** Right-aligned header slot (e.g. a "View all" link or a badge). */
   action?: React.ReactNode;
@@ -20,10 +20,14 @@ interface WidgetCardProps {
   children: React.ReactNode;
 }
 
+const PHOSPHOR = "#F5A623";
+
 /**
- * Standard dashboard panel: an elevated, glowing surface with a consistent
- * header (icon + title + info tip + action slot). Every widget on the home
- * page is wrapped in one so the grid reads as a single, cohesive system.
+ * Tactical SOC instrument panel. A sharp carbon surface with a console-style
+ * header — a bracketed, monospace, wide-tracked section label like
+ * `[ THREAT SEVERITY ]` — a thin accent keyline tab, and a hairline divider.
+ * Every home-page widget is wrapped in one so the grid reads as a single
+ * mission-control wall.
  */
 export function WidgetCard({
   title,
@@ -36,32 +40,40 @@ export function WidgetCard({
   flush = false,
   children,
 }: WidgetCardProps) {
+  const keyColor = accent ?? PHOSPHOR;
   return (
     <section
       className={cn(
-        "card-elevated group relative flex h-full flex-col overflow-hidden rounded-xl",
+        "card-elevated group relative flex h-full flex-col overflow-hidden rounded-md",
         className,
       )}
     >
-      {accent && (
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 top-0 h-px opacity-60"
-          style={{ background: `linear-gradient(90deg, transparent, ${accent}, transparent)` }}
-        />
-      )}
+      {/* full-width hairline + a short accent tab at the left = labeled instrument */}
+      <span aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-px bg-white/[0.05]" />
+      <span
+        aria-hidden
+        className="pointer-events-none absolute left-0 top-0 h-px w-14"
+        style={{ backgroundColor: keyColor, opacity: accent ? 0.9 : 0.55 }}
+      />
+
       {(title || action) && (
-        <header className="flex items-center justify-between gap-3 px-5 pb-3 pt-4">
+        <header className="flex items-center justify-between gap-3 border-b border-border/70 px-3.5 py-2.5">
           <div className="flex min-w-0 items-center gap-2">
             {Icon && (
               <Icon
-                className="h-4 w-4 shrink-0"
-                style={accent ? { color: accent } : undefined}
+                className="h-3.5 w-3.5 shrink-0"
+                style={{ color: accent ?? "rgb(var(--mauve-10-raw))" }}
               />
             )}
             {title && (
-              <h3 className="truncate text-[13px] font-semibold tracking-tight text-foreground">
-                {title}
+              <h3 className="flex min-w-0 items-center gap-1 truncate font-mono text-console uppercase tracking-[0.16em] text-foreground/90">
+                <span aria-hidden style={{ color: keyColor }} className="opacity-70">
+                  [
+                </span>
+                <span className="truncate">{title}</span>
+                <span aria-hidden style={{ color: keyColor }} className="opacity-70">
+                  ]
+                </span>
               </h3>
             )}
             {info && <InfoTip text={info} />}
@@ -69,7 +81,7 @@ export function WidgetCard({
           {action && <div className="shrink-0">{action}</div>}
         </header>
       )}
-      <div className={cn(!flush && "px-5 pb-5", flush && "pb-0", contentClassName)}>
+      <div className={cn(!flush && "px-3.5 py-3.5", flush && "pb-0", contentClassName)}>
         {children}
       </div>
     </section>

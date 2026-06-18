@@ -1,18 +1,17 @@
 import { Gauge } from "lucide-react";
 import { useAllNodes, useDashboardFindings, useDashboardScans } from "@/hooks/useDashboardData";
 import { Skeleton } from "@/components/ui/skeleton";
-import { WidgetCard, RadialGauge, DeltaBadge, StatusPill } from "./kit";
-import type { PillTone } from "./kit";
-import { riskColor } from "@/theme/tokens";
+import { WidgetCard, RadialGauge, DeltaBadge } from "./kit";
+import { riskColor, ACCENT } from "@/theme/tokens";
 
 const INFO =
   "Composite exposure index = (critical findings x8) + (high findings x3) + (unauthenticated servers x5), capped at 100. Higher is worse.";
 
-function level(score: number): { label: string; tone: PillTone } {
-  if (score >= 75) return { label: "Critical", tone: "critical" };
-  if (score >= 50) return { label: "Elevated", tone: "high" };
-  if (score >= 25) return { label: "Guarded", tone: "medium" };
-  return { label: "Low", tone: "success" };
+function band(score: number): { label: string; color: string } {
+  if (score >= 75) return { label: "Critical Risk", color: "#EF4444" };
+  if (score >= 50) return { label: "Elevated Risk", color: "#F97316" };
+  if (score >= 25) return { label: "Guarded", color: "#EAB308" };
+  return { label: "Low Risk", color: "#3FB950" };
 }
 
 interface ContributorProps {
@@ -22,12 +21,18 @@ interface ContributorProps {
 }
 
 function Contributor({ value, label, color }: ContributorProps) {
+  const active = value > 0;
   return (
-    <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2.5 text-center">
-      <p className="font-mono text-xl font-bold tabular-nums" style={{ color: value > 0 ? color : undefined }}>
-        {value}
+    <div className="relative rounded-[3px] border border-border/70 bg-black/30 px-2.5 py-2">
+      <span
+        aria-hidden
+        className="absolute left-0 top-0 h-px w-6"
+        style={{ backgroundColor: active ? color : "rgb(var(--mauve-7-raw))" }}
+      />
+      <p className="font-mono text-xl font-bold tabular-nums" style={{ color: active ? color : "rgb(var(--mauve-9-raw))" }}>
+        {String(value).padStart(2, "0")}
       </p>
-      <p className="mt-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+      <p className="mt-1 font-mono text-[9px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
         {label}
       </p>
     </div>
@@ -41,11 +46,11 @@ export function ExposureGauge() {
 
   if (loadingFindings || loadingNodes) {
     return (
-      <WidgetCard title="Exposure Index" info={INFO} icon={Gauge}>
+      <WidgetCard title="Exposure Index" info={INFO} icon={Gauge} accent={ACCENT}>
         <Skeleton className="mx-auto h-44 w-full max-w-[240px]" />
         <div className="mt-4 grid grid-cols-3 gap-2">
           {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-16 w-full rounded-lg" />
+            <Skeleton key={i} className="h-16 w-full rounded-[3px]" />
           ))}
         </div>
       </WidgetCard>
@@ -59,8 +64,8 @@ export function ExposureGauge() {
   ).length;
 
   const score = Math.min(100, critical * 8 + high * 3 + unauthServers * 5);
-  const color = riskColor(score);
-  const { label, tone } = level(score);
+  const pointer = riskColor(score);
+  const { label, color } = band(score);
 
   const completed = (scans ?? []).filter((s) => s.status === "completed");
   const delta =
@@ -73,20 +78,28 @@ export function ExposureGauge() {
       title="Exposure Index"
       info={INFO}
       icon={Gauge}
-      accent={color}
+      accent={ACCENT}
       action={<DeltaBadge value={delta} invert suffix="entities" />}
+      contentClassName="flex flex-1 flex-col justify-center gap-4"
     >
-      <div className="flex flex-col items-center">
-        <RadialGauge value={score} valueColor={color} caption="of 100" />
-        <StatusPill tone={tone} className="-mt-1">
-          {label} risk
-        </StatusPill>
+      <div className="relative flex flex-col items-center scanline">
+        <RadialGauge value={score} valueColor={pointer} caption="of 100" />
+        <div
+          className="-mt-1 inline-flex items-center gap-2 rounded-[2px] px-2.5 py-1 font-mono text-[11px] font-bold uppercase tracking-[0.14em] ring-1 ring-inset"
+          style={{ color, backgroundColor: `${color}14`, borderColor: `${color}40` }}
+        >
+          <span className="h-2 w-2 rounded-[1px]" style={{ backgroundColor: color }} />
+          {label}
+        </div>
       </div>
-      <div className="mt-4 grid grid-cols-3 gap-2">
-        <Contributor value={critical} label="Critical" color="#F87171" />
-        <Contributor value={high} label="High" color="#FB923C" />
-        <Contributor value={unauthServers} label="Unauth Srv" color="#FACC15" />
+      <div className="grid grid-cols-3 gap-2">
+        <Contributor value={critical} label="Critical" color="#EF4444" />
+        <Contributor value={high} label="High" color="#F97316" />
+        <Contributor value={unauthServers} label="Unauth Srv" color="#EAB308" />
       </div>
+      <p className="border-t border-border/60 pt-2.5 text-center font-mono text-[9px] uppercase tracking-[0.1em] text-muted-foreground/70">
+        idx = crit&times;8 + high&times;3 + unauth&times;5
+      </p>
     </WidgetCard>
   );
 }

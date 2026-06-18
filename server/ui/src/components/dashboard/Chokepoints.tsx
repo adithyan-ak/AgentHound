@@ -43,35 +43,44 @@ export function Chokepoints() {
       ) : isError || rows.length === 0 ? (
         <div className="flex h-56 flex-col items-center justify-center gap-2 text-center">
           <ShieldCheck className={isError ? "h-8 w-8 text-muted-foreground" : "h-8 w-8 text-emerald-500"} />
-          <p className="text-sm font-medium text-foreground">
+          <p className="font-mono text-sm font-medium text-foreground">
             {isError ? "Unable to check" : "No shared chokepoints"}
           </p>
-          <p className="text-xs text-muted-foreground">
+          <p className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
             {isError
-              ? "Could not query chokepoint servers."
-              : "No server is trusted by multiple agents."}
+              ? "Could not query chokepoint servers"
+              : "No server is trusted by multiple agents"}
           </p>
         </div>
       ) : (
-        <ol className="space-y-3">
+        <ol className="space-y-1.5">
           {rows.map((s) => {
-            const color = s.unauth ? "#F97316" : "#06B6D4";
+            const color = s.unauth ? "#F97316" : "#6E7B91";
             return (
-              <li key={s.name} className="space-y-1.5">
+              <li
+                key={s.name}
+                className="rounded-[3px] border border-border/60 bg-black/20 px-2.5 py-2"
+              >
                 <div className="flex items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate text-sm text-foreground">{s.name}</span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-foreground/90">
+                    {s.name}
+                  </span>
                   {s.unauth && (
                     <StatusPill tone="high" dot={false}>
                       unauth
                     </StatusPill>
                   )}
-                  <span className="shrink-0 font-mono text-sm font-bold tabular-nums" style={{ color }}>
+                  <span className="shrink-0 font-mono text-base font-bold tabular-nums" style={{ color }}>
                     {s.agentCount}
                   </span>
-                  <span className="shrink-0 text-[11px] text-muted-foreground">agents</span>
+                  <span className="shrink-0 font-mono text-[9px] uppercase tracking-wide text-muted-foreground">
+                    agents
+                  </span>
                 </div>
-                <MeterBar value={s.agentCount} max={maxAgents} color={color} />
-                <p className="text-[11px] text-muted-foreground">
+                <div className="mt-1.5">
+                  <MeterBar value={s.agentCount} max={maxAgents} color={color} height={4} />
+                </div>
+                <p className="mt-1 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
                   {s.toolCount} tool{s.toolCount === 1 ? "" : "s"} exposed
                 </p>
               </li>

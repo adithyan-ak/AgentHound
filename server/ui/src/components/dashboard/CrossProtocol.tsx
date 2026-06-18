@@ -57,8 +57,8 @@ function MiniSankey({ pivots }: { pivots: PivotPath[] }) {
     <svg width="100%" viewBox={`0 0 ${svgW} ${totalH}`} className="overflow-visible">
       <defs>
         <linearGradient id="xproto-link" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0%" stopColor={NODE_KIND_COLORS.A2AAgent} stopOpacity={0.55} />
-          <stop offset="100%" stopColor={NODE_KIND_COLORS.MCPResource} stopOpacity={0.55} />
+          <stop offset="0%" stopColor="#F5A623" stopOpacity={0.5} />
+          <stop offset="100%" stopColor={NODE_KIND_COLORS.MCPResource} stopOpacity={0.6} />
         </linearGradient>
       </defs>
 
@@ -90,24 +90,27 @@ function MiniSankey({ pivots }: { pivots: PivotPath[] }) {
 
       {agents.map((name, i) => (
         <g key={`a-${name}`}>
-          <rect x={col1X} y={agentYs[i]} width={colW} height={nodeH} rx={6} fill={`${NODE_KIND_COLORS.A2AAgent}26`} stroke={NODE_KIND_COLORS.A2AAgent} strokeWidth={1} />
-          <text x={col1X + 8} y={(agentYs[i] ?? 0) + 16} fill="#c4b5fd" fontSize={10} className="select-none">
+          <rect x={col1X} y={agentYs[i]} width={colW} height={nodeH} rx={2} fill="#16171B" stroke={NODE_KIND_COLORS.A2AAgent} strokeWidth={1} />
+          <rect x={col1X} y={agentYs[i]} width={3} height={nodeH} fill={NODE_KIND_COLORS.A2AAgent} />
+          <text x={col1X + 10} y={(agentYs[i] ?? 0) + 16} fill="#c4b5fd" fontSize={9} className="select-none font-mono">
             {truncate(name)}
           </text>
         </g>
       ))}
       {hosts.map((name, i) => (
         <g key={`h-${name}`}>
-          <rect x={col2X} y={hostYs[i]} width={colW} height={nodeH} rx={6} fill={`${NODE_KIND_COLORS.Host}66`} stroke="#64748b" strokeWidth={1} />
-          <text x={col2X + 8} y={(hostYs[i] ?? 0) + 16} fill="#cbd5e1" fontSize={10} className="select-none">
+          <rect x={col2X} y={hostYs[i]} width={colW} height={nodeH} rx={2} fill="#16171B" stroke="#5C636E" strokeWidth={1} />
+          <rect x={col2X} y={hostYs[i]} width={3} height={nodeH} fill="#5C636E" />
+          <text x={col2X + 10} y={(hostYs[i] ?? 0) + 16} fill="#cbd5e1" fontSize={9} className="select-none font-mono">
             {truncate(name)}
           </text>
         </g>
       ))}
       {resources.map((name, i) => (
         <g key={`r-${name}`}>
-          <rect x={col3X} y={resourceYs[i]} width={colW} height={nodeH} rx={6} fill={`${NODE_KIND_COLORS.MCPResource}26`} stroke={NODE_KIND_COLORS.MCPResource} strokeWidth={1} />
-          <text x={col3X + 8} y={(resourceYs[i] ?? 0) + 16} fill="#fca5a5" fontSize={10} className="select-none">
+          <rect x={col3X} y={resourceYs[i]} width={colW} height={nodeH} rx={2} fill="#16171B" stroke={NODE_KIND_COLORS.MCPResource} strokeWidth={1} />
+          <rect x={col3X} y={resourceYs[i]} width={3} height={nodeH} fill={NODE_KIND_COLORS.MCPResource} />
+          <text x={col3X + 10} y={(resourceYs[i] ?? 0) + 16} fill="#fca5a5" fontSize={9} className="select-none font-mono">
             {truncate(name)}
           </text>
         </g>
@@ -144,20 +147,20 @@ export function CrossProtocol() {
       ) : isError || pivots.length === 0 ? (
         <div className="flex h-56 flex-col items-center justify-center gap-2 text-center">
           <ShieldCheck className={isError ? "h-8 w-8 text-muted-foreground" : "h-8 w-8 text-emerald-500"} />
-          <p className="text-sm font-medium text-foreground">
+          <p className="font-mono text-sm font-medium text-foreground">
             {isError ? "Unable to check" : "No cross-protocol pivots"}
           </p>
-          <p className="text-xs text-muted-foreground">
+          <p className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
             {isError
-              ? "Could not query cross-protocol paths."
-              : "No A2A-to-MCP attack paths via shared hosts."}
+              ? "Could not query cross-protocol paths"
+              : "No A2A-to-MCP attack paths via shared hosts"}
           </p>
         </div>
       ) : (
         <div className="space-y-3">
-          <div className="flex justify-between px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <div className="flex justify-between px-1 font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
             <span>A2A Agent</span>
-            <span>Shared Host</span>
+            <span className="text-primary/70">Shared Host</span>
             <span>MCP Resource</span>
           </div>
           <MiniSankey pivots={pivots} />
