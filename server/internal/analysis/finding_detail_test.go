@@ -635,6 +635,69 @@ func TestReconstructAttackPath_CredentialChain(t *testing.T) {
 	}
 }
 
+// TestBuildImpact_SummaryNoExtraWart guards against the regression
+// where Impact.Summary leaked Go's literal "%!(EXTRA string=...)" to
+// the UI for edge kinds whose summary template contains fewer than
+// two %s placeholders. Before the fix, BuildImpact called
+// fmt.Sprintf(tmpl.summary, srcName, tgtName) unconditionally;
+// POISONED_DESCRIPTION and POISONED_INSTRUCTIONS only have one %s, so
+// the second arg landed in the formatted output as the wart.
+func TestBuildImpact_SummaryNoExtraWart(t *testing.T) {
+	cases := []struct {
+		name     string
+		edgeKind string
+		srcName  string
+		tgtName  string
+		wantSrc  bool // template should interpolate srcName
+	}{
+		{
+			name:     "POISONED_DESCRIPTION (1 placeholder)",
+			edgeKind: "POISONED_DESCRIPTION",
+			srcName:  "MyTool",
+			tgtName:  "MyTarget",
+			wantSrc:  true,
+		},
+		{
+			name:     "POISONED_INSTRUCTIONS (1 placeholder)",
+			edgeKind: "POISONED_INSTRUCTIONS",
+			srcName:  "/path/to/CLAUDE.md",
+			tgtName:  "agent-1",
+			wantSrc:  true,
+		},
+		{
+			name:     "CAN_REACH (2 placeholders)",
+			edgeKind: "CAN_REACH",
+			srcName:  "TestAgent",
+			tgtName:  "ProdDB",
+			wantSrc:  true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &Finding{
+				EdgeKind:   tc.edgeKind,
+				SourceID:   "src",
+				SourceName: tc.srcName,
+				TargetID:   "tgt",
+				TargetName: tc.tgtName,
+			}
+			impact := BuildImpact(f, nil, nil)
+			if impact == nil {
+				t.Fatal("expected impact, got nil")
+			}
+			if strings.Contains(impact.Summary, "%!(EXTRA") {
+				t.Errorf("Summary leaked Sprintf wart: %q", impact.Summary)
+			}
+			if strings.Contains(impact.Summary, "%s") {
+				t.Errorf("Summary leaked %%s placeholder: %q", impact.Summary)
+			}
+			if tc.wantSrc && !strings.Contains(impact.Summary, tc.srcName) {
+				t.Errorf("Summary = %q, expected source name %q to be interpolated", impact.Summary, tc.srcName)
+			}
+		})
+	}
+}
+
 // TestBuildImpact_CredentialChain confirms the dedicated impact
 // template fires for credential-chain findings instead of the generic
 // CAN_REACH template that gives the operator no information about the

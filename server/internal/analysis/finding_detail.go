@@ -427,8 +427,8 @@ func BuildImpact(f *Finding, path *AttackPath, compositeProps map[string]any) *I
 	}
 
 	impact := &Impact{
-		Summary:     fmt.Sprintf(tmpl.summary, srcName, tgtName),
-		BlastRadius: formatBlastRadius(tmpl.blastRadius, srcName, tgtName),
+		Summary:     formatImpactTemplate(tmpl.summary, srcName, tgtName),
+		BlastRadius: formatImpactTemplate(tmpl.blastRadius, srcName, tgtName),
 	}
 
 	if path != nil {
@@ -462,12 +462,16 @@ func isCredentialChain(props map[string]any) bool {
 	return false
 }
 
-// formatBlastRadius substitutes srcName/tgtName into a blastRadius template
-// without producing Go's "%!(EXTRA ...)" warts when the template contains
-// fewer than two %s placeholders. Several templates are static prose and
-// must pass through untouched; others reuse the same (src, tgt) pair as
-// the summary line.
-func formatBlastRadius(tmpl, srcName, tgtName string) string {
+// formatImpactTemplate substitutes srcName/tgtName into a Summary or
+// BlastRadius template without producing Go's "%!(EXTRA ...)" warts.
+// Templates may carry zero placeholders (static prose like CAN_EXECUTE's
+// blast radius), one placeholder (POISONED_DESCRIPTION's summary names
+// only the tool), or two (CAN_REACH names both ends of the chain).
+// Calling fmt.Sprintf with extra args produces a literal trailing
+// "%!(EXTRA string=...)" in the output, which is what users were
+// previously seeing on POISONED_DESCRIPTION / POISONED_INSTRUCTIONS
+// findings.
+func formatImpactTemplate(tmpl, srcName, tgtName string) string {
 	switch strings.Count(tmpl, "%s") {
 	case 0:
 		return tmpl
