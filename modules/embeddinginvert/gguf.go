@@ -126,7 +126,7 @@ func ParseGGUF(path string) (*GGUFFile, error) {
 				result.Tokens = append(result.Tokens, s)
 			}
 		} else {
-			if err := skipGGUFValue(f, valueType); err != nil {
+			if err := skipGGUFValue(f, valueType, fileSize); err != nil {
 				return nil, fmt.Errorf("skip metadata kv %d (%q): %w", i, key, err)
 			}
 		}
@@ -260,32 +260,24 @@ func readGGUFString(r io.Reader) (string, error) {
 	return string(buf), nil
 }
 
-func skipGGUFValue(r io.ReadSeeker, valueType uint32) error {
+func skipGGUFValue(r io.ReadSeeker, valueType uint32, fileSize int64) error {
 	switch valueType {
 	case 0: // uint8
-		_, err := r.Seek(1, io.SeekCurrent)
-		return err
+		return skipBytes(r, 1, fileSize)
 	case 1: // int8
-		_, err := r.Seek(1, io.SeekCurrent)
-		return err
+		return skipBytes(r, 1, fileSize)
 	case 2: // uint16
-		_, err := r.Seek(2, io.SeekCurrent)
-		return err
+		return skipBytes(r, 2, fileSize)
 	case 3: // int16
-		_, err := r.Seek(2, io.SeekCurrent)
-		return err
+		return skipBytes(r, 2, fileSize)
 	case 4: // uint32
-		_, err := r.Seek(4, io.SeekCurrent)
-		return err
+		return skipBytes(r, 4, fileSize)
 	case 5: // int32
-		_, err := r.Seek(4, io.SeekCurrent)
-		return err
+		return skipBytes(r, 4, fileSize)
 	case 6: // float32
-		_, err := r.Seek(4, io.SeekCurrent)
-		return err
+		return skipBytes(r, 4, fileSize)
 	case 7: // bool
-		_, err := r.Seek(1, io.SeekCurrent)
-		return err
+		return skipBytes(r, 1, fileSize)
 	case 8: // string
 		s, err := readGGUFString(r)
 		_ = s
@@ -299,23 +291,93 @@ func skipGGUFValue(r io.ReadSeeker, valueType uint32) error {
 		if err := binary.Read(r, binary.LittleEndian, &arrLen); err != nil {
 			return err
 		}
+		minSize, ok := minGGUFValueSize(arrType)
+		if !ok {
+			return fmt.Errorf("unknown gguf array value type %d", arrType)
+		}
+		remaining, err := remainingBytes(r, fileSize)
+		if err != nil {
+			return err
+		}
+		if arrLen > uint64(remaining)/uint64(minSize) {
+			return fmt.Errorf("array length %d of type %d exceeds remaining file bytes %d", arrLen, arrType, remaining)
+		}
+		if fixedSize, ok := fixedGGUFValueSize(arrType); ok {
+			total := arrLen * uint64(fixedSize)
+			if total > uint64(math.MaxInt64) {
+				return fmt.Errorf("array byte size %d exceeds int64 range", total)
+			}
+			return skipBytes(r, int64(total), fileSize)
+		}
 		for i := uint64(0); i < arrLen; i++ {
-			if err := skipGGUFValue(r, arrType); err != nil {
+			if err := skipGGUFValue(r, arrType, fileSize); err != nil {
 				return err
 			}
 		}
 		return nil
 	case 10: // uint64
-		_, err := r.Seek(8, io.SeekCurrent)
-		return err
+		return skipBytes(r, 8, fileSize)
 	case 11: // int64
-		_, err := r.Seek(8, io.SeekCurrent)
-		return err
+		return skipBytes(r, 8, fileSize)
 	case 12: // float64
-		_, err := r.Seek(8, io.SeekCurrent)
-		return err
+		return skipBytes(r, 8, fileSize)
 	default:
 		return fmt.Errorf("unknown gguf value type %d", valueType)
+	}
+}
+
+func remainingBytes(r io.Seeker, fileSize int64) (int64, error) {
+	pos, err := r.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, err
+	}
+	if pos < 0 || pos > fileSize {
+		return 0, fmt.Errorf("reader position %d outside file size %d", pos, fileSize)
+	}
+	return fileSize - pos, nil
+}
+
+func skipBytes(r io.Seeker, n, fileSize int64) error {
+	if n < 0 {
+		return fmt.Errorf("negative skip size %d", n)
+	}
+	remaining, err := remainingBytes(r, fileSize)
+	if err != nil {
+		return err
+	}
+	if n > remaining {
+		return fmt.Errorf("skip size %d exceeds remaining file bytes %d", n, remaining)
+	}
+	_, err = r.Seek(n, io.SeekCurrent)
+	return err
+}
+
+func fixedGGUFValueSize(valueType uint32) (int64, bool) {
+	switch valueType {
+	case 0, 1, 7: // uint8, int8, bool
+		return 1, true
+	case 2, 3: // uint16, int16
+		return 2, true
+	case 4, 5, 6: // uint32, int32, float32
+		return 4, true
+	case 10, 11, 12: // uint64, int64, float64
+		return 8, true
+	default:
+		return 0, false
+	}
+}
+
+func minGGUFValueSize(valueType uint32) (int64, bool) {
+	if fixed, ok := fixedGGUFValueSize(valueType); ok {
+		return fixed, true
+	}
+	switch valueType {
+	case 8: // string length prefix
+		return 8, true
+	case 9: // nested array header: element type + length
+		return 12, true
+	default:
+		return 0, false
 	}
 }
 

@@ -178,6 +178,34 @@ func TestParseGGUF_HugeTokenArrayRejected(t *testing.T) {
 	}
 }
 
+// TestParseGGUF_HugeSkippedArrayRejected covers non-tokenizer metadata
+// arrays. These are skipped rather than allocated, but their declared
+// length still must be bounded; os.File.Seek can move past EOF, so an
+// unchecked length used to burn CPU in a huge loop.
+func TestParseGGUF_HugeSkippedArrayRejected(t *testing.T) {
+	buf := ggufHeader(t, 0, 1) // one metadata KV
+	writeStr := func(s string) {
+		if err := binary.Write(buf, binary.LittleEndian, uint64(len(s))); err != nil {
+			t.Fatal(err)
+		}
+		buf.WriteString(s)
+	}
+	writeStr("general.fake_array")
+	if err := binary.Write(buf, binary.LittleEndian, uint32(9)); err != nil { // type 9 = array
+		t.Fatal(err)
+	}
+	if err := binary.Write(buf, binary.LittleEndian, uint32(0)); err != nil { // array elem type = uint8
+		t.Fatal(err)
+	}
+	if err := binary.Write(buf, binary.LittleEndian, uint64(math.MaxUint64)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ParseGGUF(writeTempGGUF(t, buf.Bytes()))
+	if err == nil {
+		t.Fatal("expected error on oversized skipped array, got nil")
+	}
+}
+
 // TestParseGGUF_TooManyTensorDimsRejected ensures a tensor declaring more
 // than GGML_MAX_DIMS dimensions is rejected before sizing the dims slice.
 func TestParseGGUF_TooManyTensorDimsRejected(t *testing.T) {
