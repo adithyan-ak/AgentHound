@@ -143,13 +143,15 @@ components:
           items:
             $ref: "#/components/schemas/Edge"
 
-    SearchResult:
+    SearchResultItem:
       type: object
       properties:
-        nodes:
-          type: array
-          items:
-            $ref: "#/components/schemas/Node"
+        id:
+          type: string
+        name:
+          type: string
+        kind:
+          type: string
 
     NeighborhoodResponse:
       type: object
@@ -401,7 +403,7 @@ components:
           type: string
         status:
           type: string
-          enum: [pending, running, completed, failed]
+          enum: [pending, running, completed, completed_with_errors, failed]
         started_at:
           type: string
           format: date-time
@@ -562,7 +564,9 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SearchResult"
+                type: array
+                items:
+                  $ref: "#/components/schemas/SearchResultItem"
 
   /graph/nodes:
     get:
@@ -627,13 +631,13 @@ paths:
           required: true
           schema:
             type: string
-        - name: hops
+        - name: depth
           in: query
           schema:
             type: integer
             default: 1
             minimum: 1
-            maximum: 5
+            maximum: 3
         - name: limit
           in: query
           schema:
@@ -882,7 +886,7 @@ paths:
   /analysis/prebuilt:
     get:
       summary: List pre-built queries
-      description: Returns metadata for all 17 pre-built security queries.
+      description: Returns metadata for all 18 pre-built security queries.
       operationId: listPreBuilt
       tags: [Analysis]
       responses:
