@@ -34,8 +34,9 @@ MCP servers (JSON-RPC initialize) and A2A agents (well-known agent-card).
 
 Unlike 'agenthound scan', which sweeps a fixed AI-service port set and
 fingerprints each open port, 'agenthound discover' issues protocol-specific
-HTTP probes against likely web ports (3000/8080/8443 for MCP, 80/443 for A2A)
-and emits :MCPServer and :A2AAgent nodes for each positive match.
+HTTP probes against likely web ports (3000/8000/8080/8443 for MCP,
+80/443/3000/8080 for A2A) and emits :MCPServer and :A2AAgent nodes for each
+positive match.
 
 Example:
 
