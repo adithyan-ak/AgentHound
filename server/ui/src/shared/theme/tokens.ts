@@ -153,6 +153,7 @@ export const ACCENT = "#F5A623"; // amber phosphor — primary highlight / hero 
 export const ACCENT_BRIGHT = "#FFB020"; // hotter amber — focus / leading edge
 export const ACCENT_DIM = "#7A5A1E"; // amber, recessed — unfilled instrument ticks
 export const SIGNAL_OK = "#3FB950"; // operational / OK only
+export const TRIAGE_NEUTRAL = "#8B92A5"; // slate-gray — untouched "new" triage status
 
 // Recharts theme constants — carbon panel surfaces, amber-led series.
 export const CHART_THEME = {

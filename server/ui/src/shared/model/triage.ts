@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { SEVERITY, ACCENT, SIGNAL_OK } from "@shared/theme/tokens";
+import { SEVERITY, ACCENT, SIGNAL_OK, TRIAGE_NEUTRAL } from "@shared/theme/tokens";
 
 /**
  * Finding triage workflow state (shared kernel).
@@ -35,7 +35,7 @@ export interface TriageMeta {
 }
 
 export const TRIAGE_META: Record<TriageStatus, TriageMeta> = {
-  new: { label: "New", short: "NEW", color: "#8B92A5" },
+  new: { label: "New", short: "NEW", color: TRIAGE_NEUTRAL },
   triaging: { label: "Triaging", short: "TRIAGE", color: ACCENT },
   confirmed: { label: "Confirmed", short: "CONFIRMED", color: SEVERITY.critical.solid },
   "accepted-risk": { label: "Accepted risk", short: "ACCEPTED", color: SEVERITY.info.solid },

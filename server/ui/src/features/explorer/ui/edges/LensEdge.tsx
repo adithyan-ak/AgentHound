@@ -3,7 +3,7 @@ import { BaseEdge, getBezierPath, type EdgeProps } from "@xyflow/react";
 import type { LensEdgeData } from "@features/explorer/model/graph";
 import { useExplorerStore } from "@features/explorer/model/store";
 import { edgeLabel } from "@entities/edge";
-import { EDGE_COLORS } from "@shared/theme/tokens";
+import { EDGE_COLORS, EXPLORER_HEX_FILL } from "@shared/theme/tokens";
 
 function edgeColor(data: LensEdgeData): string {
   return data.color ?? EDGE_COLORS.structure;
@@ -131,7 +131,7 @@ function LensEdgeComponent(props: EdgeProps) {
             width={labelWidth}
             height={17}
             rx={3}
-            fill="#0B1220"
+            fill={EXPLORER_HEX_FILL}
             stroke={color}
             strokeOpacity={0.55}
           />
