@@ -53,6 +53,20 @@ These labels exist in `AllNodeLabels` but NOT in `AllowedNodeKinds` — collecto
 | `ResourceGroup` | Post-processor | `type`, `sensitivity` |
 | `TrustZone` | Post-processor | `name`, `level`, `node_count` |
 
+### A2AAgent Signature Verification (`is_signed`, `signature_valid`)
+
+`A2AAgent` carries two independent signature properties:
+
+- **`is_signed`** — `true` when the agent card has a non-empty `signatures[]` array, regardless of cryptographic validity.
+- **`signature_valid`** — `true` only when every signature in the card cryptographically verifies against a key in the card's inline `jwks`.
+
+The collector accepts both JWS serializations a card may use:
+
+- **Compact** — each `signatures[]` entry is a compact JWS string.
+- **Flattened JSON (object form)** — each entry is `{ "protected": "<b64url>", "signature": "<b64url>" }`, the spec-conformant A2A shape. The signed payload is the agent card with the `signatures` member removed and JCS-canonicalized (RFC 8785 key ordering, no insignificant whitespace); it is embedded base64url-encoded as the JWS payload and verified per RFC 7515. Tampering with any other card field invalidates the signature.
+
+`signature_valid` is `false` (card unverifiable, not a verification failure) when the card omits inline `jwks`. Remote `jwks_uri` fetching is not performed — a card whose keys live only behind `jwks_uri` reports `signature_valid=false`.
+
 ---
 
 ## 2. Umbrella Labels
@@ -150,7 +164,7 @@ All node IDs are deterministic, content-based SHA-256 hashes. This ensures ident
 | `InstructionFile` | `SHA-256("InstructionFile:" + absolute_path)` |
 | `AIModel` | `SHA-256("AIModel:" + instance_id + ":" + model_name)` |
 
-**Critical invariant:** The MCPServer ID MUST match between Config Collector and MCP Collector outputs. This is the merge point connecting trust relationships (who trusts what) to capabilities (what a server exposes).
+**Critical invariant:** The MCPServer ID MUST match between Config Collector and MCP Collector outputs. This is the merge point connecting trust relationships (who trusts what) to capabilities (what a server exposes). `ComputeMCPServerID` trims surrounding whitespace from the endpoint and each arg before hashing, so `"npx "` and `"npx"` produce the same ID regardless of which collector parsed the config.
 
 ---
 

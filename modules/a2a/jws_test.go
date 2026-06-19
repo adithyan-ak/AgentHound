@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	jose "github.com/go-jose/go-jose/v4"
@@ -268,6 +269,141 @@ func TestJWS_NonStringSignatureEntry(t *testing.T) {
 	}
 }
 
+func TestJWS_ObjectForm_RS256_Valid(t *testing.T) {
+	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	card := map[string]any{
+		"name": "object-form-agent",
+		"url":  "https://example.com/a2a",
+	}
+	raw := buildObjectFormCard(t, card, privKey, jose.RS256, "rsa-obj-1", &privKey.PublicKey)
+
+	signed, valid := VerifySignatures(nil, raw)
+	if !signed {
+		t.Error("expected signed=true")
+	}
+	if !valid {
+		t.Error("expected valid=true for valid object-form RS256 signature")
+	}
+}
+
+func TestJWS_ObjectForm_ES256_Valid(t *testing.T) {
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	card := map[string]any{
+		"name":         "ecdsa-object-agent",
+		"capabilities": map[string]any{"streaming": true},
+	}
+	raw := buildObjectFormCard(t, card, privKey, jose.ES256, "ec-obj-1", &privKey.PublicKey)
+
+	signed, valid := VerifySignatures(nil, raw)
+	if !signed {
+		t.Error("expected signed=true")
+	}
+	if !valid {
+		t.Error("expected valid=true for valid object-form ES256 signature")
+	}
+}
+
+func TestJWS_ObjectForm_TamperedPayload(t *testing.T) {
+	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	card := map[string]any{"name": "original-object"}
+	raw := buildObjectFormCard(t, card, privKey, jose.RS256, "rsa-obj-1", &privKey.PublicKey)
+
+	raw["name"] = "tampered-object"
+
+	signed, valid := VerifySignatures(nil, raw)
+	if !signed {
+		t.Error("expected signed=true")
+	}
+	if valid {
+		t.Error("expected valid=false when card body is tampered after signing")
+	}
+}
+
+func TestJWS_ObjectForm_WrongKey(t *testing.T) {
+	signingKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	card := map[string]any{"name": "wrong-key-object"}
+	raw := buildObjectFormCard(t, card, signingKey, jose.RS256, "rsa-obj-1", &wrongKey.PublicKey)
+
+	signed, valid := VerifySignatures(nil, raw)
+	if !signed {
+		t.Error("expected signed=true")
+	}
+	if valid {
+		t.Error("expected valid=false when jwks public key does not match signer")
+	}
+}
+
+func TestJWS_ObjectForm_MalformedProtected(t *testing.T) {
+	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	jwksMap := jwksToMap(t, []jose.JSONWebKey{{Key: &privKey.PublicKey, KeyID: "k"}})
+	raw := map[string]any{
+		"name": "malformed-object",
+		"signatures": []any{
+			map[string]any{
+				"protected": "!!!not-base64!!!",
+				"signature": "also@@@bad",
+			},
+		},
+		"jwks": jwksMap,
+	}
+
+	signed, valid := VerifySignatures(nil, raw)
+	if !signed {
+		t.Error("expected signed=true")
+	}
+	if valid {
+		t.Error("expected valid=false for malformed base64 in object form")
+	}
+}
+
+func TestJWS_ObjectForm_MissingFields(t *testing.T) {
+	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	jwksMap := jwksToMap(t, []jose.JSONWebKey{{Key: &privKey.PublicKey, KeyID: "k"}})
+	raw := map[string]any{
+		"name": "missing-fields-object",
+		"signatures": []any{
+			map[string]any{"protected": "eyJhbGciOiJSUzI1NiJ9"},
+		},
+		"jwks": jwksMap,
+	}
+
+	signed, valid := VerifySignatures(nil, raw)
+	if !signed {
+		t.Error("expected signed=true")
+	}
+	if valid {
+		t.Error("expected valid=false when signature member is missing")
+	}
+}
+
 // --- test helpers ---
 
 func signPayload(t *testing.T, key any, alg jose.SignatureAlgorithm, kid string, payload []byte) string {
@@ -289,6 +425,71 @@ func signPayload(t *testing.T, key any, alg jose.SignatureAlgorithm, kid string,
 		t.Fatal(err)
 	}
 	return compact
+}
+
+// buildObjectFormCard produces a spec-shaped A2A card whose "signatures"
+// member is a flattened AgentCardSignature object {protected, signature}. The
+// signature is computed over the JCS-canonical card with the signatures member
+// absent — identical to what canonicalSignedPayload reconstructs at verify
+// time — then split into compact segments, exactly as a real issuer would
+// populate the object. verifyPubKey controls which key lands in the JWKS so
+// negative (wrong-key) cases can be built.
+func buildObjectFormCard(t *testing.T, card map[string]any, signKey any, alg jose.SignatureAlgorithm, kid string, verifyPubKey any) map[string]any {
+	t.Helper()
+
+	// Assemble the card exactly as it will be served (inline jwks included),
+	// since the spec excludes only the "signatures" member from the signed
+	// content. Sign the canonical form, then attach the flattened signature.
+	raw := make(map[string]any, len(card)+2)
+	for k, v := range card {
+		raw[k] = v
+	}
+	raw["jwks"] = jwksToMap(t, []jose.JSONWebKey{{Key: verifyPubKey, KeyID: kid}})
+
+	canonical, err := canonicalSignedPayload(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	signingKey := jose.SigningKey{Algorithm: alg, Key: &jose.JSONWebKey{Key: signKey, KeyID: kid}}
+	signer, err := jose.NewSigner(signingKey, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jws, err := signer.Sign(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact, err := jws.CompactSerialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(compact, ".")
+	if len(parts) != 3 {
+		t.Fatalf("expected 3 compact segments, got %d", len(parts))
+	}
+
+	raw["signatures"] = []any{
+		map[string]any{
+			"protected": parts[0],
+			"signature": parts[2],
+		},
+	}
+	return raw
+}
+
+func jwksToMap(t *testing.T, keys []jose.JSONWebKey) map[string]any {
+	t.Helper()
+	jwks := jose.JSONWebKeySet{Keys: keys}
+	jwksBytes, err := json.Marshal(jwks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var jwksMap map[string]any
+	if err := json.Unmarshal(jwksBytes, &jwksMap); err != nil {
+		t.Fatal(err)
+	}
+	return jwksMap
 }
 
 func buildRawWithJWKS(t *testing.T, payload []byte, sigs []string, pubKey any, kid string) map[string]any {

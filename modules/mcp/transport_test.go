@@ -200,6 +200,75 @@ func TestBuildHTTPTransport_TLSStrictDefault(t *testing.T) {
 	}
 }
 
+// TestHeaderRoundTripper_StripsAuthOnCrossHostRedirect verifies that
+// caller-supplied headers (e.g. Authorization) are sent to the original
+// endpoint host but NOT carried to a different host on a 302 redirect.
+func TestHeaderRoundTripper_StripsAuthOnCrossHostRedirect(t *testing.T) {
+	var secondAuth string
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer second.Close()
+
+	var firstAuth string
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstAuth = r.Header.Get("Authorization")
+		http.Redirect(w, r, second.URL, http.StatusFound)
+	}))
+	defer first.Close()
+
+	client := &http.Client{Transport: headerRoundTripper{
+		base:    &http.Transport{},
+		headers: map[string]string{"Authorization": "Bearer secret-token"},
+		host:    endpointHost(first.URL),
+	}}
+
+	resp, err := client.Get(first.URL)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if firstAuth != "Bearer secret-token" {
+		t.Errorf("same-host request: Authorization = %q, want %q", firstAuth, "Bearer secret-token")
+	}
+	if secondAuth != "" {
+		t.Errorf("cross-host redirect leaked Authorization: got %q, want empty", secondAuth)
+	}
+}
+
+// TestHeaderRoundTripper_SameHostUnchanged verifies that same-host requests
+// still receive caller-supplied headers (no regression for the common case).
+func TestHeaderRoundTripper_SameHostUnchanged(t *testing.T) {
+	var gotAuth, gotCustom string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotCustom = r.Header.Get("X-Custom")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{Transport: headerRoundTripper{
+		base:    &http.Transport{},
+		headers: map[string]string{"Authorization": "Bearer tok", "X-Custom": "v"},
+		host:    endpointHost(srv.URL),
+	}}
+
+	resp, err := client.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if gotAuth != "Bearer tok" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer tok")
+	}
+	if gotCustom != "v" {
+		t.Errorf("X-Custom = %q, want %q", gotCustom, "v")
+	}
+}
+
 func TestBuildSSETransport(t *testing.T) {
 	spec := ServerSpec{
 		Name:      "test-server",

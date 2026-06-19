@@ -2,6 +2,7 @@ package a2a
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 
@@ -35,10 +36,27 @@ func VerifySignatures(cardJSON []byte, raw map[string]any) (signed bool, valid b
 		return true, false
 	}
 
+	canonical, err := canonicalSignedPayload(raw)
+	if err != nil {
+		slog.Warn("jws: failed to canonicalize signed payload", "error", err)
+		return true, false
+	}
+
 	for i, entry := range sigArr {
-		compact, ok := entry.(string)
-		if !ok {
-			slog.Warn("jws: signature entry is not a string", "index", i)
+		var compact string
+		objectForm := false
+		switch e := entry.(type) {
+		case string:
+			compact = e
+		case map[string]any:
+			objectForm = true
+			compact, ok = flattenedToCompact(e, canonical)
+			if !ok {
+				slog.Warn("jws: object-form signature entry is malformed", "index", i)
+				return true, false
+			}
+		default:
+			slog.Warn("jws: signature entry is neither string nor object", "index", i)
 			return true, false
 		}
 
@@ -64,7 +82,7 @@ func VerifySignatures(cardJSON []byte, raw map[string]any) (signed bool, valid b
 		for _, key := range keys {
 			verifiedPayload, err := jws.Verify(&key)
 			if err == nil {
-				if cardJSON != nil && !bytes.Equal(verifiedPayload, cardJSON) {
+				if !objectForm && cardJSON != nil && !bytes.Equal(verifiedPayload, cardJSON) {
 					slog.Warn("jws: verified payload does not match card body", "index", i)
 					return true, false
 				}
@@ -79,6 +97,54 @@ func VerifySignatures(cardJSON []byte, raw map[string]any) (signed bool, valid b
 	}
 
 	return true, true
+}
+
+// flattenedToCompact reconstructs a compact JWS string from a flattened
+// AgentCardSignature object {protected, signature}. Per the A2A spec
+// (section 8.4) the signed payload is the agent card with the "signatures"
+// member removed, JCS-canonicalized; it is NOT detached, so it is embedded
+// base64url-encoded as the JWS payload segment.
+func flattenedToCompact(entry map[string]any, canonicalPayload []byte) (string, bool) {
+	protected, ok := entry["protected"].(string)
+	if !ok || protected == "" {
+		return "", false
+	}
+	signature, ok := entry["signature"].(string)
+	if !ok || signature == "" {
+		return "", false
+	}
+	if _, err := base64.RawURLEncoding.DecodeString(protected); err != nil {
+		return "", false
+	}
+	if _, err := base64.RawURLEncoding.DecodeString(signature); err != nil {
+		return "", false
+	}
+	payloadSeg := base64.RawURLEncoding.EncodeToString(canonicalPayload)
+	return protected + "." + payloadSeg + "." + signature, true
+}
+
+// canonicalSignedPayload returns the JCS-canonicalized (RFC 8785) bytes of the
+// agent card with the "signatures" member removed, matching the content the
+// A2A signer signs (spec section 8.4.1). Go's encoding/json marshals map keys
+// in lexicographic order with no insignificant whitespace, which satisfies
+// JCS for the decoded-JSON object shapes A2A cards use; HTML escaping is
+// disabled so '<', '>' and '&' are not mangled.
+func canonicalSignedPayload(raw map[string]any) ([]byte, error) {
+	stripped := make(map[string]any, len(raw))
+	for k, v := range raw {
+		if k == "signatures" {
+			continue
+		}
+		stripped[k] = v
+	}
+
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(stripped); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
 func extractJWKS(raw map[string]any) (*jose.JSONWebKeySet, error) {

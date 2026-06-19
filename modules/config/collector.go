@@ -42,6 +42,25 @@ var _ collector.Collector = (*ConfigCollector)(nil)
 
 func (c *ConfigCollector) Name() string { return "config" }
 
+// DiscoveryPaths returns the de-duplicated union of every parser's
+// ConfigPaths(homeDir). It is the single source of truth for which local
+// client config files are scanned during --discover, shared with the MCP
+// collector so the two collectors cover identical paths.
+func (c *ConfigCollector) DiscoveryPaths(homeDir string) []string {
+	var paths []string
+	seen := make(map[string]bool)
+	for _, p := range c.parsers {
+		for _, path := range p.ConfigPaths(homeDir) {
+			if path == "" || seen[path] {
+				continue
+			}
+			seen[path] = true
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
 func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOptions) (*ingest.IngestData, error) {
 	engine := opts.RulesEngine
 	if engine == nil {

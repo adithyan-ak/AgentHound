@@ -28,7 +28,16 @@ Four gates, all on by default. Decision G in `docs/plans/v0.3-v0.4-implementatio
 - Mode `0o600` on the receipt files; `0o700` on the directories.
 - One file per `(module-id, engagement-id)` tuple. Multiple receipts for the same engagement append to the same file as a JSON array.
 - Receipts include `module_id`, `target`, `target_id`, `original_content` (load-bearing for revert), `injected_content`, `mode`, `applied_at`, `dry_run`.
+- File-mutating modules (`instruction.poison`, `mcp.config.implant`) additionally record `file_existed` and `orig_mode` in the receipt's `Extra` map, so revert can restore the exact prior state — see [restore fidelity](#restore-fidelity) below.
 - Override the state root with `AGENTHOUND_STATE_DIR` (used by tests; production should leave it alone).
+
+### Restore fidelity
+
+For modules that mutate on-disk files, `revert` restores the file's prior state precisely:
+
+- **File that did not exist before** is **removed** on revert (not left behind as an empty shell), restoring the original absent state. If the operator or client added other content to that file after the mutation, revert keeps the file and only drops the agenthound-owned entry/block.
+- **Pre-existing file** keeps its **original permission mode** — revert no longer narrows it to `0o600`. The mode captured at mutation time (`orig_mode`) is reapplied.
+- Receipts written before these fields existed default to the prior conservative behavior (leave the file, mode `0o600`), so older receipts still revert safely.
 
 ## v0.4 modules
 

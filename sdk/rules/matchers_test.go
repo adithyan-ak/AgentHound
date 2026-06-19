@@ -348,6 +348,124 @@ func TestPrefixMatcher(t *testing.T) {
 	}
 }
 
+// TestKeywordMatcherUnicodeFolds guards against the offset corruption /
+// slice-bounds panic that arises when strings.ToLower changes byte length:
+// expanding folds ('Ⱥ' U+023A, 2 bytes → 'ⱥ' U+2C65, 3 bytes) grow the lowered
+// string so the lowered match index runs past the original's length (the old
+// code's `text[idx:idx+len(kw)]` panicked with slice-bounds-out-of-range);
+// shrinking folds ('İ' U+0130, 2 bytes → "i", 1 byte) produce a smaller
+// lowered string and previously yielded garbled evidence. The reported
+// offset/text must be a valid byte span into the ORIGINAL text in both cases.
+func TestKeywordMatcherUnicodeFolds(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantText  string
+		wantStart int
+	}{
+		{
+			name:     "expanding fold before match does not panic",
+			input:    "Ⱥshell", // 'Ⱥ' grows under ToLower; old code panicked here
+			wantText: "shell",
+		},
+		{
+			name:     "multiple expanding folds before match",
+			input:    "ⰊⱥⰋⱥshell", // mixed expanders pile up the byte-length skew
+			wantText: "shell",
+		},
+		{
+			name:      "shrinking fold before match yields correct evidence",
+			input:     "İsecret",
+			wantText:  "secret",
+			wantStart: 2, // 'İ' is 2 bytes in the original
+		},
+		{
+			name:     "expanding folds surrounding match",
+			input:    "ȺshellȾ",
+			wantText: "shell",
+		},
+		{
+			name:     "uppercase match preserves original casing in evidence",
+			input:    "SHELL here",
+			wantText: "SHELL",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			kw := "shell"
+			if tc.name == "shrinking fold before match yields correct evidence" {
+				kw = "secret"
+			}
+			spec := MatcherSpec{Type: "keyword", Keywords: []string{kw}, CaseInsensitive: true}
+			m, err := compileMatcher(spec)
+			if err != nil {
+				t.Fatalf("compile: %v", err)
+			}
+			results := m.Match(tc.input) // must not panic
+			if len(results) != 1 {
+				t.Fatalf("got %d results, want 1", len(results))
+			}
+			r := results[0]
+			if r.Offset < 0 || r.Offset+len(r.Text) > len(tc.input) {
+				t.Fatalf("offset/text out of bounds: offset=%d text=%q len(input)=%d", r.Offset, r.Text, len(tc.input))
+			}
+			if r.Text != tc.wantText {
+				t.Errorf("evidence text = %q, want %q", r.Text, tc.wantText)
+			}
+			if tc.wantStart != 0 && r.Offset != tc.wantStart {
+				t.Errorf("offset = %d, want %d", r.Offset, tc.wantStart)
+			}
+		})
+	}
+}
+
+// TestPrefixMatcherUnicodeFolds is the prefix-matcher equivalent of the
+// keyword fold guard: a case-insensitive prefix match over a prefix that
+// folds with a different byte length must report a valid in-bounds evidence
+// span into the original text and must not panic.
+func TestPrefixMatcherUnicodeFolds(t *testing.T) {
+	// 'İ' (U+0130, 2 bytes) lowercases to "i" (1 byte) — a shrinking fold.
+	// The prefix "i" matched case-insensitively against "İmpl" must produce a
+	// valid evidence span (the original 'İ', 2 bytes), not a 1-byte slice that
+	// would split the rune or report the wrong text.
+	spec := MatcherSpec{Type: "prefix", Prefixes: []string{"i"}, CaseInsensitive: true}
+	m, err := compileMatcher(spec)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	input := "İmpl"
+	results := m.Match(input) // must not panic
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	r := results[0]
+	if r.Offset != 0 {
+		t.Errorf("prefix offset = %d, want 0", r.Offset)
+	}
+	if r.Offset+len(r.Text) > len(input) {
+		t.Fatalf("evidence out of bounds: text=%q len(input)=%d", r.Text, len(input))
+	}
+	if r.Text != "İ" {
+		t.Errorf("evidence text = %q, want %q", r.Text, "İ")
+	}
+
+	// Expanding fold: prefix "ⱭⱭ" (the chars themselves are the prefix) — just
+	// assert no panic and a valid span for an ASCII prefix preceding nothing.
+	spec2 := MatcherSpec{Type: "prefix", Prefixes: []string{"vault://"}, CaseInsensitive: true}
+	m2, err := compileMatcher(spec2)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	in2 := "VAULT://secret"
+	res2 := m2.Match(in2)
+	if len(res2) != 1 {
+		t.Fatalf("got %d results, want 1", len(res2))
+	}
+	if res2[0].Text != "VAULT://" {
+		t.Errorf("evidence text = %q, want %q", res2[0].Text, "VAULT://")
+	}
+}
+
 func TestUnknownMatcherType(t *testing.T) {
 	_, err := compileMatcher(MatcherSpec{Type: "unknown"})
 	if err == nil {

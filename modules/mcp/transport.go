@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 
@@ -62,6 +63,7 @@ func buildHTTPTransport(spec ServerSpec, insecure bool) (mcpsdk.Transport, error
 		transport.HTTPClient = &http.Client{Transport: headerRoundTripper{
 			base:    httpTransport,
 			headers: spec.Headers,
+			host:    endpointHost(spec.URL),
 		}}
 	}
 
@@ -81,6 +83,7 @@ func buildSSETransport(spec ServerSpec, insecure bool) mcpsdk.Transport {
 		transport.HTTPClient = &http.Client{Transport: headerRoundTripper{
 			base:    httpTransport,
 			headers: spec.Headers,
+			host:    endpointHost(spec.URL),
 		}}
 	}
 
@@ -90,11 +93,27 @@ func buildSSETransport(spec ServerSpec, insecure bool) mcpsdk.Transport {
 type headerRoundTripper struct {
 	base    http.RoundTripper
 	headers map[string]string
+	host    string
 }
 
+// RoundTrip injects caller-supplied headers only when the request targets the
+// original endpoint host. Go's http.Client strips sensitive headers (e.g.
+// Authorization) on cross-host redirects; re-adding them on every request would
+// leak credentials to the redirect target. Scoping to the original host
+// preserves that protection while keeping same-host behavior unchanged.
 func (h headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	for k, v := range h.headers {
-		req.Header.Set(k, v)
+	if h.host == "" || req.URL.Host == h.host {
+		for k, v := range h.headers {
+			req.Header.Set(k, v)
+		}
 	}
 	return h.base.RoundTrip(req)
+}
+
+func endpointHost(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return ""
+	}
+	return u.Host
 }

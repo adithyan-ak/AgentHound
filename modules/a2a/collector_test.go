@@ -2,14 +2,19 @@ package a2a
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/sdk/collector"
+	jose "github.com/go-jose/go-jose/v4"
 )
 
 func TestCollector_Name(t *testing.T) {
@@ -336,11 +341,51 @@ func TestCollector_SignedCard(t *testing.T) {
 	if props["is_signed"] != true {
 		t.Errorf("expected is_signed=true, got %v", props["is_signed"])
 	}
+	// Fixture is signed but carries neither inline jwks nor a real signature,
+	// so it is genuinely unverifiable: signed=true, valid=false.
 	if props["signature_valid"] != false {
-		t.Errorf("expected signature_valid=false (Phase 2 MVP), got %v", props["signature_valid"])
+		t.Errorf("expected signature_valid=false for unverifiable card, got %v", props["signature_valid"])
 	}
 	if props["auth_method"] != "mtls" {
 		t.Errorf("expected auth_method=mtls, got %v", props["auth_method"])
+	}
+}
+
+func TestCollector_SignedCard_ObjectForm_Valid(t *testing.T) {
+	body := buildSignedObjectFormCardJSON(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	c := NewA2ACollector()
+	data, err := c.Collect(context.Background(), collector.CollectOptions{
+		TargetURL: srv.URL,
+		ScanID:    "test-scan-signed-valid",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var props map[string]any
+	for _, n := range data.Graph.Nodes {
+		for _, k := range n.Kinds {
+			if k == "A2AAgent" {
+				raw, _ := json.Marshal(n.Properties)
+				_ = json.Unmarshal(raw, &props)
+			}
+		}
+	}
+	if props == nil {
+		t.Fatal("expected A2AAgent node")
+	}
+
+	if props["is_signed"] != true {
+		t.Errorf("expected is_signed=true, got %v", props["is_signed"])
+	}
+	if props["signature_valid"] != true {
+		t.Errorf("expected signature_valid=true for properly-signed object-form card, got %v", props["signature_valid"])
 	}
 }
 
@@ -416,4 +461,57 @@ func TestCollector_OutputFormat(t *testing.T) {
 	if _, ok := roundTrip["graph"]; !ok {
 		t.Error("missing 'graph' in output")
 	}
+}
+
+func buildSignedObjectFormCardJSON(t *testing.T) []byte {
+	t.Helper()
+
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	card := map[string]any{
+		"name":            "SecureAgent",
+		"description":     "A security-hardened agent with a real signed card",
+		"url":             "https://secure.example.com/a2a",
+		"version":         "2.0.0",
+		"protocolVersion": "0.3.0",
+		"jwks":            jwksToMap(t, []jose.JSONWebKey{{Key: &privKey.PublicKey, KeyID: "key-1"}}),
+	}
+
+	canonical, err := canonicalSignedPayload(card)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	signer, err := jose.NewSigner(jose.SigningKey{
+		Algorithm: jose.ES256,
+		Key:       &jose.JSONWebKey{Key: privKey, KeyID: "key-1"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jws, err := signer.Sign(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact, err := jws.CompactSerialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(compact, ".")
+	if len(parts) != 3 {
+		t.Fatalf("expected 3 compact segments, got %d", len(parts))
+	}
+
+	card["signatures"] = []any{
+		map[string]any{"protected": parts[0], "signature": parts[2]},
+	}
+
+	body, err := json.Marshal(card)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
 }

@@ -75,10 +75,11 @@ func TestRunScan_DefaultOutputCWD(t *testing.T) {
 	defer func() { _ = os.Chdir(oldCWD) }()
 
 	cmd := newScanCmdForTest()
-	// --config with --path '' but Discover would scan real configs. Pass
-	// a non-existent path so the collector returns an empty graph quickly.
+	// --config with an existing file that no parser claims → the collector
+	// returns an empty graph successfully (a non-existent path would now be
+	// a hard error: scan exits non-zero when every collector fails).
 	_ = cmd.Flags().Set("config", "true")
-	_ = cmd.Flags().Set("path", filepath.Join(dir, "no-such-config.json"))
+	_ = cmd.Flags().Set("path", writeEmptyConfig(t))
 
 	if err := runScan(cmd, nil); err != nil {
 		t.Fatalf("runScan: %v", err)
@@ -140,7 +141,7 @@ func TestRunScan_HonoursAgentHoundOutputEnv(t *testing.T) {
 
 	cmd := newScanCmdForTest()
 	_ = cmd.Flags().Set("config", "true")
-	_ = cmd.Flags().Set("path", filepath.Join(dir, "no-such-config.json"))
+	_ = cmd.Flags().Set("path", writeEmptyConfig(t))
 
 	if err := runScan(cmd, nil); err != nil {
 		t.Fatalf("runScan: %v", err)
@@ -163,12 +164,25 @@ func TestRunScan_HonoursAgentHoundOutputEnv(t *testing.T) {
 	}
 }
 
+// writeEmptyConfig writes a JSON file that exists and parses cleanly but
+// declares zero MCP servers, so the config collector returns an empty graph
+// without error. A non-existent --path is now a hard error (scan exits
+// non-zero when every enabled collector fails), so tests that want a quick
+// empty-but-successful scan use this instead.
+func writeEmptyConfig(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "empty-config.json")
+	if err := os.WriteFile(p, []byte(`{"mcpServers":{}}`), 0o600); err != nil {
+		t.Fatalf("write empty config: %v", err)
+	}
+	return p
+}
+
 // TestRunScan_StdoutDash verifies that --output - writes JSON to stdout.
 func TestRunScan_StdoutDash(t *testing.T) {
-	dir := t.TempDir()
 	cmd := newScanCmdForTest()
 	_ = cmd.Flags().Set("config", "true")
-	_ = cmd.Flags().Set("path", filepath.Join(dir, "no-such-config.json"))
+	_ = cmd.Flags().Set("path", writeEmptyConfig(t))
 	_ = cmd.Flags().Set("scan-output", "-")
 
 	out := captureStdout(t, func() {

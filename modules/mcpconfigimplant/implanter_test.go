@@ -199,13 +199,97 @@ func TestImplant_NewFileWhenAbsent(t *testing.T) {
 	if err := i.Revert(context.Background(), receipt); err != nil {
 		t.Fatalf("Revert: %v", err)
 	}
-	got, _ := os.ReadFile(path)
-	var parsed map[string]any
-	if err := json.Unmarshal(got, &parsed); err != nil {
-		t.Fatalf("decode: %v", err)
+	// Revert must restore the original absent state — the file did not
+	// exist before implant, so revert removes it rather than leaving an
+	// empty {"mcpServers":{}} shell behind.
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		got, _ := os.ReadFile(path)
+		t.Errorf("revert left a poison-created file behind: stat err=%v, content=%q", err, string(got))
 	}
-	servers, _ := parsed["mcpServers"].(map[string]any)
-	if len(servers) != 0 {
-		t.Errorf("revert left non-empty servers: %v", servers)
+}
+
+func TestImplant_NewFilePreservesOperatorEditsOnRevert(t *testing.T) {
+	// If the operator (or client) adds another server to the file the
+	// implant created, revert must NOT delete the file — only drop our
+	// entry.
+	i := newImplanter(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fresh-mcp.json")
+
+	receipt, err := i.Implant(context.Background(), action.Target{},
+		action.ImplantPayload{
+			InjectionContent: evilEntry,
+			EngagementID:     "ENG-FRESH2",
+			Extras:           map[string]any{"file": path},
+		})
+	if err != nil {
+		t.Fatalf("Implant: %v", err)
+	}
+
+	current, _ := os.ReadFile(path)
+	var cfg map[string]any
+	if err := json.Unmarshal(current, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	servers, ok := cfg["mcpServers"].(map[string]any)
+	if !ok {
+		t.Fatalf("mcpServers is not an object: %T", cfg["mcpServers"])
+	}
+	servers["operator-added"] = map[string]any{"command": "legit"}
+	updated, _ := json.MarshalIndent(cfg, "", "  ")
+	if err := os.WriteFile(path, updated, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := i.Revert(context.Background(), receipt); err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("revert removed a file with operator edits: %v", err)
+	}
+	if !strings.Contains(string(got), "operator-added") {
+		t.Errorf("revert clobbered operator-added entry; got %s", string(got))
+	}
+	if strings.Contains(string(got), "agenthound-implant-ENG-FRESH2") {
+		t.Errorf("revert left implant entry; got %s", string(got))
+	}
+}
+
+func TestImplant_RevertPreservesOriginalMode(t *testing.T) {
+	// A pre-existing config with mode 0644 must come back as 0644 after
+	// revert, not be silently narrowed to 0600.
+	i := newImplanter(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mcp.json")
+	if err := os.WriteFile(path, []byte(seedConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// WriteFile is subject to umask; force the exact mode.
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	receipt, err := i.Implant(context.Background(), action.Target{},
+		action.ImplantPayload{
+			InjectionContent: evilEntry,
+			EngagementID:     "ENG-MODE",
+			Extras:           map[string]any{"file": path},
+		})
+	if err != nil {
+		t.Fatalf("Implant: %v", err)
+	}
+	if st, _ := os.Stat(path); st.Mode().Perm() != 0o644 {
+		t.Errorf("implant changed mode to %o, want 644", st.Mode().Perm())
+	}
+	if err := i.Revert(context.Background(), receipt); err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat after revert: %v", err)
+	}
+	if st.Mode().Perm() != 0o644 {
+		t.Errorf("revert changed mode to %o, want 644", st.Mode().Perm())
 	}
 }

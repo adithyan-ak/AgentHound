@@ -3,6 +3,7 @@ package mcp
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -392,4 +393,110 @@ func TestMarshalJSON(t *testing.T) {
 			t.Error("expected non-empty JSON string")
 		}
 	})
+}
+
+// claudeDesktopConfigPath returns the per-OS Claude Desktop config path under
+// the given home dir, matching modules/config ClaudeDesktopParser.ConfigPaths.
+func claudeDesktopConfigPath(homeDir string) string {
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(homeDir, "Library", "Application Support", "Claude", "claude_desktop_config.json")
+	case "linux":
+		return filepath.Join(homeDir, ".config", "claude", "claude_desktop_config.json")
+	case "windows":
+		return filepath.Join(homeDir, "AppData", "Roaming", "Claude", "claude_desktop_config.json")
+	default:
+		return ""
+	}
+}
+
+// TestDiscoverRetainsDistinctStdioServers covers Finding 1: two stdio servers
+// sharing the same command but with different args must both survive discovery
+// dedup (the old key omitted Args and collapsed them into one).
+func TestDiscoverRetainsDistinctStdioServers(t *testing.T) {
+	home := t.TempDir()
+	dest := claudeDesktopConfigPath(home)
+	if dest == "" {
+		t.Skip("unsupported OS for discovery path")
+	}
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	configJSON := `{
+		"mcpServers": {
+			"serverA": {"command": "npx", "args": ["-y", "serverA"]},
+			"serverB": {"command": "npx", "args": ["-y", "serverB"]}
+		}
+	}`
+	if err := os.WriteFile(dest, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	specs, err := discoverAllConfigs()
+	if err != nil {
+		t.Fatalf("discoverAllConfigs: %v", err)
+	}
+
+	ids := make(map[string]bool)
+	for _, s := range specs {
+		ids[computeServerID(s)] = true
+	}
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 distinct stdio servers to survive dedup, got %d (specs=%d)", len(ids), len(specs))
+	}
+}
+
+// TestDiscoverCoversPreviouslyMissedClient covers Finding 18: discovery now
+// shares the config collector's parser path registry, so it picks up clients
+// the old hardcoded list missed (here: Zed via ~/.config/zed/settings.json).
+func TestDiscoverCoversPreviouslyMissedClient(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("Zed parser only covers darwin/linux")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	zedPath := filepath.Join(home, ".config", "zed", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(zedPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	zedJSON := `{
+		"context_servers": {
+			"zed-server": {"command": "uvx", "args": ["mcp-server-zed"]}
+		}
+	}`
+	if err := os.WriteFile(zedPath, []byte(zedJSON), 0o644); err != nil {
+		t.Fatalf("write zed config: %v", err)
+	}
+
+	// Confirm the shared path registry includes the Zed path (the old
+	// hardcoded MCP list did not).
+	covered := false
+	for _, p := range discoveryCandidatePaths(home) {
+		if p == zedPath {
+			covered = true
+			break
+		}
+	}
+	if !covered {
+		t.Fatalf("Zed config path %q not in discovery candidates", zedPath)
+	}
+
+	specs, err := discoverAllConfigs()
+	if err != nil {
+		t.Fatalf("discoverAllConfigs: %v", err)
+	}
+	found := false
+	for _, s := range specs {
+		if s.Command == "uvx" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected discovery to find the Zed server, but it did not")
+	}
 }

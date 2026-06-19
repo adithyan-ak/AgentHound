@@ -16,7 +16,7 @@ Both binaries read environment variables at startup. The collector has no config
 |----------|------|---------|-------------|
 | `AGENTHOUND_LOG_LEVEL` | `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 | `AGENTHOUND_OUTPUT` | `--output` | `./scan-<scan_id>.json` | Output path. Use `-` for stdout. |
-| `AGENTHOUND_CONCURRENCY` | `--concurrency` | `5` | Max parallel collector goroutines |
+| `AGENTHOUND_CONCURRENCY` | `--concurrency` | `5` | Max parallel collector goroutines. For `scan`, used as the fallback for `--scan-concurrency` when that flag is not set explicitly (explicit `--scan-concurrency` wins; `--network-scan-concurrency` is unaffected). |
 | `AGENTHOUND_QUIET` | `--quiet` | _(unset)_ | Set to `1` to suppress all non-error log output |
 | `AGENTHOUND_LOG_JSON` | `--log-json` | _(unset)_ | Set to `1` for structured JSON logs to stderr |
 | `AGENTHOUND_RULES_BUNDLE` | `--rules-bundle` | _(unset)_ | Path to a fingerprint rules bundle (directory or `.tar.gz`). Same-id rules override the embedded set. Verify cosign signature before use. |

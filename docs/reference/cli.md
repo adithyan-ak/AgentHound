@@ -11,7 +11,7 @@ AgentHound ships as **two binaries**: `agenthound` (collector) and `agenthound-s
 | Flag | Env | Default | Description |
 |------|-----|---------|-------------|
 | `--output` | `AGENTHOUND_OUTPUT` | `./scan-<scan_id>.json` | Write output JSON to this path. `-` for stdout. |
-| `--concurrency` | `AGENTHOUND_CONCURRENCY` | `5` | Max parallel collector workers. |
+| `--concurrency` | `AGENTHOUND_CONCURRENCY` | `5` | Max parallel collector workers. Used by `scan` as the fallback for `--scan-concurrency` when the latter is not set explicitly. |
 | `--log-level` | `AGENTHOUND_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
 | `--quiet` | `AGENTHOUND_QUIET=1` | `false` | Suppress non-error log output. |
 | `--log-json` | `AGENTHOUND_LOG_JSON=1` | `false` | Emit structured JSON logs. |
@@ -93,10 +93,12 @@ Link-local and multicast addresses are refused unconditionally.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--scan-concurrency` | `5` | Max parallel connections (local mode). |
+| `--scan-concurrency` | `5` | Max parallel connections (local mode). When not set explicitly, falls back to the root `--concurrency` / `AGENTHOUND_CONCURRENCY` value if that is positive. |
 | `--timeout` | `120s` | Timeout per server/agent. |
 | `--insecure` | `false` | Skip TLS verification (both MCP and A2A). |
 | `--scan-output` | | Explicit output path (overrides `--output`). |
+
+Concurrency precedence for local-mode `scan`: an explicit `--scan-concurrency` always wins; otherwise the root `--concurrency` / `AGENTHOUND_CONCURRENCY` value is used when positive; otherwise the `--scan-concurrency` default (`5`) holds. `--network-scan-concurrency` is a separate knob and is not affected.
 
 #### Example
 
@@ -166,6 +168,7 @@ agenthound loot <host:port> --type <kind> [flags]
 | `--credential` | | Operator-supplied credential as `KEY=VALUE` (repeatable). |
 | `--include-credential-values` | `false` | Emit raw values on Credential nodes. |
 | `--max-items` | `0` (looter default) | Cap emitted Credentials per category. |
+| `--timeout` | `0` (looter default) | Per-probe HTTP timeout. |
 | `--engagement-id` | | Engagement identifier for IR coordination. |
 
 #### Per-Module Flags: `--type ollama`

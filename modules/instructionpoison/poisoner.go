@@ -36,6 +36,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -104,9 +105,15 @@ func (p *Poisoner) Poison(ctx context.Context, t action.Target, payload action.P
 		return nil, errors.New("instruction poison: --engagement-id is required")
 	}
 
-	original, preHash, err := readFileBounded(path)
+	original, preHash, existed, origMode, err := readFileBounded(path)
 	if err != nil {
 		return nil, fmt.Errorf("read target file: %w", err)
+	}
+	// Files this module creates are written 0o600; an existing file keeps
+	// its own mode so revert restores exactly what was there before.
+	writeMode := origMode
+	if !existed {
+		writeMode = 0o600
 	}
 
 	sentinelStart := fmt.Sprintf(sentinelStartFmt, engagementID)
@@ -151,6 +158,8 @@ func (p *Poisoner) Poison(ctx context.Context, t action.Target, payload action.P
 			"pre_sha256":     preHash,
 			"post_sha256":    postHash,
 			"replaced_prior": hadPrior,
+			"file_existed":   existed,
+			"orig_mode":      modeStr(writeMode),
 		},
 	}
 
@@ -166,7 +175,7 @@ func (p *Poisoner) Poison(ctx context.Context, t action.Target, payload action.P
 		return nil, fmt.Errorf("persist receipt before mutation: %w", err)
 	}
 
-	if err := writeFileAtomic(path, []byte(final)); err != nil {
+	if err := writeFileAtomic(path, []byte(final), writeMode); err != nil {
 		return nil, fmt.Errorf("write poisoned file: %w", err)
 	}
 	slog.Info("instruction poison applied",
@@ -203,8 +212,17 @@ func (p *Poisoner) Revert(ctx context.Context, receipt action.Receipt) error {
 		return errors.New("instruction poison revert: receipt missing sentinel markers")
 	}
 	prePoisonHash, _ := r.Extra["pre_sha256"].(string)
+	// file_existed defaults to true for receipts written before this
+	// field existed — the safe choice, since the old behavior always
+	// left a file behind. We only remove on revert when we KNOW poison
+	// created the file.
+	fileExisted := true
+	if v, ok := r.Extra["file_existed"].(bool); ok {
+		fileExisted = v
+	}
+	origMode := parseMode(r.Extra["orig_mode"], 0o600)
 
-	current, _, err := readFileBounded(path)
+	current, _, _, _, err := readFileBounded(path)
 	if err != nil {
 		return fmt.Errorf("read target file: %w", err)
 	}
@@ -215,7 +233,20 @@ func (p *Poisoner) Revert(ctx context.Context, receipt action.Receipt) error {
 			"engagement_id", r.EngagementID)
 		return nil
 	}
-	if err := writeFileAtomic(path, []byte(stripped)); err != nil {
+	// If poison created this file and stripping our block leaves it
+	// empty, remove it to restore the original absent state. If the
+	// strip left content behind (legitimate edits the operator made),
+	// keep the file — deleting it would destroy their work.
+	if !fileExisted && stripped == "" {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove poison-created file: %w", err)
+		}
+		slog.Info("instruction poison revert: removed poison-created file",
+			"file", path,
+			"engagement_id", r.EngagementID)
+		return nil
+	}
+	if err := writeFileAtomic(path, []byte(stripped), origMode); err != nil {
 		return fmt.Errorf("write reverted file: %w", err)
 	}
 	postRevertHash := sha256Hex([]byte(stripped))
@@ -230,43 +261,51 @@ func (p *Poisoner) Revert(ctx context.Context, receipt action.Receipt) error {
 }
 
 // readFileBounded reads up to MaxFileBytes from path. Returns content,
-// SHA-256 hex, and any error. A missing file is NOT an error — we
-// return empty content with empty hash and let the caller decide.
-// Instruction files often don't exist before the engagement plants
-// them; we want poison to create the file rather than refuse.
-func readFileBounded(path string) (string, string, error) {
+// SHA-256 hex, whether the file existed, its permission bits, and any
+// error. A missing file is NOT an error — we return empty content with
+// existed=false and let the caller decide. Instruction files often
+// don't exist before the engagement plants them; we want poison to
+// create the file rather than refuse.
+func readFileBounded(path string) (content string, hash string, existed bool, mode os.FileMode, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", "", nil
+			return "", "", false, 0, nil
 		}
-		return "", "", err
+		return "", "", false, 0, err
 	}
 	defer func() { _ = f.Close() }()
 	st, err := f.Stat()
 	if err != nil {
-		return "", "", err
+		return "", "", false, 0, err
 	}
 	if st.Size() > MaxFileBytes {
-		return "", "", fmt.Errorf("file %q too large (%d bytes; cap %d)", path, st.Size(), MaxFileBytes)
+		return "", "", false, 0, fmt.Errorf("file %q too large (%d bytes; cap %d)", path, st.Size(), MaxFileBytes)
 	}
 	data := make([]byte, st.Size())
 	if _, err := f.Read(data); err != nil && err.Error() != "EOF" {
-		return "", "", err
+		return "", "", false, 0, err
 	}
-	return string(data), sha256Hex(data), nil
+	return string(data), sha256Hex(data), true, st.Mode().Perm(), nil
 }
 
 // writeFileAtomic writes data via temp+rename to defeat partial-write
-// states. Mode 0o600 because instruction files often live under user
-// home directories and we don't want to widen world-readability.
-func writeFileAtomic(path string, data []byte) error {
+// states, applying mode exactly (chmod after write to bypass umask).
+// Callers pass the original file's mode so revert restores the prior
+// permissions; for files this module creates, the caller passes 0o600
+// because instruction files often live under user home directories and
+// we don't want to widen world-readability.
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	dir := filepath.Dir(path)
 	if dir != "" {
 		_ = os.MkdirAll(dir, 0o700)
 	}
 	tmp := path + ".tmp.agenthound"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	if err := os.WriteFile(tmp, data, mode); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, mode); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
@@ -274,6 +313,25 @@ func writeFileAtomic(path string, data []byte) error {
 		return err
 	}
 	return nil
+}
+
+// modeStr/parseMode persist a file mode through the receipt's JSON Extra
+// map as an octal string, sidestepping the float64 coercion JSON applies
+// to numeric values when a receipt is read back from disk for revert.
+func modeStr(m os.FileMode) string {
+	return fmt.Sprintf("%o", m.Perm())
+}
+
+func parseMode(v any, fallback os.FileMode) os.FileMode {
+	switch s := v.(type) {
+	case string:
+		if n, err := strconv.ParseUint(s, 8, 32); err == nil {
+			return os.FileMode(n).Perm()
+		}
+	case float64:
+		return os.FileMode(uint32(s)).Perm()
+	}
+	return fallback
 }
 
 // stripBracket removes the sentinel-bracketed block. Symmetric with

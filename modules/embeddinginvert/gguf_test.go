@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math"
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -100,6 +101,98 @@ func TestParseGGUF_NotFound(t *testing.T) {
 	_, err := ParseGGUF("/nonexistent/path.gguf")
 	if err == nil {
 		t.Error("expected error on missing file")
+	}
+}
+
+// ggufHeader writes a minimal GGUF v3 header (magic, version, tensor
+// count, metadata-kv count) so tests can craft malformed-but-parseable
+// files without a real model artifact.
+func ggufHeader(t *testing.T, tensorCount, metadataKVCount uint64) *bytes.Buffer {
+	t.Helper()
+	var b bytes.Buffer
+	for _, v := range []any{uint32(ggufMagic), uint32(3), tensorCount, metadataKVCount} {
+		if err := binary.Write(&b, binary.LittleEndian, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return &b
+}
+
+func writeTempGGUF(t *testing.T, data []byte) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "malformed.gguf")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestParseGGUF_MalformedCountsRejected proves a file-controlled count
+// far larger than the file cannot drive a giant allocation or unbounded
+// loop — the parser must return an error rather than panic or hang.
+func TestParseGGUF_MalformedCountsRejected(t *testing.T) {
+	cases := []struct {
+		name            string
+		tensorCount     uint64
+		metadataKVCount uint64
+	}{
+		{"huge metadata kv count", 0, math.MaxUint64},
+		{"huge tensor count", math.MaxUint64, 0},
+		{"moderately oversized count", 1 << 40, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := ggufHeader(t, tc.tensorCount, tc.metadataKVCount)
+			_, err := ParseGGUF(writeTempGGUF(t, buf.Bytes()))
+			if err == nil {
+				t.Fatal("expected error on malformed count, got nil")
+			}
+		})
+	}
+}
+
+// TestParseGGUF_HugeTokenArrayRejected crafts a tokenizer array whose
+// declared length dwarfs the file, ensuring the make([]string, 0, n)
+// capacity hint cannot be abused.
+func TestParseGGUF_HugeTokenArrayRejected(t *testing.T) {
+	buf := ggufHeader(t, 0, 1) // one metadata KV
+	writeStr := func(s string) {
+		if err := binary.Write(buf, binary.LittleEndian, uint64(len(s))); err != nil {
+			t.Fatal(err)
+		}
+		buf.WriteString(s)
+	}
+	writeStr("tokenizer.ggml.tokens")
+	if err := binary.Write(buf, binary.LittleEndian, uint32(9)); err != nil { // type 9 = array
+		t.Fatal(err)
+	}
+	if err := binary.Write(buf, binary.LittleEndian, uint32(8)); err != nil { // array elem type = string
+		t.Fatal(err)
+	}
+	if err := binary.Write(buf, binary.LittleEndian, uint64(math.MaxUint64)); err != nil { // array length
+		t.Fatal(err)
+	}
+	_, err := ParseGGUF(writeTempGGUF(t, buf.Bytes()))
+	if err == nil {
+		t.Fatal("expected error on oversized token array, got nil")
+	}
+}
+
+// TestParseGGUF_TooManyTensorDimsRejected ensures a tensor declaring more
+// than GGML_MAX_DIMS dimensions is rejected before sizing the dims slice.
+func TestParseGGUF_TooManyTensorDimsRejected(t *testing.T) {
+	buf := ggufHeader(t, 1, 0) // one tensor, no metadata
+	// tensor name
+	if err := binary.Write(buf, binary.LittleEndian, uint64(len("t"))); err != nil {
+		t.Fatal(err)
+	}
+	buf.WriteString("t")
+	if err := binary.Write(buf, binary.LittleEndian, uint32(99)); err != nil { // nDims = 99 > max
+		t.Fatal(err)
+	}
+	_, err := ParseGGUF(writeTempGGUF(t, buf.Bytes()))
+	if err == nil {
+		t.Fatal("expected error on excessive tensor dims, got nil")
 	}
 }
 

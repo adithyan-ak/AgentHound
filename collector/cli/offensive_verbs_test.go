@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -36,9 +37,10 @@ func setupSentinels(t *testing.T) string {
 // --- Mock Looter ---
 
 type mockLooter struct {
-	called bool
-	result *action.LootResult
-	err    error
+	called  bool
+	result  *action.LootResult
+	err     error
+	gotOpts action.LootOptions
 }
 
 func (m *mockLooter) ID() string            { return "mock.loot" }
@@ -49,6 +51,7 @@ func (m *mockLooter) Version() string       { return "0.0.0" }
 func (m *mockLooter) IsDestructive() bool   { return false }
 func (m *mockLooter) Loot(ctx context.Context, t action.Target, opts action.LootOptions) (*action.LootResult, error) {
 	m.called = true
+	m.gotOpts = opts
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -218,6 +221,54 @@ func TestRunLoot_NoModule(t *testing.T) {
 	err := runLoot(lootCmd, []string{"10.0.0.1:4000"})
 	if err == nil || !strings.Contains(err.Error(), "no looter registered") {
 		t.Errorf("expected 'no looter registered' error, got: %v", err)
+	}
+}
+
+// timeoutMockLooter is a Looter with a distinct registry ID/target so it can
+// coexist with mockLooter ("mock.loot"/"mock-svc") in the same test binary
+// without a duplicate-registration panic.
+type timeoutMockLooter struct {
+	gotTimeout time.Duration
+}
+
+func (m *timeoutMockLooter) ID() string            { return "mock.loot.timeout" }
+func (m *timeoutMockLooter) Action() action.Action { return action.Loot }
+func (m *timeoutMockLooter) Target() string        { return "mock-timeout-svc" }
+func (m *timeoutMockLooter) Description() string   { return "mock" }
+func (m *timeoutMockLooter) Version() string       { return "0.0.0" }
+func (m *timeoutMockLooter) IsDestructive() bool   { return false }
+func (m *timeoutMockLooter) Loot(ctx context.Context, t action.Target, opts action.LootOptions) (*action.LootResult, error) {
+	m.gotTimeout = opts.Timeout
+	return &action.LootResult{IngestData: &ingest.IngestData{}}, nil
+}
+
+// TestRunLoot_TimeoutFlowsThrough is the Finding 11 regression: loot's init()
+// now registers --timeout, so a non-zero value reaches LootOptions.Timeout.
+// Before the fix the flag was read but never registered, so GetDuration
+// swallowed the lookup error and the looter always saw the zero default.
+func TestRunLoot_TimeoutFlowsThrough(t *testing.T) {
+	setupSentinels(t)
+	mock := &timeoutMockLooter{}
+	module.Register(mock)
+	defer deregisterModule(t, mock.ID())
+
+	out := &bytes.Buffer{}
+	lootCmd.SetOut(out)
+	lootCmd.SetErr(out)
+	mustSetFlag(t, lootCmd, "type", mock.Target())
+	mustSetFlag(t, lootCmd, "engagement-id", "TEST")
+	mustSetFlag(t, lootCmd, "timeout", "42s")
+	_ = rootCmd.PersistentFlags().Set("output", "-")
+	defer func() { _ = rootCmd.PersistentFlags().Set("output", "") }()
+
+	captureStdout(t, func() {
+		if err := runLoot(lootCmd, []string{"10.0.0.1:4000"}); err != nil {
+			t.Fatalf("runLoot: %v", err)
+		}
+	})
+
+	if mock.gotTimeout != 42*time.Second {
+		t.Errorf("looter received timeout %v, want 42s", mock.gotTimeout)
 	}
 }
 

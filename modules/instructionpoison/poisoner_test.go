@@ -175,6 +175,70 @@ func TestRevert_IdempotentOnAlreadyClean(t *testing.T) {
 	}
 }
 
+func TestRevert_RemovesPoisonCreatedFile(t *testing.T) {
+	// When the instruction file did not exist before poison, revert must
+	// remove it to restore the original absent state rather than leaving
+	// an empty file behind.
+	p := newPoisoner(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md") // not created
+
+	receipt, err := p.Poison(context.Background(), action.Target{},
+		action.PoisonPayload{
+			InjectionContent: injection,
+			EngagementID:     "ENG-CREATE",
+			Extras:           map[string]any{"file": path},
+		})
+	if err != nil {
+		t.Fatalf("Poison: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("poison did not create the file: %v", err)
+	}
+	if err := p.Revert(context.Background(), receipt); err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		got, _ := os.ReadFile(path)
+		t.Errorf("revert left a poison-created file behind: stat err=%v, content=%q", err, string(got))
+	}
+}
+
+func TestRevert_PreservesOriginalMode(t *testing.T) {
+	p := newPoisoner(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+	if err := os.WriteFile(path, []byte(originalCLAUDE), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	receipt, err := p.Poison(context.Background(), action.Target{},
+		action.PoisonPayload{
+			InjectionContent: injection,
+			EngagementID:     "ENG-MODE",
+			Extras:           map[string]any{"file": path},
+		})
+	if err != nil {
+		t.Fatalf("Poison: %v", err)
+	}
+	if st, _ := os.Stat(path); st.Mode().Perm() != 0o644 {
+		t.Errorf("poison changed mode to %o, want 644", st.Mode().Perm())
+	}
+	if err := p.Revert(context.Background(), receipt); err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat after revert: %v", err)
+	}
+	if st.Mode().Perm() != 0o644 {
+		t.Errorf("revert changed mode to %o, want 644", st.Mode().Perm())
+	}
+}
+
 func TestPoison_RejectsRelativePath(t *testing.T) {
 	p := newPoisoner(t)
 	_, err := p.Poison(context.Background(), action.Target{},

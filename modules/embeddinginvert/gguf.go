@@ -25,6 +25,11 @@ const (
 	// GGML tensor types we support for the embedding layer.
 	ggmlTypeF32  = 0
 	ggmlTypeQ8_0 = 8
+
+	// maxTensorDims bounds the per-tensor dimension count read from the
+	// file before it sizes an allocation. GGML's on-disk format uses at
+	// most 4 dimensions (GGML_MAX_DIMS); anything larger is malformed.
+	maxTensorDims = 4
 )
 
 // GGUFFile holds the parsed metadata and embedding tensor from a GGUF file.
@@ -46,6 +51,12 @@ func ParseGGUF(path string) (*GGUFFile, error) {
 		return nil, fmt.Errorf("open gguf: %w", err)
 	}
 	defer func() { _ = f.Close() }()
+
+	st, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat gguf: %w", err)
+	}
+	fileSize := st.Size()
 
 	var magic uint32
 	if err := binary.Read(f, binary.LittleEndian, &magic); err != nil {
@@ -70,6 +81,16 @@ func ParseGGUF(path string) (*GGUFFile, error) {
 	if err := binary.Read(f, binary.LittleEndian, &metadataKVCount); err != nil {
 		return nil, fmt.Errorf("read metadata kv count: %w", err)
 	}
+	// Every metadata KV and tensor info occupies at least one byte on
+	// disk, so a count exceeding the file size is malformed. Reject it
+	// before it drives an allocation or loop — a crafted count would
+	// otherwise trigger a multi-GB make() panic or unbounded spin.
+	if err := boundCount(tensorCount, fileSize, "tensor count"); err != nil {
+		return nil, err
+	}
+	if err := boundCount(metadataKVCount, fileSize, "metadata kv count"); err != nil {
+		return nil, err
+	}
 
 	result := &GGUFFile{Version: version}
 
@@ -91,6 +112,9 @@ func ParseGGUF(path string) (*GGUFFile, error) {
 				return nil, err
 			}
 			if err := binary.Read(f, binary.LittleEndian, &arrLen); err != nil {
+				return nil, err
+			}
+			if err := boundCount(arrLen, fileSize, "token array length"); err != nil {
 				return nil, err
 			}
 			result.Tokens = make([]string, 0, arrLen)
@@ -125,6 +149,9 @@ func ParseGGUF(path string) (*GGUFFile, error) {
 		var nDims uint32
 		if err := binary.Read(f, binary.LittleEndian, &nDims); err != nil {
 			return nil, fmt.Errorf("tensor %d ndims: %w", i, err)
+		}
+		if nDims > maxTensorDims {
+			return nil, fmt.Errorf("tensor %d has %d dims, exceeds GGML max %d", i, nDims, maxTensorDims)
 		}
 		dims := make([]uint64, nDims)
 		for d := uint32(0); d < nDims; d++ {
@@ -161,6 +188,16 @@ func ParseGGUF(path string) (*GGUFFile, error) {
 	if embedInfo.nDims != 2 {
 		return nil, fmt.Errorf("embedding tensor has %d dims, want 2", embedInfo.nDims)
 	}
+	// The embedding matrix has at least one byte per element on disk, so
+	// neither dimension (nor their product) can exceed the file size for
+	// a well-formed file. Bounding here keeps the row/column allocations
+	// in readF32Embeddings/readQ8_0Embeddings from a crafted-count panic.
+	if err := boundCount(embedInfo.dims[0], fileSize, "embedding dim"); err != nil {
+		return nil, err
+	}
+	if err := boundCount(embedInfo.dims[1], fileSize, "vocab size"); err != nil {
+		return nil, err
+	}
 	result.EmbedDim = int(embedInfo.dims[0])
 	result.VocabSize = int(embedInfo.dims[1])
 	result.TensorType = embedInfo.tensorType
@@ -183,6 +220,21 @@ func ParseGGUF(path string) (*GGUFFile, error) {
 	}
 
 	return result, nil
+}
+
+// boundCount rejects a file-declared count that cannot fit in the file.
+// Every counted element (metadata KV, tensor, array item, matrix cell)
+// occupies at least one byte on disk, so a count larger than the file
+// size is malformed. This caps allocations and loop bounds derived from
+// untrusted header values without ever rejecting a well-formed file.
+func boundCount(n uint64, fileSize int64, what string) error {
+	if fileSize < 0 {
+		return fmt.Errorf("invalid file size %d", fileSize)
+	}
+	if n > uint64(fileSize) {
+		return fmt.Errorf("%s %d exceeds file size %d (malformed gguf)", what, n, fileSize)
+	}
+	return nil
 }
 
 func isEmbeddingTensor(name string) bool {

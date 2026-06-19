@@ -90,19 +90,15 @@ func compileKeyword(spec MatcherSpec) (*keywordMatcher, error) {
 }
 
 func (m *keywordMatcher) Match(text string) []MatchResult {
-	searchText := text
-	if m.caseInsensitive {
-		searchText = strings.ToLower(text)
-	}
 	var results []MatchResult
 	for _, kw := range m.keywords {
-		idx := strings.Index(searchText, kw)
-		if idx >= 0 {
-			matched := text[idx : idx+len(kw)]
+		start, end, ok := findKeyword(text, kw, m.caseInsensitive)
+		if ok {
+			matched := text[start:end]
 			if len(matched) > 100 {
 				matched = matched[:100]
 			}
-			results = append(results, MatchResult{Matched: true, Offset: idx, Text: matched})
+			results = append(results, MatchResult{Matched: true, Offset: start, Text: matched})
 			if !m.matchAll {
 				return results
 			}
@@ -111,6 +107,58 @@ func (m *keywordMatcher) Match(text string) []MatchResult {
 		}
 	}
 	return results
+}
+
+// findKeyword locates kw in text and returns the matched span as byte offsets
+// into the ORIGINAL text. When caseInsensitive, comparison uses strings.ToLower
+// (kw is pre-lowered by compileKeyword), but the returned offsets are mapped
+// back onto the original text via lowerSpanToOrig. strings.ToLower is not
+// byte-length-preserving (expanding folds like 'Ⱥ'→'ⱥ' grow, shrinking folds
+// like 'İ'→'i' shrink), so slicing the original with lowered indices would
+// produce out-of-range panics or garbled evidence — the remapping avoids both.
+func findKeyword(text, kw string, caseInsensitive bool) (start, end int, ok bool) {
+	if !caseInsensitive {
+		idx := strings.Index(text, kw)
+		if idx < 0 {
+			return 0, 0, false
+		}
+		return idx, idx + len(kw), true
+	}
+	lowerText := strings.ToLower(text)
+	li := strings.Index(lowerText, kw)
+	if li < 0 {
+		return 0, 0, false
+	}
+	return lowerSpanToOrig(text, li, li+len(kw))
+}
+
+// lowerSpanToOrig maps a byte span [loStart, loEnd) in strings.ToLower(text)
+// back to the corresponding byte span in the original text by walking the
+// original rune-by-rune and tracking cumulative lowered byte length. Returned
+// offsets are always valid (in-bounds) byte offsets into text.
+func lowerSpanToOrig(text string, loStart, loEnd int) (start, end int, ok bool) {
+	start, end = -1, -1
+	loPos, origPos := 0, 0
+	for _, r := range text {
+		if loPos >= loStart && start < 0 {
+			start = origPos
+		}
+		loPos += len(strings.ToLower(string(r)))
+		origPos += len(string(r))
+		if loPos >= loEnd && end < 0 {
+			end = origPos
+		}
+		if start >= 0 && end >= 0 {
+			break
+		}
+	}
+	if start < 0 {
+		start = len(text)
+	}
+	if end < 0 || end > len(text) {
+		end = len(text)
+	}
+	return start, end, true
 }
 
 type compoundMatcher struct {
@@ -217,7 +265,17 @@ func (m *prefixMatcher) Match(text string) []MatchResult {
 	}
 	for _, p := range m.prefixes {
 		if strings.HasPrefix(checkText, p) {
-			matched := text[:len(p)]
+			end := len(p)
+			if m.caseInsensitive {
+				// p is matched against strings.ToLower(text); map the prefix
+				// span back onto the original text so the evidence slice is a
+				// valid byte offset (folds are not byte-length-preserving).
+				_, end, _ = lowerSpanToOrig(text, 0, len(p))
+			}
+			matched := text[:end]
+			if len(matched) > 100 {
+				matched = matched[:100]
+			}
 			return []MatchResult{{Matched: true, Offset: 0, Text: matched}}
 		}
 	}

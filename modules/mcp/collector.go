@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/adithyan-ak/agenthound/modules/config"
 	"github.com/adithyan-ak/agenthound/sdk/collector"
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
@@ -366,40 +367,24 @@ func extractStringMap(obj map[string]any, key string) map[string]string {
 	return m
 }
 
+// discoveryCandidatePaths returns the client config paths to scan during
+// --discover. It draws from the config collector's parser registry so MCP
+// discover and the config collector cover an identical set of paths (Finding
+// 18). The shared parser ConfigPaths() are the single source of truth.
+func discoveryCandidatePaths(homeDir string) []string {
+	return config.NewConfigCollector().DiscoveryPaths(homeDir)
+}
+
 func discoverAllConfigs() ([]ServerSpec, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
 
-	candidates := []string{
-		homeDir + "/Library/Application Support/Claude/claude_desktop_config.json",
-		homeDir + "/.config/claude/claude_desktop_config.json",
-		homeDir + "/.claude.json",
-		homeDir + "/.cursor/mcp.json",
-		homeDir + "/.config/cursor/mcp.json",
-		homeDir + "/.codeium/windsurf/mcp_config.json",
-		homeDir + "/.cline/mcp_settings.json",
-		homeDir + "/.continue/config.yaml",
-		homeDir + "/.continue/config.yml",
-		homeDir + "/.continue/config.json",
-		homeDir + "/Library/Application Support/Code/User/settings.json",
-		homeDir + "/Library/Application Support/Code - Insiders/User/settings.json",
-	}
-
-	xdg := os.Getenv("XDG_CONFIG_HOME")
-	if xdg == "" {
-		xdg = homeDir + "/.config"
-	}
-	candidates = append(candidates,
-		xdg+"/Code/User/settings.json",
-		xdg+"/Code - Insiders/User/settings.json",
-	)
-
 	var allSpecs []ServerSpec
 	seen := make(map[string]bool)
 
-	for _, path := range candidates {
+	for _, path := range discoveryCandidatePaths(homeDir) {
 		if _, err := os.Stat(path); err != nil {
 			continue
 		}
@@ -409,7 +394,7 @@ func discoverAllConfigs() ([]ServerSpec, error) {
 			continue
 		}
 		for _, s := range specs {
-			key := s.Transport + ":" + s.Command + ":" + s.URL
+			key := computeServerID(s)
 			if !seen[key] {
 				seen[key] = true
 				allSpecs = append(allSpecs, s)

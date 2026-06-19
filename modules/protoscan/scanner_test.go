@@ -2,11 +2,13 @@ package protoscan
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
@@ -168,6 +170,67 @@ func TestEmitDiscoveryNodes_A2AUsesBaseURLID(t *testing.T) {
 	}
 	if got, _ := g.Nodes[0].Properties["endpoint"].(string); got != "https://agent.example.com" {
 		t.Errorf("endpoint = %q, want normalized base URL", got)
+	}
+}
+
+// TestScan_CancellationReturnsPartialAndError verifies that cancelling the
+// context mid-scan surfaces context.Canceled (rather than swallowing it) while
+// still returning the partial results gathered before cancellation. This
+// mirrors networkscan.Scanner's contract; the discover CLI tolerates
+// context.Canceled so the partial --output can still be written.
+//
+// Determinism mirrors networkscan.TestScanner_Cancellation: feed a port set
+// large enough that the single-worker dispatch loop needs many iterations,
+// slow each probe so cancellation has time to fire mid-dispatch, cancel via a
+// timer, then assert the scanner observed cancellation (returns
+// context.Canceled) and shut down cleanly. Cancellation legitimately
+// interrupts in-flight probes, so the surviving partial count is best-effort;
+// the contract under test is that the error is surfaced (not swallowed) and
+// any returned target is well-formed.
+func TestScan_CancellationReturnsPartialAndError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Slow every response so dispatch stays in flight when cancel fires.
+		time.Sleep(30 * time.Millisecond)
+		if r.Method == "POST" && (r.URL.Path == "/" || r.URL.Path == "/mcp") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(initializeOK))
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+	livePort := portOf(t, srv)
+
+	// Many copies of the live port so each dispatched job hits the slow
+	// server: dispatch needs dozens of iterations, giving cancel a window.
+	ports := make([]int, 0, 200)
+	for i := 0; i < 200; i++ {
+		ports = append(ports, livePort)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	s := &Scanner{
+		Mode:        ModeMCP,
+		MCPPorts:    ports,
+		Concurrency: 2,
+		Timeout:     2 * time.Second,
+	}
+
+	results, err := s.Scan(ctx, "127.0.0.1")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	// Partial results are best-effort under cancellation, but the return path
+	// must deliver committed results (not drop them) and each must be valid.
+	for _, tgt := range results {
+		if tgt.Meta["protocol"] != "mcp" {
+			t.Errorf("partial target protocol = %q, want mcp", tgt.Meta["protocol"])
+		}
 	}
 }
 

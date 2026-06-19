@@ -171,16 +171,22 @@ func (s *Scanner) Scan(ctx context.Context, spec string) ([]action.Target, error
 			}
 		}()
 	}
+	cancelled := false
 dispatch:
 	for _, j := range jobs {
 		select {
 		case <-ctx.Done():
+			cancelled = true
 			break dispatch
 		case jobCh <- j:
 		}
 	}
 	close(jobCh)
 	wg.Wait()
+
+	if cancelled {
+		return results, ctx.Err()
+	}
 	return results, nil
 }
 

@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -123,7 +124,12 @@ func runScan(cmd *cobra.Command, args []string) error {
 	targetsFile, _ := cmd.Flags().GetString("targets-file")
 	authToken, _ := cmd.Flags().GetString("auth-token")
 
-	concurrency, _ := cmd.Flags().GetInt("scan-concurrency")
+	scanConcurrency, _ := cmd.Flags().GetInt("scan-concurrency")
+	cfgConcurrency := 0
+	if cfg != nil {
+		cfgConcurrency = cfg.Concurrency
+	}
+	concurrency := resolveScanConcurrency(scanConcurrency, cmd.Flags().Changed("scan-concurrency"), cfgConcurrency)
 	timeout, _ := cmd.Flags().GetDuration("timeout")
 	insecure, _ := cmd.Flags().GetBool("insecure")
 
@@ -139,11 +145,21 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	if !runConfig && !runMCP && !runA2A {
-		runConfig = true
-		runMCP = true
+		if url != "" {
+			// --url with no explicit mode flags infers MCP-only mode. The
+			// config collector ignores --url, so defaulting it on would
+			// trip the "--url requires --mcp" guard below.
+			runMCP = true
+		} else {
+			runConfig = true
+			runMCP = true
+		}
 	}
 
-	if runConfig && url != "" {
+	// Explicit --config combined with --url is a usage error: the config
+	// collector has no notion of a target URL. We only error when the user
+	// actually asked for config (not the default-on case handled above).
+	if cmd.Flags().Changed("config") && runConfig && url != "" {
 		return fmt.Errorf("--url requires --mcp")
 	}
 	if runMCP && (target != "" || len(targets) > 0) && !runA2A {
@@ -159,7 +175,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	ctx := context.Background()
 
-	merged := collectAll(ctx, runConfig, runMCP, runA2A,
+	merged, enabled, failed := collectAll(ctx, runConfig, runMCP, runA2A,
 		path, paths, projectDir, includeCredValues,
 		url, target, targets, targetsFile, authToken,
 		concurrency, timeout, insecure)
@@ -171,11 +187,34 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	_, _ = fmt.Fprintf(os.Stderr, "Collected %d nodes, %d edges\n", len(merged.Graph.Nodes), len(merged.Graph.Edges))
 
-	// "-" means stdout.
+	// Write the (possibly empty) artifact before deciding the exit code so
+	// the operator keeps the envelope and logs even on total failure.
+	var writeErr error
 	if output == "-" {
-		return writeCollectorOutputStdout(merged)
+		writeErr = writeCollectorOutputStdout(merged)
+	} else {
+		writeErr = writeCollectorOutput(merged, output)
 	}
-	return writeCollectorOutput(merged, output)
+	if writeErr != nil {
+		return writeErr
+	}
+
+	// Total-failure exit code: when every enabled collector errored, exit
+	// non-zero. Partial success (>=1 collector succeeded) and a legitimately
+	// empty-but-successful scan both exit 0 — the decision keys on collector
+	// errors, not node count.
+	if allCollectorsFailed(enabled, failed) {
+		return fmt.Errorf("all %d enabled collector(s) failed", enabled)
+	}
+	return nil
+}
+
+// allCollectorsFailed reports whether every enabled collector errored. A scan
+// with no enabled collectors, or with at least one success, returns false so
+// runScan exits 0. The exit code keys on collector errors, never node count —
+// a legitimately empty-but-successful scan must still exit 0.
+func allCollectorsFailed(enabled, failed int) bool {
+	return enabled > 0 && failed == enabled
 }
 
 // writeCollectorOutputStdout writes the merged scan as indented JSON to
@@ -195,10 +234,25 @@ func writeCollectorOutputStdout(data *ingest.IngestData) error {
 	return nil
 }
 
+// resolveScanConcurrency applies the concurrency precedence: an explicitly
+// set --scan-concurrency always wins; otherwise the root
+// --concurrency / AGENTHOUND_CONCURRENCY value (resolved onto cfg.Concurrency)
+// is used when positive; otherwise the --scan-concurrency default holds.
+func resolveScanConcurrency(scanConcurrency int, scanConcurrencyChanged bool, cfgConcurrency int) int {
+	if !scanConcurrencyChanged && cfgConcurrency > 0 {
+		return cfgConcurrency
+	}
+	return scanConcurrency
+}
+
+// collectAll runs each enabled collector and merges its output. It returns
+// the merged envelope plus the count of enabled collectors and how many of
+// them failed, so the caller can decide the exit code (total failure → non-
+// zero, partial/empty success → zero).
 func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 	path string, paths []string, projectDir string, includeCredValues bool,
 	url, target string, targets []string, targetsFile, authToken string,
-	concurrency int, timeout time.Duration, insecure bool) *ingest.IngestData {
+	concurrency int, timeout time.Duration, insecure bool) (data *ingest.IngestData, enabled, failed int) {
 
 	merged := &ingest.IngestData{
 		Meta: ingest.IngestMeta{
@@ -212,8 +266,10 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 	}
 
 	if runConfig {
+		enabled++
 		data, err := collectConfig(ctx, path, paths, projectDir, includeCredValues)
 		if err != nil {
+			failed++
 			slog.Error("config collector failed", "error", err)
 		} else {
 			merged.Graph.Nodes = append(merged.Graph.Nodes, data.Graph.Nodes...)
@@ -222,8 +278,10 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 	}
 
 	if runMCP {
+		enabled++
 		data, err := collectMCP(ctx, url, concurrency, timeout, insecure)
 		if err != nil {
+			failed++
 			slog.Error("mcp collector failed", "error", err)
 		} else {
 			merged.Graph.Nodes = append(merged.Graph.Nodes, data.Graph.Nodes...)
@@ -232,8 +290,10 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 	}
 
 	if runA2A {
+		enabled++
 		data, err := collectA2A(ctx, target, targets, targetsFile, authToken, concurrency, timeout, insecure)
 		if err != nil {
+			failed++
 			slog.Error("a2a collector failed", "error", err)
 		} else {
 			merged.Graph.Nodes = append(merged.Graph.Nodes, data.Graph.Nodes...)
@@ -241,7 +301,7 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 		}
 	}
 
-	return merged
+	return merged, enabled, failed
 }
 
 func loadRulesEngineOrNil() *rules.Engine {
@@ -512,18 +572,26 @@ func dispatchFingerprints(ctx context.Context, stderr io.Writer, targets []actio
 	probed := 0
 	for _, t := range targets {
 		host := t.Address
-		// open_ports and candidate_kinds are positionally aligned
-		// (scanner emits them in matching order via PortToKind).
+		// open_ports is the authoritative per-host port list. We derive
+		// the candidate kind per port here via networkscan.PortToKind
+		// rather than trusting candidate_kinds, which only lists ports
+		// that HAVE a kind mapping — for custom --ports with unmapped
+		// ports the two lists desync by index, which would dispatch a
+		// fingerprinter at the wrong port.
 		ports := splitCSV(t.Meta["open_ports"])
-		kinds := splitCSV(t.Meta["candidate_kinds"])
 
-		// Fingerprint each (port, kind) pair where the kind has a
-		// registered fingerprinter. Targets with kinds that have no
-		// v0.2 fingerprinter (vLLM, Qdrant, MLflow, Jupyter, LangServe,
-		// OpenWebUI) silently skip — they'll come online in v0.3/v0.4.
-		for i, kind := range kinds {
-			if i >= len(ports) {
-				break
+		// Fingerprint each open port whose kind has a registered
+		// fingerprinter. Ports with no PortToKind mapping (custom --ports)
+		// or whose kind has no v0.2 fingerprinter (vLLM, Qdrant, MLflow,
+		// Jupyter, LangServe, OpenWebUI) silently skip.
+		for _, portStr := range ports {
+			port, err := strconv.Atoi(portStr)
+			if err != nil {
+				continue
+			}
+			kind, ok := networkscan.PortToKind[port]
+			if !ok {
+				continue
 			}
 			mod, ok := module.GetByTarget(kind, action.Fingerprint)
 			if !ok {
@@ -536,11 +604,11 @@ func dispatchFingerprints(ctx context.Context, stderr io.Writer, targets []actio
 			probed++
 			result, err := fp.Fingerprint(ctx, action.Target{
 				Kind:    "host",
-				Address: fmt.Sprintf("%s:%s", host, ports[i]),
+				Address: fmt.Sprintf("%s:%s", host, portStr),
 				Meta:    t.Meta,
 			})
 			if err != nil {
-				slog.Debug("fingerprint error", "kind", kind, "host", host, "port", ports[i], "error", err)
+				slog.Debug("fingerprint error", "kind", kind, "host", host, "port", portStr, "error", err)
 				continue
 			}
 			if !result.Matched || result.IngestData == nil {
@@ -549,7 +617,7 @@ func dispatchFingerprints(ctx context.Context, stderr io.Writer, targets []actio
 			matched++
 			_, _ = fmt.Fprintf(stderr,
 				"[fingerprint] %s:%s → %s (version=%s, auth=%s)\n",
-				host, ports[i], result.ServiceKind, result.Version, result.AuthMethod)
+				host, portStr, result.ServiceKind, result.Version, result.AuthMethod)
 			envelope.Graph.Nodes = append(envelope.Graph.Nodes, result.IngestData.Graph.Nodes...)
 			envelope.Graph.Edges = append(envelope.Graph.Edges, result.IngestData.Graph.Edges...)
 		}

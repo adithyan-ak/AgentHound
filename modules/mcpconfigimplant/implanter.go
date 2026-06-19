@@ -33,6 +33,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -112,9 +113,13 @@ func (i *Implanter) Implant(ctx context.Context, t action.Target, payload action
 		return nil, fmt.Errorf("mcp config implant: --inject must be a JSON object: %w", err)
 	}
 
-	original, preHash, err := readFileBounded(path)
+	original, preHash, existed, origMode, err := readFileBounded(path)
 	if err != nil {
 		return nil, fmt.Errorf("read target file: %w", err)
+	}
+	writeMode := origMode
+	if !existed {
+		writeMode = 0o600
 	}
 
 	configMap := map[string]any{}
@@ -157,9 +162,11 @@ func (i *Implanter) Implant(ctx context.Context, t action.Target, payload action
 		AppliedAt:        time.Now().UTC(),
 		DryRun:           payload.DryRun,
 		Extra: map[string]any{
-			"file":        path,
-			"servers_key": serversKey,
-			"server_name": serverName,
+			"file":         path,
+			"servers_key":  serversKey,
+			"server_name":  serverName,
+			"file_existed": existed,
+			"orig_mode":    modeStr(writeMode),
 		},
 	}
 
@@ -175,7 +182,7 @@ func (i *Implanter) Implant(ctx context.Context, t action.Target, payload action
 		return nil, fmt.Errorf("persist receipt before mutation: %w", err)
 	}
 
-	if err := writeFileAtomic(path, final); err != nil {
+	if err := writeFileAtomic(path, final, writeMode); err != nil {
 		return nil, fmt.Errorf("write implanted file: %w", err)
 	}
 	slog.Info("mcp config implant applied",
@@ -203,8 +210,16 @@ func (i *Implanter) Revert(ctx context.Context, receipt action.Receipt) error {
 	if path == "" || serversKey == "" || serverName == "" {
 		return errors.New("mcp config implant revert: receipt missing path / servers_key / server_name")
 	}
+	// file_existed defaults to true for receipts written before this
+	// field existed, matching the prior behavior of always leaving the
+	// file behind.
+	fileExisted := true
+	if v, ok := r.Extra["file_existed"].(bool); ok {
+		fileExisted = v
+	}
+	origMode := parseMode(r.Extra["orig_mode"], 0o600)
 
-	current, _, err := readFileBounded(path)
+	current, _, _, _, err := readFileBounded(path)
 	if err != nil {
 		return fmt.Errorf("read target file: %w", err)
 	}
@@ -231,12 +246,27 @@ func (i *Implanter) Revert(ctx context.Context, receipt action.Receipt) error {
 	delete(servers, serverName)
 	configMap[serversKey] = servers
 
+	// If implant created this file and dropping our entry leaves nothing
+	// but the empty servers map we added, remove the file to restore the
+	// original absent state. Any other server or top-level key means the
+	// client (or operator) added content we must not destroy.
+	if !fileExisted && len(servers) == 0 && len(configMap) == 1 {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove implant-created file: %w", err)
+		}
+		slog.Info("mcp config implant reverted (removed implant-created file)",
+			"file", path,
+			"engagement_id", r.EngagementID,
+			"server_name", serverName)
+		return nil
+	}
+
 	final, err := json.MarshalIndent(configMap, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode reverted JSON: %w", err)
 	}
 	final = append(final, '\n')
-	if err := writeFileAtomic(path, final); err != nil {
+	if err := writeFileAtomic(path, final, origMode); err != nil {
 		return fmt.Errorf("write reverted file: %w", err)
 	}
 	slog.Info("mcp config implant reverted",
@@ -246,36 +276,47 @@ func (i *Implanter) Revert(ctx context.Context, receipt action.Receipt) error {
 	return nil
 }
 
-func readFileBounded(path string) (string, string, error) {
+// readFileBounded returns the file content, its SHA-256 hex, whether the
+// file existed, its permission bits, and any error. A missing file is
+// not an error (existed=false) — implant creates the config when absent.
+func readFileBounded(path string) (content string, hash string, existed bool, mode os.FileMode, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", "", nil
+			return "", "", false, 0, nil
 		}
-		return "", "", err
+		return "", "", false, 0, err
 	}
 	defer func() { _ = f.Close() }()
 	st, err := f.Stat()
 	if err != nil {
-		return "", "", err
+		return "", "", false, 0, err
 	}
 	if st.Size() > MaxFileBytes {
-		return "", "", fmt.Errorf("file %q too large (%d bytes; cap %d)", path, st.Size(), MaxFileBytes)
+		return "", "", false, 0, fmt.Errorf("file %q too large (%d bytes; cap %d)", path, st.Size(), MaxFileBytes)
 	}
 	data := make([]byte, st.Size())
 	if _, err := f.Read(data); err != nil && err.Error() != "EOF" {
-		return "", "", err
+		return "", "", false, 0, err
 	}
-	return string(data), sha256Hex(data), nil
+	return string(data), sha256Hex(data), true, st.Mode().Perm(), nil
 }
 
-func writeFileAtomic(path string, data []byte) error {
+// writeFileAtomic writes data via temp+rename, applying mode exactly
+// (chmod after write to bypass umask). Callers pass the original file's
+// mode so revert restores prior permissions; newly-created configs get
+// 0o600.
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	dir := filepath.Dir(path)
 	if dir != "" {
 		_ = os.MkdirAll(dir, 0o700)
 	}
 	tmp := path + ".tmp.agenthound"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	if err := os.WriteFile(tmp, data, mode); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, mode); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
@@ -283,6 +324,25 @@ func writeFileAtomic(path string, data []byte) error {
 		return err
 	}
 	return nil
+}
+
+// modeStr/parseMode round-trip a file mode through the receipt's JSON
+// Extra map as an octal string, avoiding the float64 coercion JSON
+// applies to numbers when a receipt is reloaded for revert.
+func modeStr(m os.FileMode) string {
+	return fmt.Sprintf("%o", m.Perm())
+}
+
+func parseMode(v any, fallback os.FileMode) os.FileMode {
+	switch s := v.(type) {
+	case string:
+		if n, err := strconv.ParseUint(s, 8, 32); err == nil {
+			return os.FileMode(n).Perm()
+		}
+	case float64:
+		return os.FileMode(uint32(s)).Perm()
+	}
+	return fallback
 }
 
 func sha256Hex(b []byte) string {

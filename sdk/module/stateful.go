@@ -160,7 +160,10 @@ func (s *FileStatefulModule) WriteReceipt(engagementID string, r action.Receipt)
 	}
 	defer func() { _ = closer.Close() }()
 
-	existing, _ := readReceiptsFile(path)
+	existing, err := readReceiptsFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read existing receipts (refusing to overwrite, file may be corrupt): %w", err)
+	}
 	wrapped := receiptEnvelope{
 		ModuleID: s.moduleID,
 		Type:     receiptTypeFor(r),

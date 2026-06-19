@@ -138,6 +138,41 @@ func TestReadReceipts_CorruptedJSON(t *testing.T) {
 	}
 }
 
+func TestWriteReceipt_RefusesToOverwriteCorruptFile(t *testing.T) {
+	tmp := t.TempDir()
+	setStateRoot(t, tmp)
+
+	s := module.NewFileStatefulModule("mcp.poison")
+	dir := filepath.Join(tmp, "mcp.poison")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	path := filepath.Join(dir, "CORRUPT.json")
+	corrupt := []byte("this is not json{{{")
+	if err := os.WriteFile(path, corrupt, 0o600); err != nil {
+		t.Fatalf("seed corrupt file: %v", err)
+	}
+
+	r := &action.PoisonReceipt{
+		ModuleID:     "mcp.poison",
+		EngagementID: "CORRUPT",
+		TargetID:     "tool-x",
+		Mode:         "replace",
+		AppliedAt:    time.Now().UTC(),
+	}
+	if _, err := s.WriteReceipt("CORRUPT", r); err == nil {
+		t.Fatal("expected WriteReceipt to refuse overwriting a corrupt receipts file")
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("re-read after refused write: %v", err)
+	}
+	if string(got) != string(corrupt) {
+		t.Errorf("corrupt file was clobbered: got %q, want %q", got, corrupt)
+	}
+}
+
 func TestReadReceipts_UnknownReceiptType(t *testing.T) {
 	tmp := t.TempDir()
 	setStateRoot(t, tmp)
@@ -203,5 +238,46 @@ func TestWriteReceiptConcurrentSafety(t *testing.T) {
 	}
 	if len(got) != N {
 		t.Errorf("expected %d receipts, got %d (receipts were lost in concurrent writes)", N, len(got))
+	}
+}
+
+// TestWriteReceiptSeparateInstancesNoLoss exercises the file lock as the
+// sole serializer: each goroutine uses its own FileStatefulModule, so no
+// shared in-process mutex protects the read-modify-write. Only the on-disk
+// lock prevents lost receipts. This is the regression guard for the
+// flock-unlink-on-release bug — if the lockfile were removed on release,
+// two writers could hold distinct inodes for the same path and clobber
+// each other's receipts.
+func TestWriteReceiptSeparateInstancesNoLoss(t *testing.T) {
+	tmp := t.TempDir()
+	setStateRoot(t, tmp)
+
+	const N = 50
+	var wg sync.WaitGroup
+	wg.Add(N)
+	for i := 0; i < N; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			s := module.NewFileStatefulModule("mcp.poison")
+			r := &action.PoisonReceipt{
+				ModuleID:     "mcp.poison",
+				EngagementID: "SEPARATE",
+				TargetID:     fmt.Sprintf("tool-%d", idx),
+				Mode:         "replace",
+				AppliedAt:    time.Now().UTC(),
+			}
+			if _, err := s.WriteReceipt("SEPARATE", r); err != nil {
+				t.Errorf("goroutine %d: WriteReceipt: %v", idx, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	got, err := module.NewFileStatefulModule("mcp.poison").ReadReceipts("SEPARATE")
+	if err != nil {
+		t.Fatalf("ReadReceipts: %v", err)
+	}
+	if len(got) != N {
+		t.Errorf("expected %d receipts, got %d (receipts lost — lock failed to serialize)", N, len(got))
 	}
 }

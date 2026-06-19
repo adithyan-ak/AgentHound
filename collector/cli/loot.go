@@ -70,6 +70,7 @@ func init() {
 	lootCmd.Flags().Int("max-items", 0, "Cap emitted Credential nodes per category (0 = use looter default)")
 	lootCmd.Flags().String("engagement-id", "",
 		"Engagement identifier recorded on every emitted edge's evidence map. Coordinate with target IR.")
+	lootCmd.Flags().Duration("timeout", 0, "Per-probe HTTP timeout (0 = looter default)")
 	if err := lootCmd.MarkFlagRequired("type"); err != nil {
 		panic(err)
 	}
