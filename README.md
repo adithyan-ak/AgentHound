@@ -1,301 +1,239 @@
+<div align="center">
+
+<img src="docs/readme-assets/agenthound-logo.png" alt="AgentHound logo" width="160">
+
+# AgentHound
+
+**Find the attack paths hiding in your AI agent infrastructure.**
+
+BloodHound for MCP servers, A2A agents, AI services, local configs, credentials, tools, prompts, and agent sprawl.
+
+[Docs](https://docs.agenthound.io) ·
+[Quickstart](https://docs.agenthound.io/getting-started/quickstart/) ·
+[Graph Model](https://docs.agenthound.io/reference/graph-model/) ·
+[CLI](https://docs.agenthound.io/reference/cli/) ·
+[Security](https://docs.agenthound.io/operator/security/) ·
+[Contributing](CONTRIBUTING.md)
+
+[![CI](https://github.com/adithyan-ak/agenthound/actions/workflows/ci.yml/badge.svg)](https://github.com/adithyan-ak/agenthound/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/adithyan-ak/agenthound?logo=github)](https://github.com/adithyan-ak/agenthound/releases)
+[![Go Report Card](https://goreportcard.com/badge/github.com/adithyan-ak/agenthound)](https://goreportcard.com/report/github.com/adithyan-ak/agenthound)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
+</div>
+
 <p align="center">
-  <h1 align="center">AgentHound</h1>
-  <p align="center"><strong>Attack-path discovery for AI agent infrastructure</strong></p>
-  <p align="center">
-    <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
-    <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-00ADD8.svg" alt="Go"></a>
-    <a href="https://neo4j.com"><img src="https://img.shields.io/badge/Neo4j-4.4+-008CC1.svg" alt="Neo4j"></a>
-    <a href="https://github.com/adithyan-ak/agenthound/actions"><img src="https://img.shields.io/github/actions/workflow/status/adithyan-ak/agenthound/ci.yml?branch=main&label=CI" alt="CI"></a>
-  </p>
+  <img src="docs/readme-assets/agenthound-attack-surface.png" alt="AgentHound attack surface graph" width="900">
 </p>
 
-**AgentHound is the BloodHound for MCP/A2A config sprawl.** It enumerates MCP servers, A2A agents, and AI-agent client configurations across an operator's environment, builds a directed trust graph in Neo4j, and uses shortest-path algorithms to surface multi-hop attack paths the configuration files alone never reveal.
+> **Authorized use only.** AgentHound includes read-only discovery and active assessment modules. Run it only against infrastructure you own or have written authorization to assess. See [Responsible Use & Security Posture](#responsible-use--security-posture).
 
-It ships as **two binaries** in the SharpHound/BloodHound style:
+AgentHound maps the trust relationships inside modern AI-agent stacks, turns them into a Neo4j graph, and surfaces the paths that matter: what an agent can reach, execute, impersonate, or exfiltrate through.
 
-- **`agenthound`** — a lean field collector. ~9 MiB stripped on linux/amd64. No Neo4j, no Postgres, no UI. Drops on a target host, enumerates, writes JSON to a file or stdout. The collector is offline-by-default — it does not phone home.
-- **`agenthound-server`** — the operator's single-user ingest + analysis server. Runs Neo4j-backed graph storage, post-processors, the REST API, and the React UI. Operators move scan JSON to the server via file copy, an SSH pipe, or the UI's drag-drop import.
+It ships as two binaries:
 
-The marquee detection is **credential-chain CAN_REACH**: multi-hop paths where Server A reads a credential, Server B uses that credential, and an agent reaches B's resources without trusting B directly. The graph model is what makes this feasible — single-file static analyzers cannot see the path because no individual config declares it.
+- **`agenthound`**: a lean collector that enumerates local configs, MCP, A2A, and AI-service surfaces, then emits JSON.
+- **`agenthound-server`**: a localhost analysis server with Neo4j, PostgreSQL, a REST API, post-processors, and a React graph UI.
 
-Prior art on adjacent problems: Snyk Toxic Flow Analysis (Jul 2025) for static MCP code analysis, and Invariant Labs (Apr 2025) for runtime tool-call inspection. AgentHound's contribution is the credential-chain graph + collector/server split optimized for red-team workflows.
+## Why AgentHound?
 
----
+Static config scanners read one file at a time. Attack paths do not.
 
-## What it finds
+An agent may trust one MCP server. That server may expose a credential. A separate service may be authorized by the same credential. No single config file declares the full path, but the combined graph does.
 
-AgentHound discovers security issues across your AI agent infrastructure, mapped to [OWASP MCP Top 10](https://owasp.org/www-project-top-10-for-large-language-model-applications/) and [OWASP Agentic Top 10](https://genai.owasp.org/):
+AgentHound joins those facts into a directed trust graph so you can ask:
 
-| Finding | Severity | What it means |
-|---------|----------|---------------|
-| **Credential-chain paths** | Critical | Multi-hop paths where Server A reads a credential, Server B uses that credential, and an agent reaches B's resources without trusting B directly. The genuine "no other tool finds this" attack path — config-file scanners never see the chain. |
-| Shell access paths | Critical | An agent can reach tools with arbitrary command execution |
-| Database access paths | Critical | An agent can reach production database resources |
-| Data exfiltration routes | Critical | An agent can read sensitive data AND send it outbound |
-| Tool poisoning | High | Tool descriptions contain prompt injection patterns |
-| Tool shadowing | High | A malicious tool mimics a legitimate tool to hijack actions |
-| Rug pull detection | High | A tool's description changed between scans (supply chain attack) |
-| Unauthenticated servers/agents | High | MCP servers or A2A agents with no authentication |
-| Instruction file poisoning | High | Agent instruction files contain exfiltration or override patterns |
-| Hardcoded secrets | High | High-entropy strings (API keys) in config files |
-| Unpinned packages | Medium | `npx -y @pkg` without version pin — supply chain risk |
-| Unsigned agent cards | Medium | A2A agents without JWS signatures |
-| Cross-protocol attack paths[^xprotocol] | Critical | An A2A agent can pivot through host co-location to reach MCP resources |
-
-[^xprotocol]: Cross-protocol pivot detection is the academically-novel piece, but in practice it fires rarely because most A2A and MCP deployments don't share hosts. It exists; the credential-chain detection above is what most operators will actually use.
-
-All 17 findings are exposed as pre-built queries from the CLI and UI.
-
----
-
-## Install
-
-Pick one. Full options (Homebrew, prebuilt Docker images, `go install`, all-in-one image, source builds) live in the [installation guide](https://docs.agenthound.io/getting-started/install/).
-
-### Collector — one-line install
-
-```bash
-curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/install.sh | sh
+```text
+Which agents can reach shell-capable tools?
+Which credentials create cross-service paths?
+Which poisoned tools sit on high-risk routes?
+Which agents can read sensitive data and send it outbound?
 ```
 
-Single static binary, no DB, no Docker, no `sudo`. SHA-256 verified on every install; cosign signature verified additionally if `cosign` is on `$PATH` (otherwise the installer prints the manual verify command). Lands in `$HOME/.local/bin/agenthound`.
+That is the BloodHound idea applied to AI-agent infrastructure.
 
-### Server — Docker Compose (recommended)
+## Path Primitives
+
+AgentHound does not just list findings. It creates graph edges you can chain, query, and report:
+
+- **`CAN_REACH`**: an agent can traverse trust, credential, host, or protocol relationships to reach a target.
+- **`CAN_EXECUTE`**: an agent can reach a tool capable of command, database, network, or code execution.
+- **`CAN_EXFILTRATE_VIA`**: an agent can read sensitive data and send it through an outbound channel.
+- **`CAN_IMPERSONATE`**: an agent or identity can act as another trust principal.
+- **`SHADOWS`**: a tool mimics a trusted tool closely enough to hijack expected behavior.
+- **`POISONED_DESCRIPTION` / `POISONED_INSTRUCTIONS`**: tool or instruction text contains model-steering content.
+
+These edges turn AI-agent infrastructure into something you can pathfind instead of manually reason about.
+
+## Example Path
+
+```mermaid
+flowchart LR
+  Agent["AgentInstance<br/>claude-desktop"]
+  Notes["MCPServer<br/>internal-notes"]
+  Cred["Credential<br/>value_hash: a3f9..."]
+  Gateway["LiteLLMGateway<br/>prod"]
+  Providers["LLM providers<br/>OpenAI / Anthropic / Bedrock"]
+
+  Agent -- TRUSTS_SERVER --> Notes
+  Notes -- HAS_ENV_VAR --> Cred
+  Gateway -- EXPOSES_CREDENTIAL --> Cred
+  Agent -- CAN_REACH --> Gateway
+  Gateway -- PROVIDES_MODEL --> Providers
+```
+
+No single config file declares this path. AgentHound computes it once collector output lands in the same graph.
+
+## What AgentHound Finds
+
+AgentHound's detections are built around the questions security teams ask when they need to understand reachability, blast radius, and pathing risk.
+
+| Finding | What it means | Security question |
+|---|---|---|
+| **Credential-chain paths** | The same secret appears in multiple contexts, letting trust cross service boundaries. | Which reused credential gives an agent access it never explicitly had? |
+| **Reachability** | Agents, MCP servers, tools, resources, prompts, A2A skills, and AI services are joined into one graph. | What can this agent actually reach if trust edges are followed? |
+| **Execution paths** | An agent can reach shell-like, database, network, or other high-impact tools. | Which agents have a path to command execution, data-plane control, or production impact? |
+| **Exfiltration paths** | An agent can read sensitive data and also reach an outbound channel. | Where can sensitive data leave the environment? |
+| **Cross-protocol pivots** | MCP, A2A, host context, and AI-service infrastructure combine into one reachable path. | Can one agent protocol become a bridge into another trust domain? |
+| **Tool poisoning** | Tool descriptions, prompts, or instruction files contain suspicious model-steering content. | Which tools or instructions could influence model behavior in unsafe ways? |
+| **Tool shadowing** | A lookalike tool mimics a trusted capability or name. | Which tool could intercept or hijack an expected action? |
+| **Rug pulls** | A tool's description changed between scans. | What changed since the last known-good graph, and did it create a new risk path? |
+| **Unauthenticated servers or agents** | MCP servers or A2A agents are reachable without expected authentication. | Which exposed agent surfaces need immediate review? |
+| **Risk hotspots** | Nodes and paths are prioritized with risk scores and prebuilt graph queries. | Where should investigation or remediation start first? |
+
+See [Detection Rules](https://docs.agenthound.io/reference/detection-rules/) and [Risk Scoring](https://docs.agenthound.io/reference/risk-scoring/) for the full catalog.
+
+## Quick Start
+
+Prerequisites: Docker + Compose v2. For source builds, also install Go 1.25+ and Node.js 20+.
 
 ```bash
-git clone https://github.com/adithyan-ak/agenthound
+# Start the local analysis stack
+git clone https://github.com/adithyan-ak/agenthound.git
 cd agenthound
-docker compose -f docker/docker-compose.yml up -d
-# open http://localhost:8080
+docker compose -f docker/docker-compose.yml up -d --build
+
+# Build both binaries
+make build
+
+# Run a read-only local config scan, ingest it, and open the graph
+bin/agenthound scan --config
+bin/agenthound-server ingest scan-*.json
+open http://127.0.0.1:8080
 ```
 
-Brings up Neo4j 4.4 + Postgres 16 + `agenthound-server` together, all bound to `127.0.0.1`. **No application-layer auth** — see [security posture](https://docs.agenthound.io/operator/security/) for the network-boundary model and remote-access patterns (SSH tunnel, Tailscale, VPN).
+The UI runs at [`http://127.0.0.1:8080`](http://127.0.0.1:8080).
 
-### Prerequisites at a glance
-
-| Path                              | Needs                              |
-|-----------------------------------|------------------------------------|
-| Curl install (collector)          | curl, tar, sha256sum or shasum (preinstalled on macOS / Linux) |
-| Docker Compose (server, recommended) | Docker + Compose v2             |
-| All-in-one image (`make standard-run`) | Docker (auto-builds `agenthound:latest` on first run) |
-| `make build` / `make build-server` | Go 1.25+, Node 20+ (Node only for the server's React UI build) |
-| `go install ...@latest`           | Go 1.25+. (`go install` does not run `npm`; the server installed this way uses an embedded fallback page instead of the React UI. For the UI, use Docker, Homebrew, or `make build-server`.) |
-
-The newcomer-facing Make targets — `build`, `build-collector`, `build-server`, `up`, `down`, `docker*`, `standard*`, `seed`, `demo` — preflight their prerequisites and print a friendly diagnostic if anything is missing. (`test`, `lint`, `release`, `clean` and the `prerelease` gate are developer targets and skip the preflight.) `agenthound-server serve` itself probes Neo4j + Postgres on startup and tells you exactly what to start if a backend is down.
-
-`AGENTHOUND_SKIP_PREFLIGHT=1` bypasses **only** the shell/Make preflight checks. The runtime DB probe inside `agenthound-server` ignores it — you cannot start the server with a missing backend.
-
----
-
-## Quick scan
+<details>
+<summary><strong>Other install and ingest options</strong></summary>
 
 ```bash
-# Discover and enumerate everything reachable from this host (default: ./scan-<scan_id>.json in CWD)
-agenthound scan
+# Stream a scan directly into the server
+bin/agenthound scan --config --output - | bin/agenthound-server ingest -
 
-# Choose a path explicitly
-agenthound scan --output /tmp/scan.json
+# Install the collector with Go
+go install github.com/adithyan-ak/agenthound/collector/cmd/agenthound@latest
 
-# Stream JSON to stdout for piping
-agenthound scan --output - | ssh op-box 'agenthound-server ingest -'
+# Install and start the server with Go
+go install github.com/adithyan-ak/agenthound/server/cmd/agenthound-server@latest
+agenthound-server serve
 
-# Scope to one collector
-agenthound scan --config                              # Config files only (offline)
-agenthound scan --mcp --url https://mcp.example.com   # Single HTTP MCP server
-agenthound scan --a2a --targets url1,url2             # A2A agents
+# Install from a pinned release tag.
+# The installer verifies checksums and uses cosign when available.
+curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/v<VERSION>/install.sh | sh
 ```
 
-## Network scan + Looter (v0.2)
+See the full [installation guide](https://docs.agenthound.io/getting-started/install/) for release binaries, verification, Docker images, and source builds.
 
-The v0.2 offensive surface adds active network discovery for AI services and the first concrete `Looter` action. The network scanner sweeps a CIDR for AI services on standard ports and dispatches fingerprinters at each open port; the LiteLLM Looter extracts upstream provider credentials (OpenAI, Anthropic, AWS Bedrock, Azure, Cohere) from a master-key-authenticated LiteLLM gateway:
+</details>
 
-```bash
-# Discover AI services on a private CIDR (Ollama on 11434, LiteLLM on 4000, ...).
-agenthound scan 10.0.0.0/24
+## How It Works
 
-# Public IP space requires explicit override + interactive AUTHORIZED prompt + watermark.
-agenthound scan 1.1.1.1 --allow-public-targets --authorization-file ./engagement.pdf
+```mermaid
+flowchart LR
+ subgraph Field["Field / scanned environment"]
+ Config["Local configs"]
+ MCP["MCP servers"]
+ A2A["A2A agents"]
+ Services["AI services"]
+ Collector["agenthound collector"]
+ end
 
-# Loot a discovered LiteLLM gateway. value_hash on every emitted Credential is the
-# cross-collector merge primitive — same secret seen as an env var by the Config
-# Collector lights up the credential-chain finding in the analysis server.
-agenthound loot 10.0.0.10:4000 --type litellm \
-    --master-key sk-... --engagement-id ENG-001 --output -
+ subgraph Operator["Operator workstation"]
+ JSON["Scan JSON"]
+ Ingest["Ingest"]
+ Neo4j[("Neo4j")]
+ Postgres[("PostgreSQL")]
+ Analyze["Post-processors<br/>Risk scoring"]
+ API["REST API"]
+ UI["Graph UI"]
+ end
+
+ Config --> Collector
+ MCP --> Collector
+ A2A --> Collector
+ Services --> Collector
+ Collector --> JSON
+ JSON --> Ingest
+ Ingest --> Neo4j
+ Ingest --> Postgres
+ Neo4j --> Analyze
+ Analyze --> API
+ Analyze --> UI
 ```
 
-See the [scanner guide](https://docs.agenthound.io/operator/scanner/) for legal warnings, port set, and safety controls, and the [LiteLLM looter doc](https://docs.agenthound.io/operator/loot/litellm/) for the audit-trail residue caveat.
+The collector stays small and portable: no Neo4j driver, no PostgreSQL client, no UI, and no server dependencies. It writes JSON and exits. The server owns ingestion, deduplication, graph writes, post-processing, query APIs, and visualization.
 
-## Workflow
+AgentHound's graph model includes agents, MCP servers, tools, resources, prompts, credentials, hosts, config files, instruction files, A2A agents, AI-service nodes, and model nodes. Composite edges such as `CAN_REACH`, `CAN_EXECUTE`, `CAN_EXFILTRATE_VIA`, `CAN_IMPERSONATE`, `SHADOWS`, `POISONED_DESCRIPTION`, and `POISONED_INSTRUCTIONS` are computed after ingest.
 
-The collector writes JSON. The operator's box ingests it. There are three equivalent paths:
+Read the full schema in the [graph model reference](https://docs.agenthound.io/reference/graph-model/).
 
-```bash
-# (a) File copy + CLI ingest
-scp scan.json operator-box:/tmp/
-ssh operator-box 'agenthound-server ingest /tmp/scan.json'
+<p align="center">
+  <img src="docs/readme-assets/agenthound-dashboard.png" alt="AgentHound graph explorer dashboard" width="900">
+</p>
 
-# (b) Stdin pipe (no file at rest on either side)
-agenthound scan --output - | ssh operator-box 'agenthound-server ingest -'
+## Where It Fits
 
-# (c) UI drag-drop import
-# Open http://localhost:8080 → Scan Manager → "Import scan" → drag scan.json into the dropzone
-```
+- **Initial access triage**: identify agent surfaces exposed without expected authentication.
+- **Privilege expansion**: find reused credentials and trust paths between agents, tools, hosts, and services.
+- **Objective pathing**: query routes to shell-like tools, databases, model gateways, and sensitive resources.
+- **Evidence packaging**: report graph-backed paths instead of hand-wavy config observations.
+- **Retest validation**: compare scans to prove a critical path disappeared.
 
-The server validates, normalizes, deduplicates, writes the graph, and runs the post-processors. Then open the UI:
+## Responsible Use & Security Posture
 
-```bash
-open http://localhost:8080
-```
+AgentHound is built for authorized assessment and internal visibility. Active modules are for sanctioned testing only and are documented separately. The operator is responsible for authorization for every target.
 
-Or query from the CLI:
+- The collector is offline by default and writes JSON to a file or stdout.
+- The server binds to `127.0.0.1:8080` by default.
+- The server is single-user with no application-layer login. Do not expose it beyond localhost; read endpoints may surface collected graph contents.
+- Mutating localhost API endpoints are gated by a bearer token.
+- TLS verification is strict by default for supported network modules.
+- Destructive or mutating assessment workflows require explicit operator intent and should be used only within a written scope.
 
-```bash
-agenthound query --findings --severity critical
-agenthound query --prebuilt agents-shell-access
-```
-
----
-
-## How it works
-
-```
-                                FIELD                                |          OPERATOR
-                                                                     |
-  Config Collector       MCP Collector       A2A Collector           |
-  (12 client parsers)    (Go SDK, stdio/HTTP) (HTTP + JWS verify)    |
-        |                      |                      |              |
-        v                      v                      v              |
-  +-------------------------------------------------+               |          +---------------+
-  |                  agenthound (collector)          | -- JSON --> | -- API ->| ingest pipeline|
-  +-------------------------------------------------+               |          +---------------+
-                                                                     |                |
-                                                                     |                v
-                                                                     |          +---------+
-                                                                     |          |  Neo4j  |
-                                                                     |          +---------+
-                                                                     |                |
-                                                                     |                v
-                                                                     |       +-----------------+
-                                                                     |       | post-processors |
-                                                                     |       +-----------------+
-                                                                     |                |
-                                                                     |    +-----------+----------+
-                                                                     |    |                      |
-                                                                     |    v                      v
-                                                                     | +---------+        +-------------+
-                                                                     | | REST API|        |  React UI    |
-                                                                     | | (chi)   |        | (React Flow) |
-                                                                     | +---------+        +-------------+
-```
-
-The collector is a **single static binary** with the three enumeration modules statically linked. The server holds Neo4j, the post-processors, the REST API, and the embedded React + React Flow + ELK UI.
-
-### The graph
-
-AgentHound builds a directed trust graph with **23 collector-produced node types** (plus 2 synthetic) and **17 raw edge types** (plus 8 post-processed composite edge types — 25 total):
-
-- **Nodes:** `AgentInstance`, `MCPServer`, `MCPTool`, `MCPResource`, `MCPPrompt`, `A2AAgent`, `A2ASkill`, `Identity`, `Credential`, `Host`, `ConfigFile`, `InstructionFile`, `OllamaInstance`, `VLLMInstance`, `QdrantInstance`, `MLflowServer`, `LiteLLMGateway`, `JupyterServer`, `LangServeApp`, `OpenWebUIInstance`, `AIService`, `AIModel`, `ExtractedTrainingSignal`
-- **Direct edges:** `TRUSTS_SERVER`, `PROVIDES_TOOL`, `PROVIDES_RESOURCE`, `PROVIDES_PROMPT`, `ADVERTISES_SKILL`, `DELEGATES_TO`, `AUTHENTICATES_WITH`, `USES_CREDENTIAL`, `RUNS_ON`, `CONFIGURED_IN`, `HAS_ENV_VAR`, `LOADS_INSTRUCTIONS`, `SAME_AUTH_DOMAIN`, `EXPOSES`, `EXPOSES_CREDENTIAL`, `PROVIDES_MODEL`, `EXTRACTED_FROM`
-- **Composite edges (computed by post-processors):** `HAS_ACCESS_TO`, `CAN_EXECUTE`, `CAN_REACH`, `CAN_EXFILTRATE_VIA`, `SHADOWS`, `POISONED_DESCRIPTION`, `POISONED_INSTRUCTIONS`, `CAN_IMPERSONATE`. The cross-protocol A2A→MCP traversal reuses the `CAN_REACH` label with `source_collector` annotations.
-
-Node IDs are deterministic SHA-256 hashes — the same `MCPServer` discovered by the Config Collector and the MCP Collector merges into a single node by ID.
-
-### Risk scoring
-
-Every node gets a risk score (0–100) based on weighted factors:
-
-- **Agents:** credential handling, blast radius, auth posture, tool surface, poisoning exposure
-- **Servers:** auth strength, tool risk, network exposure, credential handling
-- **Tools:** capability class, poisoning indicators, access sensitivity, input validation
-
----
-
-## Configuration
-
-### Collector
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AGENTHOUND_OUTPUT` | | Write scan JSON to this path. Use `-` for stdout. Defaults to `./scan-<scan_id>.json` in CWD. |
-| `AGENTHOUND_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
-| `AGENTHOUND_QUIET` | | `1` suppresses non-error logs (same as `--quiet`) |
-| `AGENTHOUND_LOG_JSON` | | `1` emits structured JSON logs instead of text |
-| `AGENTHOUND_CONCURRENCY` | `5` | Max parallel collector workers |
-
-Global flags (available on every subcommand): `--log-level`, `--output`, `--concurrency`, `--quiet`, `--log-json`.
-
-### Server
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AGENTHOUND_NEO4J_URI` | `bolt://localhost:7687` | Neo4j connection |
-| `AGENTHOUND_NEO4J_USER` | `neo4j` | Neo4j username |
-| `AGENTHOUND_NEO4J_PASSWORD` | `agenthound` | Neo4j password |
-| `AGENTHOUND_PG_URI` | `postgres://agenthound:agenthound@localhost:5432/agenthound?sslmode=disable` | Postgres connection |
-| `AGENTHOUND_BIND` | `127.0.0.1:8080` | Server bind address `host:port`. Set to `0.0.0.0:8080` only inside a trusted network. |
-| `AGENTHOUND_LOG_LEVEL` | `info` | Log level |
-| `AGENTHOUND_CORS_ORIGINS` | `http://localhost:8080` | Comma-separated allowed CORS origins (dev only) |
-
-There is intentionally no `AGENTHOUND_JWT_SECRET`, `AGENTHOUND_ADMIN_PASSWORD`, or `AGENTHOUND_API_TOKEN` — the server has no application-layer auth.
-
----
-
-## Output handling
-
-- The collector writes scan JSON via atomic `temp + rename`. A SIGINT mid-write never leaves a half-written file at the destination.
-- Output files are `chmod 0o600` on POSIX. **NTFS does not honor POSIX permission bits** — on Windows the file inherits the directory's NTFS ACL, which typically allows any local user to read it. Treat output stored on Windows as readable by every local user account.
-- When `--output` is unset, the collector writes to `./scan-<scan_id>.json` in the current working directory. Pass `--output -` to stream JSON to stdout (no file is created); use this with a pipe (`| agenthound-server ingest -`).
-
----
-
-## Demo
-
-Seed the graph with synthetic demo data that covers all detection capabilities:
-
-```bash
-make demo
-# or
-bash scripts/seed-demo.sh
-```
-
-This stands up a multi-host Docker lab (MCP server, A2A agent, LiteLLM gateway, Ollama, vLLM, Open WebUI, Jupyter) and runs a live `scan` → `discover` → `loot` against it, ingesting the results into the server. The seeded graph covers: critical attack paths, data exfiltration routes, cross-protocol pivots, tool poisoning, credential chains, unpinned packages, unsigned A2A agents, and instruction file poisoning.
-
----
-
-## OPSEC
-
-AgentHound is a transparent assessment tool, not an evasion implant. The binary is named `agenthound`, is statically linked, and is detectable by any modern EDR. If your engagement requires evasion, the right tools are Sliver / Mythic / a custom implant — and you can shuttle AgentHound's JSON output through that channel.
-
-See the [security posture doc](https://docs.agenthound.io/operator/security/) for the full threat model and operator OPSEC notes.
-
----
+Read the [security posture guide](https://docs.agenthound.io/operator/security/) and [offensive actions guide](https://docs.agenthound.io/operator/offensive-actions/).
 
 ## Documentation
 
-Full documentation lives at **[docs.agenthound.io](https://docs.agenthound.io)**.
+Full documentation lives at [docs.agenthound.io](https://docs.agenthound.io).
 
-| Document | Description |
-|----------|-------------|
-| [Installation](https://docs.agenthound.io/getting-started/install/) | Every install path with prerequisites and verification |
-| [Quickstart](https://docs.agenthound.io/getting-started/quickstart/) | 10-minute end-to-end walkthrough |
-| [Demo Lab](https://docs.agenthound.io/getting-started/demo-lab/) | Self-contained Docker lab covering the full offensive chain |
-| [CLI Reference](https://docs.agenthound.io/reference/cli/) | All commands, flags, and examples |
-| [API Reference](https://docs.agenthound.io/reference/api/) | REST API endpoints |
-| [Graph Model](https://docs.agenthound.io/reference/graph-model/) | Node types, edge types, ID strategy |
-| [Detection Rules](https://docs.agenthound.io/reference/detection-rules/) | All detections with OWASP mappings |
-| [Risk Scoring](https://docs.agenthound.io/reference/risk-scoring/) | Weighted scoring model |
-| [Architecture](https://docs.agenthound.io/architecture/system-design/) | System design for contributors |
-| [Deployment](https://docs.agenthound.io/operator/deployment/) | Production deployment patterns |
-| [Security Posture](https://docs.agenthound.io/operator/security/) | Threat model and operational posture |
-| [Two-binary split (ADR)](docs/adr/0001-two-binary-split.md) | Why and how the split happened |
-| [Contributing](CONTRIBUTING.md) | How to contribute collectors, detections, and queries |
-| [Changelog](CHANGELOG.md) | Release notes |
-| [Vulnerability reporting](SECURITY.md) | Disclosure process |
+Start with:
 
-Machine-readable API spec: `GET /api/v1/docs` (OpenAPI 3.0, YAML format)
+- [Quickstart](https://docs.agenthound.io/getting-started/quickstart/)
+- [Installation Guide](https://docs.agenthound.io/getting-started/install/)
+- [CLI Reference](https://docs.agenthound.io/reference/cli/)
+- [Configuration Guide](https://docs.agenthound.io/reference/configuration/)
+- [Graph Model](https://docs.agenthound.io/reference/graph-model/)
+- [Detection Rules](https://docs.agenthound.io/reference/detection-rules/)
+- [Deployment Guide](https://docs.agenthound.io/operator/deployment/)
+- [Security Posture](https://docs.agenthound.io/operator/security/)
 
----
+## Contributing
+
+AgentHound is built around small, self-registering modules and a stable ingest format. Collectors, detections, and post-processors are designed to be extended without pulling server dependencies into the collector.
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the [module authoring guide](https://docs.agenthound.io/contributing/modules/). Found a vulnerability in AgentHound itself? See [SECURITY.md](SECURITY.md).
 
 ## License
 
-[Apache License 2.0](LICENSE)
+AgentHound is licensed under the [Apache License 2.0](LICENSE).
