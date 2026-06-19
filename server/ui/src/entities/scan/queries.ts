@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { qk } from "@shared/api/query-keys";
 import { deleteScan, fetchScans, uploadScan } from "./api";
 
@@ -13,16 +18,36 @@ export function useScans(limit = SCANS_LIST_LIMIT) {
   });
 }
 
-// Mutations replicate today's post-write refetch target ONLY: the scan-manager
-// list. They deliberately do NOT invalidate the dashboard scan widgets (a
-// separately-listed, out-of-scope behavioral change).
+// A scan import or delete mutates the underlying graph, so EVERY graph-derived
+// cache — not just the scan list — must be refetched, otherwise the dashboard,
+// explorer, findings, and query views can show pre-write data for up to the
+// query staleTime. These prefix keys invalidate all parameterized variants
+// (e.g. both the manager's ["scans",50] and the dashboard's ["scans",20]).
+const GRAPH_DERIVED_KEY_PREFIXES: readonly (readonly string[])[] = [
+  ["scans"],
+  ["graph"],
+  ["nodes"],
+  ["node"],
+  ["edges"],
+  ["findings"],
+  ["finding-detail"],
+  ["prebuilt-queries"],
+  ["prebuilt"],
+  ["explorer"],
+  ["health"],
+];
+
+function invalidateGraphDerivedQueries(queryClient: QueryClient) {
+  for (const queryKey of GRAPH_DERIVED_KEY_PREFIXES) {
+    void queryClient.invalidateQueries({ queryKey });
+  }
+}
+
 export function useDeleteScan() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => deleteScan(id),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: qk.scans(SCANS_LIST_LIMIT) });
-    },
+    onSuccess: () => invalidateGraphDerivedQueries(queryClient),
   });
 }
 
@@ -30,8 +55,6 @@ export function useUploadScan() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (file: File) => uploadScan(file),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: qk.scans(SCANS_LIST_LIMIT) });
-    },
+    onSuccess: () => invalidateGraphDerivedQueries(queryClient),
   });
 }

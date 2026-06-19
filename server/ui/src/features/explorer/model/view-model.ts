@@ -18,8 +18,11 @@ export interface RenderParams {
   blastData: BlastRadiusData | undefined;
   blastRadiusSourceId: string | null;
   showOrphans: boolean;
-  ownedSet: Set<string>;
-  highValueSet: Set<string>;
+  // Optional: the canvas applies Owned / High-Value marks as a post-layout
+  // overlay (they are pure presentation badges), so the layout-keyed render
+  // build no longer feeds them. Still accepted for direct/unit use.
+  ownedSet?: Set<string>;
+  highValueSet?: Set<string>;
   highlight: { nodeIds: Set<string>; edgeIds: Set<string> } | null;
 }
 

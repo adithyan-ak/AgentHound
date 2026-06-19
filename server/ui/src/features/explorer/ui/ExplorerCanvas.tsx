@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -14,9 +14,14 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useExplorerStore } from "@features/explorer/model/store";
+import { useMarksStore } from "@shared/model/marks";
 import { computeExplorerLayout } from "@features/explorer/model/layout";
 import { computeClickNeighbors } from "@features/explorer/model/click-neighbors";
-import type { BuildResult, LensEdgeData } from "@features/explorer/model/graph";
+import type {
+  BuildResult,
+  LensEdgeData,
+  HexNodeData,
+} from "@features/explorer/model/graph";
 import type { ExplorerRawData } from "@features/explorer/model/useExplorerGraph";
 import { useEscapeKey } from "@shared/lib/useEscapeKey";
 import { HexNode } from "./nodes/HexNode";
@@ -70,6 +75,32 @@ export function ExplorerCanvas({
   reactFlowRef.current = reactFlow;
   const hasInitialLayoutRef = useRef(false);
   const prevShowOrphansRef = useRef(showOrphans);
+
+  const ownedNodeIds = useMarksStore((s) => s.ownedNodeIds);
+  const highValueNodeIds = useMarksStore((s) => s.highValueNodeIds);
+  const ownedSet = useMemo(() => new Set(ownedNodeIds), [ownedNodeIds]);
+  const highValueSet = useMemo(
+    () => new Set(highValueNodeIds),
+    [highValueNodeIds],
+  );
+
+  // Owned / High-Value are pure presentation badges (no structural, dim, or
+  // size effect), so they are layered onto the already-positioned nodes here
+  // rather than fed into the ELK-layout build. Toggling a mark updates the
+  // badge instantly with no graph re-layout. Object identity is preserved for
+  // unchanged nodes so only the toggled hex re-renders.
+  const displayNodes = useMemo(
+    () =>
+      nodes.map((n) => {
+        if (n.type !== "hex") return n;
+        const data = n.data as HexNodeData;
+        const owned = ownedSet.has(n.id);
+        const highValue = highValueSet.has(n.id);
+        if (data.owned === owned && data.highValue === highValue) return n;
+        return { ...n, data: { ...data, owned, highValue } };
+      }),
+    [nodes, ownedSet, highValueSet],
+  );
 
   useEffect(() => {
     if (!built) return;
@@ -206,7 +237,7 @@ export function ExplorerCanvas({
 
   return (
     <ReactFlow
-      nodes={nodes}
+      nodes={displayNodes}
       edges={edges}
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}

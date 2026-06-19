@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import { useMarksStore } from "@shared/model/marks";
 import { useExplorerStore } from "./store";
 import { useExplorerGraph, type ExplorerRawData } from "./useExplorerGraph";
 import { useBlastRadius } from "./useBlastRadius";
@@ -40,8 +39,6 @@ export function useExplorerViewModel(): ExplorerViewModel {
   const blastDirection = useExplorerStore((s) => s.blastRadiusDirection);
   const blastMaxHops = useExplorerStore((s) => s.blastRadiusMaxHops);
   const highlight = useExplorerStore((s) => s.highlight);
-  const ownedNodeIds = useMarksStore((s) => s.ownedNodeIds);
-  const highValueNodeIds = useMarksStore((s) => s.highValueNodeIds);
 
   const { data: blastData } = useBlastRadius(
     activeLens === "blast-radius" ? blastRadiusSourceId : null,
@@ -49,11 +46,6 @@ export function useExplorerViewModel(): ExplorerViewModel {
     blastMaxHops,
   );
 
-  const ownedSet = useMemo(() => new Set(ownedNodeIds), [ownedNodeIds]);
-  const highValueSet = useMemo(
-    () => new Set(highValueNodeIds),
-    [highValueNodeIds],
-  );
   const highlightSets = useMemo(() => {
     if (!highlight) return null;
     return {
@@ -73,8 +65,6 @@ export function useExplorerViewModel(): ExplorerViewModel {
             blastData,
             blastRadiusSourceId,
             showOrphans,
-            ownedSet,
-            highValueSet,
             highlight: highlightSets,
           })
         : null,
@@ -85,8 +75,6 @@ export function useExplorerViewModel(): ExplorerViewModel {
       blastData,
       blastRadiusSourceId,
       showOrphans,
-      ownedSet,
-      highValueSet,
       highlightSets,
     ],
   );

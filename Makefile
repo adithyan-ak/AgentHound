@@ -86,7 +86,7 @@ seed: preflight-server-running
 demo: preflight-demo
 	@bash scripts/seed-demo.sh
 
-release:
+release: ui-build
 	goreleaser release --clean --snapshot
 
 standard: preflight-docker

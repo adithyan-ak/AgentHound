@@ -141,6 +141,32 @@ func TestValidatorRejectsCompositeEdgeKind(t *testing.T) {
 	assertValidationError(t, err, "graph.edges[0].kind")
 }
 
+func TestValidatorRejectsInvalidEdgeSourceKind(t *testing.T) {
+	v := NewValidator()
+	data := validIngestData()
+	data.Graph.Edges[0].SourceKind = "MCPServer) WITH edge MATCH (z) DETACH DELETE z //"
+	err := v.Validate(data)
+	assertValidationError(t, err, "graph.edges[0].source_kind")
+}
+
+func TestValidatorRejectsInvalidEdgeTargetKind(t *testing.T) {
+	v := NewValidator()
+	data := validIngestData()
+	data.Graph.Edges[0].TargetKind = "MCPTool {x:1}) DETACH DELETE n //"
+	err := v.Validate(data)
+	assertValidationError(t, err, "graph.edges[0].target_kind")
+}
+
+func TestValidatorAcceptsValidExplicitEdgeKinds(t *testing.T) {
+	v := NewValidator()
+	data := validIngestData()
+	data.Graph.Edges[0].SourceKind = "MCPServer"
+	data.Graph.Edges[0].TargetKind = "MCPTool"
+	if err := v.Validate(data); err != nil {
+		t.Fatalf("expected explicit valid edge kinds to validate, got: %v", err)
+	}
+}
+
 func TestValidatorCollectsAllErrors(t *testing.T) {
 	v := NewValidator()
 	data := &ingest.IngestData{

@@ -490,6 +490,7 @@ agenthound-server query --shortest-path --from AgentInstance:claude --to MCPReso
 | `cross-protocol-paths` | Critical Paths | critical |
 | `exfiltration-routes` | Critical Paths | critical |
 | `credential-chain` | Critical Paths | critical |
+| `litellm-credential-leak` | Critical Paths | critical |
 | `unpinned-shell` | Combined | critical |
 | `poisoned-tools` | Vulnerabilities | high |
 | `tool-shadowing` | Vulnerabilities | high |

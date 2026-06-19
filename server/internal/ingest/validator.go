@@ -92,6 +92,23 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 				Message: fmt.Sprintf("invalid edge kind %q", edge.Kind),
 			})
 		}
+		// source_kind/target_kind are interpolated as Neo4j labels in the graph
+		// writer's MATCH clause (labels cannot be query-parameterized), so any
+		// non-empty value MUST be an allowed node kind. This mirrors the node
+		// kind check above and the analysis handlers' validNodeKind guard,
+		// closing the same Cypher-injection class on the ingest path.
+		if edge.SourceKind != "" && !ingest.AllowedNodeKinds[edge.SourceKind] {
+			errs = append(errs, FieldError{
+				Path:    fmt.Sprintf("graph.edges[%d].source_kind", i),
+				Message: fmt.Sprintf("invalid source_kind %q", edge.SourceKind),
+			})
+		}
+		if edge.TargetKind != "" && !ingest.AllowedNodeKinds[edge.TargetKind] {
+			errs = append(errs, FieldError{
+				Path:    fmt.Sprintf("graph.edges[%d].target_kind", i),
+				Message: fmt.Sprintf("invalid target_kind %q", edge.TargetKind),
+			})
+		}
 	}
 
 	if len(errs) > 0 {

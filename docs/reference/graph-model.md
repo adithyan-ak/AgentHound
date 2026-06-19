@@ -214,7 +214,8 @@ Lower weight = easier to exploit = higher risk. Used by Dijkstra weighted-path q
 | Edge | Weight | Condition |
 |------|--------|-----------|
 | `TRUSTS_SERVER` | 0.1 | auth_method = none |
-| `TRUSTS_SERVER` | 0.3 | auth_method = static_key |
+| `TRUSTS_SERVER` | 0.3 | auth_method = apiKey |
+| `TRUSTS_SERVER` | 0.5 | auth_method = bearer |
 | `TRUSTS_SERVER` | 0.7 | auth_method = oauth |
 | `TRUSTS_SERVER` | 0.9 | auth_method = mtls |
 | `PROVIDES_TOOL` | 0.1 | Always (tools are always available once trusted) |
