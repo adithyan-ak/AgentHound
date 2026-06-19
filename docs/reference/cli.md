@@ -270,6 +270,14 @@ The `<host>` argument is informational for file-based Implanters — recorded on
 | `--server-name` | `agenthound-implant-<engagement-id>` | Name for the implanted server entry. |
 | `--servers-key` | `mcpServers` | Top-level key in config JSON. Override for VS Code (`servers`), Zed (`context_servers`). |
 
+#### Per-Module Flags: `--type instruction.file`
+
+`instruction.file` is registered as a Poisoner (the agent reads instruction files as part of its prompt, so modification fits the Poisoner contract), but `agenthound implant --type instruction.file` is also accepted — the dispatch falls through to the shared poison runner. The receipt is identical to one produced by `agenthound poison --type instruction.file`, and `agenthound revert <engagement-id>` rolls back either invocation the same way.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--file` | | Absolute path to the instruction file (CLAUDE.md, AGENTS.md, .cursorrules). Required. |
+
 #### Example
 
 ```bash

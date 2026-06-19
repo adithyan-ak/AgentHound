@@ -107,12 +107,24 @@ func init() {
 }
 
 func runPoison(cmd *cobra.Command, args []string) error {
+	return runPoisonDispatch(cmd, args, "poison")
+}
+
+// runPoisonDispatch is the shared body of `poison` and the fallback path
+// of `implant` when a target kind is registered as a Poisoner. label
+// only controls the [poison]/[implant] prefix on operator output —
+// Poisoner-as-Implanter (instructionpoison under `agenthound implant
+// --type instruction.file`) is the only caller that overrides it.
+func runPoisonDispatch(cmd *cobra.Command, args []string, label string) error {
 	target := args[0]
 	kind, _ := cmd.Flags().GetString("type")
 	targetID, _ := cmd.Flags().GetString("target-id")
 	injection, _ := cmd.Flags().GetString("inject")
 	injectFile, _ := cmd.Flags().GetString("inject-file")
 	mode, _ := cmd.Flags().GetString("mode")
+	if mode == "" {
+		mode = "replace"
+	}
 	commit, _ := cmd.Flags().GetBool("commit")
 	engagementID, _ := cmd.Flags().GetString("engagement-id")
 
@@ -124,7 +136,7 @@ func runPoison(cmd *cobra.Command, args []string) error {
 		injection = string(data)
 	}
 	if injection == "" {
-		return errors.New("poison: --inject or --inject-file is required")
+		return fmt.Errorf("%s: --inject or --inject-file is required", label)
 	}
 
 	if err := requirePoisonAcknowledged(cmd.OutOrStderr(), cmd.InOrStdin()); err != nil {
@@ -161,14 +173,14 @@ func runPoison(cmd *cobra.Command, args []string) error {
 		Extras:           extras,
 	})
 	if err != nil {
-		return fmt.Errorf("poison: %w", err)
+		return fmt.Errorf("%s: %w", label, err)
 	}
 
 	state := stateful.Stateful()
 	path := receiptPath(state, engagementID)
 	if commit {
 		if _, statErr := os.Stat(path); statErr != nil {
-			return fmt.Errorf("poison applied but pre-mutation receipt is missing: %w", statErr)
+			return fmt.Errorf("%s applied but pre-mutation receipt is missing: %w", label, statErr)
 		}
 	} else {
 		// Persist dry-run receipts here. Committed mutations persist inside
@@ -176,27 +188,27 @@ func runPoison(cmd *cobra.Command, args []string) error {
 		var werr error
 		path, werr = state.WriteReceipt(engagementID, receipt)
 		if werr != nil {
-			slog.Error("poison: dry-run receipt persistence failed",
+			slog.Error(label+": dry-run receipt persistence failed",
 				"module", mod.ID(),
 				"engagement_id", engagementID,
 				"target_id", targetID,
 				"error", werr)
-			return fmt.Errorf("poison dry-run receipt persistence failed: %w", werr)
+			return fmt.Errorf("%s dry-run receipt persistence failed: %w", label, werr)
 		}
 	}
 
 	if commit {
 		_, _ = fmt.Fprintf(cmd.OutOrStderr(),
-			"[poison] APPLIED %s %s — engagement_id=%s receipt=%s\n",
-			kind, target, engagementID, path)
+			"[%s] APPLIED %s %s — engagement_id=%s receipt=%s\n",
+			label, kind, target, engagementID, path)
 		_, _ = fmt.Fprintf(cmd.OutOrStderr(),
-			"[poison] revert with: agenthound revert %s\n", engagementID)
+			"[%s] revert with: agenthound revert %s\n", label, engagementID)
 	} else {
 		_, _ = fmt.Fprintf(cmd.OutOrStderr(),
-			"[poison] DRY-RUN %s %s — engagement_id=%s receipt=%s\n",
-			kind, target, engagementID, path)
+			"[%s] DRY-RUN %s %s — engagement_id=%s receipt=%s\n",
+			label, kind, target, engagementID, path)
 		_, _ = fmt.Fprintf(cmd.OutOrStderr(),
-			"[poison] re-run with --commit to apply.\n")
+			"[%s] re-run with --commit to apply.\n", label)
 	}
 
 	_ = receipt // silence unused warning when commit=false short-circuits before any reference

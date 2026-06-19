@@ -340,6 +340,88 @@ func TestRunRevert_DispatchesNonDryRunAndSkipsDryRun(t *testing.T) {
 	}
 }
 
+// --- Implant tests ---
+
+// TestRunImplant_FallsBackToPoisoner guards the v0.5 fix where
+// `agenthound implant --type instruction.file` was previously broken:
+// instructionpoison registers as action.Poison but the docs surface
+// instruction.file under `implant`. runImplant now falls back to a
+// Poisoner lookup with the same target kind. The test exercises the
+// fallback by registering only a Poisoner-shaped mock with a target
+// kind that has no Implanter and confirming Poison() is invoked.
+func TestRunImplant_FallsBackToPoisoner(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("AGENTHOUND_STATE_DIR", filepath.Join(t.TempDir(), "state"))
+
+	mock := newMockPoisoner("mock.poison.implantfallback", "mock-implant-fallback")
+	module.Register(mock)
+	defer deregisterModule(t, mock.ID())
+
+	out := &bytes.Buffer{}
+	cmd := &cobra.Command{Use: "implant"}
+	cmd.Flags().String("type", "", "")
+	cmd.Flags().String("target-id", "", "")
+	cmd.Flags().String("inject", "", "")
+	cmd.Flags().String("inject-file", "", "")
+	cmd.Flags().Bool("commit", false, "")
+	cmd.Flags().String("engagement-id", "", "")
+	cmd.SetIn(strings.NewReader("AUTHORIZED\n"))
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+
+	mustSetFlag(t, cmd, "type", mock.Target())
+	mustSetFlag(t, cmd, "target-id", "/tmp/CLAUDE.md")
+	mustSetFlag(t, cmd, "inject", "instruction body")
+	mustSetFlag(t, cmd, "engagement-id", "ENG-CLI-IMPLANT-FB")
+
+	if err := runImplant(cmd, []string{"127.0.0.1:8080"}); err != nil {
+		t.Fatalf("runImplant: %v", err)
+	}
+	if !mock.called {
+		t.Fatal("Poisoner fallback was not invoked")
+	}
+	if !mock.payload.DryRun {
+		t.Error("expected dry-run when --commit unset")
+	}
+	if mock.payload.InjectionContent != "instruction body" {
+		t.Errorf("payload InjectionContent = %q, want 'instruction body'", mock.payload.InjectionContent)
+	}
+	if !strings.Contains(out.String(), "[implant]") {
+		t.Errorf("expected [implant] label in output, got: %s", out.String())
+	}
+}
+
+// TestRunImplant_NoModuleAndNoFallback confirms the original error
+// surface still fires when neither an Implanter NOR a Poisoner matches
+// the requested target kind.
+func TestRunImplant_NoModuleAndNoFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	_ = os.MkdirAll(filepath.Join(home, ".agenthound"), 0o700)
+	_ = os.WriteFile(filepath.Join(home, ".agenthound", "poison-acknowledged"), []byte(`{}`), 0o600)
+
+	out := &bytes.Buffer{}
+	cmd := &cobra.Command{Use: "implant"}
+	cmd.Flags().String("type", "", "")
+	cmd.Flags().String("target-id", "", "")
+	cmd.Flags().String("inject", "", "")
+	cmd.Flags().String("inject-file", "", "")
+	cmd.Flags().Bool("commit", false, "")
+	cmd.Flags().String("engagement-id", "", "")
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+
+	mustSetFlag(t, cmd, "type", "definitely-not-registered-anywhere")
+	mustSetFlag(t, cmd, "inject", "x")
+	mustSetFlag(t, cmd, "engagement-id", "ENG-IMPLANT-MISS")
+
+	err := runImplant(cmd, []string{"127.0.0.1:8080"})
+	if err == nil || !strings.Contains(err.Error(), "no implanter registered") {
+		t.Errorf("expected 'no implanter registered' error, got: %v", err)
+	}
+}
+
 // --- Extract tests ---
 
 func TestRunExtract_DryRun(t *testing.T) {

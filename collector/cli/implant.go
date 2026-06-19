@@ -30,6 +30,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/module"
@@ -73,17 +74,37 @@ func init() {
 		module.RegisterFlagsFor(implantCmd, mod)
 	}
 	for _, mod := range module.ListByAction(action.Poison) {
-		// instruction.poison is registered as a Poisoner (semantically it
-		// modifies content the agent consumes, not persistence) but we
-		// surface it under `agenthound implant` too for operator
-		// ergonomics — instruction-file modification is colloquially
-		// "implanting an instruction". The flag walk is harmless because
-		// per-module flag names don't collide and the runImplant code
-		// path explicitly looks up by action.Implant.
-		_ = mod
+		// Surface every Poisoner that targets a kind the operator might
+		// type after `agenthound implant --type` — instruction.file is
+		// the canonical example. runImplant falls back to action.Poison
+		// dispatch when no Implanter matches the requested target kind,
+		// so the per-module flags must be visible on `implant --help`
+		// too. Use registerFlagsAvoidingDupes because Implanter and
+		// Poisoner flag sets overlap (e.g. both modules use --file).
+		registerFlagsAvoidingDupes(implantCmd, mod)
 	}
 
 	rootCmd.AddCommand(implantCmd)
+}
+
+// registerFlagsAvoidingDupes wires a module's per-module flags onto cmd,
+// silently skipping any whose name is already defined. pflag panics on
+// duplicate flag names, and the implant command surfaces both Implanter
+// and Poisoner flag sets so legitimate name overlap (e.g. --file used
+// by mcpconfigimplant AND instructionpoison) must not crash init().
+func registerFlagsAvoidingDupes(cmd *cobra.Command, m module.Module) {
+	fm, ok := m.(module.FlagsModule)
+	if !ok {
+		return
+	}
+	probe := pflag.NewFlagSet("implant-dedup-probe", pflag.ContinueOnError)
+	fm.RegisterFlags(probe)
+	probe.VisitAll(func(f *pflag.Flag) {
+		if cmd.Flags().Lookup(f.Name) != nil {
+			return
+		}
+		cmd.Flags().AddFlag(f)
+	})
 }
 
 func runImplant(cmd *cobra.Command, args []string) error {
@@ -112,6 +133,21 @@ func runImplant(cmd *cobra.Command, args []string) error {
 
 	mod, ok := module.GetByTarget(kind, action.Implant)
 	if !ok {
+		// Fall back to a Poisoner with the same target kind. The docs
+		// expose `--type instruction.file` under `agenthound implant`
+		// for operator ergonomics, but instructionpoison registers as
+		// a Poisoner (it modifies content the agent consumes, which is
+		// the Poisoner contract). The dispatch was previously broken:
+		// runImplant looked up only Implanters and returned an error
+		// for any Poisoner-backed type. We now hand off to the shared
+		// poison runner with label="implant" so the operator-facing
+		// output still says [implant] but the safety gates, receipt
+		// handling, and revert path all match the Poisoner contract.
+		if poisonMod, poisonOk := module.GetByTarget(kind, action.Poison); poisonOk {
+			if _, isPoisoner := poisonMod.(action.Poisoner); isPoisoner {
+				return runPoisonDispatch(cmd, args, "implant")
+			}
+		}
 		return fmt.Errorf("no implanter registered for --type %q", kind)
 	}
 	implanter, ok := mod.(action.Implanter)
