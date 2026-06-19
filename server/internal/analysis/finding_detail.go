@@ -3,6 +3,7 @@ package analysis
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 )
@@ -111,6 +112,24 @@ RETURN [n IN [ext, int, h, s, a, t, r] | {id: n.objectid, name: n.name, kinds: l
        [{kind: 'DELEGATES_TO', source: ext.objectid, target: int.objectid, properties: {}}] + [rel IN [r1, r2, r3, r4, r5] | {kind: type(rel), source: startNode(rel).objectid, target: endNode(rel).objectid, properties: properties(rel)}] AS edges
 LIMIT 1`,
 	},
+	// CAN_REACH_CREDENTIAL_CHAIN reconstructs the cross-service path emitted
+	// by processors/cross_service_credential_chain.go. The composite edge
+	// has the AgentInstance as source and the upstream provider Credential
+	// as target; the chain is joined by Credential.value_hash, not by a
+	// graph edge. We re-traverse the same join here so the UI can show
+	// what the user followed: agent -> mcp server -> env-var credential
+	// (==value_hash==) -> litellm gateway -> upstream provider credential.
+	"CAN_REACH_CREDENTIAL_CHAIN": {
+		`MATCH (a:AgentInstance {objectid: $source})-[r1:TRUSTS_SERVER]->(s:MCPServer)
+      -[r2:HAS_ENV_VAR]->(c1:Credential)
+MATCH (gw:LiteLLMGateway)-[r3:EXPOSES_CREDENTIAL]->(c1master:Credential)
+WHERE c1master.value_hash = c1.value_hash AND c1master.objectid <> c1.objectid
+MATCH (gw)-[r4:EXPOSES_CREDENTIAL]->(c2:Credential {objectid: $target})
+RETURN [n IN [a, s, c1, c1master, gw, c2] | {id: n.objectid, name: n.name, kinds: labels(n), properties: properties(n)}] AS nodes,
+       [rel IN [r1, r2, r3, r4] | {kind: type(rel), source: startNode(rel).objectid, target: endNode(rel).objectid, properties: properties(rel)}] +
+       [{kind: 'VALUE_HASH_MATCH', source: c1.objectid, target: c1master.objectid, properties: {merge_value_hash: c1.value_hash, is_synthetic: true}}] AS edges
+LIMIT 1`,
+	},
 	"CAN_EXFILTRATE_VIA": {
 		`MATCH (a:AgentInstance {objectid: $source})-[:TRUSTS_SERVER]->(s1:MCPServer)
       -[r1:PROVIDES_TOOL]->(outbound:MCPTool {objectid: $target})
@@ -184,8 +203,10 @@ func ReconstructAttackPath(ctx context.Context, db graph.GraphDB, f *Finding, co
 
 	edgeKind := f.EdgeKind
 	if edgeKind == "CAN_REACH" {
-		crossProtocol := boolVal(compositeProps, "cross_protocol")
-		if crossProtocol {
+		if isCredentialChain(compositeProps) {
+			queries = append(queries, pathQueriesByEdgeKind["CAN_REACH_CREDENTIAL_CHAIN"]...)
+		}
+		if boolVal(compositeProps, "cross_protocol") {
 			queries = append(queries, pathQueriesByEdgeKind["CAN_REACH_CROSS_PROTOCOL"]...)
 		}
 	}
@@ -343,6 +364,10 @@ var impactTemplates = map[string]struct {
 		summary:     "External A2A agent %s can reach %s resource across protocol boundaries (A2A -> MCP).",
 		blastRadius: "Any prompt running in %s context can access %s.",
 	},
+	"CAN_REACH_CREDENTIAL_CHAIN": {
+		summary:     "Agent %s can reach upstream provider credential %s through a value_hash collision in a LiteLLM gateway.",
+		blastRadius: "Compromise of agent %s's MCP env-var credential exposes upstream provider key %s, enabling lateral movement to every service the gateway fronts.",
+	},
 	"CAN_EXFILTRATE_VIA": {
 		summary:     "Agent %s has access to sensitive data and can exfiltrate it via %s tool with outbound capability.",
 		blastRadius: "Data from resources with sensitive data can be sent to external destinations.",
@@ -375,8 +400,13 @@ var impactTemplates = map[string]struct {
 
 func BuildImpact(f *Finding, path *AttackPath, compositeProps map[string]any) *Impact {
 	edgeKind := f.EdgeKind
-	if edgeKind == "CAN_REACH" && boolVal(compositeProps, "cross_protocol") {
-		edgeKind = "CAN_REACH_CROSS_PROTOCOL"
+	if edgeKind == "CAN_REACH" {
+		switch {
+		case isCredentialChain(compositeProps):
+			edgeKind = "CAN_REACH_CREDENTIAL_CHAIN"
+		case boolVal(compositeProps, "cross_protocol"):
+			edgeKind = "CAN_REACH_CROSS_PROTOCOL"
+		}
 	}
 
 	srcName := f.SourceName
@@ -398,7 +428,7 @@ func BuildImpact(f *Finding, path *AttackPath, compositeProps map[string]any) *I
 
 	impact := &Impact{
 		Summary:     fmt.Sprintf(tmpl.summary, srcName, tgtName),
-		BlastRadius: tmpl.blastRadius,
+		BlastRadius: formatBlastRadius(tmpl.blastRadius, srcName, tgtName),
 	}
 
 	if path != nil {
@@ -411,4 +441,39 @@ func BuildImpact(f *Finding, path *AttackPath, compositeProps map[string]any) *I
 	}
 
 	return impact
+}
+
+// isCredentialChain returns true when compositeProps describe a finding
+// emitted by processors/cross_service_credential_chain.go. We branch on
+// source_collector (canonical) and fall back to via_gateway/merge_value_hash
+// presence for older edges that may pre-date the source_collector tag.
+func isCredentialChain(props map[string]any) bool {
+	if props == nil {
+		return false
+	}
+	if sc, _ := props["source_collector"].(string); sc == "cross_service_credential_chain" {
+		return true
+	}
+	if gw, _ := props["via_gateway"].(string); gw != "" {
+		if mh, _ := props["merge_value_hash"].(string); mh != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// formatBlastRadius substitutes srcName/tgtName into a blastRadius template
+// without producing Go's "%!(EXTRA ...)" warts when the template contains
+// fewer than two %s placeholders. Several templates are static prose and
+// must pass through untouched; others reuse the same (src, tgt) pair as
+// the summary line.
+func formatBlastRadius(tmpl, srcName, tgtName string) string {
+	switch strings.Count(tmpl, "%s") {
+	case 0:
+		return tmpl
+	case 1:
+		return fmt.Sprintf(tmpl, srcName)
+	default:
+		return fmt.Sprintf(tmpl, srcName, tgtName)
+	}
 }

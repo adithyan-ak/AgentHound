@@ -513,3 +513,154 @@ func TestBuildImpact_NilPath(t *testing.T) {
 		t.Errorf("Summary = %q, expected to contain source name", impact.Summary)
 	}
 }
+
+// TestBuildImpact_BlastRadiusInterpolated guards against the regression
+// where BlastRadius leaked literal "%s" placeholders to the UI because
+// BuildImpact assigned the template raw instead of running it through
+// fmt.Sprintf. Both CAN_REACH templates contain two %s placeholders for
+// (srcName, tgtName); a passing test asserts both names interpolate.
+func TestBuildImpact_BlastRadiusInterpolated(t *testing.T) {
+	cases := []struct {
+		name           string
+		compositeProps map[string]any
+	}{
+		{name: "plain CAN_REACH", compositeProps: nil},
+		{name: "cross protocol", compositeProps: map[string]any{"cross_protocol": true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &Finding{
+				EdgeKind:   "CAN_REACH",
+				SourceID:   "agent-1",
+				SourceName: "TestAgent",
+				TargetID:   "res-1",
+				TargetName: "ProdDB",
+			}
+			impact := BuildImpact(f, nil, tc.compositeProps)
+			if impact == nil {
+				t.Fatal("expected impact, got nil")
+			}
+			if strings.Contains(impact.BlastRadius, "%s") {
+				t.Errorf("BlastRadius leaked %%s placeholder: %q", impact.BlastRadius)
+			}
+			if !strings.Contains(impact.BlastRadius, "TestAgent") {
+				t.Errorf("BlastRadius = %q, expected source name to be interpolated", impact.BlastRadius)
+			}
+			if !strings.Contains(impact.BlastRadius, "ProdDB") {
+				t.Errorf("BlastRadius = %q, expected target name to be interpolated", impact.BlastRadius)
+			}
+		})
+	}
+}
+
+// TestBuildImpact_PreservesStaticBlastRadius confirms that templates
+// without %s placeholders pass through formatBlastRadius unchanged, so
+// the helper does not produce Go's "%!(EXTRA ...)" warts on edge kinds
+// like CAN_EXECUTE whose BlastRadius is static prose.
+func TestBuildImpact_PreservesStaticBlastRadius(t *testing.T) {
+	f := &Finding{
+		EdgeKind:   "CAN_EXECUTE",
+		SourceID:   "tool-1",
+		SourceName: "ShellExec",
+		TargetID:   "host-1",
+		TargetName: "prod-host",
+	}
+	impact := BuildImpact(f, nil, nil)
+	if impact == nil {
+		t.Fatal("expected impact, got nil")
+	}
+	if strings.Contains(impact.BlastRadius, "%") {
+		t.Errorf("BlastRadius contains stray %% (Sprintf wart?): %q", impact.BlastRadius)
+	}
+	if impact.BlastRadius != "Full host compromise is possible through any agent with access to this tool." {
+		t.Errorf("BlastRadius template was mutated: %q", impact.BlastRadius)
+	}
+}
+
+// TestReconstructAttackPath_CredentialChain guards the cross-service
+// credential-chain reconstruction added so finding-detail responses no
+// longer return null AttackPath for the v0.2 demo's flagship finding.
+// The mock returns a credential-chain shaped row only when the cypher
+// query is the credential-chain variant; the test asserts that variant
+// fires when compositeProps carry source_collector or via_gateway tags.
+func TestReconstructAttackPath_CredentialChain(t *testing.T) {
+	triedCredentialChain := false
+	mock := &graph.MockGraphDB{
+		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
+			if strings.Contains(cypher, "LiteLLMGateway") && strings.Contains(cypher, "value_hash") {
+				triedCredentialChain = true
+				return []map[string]any{
+					{
+						"nodes": []any{
+							map[string]any{"id": "agent-1", "name": "DevAgent", "kinds": []any{"AgentInstance"}, "properties": map[string]any{}},
+							map[string]any{"id": "srv-1", "name": "Server1", "kinds": []any{"MCPServer"}, "properties": map[string]any{}},
+							map[string]any{"id": "c1-1", "name": "OPENAI_API_KEY", "kinds": []any{"Credential"}, "properties": map[string]any{}},
+							map[string]any{"id": "c1m-1", "name": "master-key", "kinds": []any{"Credential"}, "properties": map[string]any{}},
+							map[string]any{"id": "gw-1", "name": "litellm-gw", "kinds": []any{"LiteLLMGateway"}, "properties": map[string]any{}},
+							map[string]any{"id": "c2-1", "name": "openai-upstream", "kinds": []any{"Credential"}, "properties": map[string]any{}},
+						},
+						"edges": []any{
+							map[string]any{"source": "agent-1", "target": "srv-1", "kind": "TRUSTS_SERVER", "properties": map[string]any{}},
+							map[string]any{"source": "srv-1", "target": "c1-1", "kind": "HAS_ENV_VAR", "properties": map[string]any{}},
+							map[string]any{"source": "gw-1", "target": "c1m-1", "kind": "EXPOSES_CREDENTIAL", "properties": map[string]any{}},
+							map[string]any{"source": "gw-1", "target": "c2-1", "kind": "EXPOSES_CREDENTIAL", "properties": map[string]any{}},
+							map[string]any{"source": "c1-1", "target": "c1m-1", "kind": "VALUE_HASH_MATCH", "properties": map[string]any{"is_synthetic": true}},
+						},
+					},
+				}, nil
+			}
+			return nil, nil
+		},
+	}
+
+	f := &Finding{EdgeKind: "CAN_REACH", SourceID: "agent-1", TargetID: "c2-1"}
+	compositeProps := map[string]any{
+		"source_collector":  "cross_service_credential_chain",
+		"via_gateway":       "litellm-gw",
+		"merge_value_hash":  "abcd1234",
+		"upstream_provider": "openai",
+	}
+	path, err := ReconstructAttackPath(context.Background(), mock, f, compositeProps)
+	if err != nil {
+		t.Fatalf("ReconstructAttackPath() error = %v", err)
+	}
+	if !triedCredentialChain {
+		t.Error("expected credential-chain query to be tried")
+	}
+	if path == nil {
+		t.Fatal("expected reconstructed path, got nil")
+	}
+	if len(path.Nodes) != 6 {
+		t.Errorf("got %d nodes, want 6 (agent, server, c1, c1master, gateway, c2)", len(path.Nodes))
+	}
+}
+
+// TestBuildImpact_CredentialChain confirms the dedicated impact
+// template fires for credential-chain findings instead of the generic
+// CAN_REACH template that gives the operator no information about the
+// upstream provider exposure.
+func TestBuildImpact_CredentialChain(t *testing.T) {
+	f := &Finding{
+		EdgeKind:   "CAN_REACH",
+		SourceID:   "agent-1",
+		SourceName: "DevAgent",
+		TargetID:   "c2-1",
+		TargetName: "openai-upstream",
+	}
+	compositeProps := map[string]any{
+		"source_collector": "cross_service_credential_chain",
+	}
+	impact := BuildImpact(f, nil, compositeProps)
+	if impact == nil {
+		t.Fatal("expected impact, got nil")
+	}
+	if !strings.Contains(impact.Summary, "value_hash") {
+		t.Errorf("Summary = %q, expected credential-chain template mentioning value_hash", impact.Summary)
+	}
+	if !strings.Contains(impact.BlastRadius, "openai-upstream") {
+		t.Errorf("BlastRadius = %q, expected upstream credential name to be interpolated", impact.BlastRadius)
+	}
+	if strings.Contains(impact.BlastRadius, "%s") {
+		t.Errorf("BlastRadius leaked placeholder: %q", impact.BlastRadius)
+	}
+}
