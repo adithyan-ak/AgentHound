@@ -146,12 +146,21 @@ export function QueryLibrary() {
                             <p className="truncate text-xs text-muted-foreground">
                               {query.description}
                             </p>
-                            {query.owasp_map && query.owasp_map.length > 0 && (
+                            {((query.owasp_map?.length ?? 0) > 0 ||
+                              (query.atlas_map?.length ?? 0) > 0) && (
                               <div className="mt-1 flex flex-wrap gap-1">
-                                {query.owasp_map.map((tag) => (
+                                {query.owasp_map?.map((tag) => (
                                   <span
                                     key={tag}
                                     className="rounded-[2px] border border-border bg-black/40 px-1.5 py-0 font-mono text-[9px] uppercase tracking-[0.06em] text-primary/80"
+                                  >
+                                    {tag}
+                                  </span>
+                                ))}
+                                {query.atlas_map?.map((tag) => (
+                                  <span
+                                    key={tag}
+                                    className="rounded-[2px] border border-border bg-black/40 px-1.5 py-0 font-mono text-[9px] uppercase tracking-[0.06em] text-amber-400/90"
                                   >
                                     {tag}
                                   </span>

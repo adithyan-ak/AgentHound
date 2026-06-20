@@ -232,7 +232,7 @@ export function FindingsListPage() {
               : groupBy === "category"
                 ? f.category || "—"
                 : groupBy === "owasp"
-                  ? f.owasp_map[0] ?? "—"
+                  ? f.owasp_map?.[0] ?? "—"
                   : groupBy === "edge_kind"
                     ? f.edge_kind
                     : statusOf(f.id);

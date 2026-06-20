@@ -24,7 +24,10 @@ export interface Finding {
   target_name: string;
   target_kind: string;
   confidence: number;
-  owasp_map: string[];
+  // Optional: the Go side emits owasp_map with `omitempty`, so a composite
+  // edge kind absent from findingsMeta (no mapping) omits the field entirely.
+  // Every consumer must guard with `?.` / `?? []` — matches atlas_map.
+  owasp_map?: string[];
   atlas_map?: string[];
   triage?: TriageState | null;
 }

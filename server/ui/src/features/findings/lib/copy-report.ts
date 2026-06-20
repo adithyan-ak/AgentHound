@@ -16,7 +16,7 @@ export function buildFindingsTableMarkdown(findings: Finding[]): string {
   for (const f of findings) {
     const src = f.source_name || f.source_id.slice(0, 12);
     const tgt = f.target_name || f.target_id.slice(0, 12);
-    const owasp = f.owasp_map.join(", ") || "—";
+    const owasp = (f.owasp_map ?? []).join(", ") || "—";
     lines.push(
       `| ${f.severity.toUpperCase()} | ${f.title} | ${f.edge_kind} | ${src} → ${tgt} | ${owasp} | ${Math.round(
         f.confidence * 100,
@@ -36,7 +36,7 @@ export function buildMarkdownReport(
 
   lines.push(`## [${finding.severity.toUpperCase()}] ${finding.title}`);
   lines.push("");
-  lines.push(`**Finding:** ${finding.id} | Confidence: ${Math.round(finding.confidence * 100)}% | OWASP: ${finding.owasp_map.join(", ")}`);
+  lines.push(`**Finding:** ${finding.id} | Confidence: ${Math.round(finding.confidence * 100)}% | OWASP: ${(finding.owasp_map ?? []).join(", ")}`);
   lines.push(`**Category:** ${finding.category}`);
   lines.push(`**Source:** ${finding.source_name || finding.source_id} (${finding.source_kind})`);
   lines.push(`**Target:** ${finding.target_name || finding.target_id} (${finding.target_kind})`);

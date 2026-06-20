@@ -155,7 +155,7 @@ export function FindingHeader({ detail, prevId, nextId, onCopyReport }: FindingH
               <Chip>
                 <span className="tabular-nums">{Math.round(f.confidence * 100)}%</span> conf
               </Chip>
-              {f.owasp_map.map((tag) => (
+              {f.owasp_map?.map((tag) => (
                 <Chip key={tag} className="text-primary/80">
                   {tag}
                 </Chip>

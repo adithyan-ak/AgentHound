@@ -27,9 +27,9 @@ export function FindingReferences({ finding }: FindingReferencesProps) {
 
   return (
     <WidgetCard title="References" icon={BookMarked}>
-      {finding.owasp_map.length > 0 && (
+      {(finding.owasp_map?.length ?? 0) > 0 && (
         <div className="mb-4 space-y-1.5">
-          {finding.owasp_map.map((tag) => (
+          {finding.owasp_map?.map((tag) => (
             <div key={tag} className="flex items-baseline gap-2 text-xs">
               <span className="flex-shrink-0 rounded-[2px] border border-border bg-black/40 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.06em] text-primary/80">
                 {tag}
