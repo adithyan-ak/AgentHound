@@ -224,7 +224,7 @@ func requireLootAcknowledged(stderr io.Writer, stdin io.Reader) error {
 	_, _ = fmt.Fprintln(stderr, "[loot] Looters extract credentials from running services. They are read-only —")
 	_, _ = fmt.Fprintln(stderr, "[loot] no state-mutating HTTP methods — but every probe shows up in the target's audit")
 	_, _ = fmt.Fprintln(stderr, "[loot] log. Coordinate with the target's IR/security team out-of-band BEFORE")
-	_, _ = fmt.Fprintln(stderr, "[loot] running this against any production system. See docs/loot-litellm.md.")
+	_, _ = fmt.Fprintln(stderr, "[loot] running this against any production system. See https://docs.agenthound.io/operator/loot/litellm/.")
 	_, _ = fmt.Fprint(stderr, "[loot] If you have authorization for this engagement, type AUTHORIZED to proceed: ")
 	r := bufio.NewReader(stdin)
 	line, err := r.ReadString('\n')

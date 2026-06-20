@@ -148,7 +148,7 @@ agenthound-server ingest loot-ollama.json
 - **Dashboard** -- node/edge counts, risk distribution, top findings
 - **Graph Explorer** -- interactive visualization (React Flow + ELK layout)
 - **Findings** -- per-finding detail with embedded attack-path diagrams
-- **Query Library** -- 18 pre-built security queries mapped to OWASP MCP/Agentic Top 10
+- **Query Library** -- 19 pre-built security queries mapped to OWASP MCP/Agentic Top 10
 - **Scan Manager** -- history, drag-drop import
 
 **CLI queries:**

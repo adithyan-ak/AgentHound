@@ -43,7 +43,7 @@ Example:
     agenthound discover 10.0.0.0/24 --output -
 
 Public-IP targets require --allow-public-targets and an interactive
-AUTHORIZED prompt — same gates as 'scan'. See docs/discover.md.`,
+AUTHORIZED prompt — same gates as 'scan'. See https://docs.agenthound.io/operator/discover/.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runDiscover,
 }

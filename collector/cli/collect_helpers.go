@@ -29,6 +29,7 @@ func writeCollectorOutput(data *ingest.IngestData, outputPath string) error {
 		return fmt.Errorf("write file: %w", err)
 	}
 	slog.Info("output written", "path", outputPath, "nodes", len(data.Graph.Nodes), "edges", len(data.Graph.Edges))
+	_, _ = fmt.Fprintf(os.Stderr, "Next: agenthound-server ingest %s\n", outputPath)
 	return nil
 }
 

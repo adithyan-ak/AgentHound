@@ -66,7 +66,7 @@ func init() {
 	rootCmd.PersistentFlags().Int("concurrency", 0, "Max parallel collector workers (env: AGENTHOUND_CONCURRENCY)")
 	rootCmd.PersistentFlags().Bool("quiet", false, "Suppress non-error log output (env: AGENTHOUND_QUIET=1)")
 	rootCmd.PersistentFlags().Bool("log-json", false, "Emit logs as JSON instead of text (env: AGENTHOUND_LOG_JSON=1)")
-	rootCmd.PersistentFlags().String("rules-bundle", "", "Path to a fingerprint rules bundle (directory or .tar.gz). Same-id rules from the bundle override the embedded set. Verify cosign signature manually before pointing AgentHound at it; see docs/rules-bundle.md. (env: AGENTHOUND_RULES_BUNDLE)")
+	rootCmd.PersistentFlags().String("rules-bundle", "", "Path to a fingerprint rules bundle (directory or .tar.gz). Same-id rules from the bundle override the embedded set. Verify cosign signature manually before pointing AgentHound at it; see https://docs.agenthound.io/reference/rule-syntax/. (env: AGENTHOUND_RULES_BUNDLE)")
 }
 
 func setupLogger(level string, quiet, jsonLog bool) {

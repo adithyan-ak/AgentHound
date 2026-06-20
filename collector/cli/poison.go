@@ -74,7 +74,7 @@ Example (the v0.3-v0.4 demo arc):
       --mode replace --commit \
       --engagement-id DC35-DEMO
 
-See docs/poison.md for the full operator guide.`,
+See https://docs.agenthound.io/operator/offensive-actions/ for the full operator guide.`,
 	Args:          cobra.ExactArgs(1),
 	RunE:          runPoison,
 	SilenceUsage:  true,

@@ -49,7 +49,7 @@ file. Every Implanter embeds Reverter; receipts are persisted to
 By default --commit is OFF. Without --commit the Implanter runs end-
 to-end with no mutating writes; the receipt records dry_run=true.
 
-See docs/poison.md for the shared safety-gate rationale.`,
+See https://docs.agenthound.io/operator/offensive-actions/ for the shared safety-gate rationale.`,
 	Args:          cobra.ExactArgs(1),
 	RunE:          runImplant,
 	SilenceUsage:  true,

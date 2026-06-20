@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Upload, FileJson, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import {
   Dialog,
@@ -62,6 +63,7 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
   const [dragActive, setDragActive] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const { mutateAsync: uploadScan } = useUploadScan();
+  const navigate = useNavigate();
 
   const reset = useCallback(() => {
     setStatus({ kind: "idle" });
@@ -72,6 +74,14 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
     reset();
     onClose();
   }, [onClose, reset]);
+
+  const goTo = useCallback(
+    (path: string) => {
+      handleClose();
+      navigate(path);
+    },
+    [handleClose, navigate],
+  );
 
   const processFile = useCallback(
     async (file: File) => {
@@ -230,12 +240,15 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
                 </p>
               </div>
             </div>
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <button className={ghostBtn} onClick={reset}>
                 Import another
               </button>
-              <button className={primaryBtn} onClick={handleClose}>
-                Close
+              <button className={ghostBtn} onClick={() => goTo("/findings")}>
+                View findings
+              </button>
+              <button className={primaryBtn} onClick={() => goTo("/explorer")}>
+                Open graph
               </button>
             </div>
           </div>
