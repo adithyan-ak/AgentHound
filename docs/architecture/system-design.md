@@ -58,7 +58,7 @@ scan --config         scan --mcp --url <url>           scan --a2a --target <url>
                         v
               Query / Pathfinding
               (Cypher, APOC Dijkstra,
-               18 pre-built queries)
+               19 pre-built queries)
 ```
 
 ## Graph Data Model
