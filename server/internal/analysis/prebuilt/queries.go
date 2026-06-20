@@ -11,6 +11,7 @@ type PreBuiltQuery struct {
 	Severity    string   `json:"severity"`
 	Cypher      string   `json:"-"`
 	OWASPMap    []string `json:"owasp_map,omitempty"`
+	ATLASMap    []string `json:"atlas_map,omitempty"`
 }
 
 // Registry maps query IDs to their definitions.
@@ -54,6 +55,7 @@ func init() {
 			Severity:    "critical",
 			Cypher:      CypherExfiltrationRoutes,
 			OWASPMap:    []string{"MCP04", "ASI08", "ASI10"},
+			ATLASMap:    []string{"AML.T0086"},
 		},
 		"credential-chain": {
 			ID:          "credential-chain",
@@ -83,6 +85,7 @@ func init() {
 			Severity:    "high",
 			Cypher:      CypherPoisonedTools,
 			OWASPMap:    []string{"MCP05", "ASI03"},
+			ATLASMap:    []string{"AML.T0051", "AML.T0110"},
 		},
 		"tool-shadowing": {
 			ID:          "tool-shadowing",
@@ -92,6 +95,7 @@ func init() {
 			Severity:    "high",
 			Cypher:      CypherToolShadowing,
 			OWASPMap:    []string{"MCP05", "ASI03"},
+			ATLASMap:    []string{"AML.T0110"},
 		},
 		"no-auth-servers": {
 			ID:          "no-auth-servers",
@@ -119,6 +123,7 @@ func init() {
 			Severity:    "high",
 			Cypher:      CypherRugPull,
 			OWASPMap:    []string{"MCP05", "MCP09"},
+			ATLASMap:    []string{"AML.T0110", "AML.T0010"},
 		},
 
 		// Supply Chain
@@ -139,6 +144,7 @@ func init() {
 			Severity:    "high",
 			Cypher:      CypherInstructionPoisoning,
 			OWASPMap:    []string{"MCP05", "ASI03"},
+			ATLASMap:    []string{"AML.T0051"},
 		},
 		"unsigned-cards": {
 			ID:          "unsigned-cards",
@@ -197,6 +203,7 @@ func init() {
 			Severity:    "high",
 			Cypher:      CypherToolNameCollision,
 			OWASPMap:    []string{"MCP05", "ASI03"},
+			ATLASMap:    []string{"AML.T0110"},
 		},
 	}
 }

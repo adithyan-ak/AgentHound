@@ -225,6 +225,8 @@ List findings from the latest persisted snapshot (one row per fingerprint), each
 | `severity` | string | Filter: `critical`, `high`, `medium`, `low` |
 | `include_suppressed` | bool | Default `false`. When `true`, include findings triaged `accepted-risk` / `false-positive` (hidden otherwise). |
 
+Each finding carries an `owasp_map` (`[]string`) and, where the technique mapping is unambiguous, an `atlas_map` (`[]string`) of [MITRE ATLAS](https://atlas.mitre.org/) technique IDs (e.g. `["AML.T0051", "AML.T0110"]`). `atlas_map` is omitted when empty (`omitempty`); detections AgentHound has not confidently mapped carry no ATLAS tag. See the [ATLAS crosswalk](detection-rules.md#mitre-atlas-crosswalk) for the per-edge mapping.
+
 ### `GET /api/v1/analysis/findings/{id}`
 
 Return evidence detail for a specific finding.
@@ -259,15 +261,18 @@ Execute a pre-built query and return results.
 ```json
 {
   "query": {
-    "id": "agents-shell-access",
-    "name": "Agents with Shell Access",
-    "severity": "critical",
-    "category": "Critical Paths",
-    "owasp_map": ["MCP01", "ASI06"]
+    "id": "poisoned-tools",
+    "name": "Poisoned Tool Descriptions",
+    "severity": "high",
+    "category": "Vulnerabilities",
+    "owasp_map": ["MCP05", "ASI03"],
+    "atlas_map": ["AML.T0051", "AML.T0110"]
   },
   "rows": [...]
 }
 ```
+
+Like findings, pre-built queries carry an optional `atlas_map` (`[]string`) of [MITRE ATLAS](https://atlas.mitre.org/) technique IDs on confidently-mappable queries; it is omitted (`omitempty`) on queries with no ATLAS mapping (e.g. infrastructure/path/chokepoint queries). See the [ATLAS crosswalk](detection-rules.md#mitre-atlas-crosswalk).
 
 ---
 

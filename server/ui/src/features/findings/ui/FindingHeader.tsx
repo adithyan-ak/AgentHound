@@ -3,6 +3,7 @@ import { useState, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, Compass, Copy, Check } from "lucide-react";
 import { MiniHexIcon } from "./MiniHexIcon";
 import { TriageControl } from "./TriageControl";
+import { ATLAS_TITLES } from "../lib/owasp-titles";
 import { cn } from "@shared/lib/utils";
 import { SEVERITY, SEVERITY_BY_KEY } from "@shared/theme/tokens";
 import { useTriage } from "@entities/finding";
@@ -19,9 +20,18 @@ interface FindingHeaderProps {
 const consoleBtn =
   "inline-flex h-8 items-center gap-1.5 rounded-[3px] border border-border bg-black/30 px-2.5 font-mono text-[11px] uppercase tracking-[0.08em] text-foreground/80 transition-colors hover:border-primary/50 hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:opacity-40";
 
-function Chip({ children, className }: { children: ReactNode; className?: string }) {
+function Chip({
+  children,
+  className,
+  title,
+}: {
+  children: ReactNode;
+  className?: string;
+  title?: string;
+}) {
   return (
     <span
+      title={title}
       className={cn(
         "inline-flex items-center gap-1 rounded-[2px] border border-border bg-black/40 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground",
         className,
@@ -147,6 +157,11 @@ export function FindingHeader({ detail, prevId, nextId, onCopyReport }: FindingH
               </Chip>
               {f.owasp_map.map((tag) => (
                 <Chip key={tag} className="text-primary/80">
+                  {tag}
+                </Chip>
+              ))}
+              {f.atlas_map?.map((tag) => (
+                <Chip key={tag} className="text-amber-400/90" title={ATLAS_TITLES[tag] ?? tag}>
                   {tag}
                 </Chip>
               ))}

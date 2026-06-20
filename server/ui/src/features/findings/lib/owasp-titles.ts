@@ -20,3 +20,16 @@ export const OWASP_TITLES: Record<string, string> = {
   ASI09: "Lack of Observability",
   ASI10: "Insufficient Monitoring",
 };
+
+// MITRE ATLAS technique titles. Source of truth is the Go map ATLASTechniques
+// in server/internal/analysis/atlas.go (guarded server-side by atlas_test.go);
+// keep these in sync with it.
+export const ATLAS_TITLES: Record<string, string> = {
+  "AML.T0051": "LLM Prompt Injection",
+  "AML.T0110": "AI Agent Tool Poisoning",
+  "AML.T0086": "Exfiltration via AI Agent Tool Invocation",
+  "AML.T0024": "Exfiltration via AI Inference API",
+  "AML.T0057": "LLM Data Leakage",
+  "AML.T0020": "Poison Training Data",
+  "AML.T0010": "AI Supply Chain Compromise",
+};

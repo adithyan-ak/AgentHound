@@ -2,7 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { BookMarked } from "lucide-react";
 import { WidgetCard } from "@shared/ui/widgets";
 import { useFindings } from "@entities/finding";
-import { OWASP_TITLES } from "../lib/owasp-titles";
+import { ATLAS_TITLES, OWASP_TITLES } from "../lib/owasp-titles";
 import { SEVERITY, SEVERITY_BY_KEY } from "@shared/theme/tokens";
 import type { Finding } from "@entities/finding/model";
 
@@ -36,6 +36,25 @@ export function FindingReferences({ finding }: FindingReferencesProps) {
               </span>
               <span className="text-muted-foreground">{OWASP_TITLES[tag] ?? tag}</span>
             </div>
+          ))}
+        </div>
+      )}
+
+      {(finding.atlas_map?.length ?? 0) > 0 && (
+        <div className="mb-4 space-y-1.5">
+          {finding.atlas_map?.map((tag) => (
+            <a
+              key={tag}
+              href={`https://atlas.mitre.org/techniques/${tag}`}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-baseline gap-2 text-xs transition-colors hover:text-foreground"
+            >
+              <span className="flex-shrink-0 rounded-[2px] border border-border bg-black/40 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.06em] text-amber-400/90">
+                {tag}
+              </span>
+              <span className="text-muted-foreground">{ATLAS_TITLES[tag] ?? tag}</span>
+            </a>
           ))}
         </div>
       )}

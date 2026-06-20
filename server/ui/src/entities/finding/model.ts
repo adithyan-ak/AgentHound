@@ -25,6 +25,7 @@ export interface Finding {
   target_kind: string;
   confidence: number;
   owasp_map: string[];
+  atlas_map?: string[];
   triage?: TriageState | null;
 }
 

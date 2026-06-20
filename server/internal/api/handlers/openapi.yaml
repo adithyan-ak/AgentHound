@@ -296,6 +296,10 @@ components:
           type: array
           items:
             type: string
+        atlas_map:
+          type: array
+          items:
+            type: string
         triage:
           allOf:
             - $ref: "#/components/schemas/TriageState"
@@ -350,6 +354,10 @@ components:
         severity:
           type: string
         owasp_map:
+          type: array
+          items:
+            type: string
+        atlas_map:
           type: array
           items:
             type: string

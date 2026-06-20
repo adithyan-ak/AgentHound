@@ -1,6 +1,6 @@
 # Detection Rules
 
-AgentHound detects security issues in AI agent infrastructure through graph analysis and pattern matching. All detections are mapped to [OWASP MCP Top 10](https://owasp.org/www-project-top-10-for-large-language-model-applications/) and [OWASP Agentic Security Initiative Top 10](https://genai.owasp.org/).
+AgentHound detects security issues in AI agent infrastructure through graph analysis and pattern matching. All detections are mapped to [OWASP MCP Top 10](https://owasp.org/www-project-top-10-for-large-language-model-applications/) and [OWASP Agentic Security Initiative Top 10](https://genai.owasp.org/), and confidently-mappable detections additionally carry a [MITRE ATLAS](https://atlas.mitre.org/) technique crosswalk (see [MITRE ATLAS crosswalk](#mitre-atlas-crosswalk)).
 
 ## Two layers of detection
 
@@ -17,27 +17,52 @@ The detections summarized below are the **pre-built-query** layer. The 35 underl
 
 ## Detection summary
 
-| Detection | Severity | Pre-built query | OWASP mapping |
-|-----------|----------|-----------------|---------------|
-| Tool poisoning | high | `poisoned-tools` | MCP05, ASI03 |
-| Tool shadowing | high | `tool-shadowing` | MCP05, ASI03 |
-| Tool name collision | high | `tool-name-collision` | MCP05, ASI03 |
-| Tool description rug pull | high | `rug-pull` | MCP05, MCP09 |
-| Unauthenticated MCP servers | high | `no-auth-servers` | MCP03, ASI04 |
-| Unauthenticated A2A agents | high | `no-auth-a2a` | MCP03, ASI04 |
-| Instruction file poisoning | high | `instruction-poisoning` | MCP05, ASI03 |
-| Hardcoded secrets | high | `high-entropy-secrets` | MCP03, ASI04 |
-| Shell access paths | critical | `agents-shell-access` | MCP01, ASI06 |
-| Database access paths | critical | `shortest-to-database` | MCP04, ASI08 |
-| Data exfiltration routes | critical | `exfiltration-routes` | MCP04, ASI08, ASI10 |
-| Cross-protocol attack paths | critical | `cross-protocol-paths` | MCP01, ASI01, ASI06 |
-| Credential chain paths | critical | `credential-chain` | MCP03, ASI04 |
-| LiteLLM credential leak | critical | `litellm-credential-leak` | MCP03, ASI04 |
-| Unpinned packages | medium | `unpinned-packages` | MCP09, ASI09 |
-| Unsigned agent cards | medium | `unsigned-cards` | MCP09, ASI09 |
-| Unpinned packages + shell access | critical | `unpinned-shell` | MCP01, MCP09, ASI06, ASI09 |
-| Chokepoint servers | medium | `chokepoint-servers` | MCP01, ASI06 |
-| Chokepoint tools | medium | `chokepoint-tools` | MCP01, ASI06 |
+| Detection | Severity | Pre-built query | OWASP mapping | MITRE ATLAS |
+|-----------|----------|-----------------|---------------|-------------|
+| Tool poisoning | high | `poisoned-tools` | MCP05, ASI03 | AML.T0051, AML.T0110 |
+| Tool shadowing | high | `tool-shadowing` | MCP05, ASI03 | AML.T0110 |
+| Tool name collision | high | `tool-name-collision` | MCP05, ASI03 | AML.T0110 |
+| Tool description rug pull | high | `rug-pull` | MCP05, MCP09 | AML.T0110, AML.T0010 |
+| Unauthenticated MCP servers | high | `no-auth-servers` | MCP03, ASI04 | — |
+| Unauthenticated A2A agents | high | `no-auth-a2a` | MCP03, ASI04 | — |
+| Instruction file poisoning | high | `instruction-poisoning` | MCP05, ASI03 | AML.T0051 |
+| Hardcoded secrets | high | `high-entropy-secrets` | MCP03, ASI04 | — |
+| Shell access paths | critical | `agents-shell-access` | MCP01, ASI06 | — |
+| Database access paths | critical | `shortest-to-database` | MCP04, ASI08 | — |
+| Data exfiltration routes | critical | `exfiltration-routes` | MCP04, ASI08, ASI10 | AML.T0086 |
+| Cross-protocol attack paths | critical | `cross-protocol-paths` | MCP01, ASI01, ASI06 | — |
+| Credential chain paths | critical | `credential-chain` | MCP03, ASI04 | — |
+| LiteLLM credential leak | critical | `litellm-credential-leak` | MCP03, ASI04 | — |
+| Unpinned packages | medium | `unpinned-packages` | MCP09, ASI09 | — |
+| Unsigned agent cards | medium | `unsigned-cards` | MCP09, ASI09 | — |
+| Unpinned packages + shell access | critical | `unpinned-shell` | MCP01, MCP09, ASI06, ASI09 | — |
+| Chokepoint servers | medium | `chokepoint-servers` | MCP01, ASI06 | — |
+| Chokepoint tools | medium | `chokepoint-tools` | MCP01, ASI06 | — |
+
+---
+
+## MITRE ATLAS crosswalk
+
+Alongside the OWASP mappings, AgentHound annotates findings and pre-built queries with a [MITRE ATLAS](https://atlas.mitre.org/) technique crosswalk via the `atlas_map` field (see [API reference](api.md)). ATLAS catalogues adversary tactics and techniques against AI-enabled systems, so the crosswalk lets findings line up with threat-intel and detection-engineering workflows that already speak ATLAS.
+
+**Conservative, verified-only policy.** AgentHound only ships an ATLAS tag where the mapping is unambiguous. Detections whose technique assignment is uncertain carry **no** `atlas_map` (the field is omitted, not empty) and are left for analyst assignment rather than shipping a speculative tag. The canonical technique set lives in `server/internal/analysis/atlas.go` (`ATLASTechniques`) and is guarded by `atlas_test.go`, which fails the build if any finding or pre-built query references a technique ID not present in that map — preventing a typo or stale `AML.Txxxx` from shipping. The UI title map in `server/ui/src/features/findings/lib/owasp-titles.ts` mirrors the same set.
+
+The per-edge crosswalk (composite-edge findings from `GET /api/v1/analysis/findings`):
+
+| Composite edge | MITRE ATLAS | Technique |
+|----------------|-------------|-----------|
+| `POISONED_DESCRIPTION` | AML.T0051, AML.T0110 | LLM Prompt Injection; AI Agent Tool Poisoning |
+| `POISONS_CONTEXT` | AML.T0051, AML.T0110 | LLM Prompt Injection; AI Agent Tool Poisoning |
+| `SHADOWS` | AML.T0110 | AI Agent Tool Poisoning |
+| `POISONED_INSTRUCTIONS` | AML.T0051 | LLM Prompt Injection |
+| `TAINTS` | AML.T0051 | LLM Prompt Injection |
+| `IFC_VIOLATION` | AML.T0057, AML.T0086 | LLM Data Leakage; Exfiltration via AI Agent Tool Invocation |
+| `CAN_EXFILTRATE_VIA` | AML.T0086 | Exfiltration via AI Agent Tool Invocation |
+| `CAN_REACH`, `HAS_ACCESS_TO`, `CAN_EXECUTE`, `CAN_IMPERSONATE`, `CONFUSED_DEPUTY` | — | Intentionally unmapped pending analyst assignment |
+
+**Why `CAN_EXFILTRATE_VIA` maps to AML.T0086 but not AML.T0024.** ATLAS distinguishes *Exfiltration via AI Agent Tool Invocation* (AML.T0086) from *Exfiltration via AI Inference API* (AML.T0024). The `CAN_EXFILTRATE_VIA` edge models an agent reaching sensitive data and pushing it out through a **tool/channel it can invoke** — the AML.T0086 pattern. AML.T0024 describes extracting data *through the model's inference API itself* (e.g. prompting the model to regurgitate training data), which this edge does not represent, so it is deliberately excluded.
+
+`AML.T0020` (Poison Training Data) and `AML.T0010` (AI Supply Chain Compromise) are seeded in the technique set for pre-built-query and future use; it is expected that not every seeded technique is referenced by a composite edge.
 
 ---
 
@@ -146,7 +171,7 @@ Keyword sets are kept deliberately narrow — universal taint destroys signal.
 
 **What:** An injection-bearing tool can poison the shared agent context that drives a high-capability tool, even without naming it.
 
-**How detected:** The shadows processor emits a `POISONS_CONTEXT` edge from any tool with `has_injection_patterns=true` to tools carrying a high-blast capability (`shell_access`, `code_execution`, `credential_access`, `email_send`). Fan-out is capped at 20 sinks per source tool to prevent a cartesian blow-up; `scripts/perf-check.sh` enforces a ≤200 poisoned-pair-per-agent ceiling.
+**How detected:** The shadows processor emits a `POISONS_CONTEXT` edge from a tool with `has_injection_patterns=true` to a sibling tool carrying a high-blast capability (`shell_access`, `code_execution`, `credential_access`, `email_send`), where both tools are co-resident under a single agent — reachable via `(AgentInstance)-[:TRUSTS_SERVER]->(:MCPServer)-[:PROVIDES_TOOL]->(:MCPTool)`. The agent scope keeps the edge from becoming a cross-tenant cross product: a poisoner only poisons sinks the *same* agent loads into its context. Fan-out is capped at 20 sinks per (agent, source) pair to prevent a cartesian blow-up; `scripts/perf-check.sh` enforces a ≤200 poisoned-pair-per-agent ceiling.
 
 **Risk:** Unlike `SHADOWS` (which requires the poisoner to name its target), context poisoning models the broader case where injected text in one tool's description influences how the agent invokes a dangerous sibling tool.
 

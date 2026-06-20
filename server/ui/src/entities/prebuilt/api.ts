@@ -7,6 +7,7 @@ export interface PreBuiltQuery {
   category: string;
   severity: string;
   owasp_map?: string[];
+  atlas_map?: string[];
 }
 
 export async function fetchPreBuiltQueries(): Promise<PreBuiltQuery[]> {

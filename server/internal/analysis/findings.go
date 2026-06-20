@@ -26,12 +26,16 @@ var findingsMeta = map[string]struct {
 	title    string
 	desc     string
 	owasp    []string
+	atlas    []string
 }{
 	"CAN_EXFILTRATE_VIA": {
 		category: "Data Exfiltration",
 		title:    "Agent can exfiltrate data",
 		desc:     "Agent has access to sensitive data and an outbound exfiltration channel via %s",
 		owasp:    []string{"MCP04", "ASI08", "ASI10"},
+		// T0024 (AI inference-API extraction) deliberately excluded: this edge
+		// models exfiltration through agent tool invocation, not the model.
+		atlas: []string{"AML.T0086"},
 	},
 	"CAN_REACH": {
 		category: "Transitive Access",
@@ -44,18 +48,21 @@ var findingsMeta = map[string]struct {
 		title:    "Poisoned tool description",
 		desc:     "Tool %s has injection patterns in its description",
 		owasp:    []string{"MCP05", "ASI03"},
+		atlas:    []string{"AML.T0051", "AML.T0110"},
 	},
 	"SHADOWS": {
 		category: "Tool Shadowing",
 		title:    "Tool shadows another tool",
 		desc:     "Tool %s shadows a tool on another server",
 		owasp:    []string{"MCP05", "ASI03"},
+		atlas:    []string{"AML.T0110"},
 	},
 	"POISONED_INSTRUCTIONS": {
 		category: "Instruction Poisoning",
 		title:    "Poisoned instruction file",
 		desc:     "Instruction file %s contains suspicious patterns",
 		owasp:    []string{"MCP05", "ASI03"},
+		atlas:    []string{"AML.T0051"},
 	},
 	"CAN_IMPERSONATE": {
 		category: "Agent Impersonation",
@@ -81,23 +88,29 @@ var findingsMeta = map[string]struct {
 		desc:     "Low-auth agent delegates to higher-privileged agent %s",
 		owasp:    []string{"ASI06", "MCP04"},
 	},
+	// CAN_REACH, HAS_ACCESS_TO, CAN_EXECUTE, CAN_IMPERSONATE, and
+	// CONFUSED_DEPUTY are intentionally unmapped to ATLAS pending analyst
+	// assignment -- AgentHound only ships techniques it has verified.
 	"TAINTS": {
 		category: "Cross-Tool Taint",
 		title:    "Tool taints another tool",
 		desc:     "Untrusted-input tool shares schema with %s, tainting its inputs",
 		owasp:    []string{"MCP05", "ASI03"},
+		atlas:    []string{"AML.T0051"},
 	},
 	"IFC_VIOLATION": {
 		category: "Information Flow Violation",
 		title:    "Information-flow violation",
 		desc:     "Untrusted source reaches sensitive sink %s",
 		owasp:    []string{"MCP05", "ASI08"},
+		atlas:    []string{"AML.T0057", "AML.T0086"},
 	},
 	"POISONS_CONTEXT": {
 		category: "Context Poisoning",
 		title:    "Tool poisons agent context",
 		desc:     "Injection-bearing tool can poison high-capability tool %s",
 		owasp:    []string{"MCP05", "ASI03"},
+		atlas:    []string{"AML.T0051", "AML.T0110"},
 	},
 }
 
@@ -148,6 +161,7 @@ func QueryFindings(ctx context.Context, db graph.GraphDB, severity string) ([]Fi
 				title    string
 				desc     string
 				owasp    []string
+				atlas    []string
 			}{
 				category: "Other",
 				title:    edgeKind + " finding",
@@ -175,6 +189,7 @@ func QueryFindings(ctx context.Context, db graph.GraphDB, severity string) ([]Fi
 			TargetKind:  targetKind,
 			Confidence:  confidence,
 			OWASPMap:    meta.owasp,
+			ATLASMap:    meta.atlas,
 		})
 	}
 

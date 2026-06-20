@@ -18,6 +18,7 @@ type Finding struct {
 	TargetKind  string       `json:"target_kind"`
 	Confidence  float64      `json:"confidence"`
 	OWASPMap    []string     `json:"owasp_map,omitempty"`
+	ATLASMap    []string     `json:"atlas_map,omitempty"`
 	Triage      *TriageState `json:"triage,omitempty"`
 }
 
