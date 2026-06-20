@@ -117,8 +117,10 @@ github.com/adithyan-ak/agenthound/modules/networkscan
 github.com/adithyan-ak/agenthound/modules/ollamafp
 github.com/adithyan-ak/agenthound/modules/ollamaloot
 github.com/adithyan-ak/agenthound/modules/openwebuifp
+github.com/adithyan-ak/agenthound/modules/openwebuiloot
 github.com/adithyan-ak/agenthound/modules/protoscan
 github.com/adithyan-ak/agenthound/modules/qdrantfp
+github.com/adithyan-ak/agenthound/modules/qdrantloot
 github.com/adithyan-ak/agenthound/modules/vllmfp
 github.com/adithyan-ak/agenthound/sdk/action
 github.com/adithyan-ak/agenthound/sdk/collector

@@ -25,8 +25,10 @@ import (
 	_ "github.com/adithyan-ak/agenthound/modules/ollamafp"
 	_ "github.com/adithyan-ak/agenthound/modules/ollamaloot"
 	_ "github.com/adithyan-ak/agenthound/modules/openwebuifp"
+	_ "github.com/adithyan-ak/agenthound/modules/openwebuiloot"
 	_ "github.com/adithyan-ak/agenthound/modules/protoscan"
 	_ "github.com/adithyan-ak/agenthound/modules/qdrantfp"
+	_ "github.com/adithyan-ak/agenthound/modules/qdrantloot"
 	_ "github.com/adithyan-ak/agenthound/modules/vllmfp"
 )
 

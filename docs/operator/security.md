@@ -124,6 +124,28 @@ behaviour:
   for offline audit work. The output file (containing raw secrets)
   has no transport-layer protection — protect the file at rest.
 
+### `openwebui.loot` authenticated mode
+
+`agenthound loot --type openwebui --api-key <key>` reads an
+**operator-supplied** Open WebUI admin API key (or session JWT) and uses
+it to enumerate the upstream provider keys an admin has configured
+(`GET /openai/config`). Properties of this path:
+
+- **Read-only by contract.** The Looter issues GET requests only — it
+  reads `/api/config` (anonymous posture) and `/openai/config`
+  (authenticated). It never touches Open WebUI's `POST
+  /openai/config/update` mutator; that would be a Poisoner-class
+  operation. A `get_only` regression test asserts the looter has no
+  non-GET call site.
+- **value_hash redaction.** Each emitted upstream Credential carries a
+  SHA-256 `value_hash` (always populated, the cross-collector merge
+  primitive). The raw upstream key is **omitted by default** and only
+  stored on the node when `--include-credential-values` is set — same
+  gating as the Config Collector and LiteLLM Looter.
+- **Operator-key hygiene.** The supplied `--api-key` is never written to
+  the scan output and appears only as an 8-char prefix in slog. The
+  anonymous posture mode (no `--api-key`) emits no credentials at all.
+
 Output files are written via atomic `temp+rename` and chmod'd to
 `0o600` on POSIX. **NTFS does not honor POSIX permission bits.** On
 Windows, the output file inherits the directory's NTFS ACL, which

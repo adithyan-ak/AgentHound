@@ -34,12 +34,12 @@ These are the node kinds accepted in ingest input (`sdk/ingest.AllowedNodeKinds`
 | `InstructionFile` | Config | `path`, `type` (agents.md/claude.md/cursorrules/copilot-instructions/memory.md), `hash`, `is_suspicious` |
 | `OllamaInstance` | Network scan + Ollama fingerprinter | `endpoint`, `version`, `auth_method`, `is_anonymous_loot`, `discovered_via` |
 | `VLLMInstance` | Network scan + vLLM fingerprinter | `endpoint`, `version`, `auth_method`, `is_anonymous_loot` |
-| `QdrantInstance` | Network scan + Qdrant fingerprinter | `endpoint`, `version`, `collection_count` |
+| `QdrantInstance` | Network scan + Qdrant fingerprinter + Qdrant Looter | `endpoint`, `version`, `collection_count`, `collections` (sorted names), `total_points`, `anonymous_listing` (Looter-enriched) |
 | `MLflowServer` | Network scan + MLflow fingerprinter | `endpoint`, `version`, `experiment_count` |
 | `LiteLLMGateway` | Network scan + LiteLLM fingerprinter | `endpoint`, `auth_method`, `is_anonymous_loot`, `docs_enabled` |
 | `JupyterServer` | Network scan + Jupyter fingerprinter | `endpoint`, `version`, `token_required` |
 | `LangServeApp` | Network scan + LangServe fingerprinter | `endpoint`, `chains` |
-| `OpenWebUIInstance` | Network scan + Open WebUI fingerprinter | `endpoint`, `version`, `webui_auth_enabled` |
+| `OpenWebUIInstance` | Network scan + Open WebUI fingerprinter + Open WebUI Looter | `endpoint`, `version`, `webui_auth_enabled`, `signup_enabled`, `default_user_role` (if present), `auth_required`, `ollama_backend_url` (Looter-enriched posture) |
 | `AIService` | Multi-label umbrella (see below) | _(no unique properties — carried as companion label)_ |
 | `AIModel` | Ollama Looter | `name`, `size`, `digest`, `family`, `parameter_size`, `quantization` |
 | `ExtractedTrainingSignal` | Extractors | `kind`, `source_model`, `sample_count`, `confidence` |
@@ -99,7 +99,7 @@ This enables queries like `MATCH (n:AIService)` to find all AI infrastructure re
 | `LOADS_INSTRUCTIONS` | AgentInstance | InstructionFile | Config | Agent loads this instruction file |
 | `SAME_AUTH_DOMAIN` | A2AAgent | A2AAgent | A2A | Agents share an authentication domain |
 | `EXPOSES` | AIService | AIService | Fingerprinters | Service exposes another service (e.g., Open WebUI → Ollama backend) |
-| `EXPOSES_CREDENTIAL` | AIService | Credential | LiteLLM Looter | Service exposes credential material (master keys, upstream provider keys, virtual keys) |
+| `EXPOSES_CREDENTIAL` | AIService | Credential | LiteLLM Looter, Open WebUI Looter | Service exposes credential material (master keys, upstream provider keys, virtual keys). Open WebUI's authenticated mode (`--api-key`) emits one Credential per configured upstream provider key from `GET /openai/config`, with `value_hash` always populated and the raw value gated behind `--include-credential-values` |
 | `PROVIDES_MODEL` | OllamaInstance | AIModel | Ollama Looter | Instance serves this model |
 | `EXTRACTED_FROM` | AIModel | ExtractedTrainingSignal | Extractors | Extracted signal was derived from this model |
 | `INGESTS_UNTRUSTED` | MCPTool | MCPResource | MCP | Tool with rule-derived `source_trust` (web/email/fileshare) ingests untrusted input that taints same-server resources. **Raw edge** — not swept by composite cleanup (see post-processors doc) |

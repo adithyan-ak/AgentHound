@@ -163,7 +163,7 @@ agenthound loot <host:port> --type <kind> [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--type` | **(required)** | Looter kind: `litellm`, `ollama`. |
+| `--type` | **(required)** | Looter kind: `litellm`, `ollama`, `mlflow`, `qdrant`, `openwebui`. |
 | `--master-key` | | Sugar for `--credential master_key=...`. |
 | `--credential` | | Operator-supplied credential as `KEY=VALUE` (repeatable). |
 | `--include-credential-values` | `false` | Emit raw values on Credential nodes. |
@@ -178,6 +178,14 @@ agenthound loot <host:port> --type <kind> [flags]
 | `--include-weights` | `false` | Extract model weights via `/api/blobs/<digest>` (multi-GiB, very loud). |
 | `--weights-dir` | | Directory for extracted weights (required with `--include-weights`). |
 | `--include-embeddings` | `false` | Issue test embedding calls via `/api/embeddings` (consumes compute). |
+
+#### Per-Module Flags: `--type openwebui`
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--api-key` | | Open WebUI admin API key (or session JWT). When supplied, enumerates upstream provider keys via authenticated `GET /openai/config` and emits Credential + EXPOSES_CREDENTIAL. Omit for anonymous posture only (`GET /api/config`). |
+
+`--type qdrant` is anonymous and pure-GET (no per-module flags): it inventories collections via `GET /collections` and `GET /collections/{name}`, folding `collection_count`, `collections`, `total_points`, and `anonymous_listing` onto the `QdrantInstance` node. It emits **no** Credential nodes.
 
 #### Example
 
