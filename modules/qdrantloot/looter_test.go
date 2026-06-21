@@ -206,8 +206,77 @@ func TestLoot_Qdrant_ManyCollectionsConcurrent(t *testing.T) {
 	if res.Summary.PartialFailures != wantFailures {
 		t.Errorf("PartialFailures = %d, want %d", res.Summary.PartialFailures, wantFailures)
 	}
+	// Assert the FULL collections slice, not just first/last: the names
+	// arrive pre-sorted from sort.Strings before the pool runs, so this
+	// pins both completeness AND ascending order against a future refactor
+	// that moves assembly into the concurrent fold (where completion order
+	// could leak through).
 	got, _ := node.Properties["collections"].([]string)
-	if len(got) != n || got[0] != "col-00" || got[n-1] != "col-49" {
-		t.Errorf("collections not sorted/complete: got %v", got)
+	if len(got) != n {
+		t.Fatalf("collections length = %d, want %d", len(got), n)
+	}
+	for i, nm := range names {
+		if got[i] != nm {
+			t.Errorf("collections[%d] = %q, want %q (sorted order broken)", i, got[i], nm)
+		}
+	}
+
+	// Assert PartialErrors content/format, not just the count: the worker
+	// pre-formats "collections/%s: %v" into a per-index slot (looter.go),
+	// so a dropped name or mangled prefix would still pass the count check
+	// above. Spot-check one bad collection's entry is present and well-formed.
+	if len(res.PartialErrors) != wantFailures {
+		t.Fatalf("PartialErrors length = %d, want %d", len(res.PartialErrors), wantFailures)
+	}
+	wantPrefix := "collections/col-01: " // col-01 is bad (odd index)
+	var found bool
+	for _, pe := range res.PartialErrors {
+		if strings.HasPrefix(pe, wantPrefix) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("PartialErrors missing well-formed entry with prefix %q; got %v", wantPrefix, res.PartialErrors)
+	}
+}
+
+// TestLoot_Qdrant_ZeroCollections pins the conc=0 boundary: an anonymous
+// Qdrant with zero collections must clamp the worker count to 0 (no
+// goroutines spawned), drain the empty index channel, and return without
+// deadlocking — emitting the node with collection_count=0, total_points=0.
+// This is the riskiest new edge of the worker pool; a deadlock here would
+// hang every scan of an empty instance.
+func TestLoot_Qdrant_ZeroCollections(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/collections" {
+			_, _ = w.Write([]byte(`{"result":{"collections":[]},"status":"ok"}`))
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+
+	l := &Looter{}
+	res, err := l.Loot(context.Background(), action.Target{
+		Kind:    "host",
+		Address: strings.TrimPrefix(srv.URL, "http://"),
+	}, action.LootOptions{})
+	if err != nil {
+		t.Fatalf("Loot: %v", err)
+	}
+	if got := len(res.IngestData.Graph.Nodes); got != 1 {
+		t.Fatalf("nodes: got %d, want 1 (QdrantInstance still emitted)", got)
+	}
+	node := res.IngestData.Graph.Nodes[0]
+	if cc, _ := node.Properties["collection_count"].(int); cc != 0 {
+		t.Errorf("collection_count = %v, want 0", node.Properties["collection_count"])
+	}
+	if tp, _ := node.Properties["total_points"].(int64); tp != 0 {
+		t.Errorf("total_points = %v, want 0", node.Properties["total_points"])
+	}
+	if res.Summary.PartialFailures != 0 {
+		t.Errorf("PartialFailures = %d, want 0", res.Summary.PartialFailures)
 	}
 }
