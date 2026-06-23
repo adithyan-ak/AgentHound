@@ -213,7 +213,7 @@ AgentHound is built for authorized assessment and internal visibility. Active mo
 - The collector is offline by default and writes JSON to a file or stdout.
 - The server binds to `127.0.0.1:8080` by default.
 - The server is single-user with no application-layer login. Do not expose it beyond localhost; read endpoints may surface collected graph contents.
-- Mutating localhost API endpoints are gated by a bearer token.
+- Mutating localhost API endpoints are gated by an Origin allowlist (`OriginGuard`); cross-origin browser POSTs are rejected, non-browser callers (curl, the agenthound CLI) pass through.
 - TLS verification is strict by default for supported network modules.
 - Destructive or mutating assessment workflows require explicit operator intent and should be used only within a written scope.
 
