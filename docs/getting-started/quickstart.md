@@ -31,6 +31,7 @@ The server binds `127.0.0.1:8080`. No application-layer auth; mutating endpoints
 
 ```bash
 curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"     # add to ~/.zshrc or ~/.bashrc to persist
 ```
 
 Verifies checksums (and cosign signature when cosign is on `$PATH`), installs to `~/.local/bin/agenthound`. Confirm:

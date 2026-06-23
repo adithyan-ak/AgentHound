@@ -58,6 +58,17 @@ services:
         condition: service_healthy
       app-db:
         condition: service_healthy
+    # /api/v1/health is open (no Origin gate). BusyBox wget ships in the
+    # alpine base; --spider does a HEAD-equivalent and exits non-zero on
+    # 5xx. start_period lets the Neo4j schema init + Postgres migrations
+    # finish before any failure counts, so a quick paste of Quick Start
+    # step 3 doesn't race the server to readiness.
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
 
 volumes:
   neo4j-data:

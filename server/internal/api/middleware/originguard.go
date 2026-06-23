@@ -67,10 +67,11 @@ func OriginGuard(allowed []string) func(http.Handler) http.Handler {
 	}
 }
 
-// normalizeOrigin lowercases and trims one trailing slash. Per RFC 6454
+// normalizeOrigin lowercases and trims trailing slashes. Per RFC 6454
 // §4, scheme and host are case-insensitive; the port is preserved
 // verbatim. An Origin has no path component, so lowercasing the whole
-// string is safe.
+// string is safe. TrimRight strips any run of trailing slashes,
+// matching the most lenient operator paste (`http://localhost:8080///`).
 func normalizeOrigin(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.TrimRight(s, "/")

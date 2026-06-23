@@ -111,8 +111,9 @@ Prerequisites: Docker + Compose v2. No Go, no Node.js, no `git clone` — the se
 curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/docker/docker-compose.public.yml \
   | docker compose -f - -p agenthound up -d
 
-# 2. Install the collector (single static binary, ~9 MiB)
+# 2. Install the collector (single static binary, ~9 MiB → ~/.local/bin)
 curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"     # add to ~/.zshrc or ~/.bashrc to persist
 
 # 3. Scan and stream straight into the running server
 agenthound scan --config --output - \

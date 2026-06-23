@@ -75,20 +75,38 @@ func init() {
 	rootCmd.AddCommand(serveCmd)
 }
 
-// warnIfNonLoopbackBind emits a warning when the configured bind host
-// is not in 127.0.0.0/8 (or the literal "localhost"). Loopback binds
-// are the only deployment the threat model defends; remote access
-// should go through VPN / SSH tunnel / reverse proxy with mTLS.
+// warnIfNonLoopbackBind classifies the bind address and logs at the
+// right severity. Three cases:
+//
+//   - Loopback (127.0.0.0/8, ::1, "localhost") → silent; the threat
+//     model fully covers this.
+//   - Unspecified (`0.0.0.0`, `::`, empty host like `:8080`) → INFO.
+//     This is the Docker pattern: the server listens on all interfaces
+//     inside the container, and the operator's compose port mapping
+//     (e.g. `127.0.0.1:8080:8080`) controls reachability. Warning here
+//     would scare every Docker user despite a safe setup.
+//   - Specific non-loopback IP (e.g. `10.x`, `192.168.x`, a public IP)
+//     → WARN. Operator explicitly exposed the server beyond loopback
+//     and OriginGuard alone is insufficient — LAN attackers can spoof
+//     Origin trivially.
 func warnIfNonLoopbackBind(bind string) {
 	host, _, err := net.SplitHostPort(bind)
 	if err != nil {
 		return // invalid bind is handled elsewhere
 	}
 	host = strings.ToLower(strings.TrimSpace(host))
-	if host == "localhost" || host == "" {
+	if host == "localhost" {
 		return
 	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+	ip := net.ParseIP(host)
+	if ip != nil && ip.IsLoopback() {
+		return
+	}
+	// `:8080` parses to host="" → unspecified (all interfaces).
+	// `0.0.0.0` / `::` are explicit unspecified addresses.
+	if host == "" || (ip != nil && ip.IsUnspecified()) {
+		slog.Info("server listening on all interfaces — relying on host port mapping for reachability",
+			"bind", bind)
 		return
 	}
 	slog.Warn("non-loopback bind: OriginGuard alone is insufficient against LAN attackers",
