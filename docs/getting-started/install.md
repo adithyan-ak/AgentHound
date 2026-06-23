@@ -86,10 +86,10 @@ Every release artifact is signed with cosign (keyless, GitHub Actions OIDC). Ver
 
 ```bash
 cosign verify-blob \
-    --bundle agenthound_<version>_checksums.txt.sigstore.json \
+    --bundle agenthound_0.6.0_checksums.txt.sigstore.json \
     --certificate-identity-regexp 'https://github.com/adithyan-ak/agenthound/.*' \
     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-    agenthound_<version>_checksums.txt
+    agenthound_0.6.0_checksums.txt
 ```
 
 The signature and Fulcio certificate are bundled into a single

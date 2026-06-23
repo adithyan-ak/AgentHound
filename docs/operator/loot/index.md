@@ -16,7 +16,7 @@ Every Looter implements `sdk/action.Looter` and adheres to:
 
 | Flag | Required | Default | Notes |
 |------|----------|---------|-------|
-| `--type <module>` | Yes | -- | Module dispatcher key (`litellm`, `ollama`) |
+| `--type <module>` | Yes | -- | Module dispatcher key (`litellm`, `ollama`, `mlflow`, `qdrant`, `openwebui`) |
 | `--engagement-id <id>` | Recommended | empty | Correlation key for IR coordination. Recorded on every edge and slog line. |
 | `--include-credential-values` | No | `false` | Emit raw `value` property alongside `value_hash`. Default is hash-only. |
 | `--max-items <n>` | No | 1000 | Cap emitted Credential nodes per category |
@@ -33,6 +33,11 @@ The first `agenthound loot` invocation on a machine triggers an interactive `AUT
 |--------|--------|----------------|
 | [`litellm`](litellm.md) | LiteLLM gateway (port 4000) | Master key, upstream provider keys, virtual keys |
 | [`ollama`](ollama.md) | Ollama instance (port 11434) | Model inventory, modelfiles, system prompts, weights |
+| `mlflow` | MLflow tracking server (port 5000) | Experiment + run inventory (anonymous); `experiment_count`, `total_runs` |
+| `qdrant` | Qdrant vector DB (port 6333) | Collection inventory (anonymous, pure-GET; no Credential nodes) |
+| `openwebui` | Open WebUI (port 3000) | Upstream provider keys with `--api-key`; anonymous config posture otherwise |
+
+See the [CLI reference](../../reference/cli.md) for the full per-module flag set of each looter.
 
 ## Typical workflow
 

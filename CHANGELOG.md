@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.6.0
+
+The "moat detectors + read-only loot expansion" milestone. Triples the read-only Looter surface (Qdrant, Open WebUI, MLflow), adds four taint- and identity-aware post-processors with their composite edges, persists findings to Postgres for triage and cross-scan diff, crosswalks detections to MITRE ATLAS, and rebuilds the dashboard on the Obsidian Terminal theme. Also ships the OriginGuard CSRF rework that retires the on-disk bearer token, plus a zero-toolchain Docker install path.
 
 ### Install UX + CSRF defense rework
 
@@ -26,6 +28,54 @@ The bearer-token gate on mutating endpoints (introduced post-v0.4) was redundant
 - Removed: `~/.agenthound/server.token` file, `AGENTHOUND_TOKEN_PATH` / `XDG_CONFIG_HOME` token path resolution, `GET /api/v1/auth/local-token` endpoint, `apimw.LocalToken` / `apimw.LocalTokenHandler`, the UI's token-fetch bootstrap (`server/ui/src/shared/api/client.ts` dropped from ~70 LOC to 6).
 - Existing `curl` scripts continue to work — they sent no `Origin` before and now pass through cleanly. Any stale `Authorization: Bearer …` header is ignored.
 - Non-loopback binds now log a `WARN` at startup; OriginGuard alone is insufficient when LAN attackers can spoof `Origin`. Use VPN / SSH tunnel / reverse proxy with mTLS for remote access.
+
+### Three new read-only Looters
+
+- **Qdrant** (`agenthound loot --type qdrant`) — anonymous, pure-GET. Inventories collections via `GET /collections` and `GET /collections/{name}`, folding `collection_count`, `collections`, `total_points`, and `anonymous_listing` onto the `QdrantInstance` node. Emits no Credential nodes (exposure-posture signal only).
+- **Open WebUI** (`agenthound loot --type openwebui`) — anonymous posture via `GET /api/config`; with `--api-key` (admin key or session JWT) it enumerates upstream provider keys via authenticated `GET /openai/config` and emits `Credential` + `EXPOSES_CREDENTIAL` for the credential-chain post-processor.
+- **MLflow** (`agenthound loot --type mlflow`) — anonymous by default. Inventories experiments and runs via the MLflow Tracking REST API (`experiments/search`, `runs/search`), folding `experiment_count` and `total_runs` onto the `MLflowServer` node. Full artifact / model-binary download stays with the Extractor downstream.
+
+All three honor the Looter GET-only contract (each guarded by a `get_only` regression test) and the shared `AUTHORIZED` prompt + `--engagement-id` correlation.
+
+### Moat detectors — four new post-processors
+
+- **`auth_strength`** (pre-pass) — materializes a numeric `auth_strength` property (none=100 … mtls=10) onto every `MCPServer` / `A2AAgent`, so downstream processors can compare auth gradients directly in Cypher. Writes node properties only, no composite edges.
+- **`taints`** → `MCPTool -[TAINTS]-> MCPTool` (cross-server) — fires when an untrusted-input tool shares ≥2 input-schema keys with a tool on another server.
+- **`ifc_violation`** → `MCPTool -[IFC_VIOLATION]-> MCPTool` — information-flow-control violation: an untrusted-input tool shares a resource within 3 `HAS_ACCESS_TO` hops with a high-impact sink (`credential_access`, `file_write`, `email_send`).
+- **`confused_deputy`** → `A2AAgent -[CONFUSED_DEPUTY]-> A2AAgent` — a weakly-authenticated agent that `DELEGATES_TO` a strongly-authenticated one, borrowing the callee's privileges.
+- The `shadows` processor gained a second pass emitting `MCPTool -[POISONS_CONTEXT]-> MCPTool`, agent-scoped and fan-out-capped at 20 sinks per (agent, source) pair.
+
+### Schema additions
+
+- New raw edge `INGESTS_UNTRUSTED` (`MCPTool -> MCPResource`), emitted by the MCP Collector for tools whose rule-derived `source_trust` is untrusted (`RawEdgeKinds` 17 → 18).
+- Four new composite edges (`CONFUSED_DEPUTY`, `TAINTS`, `IFC_VIOLATION`, `POISONS_CONTEXT`) bring composite kinds 8 → 12 and `AllowedEdgeKinds` 25 → 30.
+- `PROVIDES_RESOURCE` endpoints widened to allow `JupyterServer` as a source.
+
+### Persisted findings + triage / diff (T0)
+
+- The ingest pipeline now writes a **findings snapshot** to Postgres (`appdb.FindingStore.InsertFindings`) after stale-edge cleanup, giving a diffable "what was found when" record that survives the next scan's graph cleanup.
+- New `PUT /api/v1/findings/triage/{fingerprint}` persists per-finding triage state; cross-scan diff is available via `agenthound-server query --diff`.
+
+### MITRE ATLAS crosswalk + regression infrastructure (T2)
+
+- Detection rules now carry a MITRE ATLAS crosswalk (see `docs/reference/detection-rules.md`).
+- Regression harness for detector and performance gates, including the `POISONS_CONTEXT` per-agent fan-out cap (`poisons_context_perf_integration_test.go`, `scripts/perf-check.sh`).
+
+### UI redesign
+
+- Rebuilt dashboard on the **Obsidian Terminal** theme; frontend restructured into a feature-sliced architecture.
+- Findings page redesigned with a facet rail, clickable severity strip, and a compact table that fits without horizontal scroll; Finding Detail typography unified on the JetBrains Mono terminal theme.
+- Explorer chrome reskinned and connected with Findings into one investigation surface. The AgentHound wolf logo replaces the Vite placeholder.
+
+### Security and dependencies
+
+- Go toolchain 1.25.9 → 1.25.11 to clear `govulncheck` stdlib findings.
+- Dropped the spoofing-prone `chi` `RealIP` middleware (unused).
+- Resolved numerous audit findings across collector, SDK, analysis, UI, and CI; routine npm and Go dependency-group bumps.
+
+### Documentation
+
+- Documentation site published via MkDocs Material to GitHub Pages; README landing page revamped.
 
 Test coverage hardening (post-v0.5.0).
 

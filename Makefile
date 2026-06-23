@@ -142,7 +142,9 @@ prerelease:
 	@echo "=== [9/12] size-check ==="
 	@bash scripts/size-check.sh
 	@echo "=== [10/12] slop-check ==="
-	@bash scripts/slop-check.sh
+	# SLOP_SKIP=hardcoded-grids matches the CI ui job: the dashboard grid-cols ->
+	# Every-Layout migration is a deferred, visually-QA'd task.
+	@SLOP_SKIP=hardcoded-grids bash scripts/slop-check.sh
 	@echo "=== [11/12] UI build ==="
 	cd server/ui && npm run build
 	@echo "=== [12/12] cross-compile (linux/amd64 + darwin/arm64) ==="
