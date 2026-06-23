@@ -249,7 +249,7 @@ func requireLootAcknowledged(stderr io.Writer, stdin io.Reader) error {
 }
 
 // lootSentinelPath resolves to $HOME/.agenthound/loot-acknowledged.
-// Mirrors server.token's location for consistency.
+// Mirrors other agenthound state under $HOME/.agenthound/ for consistency.
 func lootSentinelPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

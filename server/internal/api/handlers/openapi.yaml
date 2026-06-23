@@ -3,12 +3,12 @@ info:
   title: AgentHound API
   description: >-
     REST API for `agenthound-server`. The server binds to 127.0.0.1:8080
-    by default and is single-user. Mutating endpoints are gated by a
-    localhost token: the server generates a 32-byte token at startup
-    and writes it to `~/.agenthound/server.token` (override with
-    `AGENTHOUND_TOKEN_PATH`). The embedded React UI fetches the token
-    from `GET /api/v1/auth/local-token` on first load and includes it
-    in subsequent mutating requests as `Authorization: Bearer <token>`.
+    by default and is single-user. Mutating endpoints are gated by an
+    Origin allowlist (OriginGuard): browser requests must originate from
+    an allowlisted origin (default `http://localhost:8080` and
+    `http://127.0.0.1:8080`, configurable via `AGENTHOUND_CORS_ORIGINS`).
+    Requests with no `Origin` header are admitted as non-browser callers
+    (curl, the agenthound CLI, cron pipelines).
 
 
     Read-only endpoints (graph reads, findings, prebuilt queries,
@@ -17,11 +17,11 @@ info:
     plumb auth headers through every read for no security gain.
 
 
-    The `/ingest` endpoint is consumed primarily by the embedded React
-    UI's "Scan Manager → Import scan" drag-drop dialog. The
-    `agenthound` collector binary writes JSON to a file or stdout; CLI
-    ingest (`agenthound-server ingest <file>`) bypasses HTTP entirely
-    and does not require the localhost token.
+    The `/ingest` endpoint accepts JSON from the collector. Stream
+    directly from the host (`agenthound scan --output - | curl
+    --data-binary @- http://127.0.0.1:8080/api/v1/ingest`) or drag-drop
+    a scan file into the UI's Scan Manager. CLI ingest
+    (`agenthound-server ingest <file>`) bypasses HTTP entirely.
   version: "0.1.0"
   license:
     name: Apache 2.0
@@ -30,21 +30,7 @@ servers:
   - url: /api/v1
     description: Default
 
-# Mutating endpoints require the localhost Bearer token. Read endpoints
-# omit `security` and remain open.
-security: []
-
 components:
-  securitySchemes:
-    LocalhostToken:
-      type: http
-      scheme: bearer
-      bearerFormat: hex
-      description: >-
-        32-byte hex token loaded from `~/.agenthound/server.token` (or
-        `$AGENTHOUND_TOKEN_PATH`). Fetch via `GET /auth/local-token`
-        from the same origin; do not embed the token in client code.
-
   schemas:
     ErrorResponse:
       type: object
@@ -78,14 +64,6 @@ components:
         postgres:
           type: string
           enum: [ok, unavailable]
-
-    LocalTokenResponse:
-      type: object
-      required: [token]
-      properties:
-        token:
-          type: string
-          description: Bearer token for use on mutating endpoints
 
     GraphStats:
       type: object
@@ -501,8 +479,8 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
-    Unauthorized:
-      description: Localhost token missing or invalid
+    Forbidden:
+      description: Origin not in allowlist
       content:
         application/json:
           schema:
@@ -542,26 +520,6 @@ paths:
             application/yaml:
               schema:
                 type: string
-
-  /auth/local-token:
-    get:
-      summary: Fetch the localhost Bearer token
-      description: >-
-        Returns the server's auto-generated localhost token. The
-        embedded UI calls this on first load and caches the value;
-        subsequent mutating requests must include
-        `Authorization: Bearer <token>`. CORS is configured with
-        `AllowCredentials: false`, so a third-party tab cannot use
-        a credentialed fetch to read the token.
-      operationId: getLocalToken
-      tags: [Public]
-      responses:
-        "200":
-          description: Token retrieved
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LocalTokenResponse"
 
   /graph/stats:
     get:
@@ -776,8 +734,6 @@ paths:
         Max body 100 MB.
       operationId: ingest
       tags: [Ingest]
-      security:
-        - LocalhostToken: []
       requestBody:
         required: true
         content:
@@ -794,8 +750,8 @@ paths:
                 $ref: "#/components/schemas/IngestResult"
         "400":
           $ref: "#/components/responses/ValidationError"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /analysis/shortest-path:
     post:
@@ -803,8 +759,6 @@ paths:
       description: Find the shortest path between two nodes in the graph.
       operationId: shortestPath
       tags: [Analysis]
-      security:
-        - LocalhostToken: []
       requestBody:
         required: true
         content:
@@ -820,8 +774,8 @@ paths:
                 $ref: "#/components/schemas/PathResponse"
         "400":
           $ref: "#/components/responses/ValidationError"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /analysis/all-paths:
     post:
@@ -829,8 +783,6 @@ paths:
       description: Enumerate all paths between two nodes (bounded by max_hops and limit).
       operationId: allPaths
       tags: [Analysis]
-      security:
-        - LocalhostToken: []
       requestBody:
         required: true
         content:
@@ -846,8 +798,8 @@ paths:
                 $ref: "#/components/schemas/PathResponse"
         "400":
           $ref: "#/components/responses/ValidationError"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /analysis/weighted-path:
     post:
@@ -857,8 +809,6 @@ paths:
         shortestPath+reduce fallback. Response includes the algorithm used.
       operationId: weightedPath
       tags: [Analysis]
-      security:
-        - LocalhostToken: []
       requestBody:
         required: true
         content:
@@ -874,8 +824,8 @@ paths:
                 $ref: "#/components/schemas/PathResponse"
         "400":
           $ref: "#/components/responses/ValidationError"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /analysis/findings:
     get:
@@ -942,8 +892,6 @@ paths:
         deletion and re-detection.
       operationId: setTriage
       tags: [Analysis]
-      security:
-        - LocalhostToken: []
       parameters:
         - name: fingerprint
           in: path
@@ -966,8 +914,8 @@ paths:
                 $ref: "#/components/schemas/TriageState"
         "400":
           $ref: "#/components/responses/ValidationError"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /analysis/findings/{id}:
     get:
@@ -1060,8 +1008,6 @@ paths:
       description: Register a new scan.
       operationId: createScan
       tags: [Scans]
-      security:
-        - LocalhostToken: []
       requestBody:
         required: true
         content:
@@ -1077,8 +1023,8 @@ paths:
                 $ref: "#/components/schemas/Scan"
         "400":
           $ref: "#/components/responses/ValidationError"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /scans/{id}:
     get:
@@ -1108,8 +1054,6 @@ paths:
         nodes and edges that were exclusively owned by this scan.
       operationId: deleteScan
       tags: [Scans]
-      security:
-        - LocalhostToken: []
       parameters:
         - name: id
           in: path
@@ -1119,8 +1063,8 @@ paths:
       responses:
         "204":
           description: Scan deleted
-        "401":
-          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -1181,13 +1125,11 @@ paths:
     post:
       summary: Raw Cypher query
       description: >-
-        Execute a raw Cypher query against Neo4j. Gated behind the
-        localhost Bearer token; CLI users bypass HTTP entirely via
-        `agenthound-server query`.
+        Execute a raw Cypher query against Neo4j. Browser callers are
+        gated by OriginGuard (Origin allowlist); CLI users bypass HTTP
+        entirely via `agenthound-server query`.
       operationId: rawQuery
       tags: [Admin]
-      security:
-        - LocalhostToken: []
       requestBody:
         required: true
         content:
@@ -1203,5 +1145,5 @@ paths:
                 $ref: "#/components/schemas/QueryResponse"
         "400":
           $ref: "#/components/responses/ValidationError"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"

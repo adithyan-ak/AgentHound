@@ -129,7 +129,7 @@ No manual migration scripts required. The server detects Neo4j version (4.4 vs 5
 ## Security Checklist
 
 - [ ] All ports bound to `127.0.0.1` (or behind VPN/mesh)
-- [ ] `~/.agenthound/server.token` has mode `0600`
+- [ ] `AGENTHOUND_CORS_ORIGINS` matches the operator-facing URL(s); foreign-origin browser POSTs are rejected
 - [ ] Neo4j credentials changed from default `agenthound`
 - [ ] Postgres credentials changed from default
 - [ ] If exposed via reverse proxy: mTLS or equivalent client auth enabled

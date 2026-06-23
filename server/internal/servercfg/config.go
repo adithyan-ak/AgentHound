@@ -50,7 +50,9 @@ func LoadWithFlags(flags *pflag.FlagSet) *Config {
 		}
 	}
 	if len(cfg.CORSOrigins) == 0 {
-		cfg.CORSOrigins = []string{"http://localhost:8080"}
+		// localhost and 127.0.0.1 are distinct origins (RFC 6454 §4).
+		// Ship both so the operator can hit either URL without config.
+		cfg.CORSOrigins = []string{"http://localhost:8080", "http://127.0.0.1:8080"}
 	}
 
 	return cfg

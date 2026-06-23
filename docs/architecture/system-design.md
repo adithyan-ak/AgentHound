@@ -13,7 +13,7 @@ AgentHound enumerates MCP servers and A2A agents, builds a directed trust graph 
    |  version (+ stub      |              |  +---------------------------+  |
    |  loot/extract/        |              |  |    API Server (chi/v5)    |  |
    |  poison/implant)      |              |  | /api/v1/* — read=open,    |  |
-   +-----------------------+              |  |  mutate=localhost token   |  |
+   +-----------------------+              |  |  mutate=Origin allowlist  |  |
                                           |  |  +---------------------+  |  |
                                           |  |  | Embedded React SPA  |  |  |
                                           |  |  | (go:embed)          |  |  |

@@ -8,19 +8,18 @@ The canonical, machine-readable spec is served at `GET /api/v1/docs` (OpenAPI 3.
 
 AgentHound is single-user. The server has **no application-layer login** — no JWT, no users table, no RBAC. Network scope (`127.0.0.1` by default) is the primary access control.
 
-A second control catches browser drive-by attacks: **mutating endpoints require a localhost bearer token**. The token is a 32-byte random secret, auto-generated at first server start and persisted to `~/.agenthound/server.token` (mode `0o600`). Override the path with `AGENTHOUND_TOKEN_PATH` or `XDG_CONFIG_HOME`.
+A second control catches browser drive-by attacks: **mutating endpoints are gated by an Origin allowlist** (`OriginGuard`). Browser requests must originate from an allowlisted origin; non-browser callers (no `Origin` header) pass through.
 
 | Endpoint group | Auth |
 |---|---|
-| Read endpoints (`GET /api/v1/...`) | Open — no token required. |
-| `GET /api/v1/auth/local-token` | Open — same-origin only via CORS allowlist. |
-| Mutating endpoints (see table below) | Require `Authorization: Bearer <token>`. |
+| Read endpoints (`GET /api/v1/...`) | Open. |
+| Mutating endpoints (see table below) | Browser `Origin` must be in `AGENTHOUND_CORS_ORIGINS` (default `http://localhost:8080`, `http://127.0.0.1:8080`). No `Origin` header (curl, CLI) → pass. |
 
-CORS uses `AllowCredentials: false` so a hostile origin cannot exfiltrate the token via a credentialed fetch. CLI tools (`agenthound-server ingest`, `agenthound-server query`) bypass HTTP entirely and don't need the token.
+The default allowlist covers the embedded UI. Stream-ingest from the host (`curl --data-binary @scan.json http://127.0.0.1:8080/api/v1/ingest`) works zero-config. The `agenthound-server` CLI (`ingest`, `query`) bypasses HTTP entirely.
 
 If you need to expose the server beyond loopback, do so at the network layer (VPN / SSH tunnel / Tailscale) — never by binding `0.0.0.0:8080` to a public interface. See [`security.md`](../operator/security.md).
 
-### Mutating endpoints (token required)
+### Mutating endpoints (Origin-gated)
 
 - `POST /api/v1/ingest`
 - `POST /api/v1/query`
@@ -31,7 +30,7 @@ If you need to expose the server beyond loopback, do so at the network layer (VP
 - `POST /api/v1/analysis/weighted-path`
 - `PUT /api/v1/findings/triage/{fingerprint}`
 
-A request to any of these without the header returns `401 Unauthorized`.
+A request to any of these with a foreign or `null` `Origin` returns `403 Forbidden`.
 
 ## Error format
 
@@ -46,7 +45,7 @@ All errors return a structured JSON response:
 }
 ```
 
-Error codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED` (401), `NOT_FOUND` (404), `SERVICE_UNAVAILABLE` (503), `INTERNAL_ERROR` (500). Internal errors include a request ID for log correlation; raw error strings are not leaked to clients.
+Error codes: `VALIDATION_ERROR` (400), `FORBIDDEN` (403), `NOT_FOUND` (404), `SERVICE_UNAVAILABLE` (503), `INTERNAL_ERROR` (500). Internal errors include a request ID for log correlation; raw error strings are not leaked to clients.
 
 ---
 
@@ -69,14 +68,6 @@ Returns connectivity status for Neo4j and PostgreSQL.
 ### `GET /api/v1/docs`
 
 Serves the OpenAPI 3.0 specification (`application/yaml`).
-
-### `GET /api/v1/auth/local-token`
-
-Returns the current localhost bearer token. Used by the embedded UI on first load. Same-origin enforced via the CORS allowlist.
-
-```json
-{ "token": "..." }
-```
 
 ---
 

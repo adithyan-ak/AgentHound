@@ -22,7 +22,7 @@ IMPORTANT: Before any release tag, run `make prerelease` — it gates on all 8 c
 - **License allowlist:** `Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0, Unlicense, Zlib`.
 - **Neo4j compat:** Schema init detects version via `CALL dbms.components()` — use 4.4 (`ON...ASSERT`) or 5.x (`FOR...REQUIRE`) syntax.
 - **TLS strict default:** Both MCP and A2A modules verify certs by default. `--insecure` opts in.
-- **No application-layer auth:** Server is single-user, localhost-only. Localhost bearer token gates mutating endpoints only.
+- **No application-layer auth:** Server is single-user, localhost-only. `OriginGuard` gates mutating endpoints — browser `Origin` must be in `AGENTHOUND_CORS_ORIGINS`; callers with no `Origin` (curl, the agenthound CLI, cron) pass through.
 - **go:embed constraint:** Go forbids `..` in embed paths. Makefile copies `server/ui/dist` → `server/internal/api/ui/dist` before build.
 
 ## Module Registration

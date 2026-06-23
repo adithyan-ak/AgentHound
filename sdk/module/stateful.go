@@ -4,8 +4,8 @@
 // can walk every module's state directory, read the receipts matching the
 // engagement, and dispatch per-module Revert.
 //
-// On-disk layout — colocated with ~/.agenthound/loot-acknowledged and
-// ~/.agenthound/server.token for consistency:
+// On-disk layout — colocated with ~/.agenthound/loot-acknowledged
+// for consistency:
 //
 //	~/.agenthound/state/<module-id>/<engagement-id>.json
 //

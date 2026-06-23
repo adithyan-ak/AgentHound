@@ -5,86 +5,96 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	apimw "github.com/adithyan-ak/agenthound/server/internal/api/middleware"
 )
 
-// TestServer_GatesMutatingEndpointsWithToken locks the route topology:
-// every mutating endpoint must reject an unauthenticated request and
-// every read endpoint must serve without one. If a future change moves
-// a route between the two groups, this test fails loudly.
-func TestServer_GatesMutatingEndpointsWithToken(t *testing.T) {
-	dir := t.TempDir()
-	tok, err := apimw.NewLocalToken(filepath.Join(dir, "server.token"))
-	if err != nil {
-		t.Fatalf("NewLocalToken: %v", err)
-	}
-
+// TestServer_GatesMutatingEndpointsByOrigin locks the route topology:
+// every mutating endpoint must reject a browser request from a foreign
+// Origin (drive-by CSRF), admit a request with no Origin (CLI / curl /
+// cron), and reach the handler when the Origin is in the CORS allowlist
+// (the embedded UI). If a future change moves a route between the two
+// groups, this test fails loudly.
+func TestServer_GatesMutatingEndpointsByOrigin(t *testing.T) {
 	deps := ServerDeps{
 		// Nil DB-backed deps are fine for this routing test: the
-		// middleware rejects requests before they reach the handler.
-		// We assert on response status, not body content.
-		LocalToken: tok,
+		// middleware rejects requests before they reach the handler,
+		// and on the admit path we assert "not 403", not handler success.
+		CORSOrigins: []string{"http://localhost:8080"},
 	}
 	srv := NewServer(deps)
 
 	type tc struct {
 		method      string
 		path        string
-		gated       bool
 		description string
 	}
-	cases := []tc{
-		// Mutating — must require token.
-		{"POST", "/api/v1/ingest", true, "ingest"},
-		{"POST", "/api/v1/query", true, "raw cypher"},
-		{"POST", "/api/v1/scans", true, "create scan"},
-		{"DELETE", "/api/v1/scans/abc", true, "delete scan"},
-		{"POST", "/api/v1/analysis/shortest-path", true, "shortest-path"},
-		{"POST", "/api/v1/analysis/all-paths", true, "all-paths"},
-		{"POST", "/api/v1/analysis/weighted-path", true, "weighted-path"},
+	mutating := []tc{
+		{"POST", "/api/v1/ingest", "ingest"},
+		{"POST", "/api/v1/query", "raw cypher"},
+		{"POST", "/api/v1/scans", "create scan"},
+		{"DELETE", "/api/v1/scans/abc", "delete scan"},
+		{"POST", "/api/v1/analysis/shortest-path", "shortest-path"},
+		{"POST", "/api/v1/analysis/all-paths", "all-paths"},
+		{"POST", "/api/v1/analysis/weighted-path", "weighted-path"},
+		{"PUT", "/api/v1/findings/triage/0123456789abcdef", "triage update"},
 	}
-	for _, c := range cases {
-		t.Run(c.method+" "+c.path+" no-token", func(t *testing.T) {
+
+	for _, c := range mutating {
+		t.Run(c.method+" "+c.path+" rejects evil Origin", func(t *testing.T) {
+			req := httptest.NewRequest(c.method, c.path, bytes.NewReader([]byte("{}")))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Origin", "https://evil.com")
+			rec := httptest.NewRecorder()
+			srv.router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("%s %s: status = %d, want 403", c.method, c.path, rec.Code)
+			}
+		})
+
+		t.Run(c.method+" "+c.path+" rejects null Origin", func(t *testing.T) {
+			req := httptest.NewRequest(c.method, c.path, bytes.NewReader([]byte("{}")))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Origin", "null")
+			rec := httptest.NewRecorder()
+			srv.router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("%s %s: status = %d, want 403", c.method, c.path, rec.Code)
+			}
+		})
+
+		t.Run(c.method+" "+c.path+" admits no Origin (CLI)", func(t *testing.T) {
 			req := httptest.NewRequest(c.method, c.path, bytes.NewReader([]byte("{}")))
 			req.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()
 			srv.router.ServeHTTP(rec, req)
-			if rec.Code != http.StatusUnauthorized {
-				t.Errorf("%s %s: status = %d, want %d",
-					c.method, c.path, rec.Code, http.StatusUnauthorized)
+			if rec.Code == http.StatusForbidden {
+				t.Errorf("%s %s: OriginGuard returned 403 for no-Origin (CLI/curl) request — must allow",
+					c.method, c.path)
+			}
+		})
+
+		t.Run(c.method+" "+c.path+" admits allowed Origin (UI)", func(t *testing.T) {
+			req := httptest.NewRequest(c.method, c.path, bytes.NewReader([]byte("{}")))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Origin", "http://localhost:8080")
+			rec := httptest.NewRecorder()
+			srv.router.ServeHTTP(rec, req)
+			if rec.Code == http.StatusForbidden {
+				t.Errorf("%s %s: OriginGuard returned 403 for allowlisted Origin — UI would break",
+					c.method, c.path)
 			}
 		})
 	}
 
-	// Token bootstrap endpoint must NOT be gated, otherwise the UI can
-	// never fetch the token in the first place.
-	t.Run("GET /auth/local-token is open", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/local-token", nil)
+	// Read endpoints must be open regardless of Origin: the UI and CLI
+	// both hit these without any gating concern.
+	t.Run("GET /health is open", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 		rec := httptest.NewRecorder()
 		srv.router.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
-		}
-	})
-
-	// With the correct token, /query passes the middleware and reaches
-	// the handler. We deliberately did NOT supply a Reader, so the
-	// handler responds 500 — but that is downstream of the middleware,
-	// which is exactly what we want to prove: the token unlocks the
-	// route.
-	t.Run("POST /query with token reaches handler", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/query",
-			bytes.NewReader([]byte(`{"cypher":"MATCH (n) RETURN n LIMIT 1"}`)))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+tok.Token())
-		rec := httptest.NewRecorder()
-		srv.router.ServeHTTP(rec, req)
-		if rec.Code == http.StatusUnauthorized {
-			t.Errorf("status = 401 with valid token; middleware should have admitted the request")
+		if rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
+			t.Errorf("status = %d; reads must not be gated", rec.Code)
 		}
 	})
 }

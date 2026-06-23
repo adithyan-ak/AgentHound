@@ -81,7 +81,7 @@ const (
 )
 
 // HandleSet records (or updates) the triage decision for a fingerprint.
-// Gated by the LocalToken middleware (mutating endpoint).
+// Gated by OriginGuard (mutating endpoint).
 func (h *TriageHandler) HandleSet(w http.ResponseWriter, r *http.Request) {
 	fp := chi.URLParam(r, "fingerprint")
 	if !validFingerprint(fp) {

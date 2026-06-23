@@ -41,9 +41,9 @@ AgentHound handles sensitive data (credentials, infrastructure topology, attack 
 
 - **Credential hashing:** Config Collector hashes credential values by default (SHA-256). Raw values require explicit `--include-credential-values` flag.
 - **Single-user posture:** `agenthound-server` binds to `127.0.0.1:8080` by default and has no application-layer auth. Remote access is the operator's responsibility (SSH tunnel, WireGuard, Tailscale, mTLS reverse proxy).
-- **Localhost token on mutating endpoints:** the server generates a 32-byte token at startup, persisted at `~/.agenthound/server.token` (or `$AGENTHOUND_TOKEN_PATH`). All mutating HTTP routes require `Authorization: Bearer <token>`. The embedded UI fetches it transparently from `GET /api/v1/auth/local-token`. CLI tools (`agenthound-server ingest`, `query`) bypass HTTP entirely.
-- **CORS:** `AllowCredentials: false`. The server has no credentials to send; this prevents drive-by browser attackers from riding ambient context to read the token endpoint.
-- **Input validation:** All API inputs are validated. The `/query` endpoint requires the localhost token; node/edge kinds are checked against an allowlist before being interpolated into Cypher.
+- **OriginGuard on mutating endpoints:** browser requests to `POST /ingest`, `POST /query`, `POST /scans`, `DELETE /scans/{id}`, the three `analysis/*-path` endpoints, and `PUT /findings/triage/{fingerprint}` are rejected unless the `Origin` header is in `AGENTHOUND_CORS_ORIGINS` (default `http://localhost:8080` and `http://127.0.0.1:8080`). Requests with no `Origin` (curl, agenthound CLI, cron) pass through — same-host processes are inside the trust boundary. CLI tools (`agenthound-server ingest`, `query`) bypass HTTP entirely.
+- **CORS:** `AllowCredentials: false`. The server has no credentials to send; this and OriginGuard together defend the drive-by browser CSRF path.
+- **Input validation:** All API inputs are validated. The `/query` endpoint is OriginGuard-gated; node/edge kinds are checked against an allowlist before being interpolated into Cypher.
 - **Container security:** Non-root user, minimal base image, no unnecessary packages.
 
 For the full threat model see [`docs/security.md`](docs/security.md).

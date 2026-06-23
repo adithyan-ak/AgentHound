@@ -8,14 +8,9 @@ import (
 
 // CORS configures cross-origin sharing for the AgentHound API.
 //
-// AllowCredentials is intentionally false. Combined with the localhost
-// token requirement on mutating endpoints, this defends the server from
-// drive-by browser attackers: a hostile origin cannot ride the
-// operator's ambient cookies, and cannot read the token endpoint
-// because the response is non-credentialed.
-//
-// The server has no application-layer credentials to send anyway, so
-// nothing breaks.
+// AllowCredentials is intentionally false. The server has no
+// application-layer credentials to send. The actual CSRF defense lives
+// in OriginGuard, which gates mutating endpoints on the same allowlist.
 func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 	if len(allowedOrigins) == 0 {
 		allowedOrigins = []string{"http://localhost:8080"}
@@ -23,7 +18,7 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 	return cors.Handler(cors.Options{
 		AllowedOrigins:   allowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
+		AllowedHeaders:   []string{"Accept", "Content-Type"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: false,
 		MaxAge:           300,

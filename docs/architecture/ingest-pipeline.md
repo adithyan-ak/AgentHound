@@ -7,7 +7,7 @@ Serialization is intentional: the post-processing stage's stale-edge cleanup sco
 ## Entry Points
 
 - **CLI:** `agenthound-server ingest <file.json>` or `agenthound-server ingest -` (stdin)
-- **HTTP:** `POST /api/v1/ingest` (requires localhost Bearer token)
+- **HTTP:** `POST /api/v1/ingest` (Origin-gated by `OriginGuard`; non-browser callers pass through)
 - **UI:** Drag-drop import in Scan Manager (hits the same HTTP endpoint)
 
 All paths invoke `Pipeline.Ingest(ctx, *sdkingest.IngestData)`.

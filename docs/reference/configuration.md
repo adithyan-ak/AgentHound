@@ -35,8 +35,7 @@ Output file permissions: `0600` on POSIX. Atomic write via temp file + rename.
 | `AGENTHOUND_NEO4J_USER` | `--neo4j-user` | `neo4j` | Neo4j username |
 | `AGENTHOUND_NEO4J_PASSWORD` | `--neo4j-password` | `agenthound` | Neo4j password |
 | `AGENTHOUND_PG_URI` | `--pg-uri` | `postgres://agenthound:agenthound@localhost:5432/agenthound?sslmode=disable` | PostgreSQL connection string |
-| `AGENTHOUND_CORS_ORIGINS` | `--cors-origins` | `http://localhost:8080` | Comma-separated allowed origins. `AllowCredentials: false`. |
-| `AGENTHOUND_TOKEN_PATH` | _(none)_ | `~/.agenthound/server.token` | Path to the localhost Bearer token file. Also respects `XDG_CONFIG_HOME`. |
+| `AGENTHOUND_CORS_ORIGINS` | `--cors-origins` | `http://localhost:8080,http://127.0.0.1:8080` | Comma-separated allowed origins. Shared by CORS and OriginGuard (mutating-endpoint CSRF defense). |
 
 ---
 
@@ -46,7 +45,6 @@ The server and offensive modules persist state under `~/.agenthound/`:
 
 ```
 ~/.agenthound/
-  server.token                   # Auto-generated Bearer token (0600). UI fetches via /api/v1/auth/local-token.
   loot-acknowledged              # Marker file — operator acknowledged loot output risks
   poison-acknowledged            # Marker file — operator acknowledged poisoner risks
   extract-acknowledged           # Marker file — operator acknowledged extractor risks
@@ -59,11 +57,9 @@ When `XDG_CONFIG_HOME` is set, the base path becomes `$XDG_CONFIG_HOME/agenthoun
 
 ---
 
-## Localhost Token
+## CSRF defense (OriginGuard)
 
-The server auto-generates a random token on first startup (persisted at `server.token`, mode `0600`). Mutating API endpoints (`POST /api/v1/ingest`, `POST /api/v1/query`, path operations, scan CRUD) require `Authorization: Bearer <token>`. Read-only endpoints are open.
-
-The embedded UI retrieves the token from `GET /api/v1/auth/local-token` (same-origin only, enforced via CORS). CLI commands (`agenthound-server ingest`, `query`) bypass HTTP and do not need the token.
+Mutating API endpoints (`POST /api/v1/ingest`, `POST /api/v1/query`, path operations, scan CRUD, triage PUT) are gated by an `Origin` allowlist. Browsers must originate from a value in `AGENTHOUND_CORS_ORIGINS` (default covers `http://localhost:8080` and `http://127.0.0.1:8080`). Non-browser callers (curl, the agenthound CLI, cron pipelines) send no `Origin` header and pass through. CLI commands (`agenthound-server ingest`, `query`) bypass HTTP entirely. See [`security.md`](../operator/security.md#origin-guard-on-mutating-endpoints).
 
 ---
 

@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Install UX + CSRF defense rework
+
+**Quick Start simplified** to two one-liners. No `git clone`, no `make build`, no Go/Node toolchain:
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/docker/docker-compose.public.yml \
+  | docker compose -f - -p agenthound up -d
+curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/install.sh | sh
+agenthound scan --config --output - | curl --data-binary @- \
+  -H "Content-Type: application/json" http://127.0.0.1:8080/api/v1/ingest
+```
+
+- Added `docker/docker-compose.public.yml` — uses `ghcr.io/adithyan-ak/agenthound-server:latest`, no source checkout needed.
+
+### Removed: `~/.agenthound/server.token` bearer token
+
+The bearer-token gate on mutating endpoints (introduced post-v0.4) was redundant defense on top of CORS for the browser-CSRF threat we actually defend, and it created a file-on-disk problem under Docker. Replaced with `OriginGuard`:
+
+- Mutating endpoints (`POST /ingest`, `POST /query`, `POST /scans`, `DELETE /scans/{id}`, the three `analysis/*-path` endpoints, `PUT /findings/triage/{fingerprint}`) now require the request's `Origin` header to be in `AGENTHOUND_CORS_ORIGINS` (default `http://localhost:8080`, `http://127.0.0.1:8080`). Browsers attach `Origin` automatically on cross-origin POSTs per Fetch spec.
+- Non-browser callers (curl, the `agenthound` CLI, cron pipelines) send no `Origin` header and pass through. Stream-ingest works zero-config.
+- `Origin: null` (sandboxed iframes, `data:`/`file:` URLs) is rejected.
+- Removed: `~/.agenthound/server.token` file, `AGENTHOUND_TOKEN_PATH` / `XDG_CONFIG_HOME` token path resolution, `GET /api/v1/auth/local-token` endpoint, `apimw.LocalToken` / `apimw.LocalTokenHandler`, the UI's token-fetch bootstrap (`server/ui/src/shared/api/client.ts` dropped from ~70 LOC to 6).
+- Existing `curl` scripts continue to work — they sent no `Origin` before and now pass through cleanly. Any stale `Authorization: Bearer …` header is ignored.
+- Non-loopback binds now log a `WARN` at startup; OriginGuard alone is insufficient when LAN attackers can spoof `Origin`. Use VPN / SSH tunnel / reverse proxy with mTLS for remote access.
+
 Test coverage hardening (post-v0.5.0).
 
 ## v0.5.0

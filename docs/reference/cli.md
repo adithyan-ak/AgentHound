@@ -430,9 +430,9 @@ Start the API server, embedded React UI, and initialize databases.
 agenthound-server serve
 ```
 
-Auto-initializes Neo4j schema (constraints + indexes) and PostgreSQL migrations on first start. Generates a localhost Bearer token at `~/.agenthound/server.token` (0600) for mutating endpoint auth. The UI fetches it from `GET /api/v1/auth/local-token`. Graceful shutdown on SIGINT/SIGTERM (10s drain).
+Auto-initializes Neo4j schema (constraints + indexes) and PostgreSQL migrations on first start. Mutating HTTP endpoints are gated by `OriginGuard` (Origin allowlist, configured via `--cors-origins`). Graceful shutdown on SIGINT/SIGTERM (10s drain).
 
-**No application-layer authentication.** Default loopback bind is the security boundary. Expose remotely only over VPN/SSH tunnel.
+**No application-layer authentication.** Default loopback bind is the security boundary. Expose remotely only over VPN/SSH tunnel. The server logs a `WARN` if bound to a non-loopback address.
 
 ---
 
@@ -552,8 +552,7 @@ Print version string and commit hash.
 | `AGENTHOUND_NEO4J_USER` | server | `neo4j` |
 | `AGENTHOUND_NEO4J_PASSWORD` | server | `agenthound` |
 | `AGENTHOUND_PG_URI` | server | `postgres://agenthound:agenthound@localhost:5432/agenthound?sslmode=disable` |
-| `AGENTHOUND_CORS_ORIGINS` | server | `http://localhost:8080` |
-| `AGENTHOUND_TOKEN_PATH` | server | `~/.agenthound/server.token` |
+| `AGENTHOUND_CORS_ORIGINS` | server | `http://localhost:8080,http://127.0.0.1:8080` |
 
 ---
 
@@ -561,7 +560,6 @@ Print version string and commit hash.
 
 | Path | Purpose |
 |------|---------|
-| `~/.agenthound/server.token` | Localhost Bearer token (server, 0600). |
 | `~/.agenthound/loot-acknowledged` | Loot authorization sentinel. |
 | `~/.agenthound/poison-acknowledged` | Poison/implant authorization sentinel. |
 | `~/.agenthound/state/<module-id>/<engagement-id>.json` | Poison/implant receipts (audit trail + revert source). |

@@ -44,11 +44,9 @@ type ServerDeps struct {
 	ScanStore    *appdb.ScanStore
 	FindingStore *appdb.FindingStore
 	RulesEngine  *rules.Engine
-	CORSOrigins  []string
-	// LocalToken gates all mutating endpoints with a Bearer token. The
-	// embedded UI fetches the token from /api/v1/auth/local-token on
-	// load. Required; callers should construct via apimw.NewLocalToken.
-	LocalToken *apimw.LocalToken
+	// CORSOrigins is the allowlist for both the CORS preflight handler
+	// and OriginGuard on mutating endpoints. Default is set in servercfg.
+	CORSOrigins []string
 }
 
 func NewServer(deps ServerDeps) *Server {
@@ -80,13 +78,6 @@ func NewServer(deps ServerDeps) *Server {
 		r.Get("/health", healthH.Handle)
 		r.Get("/docs", handlers.HandleOpenAPIDocs)
 
-		// auth/local-token is the bootstrap path the embedded UI uses
-		// to discover the token. Same-origin is enforced via CORS
-		// (AllowCredentials: false, AllowedOrigins allowlist).
-		if deps.LocalToken != nil {
-			r.Get("/auth/local-token", apimw.LocalTokenHandler(deps.LocalToken))
-		}
-
 		r.Get("/graph/stats", graphH.HandleStats)
 		r.Get("/graph/search", graphH.HandleSearch)
 		r.Get("/graph/nodes", graphH.HandleListNodes)
@@ -110,17 +101,12 @@ func NewServer(deps ServerDeps) *Server {
 		r.Get("/rules", rulesH.HandleList)
 		r.Get("/rules/{id}", rulesH.HandleGet)
 
-		// Gated mutating endpoints. The localtoken middleware
-		// requires Authorization: Bearer <token>. CLI tools (ingest,
-		// query) bypass HTTP entirely by calling the pipeline /
-		// reader directly — no token needed for CLI use.
-		gate := passThrough
-		if deps.LocalToken != nil {
-			gate = deps.LocalToken.Middleware
-		}
-
+		// Gated mutating endpoints. OriginGuard rejects browser
+		// requests from origins outside the allowlist (drive-by CSRF
+		// defense). Non-browser callers (curl, the agenthound CLI,
+		// cron pipelines) send no Origin header and pass through.
 		r.Group(func(r chi.Router) {
-			r.Use(gate)
+			r.Use(apimw.OriginGuard(deps.CORSOrigins))
 			r.Post("/ingest", ingestH.Handle)
 			r.Post("/query", queryH.Handle)
 			r.Post("/scans", scanH.HandleCreate)
@@ -172,12 +158,6 @@ func NewServer(deps ServerDeps) *Server {
 	})
 
 	return &Server{router: r}
-}
-
-// passThrough is the no-op middleware used when no LocalToken is
-// configured (test setups). Production always wires a LocalToken.
-func passThrough(next http.Handler) http.Handler {
-	return next
 }
 
 // ListenAndServe binds the HTTP server to the given host:port string.

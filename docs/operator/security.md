@@ -40,44 +40,47 @@ If a multi-tenant team server is what you need, fork before this
 commit (auth lived in `internal/auth/` until then) — but expect to
 maintain it yourself. The project direction is single-user-first.
 
-## Localhost token on mutating endpoints
+## Origin guard on mutating endpoints
 
 Although the server is single-user, the operator's *browser* is not.
-A malicious tab open in the same browser session can issue same-origin
-POSTs to `127.0.0.1:8080` and run arbitrary Cypher or upload
-attacker-chosen ingest data. To shut that drive-by path:
+A malicious tab open in the same browser session can auto-submit a
+cross-origin POST to `127.0.0.1:8080` and try to run arbitrary
+Cypher or ingest attacker-chosen data. To shut that drive-by path,
+`agenthound-server` runs an **Origin allowlist** on every mutating
+endpoint (`OriginGuard`):
 
-- The server generates a random 32-byte token at first startup and
-  persists it to `~/.agenthound/server.token` with `0o600` perms.
-  Override the path via `AGENTHOUND_TOKEN_PATH`. If `XDG_CONFIG_HOME`
-  is set, the default becomes
-  `$XDG_CONFIG_HOME/agenthound/server.token`. The token is reused on
-  subsequent restarts (idempotent).
-- All mutating HTTP routes require
-  `Authorization: Bearer <token>`. Specifically: `POST /ingest`,
-  `POST /query`, `POST /scans`, `DELETE /scans/{id}`, the three
-  `POST /analysis/*-path` endpoints, and
-  `PUT /findings/triage/{fingerprint}`. The triage *read*
-  (`GET /findings/triage/{fingerprint}`) stays open like other reads.
+- Browsers attach `Origin: <scheme>://<host>:<port>` to every
+  cross-origin POST (and to every same-origin non-GET) per the Fetch
+  spec. The middleware compares the header to the allowlist (default
+  `http://localhost:8080` and `http://127.0.0.1:8080`, configurable
+  via `AGENTHOUND_CORS_ORIGINS`). A foreign `Origin` (e.g. a tab on
+  `evil.com`) → `403 Forbidden`. The string `Origin: null`
+  (sandboxed iframes, `data:` / `file:` URLs) is also rejected.
+- Requests with **no** `Origin` header pass through. This is the
+  non-browser caller — `curl`, the `agenthound` CLI, a cron pipeline.
+  Same-host processes are inside the trust boundary by design:
+  AgentHound is single-user; if an attacker has shell access on the
+  box they can do worse than POST to `/ingest`.
 - Read endpoints (graph reads, findings, prebuilt queries, rules,
   health, docs) stay open. Localhost-only reads on a single-user box
   are fine; gating them would force the UI to plumb auth through
   every TanStack Query call for no security gain.
-- `GET /api/v1/auth/local-token` returns the token to same-origin
-  callers. The embedded UI fetches it once on first load and caches
-  it in memory. Same-origin enforcement is provided by CORS:
-  `AllowCredentials: false` and `AllowedOrigins` is the
-  operator-set allowlist (default `http://localhost:8080`), so a
-  third-party tab cannot use a credentialed fetch to read the
-  response.
 - `agenthound-server` CLI subcommands (`ingest`, `query`) call the
   pipeline / reader directly and do **not** speak HTTP, so they
-  bypass the token entirely. No CLI plumbing changes are required.
+  bypass OriginGuard entirely.
 
-To revoke the token (e.g. you suspect another user on the box read
-the file), delete `~/.agenthound/server.token` and restart the
-server. The next startup generates a fresh token; any open UI tab
-will need a refresh to re-fetch.
+The allowlist is shared with CORS — one env var, one source of truth.
+CORS still enforces `AllowCredentials: false` so a hostile origin
+cannot ride ambient cookies even if one were ever introduced.
+
+### Non-loopback binds
+
+Binding `agenthound-server` to anything other than loopback (`0.0.0.0`
+or a LAN address) puts mutating endpoints in front of anyone who can
+spoof an `Origin` header — trivial for a LAN attacker with `curl`.
+The server logs a `WARN` on startup in this case. **Don't do it.**
+For remote access use a VPN, an SSH tunnel
+(`ssh -L 8080:localhost:8080 host`), or a reverse proxy with mTLS.
 
 ### Triage state retention
 

@@ -34,13 +34,10 @@ services:
       timeout: 5s
       retries: 5
 
-  # Service name 'agenthound' kept unchanged: keeps existing volumes / muscle
-  # memory; the binary inside is now agenthound-server, but the compose service
-  # is the operator-facing handle.
+  # Pulls the pre-built server image from GHCR — no source checkout needed.
+  # Operators who want to build from source should use docker-compose.yml instead.
   agenthound:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.agenthound-server
+    image: ghcr.io/adithyan-ak/agenthound-server:latest
     ports:
       # Bind on the loopback interface only — the server has no application-layer
       # auth. To reach it from another machine, use a VPN / SSH tunnel / Tailscale,
@@ -62,9 +59,10 @@ services:
       app-db:
         condition: service_healthy
     # /api/v1/health is open (no Origin gate). BusyBox wget ships in the
-    # alpine base. start_period covers Neo4j schema init + Postgres
-    # migrations so a quick `docker compose up -d` immediately followed
-    # by a curl-ingest doesn't race the server to readiness.
+    # alpine base; --spider does a HEAD-equivalent and exits non-zero on
+    # 5xx. start_period lets the Neo4j schema init + Postgres migrations
+    # finish before any failure counts, so a quick paste of Quick Start
+    # step 3 doesn't race the server to readiness.
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8080/api/v1/health"]
       interval: 5s

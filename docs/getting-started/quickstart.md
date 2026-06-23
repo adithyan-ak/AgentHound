@@ -6,76 +6,62 @@ Get AgentHound running the full offensive chain (scan, discover, loot, poison, r
 
 | Tool | Version | Purpose |
 |------|---------|---------|
-| Go | 1.25+ | Build from source |
-| Docker + Compose | v2+ | Infrastructure (Neo4j, Postgres, server) |
-| Neo4j | 4.4+ Community | Graph database (provided via Docker) |
-| PostgreSQL | 16+ | Scan history (provided via Docker) |
+| Docker + Compose | v2+ | Runs the analysis server stack (Neo4j + Postgres + UI) |
 
-You also need at least one MCP client configured (Claude Desktop, Cursor, VS Code, etc.) for the config scan to find anything interesting.
+The collector is a single static binary (no Go needed). The server runs from a pre-built image (no source checkout, no `make build`). You also need at least one MCP client configured (Claude Desktop, Cursor, VS Code, etc.) for the config scan to find anything interesting.
 
-## 1. Install
+For contributor / source-build paths see [Installation](./install.md).
 
-Three options — pick one.
-
-**From source (recommended for development):**
+## 1. Start the Analysis Server
 
 ```bash
-git clone https://github.com/adithyan-ak/agenthound.git
-cd agenthound
-make build
-# Binaries: bin/agenthound (collector) and bin/agenthound-server (analysis)
+curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/docker/docker-compose.public.yml \
+  | docker compose -f - -p agenthound up -d --wait
 ```
 
-**Via `go install`:**
+Pulls `neo4j:4.4-community`, `postgres:16-alpine`, and `ghcr.io/adithyan-ak/agenthound-server:latest`, then blocks until every healthcheck (Neo4j, Postgres, and the AgentHound server itself) reports healthy — first boot is ~30-60s while Neo4j initializes. To inspect state manually:
 
 ```bash
-go install github.com/adithyan-ak/agenthound/collector/cmd/agenthound@latest
-go install github.com/adithyan-ak/agenthound/server/cmd/agenthound-server@latest
+docker compose -p agenthound ps
 ```
 
-**Docker only (no local Go required):**
+The server binds `127.0.0.1:8080`. No application-layer auth; mutating endpoints are gated by an `Origin` allowlist (`OriginGuard`) — browser CSRF is rejected, non-browser callers (curl, the agenthound CLI, cron) pass through. Protect with VPN/SSH tunnel if you need remote access.
+
+## 2. Install the Collector
 
 ```bash
-git clone https://github.com/adithyan-ak/agenthound.git
-cd agenthound
-docker compose -f docker/docker-compose.yml up -d --build
+curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"     # add to ~/.zshrc or ~/.bashrc to persist
 ```
 
-## 2. Start the Analysis Server
-
-The server needs Neo4j and Postgres. Docker Compose handles both:
+Verifies checksums (and cosign signature when cosign is on `$PATH`), installs to `~/.local/bin/agenthound`. Confirm:
 
 ```bash
-docker compose -f docker/docker-compose.yml up -d
+agenthound --version
 ```
 
-Wait for all services to report healthy:
+## 3. Run Your First Scan and Ingest
+
+The config scan is offline and safe. It parses all 12 supported MCP client config formats on the local machine and reports trust relationships, credentials, and instruction files. Stream straight into the running server in one pipe:
 
 ```bash
-docker compose -f docker/docker-compose.yml ps
+agenthound scan --config --output - \
+  | curl --data-binary @- -H "Content-Type: application/json" \
+         http://127.0.0.1:8080/api/v1/ingest
 ```
 
-This starts Neo4j (bolt://localhost:7687), PostgreSQL (localhost:5432), and the AgentHound server on `127.0.0.1:8080`. The server binds loopback-only; there is no application-layer auth. Protect with VPN/SSH tunnel if you need remote access.
-
-## 3. Run Your First Scan (Config Discovery)
-
-The config scan is offline and safe. It parses all 12 supported MCP client config formats on the local machine and reports trust relationships, credentials, and instruction files:
+Or write to disk and ingest in two steps. The collector prints the
+exact filename (`./scan-<scan_id>.json`); use that, not a glob, since
+later scans accumulate alongside it:
 
 ```bash
-agenthound scan --config
+agenthound scan --config                     # prints ./scan-<scan_id>.json
+curl --data-binary @./scan-<scan_id>.json \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/api/v1/ingest
 ```
 
-Output lands at `./scan-<scan_id>.json` in the current directory. Ingest it into the graph:
-
-```bash
-agenthound-server ingest scan-*.json
-```
-
-Or pipe directly without writing to disk:
-
-```bash
-agenthound scan --config --output - | agenthound-server ingest -
-```
+Drag-drop a `scan-*.json` into the UI's Scan Manager also works — same endpoint.
 
 ## 4. Run a Network Scan
 
@@ -108,10 +94,13 @@ agenthound discover 10.0.0.0/24 --mcp          # MCP only (ports 3000,8000,8080,
 agenthound discover 10.0.0.0/24 --a2a          # A2A only (ports 80,443,3000,8080)
 ```
 
-Ingest the result the same way:
+Ingest the result the same way (stream form, or curl the file the
+collector wrote):
 
 ```bash
-agenthound-server ingest discover-*.json
+agenthound discover 10.0.0.0/24 --output - \
+  | curl --data-binary @- -H "Content-Type: application/json" \
+         http://127.0.0.1:8080/api/v1/ingest
 ```
 
 ## 6. Loot a Service
@@ -135,10 +124,13 @@ agenthound loot 172.30.0.10:11434 --type ollama \
     --output loot-ollama.json
 ```
 
-Ingest the loot envelope to surface credential-chain findings in the graph:
+Ingest the loot envelope to surface credential-chain findings in the
+graph (point curl at the file the collector wrote):
 
 ```bash
-agenthound-server ingest loot-ollama.json
+curl --data-binary @./loot-ollama.json \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:8080/api/v1/ingest
 ```
 
 ## 7. Explore Findings
@@ -151,27 +143,25 @@ agenthound-server ingest loot-ollama.json
 - **Query Library** -- 19 pre-built security queries mapped to OWASP MCP/Agentic Top 10
 - **Scan Manager** -- history, drag-drop import
 
-**CLI queries:**
+**HTTP queries (no extra install):**
 
 ```bash
-# All findings
-agenthound-server query --findings
-
-# Critical findings only
-agenthound-server query --findings --severity critical
-
 # Pre-built query (agents with shell access)
-agenthound-server query --prebuilt agents-shell-access
+curl http://127.0.0.1:8080/api/v1/analysis/prebuilt/agents-shell-access
 
 # Cross-protocol paths (MCP-to-A2A boundary traversal)
-agenthound-server query --prebuilt cross-protocol-paths
+curl http://127.0.0.1:8080/api/v1/analysis/prebuilt/cross-protocol-paths
 
-# Credential chain (LiteLLM master key reuse)
-agenthound-server query --prebuilt credential-chain
+# Findings (filter by severity)
+curl 'http://127.0.0.1:8080/api/v1/analysis/findings?severity=critical'
 
-# Raw Cypher
-agenthound-server query "MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(s) RETURN a.name, s.name"
+# Raw Cypher (OriginGuard admits no-Origin callers)
+curl -H "Content-Type: application/json" \
+  --data '{"cypher":"MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(s) RETURN a.name, s.name"}' \
+  http://127.0.0.1:8080/api/v1/query
 ```
+
+If you have `agenthound-server` installed locally (Homebrew / `go install` / source build), the equivalent CLI is `agenthound-server query --findings` / `--prebuilt <id>` / raw Cypher as a positional arg — see [CLI reference](../reference/cli.md).
 
 ## 8. Poison and Revert (Advanced -- Destructive)
 
