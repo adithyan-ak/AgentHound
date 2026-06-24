@@ -9,7 +9,10 @@
 
 set -e
 
-GITHUB_REPO="adithyan-ak/agenthound"
+# Canonical owner/repo case matters: GitHub URLs are case-insensitive, but the
+# cosign keyless signature's certificate identity (SAN) is the exact slug the
+# release workflow ran under, so this must match it verbatim or cosign rejects it.
+GITHUB_REPO="adithyan-ak/AgentHound"
 INSTALL_DIR="${AGENTHOUND_INSTALL_DIR:-$HOME/.local/bin}"
 
 echo ""
@@ -28,10 +31,18 @@ esac
 
 # Resolve version. Default to the latest GitHub Release tag.
 if [ -z "$AGENTHOUND_VERSION" ]; then
-  VERSION=$(curl -sSfL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" \
-    | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
-  if [ -z "$VERSION" ]; then
-    echo "Error: could not determine latest release"; exit 1
+  # Resolve "latest" via the github.com redirect, NOT api.github.com. The REST
+  # API is rate-limited to 60 requests/hour per IP for anonymous callers, which
+  # is permanently exhausted behind shared / corporate NAT egress IPs and breaks
+  # the installer with a 403. The /releases/latest redirect carries no such
+  # budget: it 302s to /releases/tag/<version>, which we parse out.
+  resolved=$(curl -sSL -o /dev/null -w '%{url_effective}' \
+    "https://github.com/${GITHUB_REPO}/releases/latest" || true)
+  VERSION=${resolved##*/tag/}
+  if [ -z "$VERSION" ] || [ "$VERSION" = "$resolved" ]; then
+    echo "Error: could not determine latest release"
+    echo "       Set AGENTHOUND_VERSION=vX.Y.Z to pin a specific version."
+    exit 1
   fi
 else
   VERSION="$AGENTHOUND_VERSION"
