@@ -1,12 +1,13 @@
 # AgentHound demo lab.
 #
-# Covers the full DC35 demo arc: scan → discover → loot → poison → revert.
+# Covers the DC35 demo arc: config → scan → discover → loot → findings,
+# with poison/revert available as a manual workshop step.
 # Lightweight Python stubs serve the canonical responses each fingerprinter
 # and Looter expects; production fingerprinting against real instances is
 # the operator's path.
 #
 # Subnet 172.30.0.0/24:
-#   172.30.0.10 — ollama         (port 11434)
+#   172.30.0.10 — ollama-stub    (port 11434)
 #   172.30.0.20 — litellm-stub   (port 4000)
 #   172.30.0.30 — operator        (mounted MCP config)
 #   172.30.0.40 — vllm-stub      (port 8000)
@@ -16,8 +17,7 @@
 #   172.30.0.80 — a2a-stub       (port 8080, discovery target)
 #
 # Run:
-#   docker compose -f docker/demo/docker-compose.yml up -d
-#   ./scripts/seed-demo.sh
+#   make demo
 #   open http://localhost:8080
 
 
@@ -30,13 +30,17 @@ networks:
 
 services:
   ollama:
-    image: ollama/ollama:latest
+    build:
+      context: ./ollama-stub
     container_name: agenthound-demo-ollama
     networks:
       demo-lab:
         ipv4_address: 172.30.0.10
-    environment:
-      - OLLAMA_HOST=0.0.0.0:11434
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:11434/api/version', timeout=2).read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
   litellm-stub:
     build:
@@ -47,6 +51,11 @@ services:
         ipv4_address: 172.30.0.20
     environment:
       - LITELLM_MASTER_KEY=sk-DEMO-CHAIN-KEY-NOT-REAL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=2).read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
   operator:
     image: alpine:3.20
@@ -65,6 +74,11 @@ services:
     networks:
       demo-lab:
         ipv4_address: 172.30.0.40
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/models', timeout=2).read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
   openwebui-stub:
     build:
@@ -78,6 +92,11 @@ services:
       # OpenWebUI fingerprinter emits the EXPOSES edge to the Ollama
       # backend at 172.30.0.10.
       - OLLAMA_BASE_URL=http://172.30.0.10:11434
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/api/version', timeout=2).read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
   jupyter-stub:
     build:
@@ -86,6 +105,11 @@ services:
     networks:
       demo-lab:
         ipv4_address: 172.30.0.60
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8888/api/status', timeout=2).read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
   mcp-stub:
     build:
@@ -94,6 +118,11 @@ services:
     networks:
       demo-lab:
         ipv4_address: 172.30.0.70
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, urllib.request; req=urllib.request.Request('http://127.0.0.1:8080/', data=json.dumps({'jsonrpc':'2.0','id':1,'method':'initialize','params':{}}).encode(), headers={'Content-Type':'application/json'}); urllib.request.urlopen(req, timeout=2).read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
   a2a-stub:
     build:
@@ -102,3 +131,21 @@ services:
     networks:
       demo-lab:
         ipv4_address: 172.30.0.80
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/.well-known/agent-card.json', timeout=2).read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  collector-runner:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile.agenthound
+    profiles: ["tools"]
+    networks:
+      - demo-lab
+    environment:
+      - HOME=/out/home
+    volumes:
+      - ./out:/out
+      - ./operator-config:/demo/operator-config:ro

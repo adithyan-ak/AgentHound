@@ -132,6 +132,28 @@ check_docker_compose() {
   MISSING="${MISSING}docker-compose\n"
 }
 
+check_curl() {
+  if ! command -v curl >/dev/null 2>&1; then
+    print_status FAIL curl "not found" ""
+    MISSING="${MISSING}curl\n"
+    return
+  fi
+  ver=$(curl --version 2>/dev/null | awk 'NR==1 {print $2}')
+  [ -z "$ver" ] && ver="present"
+  print_status OK curl "$ver" ""
+}
+
+check_python3() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    print_status FAIL python3 "not found" ""
+    MISSING="${MISSING}python3\n"
+    return
+  fi
+  ver=$(python3 --version 2>/dev/null | awk '{print $2}')
+  [ -z "$ver" ] && ver="present"
+  print_status OK python3 "$ver" ""
+}
+
 check_server_running() {
   # Honor AGENTHOUND_URL (the var seed-test-data.sh uses); fall back
   # to AGENTHOUND_BIND_URL for backward compat with earlier preflight
@@ -189,6 +211,8 @@ case "$TARGET" in
     # don't double-check it here.
     check_docker
     check_docker_compose
+    check_curl
+    check_python3
     ;;
   *)
     # Unknown targets: be conservative and check everything.
@@ -212,6 +236,7 @@ if [ -n "$MISSING" ]; then
       docker-daemon)  echo "    docker daemon   — Docker is installed but the daemon isn't running. Start Docker Desktop or 'sudo systemctl start docker'." ;;
       docker-compose) echo "    docker compose  — install the v2 plugin (https://docs.docker.com/compose/install/) — comes with Docker Desktop by default." ;;
       curl)           echo "    curl            — install curl (preinstalled on most systems; on Debian/Ubuntu: 'sudo apt install curl', on macOS via Homebrew: 'brew install curl')." ;;
+      python3)        echo "    python3         — install Python 3 or ensure it is on PATH." ;;
       server)         echo "    agenthound-server — start the server first with: docker compose -f docker/docker-compose.yml up -d  (or 'make up')" ;;
       *)              echo "    $tool — see https://docs.agenthound.io/getting-started/install/" ;;
     esac

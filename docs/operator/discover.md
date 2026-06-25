@@ -113,7 +113,7 @@ agenthound loot 10.0.0.10:11434 --type ollama \
     --engagement-id RTV-2027 --output - | agenthound-server ingest -
 ```
 
-After each ingest the `cross_service_credential_chain` post-processor folds the `value_hash` joins, surfacing `:CAN_REACH` paths from agents to upstream provider credentials via the LiteLLM gateway — the credential-chain finding the v0.3 demo lab is built around.
+After each ingest the `cross_service_credential_chain` post-processor folds the `value_hash` joins, surfacing `:CAN_REACH` paths from agents to upstream provider credentials via the LiteLLM gateway — the credential-chain finding the demo lab is built around.
 
 ## See also
 

@@ -6,7 +6,7 @@
       "args": ["/opt/mcp-servers/litellm-proxy/index.js"],
       "env": {
         "LITELLM_MASTER_KEY": "sk-DEMO-CHAIN-KEY-NOT-REAL",
-        "LITELLM_BASE_URL": "http://172.20.0.20:4000"
+        "LITELLM_BASE_URL": "http://172.30.0.20:4000"
       }
     }
   }

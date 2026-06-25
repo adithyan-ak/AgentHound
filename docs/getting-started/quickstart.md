@@ -204,25 +204,19 @@ Revert is idempotent. Running it twice against the same engagement-id is safe.
 
 ## 9. Demo Lab
 
-The v0.3 demo lab spins up a full vulnerable environment (Ollama, LiteLLM, vLLM, Open WebUI, Jupyter, MCP stub, A2A stub) on an isolated Docker network:
+The demo lab spins up a vulnerable AI environment on an isolated Docker network and runs collection from a profiled collector runner inside that network:
 
 ```bash
-# Start the lab
-docker compose -f docker/demo/docker-compose.yml up -d --build
-
-# Run the full demo arc (scan + discover + loot + ingest)
-./scripts/seed-demo.sh
-
-# Open the UI
-open http://localhost:8080
+# Start the server, start the lab, collect, ingest, and validate
+make demo
 ```
 
-The seed script runs the complete chain: network scan, protocol discovery, LiteLLM loot, Ollama loot, and ingests all envelopes. After it completes, the Findings panel surfaces cross-service credential chains, EXPOSES edges, and discovered protocol endpoints.
+The seed script runs config scan, network scan, protocol discovery, LiteLLM loot, Ollama loot, HTTP ingest, and validation. After it completes, open the printed UI URL; the Findings panel surfaces cross-service credential chains, `EXPOSES` edges, and discovered protocol endpoints.
 
 Tear down when done:
 
 ```bash
-docker compose -f docker/demo/docker-compose.yml down --volumes
+make demo-down
 ```
 
 ## Environment Variables

@@ -28,6 +28,7 @@ __debug_bin*
 testdata/demo/scan-output.json
 testdata/demo/config-output.json
 testdata/demo/loot-output.json
+docker/demo/out/
 # Standalone scan/loot files dropped in CWD by default.
 /scan-*.json
 /loot-*.json

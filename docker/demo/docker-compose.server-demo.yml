@@ -1,0 +1,16 @@
+# Demo-only override for the AgentHound analysis stack.
+#
+# The UI/API is the only host-facing service required by `make demo`.
+# Keeping Neo4j/Postgres internal avoids stage-time port conflicts with
+# local databases or another Neo4j browser already bound on the MacBook.
+
+services:
+  agenthound:
+    ports: !override
+      - "${AGENTHOUND_DEMO_BIND:-127.0.0.1:8080}:8080"
+
+  graph-db:
+    ports: !reset []
+
+  app-db:
+    ports: !reset []
