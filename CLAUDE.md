@@ -13,7 +13,13 @@ go test ./... -race         # All tests pass with race detector
 
 CI also runs: `golangci-lint` (errcheck + gofmt), `govulncheck`, `go-licenses check`, `scripts/deps-check.sh`, `scripts/size-check.sh`.
 
-IMPORTANT: Before any release tag, run `make prerelease` — it gates on all 8 checks (gofmt, vet, build, test -race, deps-check, size-check, UI build, cross-compile). Never tag without a passing `make prerelease`.
+IMPORTANT: Before any release tag, run `make prerelease` — it gates on all release checks (version-check, gofmt, golangci-lint, vet, govulncheck, go-licenses, build, test -race, deps-check, size-check, slop-check, UI build, cross-compile). Never tag without a passing `make prerelease`.
+
+### Release versioning (single source of truth)
+
+The first `## vX.Y.Z` header in `CHANGELOG.md` is the SSOT for the human-maintained version. The binary / Docker / Homebrew versions are injected by GoReleaser from the git tag, so the only strings to bump are the install pins in `install.sh` and `README.md`.
+
+Release prep: write the new `CHANGELOG.md` section, run `make sync-version` (rewrites both pins from the CHANGELOG), then `make prerelease`. `scripts/version-check.sh` runs as a `prerelease` step (and as a path-filtered CI job on `install.sh` / `README.md` / `CHANGELOG.md` changes); it fails if the pins or the pushed tag disagree with the CHANGELOG, so a mismatched version can never ship.
 
 ## Key Constraints
 
@@ -56,6 +62,7 @@ IMPORTANT: When making changes that affect any of these, update the correspondin
 - New detection rules → `docs/reference/detection-rules.md`
 - Deployment changes → `docs/operator/deployment.md`
 - Security posture changes → `docs/operator/security.md`
+- New docs page → add it to the `nav` in `mkdocs.yml` (Docs CI runs `mkdocs build --strict` on every docs PR, so an orphan page, broken link, or bad anchor fails the build; run `make docs-check` locally first).
 
 ## Quick Reference
 

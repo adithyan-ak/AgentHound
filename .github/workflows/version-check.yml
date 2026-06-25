@@ -1,0 +1,32 @@
+name: Version Check
+
+# Early-feedback check on the hand-maintained version strings: surfaces (as a red
+# check) a release-prep PR whose install.sh / README pins disagree with the
+# CHANGELOG. Path-filtered to those files, so do NOT make it a required status
+# check -- a skipped path-filtered workflow stays "pending" and would block
+# code-only PRs. The hard guarantee is the release pipeline: release.yml ->
+# make prerelease -> scripts/version-check.sh re-checks (including the tag)
+# before GoReleaser publishes, so a mismatched version can never ship.
+on:
+  pull_request:
+    paths:
+      - "install.sh"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "scripts/version-check.sh"
+      - ".github/workflows/version-check.yml"
+
+concurrency:
+  group: version-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      - name: Version pins match the CHANGELOG
+        run: bash scripts/version-check.sh
