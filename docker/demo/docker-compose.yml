@@ -142,6 +142,7 @@ services:
       context: ../..
       dockerfile: docker/Dockerfile.agenthound
     profiles: ["tools"]
+    user: "${AGENTHOUND_DEMO_RUNNER_UID:-1001}:${AGENTHOUND_DEMO_RUNNER_GID:-1001}"
     networks:
       - demo-lab
     environment:

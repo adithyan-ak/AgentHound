@@ -33,7 +33,7 @@ make demo
 1. Tears down prior demo/server volumes unless `./scripts/seed-demo.sh --keep` is used.
 2. Starts the AgentHound analysis stack with a demo override that keeps Neo4j/Postgres ports internal and exposes only the UI/API on `127.0.0.1:8080`.
 3. Starts the lab with `docker compose -f docker/demo/docker-compose.yml up -d --build --wait`.
-4. Runs collection from the profiled `collector-runner` container on the `demo-lab` network.
+4. Runs collection from the profiled `collector-runner` container on the `demo-lab` network. The runner uses the host UID/GID for bind-mounted outputs so cleanup works on native Linux as well as Docker Desktop.
 5. Ingests `config.json`, `scan.json`, `discover.json`, `loot-litellm.json`, and `loot-ollama.json` through `POST /api/v1/ingest`.
 6. Fails unless the `litellm-credential-leak` prebuilt query returns at least one row and the graph contains the expected service/model nodes.
 

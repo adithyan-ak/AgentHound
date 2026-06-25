@@ -34,6 +34,8 @@ ENGAGEMENT_ID="DEMO-LOCAL"
 OUT_DIR="$REPO_ROOT/docker/demo/out"
 RUNNER=(docker compose -f "$LAB_COMPOSE" --profile tools run --rm -T collector-runner)
 SERVER_COMPOSE_CMD=(docker compose -f "$SERVER_COMPOSE" -f "$SERVER_DEMO_COMPOSE")
+export AGENTHOUND_DEMO_RUNNER_UID="${AGENTHOUND_DEMO_RUNNER_UID:-$(id -u)}"
+export AGENTHOUND_DEMO_RUNNER_GID="${AGENTHOUND_DEMO_RUNNER_GID:-$(id -g)}"
 
 KEEP=0
 for arg in "$@"; do
