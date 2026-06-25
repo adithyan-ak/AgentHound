@@ -1,9 +1,12 @@
 name: Version Check
 
-# Runs only when the hand-maintained version strings change, so a release-prep
-# PR can't merge with install.sh / README pins that disagree with the CHANGELOG.
-# The release pipeline (release.yml -> make prerelease -> scripts/version-check.sh)
-# re-checks at tag time, so a mismatch can never reach a published release.
+# Early-feedback check on the hand-maintained version strings: surfaces (as a red
+# check) a release-prep PR whose install.sh / README pins disagree with the
+# CHANGELOG. Path-filtered to those files, so do NOT make it a required status
+# check -- a skipped path-filtered workflow stays "pending" and would block
+# code-only PRs. The hard guarantee is the release pipeline: release.yml ->
+# make prerelease -> scripts/version-check.sh re-checks (including the tag)
+# before GoReleaser publishes, so a mismatched version can never ship.
 on:
   pull_request:
     paths:

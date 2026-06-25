@@ -20,7 +20,7 @@ if ! command -v mkdocs >/dev/null 2>&1; then
   exit 1
 fi
 
-site_dir="$(mktemp -d)/site"
-mkdocs build --strict --site-dir "$site_dir"
-rm -rf "$site_dir"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdocs build --strict --site-dir "$tmp/site"
 echo "docs-check: strict build OK."

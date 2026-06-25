@@ -1,11 +1,15 @@
 name: Docs
 
 # Build the MkDocs site (strict) and deploy to GitHub Pages.
-# - pull_request: build-only gate, so doc-structure breakage (orphan pages,
-#   broken links, bad anchors) fails the PR instead of slipping to main.
-# - push to main: build + deploy. Pages source must be "GitHub Actions"
+# - pull_request: strict build only; doc-structure breakage (orphan pages,
+#   broken links, bad anchors) surfaces as a red check on the PR.
+# - push to main / workflow_dispatch: build + deploy. Deploy needs a green
+#   strict build (deploy: needs: build), so broken docs can never publish —
+#   this is the real backstop. Pages source must be "GitHub Actions"
 #   (Settings -> Pages, one-time).
-# Path-filtered so it runs only when docs actually change.
+# Path-filtered so it runs only when docs actually change. Because GitHub leaves
+# a skipped path-filtered workflow "pending", do NOT make this a required status
+# check or it would block every code-only PR; rely on the deploy backstop above.
 on:
   push:
     branches: [main]
@@ -48,14 +52,14 @@ jobs:
       - name: Build site (strict)
         run: mkdocs build --strict
       - name: Upload Pages artifact
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa  # v3.0.1
         with:
           path: site
 
   deploy:
     needs: build
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       pages: write

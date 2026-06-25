@@ -21,6 +21,12 @@ if [ -z "$ver" ]; then
   echo "sync-version: no version given and no '## vX.Y.Z' header in CHANGELOG.md"
   exit 1
 fi
+# Guard the substitution: a non-X.Y.Z value (typo'd VERSION= or sed-special
+# characters like & or #) would otherwise mutate / corrupt the pins in place.
+if ! echo "$ver" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo "sync-version: '$ver' is not a valid X.Y.Z version"
+  exit 1
+fi
 
 # Portable in-place sed (GNU uses -i; BSD/macOS needs -i '').
 sedi() {
