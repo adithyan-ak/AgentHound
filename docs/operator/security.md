@@ -2,10 +2,11 @@
 
 ## What AgentHound is
 
-AgentHound is a transparent, authorized-assessment tool for AI agent
-infrastructure. It enumerates configuration, queries documented
-endpoints, and builds a graph of trust relationships. Operators run it
-against systems they have been authorized to assess.
+AgentHound is a transparent, authorized-assessment offensive security
+framework for AI agent infrastructure. The collector runs recon,
+enumeration, credential looting, and reversible exploitation; the server
+builds the graph and computes attack paths. Operators run it against
+systems they have been authorized to assess.
 
 ## What AgentHound is not
 

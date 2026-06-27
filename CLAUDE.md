@@ -1,6 +1,6 @@
 # AgentHound
 
-BloodHound for AI agent infrastructure. Two binaries: `agenthound` (lean collector, ~9.9 MiB) and `agenthound-server` (Neo4j + Postgres + React UI, binds 127.0.0.1:8080).
+Offensive security framework for AI agent infrastructure (BloodHound for the agentic stack). Two binaries: `agenthound` (lean collector, ~9.9 MiB) and `agenthound-server` (Neo4j + Postgres + React UI, binds 127.0.0.1:8080).
 
 ## Pre-Commit Checks (MANDATORY)
 

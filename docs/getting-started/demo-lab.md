@@ -1,6 +1,6 @@
 # Demo Lab
 
-A self-contained Docker environment for the DEFCON demo path: config scan, network scan, protocol discovery, LiteLLM/Ollama loot, HTTP ingest, and validation of the credential-chain finding. Poison/revert remains available as a manual workshop extension, but `make demo` does not mutate the lab.
+A self-contained Docker environment that runs the offensive lifecycle end-to-end: config scan, network scan, protocol discovery, LiteLLM/Ollama loot, HTTP ingest, and validation of the resulting attack-path findings (e.g., the LiteLLM credential-leak path). Poison/revert remains available as a manual workshop extension, but `make demo` does not mutate the lab.
 
 ## Lab topology
 

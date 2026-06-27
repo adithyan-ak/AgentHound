@@ -1,6 +1,6 @@
 # Architecture Overview
 
-AgentHound enumerates MCP servers and A2A agents, builds a directed trust graph in Neo4j, and uses shortest-path algorithms to discover attack paths across protocol boundaries. It ships as **two binaries** in the BloodHound/SharpHound style: a lean field collector (`agenthound`) and a single-user analysis server (`agenthound-server`).
+AgentHound is an offensive security framework for AI agent infrastructure. It runs the full red-team lifecycle — recon, fingerprinting, credential looting, model and weight exfiltration, model inversion, tool/instruction poisoning, and config-implant persistence — then merges every fact into a Neo4j graph and computes the attack paths that tie it together. It ships as **two binaries** in the BloodHound/SharpHound mold: a lean field collector (`agenthound`) and a single-user analysis server (`agenthound-server`).
 
 ## Components
 
@@ -50,7 +50,7 @@ scan --config         scan --mcp --url <url>           scan --a2a --target <url>
          |  2. Normalize (snake_case)   |
          |  3. Deduplicate (MERGE)      |
          |  4. Batch write to Neo4j     |
-         |  5. Post-process (9 stages   |
+         |  5. Post-process (15 stages  |
          |     producing composite      |
          |     edges, plus risk score)  |
          +------------------------------+
@@ -98,14 +98,14 @@ scan --config         scan --mcp --url <url>           scan --a2a --target <url>
 Node IDs are deterministic SHA-256 hashes of `Kind:` + identifying properties. MCPServer IDs
 match across Config and MCP collectors -- this is the merge point connecting trust to capabilities.
 
-### Edge Types (25 total)
+### Edge Types (30 total)
 
-**17 raw edges** (from collectors): TRUSTS_SERVER, PROVIDES_TOOL, PROVIDES_RESOURCE,
+**18 raw edges** (from collectors): TRUSTS_SERVER, PROVIDES_TOOL, PROVIDES_RESOURCE,
 PROVIDES_PROMPT, ADVERTISES_SKILL, DELEGATES_TO, AUTHENTICATES_WITH, USES_CREDENTIAL,
 RUNS_ON, CONFIGURED_IN, HAS_ENV_VAR, LOADS_INSTRUCTIONS, SAME_AUTH_DOMAIN, EXPOSES,
-EXPOSES_CREDENTIAL, PROVIDES_MODEL, EXTRACTED_FROM.
+EXPOSES_CREDENTIAL, PROVIDES_MODEL, EXTRACTED_FROM, INGESTS_UNTRUSTED.
 
-**8 composite edges** (computed by post-processors in dependency order):
+**12 composite edges** (computed by post-processors in dependency order):
 
 | # | Edge | Meaning |
 |---|------|---------|
@@ -113,10 +113,14 @@ EXPOSES_CREDENTIAL, PROVIDES_MODEL, EXTRACTED_FROM.
 | 2 | CAN_EXECUTE | Tool can execute commands on a host |
 | 3 | SHADOWS | Tool mimics another tool's description cross-server |
 | 4 | POISONED_DESCRIPTION | Tool description contains injection patterns |
-| 5 | CAN_REACH | Agent has transitive access to a resource |
-| 6 | CAN_EXFILTRATE_VIA | Agent can reach sensitive data + outbound channel |
-| 7 | CAN_IMPERSONATE | A2A agent mimics another (TF-IDF cosine > 0.8) |
-| 8 | Cross-protocol CAN_REACH | A2A agent reaches MCP resources via host correlation |
+| 5 | POISONED_INSTRUCTIONS | Instruction file contains injection patterns |
+| 6 | TAINTS | Untrusted-input tool shares schema keys with a tool on another server |
+| 7 | CAN_REACH | Agent has transitive access to a resource (incl. credential-chain + cross-protocol, up to 6 hops) |
+| 8 | CAN_EXFILTRATE_VIA | Agent can reach sensitive data + an outbound channel |
+| 9 | IFC_VIOLATION | Untrusted source shares a resource with a high-impact sink |
+| 10 | CAN_IMPERSONATE | A2A agent mimics another (TF-IDF cosine > 0.8) |
+| 11 | CONFUSED_DEPUTY | Weakly-authed agent delegates to a strongly-authed one |
+| 12 | POISONS_CONTEXT | Injection-bearing tool poisons context driving a high-capability tool |
 
 All edges carry: `scan_id`, `last_seen`, `confidence`, `risk_weight`, `is_composite`, `evidence`.
 

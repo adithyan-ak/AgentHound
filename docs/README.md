@@ -1,6 +1,6 @@
 # AgentHound Documentation
 
-Attack-path discovery for AI agent infrastructure. [BloodHound](https://github.com/BloodHoundAD/BloodHound) for MCP, A2A, and AI services.
+The offensive security framework for AI agent infrastructure — run the full red-team lifecycle (recon, credential looting, model & weight exfiltration, model inversion, tool/instruction poisoning, config-implant persistence, and attack-path analysis) across MCP, A2A, and AI services. [BloodHound](https://github.com/BloodHoundAD/BloodHound) for the agentic stack.
 
 ---
 
@@ -27,8 +27,8 @@ Attack-path discovery for AI agent infrastructure. [BloodHound](https://github.c
 
 - **[CLI Reference](reference/cli.md)** — Every command, flag, and env var
 - **[API Reference](reference/api.md)** — REST endpoints, auth, request/response schemas
-- **[Graph Model](reference/graph-model.md)** — 25 node types, 25 edge types, ID strategy, merge semantics
-  - [CAN_REACH](reference/edges/can-reach.md) — The marquee composite edge (transitive agent→resource access)
+- **[Graph Model](reference/graph-model.md)** — 25 node types, 30 edge types (18 raw + 12 composite), ID strategy, merge semantics
+  - [CAN_REACH](reference/edges/can-reach.md) — Transitive agent→resource access (one of the 12 composite edges)
 - **[Detection Rules](reference/detection-rules.md)** — 19 pre-built queries + OWASP mapping
 - **[Rule Syntax](reference/rule-syntax.md)** — YAML schema for detection + fingerprint rules
 - **[Configuration](reference/configuration.md)** — Env vars, state directories, defaults
@@ -38,7 +38,7 @@ Attack-path discovery for AI agent infrastructure. [BloodHound](https://github.c
 
 - **[System Design](architecture/system-design.md)** — Two-binary split, data flow, tech stack
 - **[Ingest Pipeline](architecture/ingest-pipeline.md)** — Validate → normalize → deduplicate → write → post-process
-- **[Post-Processors](architecture/post-processors.md)** — 11 composite-edge processors with dependency ordering
+- **[Post-Processors](architecture/post-processors.md)** — 15 post-processors computing 12 composite edges, in dependency order
 
 ## Contributing
 

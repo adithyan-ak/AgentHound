@@ -14,9 +14,11 @@ var cfg *clientcfg.Config
 
 var rootCmd = &cobra.Command{
 	Use:   "agenthound",
-	Short: "BloodHound for AI Agent Infrastructure — collector",
-	Long: `AgentHound enumerates MCP servers, A2A agents, and client configurations,
-then writes the trust graph as JSON to a file or stdout.
+	Short: "Offensive security framework for AI agent infrastructure — collector",
+	Long: `AgentHound is an offensive security framework for AI agent infrastructure.
+The collector runs the field side of the engagement — recon, fingerprinting,
+enumeration, credential looting, model extraction, poisoning, and config
+implants — and writes the results as JSON to a file or stdout.
 
 The collector is auth-less and offline-by-default. Operators ingest the
 resulting JSON on their analysis box via 'agenthound-server ingest <file>',

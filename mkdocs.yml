@@ -1,5 +1,5 @@
 site_name: AgentHound
-site_description: Attack-path discovery for AI agent infrastructure — BloodHound for MCP, A2A, and AI services.
+site_description: The offensive security framework for AI agent infrastructure — recon, credential looting, model exfiltration, poisoning, and attack-path analysis across MCP, A2A, and AI services. BloodHound for the agentic stack.
 site_url: https://docs.agenthound.io
 copyright: Copyright &copy; AgentHound contributors — Apache-2.0
 

@@ -1,6 +1,6 @@
 # Attack Path Analysis
 
-AgentHound's core contribution is surfacing attack paths that span protocol boundaries -- paths no single-protocol scanner can see. The graph combines MCP trust relationships, A2A delegation chains, network-discovered AI services, and looted credentials into a unified directed graph where Cypher queries reveal multi-hop exploitation routes.
+Once the offensive lifecycle has harvested the estate — configs, MCP/A2A enumeration, looted credentials and models — AgentHound's analysis layer turns that loot into attack paths that span protocol boundaries, paths no single-protocol scanner can see. The graph combines MCP trust relationships, A2A delegation chains, network-discovered AI services, and looted credentials into a unified directed graph where Cypher queries reveal multi-hop exploitation routes.
 
 ## 1. Credential chains via value_hash
 
