@@ -47,14 +47,14 @@ Hand the LiteLLM looter one master key and get back every upstream provider key 
 <tr>
 <td width="50%" valign="top">
 
-🧬 **Model & weight exfiltration**<br/>
-Stream raw model weights straight off an unauthenticated Ollama to disk - alongside modelfiles, templates, and system prompts. Not metadata about the model. The model.
+🧬 **Modelfile, system-prompt & fine-tune inventory**<br/>
+Enumerate every model on an unauthenticated Ollama - names, digests, sizes, modelfiles, templates, and system prompts. Fine-tunes (SYSTEM / ADAPTER directives) get flagged; each `:AIModel` node carries `value_hash` so a leaked prompt matches across collectors.
 
 </td>
 <td width="50%" valign="top">
 
 🔬 **Model inversion / training-data residue extraction**<br/>
-A pure-Go GGUF parser runs statistical inversion on the embedding matrix to recover likely **fine-tune vocabulary tokens** - surfacing what a model was trained on as graph nodes.
+A pure-Go GGUF parser runs statistical inversion on the embedding matrix of any weight file you feed it to recover likely **fine-tune vocabulary tokens** - surfacing what a model was trained on as graph nodes.
 
 </td>
 </tr>
@@ -113,7 +113,7 @@ A new attack against a new AI service is one module away - implement an action i
 | **Agent client** | 12 MCP client configs + instruction files (`CLAUDE.md`, `AGENTS.md`, `.cursorrules`) | `config` |
 | **Protocol** | MCP servers (stdio + HTTP/SSE), A2A agents (agent cards, JWS, delegation) | `mcp`, `a2a`, `protoscan` |
 | **Model gateway** | LiteLLM - one master key → the whole upstream provider keyring | `litellmfp`, `litellmloot` |
-| **Inference** | Ollama, vLLM - including **raw weight exfiltration** | `ollamafp`, `ollamaloot`, `vllmfp` |
+| **Inference** | Ollama, vLLM - model inventory, modelfiles, system prompts, fine-tune detection | `ollamafp`, `ollamaloot`, `vllmfp` |
 | **Vector / RAG** | Qdrant collections | `qdrantfp`, `qdrantloot` |
 | **MLOps** | MLflow experiments + runs | `mlflowfp`, `mlflowloot` |
 | **Notebook** | Jupyter sessions + notebook tree | `jupyterfp`, `jupyterloot` |
@@ -172,19 +172,19 @@ agenthound scan 10.0.0.0/24
 agenthound discover 10.0.0.0/24 --mcp --a2a
 ```
 
-**2. Loot** - pull latent credentials and model weights, read-only (GET/HEAD):
+**2. Loot** - pull latent credentials and model metadata, read-only (GET/HEAD):
 
 ```bash
 agenthound loot 10.0.0.20:4000 --type litellm --master-key sk-... --engagement-id ENG-1 --output -
-agenthound loot 10.0.0.10:11434 --type ollama --include-weights --weights-dir /tmp/loot --engagement-id ENG-1
+agenthound loot 10.0.0.10:11434 --type ollama --include-credential-values --engagement-id ENG-1
 ```
 
 Looter types: `litellm`, `ollama`, `openwebui`, `mlflow`, `qdrant`, `jupyter`.
 
-**3. Extract** - invert a looted model to recover fine-tune residue:
+**3. Extract** - invert a locally-available GGUF weight file to recover fine-tune residue:
 
 ```bash
-agenthound extract <model-id> --type embedding-invert --artifact /tmp/loot/model.bin --commit --engagement-id ENG-1
+agenthound extract <model-id> --type embedding-invert --artifact /path/to/model.gguf --commit --engagement-id ENG-1
 ```
 
 **4. Exploit + persist** - sanctioned, reversible offensive actions:

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Ollama Looter: align flag surface with upstream API
+
+Removes the experimental `--include-weights` / `--weights-dir` flags from `agenthound loot --type ollama` and cleans up the docs, tests, and node schema that surrounded them. The flags targeted `/api/blobs/<digest>` with `GET`, which sits outside Ollama's documented HTTP API surface — the upstream spec defines only `HEAD` (existence check for the create-model flow) and `POST` (upload) on that path (see the [Ollama API docs](https://github.com/ollama/ollama/blob/main/docs/api.md#check-if-a-blob-exists) and the [OpenAPI spec](https://github.com/ollama/ollama/blob/main/docs/openapi.yaml)). Raw GGUF acquisition from a compromised Ollama host remains available out-of-band via filesystem access to `~/.ollama/models/blobs/`; `agenthound extract --type embedding-invert` continues to accept any locally-available GGUF file.
+
+- **Flags removed:** `--include-weights`, `--weights-dir` (on `agenthound loot --type ollama`).
+- **Code removed:** the weight-extraction branch, `downloadBlob`, `MaxWeightBytes`, and the filename/digest helpers from `modules/ollamaloot/looter.go`; the two flag-specific tests and their stub handler from `modules/ollamaloot/looter_test.go`. Anonymous-happy-path, `--include-credential-values`, and `--include-embeddings` coverage is unchanged.
+- **Node schema:** the `weight_artifact_path` / `weight_artifact_sha256` / `weight_artifact_bytes` properties on `:AIModel` are no longer emitted.
+- **Extractor unchanged:** the GGUF parser + embedding-inversion pipeline in `modules/embeddinginvert/` is correct against any local weight file. `agenthound extract --type embedding-invert --artifact <path>` help + godoc were rewritten to make out-of-band GGUF acquisition explicit (compromised host at `~/.ollama/models/blobs/`, HuggingFace, etc.).
+- **Docs:** the README capability tile now describes the Ollama Looter's actual surface (modelfile / system prompt / fine-tune detection). `docs/operator/loot/ollama.md` replaces the Level 3 "Weight extraction" section with an "out-of-band acquisition" guide pointing at `~/.ollama/models/blobs/`. `docs/reference/cli.md`, `docs/README.md`, `docs/architecture/system-design.md`, and `docs/contributing/modules.md` track the flag removal. `docs/plans/sprint3-offensive-primitives.md` gains a dated correction block noting the `/api/blobs` GET premise sits outside upstream's API surface.
+
+Callers that pass `--include-weights` or `--weights-dir` will hit an unknown-flag error at the CLI parser rather than a silent no-op — deliberate, so a stale invocation surfaces immediately.
+
 ## v0.7.0
 
 Network `scan` / `discover` usability and hardening. Adds progress and summary output to the network verbs, fixes a `:MCPServer` duplicate-node bug at the cross-collector merge point, and adds memory-safety guards (absolute host ceiling, nested-include rejection, concurrency clamp) across the scan/discover path.
@@ -174,8 +188,8 @@ The "broaden the scan surface, harden the operations" milestone. v0.2 turned the
 
 - `agenthound loot <host> --type ollama` extracts model inventory + modelfiles via two anonymous GETs (`/api/tags`, `/api/show`). Implemented in `modules/ollamaloot/`.
 - Each emitted `:AIModel` carries `value_hash` over the modelfile content — the cross-collector merge primitive extends to model artifacts, so the same fine-tune leaked via Ollama matches the same modelfile discovered through any future collector.
-- Two flag-gated extras (default OFF, opt-in only):
-  - `--include-weights` + `--weights-dir <path>` — streams `/api/blobs/<digest>` to disk. Multi-GiB. Bandwidth-heavy. Loud. SHA-256 + bytes-written recorded on the AIModel node.
+- Two flag-gated extras (default OFF, opt-in only) — ~~`--include-weights` + `--weights-dir <path>`~~ **[removed in a follow-up; see Unreleased "Ollama Looter: align flag surface with upstream API"]** and `--include-embeddings`:
+  - ~~`--include-weights` + `--weights-dir <path>`~~ **Removed in a follow-up patch to align the Looter surface with Ollama's documented HTTP API. See the "Ollama Looter: align flag surface with upstream API" entry under Unreleased.**
   - `--include-embeddings` — single POST `/api/embeddings` to confirm the inference compute path is consumable. The Looter contract is GET-only by default; this POST is the documented exception, allowed because it is read-only-in-effect on the target. Gated because operator-billed compute is the cost.
 - GET-only contract enforced by `get_only_test.go` with an explicit allowlist for the two POST exceptions (`/api/show` is a "lookup with a body"; `/api/embeddings` per above).
 - Modelfile / template / system-prompt content NOT promoted onto the node by default — only `value_hash` + size + has-system-prompt boolean. `--include-credential-values` opts into raw modelfile content, mirroring the LiteLLM Looter.
@@ -185,7 +199,7 @@ The "broaden the scan surface, harden the operations" milestone. v0.2 turned the
 - New `sdk/module/flags.go` declares `type FlagsModule interface { RegisterFlags(*pflag.FlagSet) }` as a pure side-interface. Modules that need per-module CLI flags add the method; modules that don't, don't.
 - `module.RegisterFlagsFor(cmd, m)` helper does the type-assert in one call so action subcommands (`agenthound loot` etc.) don't repeat the boilerplate.
 - `agenthound loot --help` lists every per-module flag from every registered Looter at command-construction time — operators discover module-specific flags without having to specify `--type` first. Per-module flag values flow into `LootOptions.Extras` (new field on the v0.2 `LootOptions` struct) at dispatch time.
-- The Ollama Looter is the first consumer (`--include-weights`, `--weights-dir`, `--include-embeddings`).
+- The Ollama Looter is the first consumer (`--include-embeddings`; `--include-weights` and `--weights-dir` were originally listed here too but were removed in a follow-up — see Unreleased).
 
 ### Rules-bundle loader and signed-tarball release
 

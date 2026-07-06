@@ -55,10 +55,11 @@ type LootOptions struct {
 
 	// Extras carries per-Looter flag values populated by the CLI dispatch
 	// from the Looter's FlagsModule.RegisterFlags surface. Keys are the
-	// per-module flag names (e.g. "include-weights", "weights-dir") so
+	// per-module flag names (e.g. "include-embeddings", "master-key") so
 	// each Looter can pull its own without colliding with another's. The
-	// Ollama Looter (v0.3) is the first consumer — it reads
-	// Extras["include-weights"] (bool) and Extras["weights-dir"] (string).
+	// Ollama Looter reads Extras["include-embeddings"] (bool); the Open
+	// WebUI Looter reads Extras["api-key"] (string); LiteLLM reads its
+	// master-key sugar the same way.
 	//
 	// Generic LootOptions stays free of per-Looter fields; new Looters
 	// should add their flags to RegisterFlags and read them from Extras

@@ -24,11 +24,15 @@ import (
 var extractCmd = &cobra.Command{
 	Use:   "extract <source-node-id>",
 	Short: "Extract training signals or derived artifacts from a model (gated)",
-	Long: `Run a registered Extractor against a previously-looted artifact.
+	Long: `Run a registered Extractor against a locally-available artifact.
 
 v0.5 ships one Extractor: embedding-invert — detects fine-tune training
 signals by analyzing statistical outliers in the embedding layer of a
-GGUF weight file produced by 'agenthound loot --type ollama --include-weights'.
+GGUF weight file. Point --artifact at any GGUF the operator has already
+obtained out-of-band: a blob copied from ~/.ollama/models/blobs/ on a
+compromised host, a HuggingFace download, or any other source. The
+Ollama HTTP API does not expose a raw-weight download endpoint, so
+AgentHound cannot pull the file itself.
 
 By default --commit is OFF. Without --commit the Extractor runs end-to-
 end but does not emit ingest data (dry-run summary only).
@@ -36,7 +40,7 @@ end but does not emit ingest data (dry-run summary only).
 Example:
 
   agenthound extract <ai-model-node-id> --type embedding-invert \
-      --artifact /tmp/loot/support-agent-v3-sha256abc123.bin \
+      --artifact /path/to/support-agent-v3.gguf \
       --commit --engagement-id DC35-DEMO --output -`,
 	Args:          cobra.ExactArgs(1),
 	RunE:          runExtract,
@@ -46,7 +50,7 @@ Example:
 
 func init() {
 	extractCmd.Flags().String("type", "", "Extractor target kind (e.g. 'embedding-invert'). Required.")
-	extractCmd.Flags().String("artifact", "", "Path to the artifact file (e.g. weight file from --include-weights).")
+	extractCmd.Flags().String("artifact", "", "Path to the local artifact file (e.g. a GGUF weight file obtained out-of-band).")
 	extractCmd.Flags().Bool("commit", false, "Emit ingest data. Default: dry-run summary only.")
 	extractCmd.Flags().String("engagement-id", "", "Engagement identifier. Required.")
 	if err := extractCmd.MarkFlagRequired("type"); err != nil {

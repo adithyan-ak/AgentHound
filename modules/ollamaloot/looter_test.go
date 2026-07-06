@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -36,13 +35,6 @@ func ollamaStubServer(t *testing.T, opts stubOpts) *httptest.Server {
 			} else {
 				_, _ = w.Write([]byte(`{"modelfile":` + jsonString(modelfileLlama) + `,"template":"{{ .Prompt }}","details":{"family":"llama","parameter_size":"8B","quantization_level":"Q4_0"}}`))
 			}
-		case "/api/blobs/sha256:abcdef0123456789", "/api/blobs/sha256:fedcba9876543210":
-			if !opts.allowBlobs {
-				w.WriteHeader(404)
-				return
-			}
-			// Tiny synthetic blob — the test asserts we wrote N bytes.
-			_, _ = w.Write([]byte("FAKEWEIGHTS-DO-NOT-USE-IN-PROD"))
 		case "/api/embeddings":
 			if !opts.allowEmbeddings {
 				w.WriteHeader(404)
@@ -56,7 +48,6 @@ func ollamaStubServer(t *testing.T, opts stubOpts) *httptest.Server {
 }
 
 type stubOpts struct {
-	allowBlobs      bool
 	allowEmbeddings bool
 }
 
@@ -149,68 +140,6 @@ func TestLoot_IncludeCredentialValuesEmitsModelfile(t *testing.T) {
 	}
 	if !saw {
 		t.Error("modelfile not surfaced on any AIModel node when IncludeCredentialValues=true")
-	}
-}
-
-func TestLoot_IncludeWeightsRequiresWeightsDir(t *testing.T) {
-	l := &Looter{}
-	_, err := l.Loot(context.Background(), action.Target{
-		Kind:    "host",
-		Address: "127.0.0.1:1",
-	}, action.LootOptions{
-		Extras: map[string]any{"include-weights": true},
-	})
-	if err == nil {
-		t.Fatal("expected error when --include-weights provided without --weights-dir")
-	}
-	if !strings.Contains(err.Error(), "weights-dir") {
-		t.Errorf("error = %q, want to mention weights-dir", err.Error())
-	}
-}
-
-func TestLoot_IncludeWeightsHappyPath(t *testing.T) {
-	srv := ollamaStubServer(t, stubOpts{allowBlobs: true})
-	defer srv.Close()
-
-	weightsDir := t.TempDir()
-	l := &Looter{}
-	res, err := l.Loot(context.Background(), action.Target{
-		Kind:    "host",
-		Address: strings.TrimPrefix(srv.URL, "http://"),
-	}, action.LootOptions{
-		Extras: map[string]any{
-			"include-weights": true,
-			"weights-dir":     weightsDir,
-		},
-	})
-	if err != nil {
-		t.Fatalf("Loot: %v", err)
-	}
-	var sawArtifact bool
-	for _, n := range res.IngestData.Graph.Nodes {
-		if n.Kinds[0] != "AIModel" {
-			continue
-		}
-		if path, _ := n.Properties["weight_artifact_path"].(string); path != "" {
-			sawArtifact = true
-			if !strings.HasPrefix(path, weightsDir) {
-				t.Errorf("weight artifact path %q not under weights-dir %q", path, weightsDir)
-			}
-			if _, err := stat(path); err != nil {
-				t.Errorf("weight artifact file missing at %q: %v", path, err)
-			}
-			if sha, _ := n.Properties["weight_artifact_sha256"].(string); len(sha) != 64 {
-				t.Errorf("weight_artifact_sha256 should be 64-char hex; got %q", sha)
-			}
-		}
-	}
-	if !sawArtifact {
-		t.Error("expected at least one AIModel with weight_artifact_path populated")
-	}
-	// Ensure no leftover temp blob outside the dir.
-	matches, _ := filepath.Glob(filepath.Join(weightsDir, "*.bin"))
-	if len(matches) == 0 {
-		t.Error("expected at least one .bin in weights-dir")
 	}
 }
 
