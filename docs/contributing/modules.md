@@ -166,8 +166,10 @@ For modules that need CLI flags beyond the standard set:
 import "github.com/spf13/pflag"
 
 func (f *YourLooter) RegisterFlags(fs *pflag.FlagSet) {
-    fs.BoolVar(&f.includeWeights, "include-weights", false, "Download model weight files")
-    fs.StringVar(&f.weightsDir, "weights-dir", "", "Directory for weight storage")
+    fs.Bool("include-embeddings", false,
+        "Issue benchmark embedding request (consumes operator-billed compute)")
+    fs.String("api-key", "",
+        "Optional service API key; enables authenticated enumeration")
 }
 ```
 

@@ -181,9 +181,9 @@ agenthound loot <host:port> --type <kind> [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--include-weights` | `false` | Extract model weights via `/api/blobs/<digest>` (multi-GiB, very loud). |
-| `--weights-dir` | | Directory for extracted weights (required with `--include-weights`). |
 | `--include-embeddings` | `false` | Issue test embedding calls via `/api/embeddings` (consumes compute). |
+
+> Ollama's HTTP API does not expose a raw-weight download endpoint. See [Ollama loot](../operator/loot/ollama.md#getting-raw-weights-out-of-band) for how to obtain the GGUF weight file out-of-band when the engagement needs it.
 
 #### Per-Module Flags: `--type openwebui`
 
@@ -398,7 +398,7 @@ agenthound extract <source-node-id> --type embedding-invert \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--type` | (required) | Extractor kind (`embedding-invert`) |
-| `--artifact` | (required) | Path to artifact file (from `--include-weights`) |
+| `--artifact` | (required) | Path to a local GGUF weight file (obtained out-of-band; see [Ollama loot](../operator/loot/ollama.md#getting-raw-weights-out-of-band)) |
 | `--commit` | `false` | Emit ingest data (default: dry-run summary) |
 | `--engagement-id` | (required) | Engagement correlation key |
 | `--confidence-threshold` | `3.0` | Z-score threshold for outlier detection |

@@ -1,6 +1,6 @@
 # AgentHound Documentation
 
-The offensive security framework for AI agent infrastructure — run the full red-team lifecycle (recon, credential looting, model & weight exfiltration, model inversion, tool/instruction poisoning, config-implant persistence, and attack-path analysis) across MCP, A2A, and AI services. [BloodHound](https://github.com/BloodHoundAD/BloodHound) for the agentic stack.
+The offensive security framework for AI agent infrastructure — run the full red-team lifecycle (recon, credential looting, model & modelfile inventory, model inversion, tool/instruction poisoning, config-implant persistence, and attack-path analysis) across MCP, A2A, and AI services. [BloodHound](https://github.com/BloodHoundAD/BloodHound) for the agentic stack.
 
 ---
 
@@ -17,7 +17,7 @@ The offensive security framework for AI agent infrastructure — run the full re
 - **[Protocol Discovery](operator/discover.md)** — Find MCP servers and A2A agents by protocol shape
 - **[Looting](operator/loot/index.md)** — Extract credentials and model artifacts from discovered services
   - [LiteLLM](operator/loot/litellm.md) — Master key → upstream provider keys
-  - [Ollama](operator/loot/ollama.md) — Model inventory, modelfiles, weight extraction
+  - [Ollama](operator/loot/ollama.md) — Model inventory, modelfiles, fine-tune detection
 - **[Offensive Actions](operator/offensive-actions.md)** — Poison tool descriptions, implant configs, revert
 - **[Attack Paths](operator/attack-paths.md)** — Credential chains, cross-protocol pivots, exfiltration routes
 - **[Deployment](operator/deployment.md)** — Production setup, reverse proxy, backups

@@ -1,6 +1,6 @@
 # `agenthound loot --type ollama` -- Ollama Looter
 
-Ollama is the default anonymous-loot target: no authentication by default, model inventory and modelfiles available via simple HTTP. The Looter extracts model metadata, system prompts, and (optionally) raw weights without modifying any state on the target.
+Ollama is the default anonymous-loot target: no authentication by default, model inventory and modelfiles available via simple HTTP. The Looter extracts model metadata and system prompts without modifying any state on the target.
 
 ## What it extracts
 
@@ -9,9 +9,10 @@ Ollama is the default anonymous-loot target: no authentication by default, model
 | Model inventory (names, digests, sizes) | `/api/tags` | GET | Always |
 | Modelfile, template, system prompt, family, parameters | `/api/show` | POST | Always (per model) |
 | Embedding capability confirmation | `/api/embeddings` | POST | `--include-embeddings` only |
-| Raw model weights | `/api/blobs/<digest>` | GET | `--include-weights` only |
 
 Each model emits an `:AIModel` node joined to the `:OllamaInstance` via a `PROVIDES_MODEL` edge. Fine-tunes (detected by `SYSTEM` or `ADAPTER` directives in the modelfile) are flagged with `is_finetune: true`.
+
+> **Note on raw weights.** The Ollama HTTP API does not expose a raw-weight download endpoint — `/api/blobs/<digest>` accepts only `HEAD` (existence check) and `POST` (upload for the create-model flow) per the [upstream API docs](https://github.com/ollama/ollama/blob/main/docs/api.md). Raw weight blobs live at `~/.ollama/models/blobs/sha256-<digest>` and require filesystem access on the target host to retrieve. A `--include-weights` flag was shipped in v0.3 based on a misread of that endpoint; it was withdrawn — see the CHANGELOG.
 
 ## Probe levels
 
@@ -42,22 +43,13 @@ Issues a single `POST /api/embeddings` against the first available model with a 
 
 Sets `embedding_capability_confirmed: true|false` on the `OllamaInstance` node.
 
-### Level 3: Weight extraction (`--include-weights`)
+## Getting raw weights (out-of-band)
 
-```bash
-agenthound loot 10.0.0.10:11434 --type ollama \
-    --include-weights --weights-dir ./extracted-weights \
-    --engagement-id ENG-001 --output -
-```
+The Looter no longer attempts raw weight extraction — Ollama's HTTP API does not support it. If the engagement needs the actual GGUF weight file (e.g. as input to `agenthound extract --type embedding-invert`), obtain it out-of-band:
 
-Streams `GET /api/blobs/<digest>` for each model to local disk. Multi-GiB per model. Bandwidth-heavy and highly visible in network monitoring.
-
-- `--weights-dir` is mandatory with `--include-weights`
-- Files written as `<model-name>-<digest-prefix>.bin` (mode 0600)
-- Capped at 32 GiB per blob (defensive ceiling)
-- Adds `weight_artifact_path`, `weight_artifact_sha256`, `weight_artifact_bytes` to the AIModel node
-
-Use this when the engagement requires proving model exfiltration is possible or when the fine-tune itself is the target artifact.
+- **Filesystem access to a compromised host.** Ollama stores weights as content-addressed blobs at `~/.ollama/models/blobs/sha256-<digest>`. `ollama show <model> --modelfile` on the host prints the `FROM` line with the blob's absolute path. `cp` the blob to a `.gguf` filename and any llama.cpp-compatible tool (including `agenthound extract`) loads it directly.
+- **Model registry / HuggingFace.** If the model name matches a public release, the weights are downloadable at source.
+- **Manifests as a shopping list.** `~/.ollama/models/manifests/` lists every layer digest per installed model — useful for enumerating what's on disk before physical acquisition.
 
 ## value_hash semantics
 
@@ -94,8 +86,6 @@ Expected output: two models -- `tinyllama` (stock, `is_finetune: false`) and `su
 | Flag | Default | Notes |
 |------|---------|-------|
 | `--include-embeddings` | `false` | POST exception; consumes target compute |
-| `--include-weights` | `false` | Multi-GiB downloads; requires `--weights-dir` |
-| `--weights-dir <path>` | -- | Local directory for extracted weight blobs |
 | `--include-credential-values` | `false` | Emit raw modelfile/template/system_prompt |
 | `--max-items <n>` | 1000 | Cap on models enumerated from `/api/tags` |
 | `--engagement-id <id>` | empty | Correlation key on all edges |

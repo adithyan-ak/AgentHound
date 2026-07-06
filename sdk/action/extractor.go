@@ -14,9 +14,14 @@ import (
 // Poisoners.
 //
 // v0.4 ships one proof-of-concept Extractor: embedding-inversion. It
-// takes an AIModel node + extracted weights from the Ollama Looter's
-// --include-weights path and runs a local embedding-inversion algorithm
-// to produce probabilistic training-signal artifacts.
+// takes an AIModel node + a GGUF weight file the operator has already
+// obtained by other means (filesystem access to ~/.ollama/models/blobs/
+// on a compromised Ollama host, a HuggingFace download, or any other
+// out-of-band source) and runs a local embedding-inversion algorithm
+// to produce probabilistic training-signal artifacts. AgentHound does
+// not itself pull raw weight blobs over HTTP — the previous Ollama
+// Looter --include-weights path was withdrawn because the endpoint it
+// targeted (GET /api/blobs/<digest>) does not exist in the Ollama API.
 //
 // Implementations also implement sdk/module.Module.
 type Extractor interface {
@@ -30,8 +35,10 @@ type ExtractOptions struct {
 	SourceNodeID string
 
 	// ArtifactPath is the local filesystem path to an artifact the
-	// Extractor consumes (e.g. a weight file previously downloaded by
-	// `agenthound loot --type ollama --include-weights`).
+	// Extractor consumes — for embedding-invert, any GGUF weight file
+	// the operator has already obtained (e.g. copied from
+	// ~/.ollama/models/blobs/ on a compromised host, downloaded from
+	// HuggingFace, or produced by another tool).
 	ArtifactPath string
 
 	// EngagementID correlates the extraction with the engagement.

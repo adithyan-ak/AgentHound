@@ -10,12 +10,10 @@
 // Probes (GET-only by default — Looters are read-only by contract):
 //
 //	GET /api/tags                  — list installed models
-//	GET /api/show     (per model)  — modelfile, template, parameters, system prompt
+//	POST /api/show    (per model)  — modelfile, template, parameters, system prompt
+//	                                 (documented "lookup with a body" exception)
 //
 // Flag-gated extras (default OFF, opt-in only):
-//
-//	GET /api/blobs/<digest>  (--include-weights, --weights-dir <path>)
-//	    Streams model weights to disk. Multi-GiB. Bandwidth-heavy. Loud.
 //
 //	POST /api/embeddings      (--include-embeddings)
 //	    Issues a single benchmark embedding request to confirm the
@@ -24,21 +22,25 @@
 //	    allowed because it is read-only-in-effect on the target (no
 //	    state change). Gated behind explicit flag because it consumes
 //	    operator-billed compute.
+//
+// The previous v0.3 --include-weights / --weights-dir surface was
+// removed: it targeted GET /api/blobs/<digest>, an endpoint Ollama's
+// HTTP API does not implement. Only HEAD (existence check) and POST
+// (upload for the create-model flow) are defined on that path — see
+// https://github.com/ollama/ollama/blob/main/docs/api.md — so the flag
+// could never stream weights against a real Ollama. Raw weight
+// extraction from a compromised host still requires filesystem access
+// to ~/.ollama/models/blobs/, which is out of scope for a Looter.
 package ollamaloot
 
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -53,12 +55,6 @@ const (
 	DefaultPort         = 11434
 	DefaultProbeTimeout = 30 * time.Second
 	DefaultMaxItems     = 1000
-
-	// MaxWeightBytes caps a single weight blob download. Real Ollama
-	// blobs are GiB-scale; this is a defensive ceiling against an
-	// attacker-controlled response that streams forever. 32 GiB is
-	// generous for current model sizes.
-	MaxWeightBytes int64 = 32 << 30
 )
 
 // Looter is the registered module.
@@ -70,22 +66,16 @@ type Looter struct{}
 // the ollama target. Mirrors the FlagsModule sidecar pattern from
 // sdk/module/flags.go — flag values flow through LootOptions.Extras.
 func (l *Looter) RegisterFlags(fs *pflag.FlagSet) {
-	fs.Bool("include-weights", false,
-		"Extract model weights via /api/blobs/<digest> (multi-GiB, very loud).")
-	fs.String("weights-dir", "",
-		"Directory to write extracted weights into (required with --include-weights).")
 	fs.Bool("include-embeddings", false,
 		"Issue test embedding calls via /api/embeddings (consumes operator-billed compute).")
 }
 
 // Loot probes an Ollama instance, emits one :OllamaInstance node, one
 // :AIModel per /api/tags entry with PROVIDES_MODEL edges, and (when
-// flag-gated) downloads weights or issues an embedding probe.
+// flag-gated) issues an embedding probe.
 //
 // opts.Extras keys consumed by this Looter:
 //
-//	"include-weights"     bool   — gate /api/blobs/<digest> downloads
-//	"weights-dir"         string — local directory for weight artifacts
 //	"include-embeddings"  bool   — gate POST /api/embeddings probe
 func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOptions) (*action.LootResult, error) {
 	_, host, _ := action.EndpointParts(t, DefaultPort, "http")
@@ -101,14 +91,7 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		maxItems = DefaultMaxItems
 	}
 
-	includeWeights, _ := opts.Extras["include-weights"].(bool)
-	weightsDir, _ := opts.Extras["weights-dir"].(string)
 	includeEmbeddings, _ := opts.Extras["include-embeddings"].(bool)
-	weightsDir = strings.TrimSpace(weightsDir)
-
-	if includeWeights && weightsDir == "" {
-		return nil, errors.New("ollama loot: --include-weights requires --weights-dir <path>")
-	}
 
 	client := common.NoRedirectClient(timeout)
 
@@ -198,28 +181,6 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		res.IngestData.Graph.Edges = append(res.IngestData.Graph.Edges,
 			providesModelEdge(ollamaID, modelID, opts.EngagementID, tag.Digest))
 		res.Summary.CredentialsFound++
-
-		// 2b. Flag-gated weight extraction.
-		if includeWeights && tag.Digest != "" {
-			path, sha, n, weightErr := downloadBlob(ctx, client, baseURL, tag.Digest, weightsDir, tag.Model)
-			res.Summary.EndpointsProbed++
-			if weightErr != nil {
-				slog.Warn("ollama loot: /api/blobs failed",
-					"model", tag.Model,
-					"digest", tag.Digest,
-					"engagement_id", opts.EngagementID,
-					"error", weightErr)
-				res.PartialErrors = append(res.PartialErrors,
-					fmt.Sprintf("api/blobs %s: %v", tag.Digest, weightErr))
-				res.Summary.PartialFailures++
-				continue
-			}
-			// Mutate the AIModel node's properties in place.
-			lastIdx := len(res.IngestData.Graph.Nodes) - 1
-			res.IngestData.Graph.Nodes[lastIdx].Properties["weight_artifact_path"] = path
-			res.IngestData.Graph.Nodes[lastIdx].Properties["weight_artifact_sha256"] = sha
-			res.IngestData.Graph.Nodes[lastIdx].Properties["weight_artifact_bytes"] = n
-		}
 	}
 
 	// 3. Flag-gated embedding probe (POST exception — see package doc).
@@ -239,7 +200,6 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		"endpoint", baseURL,
 		"engagement_id", opts.EngagementID,
 		"models_emitted", len(tags),
-		"include_weights", includeWeights,
 		"include_embeddings", includeEmbeddings,
 		"partial_failures", res.Summary.PartialFailures)
 
@@ -340,46 +300,6 @@ func fetchShow(ctx context.Context, client *http.Client, url, modelName string) 
 	return se, nil
 }
 
-// downloadBlob streams /api/blobs/<digest> to disk. Returns (path, sha,
-// bytes-written, err). The local filename is derived from the model
-// name + a sanitized digest fragment so multiple models in a single
-// loot don't collide.
-func downloadBlob(ctx context.Context, client *http.Client, baseURL, digest, weightsDir, modelName string) (string, string, int64, error) {
-	if err := os.MkdirAll(weightsDir, 0o700); err != nil {
-		return "", "", 0, fmt.Errorf("mkdir weights-dir: %w", err)
-	}
-	url := strings.TrimRight(baseURL, "/") + "/api/blobs/" + digest
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return "", "", 0, fmt.Errorf("build request: %w", err)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", 0, fmt.Errorf("request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", "", 0, fmt.Errorf("status %d", resp.StatusCode)
-	}
-
-	safe := sanitizeFilename(modelName) + "-" + safeDigestFragment(digest) + ".bin"
-	path := filepath.Join(weightsDir, safe)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return "", "", 0, fmt.Errorf("open weights file: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	hasher := sha256.New()
-	mw := io.MultiWriter(f, hasher)
-	n, err := io.Copy(mw, io.LimitReader(resp.Body, MaxWeightBytes))
-	if err != nil {
-		_ = os.Remove(path)
-		return "", "", 0, fmt.Errorf("stream blob: %w", err)
-	}
-	return path, hex.EncodeToString(hasher.Sum(nil)), n, nil
-}
-
 // probeEmbeddings issues exactly one POST /api/embeddings against the
 // first available model. Returns true on a 2xx response. The Looter's
 // GET-only contract makes this the single allowed exception — the POST
@@ -426,24 +346,6 @@ func providesModelEdge(ollamaID, modelID, engagementID, digest string) ingest.Ed
 			},
 		},
 	}
-}
-
-func sanitizeFilename(s string) string {
-	r := strings.NewReplacer(
-		"/", "_",
-		":", "_",
-		" ", "_",
-		"..", "_",
-	)
-	return r.Replace(s)
-}
-
-func safeDigestFragment(d string) string {
-	d = strings.TrimPrefix(d, "sha256:")
-	if len(d) > 12 {
-		return d[:12]
-	}
-	return d
 }
 
 var _ action.Looter = (*Looter)(nil)

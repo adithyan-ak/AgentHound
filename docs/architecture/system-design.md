@@ -1,6 +1,6 @@
 # Architecture Overview
 
-AgentHound is an offensive security framework for AI agent infrastructure. It runs the full red-team lifecycle — recon, fingerprinting, credential looting, model and weight exfiltration, model inversion, tool/instruction poisoning, and config-implant persistence — then merges every fact into a Neo4j graph and computes the attack paths that tie it together. It ships as **two binaries** in the BloodHound/SharpHound mold: a lean field collector (`agenthound`) and a single-user analysis server (`agenthound-server`).
+AgentHound is an offensive security framework for AI agent infrastructure. It runs the full red-team lifecycle — recon, fingerprinting, credential looting, model and modelfile inventory, model inversion, tool/instruction poisoning, and config-implant persistence — then merges every fact into a Neo4j graph and computes the attack paths that tie it together. It ships as **two binaries** in the BloodHound/SharpHound mold: a lean field collector (`agenthound`) and a single-user analysis server (`agenthound-server`).
 
 ## Components
 

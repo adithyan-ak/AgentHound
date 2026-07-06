@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"os"
 )
 
 // readAllString drains r.Body into a string. Test-only helper.
@@ -22,8 +21,4 @@ func readAllString(r *http.Request) (string, error) {
 func jsonString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
-}
-
-func stat(path string) (os.FileInfo, error) {
-	return os.Stat(path)
 }
