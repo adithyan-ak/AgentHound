@@ -108,7 +108,7 @@ agenthound discover 10.0.0.0/24 --output - \
 Looters extract latent credentials from discovered services via read-only HTTP (GET/HEAD only). The first invocation prompts for an interactive AUTHORIZED confirmation:
 
 ```bash
-agenthound loot 172.30.0.20:4000 --type litellm \
+agenthound loot 10.0.0.20:4000 --type litellm \
     --master-key sk-... \
     --engagement-id MY-ENGAGEMENT \
     --output -
@@ -119,7 +119,7 @@ Available looter types: `litellm`, `ollama`, `mlflow`, `qdrant`, `openwebui`, `j
 Loot Ollama models and modelfiles:
 
 ```bash
-agenthound loot 172.30.0.10:11434 --type ollama \
+agenthound loot 10.0.0.10:11434 --type ollama \
     --engagement-id MY-ENGAGEMENT \
     --output loot-ollama.json
 ```
@@ -201,23 +201,6 @@ agenthound revert DC35-DEMO
 ```
 
 Revert is idempotent. Running it twice against the same engagement-id is safe.
-
-## 9. Demo Lab
-
-The demo lab spins up a vulnerable AI environment on an isolated Docker network and runs collection from a profiled collector runner inside that network:
-
-```bash
-# Start the server, start the lab, collect, ingest, and validate
-make demo
-```
-
-The seed script runs config scan, network scan, protocol discovery, LiteLLM loot, Ollama loot, HTTP ingest, and validation. After it completes, open the printed UI URL; the Findings panel surfaces cross-service credential chains, `EXPOSES` edges, and discovered protocol endpoints.
-
-Tear down when done:
-
-```bash
-make demo-down
-```
 
 ## Environment Variables
 

@@ -47,7 +47,7 @@ For modules that mutate on-disk files, `revert` restores the file's prior state 
 
 v4-Phase 2 lands two more: `instruction.file.append` (CLAUDE.md / AGENTS.md / `.cursorrules`) and `mcp.config.malicious-server` (Implanter targeting MCP client configs).
 
-## Worked example — MCP tool description (the v0.4 demo arc)
+## Worked example — MCP tool description
 
 ```bash
 # 1. First-run AUTHORIZED prompt + sentinel.
@@ -92,7 +92,7 @@ agenthound revert DC35-DEMO
 --auth-token    <bearer>              Optional auth token sent on both list and update
 ```
 
-The defaults match the v0.3 demo MCP-stub at `docker/demo/mcp-stub/`. Real MCP servers vary in their admin surface — there is no standard MCP "tools/update" RPC. For production engagements:
+The defaults match a typical MCP stub with a `PUT /admin/tools/{id}` admin surface. Real MCP servers vary in their admin surface — there is no standard MCP "tools/update" RPC. For production engagements:
 
 - Inspect the target's admin surface (HTTP, gRPC, file-based config reload).
 - If the target accepts a JSON body of shape `{"description": "..."}` against an HTTP endpoint, the existing module works — pass `--update-method` and `--update-path` to point at it.

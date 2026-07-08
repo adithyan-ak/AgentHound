@@ -117,7 +117,7 @@ check_docker() {
 
 check_docker_compose() {
   # Every caller in this repo invokes `docker compose` (v2 plugin
-  # syntax): Makefile up/down, scripts/seed-demo.sh, all docs. The
+  # syntax): Makefile up/down and all docs. The
   # legacy `docker-compose` v1 binary uses a different invocation
   # (`docker-compose -f ...`) and would fail the actual `make up`
   # immediately after a "passing" preflight — so accepting v1 here is
@@ -202,14 +202,6 @@ case "$TARGET" in
     ;;
   server-running)
     check_server_running
-    ;;
-  demo)
-    # `make demo` starts Docker Compose stacks, then uses curl + python3
-    # to health-check, ingest through the HTTP API, and validate findings.
-    check_docker
-    check_docker_compose
-    check_curl
-    check_python3
     ;;
   *)
     # Unknown targets: be conservative and check everything.

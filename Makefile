@@ -1,4 +1,4 @@
-.PHONY: build build-collector build-server build-all test lint docker docker-collector docker-server docker-standard up down clean seed demo demo-prep demo-down demo-reset release ui-build ui-dev ui-test standard standard-run standard-stop deps-check size-check slop-check version-check sync-version docs-check prerelease preflight-build preflight-collector preflight-server preflight-docker preflight-docker-compose preflight-server-running preflight-demo
+.PHONY: build build-collector build-server build-all test lint docker docker-collector docker-server docker-standard up down clean seed release ui-build ui-dev ui-test standard standard-run standard-stop deps-check size-check slop-check version-check sync-version docs-check prerelease preflight-build preflight-collector preflight-server preflight-docker preflight-docker-compose preflight-server-running
 
 # Preflight gates. Verify required tools are present and at the expected
 # major versions BEFORE attempting a build, so newcomers get a friendly
@@ -21,9 +21,6 @@ preflight-docker-compose:
 
 preflight-server-running:
 	@bash scripts/preflight.sh server-running
-
-preflight-demo:
-	@bash scripts/preflight.sh demo
 
 ui-build:
 	cd server/ui && npm ci --ignore-scripts && npm run build
@@ -82,23 +79,6 @@ clean:
 
 seed: preflight-server-running
 	@bash scripts/seed-test-data.sh
-
-demo: preflight-demo
-	@bash scripts/seed-demo.sh
-
-demo-prep: preflight-demo
-	docker compose -f docker/docker-compose.yml -f docker/demo/docker-compose.server-demo.yml pull graph-db app-db
-	docker compose -f docker/demo/docker-compose.yml pull operator
-	docker compose -f docker/docker-compose.yml -f docker/demo/docker-compose.server-demo.yml build
-	docker compose -f docker/demo/docker-compose.yml --profile tools build
-
-demo-down: preflight-demo
-	docker compose -f docker/demo/docker-compose.yml down --remove-orphans
-
-demo-reset: preflight-demo
-	docker compose -f docker/demo/docker-compose.yml down --volumes --remove-orphans
-	docker compose -f docker/docker-compose.yml -f docker/demo/docker-compose.server-demo.yml down --volumes --remove-orphans
-	rm -rf docker/demo/out
 
 release: ui-build
 	goreleaser release --clean --snapshot
