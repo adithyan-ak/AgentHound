@@ -64,13 +64,13 @@ By default, modelfile content, templates, and system prompts are NOT included in
 
 Use this for engagements where the deliverable includes the actual leaked content (red-team report appendix, evidence package for remediation).
 
-## Demo example
+## Example
 
 ```bash
-# Against the demo lab Ollama (preloaded with tinyllama + support-agent-v3)
-echo "AUTHORIZED" | bin/agenthound loot 172.30.0.10:11434 \
+# Against an authorized Ollama instance
+echo "AUTHORIZED" | bin/agenthound loot 10.0.0.10:11434 \
     --type ollama \
-    --engagement-id DEMO-LOCAL \
+    --engagement-id MY-ENGAGEMENT \
     --include-credential-values \
     --output /tmp/loot-ollama.json
 

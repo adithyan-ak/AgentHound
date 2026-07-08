@@ -101,7 +101,6 @@ nav:
   - Getting Started:
       - Install: getting-started/install.md
       - Quickstart: getting-started/quickstart.md
-      - Demo Lab: getting-started/demo-lab.md
   - Operator Guides:
       - Network Scanning: operator/scanner.md
       - Rules Bundles: operator/rules-bundle.md

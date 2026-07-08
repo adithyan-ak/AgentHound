@@ -1,6 +1,6 @@
 # `agenthound scan` — network scanner operator guide
 
-> **Authorized targets only.** Scanning IP space without written authorization may violate CFAA-style laws (US 18 USC 1030, UK Computer Misuse Act, equivalent statutes in most jurisdictions). The scanner refuses public IP space without `--allow-public-targets`, and that flag itself requires interactive `AUTHORIZED` confirmation. The authorization-file watermark exists so you have an auditable record of what authorization covered which scan. Use the controlled lab (`docker/demo/`) for testing; coordinate with target IR/security teams for engagements.
+> **Authorized targets only.** Scanning IP space without written authorization may violate CFAA-style laws (US 18 USC 1030, UK Computer Misuse Act, equivalent statutes in most jurisdictions). The scanner refuses public IP space without `--allow-public-targets`, and that flag itself requires interactive `AUTHORIZED` confirmation. The authorization-file watermark exists so you have an auditable record of what authorization covered which scan. Use a controlled lab environment for testing; coordinate with target IR/security teams for engagements.
 
 The network scanner is the v0.2 entry point for active discovery. It performs a bounded TCP port sweep across a CIDR or host list, then dispatches the registered fingerprinters at each open `(host, port)` pair to identify AI services. Output is the same ingest envelope the existing collectors produce, so `agenthound-server ingest` accepts it through the same path.
 

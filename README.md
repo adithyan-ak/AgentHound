@@ -155,8 +155,6 @@ curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/v0.7.0/insta
 
 Also available via Homebrew (`brew install agenthound agenthound-server`), `go install`, and signed release binaries - see the [installation guide](https://docs.agenthound.io/getting-started/install/).
 
-Want the full arc against a safe target? `make demo` spins up 8 deliberately-vulnerable AI services on an isolated network and seeds scan → loot → ingest end-to-end.
-
 <p align="center">
   <img src="docs/readme-assets/agenthound-dashboard.png" alt="AgentHound dashboard" width="900">
 </p>

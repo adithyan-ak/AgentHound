@@ -8,7 +8,6 @@ The offensive security framework for AI agent infrastructure — run the full re
 
 - **[Install](getting-started/install.md)** — Homebrew, Docker, or build from source
 - **[Quickstart](getting-started/quickstart.md)** — First scan to first finding in 10 minutes
-- **[Demo Lab](getting-started/demo-lab.md)** — Full offensive arc with Docker (scan → discover → loot → poison → revert)
 
 ## Operator Guides
 

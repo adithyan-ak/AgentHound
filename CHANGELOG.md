@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Removed: `make demo`, `docker/demo/` lab, and `scripts/seed-demo.sh`
+
+The self-contained Docker demo lab (`docker/demo/`, 8 vulnerable stubs on `172.30.0.0/24`) and its driver (`scripts/seed-demo.sh`, invoked via `make demo` / `make demo-prep` / `make demo-down` / `make demo-reset`) have been removed. `docs/getting-started/demo-lab.md` and the "Demo Lab" section of `docs/getting-started/quickstart.md` are gone; `mkdocs.yml`, `README.md`, `docs/README.md`, `docs/operator/scanner.md`, `docs/operator/loot/ollama.md`, and `docs/operator/offensive-actions.md` no longer reference the lab. The `preflight-demo` Makefile target and the `demo)` case in `scripts/preflight.sh` were removed. Stale `testdata/demo/*.json` and `docker/demo/out/` entries in `.gitignore` (dead since the pre-flatten era) were cleaned up.
+
+To populate a running server with sample graph data, use `make seed` (still shipped; reads `testdata/valid_*.json` and posts to `/api/v1/ingest`).
+
+End-to-end coverage that exercised the compiled `agenthound` binary against a live HTTP server (previously provided by `make demo`) is not replaced in this change. The Go-side integration tests (`server/internal/analysis/*_integration_test.go`) that run against a live Neo4j are unchanged — those were never gated by `make demo` and continue to gate CI.
+
 ### Ollama Looter: align flag surface with upstream API
 
 Removes the experimental `--include-weights` / `--weights-dir` flags from `agenthound loot --type ollama` and cleans up the docs, tests, and node schema that surrounded them. The flags targeted `/api/blobs/<digest>` with `GET`, which sits outside Ollama's documented HTTP API surface — the upstream spec defines only `HEAD` (existence check for the create-model flow) and `POST` (upload) on that path (see the [Ollama API docs](https://github.com/ollama/ollama/blob/main/docs/api.md#check-if-a-blob-exists) and the [OpenAPI spec](https://github.com/ollama/ollama/blob/main/docs/openapi.yaml)). Raw GGUF acquisition from a compromised Ollama host remains available out-of-band via filesystem access to `~/.ollama/models/blobs/`; `agenthound extract --type embedding-invert` continues to accept any locally-available GGUF file.

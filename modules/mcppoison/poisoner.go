@@ -58,10 +58,11 @@ const (
 	// where the body is the entire new tool descriptor.
 	DefaultUpdateMethod = "PUT"
 
-	// DefaultUpdatePathTemplate is the path template the demo MCP-stub
-	// implements (see docker/demo/v0.3/mcp-stub/app.py). For real
-	// engagements the operator overrides via --update-path so the
-	// module can talk to whatever admin surface the target exposes.
+	// DefaultUpdatePathTemplate is the conventional admin-surface path
+	// for a PUT-based tool-description update. See sdk/action/poisoner.go
+	// for the Poisoner + Reverter contract. Real engagements override
+	// via --update-path so the module can talk to whatever admin surface
+	// the target exposes.
 	DefaultUpdatePathTemplate = "/admin/tools/{id}"
 
 	// DefaultListPath is where we GET the JSON-RPC tools/list response
