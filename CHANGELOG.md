@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+### Looters: 22 verified findings + coverage additions across LiteLLM, MLflow, Open WebUI, Qdrant, Ollama, Jupyter (#74)
+
+Fixes 2 CRITICAL, 6 HIGH, 4 MEDIUM, and 15 LOW findings verified by two grounder passes against upstream code (LiteLLM `key_management_endpoints.py` / `proxy/utils.py`, MLflow `sqlalchemy_store.py`, Ollama `server/sched.go`, Open WebUI `routers/{ollama,retrieval}.py`, Qdrant `openapi.json`). Every fix is grounded in primary evidence — no invention.
+
+**CRITICAL fixes**
+
+- **LiteLLM `/key/list` (U-CRIT-1):** Rewrote the probe to send `?return_full_object=true&size=100&page=N` and paginate via `total_pages`. The default response shape is `List[str]` of hashed tokens per `return_full_object=False`; the prior decoder expected an object array with a fabricated `key_id` field that has never existed in any LiteLLM version. Result: virtual-key extraction now works against real deployments instead of silently emitting zero Credentials + a partial error.
+- **LiteLLM virtual-key `value_hash` double-hash (U-HIGH-2, latent behind U-CRIT-1):** LiteLLM's `token` column is already `SHA-256(raw_key).hexdigest()` per `proxy/utils.py::hash_token()`. The prior code called `common.HashCredentialValue(k.Token)`, producing `sha256(sha256(raw))` and silently breaking the cross-collector merge invariant. Fix: the value returned by `/key/list` is now assigned to `value_hash` verbatim (no rehash).
+- **LiteLLM fabricated `key_id` field (U-CRIT-1 nested):** Removed — the field is absent from LiteLLM's Pydantic model (`_types.py::LiteLLM_VerificationToken`) and Prisma schema on every historic tag checked.
+- **MLflow `experiments/search` HTTP 400 (U-CRIT-2):** Modern MLflow (2.22.x+) rejects the request without `max_results` with `INVALID_PARAMETER_VALUE` (live-reproduced). Fix: send `?max_results=<n>&page_token=<t>` on every probe and iterate `next_page_token`. Applied to both `experiments/search` (GET) and `runs/search` (POST body); wired `DefaultMaxItems`. `runs/search` was also silently truncated at 1000/experiment before this fix.
+
+**HIGH fixes**
+
+- **MLflow Model Registry (U-HIGH-3, coverage):** New probes for `registered-models/search`, `model-versions/search`, and per-version `model-versions/get-download-uri`. **Important semantic correction:** the returned URI is the plain `storage_location or source` from `sqlalchemy_store.py::get_model_version_download_uri` (line 1291-1306) — an `s3://`, `gs://`, `azure://`, `dbfs:/`, `file:///`, or `hdfs://` URI. It is NOT a presigned/pre-signed URL and NOT credential material. Each URI is emitted as an `:MCPResource` joined via `PROVIDES_RESOURCE`, with `sensitivity` auto-classified by scheme + path (`critical` for `file:///etc/*` and `prod` cloud buckets; `high` for other cloud storage; `medium` for other `file://`). Registry probes are anonymous-readable on stock MLflow.
+- **Open WebUI admin-authenticated probes (U-HIGH-4, coverage):** Four new admin-gated probes (`/openai/config`, `/ollama/config`, `/api/v1/retrieval/config`, `/api/v1/retrieval/embedding`) surface 18+ upstream provider API keys via a recursive, case-insensitive secret walker matching `KEY`/`TOKEN`/`PASSWORD`/`SUBSCRIPTION`/`_SK` suffixes and skipping `MODEL`/`ENGINE`/`URL`/`HOST` negatives. **Correct field name is `key` (not `api_key`)** per `routers/ollama.py:189-192`; the walker also tries the legacy `api_key` field. `OLLAMA_API_CONFIGS` may be keyed by string index (`"0"`, `"1"`) OR base URL — both lookups are attempted. `/api/v1/retrieval/reranking` does NOT exist on Open WebUI (verified via full route enumeration in `retrieval.py`); rerank config (`RAG_EXTERNAL_RERANKER_API_KEY`) lives inside `/retrieval/config` and is captured by the walker.
+- **Qdrant `/points/scroll` (U-HIGH-5, coverage):** New `--include-points` flag runs `POST /collections/{name}/points/scroll`, iterating `next_page_offset` until null with per-collection (`--points-per-collection`, default 100) and global (`--max-total-resources`, default 5000) caps. Each sampled point is emitted as an `:MCPResource` joined via `PROVIDES_RESOURCE`. The Looter's `get_only_test.go` allowlist now permits the POST with a read-only-in-effect justification.
+- **LiteLLM `/model/info` `api_key` dead branch (U-HIGH-1):** Deleted — LiteLLM strips upstream `api_key` server-side via `remove_sensitive_info_from_deployment` on every code path.
+- **CLI credential redaction (U-HIGH-6):** A malformed `--credential sk-...` (no `=`) previously leaked the raw secret to stderr twice (Cobra's `RunE` error surface + `main.go` double-print). Fix: the returned error routes through `sdk/common.Redact` at the parse site. Regression test in `collector/cli/loot_redaction_test.go`.
+- **MLflow silent truncation at 1000 runs/experiment (U-HIGH-2, subsumed into U-CRIT-2 pagination fix).**
+
+**MEDIUM fixes**
+
+- **Jupyter recursive listing (U-MED-1):** `fetchContents` now walks `/api/contents` breadth-first with an explicit `--max-depth` flag (default 4, arbitrary safety cap — Jupyter Server has no documented upper bound). Per-directory 4xx/5xx recorded as `PartialErrors` with a well-formed prefix; the walk continues on siblings.
+- **Ollama `/api/embeddings` runner cache (U-MED-2):** The probe now sends `keep_alive: 0` so the runner is unloaded immediately after the request (verified against Ollama `server/sched.go:389-398`: `runner.sessionDuration <= 0` triggers `expiredCh` on `refCount` drop).
+- **Open WebUI dead `$.ollama.base_url` capture (U-MED-3):** Removed from `sdk/rules/builtin/fingerprints/openwebui.yaml` (bumped to `version: 3`) and from the fingerprinter. The field was verified absent from `/api/config` across all 14 Open WebUI tags + main. The `openwebuifp` `EXPOSES` edge emission (fenced on the dead capture) is deleted; the same edge is now emitted from the authenticated Looter side via `/ollama/config` (where the data actually lives). `canonicalizeBackend` was moved to `openwebuiloot` for `OLLAMA_BASE_URLS` normalization.
+- **LiteLLM synthetic `value_hash` cross-collector semantic (U-MED-4):** The Looter now marks upstream-provider Credentials (which carry `SHA-256("provider:name")` because LiteLLM masks the raw upstream `api_key`) with `merge_key: "identity"`. The `cross_service_credential_chain` post-processor's Cypher was extended with `AND (c1master.merge_key IS NULL OR c1master.merge_key = 'value_hash')` on both sides of the value_hash join, explicitly filtering identity-marked nodes out. Defensive today (the synthetic hash can't legitimately match any real credential) but makes intent unambiguous.
+
+**LOW / doc / hygiene fixes (batched)**
+
+- **Ollama:** dual-emit `parameter_size` (canonical) and `parameters` (deprecated alias, one release); migrate `/api/show` request body to canonical `{model: ...}` field (Ollama's `ShowHandler` still accepts the legacy `name` field but the docs canonicalize on `model`); drop stale `--include-weights` refs from `register.go` description and `docs/operator/loot/index.md`; rewrite the `value_hash` semantics section in `ollama.md` to reflect the "only when modelfile present" reality and add a `keep_alive: 0` semantics paragraph.
+- **Jupyter:** add missing `get_only_test.go` (only Looter without one); drop the unread `session.notebook` field (Jupyter Server still emits it in the deprecated shape but our Looter never read it); count empty-path console kernels in `active_sessions`.
+- **Qdrant:** nullable `points_count` via `*int64` (Qdrant OpenAPI declares `points_count` as `integer | null`); `points_count_unknown` counter on the `:QdrantInstance` node no longer conflates missing / null / real-zero.
+- **Docs / schema alignment:** `graph-model.md` AIModel props (`size_bytes`/`parameter_size`), OpenWebUI props (drop `default_user_role`, add `ollama_backend_urls`), edge `evidence` type (`map[string]any`, not `string`), `PROVIDES_RESOURCE` source-kind list (adds `MLflowServer` + `QdrantInstance`), value_hash exception clause for identity-marked Credentials; per-Looter `--max-items` default table in `docs/operator/loot/index.md`; new per-module flag tables for `qdrant` (`--include-points`, `--points-per-collection`, `--max-total-resources`) and `jupyter` (`--max-depth`) in `docs/reference/cli.md`; MLflow coverage note; `sdk/common/redact.go` doc-comment extended to name CLI error paths; `sdk/action/looter.go` `Extras` comment corrected (LiteLLM master-key reads from `Credentials`, not `Extras`); `CLAUDE.md` gains the `merge_key: "identity"` exception clause.
+
+**Kinds registry and post-processor (cross-cutting)**
+
+- `sdk/ingest/kinds.go`: `PROVIDES_RESOURCE` source-kinds extended from `{MCPServer, JupyterServer}` to `{MCPServer, JupyterServer, MLflowServer, QdrantInstance}` so the MLflow Model Registry and Qdrant scroll emissions pass the validator's `source_kind` check. No new node or edge kinds registered — `:MCPResource` and `PROVIDES_RESOURCE` were already allowed.
+- `server/internal/analysis/processors/cross_service_credential_chain.go`: value_hash join now filters `merge_key='identity'` on both sides. New unit test `TestCrossServiceCredentialChain_MergeKeyFilter` locks in the clause.
+
+**New per-module flags**
+
+- `--type qdrant`: `--include-points` (bool, default false), `--points-per-collection` (int, default 100), `--max-total-resources` (int, default 5000).
+- `--type jupyter`: `--max-depth` (int, default 4).
+
+**Convention**
+
+- **`merge_key: "identity"`** on `:Credential` nodes marks Credentials whose `value_hash` is a synthesized SHA-256 of a stable identity string (e.g. `"provider:name"`) rather than the SHA-256 of a raw secret value. Introduced because LiteLLM's `/model/info` masks the upstream provider `api_key`, so there is no raw value to hash. The `cross_service_credential_chain` post-processor filters these out of value_hash joins so they cannot false-positive against real credentials. Every non-identity Credential emission sets `merge_key: "value_hash"` (or omits the field for backward compatibility with pre-existing graphs).
+
+**Test coverage:** 29 new tests + existing tests updated to new shapes. Full suite passes with `-race` across all 46 test packages; `golangci-lint` clean; `gofmt`, `go build`, `go vet` clean; `scripts/deps-check.sh` and `scripts/size-check.sh` clean.
+
 ### Removed: `make demo`, `docker/demo/` lab, and `scripts/seed-demo.sh`
 
 The self-contained Docker demo lab (`docker/demo/`, 8 vulnerable stubs on `172.30.0.0/24`) and its driver (`scripts/seed-demo.sh`, invoked via `make demo` / `make demo-prep` / `make demo-down` / `make demo-reset`) have been removed. `docs/getting-started/demo-lab.md` and the "Demo Lab" section of `docs/getting-started/quickstart.md` are gone; `mkdocs.yml`, `README.md`, `docs/README.md`, `docs/operator/scanner.md`, `docs/operator/loot/ollama.md`, and `docs/operator/offensive-actions.md` no longer reference the lab. The `preflight-demo` Makefile target and the `demo)` case in `scripts/preflight.sh` were removed. Stale `testdata/demo/*.json` and `docker/demo/out/` entries in `.gitignore` (dead since the pre-flatten era) were cleaned up.

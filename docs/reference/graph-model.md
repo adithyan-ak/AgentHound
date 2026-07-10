@@ -188,6 +188,8 @@ This is what enables attack paths like: `AgentInstance → MCPServer → Credent
 
 **Requirement:** Every collector or looter MUST populate `value_hash` on every emitted Credential node.
 
+**Exception:** when a Looter cannot observe the raw credential value (e.g. LiteLLM's `/model/info` strips upstream provider `api_key` via `remove_sensitive_info_from_deployment`), it may synthesize a stable identity via `SHA-256("provider:name")` and mark the node `merge_key: "identity"`. Such nodes still carry a non-empty `value_hash` (so the ingest validator continues to accept them unchanged), but the `cross_service_credential_chain` post-processor explicitly filters them out of value_hash joins on both sides — synthetic identities cannot collision-craft against real credentials. Non-identity Credential emissions set `merge_key: "value_hash"` (or omit the field for backward compatibility). See `CLAUDE.md`, `docs/operator/loot/index.md`, and `server/internal/analysis/processors/cross_service_credential_chain.go`.
+
 ---
 
 ## 6. Post-Processor Execution Order
