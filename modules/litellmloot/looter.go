@@ -96,6 +96,7 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		"high_entropy": true,
 		"format":       "litellm",
 		"value_hash":   masterValueHash,
+		"merge_key":    "value_hash",
 	}
 	if opts.IncludeCredentialValues {
 		masterProps["value"] = masterKey
@@ -136,9 +137,13 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 			"high_entropy": true,
 			"format":       "upstream-provider",
 			"value_hash":   uc.ValueHash,
-		}
-		if opts.IncludeCredentialValues && uc.Value != "" {
-			props["value"] = uc.Value
+			// LiteLLM's /model/info strips upstream api_key server-side
+			// (remove_sensitive_info_from_deployment); value_hash on this
+			// node is SHA-256(provider:name), a synthetic identity that
+			// cannot participate in cross-collector value_hash joins.
+			// The cross_service_credential_chain post-processor filters
+			// these out via WHERE c1master.merge_key = 'value_hash'.
+			"merge_key": "identity",
 		}
 		res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, ingest.Node{
 			ID: credID, Kinds: []string{"Credential"}, Properties: props,
@@ -173,6 +178,7 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 			"high_entropy": false,
 			"format":       "litellm-virtual",
 			"value_hash":   vk.ValueHash,
+			"merge_key":    vk.MergeKey,
 			"spend_usd":    vk.Spend,
 			"models":       vk.Models,
 		}
@@ -197,22 +203,36 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 	return res, nil
 }
 
-// upstreamCred captures one upstream provider key extracted from
-// LiteLLM's /model/info response. value is set only when LiteLLM's
-// response leaked the actual key; value_hash is always populated.
+// upstreamCred captures one upstream provider entry extracted from
+// LiteLLM's /model/info response. LiteLLM's proxy_server.py runs
+// remove_sensitive_info_from_deployment before serializing, which
+// unconditionally pops litellm_params.api_key — so the raw upstream key
+// is never surfaced by /model/info on any modern LiteLLM. value_hash is
+// always synthesized as SHA-256("provider:name") for cross-run stability;
+// the caller marks these nodes merge_key="identity" so the cross-collector
+// join processor skips them (see server/internal/analysis/processors/
+// cross_service_credential_chain.go).
 type upstreamCred struct {
 	Name      string // sanitized name (provider/model)
 	Provider  string // openai, anthropic, aws_bedrock, etc.
 	Endpoint  string // upstream api_base (LiteLLM exposes this in model_info)
-	Value     string // raw upstream key, if exposed by /model/info
-	ValueHash string // SHA-256 over the upstream key OR over the synthesized identity when no key surfaced
+	ValueHash string // SHA-256("provider:name") — synthetic identity, never a real secret
 }
 
-// virtualKey captures one /key/list entry.
+// virtualKey captures one /key/list entry. LiteLLM's proxy/utils.py
+// hash_token() stores every sk-... key as SHA-256(raw).hexdigest() in
+// the LiteLLM_VerificationToken.token column (Prisma @id). The value we
+// pull off /key/list is therefore already the hex digest — assigning it
+// directly to ValueHash preserves the cross-collector merge invariant
+// (any other collector that observed the raw sk-... would produce the
+// same SHA-256 hex string). MergeKey is set to "value_hash" for that
+// path, "identity" for the rare (empty-token) fallback that hashes a
+// synthesized "virtual:<id>" string.
 type virtualKey struct {
 	KeyID     string
 	Value     string
 	ValueHash string
+	MergeKey  string
 	Spend     float64
 	Models    []string
 }
@@ -223,6 +243,12 @@ type virtualKey struct {
 // model entries, each with a "model_info" sub-object whose key shape
 // varies. Unknown fields are skipped; missing fields produce no
 // upstreamCred for that entry rather than an error.
+//
+// LiteLLM strips litellm_params.api_key from /model/info before
+// returning it (proxy/common_utils/openai_endpoint_utils.py
+// remove_sensitive_info_from_deployment), so the parser never attempts
+// to read it — every emitted upstreamCred carries only a synthetic
+// SHA-256("provider:name") identity.
 func fetchModelInfo(ctx context.Context, client *http.Client, url, masterKey string, maxItems int) ([]upstreamCred, error) {
 	body, err := common.GetJSON(ctx, client, url, masterKey, 16<<20)
 	if err != nil {
@@ -253,76 +279,146 @@ func fetchModelInfo(ctx context.Context, client *http.Client, url, masterKey str
 		if v, ok := e.LiteLLMParams["api_base"].(string); ok {
 			uc.Endpoint = v
 		}
-		// Some LiteLLM versions surface api_key in litellm_params (rare —
-		// usually masked, but worth recording when present). Even when no
-		// raw key is exposed we still emit the upstream Credential node
-		// because the existence of the upstream is itself the leak — the
-		// master key implies access to it. value_hash for these nodes
-		// hashes a synthetic identity (provider:model_name) so the
-		// per-provider node is deterministic across re-runs.
-		if v, ok := e.LiteLLMParams["api_key"].(string); ok && v != "" {
-			uc.Value = v
-			uc.ValueHash = common.HashCredentialValue(v)
-		} else {
-			uc.ValueHash = common.HashCredentialValue(uc.Provider + ":" + uc.Name)
-		}
+		uc.ValueHash = common.HashCredentialValue(uc.Provider + ":" + uc.Name)
 		out = append(out, uc)
 	}
 	return out, nil
 }
 
-// fetchKeyList issues GET /key/list with the master key.
-func fetchKeyList(ctx context.Context, client *http.Client, url, masterKey string, maxItems int) ([]virtualKey, error) {
-	body, err := common.GetJSON(ctx, client, url, masterKey, 16<<20)
-	if err != nil {
-		return nil, err
+// listKeyPageSize is LiteLLM's server-side hard cap on /key/list page
+// size (Query(10, ge=1, le=100) per litellm/proxy/management_endpoints/
+// key_management_endpoints.py). Requesting a larger size clamps to 100.
+const listKeyPageSize = 100
+
+// fetchKeyList issues GET /key/list?return_full_object=true&size=100&page=N
+// against LiteLLM and iterates pages until total_pages is exhausted or
+// maxItems is reached.
+//
+// Two response shapes are handled:
+//
+//  1. return_full_object=true → keys[] is a list of objects with a
+//     "token" field (the already-hashed key) plus spend/models/aliases.
+//
+//  2. return_full_object=false → keys[] is a list of bare hashed-token
+//     strings. This is the server-side default even when the caller
+//     asks for the expanded form on some LiteLLM versions, so both
+//     shapes are decoded per-entry via json.RawMessage.
+//
+// The "token" value LiteLLM returns is already SHA-256(raw_key) per its
+// proxy/utils.py::hash_token(); it is assigned to vk.ValueHash directly
+// (no re-hash) so a collector that observes the raw sk-... produces the
+// same value_hash and the cross-service credential-chain post-processor
+// joins the nodes.
+func fetchKeyList(ctx context.Context, client *http.Client, baseKeyListURL, masterKey string, maxItems int) ([]virtualKey, error) {
+	if maxItems <= 0 {
+		return nil, nil
 	}
-	type rawKey struct {
-		Token  string   `json:"token"`  // sometimes the hashed token
-		KeyID  string   `json:"key_id"` // newer LiteLLM versions
-		Spend  float64  `json:"spend"`
-		Models []string `json:"models"`
+	// Precompute page cap: ceil(maxItems/pageSize) with no off-by-one.
+	pageCap := (maxItems + listKeyPageSize - 1) / listKeyPageSize
+	if pageCap < 1 {
+		pageCap = 1
 	}
+
 	type rawResp struct {
-		Keys []rawKey `json:"keys"`
+		Keys        []json.RawMessage `json:"keys"`
+		TotalCount  int               `json:"total_count"`
+		CurrentPage int               `json:"current_page"`
+		TotalPages  int               `json:"total_pages"`
 	}
-	var parsed rawResp
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		// Try the legacy shape: bare array.
-		var legacy []rawKey
-		if err2 := json.Unmarshal(body, &legacy); err2 == nil {
-			parsed.Keys = legacy
-		} else {
-			return nil, fmt.Errorf("decode /key/list: %w", err)
-		}
+	type rawKeyObject struct {
+		Token    string   `json:"token"`
+		Spend    float64  `json:"spend"`
+		Models   []string `json:"models"`
+		KeyAlias string   `json:"key_alias"`
+		KeyName  string   `json:"key_name"`
 	}
+
 	var out []virtualKey
-	for _, k := range parsed.Keys {
+	for page := 1; ; page++ {
+		if page > pageCap {
+			break
+		}
+		u := fmt.Sprintf("%s?return_full_object=true&size=%d&page=%d",
+			baseKeyListURL, listKeyPageSize, page)
+		body, err := common.GetJSON(ctx, client, u, masterKey, 16<<20)
+		if err != nil {
+			if page == 1 {
+				return nil, err
+			}
+			return out, fmt.Errorf("page %d: %w", page, err)
+		}
+		var parsed rawResp
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			return nil, fmt.Errorf("decode /key/list page %d: %w", page, err)
+		}
+		for _, raw := range parsed.Keys {
+			if len(out) >= maxItems {
+				break
+			}
+			// return_full_object=false → keys[] is []string of hashed
+			// tokens; try that shape first.
+			var s string
+			var vk virtualKey
+			if err := json.Unmarshal(raw, &s); err == nil {
+				s = strings.TrimSpace(s)
+				if s == "" {
+					continue
+				}
+				vk = virtualKey{
+					KeyID:     s,
+					Value:     s,
+					ValueHash: s, // token IS SHA-256(raw_key); do not rehash.
+					MergeKey:  "value_hash",
+				}
+			} else {
+				// Fall back to object shape (return_full_object=true).
+				var obj rawKeyObject
+				if err := json.Unmarshal(raw, &obj); err != nil {
+					continue
+				}
+				token := strings.TrimSpace(obj.Token)
+				if token == "" {
+					// No stable identifier — fall back to synthetic
+					// identity keyed off any alias/name we can find.
+					id := obj.KeyAlias
+					if id == "" {
+						id = obj.KeyName
+					}
+					if id == "" {
+						continue
+					}
+					vk = virtualKey{
+						KeyID:     id,
+						ValueHash: common.HashCredentialValue("virtual:" + id),
+						MergeKey:  "identity",
+						Spend:     obj.Spend,
+						Models:    obj.Models,
+					}
+				} else {
+					vk = virtualKey{
+						KeyID:     token,
+						Value:     token,
+						ValueHash: token, // pre-hashed by LiteLLM
+						MergeKey:  "value_hash",
+						Spend:     obj.Spend,
+						Models:    obj.Models,
+					}
+				}
+			}
+			out = append(out, vk)
+		}
 		if len(out) >= maxItems {
 			break
 		}
-		id := k.KeyID
-		if id == "" {
-			id = k.Token
+		// Terminal conditions: server-reported TotalPages exhausted, or
+		// the page returned zero keys (guards against a server that
+		// omits total_pages).
+		if parsed.TotalPages > 0 && page >= parsed.TotalPages {
+			break
 		}
-		if id == "" {
-			continue
+		if len(parsed.Keys) == 0 {
+			break
 		}
-		vk := virtualKey{
-			KeyID:  id,
-			Value:  k.Token,
-			Spend:  k.Spend,
-			Models: k.Models,
-		}
-		// LiteLLM's /key/list typically returns hashed tokens; if the raw
-		// token surfaces (e.g. on a misconfigured deployment) hash it,
-		// otherwise hash the deterministic key_id.
-		if k.Token != "" {
-			vk.ValueHash = common.HashCredentialValue(k.Token)
-		} else {
-			vk.ValueHash = common.HashCredentialValue("virtual:" + id)
-		}
-		out = append(out, vk)
 	}
 	return out, nil
 }

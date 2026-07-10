@@ -55,11 +55,19 @@ type LootOptions struct {
 
 	// Extras carries per-Looter flag values populated by the CLI dispatch
 	// from the Looter's FlagsModule.RegisterFlags surface. Keys are the
-	// per-module flag names (e.g. "include-embeddings", "master-key") so
-	// each Looter can pull its own without colliding with another's. The
-	// Ollama Looter reads Extras["include-embeddings"] (bool); the Open
-	// WebUI Looter reads Extras["api-key"] (string); LiteLLM reads its
-	// master-key sugar the same way.
+	// per-module flag names (e.g. "include-embeddings", "api-key",
+	// "include-points") so each Looter can pull its own without colliding
+	// with another's. Example consumers: the Ollama Looter reads
+	// Extras["include-embeddings"] (bool); the Open WebUI Looter reads
+	// Extras["api-key"] (string); the Qdrant Looter reads
+	// Extras["include-points"] (bool) + Extras["points-per-collection"]
+	// (int) + Extras["max-total-resources"] (int); the Jupyter Looter
+	// reads Extras["max-depth"] (int).
+	//
+	// LiteLLM's --master-key sugar does NOT flow through Extras. It is
+	// read from opts.Credentials["master_key"] — see the CLI dispatch in
+	// collector/cli/loot.go (the --master-key flag maps into
+	// creds["master_key"] via strings.Cut, not into Extras).
 	//
 	// Generic LootOptions stays free of per-Looter fields; new Looters
 	// should add their flags to RegisterFlags and read them from Extras

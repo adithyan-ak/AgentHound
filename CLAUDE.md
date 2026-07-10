@@ -43,7 +43,7 @@ Modules self-register via `init()`. To add one:
 ## Critical Architectural Facts
 
 - **Node IDs:** Deterministic SHA-256 content-based. MCPServer ID MUST match between Config Collector and MCP Collector (the merge point).
-- **value_hash:** SHA-256 of credential value. Cross-collector merge primitive. Every Looter MUST populate it on every emitted Credential.
+- **value_hash:** SHA-256 of credential value. Cross-collector merge primitive. Every Looter MUST populate it on every emitted Credential. **Exception:** when a Looter cannot observe the raw credential value (e.g. LiteLLM masks upstream provider `api_key` via `/model/info`), it may synthesize a stable identity via `SHA-256("provider:name")` and mark the node `merge_key: "identity"`. The cross-service credential-chain processor explicitly filters these out of value_hash joins (`server/internal/analysis/processors/cross_service_credential_chain.go`), so synthetic identities cannot false-positive against real credentials.
 - **Batch writes:** 1000 operations per Neo4j transaction. UNWIND + MERGE pattern.
 - **Stale edge cleanup:** Only delete composite edges whose source_collector ran in current scan.
 - **Post-processor order:** HAS_ACCESS_TO → CAN_EXECUTE → SHADOWS → POISONED_DESCRIPTION → POISONED_INSTRUCTIONS → CAN_REACH → cross_service_credential_chain → CAN_EXFILTRATE_VIA → CAN_IMPERSONATE → Cross-protocol CAN_REACH → RiskScore.

@@ -11,17 +11,26 @@ import (
 )
 
 const owuiVersionBody = `{"version":"0.6.5"}`
-const owuiConfigBodyWithBackend = `{"name":"Open WebUI","ollama":{"base_url":"http://ollama-backend:11434"}}`
-const owuiConfigBodyNoBackend = `{"name":"Open WebUI","ollama":{}}`
 
-func TestFingerprint_OpenWebUIHappyWithExposes(t *testing.T) {
+// owuiConfigBody matches Open WebUI's real /api/config shape (verified
+// across v0.1.111..v0.9.6 + main). {"name": "Open WebUI", ...} is
+// stable across every tag; $.ollama.base_url was NEVER present and
+// the fingerprint no longer captures it.
+const owuiConfigBody = `{"name":"Open WebUI","status":true,"features":{"auth":false,"enable_signup":true}}`
+
+// TestFingerprint_OpenWebUI_HappyPath — the v3 rule matches on
+// /api/version + /api/config's {"name": "Open WebUI"} shape. Emits
+// exactly 1 OpenWebUIInstance node, 0 edges (the old EXPOSES edge on
+// $.ollama.base_url is gone — Ollama backend URLs are surfaced by the
+// authenticated Looter via /ollama/config).
+func TestFingerprint_OpenWebUI_HappyPath(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/version":
 			_, _ = w.Write([]byte(owuiVersionBody))
 		case "/api/config":
-			_, _ = w.Write([]byte(owuiConfigBodyWithBackend))
+			_, _ = w.Write([]byte(owuiConfigBody))
 		default:
 			w.WriteHeader(404)
 		}
@@ -48,34 +57,26 @@ func TestFingerprint_OpenWebUIHappyWithExposes(t *testing.T) {
 	if res.IngestData == nil {
 		t.Fatal("IngestData nil")
 	}
-	if len(res.IngestData.Graph.Nodes) != 2 {
-		t.Fatalf("expected 2 nodes (OpenWebUI + placeholder Ollama), got %d", len(res.IngestData.Graph.Nodes))
+	if len(res.IngestData.Graph.Nodes) != 1 {
+		t.Fatalf("expected 1 node (OpenWebUIInstance only), got %d", len(res.IngestData.Graph.Nodes))
 	}
-	if len(res.IngestData.Graph.Edges) != 1 {
-		t.Fatalf("expected 1 EXPOSES edge, got %d", len(res.IngestData.Graph.Edges))
-	}
-	edge := res.IngestData.Graph.Edges[0]
-	if edge.Kind != "EXPOSES" {
-		t.Errorf("edge kind = %q, want EXPOSES", edge.Kind)
-	}
-	if edge.SourceKind != "OpenWebUIInstance" || edge.TargetKind != "OllamaInstance" {
-		t.Errorf("edge endpoints = %s -> %s, want OpenWebUIInstance -> OllamaInstance", edge.SourceKind, edge.TargetKind)
-	}
-	if got, _ := edge.Properties["evidence"].(string); got != "http://ollama-backend:11434" {
-		t.Errorf("edge evidence = %v, want http://ollama-backend:11434", edge.Properties["evidence"])
+	if len(res.IngestData.Graph.Edges) != 0 {
+		t.Fatalf("expected 0 EXPOSES edges (dead capture removed in v3), got %d", len(res.IngestData.Graph.Edges))
 	}
 }
 
-func TestFingerprint_OpenWebUI_NoBackendStillMatches(t *testing.T) {
-	// /api/config available but missing ollama.base_url — fingerprint
-	// matches, no EXPOSES edge.
+// TestFingerprint_OpenWebUI_ConfigMissingNameField — response with a
+// different name field is not Open WebUI, so the conjunctive match
+// fails on probe 2. The single-probe fallback on /api/version alone
+// still fires because /api/version returned a valid version.
+func TestFingerprint_OpenWebUI_ConfigMissingNameField(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/version":
 			_, _ = w.Write([]byte(owuiVersionBody))
 		case "/api/config":
-			_, _ = w.Write([]byte(owuiConfigBodyNoBackend))
+			_, _ = w.Write([]byte(`{"name":"Something Else","status":true}`))
 		default:
 			w.WriteHeader(404)
 		}
@@ -94,13 +95,13 @@ func TestFingerprint_OpenWebUI_NoBackendStillMatches(t *testing.T) {
 		t.Fatalf("Fingerprint: %v", err)
 	}
 	if !res.Matched {
-		t.Fatal("expected Matched=true")
+		t.Fatal("expected Matched=true via /api/version fallback")
 	}
 	if len(res.IngestData.Graph.Nodes) != 1 {
-		t.Errorf("expected 1 node (no placeholder Ollama), got %d", len(res.IngestData.Graph.Nodes))
+		t.Errorf("expected 1 node, got %d", len(res.IngestData.Graph.Nodes))
 	}
 	if len(res.IngestData.Graph.Edges) != 0 {
-		t.Errorf("expected 0 EXPOSES edges (no backend URL captured), got %d", len(res.IngestData.Graph.Edges))
+		t.Errorf("expected 0 edges, got %d", len(res.IngestData.Graph.Edges))
 	}
 }
 
@@ -158,26 +159,5 @@ func TestFingerprint_NotOpenWebUI(t *testing.T) {
 	}
 	if res.Matched {
 		t.Error("expected no match on non-OpenWebUI body")
-	}
-}
-
-func TestCanonicalizeBackend(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"http://ollama:11434", "http://ollama:11434"},
-		{"https://ollama.example.com", "https://ollama.example.com:11434"},
-		{"ollama-backend:11434", "http://ollama-backend:11434"},
-		{"ollama-backend", "http://ollama-backend:11434"},
-		{"", ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got := canonicalizeBackend(tt.input)
-			if got != tt.want {
-				t.Errorf("canonicalizeBackend(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
 	}
 }

@@ -137,7 +137,7 @@ type EdgeEndpoints struct {
 var EdgeKindEndpoints = map[string]EdgeEndpoints{
 	"TRUSTS_SERVER":         {SourceKinds: []string{"AgentInstance"}, TargetKinds: []string{"MCPServer"}},
 	"PROVIDES_TOOL":         {SourceKinds: []string{"MCPServer"}, TargetKinds: []string{"MCPTool"}},
-	"PROVIDES_RESOURCE":     {SourceKinds: []string{"MCPServer", "JupyterServer"}, TargetKinds: []string{"MCPResource"}},
+	"PROVIDES_RESOURCE":     {SourceKinds: []string{"MCPServer", "JupyterServer", "MLflowServer", "QdrantInstance"}, TargetKinds: []string{"MCPResource"}},
 	"PROVIDES_PROMPT":       {SourceKinds: []string{"MCPServer"}, TargetKinds: []string{"MCPPrompt"}},
 	"ADVERTISES_SKILL":      {SourceKinds: []string{"A2AAgent"}, TargetKinds: []string{"A2ASkill"}},
 	"DELEGATES_TO":          {SourceKinds: []string{"A2AAgent"}, TargetKinds: []string{"A2AAgent"}},

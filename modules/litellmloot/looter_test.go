@@ -2,9 +2,11 @@ package litellmloot
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +16,15 @@ import (
 )
 
 const fakeMasterKey = "sk-test-litellm-master-key-not-real"
+
+// Deterministic hex digests standing in for LiteLLM's pre-hashed token
+// column values. LiteLLM's proxy/utils.py hash_token() stores
+// SHA-256(raw_key).hexdigest() as the token, so the strings the Looter
+// receives are already 64 hex characters — never a raw sk-... value.
+const (
+	fakeHashedTokenA = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd01"
+	fakeHashedTokenB = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd02"
+)
 
 // stubLiteLLM is a configurable test server simulating LiteLLM responses.
 // Each handler controls what /model/info and /key/list return; tests
@@ -85,12 +96,19 @@ const happyPathModelInfo = `{
   ]
 }`
 
-const happyPathKeyList = `{
-  "keys": [
-    {"key_id": "vk-eng-team", "spend": 12.34, "models": ["gpt-4", "claude-3"]},
-    {"key_id": "vk-data-team", "spend": 5.67, "models": ["claude-3"]}
-  ]
-}`
+// happyPathKeyList matches the default (return_full_object=false) shape
+// of LiteLLM's /key/list response: keys[] is a bare list of hashed-token
+// strings, wrapped in pagination metadata (total_count, total_pages).
+// Real deployments always return the token pre-hashed via
+// proxy/utils.py::hash_token().
+const happyPathKeyList = `{"keys":["` + fakeHashedTokenA + `","` + fakeHashedTokenB + `"],"total_count":2,"current_page":1,"total_pages":1}`
+
+// happyPathKeyListFullObject is the return_full_object=true expansion —
+// keys[] carries objects with the same hashed token plus spend/models.
+const happyPathKeyListFullObject = `{"keys":[
+  {"token":"` + fakeHashedTokenA + `","spend":12.34,"models":["gpt-4","claude-3"],"key_alias":"eng-team"},
+  {"token":"` + fakeHashedTokenB + `","spend":5.67,"models":["claude-3"],"key_alias":"data-team"}
+],"total_count":2,"current_page":1,"total_pages":1}`
 
 func TestLoot_HappyPath(t *testing.T) {
 	s := newStub(t)
@@ -273,7 +291,7 @@ func TestLoot_IncludeCredentialValues(t *testing.T) {
 	// value too. The merge-primitive value_hash is unchanged.
 	s := newStub(t)
 	s.modelInfoBody = `{"data": []}`
-	s.keyListBody = `{"keys": []}`
+	s.keyListBody = happyPathKeyList
 	srv := httptest.NewServer(s.handler())
 	defer srv.Close()
 
@@ -298,5 +316,241 @@ func TestLoot_IncludeCredentialValues(t *testing.T) {
 	}
 	if got := master.Properties["value"]; got != fakeMasterKey {
 		t.Errorf("master.value = %v, want raw key with IncludeCredentialValues=true", got)
+	}
+}
+
+// TestLoot_ModelInfoIsIdentityMergeKey verifies that upstream provider
+// Credentials from /model/info carry merge_key="identity" — the
+// cross-service credential-chain processor must skip these in the
+// value_hash join because their value_hash is SHA-256("provider:name"),
+// not SHA-256(raw_key). LiteLLM's /model/info strips litellm_params.api_key
+// via remove_sensitive_info_from_deployment.
+func TestLoot_ModelInfoIsIdentityMergeKey(t *testing.T) {
+	s := newStub(t)
+	s.modelInfoBody = happyPathModelInfo
+	s.keyListBody = `{"keys":[],"total_count":0,"total_pages":0}`
+	srv := httptest.NewServer(s.handler())
+	defer srv.Close()
+
+	l := &Looter{}
+	res, err := l.Loot(context.Background(), action.Target{
+		Address: strings.TrimPrefix(srv.URL, "http://"),
+	}, action.LootOptions{
+		Credentials: map[string]string{"master_key": fakeMasterKey},
+	})
+	if err != nil {
+		t.Fatalf("Loot: %v", err)
+	}
+	for _, n := range res.IngestData.Graph.Nodes {
+		if n.Properties["type"] != "apiKey" {
+			continue
+		}
+		if got, _ := n.Properties["merge_key"].(string); got != "identity" {
+			t.Errorf("upstream node %q merge_key = %q, want identity", n.Properties["name"], got)
+		}
+		if _, hasRaw := n.Properties["value"]; hasRaw {
+			t.Errorf("upstream node leaked raw value; /model/info strips upstream api_key server-side")
+		}
+	}
+}
+
+// TestLoot_KeyList_RequestsFullObject asserts every outgoing /key/list
+// request carries return_full_object=true and size=100 — the fix for
+// U-CRIT-1 (default List[str] shape) and U-M1 (page cap).
+func TestLoot_KeyList_RequestsFullObject(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		gotQuery []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/key/list" {
+			mu.Lock()
+			gotQuery = append(gotQuery, r.URL.RawQuery)
+			mu.Unlock()
+			_, _ = w.Write([]byte(happyPathKeyList))
+			return
+		}
+		if r.URL.Path == "/model/info" {
+			_, _ = w.Write([]byte(happyPathModelInfo))
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+
+	l := &Looter{}
+	_, err := l.Loot(context.Background(), action.Target{
+		Address: strings.TrimPrefix(srv.URL, "http://"),
+	}, action.LootOptions{
+		Credentials: map[string]string{"master_key": fakeMasterKey},
+	})
+	if err != nil {
+		t.Fatalf("Loot: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(gotQuery) == 0 {
+		t.Fatal("no /key/list request observed")
+	}
+	for i, q := range gotQuery {
+		if !strings.Contains(q, "return_full_object=true") {
+			t.Errorf("page %d query %q missing return_full_object=true", i+1, q)
+		}
+		if !strings.Contains(q, "size=100") {
+			t.Errorf("page %d query %q missing size=100 (LiteLLM's max)", i+1, q)
+		}
+		if !strings.Contains(q, fmt.Sprintf("page=%d", i+1)) {
+			t.Errorf("page %d query %q missing page=%d", i+1, q, i+1)
+		}
+	}
+}
+
+// TestLoot_KeyList_ValueHashPreserved asserts that the token string
+// returned by /key/list — already SHA-256(raw_key).hexdigest() per
+// LiteLLM proxy/utils.py::hash_token() — is assigned to value_hash
+// directly, without a second hash pass. Double-hashing (U-HIGH-2)
+// broke cross-collector merge; the fix is byte-for-byte pass-through.
+func TestLoot_KeyList_ValueHashPreserved(t *testing.T) {
+	s := newStub(t)
+	s.modelInfoBody = `{"data": []}`
+	s.keyListBody = happyPathKeyList
+	srv := httptest.NewServer(s.handler())
+	defer srv.Close()
+
+	l := &Looter{}
+	res, err := l.Loot(context.Background(), action.Target{
+		Address: strings.TrimPrefix(srv.URL, "http://"),
+	}, action.LootOptions{
+		Credentials: map[string]string{"master_key": fakeMasterKey},
+	})
+	if err != nil {
+		t.Fatalf("Loot: %v", err)
+	}
+	hashes := map[string]bool{}
+	for _, n := range res.IngestData.Graph.Nodes {
+		if n.Properties["type"] != "virtual_key" {
+			continue
+		}
+		vh, _ := n.Properties["value_hash"].(string)
+		hashes[vh] = true
+		if got, _ := n.Properties["merge_key"].(string); got != "value_hash" {
+			t.Errorf("virtual key %q merge_key = %q, want value_hash", n.Properties["name"], got)
+		}
+		// Regression: prior double-hash would produce SHA-256(hex) — a
+		// different hex string. Assert we pass the fixture through.
+		if vh == common.HashCredentialValue(fakeHashedTokenA) ||
+			vh == common.HashCredentialValue(fakeHashedTokenB) {
+			t.Errorf("virtual key value_hash %q is double-hashed (SHA-256 of the already-hashed token); pass through directly", vh)
+		}
+	}
+	if !hashes[fakeHashedTokenA] || !hashes[fakeHashedTokenB] {
+		t.Errorf("expected value_hash values to equal the fixture hashed tokens verbatim; got %+v", hashes)
+	}
+}
+
+// TestLoot_KeyList_ObjectShape verifies decoding of the
+// return_full_object=true response (keys[] is []{token,spend,models,...}).
+func TestLoot_KeyList_ObjectShape(t *testing.T) {
+	s := newStub(t)
+	s.modelInfoBody = `{"data": []}`
+	s.keyListBody = happyPathKeyListFullObject
+	srv := httptest.NewServer(s.handler())
+	defer srv.Close()
+
+	l := &Looter{}
+	res, err := l.Loot(context.Background(), action.Target{
+		Address: strings.TrimPrefix(srv.URL, "http://"),
+	}, action.LootOptions{
+		Credentials: map[string]string{"master_key": fakeMasterKey},
+	})
+	if err != nil {
+		t.Fatalf("Loot: %v", err)
+	}
+	var virtCount int
+	for _, n := range res.IngestData.Graph.Nodes {
+		if n.Properties["type"] != "virtual_key" {
+			continue
+		}
+		virtCount++
+		spend, _ := n.Properties["spend_usd"].(float64)
+		if spend == 0 {
+			t.Errorf("virtual key %q spend_usd = 0, want spend metadata parsed from object shape", n.Properties["name"])
+		}
+		models, _ := n.Properties["models"].([]string)
+		if len(models) == 0 {
+			t.Errorf("virtual key %q models = empty, want models parsed from object shape", n.Properties["name"])
+		}
+	}
+	if virtCount != 2 {
+		t.Errorf("virtual key count = %d, want 2 from object-shape fixture", virtCount)
+	}
+}
+
+// TestLoot_KeyList_PaginatesUntilTotalPages exercises the pagination
+// loop: a 3-page fixture returning total_pages=3 must be walked
+// entirely, producing 6 virtual keys (2 per page).
+func TestLoot_KeyList_PaginatesUntilTotalPages(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		pagesHit []int
+	)
+	pages := []string{
+		`{"keys":["aaa1aaa1aaa1aaa1aaa1aaa1aaa1aaa1aaa1aaa1aaa1aaa1aaa1aaa1aaa1aaa1","aaa2aaa2aaa2aaa2aaa2aaa2aaa2aaa2aaa2aaa2aaa2aaa2aaa2aaa2aaa2aaa2"],"total_count":6,"current_page":1,"total_pages":3}`,
+		`{"keys":["bbb1bbb1bbb1bbb1bbb1bbb1bbb1bbb1bbb1bbb1bbb1bbb1bbb1bbb1bbb1bbb1","bbb2bbb2bbb2bbb2bbb2bbb2bbb2bbb2bbb2bbb2bbb2bbb2bbb2bbb2bbb2bbb2"],"total_count":6,"current_page":2,"total_pages":3}`,
+		`{"keys":["ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1","ccc2ccc2ccc2ccc2ccc2ccc2ccc2ccc2ccc2ccc2ccc2ccc2ccc2ccc2ccc2ccc2"],"total_count":6,"current_page":3,"total_pages":3}`,
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/model/info":
+			_, _ = w.Write([]byte(`{"data": []}`))
+		case "/key/list":
+			// Parse the page query param.
+			var p int
+			_, _ = fmt.Sscanf(r.URL.Query().Get("page"), "%d", &p)
+			mu.Lock()
+			pagesHit = append(pagesHit, p)
+			mu.Unlock()
+			if p < 1 || p > len(pages) {
+				w.WriteHeader(400)
+				return
+			}
+			_, _ = w.Write([]byte(pages[p-1]))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	l := &Looter{}
+	res, err := l.Loot(context.Background(), action.Target{
+		Address: strings.TrimPrefix(srv.URL, "http://"),
+	}, action.LootOptions{
+		Credentials: map[string]string{"master_key": fakeMasterKey},
+	})
+	if err != nil {
+		t.Fatalf("Loot: %v", err)
+	}
+	mu.Lock()
+	got := append([]int(nil), pagesHit...)
+	mu.Unlock()
+	if len(got) != 3 {
+		t.Fatalf("pages requested = %v, want [1 2 3]", got)
+	}
+	for i, p := range got {
+		if p != i+1 {
+			t.Errorf("page order = %v, want [1 2 3]", got)
+			break
+		}
+	}
+	var virtCount int
+	for _, n := range res.IngestData.Graph.Nodes {
+		if n.Properties["type"] == "virtual_key" {
+			virtCount++
+		}
+	}
+	if virtCount != 6 {
+		t.Errorf("virtual key count across 3 pages = %d, want 6", virtCount)
 	}
 }

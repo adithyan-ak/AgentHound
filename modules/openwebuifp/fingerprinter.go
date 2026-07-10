@@ -3,15 +3,16 @@
 // Open WebUI is the most-deployed self-hosted ChatGPT-style frontend; it
 // proxies requests to a backend Ollama (or any OpenAI-compatible API). The
 // /api/version probe identifies the service; a SECOND probe to /api/config
-// captures the configured backend URL. When the second probe lands, this
-// module emits an :EXPOSES edge from the OpenWebUIInstance to a
-// (possibly-not-yet-known) OllamaInstance node — making this the FIRST
-// emitter of EXPOSES in the codebase.
+// confirms the response body carries {"name": "Open WebUI", ...} as a
+// belt-and-braces guard.
 //
-// The writer's MERGE-by-objectid semantics handle the case where the
-// target Ollama node doesn't yet exist: a placeholder node is created on
-// the first :EXPOSES write, and a later Ollama fingerprint MERGE-merges
-// properties onto it.
+// This module no longer emits an EXPOSES edge from OpenWebUIInstance to
+// OllamaInstance. The old edge was fenced on capturing $.ollama.base_url
+// from /api/config, but that field is verified absent from Open WebUI's
+// get_app_config response on every tag from v0.1.111 through v0.9.6 (and
+// main), so the edge never fired in practice. The authenticated
+// openwebuiloot Looter emits the EXPOSES edge from the admin-gated
+// /ollama/config endpoint (which does return OLLAMA_BASE_URLS).
 package openwebuifp
 
 import (
@@ -19,8 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -69,11 +68,10 @@ func (f *Fingerprinter) Fingerprint(ctx context.Context, t action.Target) (*acti
 		return &action.FingerprintResult{Matched: false}, nil
 	}
 	// The /api/config probe is conjunctive in v0.2 RunFingerprint — if
-	// /api/config returns non-200, RunFingerprint reports Matched=false
-	// even though the /api/version probe matched. Re-probe /api/version
-	// alone to disambiguate (Open WebUI with a locked /api/config is
-	// still Open WebUI). The single-probe rule is constructed inline so
-	// we do not need a second YAML.
+	// /api/config returns non-200 (e.g. auth-locked), RunFingerprint
+	// reports Matched=false even though /api/version matched. Re-probe
+	// /api/version alone to disambiguate (Open WebUI with a locked
+	// /api/config is still Open WebUI).
 	if !res.Matched {
 		fallback := *f.rule
 		if len(fallback.Probes) > 0 {
@@ -117,40 +115,6 @@ func (f *Fingerprinter) Fingerprint(ctx context.Context, t action.Target) (*acti
 		},
 	}
 
-	// EXPOSES edge: when /api/config gave us an Ollama backend URL,
-	// emit a placeholder OllamaInstance node + the edge. The writer
-	// MERGE-by-objectid pattern means a later `agenthound scan` against
-	// that Ollama host will fold its real properties onto this same
-	// node id without duplicating.
-	if backendURL := strings.TrimSpace(res.Captures["ollama_backend_url"]); backendURL != "" {
-		canon := canonicalizeBackend(backendURL)
-		if canon != "" {
-			ollamaID := ingest.ComputeNodeID("OllamaInstance", canon)
-			out.Graph.Nodes = append(out.Graph.Nodes, ingest.Node{
-				ID:    ollamaID,
-				Kinds: []string{"OllamaInstance", "AIService"},
-				Properties: map[string]any{
-					"objectid":       ollamaID,
-					"endpoint":       canon,
-					"discovered_via": "openwebui_config",
-					"service_kind":   "ollama",
-					"auth_method":    "none",
-				},
-			})
-			out.Graph.Edges = append(out.Graph.Edges, ingest.Edge{
-				Source:     objectID,
-				Target:     ollamaID,
-				Kind:       "EXPOSES",
-				SourceKind: "OpenWebUIInstance",
-				TargetKind: "OllamaInstance",
-				Properties: map[string]any{
-					"discovered_via": "openwebui_api_config",
-					"evidence":       backendURL,
-				},
-			})
-		}
-	}
-
 	return &action.FingerprintResult{
 		Matched:     true,
 		ServiceKind: "openwebui",
@@ -159,39 +123,6 @@ func (f *Fingerprinter) Fingerprint(ctx context.Context, t action.Target) (*acti
 		IngestData:  out,
 		Properties:  res.Properties,
 	}, nil
-}
-
-// canonicalizeBackend normalizes a captured backend URL to "scheme://host:port"
-// (no path, no query). Returns empty when the input is unparseable so the
-// caller skips the EXPOSES edge rather than emitting a junk endpoint.
-func canonicalizeBackend(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	// Open WebUI sometimes stores the backend without a scheme. Default
-	// to http:// so url.Parse succeeds.
-	if !strings.Contains(raw, "://") {
-		raw = "http://" + raw
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return ""
-	}
-	host := u.Hostname()
-	port := u.Port()
-	if port == "" {
-		// Default Ollama port — matches what ollamafp uses for objectid.
-		port = "11434"
-	}
-	if _, err := strconv.Atoi(port); err != nil {
-		return ""
-	}
-	scheme := u.Scheme
-	if scheme == "" {
-		scheme = "http"
-	}
-	return fmt.Sprintf("%s://%s:%s", scheme, host, port)
 }
 
 var _ action.Fingerprinter = (*Fingerprinter)(nil)

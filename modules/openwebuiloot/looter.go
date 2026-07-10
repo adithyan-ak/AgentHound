@@ -2,37 +2,53 @@
 //
 // Open WebUI (default port 3000) is the most-deployed self-hosted
 // ChatGPT-style frontend. It proxies to a backend Ollama or any
-// OpenAI-compatible upstream, and stores per-user chats, RAG documents,
-// and (admin-configured) upstream provider API keys. The Looter runs in
+// OpenAI-compatible upstream and stores per-user chats, RAG documents,
+// and admin-configured upstream provider API keys. The Looter runs in
 // two modes:
 //
-// ANONYMOUS (no creds): GET /api/config (unauthenticated) — folds POSTURE
-// properties onto the existing :OpenWebUIInstance node: signup_enabled,
-// default_user_role (if present), auth_required, and re-captures
-// ollama_backend_url if present. The openwebuifp fingerprinter already
-// emits the EXPOSES->OllamaInstance edge from this capture; the Looter
-// only enriches node properties and does NOT duplicate that edge.
+// ANONYMOUS (no creds): GET /api/config (unauthenticated) — folds
+// POSTURE properties onto the existing :OpenWebUIInstance node:
+// signup_enabled and auth_required.
 //
-// AUTHENTICATED (operator supplies --api-key): GET /openai/config
-// (admin-gated) — enumerates the configured upstream provider API keys
-// and emits one :Credential node per non-empty key, each linked via an
-// EXPOSES_CREDENTIAL edge anchored on the OpenWebUIInstance. value_hash
-// is MANDATORY on every Credential; the raw value is gated behind
-// opts.IncludeCredentialValues. Mirrors the Credential + EXPOSES_CREDENTIAL
-// emission pattern in modules/litellmloot.
+// AUTHENTICATED (operator supplies --api-key): four admin-gated probes
+// enumerate configured upstream provider API keys and emit one
+// :Credential per key, each linked via an EXPOSES_CREDENTIAL edge:
+//
+//	GET /openai/config              — OPENAI_API_KEYS[] + OPENAI_API_BASE_URLS[]
+//	GET /ollama/config              — OLLAMA_BASE_URLS[] + OLLAMA_API_CONFIGS{key}
+//	GET /api/v1/retrieval/config    — RAG / OCR / websearch keys (recursive walker)
+//	GET /api/v1/retrieval/embedding — nested openai_config.key / ollama_config.key / ...
+//
+// The Open WebUI upstream field name is `key` (per
+// backend/open_webui/routers/ollama.py:189-192 `get_api_key`); the
+// probes decode `key` primarily and fall back to a legacy `api_key`
+// field for older/forked instances. OLLAMA_API_CONFIGS may be keyed by
+// string index ("0", "1", …) OR by the full base URL — both lookups
+// are attempted.
+//
+// The retrieval walker is recursive because Open WebUI's /api/v1/retrieval/
+// endpoints nest secrets one level deep (openai_config.key,
+// ollama_config.key, azure_openai_config.key at
+// backend/open_webui/routers/retrieval.py:445-457) alongside flat
+// UPPER_SNAKE fields (RAG_EXTERNAL_RERANKER_API_KEY, PADDLEOCR_VL_TOKEN,
+// BING_SEARCH_V7_SUBSCRIPTION_KEY, YACY_PASSWORD, SOUGOU_API_SK). A
+// flat suffix walker misses the nested case; the recursive walker
+// matches on KEY/TOKEN/PASSWORD/SECRET/SUBSCRIPTION/_SK suffixes
+// case-insensitively, with negative filters for ENGINE/MODEL/URL/HOST
+// noise.
 //
 // Probes (GET only — Looters are read-only by contract):
 //
-//	GET /api/config     — anonymous posture
-//	GET /openai/config  — authenticated upstream keys (--api-key only)
+//	GET /api/config                — anonymous posture
+//	GET /openai/config             — authenticated upstream OpenAI keys
+//	GET /ollama/config             — authenticated Ollama upstream keys
+//	GET /api/v1/retrieval/config   — authenticated RAG + external keys
+//	GET /api/v1/retrieval/embedding — authenticated embedding config
 //
-// ENDPOINT-SHAPE ASSUMPTION (needs live verification): the authenticated
-// upstream-key path targets `GET /openai/config` and reads the
-// `OPENAI_API_KEYS` / `OPENAI_API_BASE_URLS` arrays. This shape is
-// grounded in the open-webui backend source (routers/openai.py) but has
-// not been confirmed against a live instance across versions, so the
-// parser is intentionally defensive (missing arrays -> zero credentials,
-// not an error) and the anonymous posture mode works regardless.
+// /api/v1/retrieval/reranking does NOT exist on Open WebUI (verified
+// via full route enumeration in retrieval.py). Rerank config
+// (RAG_EXTERNAL_RERANKER_API_KEY at retrieval.py:650-652) lives inside
+// /api/v1/retrieval/config and is captured by the walker.
 package openwebuiloot
 
 import (
@@ -56,18 +72,23 @@ const (
 	DefaultPort         = 3000
 	DefaultProbeTimeout = 30 * time.Second
 	DefaultMaxItems     = 1000
+	// walkerMaxDepth bounds the recursive secret walker over admin
+	// config responses. Open WebUI's actual nesting is one level; 8
+	// leaves ample margin against any future config restructuring.
+	walkerMaxDepth = 8
+	// walkerMinSecretLen skips likely-noise short strings. Real API
+	// keys, tokens, subscription keys, and passwords are always
+	// significantly longer than 7 chars.
+	walkerMinSecretLen = 8
 )
 
 // Looter is the registered module.
 type Looter struct{}
 
-// RegisterFlags satisfies module.FlagsModule. --api-key is the operator's
-// Open WebUI admin token (a per-user API key or a session JWT for an
-// admin account). When absent, the Looter runs anonymous posture mode
-// only; the flag value flows through LootOptions.Extras["api-key"].
+// RegisterFlags satisfies module.FlagsModule.
 func (l *Looter) RegisterFlags(fs *pflag.FlagSet) {
 	fs.String("api-key", "",
-		"Open WebUI admin API key (or session JWT) for authenticated upstream-credential enumeration via GET /openai/config.")
+		"Open WebUI admin API key (or session JWT) for authenticated upstream-credential enumeration.")
 }
 
 // Loot probes Open WebUI. Anonymous mode always runs (posture props on
@@ -77,10 +98,10 @@ func (l *Looter) RegisterFlags(fs *pflag.FlagSet) {
 //
 // opts.Extras key consumed by this Looter:
 //
-//	"api-key"  string — admin API key / JWT for GET /openai/config
+//	"api-key"  string — admin API key / JWT for authenticated probes
 //
-// The key is also read from opts.Credentials["api_key"] as a fallback so
-// the generic --credential api_key=... path works too.
+// The key is also read from opts.Credentials["api_key"] as a fallback
+// so the generic --credential api_key=... path works too.
 func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOptions) (*action.LootResult, error) {
 	_, host, _ := action.EndpointParts(t, DefaultPort, "http")
 	baseURL := action.EndpointBaseURL(t, DefaultPort, "http")
@@ -105,9 +126,6 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 
 	res := &action.LootResult{IngestData: &ingest.IngestData{}}
 
-	// Always emit the OpenWebUIInstance node so the posture properties and
-	// EXPOSES_CREDENTIAL edges have a home. MERGE-by-objectid folds these
-	// onto the fingerprinter's node.
 	res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, ingest.Node{
 		ID:    openwebuiID,
 		Kinds: []string{"OpenWebUIInstance", "AIService"},
@@ -137,85 +155,50 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		// auth=false on Open WebUI's /api/config means the instance is
 		// wide-open (no login gate). auth_required is the inverse.
 		props["auth_required"] = cfg.AuthEnabled
-		if cfg.DefaultUserRole != "" {
-			props["default_user_role"] = cfg.DefaultUserRole
-		}
-		// Re-capture the Ollama backend URL if /api/config exposes it. The
-		// fingerprinter already emits the EXPOSES->OllamaInstance edge from
-		// this same capture, so we enrich the node property only and do NOT
-		// duplicate the edge.
-		if cfg.OllamaBackendURL != "" {
-			props["ollama_backend_url"] = cfg.OllamaBackendURL
-		}
 	}
 
-	// 2. AUTHENTICATED upstream credentials — GET /openai/config.
-	if apiKey != "" {
-		creds, credErr := fetchOpenAIConfig(ctx, client, baseURL, apiKey, maxItems)
-		res.Summary.EndpointsProbed++
-		if credErr != nil {
-			slog.Warn("openwebui loot: /openai/config failed",
-				"endpoint", baseURL,
-				"key_prefix", common.Redact(apiKey),
-				"engagement_id", opts.EngagementID,
-				"error", credErr)
-			res.PartialErrors = append(res.PartialErrors, fmt.Sprintf("openai/config: %v", credErr))
-			res.Summary.PartialFailures++
-		}
-		for _, uc := range creds {
-			credID := ingest.ComputeNodeID("Credential", baseURL, "upstream-"+uc.Name)
-			cprops := map[string]any{
-				"objectid":     credID,
-				"type":         "apiKey",
-				"name":         "upstream-" + uc.Name,
-				"source":       "openwebui",
-				"is_exposed":   true,
-				"high_entropy": true,
-				"format":       "upstream-provider",
-				"value_hash":   uc.ValueHash,
-			}
-			if uc.Endpoint != "" {
-				cprops["provider_endpoint"] = uc.Endpoint
-			}
-			if opts.IncludeCredentialValues && uc.Value != "" {
-				cprops["value"] = uc.Value
-			}
-			res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, ingest.Node{
-				ID:         credID,
-				Kinds:      []string{"Credential"},
-				Properties: cprops,
-			})
-			res.IngestData.Graph.Edges = append(res.IngestData.Graph.Edges,
-				ingest.ExposesCredentialEdge(openwebuiID, credID, opts.EngagementID, "openai_config", uc.Endpoint))
-			res.Summary.CredentialsFound++
-		}
+	if apiKey == "" {
+		slog.Info("openwebui loot complete",
+			"endpoint", baseURL,
+			"engagement_id", opts.EngagementID,
+			"authenticated", false,
+			"credentials_found", res.Summary.CredentialsFound,
+			"partial_failures", res.Summary.PartialFailures)
+		return res, nil
 	}
+
+	// 2. AUTHENTICATED probes — four admin-gated endpoints. Each is
+	//    independent; a failure records a partial and the next probe
+	//    still runs.
+	remaining := maxItems
+	remaining = runOpenAIConfig(ctx, client, res, opts, openwebuiID, baseURL, apiKey, remaining)
+	remaining = runOllamaConfig(ctx, client, res, opts, openwebuiID, baseURL, apiKey, remaining)
+	remaining = runRetrievalWalk(ctx, client, res, opts, openwebuiID, baseURL, apiKey,
+		"/api/v1/retrieval/config", "retrieval_config", remaining)
+	_ = runRetrievalWalk(ctx, client, res, opts, openwebuiID, baseURL, apiKey,
+		"/api/v1/retrieval/embedding", "retrieval_embedding", remaining)
 
 	slog.Info("openwebui loot complete",
 		"endpoint", baseURL,
 		"engagement_id", opts.EngagementID,
-		"authenticated", apiKey != "",
+		"authenticated", true,
 		"credentials_found", res.Summary.CredentialsFound,
 		"partial_failures", res.Summary.PartialFailures)
 
 	return res, nil
 }
 
-// configPosture is the slice of GET /api/config the Looter promotes onto
-// the OpenWebUIInstance node. Fields are read defensively — a missing
-// field leaves the zero value and the caller decides whether to emit it.
+// configPosture is the slice of GET /api/config the Looter promotes
+// onto the OpenWebUIInstance node.
 type configPosture struct {
-	SignupEnabled    bool
-	AuthEnabled      bool
-	DefaultUserRole  string
-	OllamaBackendURL string
+	SignupEnabled bool
+	AuthEnabled   bool
 }
 
-// fetchConfig issues GET /api/config (unauthenticated). The signup and
-// auth flags live under "features"; default_user_role is not exposed on
-// current Open WebUI builds (left empty when absent, never fabricated).
-// The ollama backend URL matches the fingerprinter's $.ollama.base_url
-// capture when present.
+// fetchConfig issues GET /api/config (unauthenticated). Only reads the
+// signup / auth flags — verified stable across all 14 sampled Open
+// WebUI tags plus main. $.ollama.base_url was NEVER present on any
+// version and was removed from this decoder in v0.4.
 func fetchConfig(ctx context.Context, client *http.Client, baseURL string) (configPosture, error) {
 	body, err := common.GetJSON(ctx, client, strings.TrimRight(baseURL, "/")+"/api/config", "", 4<<20)
 	if err != nil {
@@ -226,10 +209,6 @@ func fetchConfig(ctx context.Context, client *http.Client, baseURL string) (conf
 			Auth         *bool `json:"auth"`
 			EnableSignup *bool `json:"enable_signup"`
 		} `json:"features"`
-		DefaultUserRole string `json:"default_user_role"`
-		Ollama          struct {
-			BaseURL string `json:"base_url"`
-		} `json:"ollama"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return configPosture{}, fmt.Errorf("decode /api/config: %w", err)
@@ -244,58 +223,394 @@ func fetchConfig(ctx context.Context, client *http.Client, baseURL string) (conf
 	if raw.Features.Auth != nil {
 		c.AuthEnabled = *raw.Features.Auth
 	}
-	c.DefaultUserRole = strings.TrimSpace(raw.DefaultUserRole)
-	c.OllamaBackendURL = strings.TrimSpace(raw.Ollama.BaseURL)
 	return c, nil
 }
 
-// upstreamCred captures one upstream provider key from GET /openai/config.
-type upstreamCred struct {
-	Name      string // index-derived slug (e.g. "openai-0")
-	Endpoint  string // matching OPENAI_API_BASE_URLS entry
-	Value     string // raw upstream key
-	ValueHash string // SHA-256 over the key value
+// probeGET issues a bearer-authenticated GET and records partial-failure
+// bookkeeping. Returns the raw body when successful, nil otherwise.
+func probeGET(
+	ctx context.Context,
+	client *http.Client,
+	res *action.LootResult,
+	opts action.LootOptions,
+	baseURL, path, apiKey string,
+) []byte {
+	res.Summary.EndpointsProbed++
+	body, err := common.GetJSON(ctx, client, strings.TrimRight(baseURL, "/")+path, apiKey, 4<<20)
+	if err != nil {
+		slog.Warn("openwebui loot: probe failed",
+			"endpoint", baseURL+path,
+			"key_prefix", common.Redact(apiKey),
+			"engagement_id", opts.EngagementID,
+			"error", err)
+		res.PartialErrors = append(res.PartialErrors, fmt.Sprintf("%s: %v", strings.TrimPrefix(path, "/"), err))
+		res.Summary.PartialFailures++
+		return nil
+	}
+	return body
 }
 
-// fetchOpenAIConfig issues GET /openai/config with the admin API key and
-// extracts configured upstream provider keys. ASSUMED SHAPE (needs live
-// verification): the response carries parallel OPENAI_API_KEYS and
-// OPENAI_API_BASE_URLS arrays where index i pairs a key with its base
-// URL. Empty keys (Ollama upstreams typically have no key) are skipped.
-// Parsing is defensive: a missing array yields zero credentials, not an
-// error.
-func fetchOpenAIConfig(ctx context.Context, client *http.Client, baseURL, apiKey string, maxItems int) ([]upstreamCred, error) {
-	body, err := common.GetJSON(ctx, client, strings.TrimRight(baseURL, "/")+"/openai/config", apiKey, 4<<20)
-	if err != nil {
-		return nil, err
+// emitUpstreamCredential builds a :Credential node + EXPOSES_CREDENTIAL
+// edge from a harvested upstream key and appends both to the LootResult.
+func emitUpstreamCredential(
+	res *action.LootResult,
+	opts action.LootOptions,
+	openwebuiID, baseURL string,
+	nameSlug, format, value, endpoint, source string,
+) {
+	credID := ingest.ComputeNodeID("Credential", baseURL, nameSlug)
+	cprops := map[string]any{
+		"objectid":     credID,
+		"type":         "apiKey",
+		"name":         nameSlug,
+		"source":       "openwebui",
+		"is_exposed":   true,
+		"high_entropy": true,
+		"format":       format,
+		"value_hash":   common.HashCredentialValue(value),
+		"merge_key":    "value_hash",
+	}
+	if endpoint != "" {
+		cprops["provider_endpoint"] = endpoint
+	}
+	if opts.IncludeCredentialValues {
+		cprops["value"] = value
+	}
+	res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, ingest.Node{
+		ID:         credID,
+		Kinds:      []string{"Credential"},
+		Properties: cprops,
+	})
+	edgeEndpoint := endpoint
+	if edgeEndpoint == "" {
+		edgeEndpoint = baseURL
+	}
+	res.IngestData.Graph.Edges = append(res.IngestData.Graph.Edges,
+		ingest.ExposesCredentialEdge(openwebuiID, credID, opts.EngagementID, source, edgeEndpoint))
+	res.Summary.CredentialsFound++
+}
+
+// runOpenAIConfig probes GET /openai/config and emits one :Credential
+// per non-empty OPENAI_API_KEYS[i], paired with OPENAI_API_BASE_URLS[i]
+// when the arrays are parallel.
+func runOpenAIConfig(
+	ctx context.Context,
+	client *http.Client,
+	res *action.LootResult,
+	opts action.LootOptions,
+	openwebuiID, baseURL, apiKey string,
+	remaining int,
+) int {
+	if remaining <= 0 {
+		return 0
+	}
+	body := probeGET(ctx, client, res, opts, baseURL, "/openai/config", apiKey)
+	if body == nil {
+		return remaining
 	}
 	var raw struct {
 		APIKeys     []string `json:"OPENAI_API_KEYS"`
 		APIBaseURLs []string `json:"OPENAI_API_BASE_URLS"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("decode /openai/config: %w", err)
+		res.PartialErrors = append(res.PartialErrors, fmt.Sprintf("openai/config decode: %v", err))
+		res.Summary.PartialFailures++
+		return remaining
 	}
-	var out []upstreamCred
 	for i, key := range raw.APIKeys {
-		if len(out) >= maxItems {
+		if remaining <= 0 {
 			break
 		}
 		key = strings.TrimSpace(key)
-		if key == "" {
-			continue // Ollama / keyless upstreams expose no secret.
+		if key == "" || len(key) < walkerMinSecretLen {
+			continue
 		}
-		uc := upstreamCred{
-			Name:      "openai-" + strconv.Itoa(i),
-			Value:     key,
-			ValueHash: common.HashCredentialValue(key),
-		}
+		endpoint := ""
 		if i < len(raw.APIBaseURLs) {
-			uc.Endpoint = strings.TrimSpace(raw.APIBaseURLs[i])
+			endpoint = strings.TrimSpace(raw.APIBaseURLs[i])
 		}
-		out = append(out, uc)
+		emitUpstreamCredential(res, opts, openwebuiID, baseURL,
+			"upstream-openai-"+strconv.Itoa(i), "upstream-provider", key, endpoint, "openai_config")
+		remaining--
 	}
-	return out, nil
+	return remaining
+}
+
+// runOllamaConfig probes GET /ollama/config. For each entry in
+// OLLAMA_BASE_URLS:
+//
+//   - Emits a placeholder :OllamaInstance node + :EXPOSES edge from
+//     OpenWebUIInstance → OllamaInstance (matches what the old
+//     fingerprinter tried to emit via the dead $.ollama.base_url capture).
+//   - Looks up per-URL API key via OLLAMA_API_CONFIGS (keyed by index
+//     "0"/"1"/… OR by the full base URL, per Open WebUI's get_api_key
+//     double-fallback at routers/ollama.py:189-192). Decodes primary
+//     field `key`; falls back to legacy `api_key`.
+//   - Emits a :Credential + :EXPOSES_CREDENTIAL edge per non-empty key.
+func runOllamaConfig(
+	ctx context.Context,
+	client *http.Client,
+	res *action.LootResult,
+	opts action.LootOptions,
+	openwebuiID, baseURL, apiKey string,
+	remaining int,
+) int {
+	if remaining <= 0 {
+		return 0
+	}
+	body := probeGET(ctx, client, res, opts, baseURL, "/ollama/config", apiKey)
+	if body == nil {
+		return remaining
+	}
+	var raw struct {
+		BaseURLs   []string                   `json:"OLLAMA_BASE_URLS"`
+		APIConfigs map[string]json.RawMessage `json:"OLLAMA_API_CONFIGS"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		res.PartialErrors = append(res.PartialErrors, fmt.Sprintf("ollama/config decode: %v", err))
+		res.Summary.PartialFailures++
+		return remaining
+	}
+
+	// Track canonical URLs to promote onto the instance node.
+	canonicalBaseURLs := make([]string, 0, len(raw.BaseURLs))
+
+	for i, base := range raw.BaseURLs {
+		base = strings.TrimSpace(base)
+		if base == "" {
+			continue
+		}
+		canon := canonicalizeBackendURL(base)
+		if canon == "" {
+			continue
+		}
+		canonicalBaseURLs = append(canonicalBaseURLs, canon)
+
+		// Emit placeholder :OllamaInstance node + :EXPOSES edge — one
+		// per canonical backend URL. Uses ComputeNodeID with the
+		// canonical URL so ollamafp / ollamaloot fold into the same
+		// node via MERGE-by-objectid.
+		ollamaID := ingest.ComputeNodeID("OllamaInstance", canon)
+		res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, ingest.Node{
+			ID:    ollamaID,
+			Kinds: []string{"OllamaInstance", "AIService"},
+			Properties: map[string]any{
+				"objectid":       ollamaID,
+				"endpoint":       canon,
+				"discovered_via": "openwebui_ollama_config",
+				"service_kind":   "ollama",
+				"auth_method":    "none",
+			},
+		})
+		res.IngestData.Graph.Edges = append(res.IngestData.Graph.Edges, ingest.Edge{
+			Source:     openwebuiID,
+			Target:     ollamaID,
+			Kind:       "EXPOSES",
+			SourceKind: "OpenWebUIInstance",
+			TargetKind: "OllamaInstance",
+			Properties: map[string]any{
+				"confidence":  1.0,
+				"risk_weight": 0.3,
+				"evidence": map[string]any{
+					"endpoint":      baseURL,
+					"source":        "ollama_config",
+					"engagement_id": opts.EngagementID,
+					"backend_url":   canon,
+				},
+			},
+		})
+
+		if remaining <= 0 {
+			continue
+		}
+		// Per-URL config lookup: index-keyed → base-URL-keyed →
+		// canonical-URL-keyed. Decodes `key` primarily, `api_key` as
+		// legacy fallback.
+		var cfgRaw json.RawMessage
+		if v, ok := raw.APIConfigs[strconv.Itoa(i)]; ok {
+			cfgRaw = v
+		} else if v, ok := raw.APIConfigs[base]; ok {
+			cfgRaw = v
+		} else if v, ok := raw.APIConfigs[canon]; ok {
+			cfgRaw = v
+		}
+		if len(cfgRaw) == 0 {
+			continue
+		}
+		var cfg struct {
+			Key    string `json:"key"`
+			APIKey string `json:"api_key"`
+		}
+		if err := json.Unmarshal(cfgRaw, &cfg); err != nil {
+			continue
+		}
+		key := strings.TrimSpace(cfg.Key)
+		if key == "" {
+			key = strings.TrimSpace(cfg.APIKey)
+		}
+		if key == "" || len(key) < walkerMinSecretLen {
+			continue
+		}
+		emitUpstreamCredential(res, opts, openwebuiID, baseURL,
+			"upstream-ollama-"+strconv.Itoa(i), "upstream-ollama", key, canon, "ollama_config")
+		remaining--
+	}
+
+	// Promote the canonicalized base URLs onto the OpenWebUIInstance
+	// posture props (first URL is exposed as ollama_backend_url for
+	// backward-compat with the historic property name).
+	if len(canonicalBaseURLs) > 0 {
+		props := res.IngestData.Graph.Nodes[0].Properties
+		props["ollama_backend_url"] = canonicalBaseURLs[0]
+		props["ollama_backend_urls"] = canonicalBaseURLs
+	}
+	return remaining
+}
+
+// runRetrievalWalk probes an admin-gated retrieval endpoint and runs
+// the recursive secret walker over the response, emitting one
+// :Credential per matched secret field.
+func runRetrievalWalk(
+	ctx context.Context,
+	client *http.Client,
+	res *action.LootResult,
+	opts action.LootOptions,
+	openwebuiID, baseURL, apiKey, path, source string,
+	remaining int,
+) int {
+	if remaining <= 0 {
+		return 0
+	}
+	body := probeGET(ctx, client, res, opts, baseURL, path, apiKey)
+	if body == nil {
+		return remaining
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(body, &root); err != nil {
+		res.PartialErrors = append(res.PartialErrors,
+			fmt.Sprintf("%s decode: %v", strings.TrimPrefix(path, "/"), err))
+		res.Summary.PartialFailures++
+		return remaining
+	}
+	harvested := walkSecretFields(root, nil, remaining, walkerMaxDepth)
+	for _, hc := range harvested {
+		if remaining <= 0 {
+			break
+		}
+		emitUpstreamCredential(res, opts, openwebuiID, baseURL,
+			"openwebui-"+source+"-"+hc.PathSlug,
+			"openwebui-"+source,
+			hc.Value,
+			"",
+			source)
+		remaining--
+	}
+	return remaining
+}
+
+// harvested is one match from the recursive secret walker.
+type harvested struct {
+	PathSlug string
+	Value    string
+}
+
+// isSecretKey reports whether a JSON key name looks like it holds a
+// secret. Match is case-insensitive so both flat UPPER_SNAKE
+// (RAG_EXTERNAL_RERANKER_API_KEY, PADDLEOCR_VL_TOKEN, YACY_PASSWORD,
+// BING_SEARCH_V7_SUBSCRIPTION_KEY, SOUGOU_API_SK) and nested lowercase
+// (openai_config.key) shapes hit.
+//
+// Negative filters skip common non-secret fields that would otherwise
+// match a positive suffix (RAG_TOKENIZER_MODEL contains "TOKEN" but is
+// an engine identifier; SEARCHAPI_ENGINE / SEARXNG_LANGUAGE contain no
+// positive suffix but are guarded belt-and-braces).
+func isSecretKey(key string) bool {
+	upper := strings.ToUpper(key)
+	// Negative filter first — a positive suffix that co-occurs with any
+	// of these tokens is presumed non-secret.
+	negatives := []string{
+		"MODEL", "ENGINE", "URL", "HOST", "NAME", "MODE",
+		"TYPE", "PATH", "DIR", "FORMAT", "LANGUAGE", "TEMPLATE",
+		"TIMEOUT", "PARAMS", "SIZE", "COUNT",
+	}
+	for _, n := range negatives {
+		if strings.Contains(upper, n) {
+			return false
+		}
+	}
+	positives := []string{"KEY", "TOKEN", "PASSWORD", "SECRET", "SUBSCRIPTION"}
+	for _, p := range positives {
+		if strings.Contains(upper, p) {
+			return true
+		}
+	}
+	// _SK trailing suffix — Sougou-style shorthand.
+	if strings.HasSuffix(upper, "_SK") {
+		return true
+	}
+	return false
+}
+
+// walkSecretFields recurses into every nested object in root, emitting
+// one entry per terminal string value whose key name matches
+// isSecretKey and whose value clears walkerMinSecretLen. Path is a
+// breadcrumb slice used to build the credential's name slug (dotted
+// path, snake_cased).
+func walkSecretFields(root map[string]json.RawMessage, path []string, maxItems, depth int) []harvested {
+	if depth <= 0 || maxItems <= 0 {
+		return nil
+	}
+	var out []harvested
+	for k, raw := range root {
+		if len(out) >= maxItems {
+			break
+		}
+		bread := append(append([]string(nil), path...), k)
+		// Try string first.
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil {
+			if !isSecretKey(k) {
+				continue
+			}
+			v := strings.TrimSpace(s)
+			if len(v) < walkerMinSecretLen {
+				continue
+			}
+			out = append(out, harvested{
+				PathSlug: pathToSlug(bread),
+				Value:    v,
+			})
+			continue
+		}
+		// Try nested object.
+		var nested map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &nested); err == nil && nested != nil {
+			for _, hc := range walkSecretFields(nested, bread, maxItems-len(out), depth-1) {
+				if len(out) >= maxItems {
+					break
+				}
+				out = append(out, hc)
+			}
+		}
+		// Arrays and other scalar types (bool, number, null) are
+		// intentionally ignored — Open WebUI admin secrets are always
+		// strings.
+	}
+	return out
+}
+
+// pathToSlug renders a breadcrumb path as a lowercase dotted
+// identifier suitable for use in a Credential node's name property.
+func pathToSlug(path []string) string {
+	cleaned := make([]string, 0, len(path))
+	for _, p := range path {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if p == "" {
+			continue
+		}
+		cleaned = append(cleaned, p)
+	}
+	return strings.Join(cleaned, ".")
 }
 
 var _ action.Looter = (*Looter)(nil)

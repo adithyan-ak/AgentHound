@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/sdk/module"
 	"github.com/google/uuid"
@@ -113,7 +114,12 @@ func runLoot(cmd *cobra.Command, args []string) error {
 	for _, spec := range credSpecs {
 		k, v, ok := strings.Cut(spec, "=")
 		if !ok {
-			return fmt.Errorf("invalid --credential %q: expected KEY=VALUE", spec)
+			// Redact the raw spec: if the operator typed
+			// `--credential sk-...` (no =), we must NOT echo the raw
+			// value into the returned error, because Cobra prints
+			// RunE errors to stderr and main.go prints them again —
+			// two credential-leaking paths, both eliminated here.
+			return fmt.Errorf("invalid --credential %q: expected KEY=VALUE", common.Redact(spec))
 		}
 		creds[k] = v
 	}

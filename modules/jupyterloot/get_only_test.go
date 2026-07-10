@@ -1,4 +1,4 @@
-package qdrantloot
+package jupyterloot
 
 import (
 	"os"
@@ -9,15 +9,16 @@ import (
 )
 
 // TestLooter_HTTPMethods enforces the Looter contract (sdk/action.Looter):
-// no state-mutating requests. The Qdrant Looter is PURE GET — its
-// inventory probes (/collections and /collections/{name}) are plain GETs
-// with no body, so there should be NO POST/PUT/PATCH/DELETE/CONNECT call
-// site at all. Any future addition (e.g. a POST search/scroll query) must
-// be added to the allowlist below WITH a comment explaining why it is
-// read-only-in-effect, or this guard fails.
+// no state-mutating requests. The Jupyter Looter is PURE GET — both
+// probes (/api/sessions and the recursive /api/contents walk) issue
+// plain GETs with no body. There is NO POST/PUT/PATCH/DELETE/CONNECT
+// call site, and none is justifiable for read-only inventory.
 //
-// Mirrors modules/mlflowloot/get_only_test.go and
-// modules/ollamaloot/get_only_test.go.
+// Any future addition (e.g. a POST search) MUST be added to the
+// allowlist below WITH a justifying comment explaining why it is
+// read-only-in-effect. PUT/PATCH/DELETE can never be justified.
+//
+// Mirrors modules/qdrantloot/get_only_test.go.
 func TestLooter_HTTPMethods(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join(".", "looter.go"))
 	if err != nil {
@@ -35,18 +36,9 @@ func TestLooter_HTTPMethods(t *testing.T) {
 		funcCtx string // substring of the surrounding function name
 		why     string
 	}
-	allowlist := []allowed{
-		{
-			method:  "POST",
-			funcCtx: "fetchScrolledPoints",
-			why:     "/collections/{name}/points/scroll is Qdrant's paginated payload read (POST-only per OpenAPI ScrollRequest); read-only-in-effect, no state change. Gated behind --include-points.",
-		},
-		{
-			method:  "POST",
-			funcCtx: "postJSON",
-			why:     "shared POST helper for fetchScrolledPoints; each call site inherits the /points/scroll read-only-in-effect justification.",
-		},
-	}
+	// Intentionally empty: the Jupyter Looter has no read-only-in-effect
+	// mutating exception. Any match below is a contract violation.
+	allowlist := []allowed{}
 
 	for _, idx := range matches {
 		prefix := string(src[:idx[0]])
