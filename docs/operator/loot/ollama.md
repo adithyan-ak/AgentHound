@@ -53,10 +53,16 @@ The Looter no longer attempts raw weight extraction — Ollama's HTTP API does n
 
 ## value_hash semantics
 
-The `value_hash` on each `AIModel` node is `SHA-256(modelfile_content)`. This serves two purposes:
+When `/api/show` returns a non-empty modelfile, the `AIModel` node carries `value_hash = SHA-256(modelfile_content)`. Models whose `/api/show` returns no modelfile (rare — private, unbuilt, or pre-migration models) omit the property, per the validator contract (`value_hash` is required only on `Credential` nodes; `AIModel` is optional). This serves two purposes:
 
 1. **Cross-run stability.** The same model on the same Ollama instance produces the same hash across loot runs, enabling diff detection (rug-pull detection for model artifacts).
 2. **Cross-collector joins.** If another collector surfaces the same modelfile content (e.g., a config collector finds a modelfile on disk), the `cross_service_credential_chain` post-processor can join on `value_hash`.
+
+## Level-2 keep_alive semantics
+
+The `--include-embeddings` probe sends `keep_alive: 0` in its request body. This tells Ollama's scheduler to evict THIS runner immediately after the request completes (verified against Ollama `server/sched.go:389-398`: when `runner.sessionDuration <= 0`, the finished-request handler sends the runner to `expiredCh` on `refCount` drop). If the target had insufficient VRAM to load the runner, other runners may have been evicted DURING load — this is standard scheduler behavior for any request and is independent of `keep_alive`.
+
+On Ollama versions predating the `keep_alive` field, the field is ignored and the newly-loaded runner stays warm for the default 5 minutes (`envconfig.KeepAlive()`).
 
 ## --include-credential-values
 

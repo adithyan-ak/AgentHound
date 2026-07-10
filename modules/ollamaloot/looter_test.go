@@ -2,9 +2,12 @@ package ollamaloot
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
@@ -80,6 +83,17 @@ func TestLoot_AnonymousHappyPath(t *testing.T) {
 		case "OllamaInstance":
 			ollama++
 		case "AIModel":
+			// Dual-emit contract: both parameter_size (canonical) and
+			// parameters (deprecated alias) must be populated with the
+			// same value.
+			ps, _ := n.Properties["parameter_size"].(string)
+			pa, _ := n.Properties["parameters"].(string)
+			if ps == "" {
+				t.Errorf("AIModel.parameter_size should be populated (canonical field per graph-model.md)")
+			}
+			if pa != ps {
+				t.Errorf("AIModel dual-emit mismatch: parameters=%q parameter_size=%q; must be equal for one release", pa, ps)
+			}
 			if name, _ := n.Properties["name"].(string); strings.Contains(name, "support-agent") {
 				modelFinetune++
 				if got, _ := n.Properties["is_finetune"].(bool); !got {
@@ -160,6 +174,116 @@ func TestLoot_IncludeEmbeddingsProbesPOST(t *testing.T) {
 	confirmed, _ := res.IngestData.Graph.Nodes[0].Properties["embedding_capability_confirmed"].(bool)
 	if !confirmed {
 		t.Error("embedding_capability_confirmed should be true after successful probe")
+	}
+}
+
+// TestLoot_Ollama_ShowUsesModelField locks in the /api/show request
+// body shape: canonical field is {"model": ...}, not legacy {"name": ...}.
+// Ollama's ShowHandler accepts both, but "model" matches current api.md.
+func TestLoot_Ollama_ShowUsesModelField(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		gotBody  []byte
+		gotCount int
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/tags":
+			_, _ = w.Write([]byte(tagsBody))
+		case "/api/show":
+			b, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			if gotCount == 0 {
+				gotBody = b
+			}
+			gotCount++
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"modelfile":"FROM llama3\n","details":{"family":"llama","parameter_size":"8B"}}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	l := &Looter{}
+	_, err := l.Loot(context.Background(), action.Target{
+		Kind:    "host",
+		Address: strings.TrimPrefix(srv.URL, "http://"),
+	}, action.LootOptions{})
+	if err != nil {
+		t.Fatalf("Loot: %v", err)
+	}
+	if gotCount == 0 {
+		t.Fatal("no /api/show call observed")
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(gotBody, &parsed); err != nil {
+		t.Fatalf("first /api/show body not valid JSON: %v (%s)", err, string(gotBody))
+	}
+	if _, ok := parsed["model"]; !ok {
+		t.Errorf("/api/show body missing canonical `model` field: %s", string(gotBody))
+	}
+	if _, ok := parsed["name"]; ok {
+		t.Errorf("/api/show body still sends deprecated `name` field: %s", string(gotBody))
+	}
+}
+
+// TestLoot_Ollama_EmbeddingsKeepAliveZero — the --include-embeddings
+// probe must send keep_alive: 0 so the runner is unloaded immediately
+// after the probe (verified against Ollama server/sched.go:389-398).
+func TestLoot_Ollama_EmbeddingsKeepAliveZero(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		gotBody  []byte
+		observed bool
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/tags":
+			_, _ = w.Write([]byte(tagsBody))
+		case "/api/show":
+			_, _ = w.Write([]byte(`{"modelfile":"FROM llama3\n","details":{"family":"llama","parameter_size":"8B"}}`))
+		case "/api/embeddings":
+			b, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			gotBody = b
+			observed = true
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"embedding":[0.1,0.2,0.3]}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	l := &Looter{}
+	_, err := l.Loot(context.Background(), action.Target{
+		Kind:    "host",
+		Address: strings.TrimPrefix(srv.URL, "http://"),
+	}, action.LootOptions{
+		Extras: map[string]any{"include-embeddings": true},
+	})
+	if err != nil {
+		t.Fatalf("Loot: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !observed {
+		t.Fatal("no /api/embeddings probe observed")
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(gotBody, &parsed); err != nil {
+		t.Fatalf("embeddings body not valid JSON: %v (%s)", err, string(gotBody))
+	}
+	ka, ok := parsed["keep_alive"]
+	if !ok {
+		t.Fatalf("/api/embeddings body missing keep_alive: %s", string(gotBody))
+	}
+	f, _ := ka.(float64)
+	if f != 0 {
+		t.Errorf("keep_alive = %v, want 0 (immediate unload per sched.go:389-398)", ka)
 	}
 }
 

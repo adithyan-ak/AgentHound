@@ -19,9 +19,24 @@
 //	    Issues a single benchmark embedding request to confirm the
 //	    inference compute path is consumable. The Looter contract is
 //	    GET-only by default; this POST is the documented exception,
-//	    allowed because it is read-only-in-effect on the target (no
-//	    state change). Gated behind explicit flag because it consumes
-//	    operator-billed compute.
+//	    allowed because it makes no durable state change (no data
+//	    written, no config mutated). The probe transiently loads the
+//	    model into the runner cache to fulfil the embedding request
+//	    and sets "keep_alive": 0 to request the scheduler evict THIS
+//	    runner immediately after the request completes (verified
+//	    Ollama server/sched.go:389-398: runners with sessionDuration
+//	    <= 0 are sent to expiredCh on refCount drop). If the target
+//	    lacked VRAM for the new runner, other runners may have been
+//	    evicted DURING load — this is standard scheduler behavior for
+//	    any request, independent of keep_alive. On Ollama versions
+//	    predating keep_alive, the runner stays warm for the default
+//	    5 minutes (envconfig.KeepAlive()). Gated behind an explicit
+//	    flag because it consumes operator-billed compute.
+//
+//	Note: /api/embeddings is superseded by POST /api/embed in current
+//	Ollama; the deprecated route still routes to EmbeddingsHandler and
+//	is preserved here for backward compat with pre-/api/embed Ollama
+//	versions. Migration to /api/embed is deferred.
 //
 // The previous v0.3 --include-weights / --weights-dir surface was
 // removed: it targeted GET /api/blobs/<digest>, an endpoint Ollama's
@@ -148,12 +163,18 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 
 		modelID := ingest.ComputeNodeID("AIModel", baseURL, tag.Model)
 		props := map[string]any{
-			"objectid":    modelID,
-			"name":        tag.Model,
-			"service_id":  ollamaID,
-			"digest":      tag.Digest,
-			"size_bytes":  tag.Size,
-			"family":      show.Family,
+			"objectid":       modelID,
+			"name":           tag.Model,
+			"service_id":     ollamaID,
+			"digest":         tag.Digest,
+			"size_bytes":     tag.Size,
+			"family":         show.Family,
+			"parameter_size": show.Parameters, // canonical Ollama Details.ParameterSize
+			// TODO(v0.5): drop the "parameters" alias below; downstream
+			// graph consumers migrate to "parameter_size" per
+			// docs/reference/graph-model.md. Dual-emitted for one
+			// release cycle to avoid breaking external UI/query
+			// consumers.
 			"parameters":  show.Parameters,
 			"is_finetune": show.IsFinetune,
 			"modified_at": tag.ModifiedAt,
@@ -252,7 +273,10 @@ type showEntry struct {
 }
 
 func fetchShow(ctx context.Context, client *http.Client, url, modelName string) (showEntry, error) {
-	payload, _ := json.Marshal(map[string]string{"name": modelName})
+	// Canonical field is "model" per current Ollama docs/api.md; the
+	// legacy "name" field still works (ShowHandler falls back via
+	// req.Name → req.Model) but is deprecated. Send "model".
+	payload, _ := json.Marshal(map[string]string{"model": modelName})
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
 	if err != nil {
 		return showEntry{}, fmt.Errorf("build request: %w", err)
@@ -301,19 +325,32 @@ func fetchShow(ctx context.Context, client *http.Client, url, modelName string) 
 }
 
 // probeEmbeddings issues exactly one POST /api/embeddings against the
-// first available model. Returns true on a 2xx response. The Looter's
-// GET-only contract makes this the single allowed exception — the POST
-// is read-only-in-effect on the target (no state change). It is gated
-// behind --include-embeddings because operator-billed compute is the
-// "cost" being incurred on the target.
+// first available model. Returns true on a 2xx response. This is the
+// documented GET-only-contract exception — the POST makes no durable
+// state change (no data written, no config mutated) but does load the
+// model into the runner cache to fulfil the request.
+//
+// keep_alive: 0 requests the scheduler evict THIS runner immediately
+// after the probe completes. Verified against Ollama server/sched.go
+// (lines 389-398): when runner.sessionDuration <= 0, the finished-request
+// handler sends the runner to expiredCh on refCount drop, triggering
+// unload. On Ollama versions predating keep_alive support the field is
+// ignored and the runner stays warm for the default 5 minutes
+// (envconfig.KeepAlive()).
+//
+// Note: /api/embeddings is superseded by POST /api/embed in current
+// Ollama. Migration to /api/embed is deferred — the deprecated route
+// still routes to EmbeddingsHandler on every Ollama version we care
+// about, and keeping it minimizes the compat matrix.
 func probeEmbeddings(ctx context.Context, client *http.Client, baseURL string, tags []tagEntry) bool {
 	if len(tags) == 0 {
 		return false
 	}
 	url := strings.TrimRight(baseURL, "/") + "/api/embeddings"
 	payload, _ := json.Marshal(map[string]any{
-		"model":  tags[0].Model,
-		"prompt": "agenthound benchmark probe",
+		"model":      tags[0].Model,
+		"prompt":     "agenthound benchmark probe",
+		"keep_alive": 0,
 	})
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
 	if err != nil {

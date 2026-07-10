@@ -63,3 +63,36 @@ func TestResolveEdgeEndpoints_AllRegisteredKindsResolvable(t *testing.T) {
 		}
 	}
 }
+
+// TestProvidesResource_AcceptsMLflowAndQdrantSources locks in the
+// extension of PROVIDES_RESOURCE to accept :MCPResource emissions from
+// mlflowloot (Model Registry storage URIs) and qdrantloot (scrolled
+// point payloads) in addition to the original MCPServer and
+// JupyterServer sources.
+func TestProvidesResource_AcceptsMLflowAndQdrantSources(t *testing.T) {
+	ep, ok := EdgeKindEndpoints["PROVIDES_RESOURCE"]
+	if !ok {
+		t.Fatal("PROVIDES_RESOURCE missing from EdgeKindEndpoints")
+	}
+	wantSources := map[string]bool{
+		"MCPServer": true, "JupyterServer": true,
+		"MLflowServer": true, "QdrantInstance": true,
+	}
+	got := map[string]bool{}
+	for _, s := range ep.SourceKinds {
+		got[s] = true
+	}
+	for k := range wantSources {
+		if !got[k] {
+			t.Errorf("PROVIDES_RESOURCE source-kinds missing %q; got %v", k, ep.SourceKinds)
+		}
+	}
+	// Explicit-override paths for both new sources.
+	for _, src := range []string{"MLflowServer", "QdrantInstance"} {
+		gotSrc, gotTgt := ResolveEdgeEndpoints("PROVIDES_RESOURCE", src, "MCPResource")
+		if gotSrc != src || gotTgt != "MCPResource" {
+			t.Errorf("ResolveEdgeEndpoints(PROVIDES_RESOURCE, %q, MCPResource) = (%q, %q), want (%q, MCPResource)",
+				src, gotSrc, gotTgt, src)
+		}
+	}
+}

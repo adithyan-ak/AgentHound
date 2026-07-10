@@ -39,9 +39,9 @@ These are the node kinds accepted in ingest input (`sdk/ingest.AllowedNodeKinds`
 | `LiteLLMGateway` | Network scan + LiteLLM fingerprinter | `endpoint`, `auth_method`, `is_anonymous_loot`, `docs_enabled` |
 | `JupyterServer` | Network scan + Jupyter fingerprinter | `endpoint`, `version`, `token_required` |
 | `LangServeApp` | Network scan + LangServe fingerprinter | `endpoint`, `chains` |
-| `OpenWebUIInstance` | Network scan + Open WebUI fingerprinter + Open WebUI Looter | `endpoint`, `version`, `webui_auth_enabled`, `signup_enabled`, `default_user_role` (if present), `auth_required`, `ollama_backend_url` (Looter-enriched posture) |
+| `OpenWebUIInstance` | Network scan + Open WebUI fingerprinter + Open WebUI Looter | `endpoint`, `version`, `webui_auth_enabled`, `signup_enabled`, `auth_required`, `ollama_backend_url` (first canonicalized backend URL), `ollama_backend_urls` (full list, Looter-enriched from admin `/ollama/config`) |
 | `AIService` | Multi-label umbrella (see below) | _(no unique properties — carried as companion label)_ |
-| `AIModel` | Ollama Looter | `name`, `size`, `digest`, `family`, `parameter_size`, `quantization` |
+| `AIModel` | Ollama Looter | `name`, `size_bytes`, `digest`, `family`, `parameter_size` (canonical), `parameters` (deprecated alias, one-release dual-emit), `is_finetune`, `modified_at`, `value_hash` (when modelfile present), `has_system_prompt`, `modelfile_size_bytes` |
 | `ExtractedTrainingSignal` | Extractors | `kind`, `source_model`, `sample_count`, `confidence` |
 
 ### Synthetic (2 kinds, post-processor created)
@@ -87,7 +87,7 @@ This enables queries like `MATCH (n:AIService)` to find all AI infrastructure re
 |------|--------|--------|-----------|---------|
 | `TRUSTS_SERVER` | AgentInstance | MCPServer | Config | Agent trusts this server to provide tools |
 | `PROVIDES_TOOL` | MCPServer | MCPTool | MCP | Server exposes this tool |
-| `PROVIDES_RESOURCE` | MCPServer / JupyterServer | MCPResource | MCP / Jupyter Looter | Server exposes this resource |
+| `PROVIDES_RESOURCE` | MCPServer / JupyterServer / MLflowServer / QdrantInstance | MCPResource | MCP / Jupyter Looter / MLflow Looter (Model Registry storage URIs) / Qdrant Looter (scrolled point payloads under `--include-points`) | Server exposes this resource. MLflow URIs are plain `storage_location or source` (s3://, gs://, dbfs:/, file:///), NOT presigned credentials. Qdrant point resources are per-collection payload samples. |
 | `PROVIDES_PROMPT` | MCPServer | MCPPrompt | MCP | Server exposes this prompt template |
 | `ADVERTISES_SKILL` | A2AAgent | A2ASkill | A2A | Agent advertises this skill |
 | `DELEGATES_TO` | A2AAgent | A2AAgent | A2A | Agent delegates tasks to another agent |
@@ -143,7 +143,7 @@ type Edge struct {
 | `confidence` | float64 | 0.0–1.0 confidence score |
 | `risk_weight` | float64 | Lower = easier to exploit (used by Dijkstra) |
 | `is_composite` | bool | True for post-processed edges |
-| `evidence` | string | Human-readable explanation |
+| `evidence` | map[string]any | Structured evidence: `endpoint`, `source`, `engagement_id`, and edge-specific keys (e.g. `digest` for `PROVIDES_MODEL`, `backend_url` for `EXPOSES`, `model_name`/`model_version` for MLflow `PROVIDES_RESOURCE`, `collection`/`point_id` for Qdrant `PROVIDES_RESOURCE`) |
 
 Composite edges additionally carry `source_collector` (`mcp`, `a2a`, `config`, or a processor-owned source such as `cross_service_credential_chain`) for scoped stale-edge cleanup.
 

@@ -59,12 +59,27 @@ func (p *CrossServiceCredentialChain) Process(ctx context.Context, db graph.Grap
 	// (c1master). Folding it here avoids re-MATCHing the join path. The
 	// agents are collected for the count, then re-UNWOUND so the CAN_REACH
 	// MERGE stays one edge per (agent, upstream-credential) as before.
+	// merge_key filter (U-MED-4): when a Looter cannot observe the raw
+	// credential value (e.g. LiteLLM masks upstream provider api_key
+	// server-side, so /model/info gives us no key material), it emits a
+	// Credential with a SYNTHETIC value_hash = SHA-256("provider:name")
+	// and marks the node merge_key='identity'. Those hashes cannot
+	// legitimately participate in the cross-collector value_hash join —
+	// there is no raw sk-... that hashes to sha256("openai:gpt-4"), so
+	// they can't false-positive today, but the explicit filter makes
+	// intent unambiguous and rules out a hypothetical collision-crafted
+	// synthetic ever matching a real credential. Any node with
+	// merge_key='value_hash' (or the historic missing merge_key from
+	// pre-U-MED-4 emissions) is eligible for the join.
 	cypher := `
 MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(s:MCPServer)
       -[:HAS_ENV_VAR]->(c1:Credential)
 WHERE c1.value_hash IS NOT NULL AND c1.value_hash <> ''
+  AND (c1.merge_key IS NULL OR c1.merge_key = 'value_hash')
 MATCH (gw:LiteLLMGateway)-[:EXPOSES_CREDENTIAL]->(c1master:Credential)
-WHERE c1master.value_hash = c1.value_hash AND c1master.objectid <> c1.objectid
+WHERE c1master.value_hash = c1.value_hash
+  AND c1master.objectid <> c1.objectid
+  AND (c1master.merge_key IS NULL OR c1master.merge_key = 'value_hash')
 MATCH (gw)-[:EXPOSES_CREDENTIAL]->(c2:Credential)
 WHERE c2.type IN ['apiKey', 'virtual_key'] AND c2.objectid <> c1master.objectid
 WITH s, c1, c1master, c2, gw, collect(DISTINCT a) AS agents

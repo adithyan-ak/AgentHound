@@ -108,3 +108,36 @@ func TestCrossServiceCredentialChain_CypherJoinsOnValueHash(t *testing.T) {
 		t.Errorf("Cypher must refresh existing CAN_REACH scan_id instead of skipping matches; query:\n%s", captured)
 	}
 }
+
+// TestCrossServiceCredentialChain_MergeKeyFilter guards the U-MED-4
+// filter clause: synthetic-identity Credentials (merge_key='identity')
+// must be excluded from BOTH sides of the value_hash join. Nodes with
+// merge_key IS NULL (pre-U-MED-4 emissions) must continue to
+// participate for backward compatibility.
+func TestCrossServiceCredentialChain_MergeKeyFilter(t *testing.T) {
+	var captured string
+	mock := &graph.MockGraphDB{
+		ExecuteWriteFunc: func(_ context.Context, cypher string, _ map[string]any) (int, error) {
+			captured = cypher
+			return 0, nil
+		},
+	}
+	p := &CrossServiceCredentialChain{}
+	_, err := p.Process(context.Background(), mock, "scan-1")
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	// Both sides of the join must be filtered.
+	for _, side := range []string{
+		"c1.merge_key IS NULL OR c1.merge_key = 'value_hash'",
+		"c1master.merge_key IS NULL OR c1master.merge_key = 'value_hash'",
+	} {
+		if !strings.Contains(captured, side) {
+			t.Errorf("Cypher missing merge_key filter %q; query:\n%s", side, captured)
+		}
+	}
+	// The clause must NOT accidentally accept identity-marked nodes.
+	if strings.Contains(captured, "merge_key = 'identity'") {
+		t.Errorf("Cypher accidentally selects identity-marked nodes; query:\n%s", captured)
+	}
+}

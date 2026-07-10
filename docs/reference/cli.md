@@ -173,7 +173,7 @@ agenthound loot <host:port> --type <kind> [flags]
 | `--master-key` | | Sugar for `--credential master_key=...`. |
 | `--credential` | | Operator-supplied credential as `KEY=VALUE` (repeatable). |
 | `--include-credential-values` | `false` | Emit raw values on Credential nodes. |
-| `--max-items` | `0` (looter default) | Cap emitted Credentials per category. |
+| `--max-items` | `0` (looter default) | Cap on the enumerated resource per Looter — semantics vary by module. See the [per-Looter default table](../operator/loot/index.md) for defaults + semantics. |
 | `--timeout` | `0` (looter default) | Per-probe HTTP timeout. |
 | `--engagement-id` | | Engagement identifier for IR coordination. |
 
@@ -181,7 +181,7 @@ agenthound loot <host:port> --type <kind> [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--include-embeddings` | `false` | Issue test embedding calls via `/api/embeddings` (consumes compute). |
+| `--include-embeddings` | `false` | Issue one test embedding call via `POST /api/embeddings` with `keep_alive: 0` (evicts the runner immediately after the probe per Ollama `server/sched.go:389-398`; consumes compute). |
 
 > Ollama's HTTP API does not expose a raw-weight download endpoint. See [Ollama loot](../operator/loot/ollama.md#getting-raw-weights-out-of-band) for how to obtain the GGUF weight file out-of-band when the engagement needs it.
 
@@ -189,11 +189,29 @@ agenthound loot <host:port> --type <kind> [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--api-key` | | Open WebUI admin API key (or session JWT). When supplied, enumerates upstream provider keys via authenticated `GET /openai/config` and emits Credential + EXPOSES_CREDENTIAL. Omit for anonymous posture only (`GET /api/config`). |
+| `--api-key` | | Open WebUI admin API key (or session JWT). When supplied, enumerates upstream provider keys via authenticated `GET /openai/config`, `GET /ollama/config`, `GET /api/v1/retrieval/config`, and `GET /api/v1/retrieval/embedding` (recursive secret walker for KEY/TOKEN/PASSWORD/SUBSCRIPTION/`_SK` suffixes; skips `MODEL`/`ENGINE`/`URL`/`HOST` negatives). Omit for anonymous posture only (`GET /api/config`). |
 
-`--type qdrant` is anonymous and pure-GET (no per-module flags): it inventories collections via `GET /collections` and `GET /collections/{name}`, folding `collection_count`, `collections`, `total_points`, and `anonymous_listing` onto the `QdrantInstance` node. It emits **no** Credential nodes.
+#### Per-Module Flags: `--type qdrant`
 
-`--type jupyter` is also anonymous and pure-GET (no per-module flags): it inventories active sessions via `GET /api/sessions` and the notebook tree via `GET /api/contents/`, emitting one `:MCPResource` per discovered notebook.
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--include-points` | `false` | Sample per-collection payloads via `POST /collections/{name}/points/scroll` (opt-in; can be large). Emits one `:MCPResource` per point + `PROVIDES_RESOURCE` edge from `QdrantInstance`. |
+| `--points-per-collection` | `100` | Cap on payloads sampled per collection when `--include-points` is set. |
+| `--max-total-resources` | `5000` | Global cap on `:MCPResource` nodes emitted across all collections (prevents runaway on large deployments). |
+
+Without `--include-points` the Qdrant Looter is pure-GET (`GET /collections` + `GET /collections/{name}`), folding `collection_count`, `collections`, `total_points`, `points_count_unknown`, and `anonymous_listing` onto the `QdrantInstance` node with no Credential nodes.
+
+#### Per-Module Flags: `--type jupyter`
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--max-depth` | `4` | Maximum recursion depth into `/api/contents` subdirectories. Arbitrary safety cap — Jupyter Server places no upper bound on tree depth, so a hostile or accidentally-deep tree could exhaust the Looter without one. |
+
+The Jupyter Looter is anonymous and pure-GET: it inventories active sessions via `GET /api/sessions` (empty-path console kernels are counted) and walks the notebook tree recursively via `GET /api/contents/`, emitting one `:MCPResource` per discovered notebook OR file. Per-directory 4xx/5xx failures are recorded as `PartialErrors` and the walk continues on sibling directories.
+
+#### `--type mlflow` — coverage note
+
+The MLflow Looter enumerates experiments + runs (paginated via `max_results` / `next_page_token` — modern MLflow rejects `experiments/search` without `max_results`) plus the Model Registry: `registered-models/search`, `model-versions/search`, and per-version `get-download-uri`. Each returned artifact URI is emitted as an `:MCPResource` joined to `MLflowServer` via `PROVIDES_RESOURCE`, with `sensitivity` auto-classified by scheme + path (see the [artifact sensitivity heuristic in graph-model.md](graph-model.md)). No new flag; the Model Registry probes are anonymous-readable on stock MLflow deployments.
 
 #### Example
 

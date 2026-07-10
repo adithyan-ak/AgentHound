@@ -13,7 +13,7 @@ func (*Looter) ID() string            { return "qdrant.loot" }
 func (*Looter) Action() action.Action { return action.Loot }
 func (*Looter) Target() string        { return "qdrant" }
 func (*Looter) Description() string {
-	return "Inventory Qdrant collections and per-collection point counts (anonymous, GET-only)"
+	return "Inventory Qdrant collections and per-collection point counts (anonymous, GET-only); flag-gated payload sampling via /points/scroll"
 }
 func (*Looter) Version() string     { return "0.4.0-dev" }
 func (*Looter) IsDestructive() bool { return false }

@@ -1,22 +1,28 @@
-# Open WebUI fingerprint rule (v0.3).
+# Open WebUI fingerprint rule (v0.3, v3 shape).
 #
 # Open WebUI is the most-deployed self-hosted ChatGPT-style frontend. It speaks
 # to a backend Ollama (or any OpenAI-compatible API) and stores chat history,
 # RAG documents, and per-user prompts. Default port 3000, no auth required to
-# hit /api/version — auth gates the chat endpoints, not the version probe.
+# hit /api/version or /api/config — auth gates the chat endpoints and the
+# admin-only /ollama/config, /openai/config, /api/v1/retrieval/* surfaces.
 #
 # /api/version returns: {"version":"0.3.x"}.
 #
-# This is the FIRST fingerprinter to emit an EXPOSES edge. The rules engine
-# captures /api/config -> $.ollama.base_url, but the EXPOSES edge construction
-# happens in the dispatcher (modules/openwebuifp/fingerprinter.go) — the
-# rules engine emits node kinds, not edges. The captured value lands on the
-# OpenWebUIInstance node as `ollama_backend_url` and the dispatcher fans out
-# the edge.
+# v3 change: the historic $.ollama.base_url capture on /api/config was
+# verified absent from Open WebUI's get_app_config response on every
+# tag from v0.1.111 through v0.9.6 (and main). The old capture was dead
+# and never emitted an EXPOSES edge in practice. It has been removed;
+# the backend URL is now captured by the openwebuiloot Looter via the
+# admin-gated /ollama/config endpoint (which does return OLLAMA_BASE_URLS).
+#
+# The second probe is retained as an anonymous shape guard: /api/config
+# is expected to return {"name": "Open WebUI", ...} on every version.
+# The soft matcher strengthens the fingerprint without depending on any
+# captured field.
 id: openwebui
 name: Open WebUI chat frontend
 description: 'Identifies Open WebUI by GET /api/version returning {"version": "X.Y.Z"}'
-version: 2
+version: 3
 service_kind: openwebui
 probes:
   - method: GET
@@ -29,21 +35,21 @@ probes:
         regex: '^\d+\.\d+\.\d+'
     captures:
       version: "$.version"
-  # Second probe — read /api/config, capture the configured Ollama backend
-  # URL so the dispatcher can emit an EXPOSES edge (OpenWebUIInstance ->
-  # OllamaInstance). The probe's matcher gate is intentionally lenient so a
-  # 401/403 (auth-required config endpoint) does not invalidate the v0.3+
-  # primary fingerprint match. v0.2's RunFingerprint requires ALL probes to
-  # match — an Open WebUI deployment that locks /api/config will look
-  # identical to one that doesn't expose a backend URL. That's the correct
-  # behavior: no capture, no edge.
+  # Second probe — read /api/config and confirm the response body is
+  # shaped like Open WebUI's get_app_config output. Verified across
+  # 14 tags + main: {"name": "Open WebUI", ...} is always present. This
+  # strengthens the primary fingerprint without capturing any field
+  # that changed across versions. If /api/config is locked (401), the
+  # fingerprinter's fallback single-probe path still lands on
+  # /api/version.
   - method: GET
     path: /api/config
     matchers:
       - type: http_status
         status_code: 200
-    captures:
-      ollama_backend_url: "$.ollama.base_url"
+      - type: json_path
+        path: "$.name"
+        regex: '^Open WebUI$'
 emit:
   node_kinds:
     - OpenWebUIInstance
@@ -53,4 +59,3 @@ emit:
     auth_method: none
     is_anonymous_loot: "true"
     version: "{capture:version}"
-    ollama_backend_url: "{capture:ollama_backend_url}"
