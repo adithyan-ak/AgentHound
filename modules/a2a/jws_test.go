@@ -1,13 +1,17 @@
 package a2a
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	jose "github.com/go-jose/go-jose/v4"
 )
@@ -246,12 +250,17 @@ func TestJWS_MultipleSignatures_OneFails(t *testing.T) {
 	}
 	raw := buildRawWithKeys(t, payload, []string{rsaCompact, ecCompact}, jwksKeys)
 
-	signed, valid := VerifySignatures(payload, raw)
-	if !signed {
+	// Any-valid semantics: one signature verifies, so the card is Valid, but
+	// the status distinguishes it from a fully-verified card.
+	res := VerifySignaturesCtx(context.Background(), payload, raw, VerifyOptions{})
+	if !res.Signed {
 		t.Error("expected signed=true")
 	}
-	if valid {
-		t.Error("expected valid=false when one signature fails")
+	if !res.Valid {
+		t.Error("expected valid=true under any-valid semantics when at least one signature verifies")
+	}
+	if res.Status != SigStatusPartiallyVerified {
+		t.Errorf("expected status partially_verified, got %q", res.Status)
 	}
 }
 
@@ -524,4 +533,116 @@ func buildRawWithKeys(t *testing.T, payload []byte, sigs []string, keys []jose.J
 	raw["jwks"] = jwksMap
 
 	return raw
+}
+
+// signPayloadWithJKU signs payload and adds a `jku` protected header pointing
+// at jwksURL, matching the A2A spec's remote-key-resolution mechanism.
+func signPayloadWithJKU(t *testing.T, key any, alg jose.SignatureAlgorithm, kid, jwksURL string, payload []byte) string {
+	t.Helper()
+	opts := (&jose.SignerOptions{}).WithHeader(jose.HeaderKey("jku"), jwksURL)
+	signingKey := jose.SigningKey{Algorithm: alg, Key: &jose.JSONWebKey{Key: key, KeyID: kid}}
+	signer, err := jose.NewSigner(signingKey, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jws, err := signer.Sign(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact, err := jws.CompactSerialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compact
+}
+
+// jwksTestServer serves the given keys as a JWKS document over loopback HTTP.
+func jwksTestServer(t *testing.T, keys []jose.JSONWebKey) *httptest.Server {
+	t.Helper()
+	body, err := json.Marshal(jose.JSONWebKeySet{Keys: keys})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestJWS_JKUFetch_Verified(t *testing.T) {
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := jwksTestServer(t, []jose.JSONWebKey{{Key: &privKey.PublicKey, KeyID: "jku-key-1"}})
+
+	payload := []byte(`{"name":"jku-agent"}`)
+	compact := signPayloadWithJKU(t, privKey, jose.ES256, "jku-key-1", srv.URL, payload)
+	raw := map[string]any{"name": "jku-agent", "signatures": []any{compact}}
+
+	fetcher := NewJWKSFetcher(false, 5*time.Second)
+	res := VerifySignaturesCtx(context.Background(), payload, raw, VerifyOptions{Fetcher: fetcher})
+	if !res.Signed {
+		t.Error("expected signed=true")
+	}
+	if !res.Valid || res.Status != SigStatusVerified {
+		t.Errorf("expected verified via jku fetch, got valid=%v status=%q", res.Valid, res.Status)
+	}
+}
+
+func TestJWS_JKUOffline_Unverifiable(t *testing.T) {
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := jwksTestServer(t, []jose.JSONWebKey{{Key: &privKey.PublicKey, KeyID: "jku-key-1"}})
+
+	payload := []byte(`{"name":"jku-agent"}`)
+	compact := signPayloadWithJKU(t, privKey, jose.ES256, "jku-key-1", srv.URL, payload)
+	raw := map[string]any{"name": "jku-agent", "signatures": []any{compact}}
+
+	// No fetcher: remote jku resolution is disabled (the --no-verify-jwks path).
+	res := VerifySignaturesCtx(context.Background(), payload, raw, VerifyOptions{})
+	if !res.Signed {
+		t.Error("expected signed=true")
+	}
+	if res.Valid || res.Status != SigStatusUnverifiable {
+		t.Errorf("expected unverifiable offline, got valid=%v status=%q", res.Valid, res.Status)
+	}
+}
+
+func TestJWS_TrustedKeys_Verified(t *testing.T) {
+	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte(`{"name":"trusted-agent"}`)
+	compact := signPayload(t, privKey, jose.RS256, "trusted-1", payload)
+	raw := map[string]any{"name": "trusted-agent", "signatures": []any{compact}}
+
+	trusted := &jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &privKey.PublicKey, KeyID: "trusted-1"}}}
+	res := VerifySignaturesCtx(context.Background(), payload, raw, VerifyOptions{TrustedKeys: trusted})
+	if !res.Valid || res.Status != SigStatusVerified {
+		t.Errorf("expected verified via trusted keys, got valid=%v status=%q", res.Valid, res.Status)
+	}
+}
+
+func TestJWS_SSRFBlocked(t *testing.T) {
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte(`{"name":"ssrf-agent"}`)
+	// jku points at the cloud-metadata / link-local endpoint; the SSRF-safe
+	// fetcher must refuse to connect, leaving the signature unverifiable.
+	compact := signPayloadWithJKU(t, privKey, jose.ES256, "k1", "http://169.254.169.254/jwks.json", payload)
+	raw := map[string]any{"name": "ssrf-agent", "signatures": []any{compact}}
+
+	fetcher := NewJWKSFetcher(false, 2*time.Second)
+	res := VerifySignaturesCtx(context.Background(), payload, raw, VerifyOptions{Fetcher: fetcher})
+	if res.Valid || res.Status != SigStatusUnverifiable {
+		t.Errorf("expected unverifiable (SSRF blocked), got valid=%v status=%q", res.Valid, res.Status)
+	}
 }

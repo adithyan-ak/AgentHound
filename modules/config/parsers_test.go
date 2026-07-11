@@ -38,6 +38,12 @@ func TestClaudeDesktopParser(t *testing.T) {
 	if len(paths) == 0 {
 		t.Fatal("ConfigPaths returned empty")
 	}
+	if runtime.GOOS == "linux" {
+		want := filepath.Join("/home/user", ".config", "Claude", "claude_desktop_config.json")
+		if paths[0] != want {
+			t.Errorf("linux ConfigPaths[0] = %q, want %q (capital Claude, case-sensitive FS)", paths[0], want)
+		}
+	}
 
 	data := readFixture(t, "claude_desktop.json")
 	cfg, err := p.Parse("/fake/path", data)
@@ -137,6 +143,18 @@ func TestCursorParser(t *testing.T) {
 
 	if p.ClientName() != "cursor" {
 		t.Fatalf("ClientName = %q", p.ClientName())
+	}
+
+	paths := p.ConfigPaths("/home/user")
+	wantGlobal := filepath.Join("/home/user", ".cursor", "mcp.json")
+	foundGlobal := false
+	for _, pth := range paths {
+		if pth == wantGlobal {
+			foundGlobal = true
+		}
+	}
+	if !foundGlobal {
+		t.Errorf("ConfigPaths %v missing canonical global path %q", paths, wantGlobal)
 	}
 
 	data := readFixture(t, "cursor.json")
@@ -240,6 +258,40 @@ func TestVSCodeParser(t *testing.T) {
 		}
 		if sse.URL != "http://localhost:8080/sse" {
 			t.Errorf("URL = %q", sse.URL)
+		}
+	})
+
+	t.Run("mcp.json servers key", func(t *testing.T) {
+		data := readFixture(t, "vscode_mcp.json")
+		cfg, err := p.Parse("/fake/path", data)
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+
+		if len(cfg.Servers) != 2 {
+			t.Fatalf("got %d servers, want 2", len(cfg.Servers))
+		}
+
+		sqlite := serverByName(cfg.Servers, "sqlite")
+		if sqlite == nil {
+			t.Fatal("server 'sqlite' not found")
+		}
+		if sqlite.Transport != "stdio" {
+			t.Errorf("transport = %q, want stdio", sqlite.Transport)
+		}
+		if sqlite.Command != "uvx" {
+			t.Errorf("command = %q, want uvx", sqlite.Command)
+		}
+
+		remote := serverByName(cfg.Servers, "remote-vscode")
+		if remote == nil {
+			t.Fatal("server 'remote-vscode' not found")
+		}
+		if remote.Transport != "http" {
+			t.Errorf("transport = %q, want http", remote.Transport)
+		}
+		if remote.URL != "http://localhost:3005/mcp" {
+			t.Errorf("URL = %q", remote.URL)
 		}
 	})
 }
@@ -570,6 +622,40 @@ func TestAugmentParser(t *testing.T) {
 		}
 		if nested.Command != "node" {
 			t.Errorf("command = %q, want node", nested.Command)
+		}
+	})
+
+	t.Run("array format", func(t *testing.T) {
+		data := readFixture(t, "augment_settings_array.json")
+		cfg, err := p.Parse("/fake/path", data)
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+
+		if len(cfg.Servers) != 2 {
+			t.Fatalf("got %d servers, want 2", len(cfg.Servers))
+		}
+
+		ctx := serverByName(cfg.Servers, "augment-context")
+		if ctx == nil {
+			t.Fatal("server 'augment-context' not found")
+		}
+		if ctx.Transport != "stdio" {
+			t.Errorf("transport = %q, want stdio", ctx.Transport)
+		}
+		if ctx.Env["AUGMENT_API_KEY"] != "aug_xxxxxxxxxxxx" {
+			t.Errorf("AUGMENT_API_KEY = %q", ctx.Env["AUGMENT_API_KEY"])
+		}
+
+		remote := serverByName(cfg.Servers, "augment-remote")
+		if remote == nil {
+			t.Fatal("server 'augment-remote' not found")
+		}
+		if remote.Transport != "http" {
+			t.Errorf("transport = %q, want http", remote.Transport)
+		}
+		if remote.URL != "https://augment-mcp.example.com/v1" {
+			t.Errorf("URL = %q", remote.URL)
 		}
 	})
 }

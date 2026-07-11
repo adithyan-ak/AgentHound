@@ -1,0 +1,13 @@
+{
+  "servers": {
+    "sqlite": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["mcp-server-sqlite", "--db-path", "/tmp/test.db"]
+    },
+    "remote-vscode": {
+      "type": "http",
+      "url": "http://localhost:3005/mcp"
+    }
+  }
+}

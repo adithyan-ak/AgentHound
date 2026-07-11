@@ -24,11 +24,11 @@ These are the node kinds accepted in ingest input (`sdk/ingest.AllowedNodeKinds`
 | `MCPTool` | MCP | `name`, `description`, `input_schema`, `output_schema`, `annotations`, `description_hash` (SHA-256), `input_schema_hash` (SHA-256), `schema_keys[]`, `capability_surface[]`, `source_trust` (untrusted_web/email/fileshare), `has_injection_patterns`, `has_cross_references` |
 | `MCPResource` | MCP | `uri`, `name`, `mime_type`, `size`, `uri_scheme`, `sensitivity` (auto-classified) |
 | `MCPPrompt` | MCP | `name`, `description`, `arguments` |
-| `A2AAgent` | A2A | `name`, `description`, `url`, `provider`, `version`, `protocol_versions`, `capabilities`, `security_schemes`, `auth_method`, `auth_strength` (numeric, post-processor), `is_signed`, `signature_valid`, `card_hash` |
+| `A2AAgent` | A2A | `name`, `description`, `url`, `provider`, `version`, `protocol_versions`, `capabilities`, `security_schemes`, `auth_method`, `auth_posture`, `auth_strength` (numeric, post-processor), `is_https`, `is_signed`, `signature_valid`, `signature_verification_status`, `card_hash` |
 | `A2ASkill` | A2A | `id`, `name`, `description`, `input_modes`, `output_modes`, `description_hash`, `has_injection_patterns` |
 | `AgentInstance` | Config | `name`, `framework`, `config_path` |
 | `Identity` | Config + MCP | `type` (none/apiKey/oauth/bearer/mtls), `scope`, `is_static` |
-| `Credential` | Config + LiteLLM Looter | `type` (envVar/hardcoded/vaultRef/inputPrompt/master_key/apiKey/virtual_key), `name`, `source`, `is_exposed`, `high_entropy`, `value_hash` (SHA-256), `blast_radius` (distinct reachable agents, post-processor) |
+| `Credential` | Config + LiteLLM Looter | `type` (envVar/hardcoded/vaultRef/inputPrompt/master_key/apiKey/virtual_key), `name`, `source`, `is_exposed`, `high_entropy`, `format`, `value_hash` (SHA-256), `blast_radius` (distinct reachable agents, post-processor) |
 | `Host` | Config + A2A | `hostname`, `ip`, `is_local`, `is_private`, `is_public` |
 | `ConfigFile` | Config | `path`, `client`, `server_count` |
 | `InstructionFile` | Config | `path`, `type` (agents.md/claude.md/cursorrules/copilot-instructions/memory.md), `hash`, `is_suspicious` |
@@ -53,19 +53,25 @@ These labels exist in `AllNodeLabels` but NOT in `AllowedNodeKinds` — collecto
 | `ResourceGroup` | Post-processor | `type`, `sensitivity` |
 | `TrustZone` | Post-processor | `name`, `level`, `node_count` |
 
-### A2AAgent Signature Verification (`is_signed`, `signature_valid`)
+### A2AAgent Signature Verification (`is_signed`, `signature_valid`, `signature_verification_status`)
 
-`A2AAgent` carries two independent signature properties:
+`A2AAgent` carries three signature properties:
 
 - **`is_signed`** — `true` when the agent card has a non-empty `signatures[]` array, regardless of cryptographic validity.
-- **`signature_valid`** — `true` only when every signature in the card cryptographically verifies against a key in the card's inline `jwks`.
+- **`signature_valid`** — `true` when **at least one** signature cryptographically verifies against a resolvable key (any-valid semantics). Retained for backward compatibility.
+- **`signature_verification_status`** — the authoritative outcome, disambiguating the two cases `signature_valid=false` previously conflated:
+  - `unsigned` — no `signatures[]`.
+  - `verified` — every signature verified.
+  - `partially_verified` — at least one, but not all, signatures verified.
+  - `failed` — signatures were checked against resolvable keys but none verified (tampered card, wrong key, unsupported algorithm).
+  - `unverifiable` — no key could be resolved for any signature, so verification could not be attempted.
+
+**Key resolution** (per signature, in order): the card's inline `jwks`; operator-supplied trusted keys (`--a2a-trusted-keys`, a JWKS file); then — unless `--no-verify-jwks` is set — the JWS protected-header **`jku`** URL (the A2A spec §8.4 mechanism) and, as a fallback, a top-level `jwks_uri`. Remote resolution is **on by default** via an SSRF-hardened fetcher: it validates the resolved IP at dial time (refusing link-local/cloud-metadata `169.254.0.0/16`, `fe80::/10`, and unspecified addresses; loopback and RFC1918 remain allowed for internal engagements), caps redirects and response size, honors `--insecure` for TLS, and never forwards `--auth-token` to the `jku` host.
 
 The collector accepts both JWS serializations a card may use:
 
 - **Compact** — each `signatures[]` entry is a compact JWS string.
-- **Flattened JSON (object form)** — each entry is `{ "protected": "<b64url>", "signature": "<b64url>" }`, the spec-conformant A2A shape. The signed payload is the agent card with the `signatures` member removed and JCS-canonicalized (RFC 8785 key ordering, no insignificant whitespace); it is embedded base64url-encoded as the JWS payload and verified per RFC 7515. Tampering with any other card field invalidates the signature.
-
-`signature_valid` is `false` (card unverifiable, not a verification failure) when the card omits inline `jwks`. Remote `jwks_uri` fetching is not performed — a card whose keys live only behind `jwks_uri` reports `signature_valid=false`.
+- **Flattened JSON (object form)** — each entry is `{ "protected": "<b64url>", "signature": "<b64url>" }`, the spec-conformant A2A shape. The signed payload is the agent card with the `signatures` member removed and JCS-canonicalized (key ordering, no insignificant whitespace); it is embedded base64url-encoded as the JWS payload and verified per RFC 7515. Tampering with any other card field invalidates the signature.
 
 ---
 
@@ -93,7 +99,7 @@ This enables queries like `MATCH (n:AIService)` to find all AI infrastructure re
 | `DELEGATES_TO` | A2AAgent | A2AAgent | A2A | Agent delegates tasks to another agent |
 | `AUTHENTICATES_WITH` | MCPServer / A2AAgent | Identity | Config / A2A | Entity uses this auth identity |
 | `USES_CREDENTIAL` | Identity | Credential | Config | Identity backed by this credential material |
-| `RUNS_ON` | MCPServer / A2AAgent | Host | Config / A2A | Entity runs on this host |
+| `RUNS_ON` | MCPServer / A2AAgent | Host | Config / A2A / MCP | Entity runs on this host |
 | `CONFIGURED_IN` | MCPServer | ConfigFile | Config | Server defined in this config file |
 | `HAS_ENV_VAR` | MCPServer | Credential | Config | Server has access to this env var |
 | `LOADS_INSTRUCTIONS` | AgentInstance | InstructionFile | Config | Agent loads this instruction file |

@@ -105,6 +105,72 @@ func parseMCPServersMap(data map[string]any, rootKey, urlKey string) ([]ServerDe
 	return servers, nil
 }
 
+// parseMCPServersList parses the ARRAY form of an MCP server list, where each
+// element is an object carrying its own "name" plus the same fields as the
+// keyed map form. Augment persists augment.advanced.mcpServers this way.
+func parseMCPServersList(list []any, urlKey string) []ServerDef {
+	var servers []ServerDef
+	for _, entry := range list {
+		obj, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		sd := ServerDef{Name: getString(obj, "name")}
+
+		if v, ok := obj["disabled"].(bool); ok {
+			sd.Disabled = v
+		}
+
+		if aa, ok := obj["autoApprove"].([]any); ok {
+			for _, item := range aa {
+				if s, ok := item.(string); ok {
+					sd.AutoApprove = append(sd.AutoApprove, s)
+				}
+			}
+		}
+
+		if hdrs, ok := obj["headers"].(map[string]any); ok {
+			sd.Headers = make(map[string]string, len(hdrs))
+			for k, v := range hdrs {
+				if s, ok := v.(string); ok {
+					sd.Headers[k] = s
+				}
+			}
+		}
+
+		if envObj, ok := obj["env"].(map[string]any); ok {
+			sd.Env = make(map[string]string, len(envObj))
+			for k, v := range envObj {
+				if s, ok := v.(string); ok {
+					sd.Env[k] = s
+				}
+			}
+		}
+
+		if urlVal, ok := obj[urlKey].(string); ok && urlVal != "" {
+			sd.Transport = "http"
+			sd.URL = urlVal
+		} else if cmd, ok := obj["command"].(string); ok && cmd != "" {
+			sd.Transport = "stdio"
+			sd.Command = cmd
+			if args, ok := obj["args"].([]any); ok {
+				for _, a := range args {
+					if s, ok := a.(string); ok {
+						sd.Args = append(sd.Args, s)
+					}
+				}
+			}
+		} else {
+			continue
+		}
+
+		servers = append(servers, sd)
+	}
+
+	return servers
+}
+
 func parseJSONToMap(data []byte) (map[string]any, error) {
 	data = common.StripJSONComments(data)
 	var m map[string]any

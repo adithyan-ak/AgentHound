@@ -402,7 +402,7 @@ func claudeDesktopConfigPath(homeDir string) string {
 	case "darwin":
 		return filepath.Join(homeDir, "Library", "Application Support", "Claude", "claude_desktop_config.json")
 	case "linux":
-		return filepath.Join(homeDir, ".config", "claude", "claude_desktop_config.json")
+		return filepath.Join(homeDir, ".config", "Claude", "claude_desktop_config.json")
 	case "windows":
 		return filepath.Join(homeDir, "AppData", "Roaming", "Claude", "claude_desktop_config.json")
 	default:

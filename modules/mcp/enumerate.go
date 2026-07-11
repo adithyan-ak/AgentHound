@@ -524,8 +524,25 @@ func marshalJSON(v any) string {
 func logEnumerationError(kind, serverID string, err error) {
 	msg := err.Error()
 	if strings.Contains(msg, "Method not found") || strings.Contains(msg, "method not found") {
-		slog.Debug("server does not support optional method", "method", kind+"/list", "server", serverID)
+		slog.Debug("server does not support optional method", "method", methodForKind(kind), "server", serverID)
 		return
 	}
 	log.Printf("[mcp] %s enumeration error for server %s: %v", kind, serverID, err)
+}
+
+// methodForKind maps an enumeration kind to the real MCP JSON-RPC method name
+// (e.g. "resource template" -> "resources/templates/list") for accurate logs.
+func methodForKind(kind string) string {
+	switch kind {
+	case "tool":
+		return "tools/list"
+	case "resource":
+		return "resources/list"
+	case "resource template":
+		return "resources/templates/list"
+	case "prompt":
+		return "prompts/list"
+	default:
+		return kind + "/list"
+	}
 }

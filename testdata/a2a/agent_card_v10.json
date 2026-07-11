@@ -6,7 +6,7 @@
   },
   "supportedInterfaces": [
     {
-      "type": "A2A",
+      "protocolBinding": "JSONRPC",
       "url": "https://analyst.example.com/a2a",
       "protocolVersion": "1.0"
     }

@@ -129,7 +129,7 @@ All edges carry: `scan_id`, `last_seen`, `confidence`, `risk_weight`, `is_compos
 | Collector | Network | Input | Output Nodes | Key Signals |
 |-----------|---------|-------|-------------|-------------|
 | **Config** | None | 12 MCP client config formats (Claude Desktop, Cursor, VS Code, Windsurf, Zed, Cline, Continue, JetBrains, Kiro, Amazon Q, Augment, Claude Code) | ConfigFile, AgentInstance, MCPServer, Identity, Credential, Host, InstructionFile | Unpinned packages, high-entropy secrets, instruction poisoning |
-| **MCP** | stdio / HTTP | Live MCP servers via Go SDK v1.5.0 | MCPServer, MCPTool, MCPResource, MCPPrompt | Capability surface (8 categories), injection patterns, description hashes, cross-references |
+| **MCP** | stdio / HTTP | Live MCP servers via Go SDK v1.6.1 | MCPServer, MCPTool, MCPResource, MCPPrompt | Capability surface (8 categories), injection patterns, description hashes, cross-references |
 | **A2A** | HTTP | Agent Card JSON (v0.3.0 + v1.0) | A2AAgent, A2ASkill, Host | JWS signature verification, auth posture scoring, delegation chains |
 
 All collectors produce the same JSON ingest format. The Config and MCP collectors share

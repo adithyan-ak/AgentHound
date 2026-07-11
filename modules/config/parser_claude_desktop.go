@@ -14,7 +14,7 @@ func (p *ClaudeDesktopParser) ConfigPaths(homeDir string) []string {
 	case "darwin":
 		return []string{filepath.Join(homeDir, "Library", "Application Support", "Claude", "claude_desktop_config.json")}
 	case "linux":
-		return []string{filepath.Join(homeDir, ".config", "claude", "claude_desktop_config.json")}
+		return []string{filepath.Join(homeDir, ".config", "Claude", "claude_desktop_config.json")}
 	case "windows":
 		return []string{filepath.Join(homeDir, "AppData", "Roaming", "Claude", "claude_desktop_config.json")}
 	default:

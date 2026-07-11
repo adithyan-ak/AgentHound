@@ -30,32 +30,16 @@
       "name": "GetWeather",
       "description": "Get current weather for a location",
       "tags": ["weather", "forecast"],
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "location": {"type": "string"}
-        }
-      },
-      "outputSchema": {
-        "type": "object",
-        "properties": {
-          "temperature": {"type": "number"},
-          "conditions": {"type": "string"}
-        }
-      }
+      "inputModes": ["application/json"],
+      "outputModes": ["application/json"]
     },
     {
       "id": "get-forecast",
       "name": "GetForecast",
       "description": "Get 7-day weather forecast for a location",
       "tags": ["weather", "forecast"],
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "location": {"type": "string"},
-          "days": {"type": "integer"}
-        }
-      }
+      "inputModes": ["application/json"],
+      "outputModes": ["application/json"]
     }
   ]
 }

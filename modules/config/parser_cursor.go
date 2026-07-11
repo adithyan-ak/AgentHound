@@ -2,21 +2,20 @@ package config
 
 import (
 	"path/filepath"
-	"runtime"
 )
 
 type CursorParser struct{}
 
 func (p *CursorParser) ClientName() string { return "cursor" }
 
+// ConfigPaths returns Cursor's canonical MCP config locations: the global
+// ~/.cursor/mcp.json (all OSes) and the project-scoped .cursor/mcp.json
+// (resolved against the current working directory, like ClaudeCodeParser's
+// .mcp.json). Cursor documents no per-OS globalStorage location.
 func (p *CursorParser) ConfigPaths(homeDir string) []string {
-	switch runtime.GOOS {
-	case "darwin":
-		return []string{filepath.Join(homeDir, "Library", "Application Support", "Cursor", "User", "globalStorage", "cursor.mcp", "mcp.json")}
-	case "linux":
-		return []string{filepath.Join(homeDir, ".config", "Cursor", "User", "globalStorage", "cursor.mcp", "mcp.json")}
-	default:
-		return nil
+	return []string{
+		filepath.Join(homeDir, ".cursor", "mcp.json"),
+		filepath.Join(".cursor", "mcp.json"),
 	}
 }
 
