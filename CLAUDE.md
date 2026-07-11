@@ -81,4 +81,4 @@ IMPORTANT: When making changes that affect any of these, update the correspondin
 
 ## Tech Stack
 
-Go 1.25.11 | cobra | chi/v5 | Neo4j 4.4+ | PostgreSQL 16 | pgx/v5 | MCP Go SDK v1.6.1 | React 18 + Vite 6 + React Flow + ELK | shadcn/ui + Zustand 5 + TanStack Query 5 | Docker Compose | GoReleaser v2 + cosign | Apache 2.0
+Go 1.25.11 | cobra | chi/v5 | Neo4j 4.4+ | PostgreSQL 16 | pgx/v5 | MCP Go SDK v1.6.1 | React 18 + Vite 8 + React Flow + ELK | shadcn/ui + Zustand 5 + TanStack Query 5 | Docker Compose | GoReleaser v2 + cosign | Apache 2.0

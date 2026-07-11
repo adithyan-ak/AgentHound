@@ -9,10 +9,14 @@ Choose the interface that matches your module's purpose:
 | Interface | Action | Contract | Mutating? |
 |-----------|--------|----------|-----------|
 | `Fingerprinter` | `fingerprint` | Probe a target, identify the service kind/version/auth | No |
+| `Scanner` | `scan` | Expand a CIDR / range / discovery seed into concrete `Target`s (feeds Fingerprinters) | No |
+| `Enumerator` | `enumerate` | Inspect a single `Target` and produce a graph patch (`ingest.IngestData`); supersedes today's collector shape | No |
 | `Looter` | `loot` | Extract secrets/state read-only (GET/HEAD; idempotent search/lookup POSTs allowed with a `get_only` guard) | No |
 | `Extractor` | `extract` | Pull specific resources by reference (compute-heavy) | No (billing-heavy) |
-| `Poisoner` | `poison` | Inject content into upstream artifacts | **Yes** -- requires Reverter |
-| `Implanter` | `implant` | Plant persistent backdoors in target config | **Yes** -- requires Reverter |
+| `Poisoner` | `poison` | Inject content into upstream artifacts | **Yes** — requires `Reverter` |
+| `Implanter` | `implant` | Plant persistent backdoors in target config | **Yes** — requires `Reverter` |
+
+`Reverter` (`sdk/action/reverter.go`) is not an action of its own — it is a compile-time-mandatory super-interface every `Poisoner` and `Implanter` embeds, so any change made on-target can be undone via `agenthound revert`.
 
 All interfaces are defined in `sdk/action/`. Every module also implements `sdk/module.Module`:
 

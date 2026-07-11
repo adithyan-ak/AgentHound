@@ -25,7 +25,7 @@
 
 > **Authorized use only.** AgentHound ships read-only discovery **and** active exploitation modules. Run it only against infrastructure you own or are written-authorized to assess. See [Safety & Authorization](#-safety--authorization).
 
-**AgentHound is an open-source offensive security framework for AI agent infrastructure.** It runs the full engagement - recon, fingerprinting, credential looting, **model & weight exfiltration**, model inversion, tool and instruction poisoning, and config-implant persistence - across every layer of the modern agentic stack, then merges every fact into one Neo4j graph and proves the attack paths that tie it all together. Agenthound is BloodHound for the agentic stack.
+**AgentHound is an open-source offensive security framework for AI agent infrastructure.** It runs the full engagement - recon, fingerprinting, credential looting, **modelfile / system-prompt / fine-tune inventory**, model inversion, tool and instruction poisoning, and config-implant persistence - across every layer of the modern agentic stack, then merges every fact into one Neo4j graph and proves the attack paths that tie it all together. Agenthound is BloodHound for the agentic stack.
 
 ## ⚡ Capabilities
 

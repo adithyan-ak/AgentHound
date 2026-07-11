@@ -6,8 +6,8 @@ Clone to green CI in 5 minutes.
 
 | Tool | Version | Purpose |
 |------|---------|---------|
-| Go | 1.25.10 | Pinned in `go.mod` |
-| Node.js | 20+ | UI build (Vite 6) |
+| Go | 1.25.11 | Pinned in `go.mod` |
+| Node.js | 20+ | UI build (Vite 8) |
 | Docker + Compose | Latest stable | Integration tests, local Neo4j/Postgres |
 | golangci-lint | v2.11+ | Linting (CI uses this exact version) |
 

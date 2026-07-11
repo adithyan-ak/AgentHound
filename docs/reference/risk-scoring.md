@@ -110,14 +110,18 @@ score = 0.30 * capability_class + 0.25 * poisoning + 0.25 * access_sensitivity
 
 ## Resource Sensitivity Classification
 
-Applied automatically during MCP enumeration based on URI pattern matching:
+Applied automatically during MCP enumeration by the shipped detection rules under `sdk/rules/builtin/sensitivity-*.yaml`. Buckets are applied in the order critical → high → medium; anything unmatched falls through to `low`.
 
-| Pattern | Sensitivity |
-|---------|-------------|
-| `postgres://`, `mysql://`, `mongodb://` with `prod` in host/path | critical |
-| `file:///etc/` | critical |
-| `*.env`, `*.key`, `*.pem`, `*.p12` | critical |
-| `redis://` with `prod` in host | critical |
-| Database URIs without `prod` | high |
-| `file:///` (general) | medium |
-| All other URIs | low |
+| Pattern | Sensitivity | Source rule |
+|---------|-------------|-------------|
+| `postgres://`, `postgresql://`, `mysql://`, `mongodb://` with `prod` in URI | critical | `sensitivity-critical.yaml` |
+| `redis://` with `prod` in URI | critical | `sensitivity-critical.yaml` |
+| `s3://`, `gs://` with `prod` in URI | critical | `sensitivity-critical.yaml` |
+| `file:///etc/shadow`, `file:///etc/passwd`, `file:///root/…` | critical | `sensitivity-critical.yaml` |
+| `file://…` ending in `.env`, `.key`, `.pem`, `.crt`, `.p12`, `.pfx`, `.jks` | critical | `sensitivity-critical.yaml` |
+| Any URI containing `/credentials`, `/secrets`, or `/.ssh/` (case-insensitive) | critical | `sensitivity-critical.yaml` |
+| `postgres://`, `postgresql://`, `mysql://`, `mongodb://`, `redis://` (no `prod` required) | high | `sensitivity-high.yaml` |
+| `file:///var/log/…` | high | `sensitivity-high.yaml` |
+| `file://…` config with `secret`/`password` in the name (`.conf`/`.cfg`/`.ini`/`.yaml`/`.yml`/`.json`) | high | `sensitivity-high.yaml` |
+| `file:///`, `file://localhost/`, `http://`, `https://`, `s3://`, `gs://` (any URI not already critical/high) | medium | `sensitivity-medium.yaml` |
+| Anything else | low | (fallback) |

@@ -12,13 +12,13 @@ One MCP tool's description references another tool by name or describes overlapp
 
 ## How it's computed
 
-The `shadows` post-processor uses TF-IDF cosine similarity on tool descriptions:
+The `shadows` post-processor emits a target-specific edge from `t1` to `t2` when `t1`'s description literally names `t2`, across two different servers:
 
-1. For each pair of tools from DIFFERENT servers (same-server tools can't shadow each other — the agent already trusts both)
-2. Compute cosine similarity on the description text
-3. If similarity > 0.8 AND one tool's description contains the other tool's name as a substring → emit SHADOWS edge
+1. Enumerate every `(t1, t2)` where `t1` and `t2` belong to different `MCPServer`s (same-server tools can't shadow each other — the agent already trusts both).
+2. Require `t2.name` to be non-null and `t1.description` to be non-null.
+3. Emit a `SHADOWS` edge iff `toLower(t1.description) CONTAINS toLower(t2.name)`.
 
-Additionally, explicit cross-references are detected: if tool A's description contains `tool_name: "B"` or references tool B's server by endpoint, that's a direct shadow signal.
+The match is a plain lowercased substring test — no TF-IDF, no cosine similarity, no `tool_name:` / endpoint parsing. The target-specificity (t1 has to name t2) is load-bearing: an earlier version of the processor OR-ed in `t1.has_cross_references`, but that flag is target-blind — a single tool that referenced any sibling made it shadow every tool on every other server, a cartesian false-positive blow-up. `has_cross_references` still feeds tool-level risk scoring (`server/internal/analysis/riskscore/tool.go`); it just no longer manufactures `SHADOWS` edges.
 
 ## Cypher example
 
@@ -42,7 +42,18 @@ Tool shadowing is a supply-chain attack on agent behavior:
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `confidence` | float | Cosine similarity score (0.8–1.0) |
-| `risk_weight` | float | 0.4 |
-| `evidence` | object | `{similarity_score, cross_reference_detected, description_hash_shadow, description_hash_legit}` |
-| `is_composite` | bool | true |
+| `confidence` | float | `0.9` when the shadowing tool also has `has_injection_patterns=true`, else `0.6`. |
+| `risk_weight` | float | Fixed `0.4`. |
+| `is_composite` | bool | `true`. |
+| `source_collector` | string | `mcp`. |
+| `scan_id`, `last_seen` | string | Standard edge provenance. |
+
+## Second pass: `POISONS_CONTEXT`
+
+The same processor runs a second Cypher pass that emits `POISONS_CONTEXT` edges. This is the deliberate widening of the narrow `SHADOWS` guard above: an injection-bearing tool can poison the shared agent context that drives a high-capability sibling tool even without naming it. It is documented here because both edges are produced by the `shadows` processor in one invocation.
+
+**Rule.** For every `AgentInstance a` that trusts both a source tool `src` (with `has_injection_patterns = true`) and a sink tool `snk` (with a capability in `{shell_access, code_execution, credential_access, email_send}`), and `src <> snk`, emit `(src)-[:POISONS_CONTEXT]->(snk)`. Both `src` and `snk` are reached via `a-[:TRUSTS_SERVER]->MCPServer-[:PROVIDES_TOOL]->MCPTool` — scoping to a single agent is what stops the two MATCH clauses from forming a cross-tenant global cross-product.
+
+**Fan-out cap.** Per `(agent, source)` pair, at most 20 sinks are materialized. When more than 20 eligible sinks co-reside, the first 20 by `snk.objectid` (stable across runs) are kept — the cap truncates, it does not suppress the whole group, so an attacker cannot silence the finding by registering a 21st sink. Grouping by `(a, src)` (not `src` alone) is load-bearing: keying on `src` alone would union sink sets across agents and re-globalize the cap. The `poisons_context_perf_integration_test.go` regression guards the per-source cap; `scripts/perf-check.sh` enforces the downstream ≤200 pairs-per-agent operator heuristic (10 sources × 20).
+
+**Properties on `POISONS_CONTEXT`.** `confidence = 0.6`, `risk_weight = 0.4`, `is_composite = true`, `source_collector = 'mcp'`, plus standard `scan_id` / `last_seen`.

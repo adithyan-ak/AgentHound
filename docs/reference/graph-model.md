@@ -39,7 +39,7 @@ These are the node kinds accepted in ingest input (`sdk/ingest.AllowedNodeKinds`
 | `LiteLLMGateway` | Network scan + LiteLLM fingerprinter | `endpoint`, `auth_method`, `is_anonymous_loot`, `docs_enabled` |
 | `JupyterServer` | Network scan + Jupyter fingerprinter | `endpoint`, `version`, `token_required` |
 | `LangServeApp` | Network scan + LangServe fingerprinter | `endpoint`, `chains` |
-| `OpenWebUIInstance` | Network scan + Open WebUI fingerprinter + Open WebUI Looter | `endpoint`, `version`, `webui_auth_enabled`, `signup_enabled`, `auth_required`, `ollama_backend_url` (first canonicalized backend URL), `ollama_backend_urls` (full list, Looter-enriched from admin `/ollama/config`) |
+| `OpenWebUIInstance` | Network scan + Open WebUI fingerprinter + Open WebUI Looter | `endpoint`, `version`, `signup_enabled`, `auth_required`, `ollama_backend_url` (first canonicalized backend URL), `ollama_backend_urls` (full list, Looter-enriched from admin `/ollama/config`) |
 | `AIService` | Multi-label umbrella (see below) | _(no unique properties — carried as companion label)_ |
 | `AIModel` | Ollama Looter | `name`, `size_bytes`, `digest`, `family`, `parameter_size` (canonical), `parameters` (deprecated alias, one-release dual-emit), `is_finetune`, `modified_at`, `value_hash` (when modelfile present), `has_system_prompt`, `modelfile_size_bytes` |
 | `ExtractedTrainingSignal` | Extractors | `kind`, `source_model`, `sample_count`, `confidence` |
@@ -214,7 +214,7 @@ Processors run in strict dependency order. A processor may only read edges produ
 | 8 | can_reach | `CAN_REACH` | 2 (HAS_ACCESS_TO) |
 | 9 | cross_service_credential_chain | `CAN_REACH` (credential variant) + `Credential.blast_radius` | 2, 8 (joins on `Credential.value_hash`) |
 | 10 | ifc_violation | `IFC_VIOLATION` | 2 (HAS_ACCESS_TO) + INGESTS_UNTRUSTED |
-| 11 | can_exfiltrate_via | `CAN_EXFILTRATE_VIA` | 8 (CAN_REACH) |
+| 11 | can_exfiltrate | `CAN_EXFILTRATE_VIA` | 8 (CAN_REACH) |
 | 12 | can_impersonate | `CAN_IMPERSONATE` | Raw edges only |
 | 13 | confused_deputy | `CONFUSED_DEPUTY` | 1 (auth_strength) + 8 (can_reach) |
 | 14 | cross_protocol | `CAN_REACH` (cross-protocol) | 2 (HAS_ACCESS_TO) + DELEGATES_TO |

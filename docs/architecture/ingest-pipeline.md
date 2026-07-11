@@ -36,7 +36,7 @@ Checks performed:
 - `meta.collector` must be in `AllowedCollectors` (mcp, a2a, config, scan)
 - `meta.scan_id` must be non-empty
 - Every node must have a non-empty `id` and at least one `kind` from `AllowedNodeKinds` (23 kinds)
-- Every edge must have non-empty `source`/`target` and a `kind` from `RawEdgeKinds` (17 kinds)
+- Every edge must have non-empty `source`/`target` and a `kind` from `RawEdgeKinds` (18 kinds)
 
 Validation errors are structured (`FieldError` with JSON path + message) and returned as a `ValidationError` to the caller. On failure, the pipeline aborts -- no partial writes.
 
@@ -78,24 +78,34 @@ On failure, the scan record is updated to `failed` and the error propagates.
 Before running processors:
 1. **Stale-edge cleanup:** Deletes composite edges where `scan_id != current AND source_collector IN $collectors`. This scopes deletion to only the collector(s) that ran in the current scan -- prevents ping-pong deletion on partial scans (e.g., an MCP-only re-scan won't delete A2A composite edges).
 
-Then runs 11 processors in dependency-validated order. See `docs/architecture/post-processors.md` for details.
+Then runs 15 processors in dependency-validated order. See `docs/architecture/post-processors.md` for details.
 
 Post-processing is non-fatal to the ingest: failures are logged and included in the result stats, and the written nodes/edges stay queryable (a processor bug won't block data). The scan is, however, recorded as `completed_with_errors` — the real node/edge counts plus the `post-processing: ...` error — rather than `completed`, so an analysis failure is surfaced instead of reported as a clean success.
 
 ## Processing Order
 
+The annotations below are each processor's declared `Dependencies() []string` return — the *processor-level* ordering contract enforced by the pipeline. Raw collector edges (`INGESTS_UNTRUSTED`, `DELEGATES_TO`, `HAS_ENV_VAR`, etc.) and pre-existing node properties (`schema_keys`, `auth_method`, …) are Cypher traversal inputs, not processor dependencies — they are present from ingest, so they do not appear here.
+
 ```
-1.  has_access_to               (no deps)
-2.  can_execute                  (no deps)
-3.  shadows                      (no deps)
-4.  poisoned_description         (no deps)
-5.  poisoned_instructions        (no deps)
-6.  can_reach                    (depends: has_access_to)
-7.  cross_service_credential_chain (depends: has_access_to, can_reach)
-8.  can_exfiltrate               (depends: can_reach)
-9.  can_impersonate              (no deps)
-10. cross_protocol               (depends: has_access_to)
-11. risk_score                   (depends: all above)
+ 1. auth_strength                    (deps: none; pre-pass, sets node property)
+ 2. has_access_to                    (deps: none)
+ 3. can_execute                      (deps: none)
+ 4. shadows                          (deps: none; also emits POISONS_CONTEXT)
+ 5. poisoned_description             (deps: none)
+ 6. poisoned_instructions            (deps: none)
+ 7. taints                           (deps: none; runs before can_reach so its cross-tool
+                                     edges influence transitive reachability)
+ 8. can_reach                        (deps: has_access_to)
+ 9. cross_service_credential_chain   (deps: has_access_to, can_reach)
+10. ifc_violation                    (deps: has_access_to)
+11. can_exfiltrate                   (deps: can_reach)
+12. can_impersonate                  (deps: none)
+13. confused_deputy                  (deps: auth_strength, can_reach)
+14. cross_protocol                   (deps: has_access_to)
+15. risk_score                       (deps: has_access_to, can_execute, shadows,
+                                     poisoned_description, poisoned_instructions,
+                                     can_reach, can_exfiltrate, can_impersonate,
+                                     cross_protocol)
 ```
 
 Dependency validation runs before the first processor executes. If a processor appears before a dependency it declares, the pipeline returns an ordering error immediately.
