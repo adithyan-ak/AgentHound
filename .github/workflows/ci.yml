@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: "1.25.11"
+          go-version: "1.25.12"
       - name: Create UI embed stub
         run: mkdir -p server/internal/api/ui/dist && echo '<!DOCTYPE html><html><body></body></html>' > server/internal/api/ui/dist/index.html
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a
@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: "1.25.11"
+          go-version: "1.25.12"
       - name: Create UI embed stub
         run: mkdir -p server/internal/api/ui/dist && echo '<!DOCTYPE html><html><body></body></html>' > server/internal/api/ui/dist/index.html
       - name: Run unit tests
@@ -66,7 +66,7 @@ jobs:
       - run: mkdir -p server/internal/api/ui/dist && cp -r server/ui/dist/. server/internal/api/ui/dist/
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: "1.25.11"
+          go-version: "1.25.12"
       - name: Build collector
         run: go build -o bin/agenthound ./collector/cmd/agenthound
       - name: Build server
@@ -135,7 +135,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: "1.25.11"
+          go-version: "1.25.12"
       - name: Create UI embed stub
         run: mkdir -p server/internal/api/ui/dist && echo '<!DOCTYPE html><html><body></body></html>' > server/internal/api/ui/dist/index.html
       - name: Run full test suite with DB
@@ -156,7 +156,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: "1.25.11"
+          go-version: "1.25.12"
       - name: Create UI embed stub
         run: mkdir -p server/internal/api/ui/dist && echo '<!DOCTYPE html><html><body></body></html>' > server/internal/api/ui/dist/index.html
       - run: |
@@ -176,7 +176,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: "1.25.11"
+          go-version: "1.25.12"
       - name: Create UI embed stub
         run: mkdir -p server/internal/api/ui/dist && echo '<!DOCTYPE html><html><body></body></html>' > server/internal/api/ui/dist/index.html
       - name: Build collector

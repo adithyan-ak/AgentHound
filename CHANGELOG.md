@@ -1,6 +1,35 @@
 # Changelog
 
-## Unreleased
+## v0.8.0
+
+Collector-hardening and read-only loot-expansion milestone. Brings the A2A, MCP, and agent-config collectors into line with the real protocol specs and vendor config formats — most notably spec-compliant JWS `jku` signature verification behind an SSRF-hardened key fetcher — expands the read-only Looter surface with 22 verified findings and new resource-sampling flags, retires the Docker demo lab and the out-of-spec Ollama weight flags, and clears a large batch of documentation drift.
+
+### Collectors: grounded A2A / MCP / config fixes + spec-compliant JWS `jku` verification (#75)
+
+Corrects 15 validated findings where collector code diverged from the real protocol specs and vendor config formats.
+
+**A2A**
+
+- **Spec-compliant JWS key resolution.** Signed agent cards are verified by resolving keys in spec order — the card's inline `jwks`, then operator-supplied `--a2a-trusted-keys` (a JWKS file), then the JWS protected-header **`jku`** URL (A2A spec §8.4). Remote `jku` resolution is **on by default** behind an SSRF-hardened fetcher: it validates the resolved IP at dial time (refuses link-local / cloud-metadata `169.254.0.0/16` + `fe80::/10` and unspecified addresses; loopback and RFC1918 remain allowed for internal engagements), caps redirects and response size, honors `--insecure` for TLS, and never forwards `--auth-token` to the `jku` host. New escape hatches: `--no-verify-jwks` (offline: inline `jwks` + `--a2a-trusted-keys` only) and `--a2a-trusted-keys <jwks.json>`.
+- **New `signature_verification_status` enum** on `:A2AAgent` disambiguates what `signature_valid=false` previously conflated: `verified` / `partially_verified` / `failed` / `unverifiable` / `unsigned` (any-valid semantics across multiple signatures).
+- **v0.3.0 skills** read the spec's `inputModes` / `outputModes` (not `inputSchema`); **v1.0 interfaces** key off `protocolBinding` (not a fabricated `type == "A2A"`).
+- The agent-card fetch now honors `--timeout` (was hardcoded 15s).
+
+**Config**
+
+- **Cursor:** read the canonical `~/.cursor/mcp.json` (+ project `.cursor/mcp.json`) instead of a fabricated `globalStorage` path.
+- **Augment:** parse the real `augment.advanced.mcpServers` JSON array (object form still supported).
+- **Claude Desktop:** fixed the case-sensitive Linux path (`~/.config/Claude`).
+- **VS Code:** read `.vscode/mcp.json` + user `mcp.json` with the top-level `servers` key.
+- Removed the invented root `.copilot-instructions.md` instruction target.
+
+**MCP**
+
+- Enumeration debug logs now record the real JSON-RPC method names.
+
+**Docs (shipped in #75):** corrected the `mcppoison --update-path` default, the MCP Go SDK version (v1.6.1), `RUNS_ON` collector attribution, and several undocumented emitted properties; bug-encoding test fixtures corrected in lockstep.
+
+**New flags:** `agenthound scan` gains `--no-verify-jwks` (bool, default false) and `--a2a-trusted-keys` (string, path to a JWKS file).
 
 ### Looters: 22 verified findings + coverage additions across LiteLLM, MLflow, Open WebUI, Qdrant, Ollama, Jupyter (#74)
 
@@ -71,6 +100,21 @@ Removes the experimental `--include-weights` / `--weights-dir` flags from `agent
 - **Docs:** the README capability tile now describes the Ollama Looter's actual surface (modelfile / system prompt / fine-tune detection). `docs/operator/loot/ollama.md` replaces the Level 3 "Weight extraction" section with an "out-of-band acquisition" guide pointing at `~/.ollama/models/blobs/`. `docs/reference/cli.md`, `docs/README.md`, `docs/architecture/system-design.md`, and `docs/contributing/modules.md` track the flag removal. `docs/plans/sprint3-offensive-primitives.md` gains a dated correction block noting the `/api/blobs` GET premise sits outside upstream's API surface.
 
 Callers that pass `--include-weights` or `--weights-dir` will hit an unknown-flag error at the CLI parser rather than a silent no-op — deliberate, so a stale invocation surfaces immediately.
+
+### Documentation
+
+- Corrected 27 verified drift / hallucination findings across 15 files, grounded against primary Go source, YAML rules, `Makefile`, `go.mod`, and `package.json`: the API auth model (`token required` → `Origin-gated`), depth caps, the `SHADOWS` substring-match semantics, the `can_exfiltrate` capability list, the sensitivity tables, the processor registry order, and toolchain versions (Go 1.25.11, Vite 8). Pure doc corrections — no code or behavior change. (#76)
+- Reframed AgentHound as an offensive / red-team framework across the README and docs. (#69)
+- Added the Rules Bundles page to the mkdocs nav.
+
+### Release & CI tooling (#66)
+
+- CI now enforces version consistency (`scripts/version-check.sh`) and catches docs breakage pre-merge (`scripts/docs-check.sh` → `mkdocs build --strict`). `scripts/sync-version.sh` (wired as `make sync-version`) rewrites the `install.sh` / `README.md` version pins from the `CHANGELOG.md` single source of truth.
+
+### Dependencies
+
+- **Go toolchain 1.25.11 → 1.25.12** (`go.mod`) to pull in the `crypto/tls` fix for **GO-2026-5856** (Encrypted Client Hello privacy leak, flagged by `govulncheck`). With `GOTOOLCHAIN=auto` the release build and CI auto-select the patched toolchain.
+- Bumped GitHub Actions (`actions-all` group, 8 updates — incl. `actions/checkout` 6→7, `actions/cache` 4→6, `actions/setup-python` 5→6) (#70) and the UI `npm-minor-patch` group (18 Radix / TanStack / React Router / Vite-plugin updates) (#71).
 
 ## v0.7.0
 
