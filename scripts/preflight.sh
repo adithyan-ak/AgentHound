@@ -57,13 +57,13 @@ check_go() {
     MISSING="${MISSING}go\n"
     return
   fi
-  # `go version` -> "go version go1.25.11 darwin/arm64"
+  # `go version` -> "go version go1.25.12 darwin/arm64"
   ver=$(go version 2>/dev/null | awk '{print $3}' | sed 's/^go//')
   need="${GO_MIN_MAJOR}.${GO_MIN_MINOR}"
   if ge_version "$ver" "$need"; then
     print_status OK go "$ver" "(need >= ${need})"
   else
-    print_status WARN go "$ver" "(project pins >= ${need} — CI uses 1.25.11)"
+    print_status WARN go "$ver" "(project pins >= ${need} — CI uses 1.25.12)"
     HAS_WARN=1
   fi
 }
