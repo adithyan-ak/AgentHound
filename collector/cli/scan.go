@@ -82,6 +82,8 @@ func init() {
 	scanCmd.Flags().StringSlice("discover-domain", nil, "Domains to probe for well-known agent cards")
 	scanCmd.Flags().String("targets-file", "", "File with A2A agent URLs (one per line)")
 	scanCmd.Flags().String("auth-token", "", "Bearer token for authenticated A2A agents")
+	scanCmd.Flags().Bool("no-verify-jwks", false, "Disable remote JWKS (jku) resolution during A2A signature verification (offline: inline jwks + --a2a-trusted-keys only)")
+	scanCmd.Flags().String("a2a-trusted-keys", "", "Path to a JWKS JSON file of trusted keys for A2A signature verification (offline key store)")
 
 	scanCmd.Flags().Int("scan-concurrency", 5, "Max parallel connections")
 	scanCmd.Flags().Duration("timeout", 120*time.Second, "Timeout per server/agent")
@@ -126,6 +128,8 @@ func runScan(cmd *cobra.Command, args []string) error {
 	discoverDomains, _ := cmd.Flags().GetStringSlice("discover-domain")
 	targetsFile, _ := cmd.Flags().GetString("targets-file")
 	authToken, _ := cmd.Flags().GetString("auth-token")
+	noVerifyJWKS, _ := cmd.Flags().GetBool("no-verify-jwks")
+	a2aTrustedKeys, _ := cmd.Flags().GetString("a2a-trusted-keys")
 
 	scanConcurrency, _ := cmd.Flags().GetInt("scan-concurrency")
 	cfgConcurrency := 0
@@ -181,7 +185,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	merged, enabled, failed := collectAll(ctx, runConfig, runMCP, runA2A,
 		path, paths, projectDir, includeCredValues,
 		url, target, targets, targetsFile, authToken,
-		concurrency, timeout, insecure)
+		concurrency, timeout, insecure, noVerifyJWKS, a2aTrustedKeys)
 
 	// Default behavior: if no --output set, auto-name to scan-<scan_id>.json in CWD.
 	if output == "" {
@@ -268,7 +272,8 @@ func resolveProbeTimeout(timeout time.Duration, timeoutChanged bool) time.Durati
 func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 	path string, paths []string, projectDir string, includeCredValues bool,
 	url, target string, targets []string, targetsFile, authToken string,
-	concurrency int, timeout time.Duration, insecure bool) (data *ingest.IngestData, enabled, failed int) {
+	concurrency int, timeout time.Duration, insecure bool,
+	noVerifyJWKS bool, a2aTrustedKeys string) (data *ingest.IngestData, enabled, failed int) {
 
 	merged := &ingest.IngestData{
 		Meta: ingest.IngestMeta{
@@ -307,7 +312,7 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 
 	if runA2A {
 		enabled++
-		data, err := collectA2A(ctx, target, targets, targetsFile, authToken, concurrency, timeout, insecure)
+		data, err := collectA2A(ctx, target, targets, targetsFile, authToken, concurrency, timeout, insecure, noVerifyJWKS, a2aTrustedKeys)
 		if err != nil {
 			failed++
 			slog.Error("a2a collector failed", "error", err)
@@ -365,7 +370,8 @@ func collectMCP(ctx context.Context, url string, concurrency int, timeout time.D
 }
 
 func collectA2A(ctx context.Context, target string, targets []string, targetsFile, authToken string,
-	concurrency int, timeout time.Duration, insecure bool) (*ingest.IngestData, error) {
+	concurrency int, timeout time.Duration, insecure bool,
+	noVerifyJWKS bool, a2aTrustedKeys string) (*ingest.IngestData, error) {
 	var a2aOpts []a2acollector.Option
 	if concurrency > 0 {
 		a2aOpts = append(a2aOpts, a2acollector.WithConcurrency(concurrency))
@@ -375,6 +381,12 @@ func collectA2A(ctx context.Context, target string, targets []string, targetsFil
 	}
 	if insecure {
 		a2aOpts = append(a2aOpts, a2acollector.WithInsecure(true))
+	}
+	if noVerifyJWKS {
+		a2aOpts = append(a2aOpts, a2acollector.WithJWKSFetch(false))
+	}
+	if a2aTrustedKeys != "" {
+		a2aOpts = append(a2aOpts, a2acollector.WithTrustedKeysFile(a2aTrustedKeys))
 	}
 
 	c := a2acollector.NewA2ACollector(a2aOpts...)

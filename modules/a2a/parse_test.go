@@ -1,6 +1,7 @@
 package a2a
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -212,7 +213,7 @@ func TestParseAgentCard_Dispatch(t *testing.T) {
 				Version:  DetectVersion(parsed),
 				CardHash: "abc123",
 			}
-			card, err := ParseAgentCard(raw, engine)
+			card, err := ParseAgentCard(context.Background(), raw, engine, VerifyOptions{})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}

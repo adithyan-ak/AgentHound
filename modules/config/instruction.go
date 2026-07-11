@@ -25,7 +25,6 @@ var projectTargets = []instructionTarget{
 	{"AGENTS.md", "agents.md"},
 	{"CLAUDE.md", "claude.md"},
 	{".cursorrules", "cursorrules"},
-	{".copilot-instructions.md", "copilot-instructions"},
 	{filepath.Join(".github", "copilot-instructions.md"), "copilot-instructions"},
 }
 

@@ -1,6 +1,7 @@
 package a2a
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -21,6 +22,7 @@ type AgentCardData struct {
 	Skills           []SkillData
 	IsSigned         bool
 	SignatureValid   bool
+	SignatureStatus  string
 	IsHTTPS          bool
 	CardHash         string
 }
@@ -50,7 +52,7 @@ func DetectVersion(raw map[string]any) string {
 	return "v0.3.0"
 }
 
-func ParseAgentCard(raw *RawCard, engine *rules.Engine) (*AgentCardData, error) {
+func ParseAgentCard(ctx context.Context, raw *RawCard, engine *rules.Engine, verifyOpts VerifyOptions) (*AgentCardData, error) {
 	switch raw.Version {
 	case "v1.0":
 		card, err := parseV10(raw.Parsed, raw.CardHash, engine)
@@ -58,9 +60,7 @@ func ParseAgentCard(raw *RawCard, engine *rules.Engine) (*AgentCardData, error) 
 			return nil, err
 		}
 		card.IsHTTPS = strings.HasPrefix(raw.URL, "https://")
-		signed, valid := VerifySignatures(raw.Body, raw.Parsed)
-		card.IsSigned = signed
-		card.SignatureValid = valid
+		applySignatureResult(card, VerifySignaturesCtx(ctx, raw.Body, raw.Parsed, verifyOpts))
 		return card, nil
 	default:
 		card, err := parseV030(raw.Parsed, raw.CardHash, engine)
@@ -68,11 +68,15 @@ func ParseAgentCard(raw *RawCard, engine *rules.Engine) (*AgentCardData, error) 
 			return nil, err
 		}
 		card.IsHTTPS = strings.HasPrefix(raw.URL, "https://")
-		signed, valid := VerifySignatures(raw.Body, raw.Parsed)
-		card.IsSigned = signed
-		card.SignatureValid = valid
+		applySignatureResult(card, VerifySignaturesCtx(ctx, raw.Body, raw.Parsed, verifyOpts))
 		return card, nil
 	}
+}
+
+func applySignatureResult(card *AgentCardData, res SignatureResult) {
+	card.IsSigned = res.Signed
+	card.SignatureValid = res.Valid
+	card.SignatureStatus = res.Status
 }
 
 func parseV030(raw map[string]any, cardHash string, engine *rules.Engine) (*AgentCardData, error) {
@@ -120,7 +124,7 @@ func parseV030(raw map[string]any, cardHash string, engine *rules.Engine) (*Agen
 			if !ok {
 				continue
 			}
-			skill := parseSkillV030(sObj, engine)
+			skill := parseSkill(sObj, engine)
 			card.Skills = append(card.Skills, skill)
 		}
 	}
@@ -144,19 +148,24 @@ func parseV10(raw map[string]any, cardHash string, engine *rules.Engine) (*Agent
 	}
 
 	if ifaces, ok := raw["supportedInterfaces"].([]any); ok {
+		seenPV := make(map[string]bool)
 		for _, iface := range ifaces {
 			ifObj, ok := iface.(map[string]any)
 			if !ok {
 				continue
 			}
-			ifType := getString030(ifObj, "type")
-			if strings.EqualFold(ifType, "A2A") {
-				if u := getString030(ifObj, "url"); u != "" {
-					card.URL = u
-				}
-				if pv := getString030(ifObj, "protocolVersion"); pv != "" {
-					card.ProtocolVersions = append(card.ProtocolVersions, pv)
-				}
+			// The transport discriminator is protocolBinding (values JSONRPC,
+			// GRPC, HTTP+JSON per A2A v1.0 §4.4.6) — there is no "type" field.
+			// Prefer the JSONRPC interface URL; otherwise fall back to the
+			// first interface that carries a URL.
+			u := getString030(ifObj, "url")
+			binding := getString030(ifObj, "protocolBinding")
+			if u != "" && (card.URL == "" || strings.EqualFold(binding, "JSONRPC")) {
+				card.URL = u
+			}
+			if pv := getString030(ifObj, "protocolVersion"); pv != "" && !seenPV[pv] {
+				seenPV[pv] = true
+				card.ProtocolVersions = append(card.ProtocolVersions, pv)
 			}
 		}
 	}
@@ -178,7 +187,7 @@ func parseV10(raw map[string]any, cardHash string, engine *rules.Engine) (*Agent
 			if !ok {
 				continue
 			}
-			skill := parseSkillV10(sObj, engine)
+			skill := parseSkill(sObj, engine)
 			card.Skills = append(card.Skills, skill)
 		}
 	}
@@ -214,46 +223,10 @@ func getSecurityRefs(raw map[string]any) []any {
 	return sec
 }
 
-func parseSkillV030(s map[string]any, engine *rules.Engine) SkillData {
-	id := getString030(s, "id")
-	name := getString030(s, "name")
-	desc := getString030(s, "description")
-
-	var inputModes, outputModes []string
-	if is, ok := s["inputSchema"].(map[string]any); ok {
-		if t := getString030(is, "type"); t != "" {
-			inputModes = append(inputModes, "application/json")
-		}
-	}
-	if _, ok := s["outputSchema"].(map[string]any); ok {
-		outputModes = append(outputModes, "application/json")
-	}
-
-	descHash := common.DescriptionHash(name, desc, nil)
-
-	hasInj := false
-	matches := engine.EvaluateAll("a2a", map[string]string{
-		"skill.description": desc,
-	})
-	for _, m := range matches {
-		if m.Emit.FindingType == "has_injection_patterns" {
-			hasInj = true
-			break
-		}
-	}
-
-	return SkillData{
-		ID:              id,
-		Name:            name,
-		Description:     desc,
-		InputModes:      inputModes,
-		OutputModes:     outputModes,
-		DescriptionHash: descHash,
-		HasInjection:    hasInj,
-	}
-}
-
-func parseSkillV10(s map[string]any, engine *rules.Engine) SkillData {
+// parseSkill parses an A2A AgentSkill for both v0.3.0 and v1.0 cards. Media
+// types come from the spec's inputModes/outputModes string arrays; AgentSkill
+// has no inputSchema/outputSchema field in any A2A version.
+func parseSkill(s map[string]any, engine *rules.Engine) SkillData {
 	id := getString030(s, "id")
 	name := getString030(s, "name")
 	desc := getString030(s, "description")

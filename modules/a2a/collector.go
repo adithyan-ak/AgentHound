@@ -14,12 +14,16 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
+	jose "github.com/go-jose/go-jose/v4"
 )
 
 type A2ACollector struct {
-	concurrency int
-	timeout     time.Duration
-	insecure    bool
+	concurrency      int
+	timeout          time.Duration
+	insecure         bool
+	jwksFetchEnabled bool
+	trustedKeysPath  string
+	trustedKeys      *jose.JSONWebKeySet
 }
 
 type Option func(*A2ACollector)
@@ -36,10 +40,24 @@ func WithInsecure(v bool) Option {
 	return func(c *A2ACollector) { c.insecure = v }
 }
 
+// WithJWKSFetch toggles spec-compliant remote JWKS (`jku`) resolution during
+// signature verification. Enabled by default; disable for a fully offline scan.
+func WithJWKSFetch(v bool) Option {
+	return func(c *A2ACollector) { c.jwksFetchEnabled = v }
+}
+
+// WithTrustedKeysFile points at a JWKS JSON file whose keys are used as an
+// out-of-band trusted key store for signature verification (the A2A spec's
+// trusted-key-store option), consulted before any network fetch.
+func WithTrustedKeysFile(path string) Option {
+	return func(c *A2ACollector) { c.trustedKeysPath = path }
+}
+
 func NewA2ACollector(opts ...Option) *A2ACollector {
 	c := &A2ACollector{
-		concurrency: 5,
-		timeout:     15 * time.Second,
+		concurrency:      5,
+		timeout:          15 * time.Second,
+		jwksFetchEnabled: true,
 	}
 	for _, o := range opts {
 		o(c)
@@ -75,6 +93,19 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 	insecure := opts.Insecure || c.insecure
 	authToken := opts.AuthToken
 
+	if c.trustedKeysPath != "" && c.trustedKeys == nil {
+		set, err := LoadJWKSFile(c.trustedKeysPath)
+		if err != nil {
+			return nil, fmt.Errorf("load a2a trusted keys %s: %w", c.trustedKeysPath, err)
+		}
+		c.trustedKeys = set
+	}
+
+	verifyOpts := VerifyOptions{TrustedKeys: c.trustedKeys}
+	if c.jwksFetchEnabled {
+		verifyOpts.Fetcher = NewJWKSFetcher(insecure, c.timeout)
+	}
+
 	type cardResult struct {
 		card *AgentCardData
 		url  string
@@ -92,14 +123,14 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			raw, err := FetchAgentCard(ctx, tgt, authToken, insecure)
+			raw, err := FetchAgentCard(ctx, tgt, authToken, insecure, c.timeout)
 			if err != nil {
 				results[idx] = cardResult{url: tgt, err: err}
 				return
 			}
 			raw.URL = tgt
 
-			card, err := ParseAgentCard(raw, engine)
+			card, err := ParseAgentCard(ctx, raw, engine, verifyOpts)
 			if err != nil {
 				results[idx] = cardResult{url: tgt, err: err}
 				return
@@ -213,19 +244,20 @@ func buildGraph(card *AgentCardData, scanID string) ([]ingest.Node, []ingest.Edg
 	agentID := agentNodeID(card)
 
 	agentProps := map[string]any{
-		"name":              card.Name,
-		"description":       card.Description,
-		"url":               card.URL,
-		"provider":          card.Provider,
-		"version":           card.Version,
-		"protocol_versions": card.ProtocolVersions,
-		"capabilities":      card.Capabilities,
-		"auth_method":       card.AuthMethod,
-		"is_signed":         card.IsSigned,
-		"signature_valid":   card.SignatureValid,
-		"is_https":          card.IsHTTPS,
-		"card_hash":         card.CardHash,
-		"auth_posture":      AuthPostureScore(card.SecuritySchemes),
+		"name":                          card.Name,
+		"description":                   card.Description,
+		"url":                           card.URL,
+		"provider":                      card.Provider,
+		"version":                       card.Version,
+		"protocol_versions":             card.ProtocolVersions,
+		"capabilities":                  card.Capabilities,
+		"auth_method":                   card.AuthMethod,
+		"is_signed":                     card.IsSigned,
+		"signature_valid":               card.SignatureValid,
+		"signature_verification_status": card.SignatureStatus,
+		"is_https":                      card.IsHTTPS,
+		"card_hash":                     card.CardHash,
+		"auth_posture":                  AuthPostureScore(card.SecuritySchemes),
 	}
 
 	schemesData := make([]map[string]string, len(card.SecuritySchemes))

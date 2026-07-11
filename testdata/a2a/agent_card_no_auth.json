@@ -17,12 +17,7 @@
       "name": "Lookup",
       "description": "Look up public information by topic",
       "tags": ["info", "public"],
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "query": {"type": "string"}
-        }
-      }
+      "inputModes": ["application/json"]
     }
   ]
 }

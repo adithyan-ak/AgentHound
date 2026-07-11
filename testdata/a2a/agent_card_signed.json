@@ -27,12 +27,7 @@
       "name": "SecureOperation",
       "description": "Perform a secure operation",
       "tags": ["security"],
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "action": {"type": "string"}
-        }
-      }
+      "inputModes": ["application/json"]
     }
   ],
   "signatures": [

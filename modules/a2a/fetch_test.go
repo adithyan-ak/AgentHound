@@ -31,7 +31,7 @@ func TestFetchAgentCard_V10Path(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	card, err := FetchAgentCard(context.Background(), srv.URL, "", false)
+	card, err := FetchAgentCard(context.Background(), srv.URL, "", false, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestFetchAgentCard_FallbackToV030(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	card, err := FetchAgentCard(context.Background(), srv.URL, "", false)
+	card, err := FetchAgentCard(context.Background(), srv.URL, "", false, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestFetchAgentCard_BothPathsFail(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := FetchAgentCard(context.Background(), srv.URL, "", false)
+	_, err := FetchAgentCard(context.Background(), srv.URL, "", false, 0)
 	if err == nil {
 		t.Fatal("expected error when both paths return 404")
 	}
@@ -92,7 +92,7 @@ func TestFetchAgentCard_AuthHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := FetchAgentCard(context.Background(), srv.URL, "test-token-123", false)
+	_, err := FetchAgentCard(context.Background(), srv.URL, "test-token-123", false, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestFetchAgentCard_Timeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	_, err := FetchAgentCard(ctx, srv.URL, "", false)
+	_, err := FetchAgentCard(ctx, srv.URL, "", false, 0)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -124,7 +124,7 @@ func TestFetchAgentCard_InvalidJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := FetchAgentCard(context.Background(), srv.URL, "", false)
+	_, err := FetchAgentCard(context.Background(), srv.URL, "", false, 0)
 	if err == nil {
 		t.Fatal("expected JSON parse error")
 	}
@@ -136,7 +136,7 @@ func TestFetchAgentCard_ServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := FetchAgentCard(context.Background(), srv.URL, "", false)
+	_, err := FetchAgentCard(context.Background(), srv.URL, "", false, 0)
 	if err == nil {
 		t.Fatal("expected error on 500 response")
 	}
@@ -154,7 +154,7 @@ func TestFetchAgentCard_TLSStrictDefault(t *testing.T) {
 	defer srv.Close()
 
 	// Insecure=false → TLS handshake should fail (unknown authority).
-	_, err := FetchAgentCard(context.Background(), srv.URL, "", false)
+	_, err := FetchAgentCard(context.Background(), srv.URL, "", false, 0)
 	if err == nil {
 		t.Fatal("expected TLS verification error with self-signed cert; got nil")
 	}
@@ -165,7 +165,7 @@ func TestFetchAgentCard_TLSStrictDefault(t *testing.T) {
 	}
 
 	// Insecure=true → handshake should succeed.
-	if _, err := FetchAgentCard(context.Background(), srv.URL, "", true); err != nil {
+	if _, err := FetchAgentCard(context.Background(), srv.URL, "", true, 0); err != nil {
 		t.Errorf("Insecure=true against self-signed cert: unexpected error %v", err)
 	}
 }

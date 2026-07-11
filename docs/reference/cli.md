@@ -74,8 +74,12 @@ Read-only: calls `tools/list`, `resources/list`, `resources/templates/list`, `pr
 | `--targets-file` | | File with agent URLs (one per line). |
 | `--discover-domain` | | Domains to probe for `/.well-known/agent-card.json`. |
 | `--auth-token` | | Bearer token for authenticated agents. |
+| `--no-verify-jwks` | `false` | Disable remote JWKS (`jku`) resolution during signature verification; verify only against inline `jwks` and `--a2a-trusted-keys` (offline). |
+| `--a2a-trusted-keys` | | Path to a JWKS JSON file of trusted keys used to verify signed agent cards (offline key store). |
 
 At least one of `--target`, `--targets`, `--targets-file`, or `--discover-domain` is required with `--a2a`.
+
+Signed agent cards are verified by default: keys are resolved from the card's inline `jwks`, then `--a2a-trusted-keys`, then the JWS protected-header `jku` URL over an SSRF-hardened fetcher (loopback/RFC1918 allowed; link-local/cloud-metadata refused). `--no-verify-jwks` restricts verification to local key sources. Results are surfaced on the `A2AAgent` node via `signature_verification_status` (`verified` / `partially_verified` / `failed` / `unverifiable` / `unsigned`).
 
 #### Network Mode Flags
 
@@ -254,7 +258,7 @@ agenthound poison <host:port> --type <kind> --engagement-id <ID> [flags]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--update-method` | `PUT` | HTTP method for the description update. |
-| `--update-path` | `/tools/{id}` | Path template; `{id}` replaced with `--target-id`. |
+| `--update-path` | `/admin/tools/{id}` | Path template; `{id}` replaced with `--target-id`. |
 | `--list-path` | `/` | JSON-RPC tools/list call path (reads original description). |
 | `--auth-token` | | Bearer token for list and update requests. |
 

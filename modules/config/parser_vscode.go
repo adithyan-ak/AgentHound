@@ -10,14 +10,24 @@ type VSCodeParser struct{}
 func (p *VSCodeParser) ClientName() string { return "vscode" }
 
 func (p *VSCodeParser) ConfigPaths(homeDir string) []string {
+	// The dedicated mcp.json (top-level "servers") is VS Code's documented,
+	// primary MCP location: project-scoped .vscode/mcp.json (resolved against
+	// CWD, like other project parsers) and the user-profile mcp.json. The
+	// legacy settings.json ("mcp.servers") is also scanned for older setups.
+	paths := []string{filepath.Join(".vscode", "mcp.json")}
 	switch runtime.GOOS {
 	case "darwin":
-		return []string{filepath.Join(homeDir, "Library", "Application Support", "Code", "User", "settings.json")}
+		paths = append(paths,
+			filepath.Join(homeDir, "Library", "Application Support", "Code", "User", "mcp.json"),
+			filepath.Join(homeDir, "Library", "Application Support", "Code", "User", "settings.json"),
+		)
 	case "linux":
-		return []string{filepath.Join(homeDir, ".config", "Code", "User", "settings.json")}
-	default:
-		return nil
+		paths = append(paths,
+			filepath.Join(homeDir, ".config", "Code", "User", "mcp.json"),
+			filepath.Join(homeDir, ".config", "Code", "User", "settings.json"),
+		)
 	}
+	return paths
 }
 
 func (p *VSCodeParser) Parse(path string, data []byte) (*ParsedConfig, error) {
@@ -89,14 +99,22 @@ func (p *VSCodeParser) Parse(path string, data []byte) (*ParsedConfig, error) {
 }
 
 func (p *VSCodeParser) extractServersMap(m map[string]any) map[string]any {
-	// Format 1: dotted key "mcp.servers"
+	// Format 1: top-level "servers" (the dedicated .vscode/mcp.json and
+	// user-profile mcp.json format; VS Code uses "servers", not "mcpServers")
+	if raw, ok := m["servers"]; ok {
+		if sm, ok := raw.(map[string]any); ok {
+			return sm
+		}
+	}
+
+	// Format 2: dotted key "mcp.servers"
 	if raw, ok := m["mcp.servers"]; ok {
 		if sm, ok := raw.(map[string]any); ok {
 			return sm
 		}
 	}
 
-	// Format 2: nested "mcp" -> "servers"
+	// Format 3: nested "mcp" -> "servers"
 	if mcpRaw, ok := m["mcp"]; ok {
 		if mcpObj, ok := mcpRaw.(map[string]any); ok {
 			if raw, ok := mcpObj["servers"]; ok {

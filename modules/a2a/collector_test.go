@@ -346,6 +346,9 @@ func TestCollector_SignedCard(t *testing.T) {
 	if props["signature_valid"] != false {
 		t.Errorf("expected signature_valid=false for unverifiable card, got %v", props["signature_valid"])
 	}
+	if props["signature_verification_status"] != "unverifiable" {
+		t.Errorf("expected signature_verification_status=unverifiable, got %v", props["signature_verification_status"])
+	}
 	if props["auth_method"] != "mtls" {
 		t.Errorf("expected auth_method=mtls, got %v", props["auth_method"])
 	}
@@ -386,6 +389,9 @@ func TestCollector_SignedCard_ObjectForm_Valid(t *testing.T) {
 	}
 	if props["signature_valid"] != true {
 		t.Errorf("expected signature_valid=true for properly-signed object-form card, got %v", props["signature_valid"])
+	}
+	if props["signature_verification_status"] != "verified" {
+		t.Errorf("expected signature_verification_status=verified, got %v", props["signature_verification_status"])
 	}
 }
 

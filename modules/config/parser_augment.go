@@ -26,14 +26,25 @@ func (p *AugmentParser) Parse(path string, data []byte) (*ParsedConfig, error) {
 		return nil, err
 	}
 
-	serversMap := p.extractServersMap(m)
-	if serversMap == nil {
+	advanced := p.extractServersMap(m)
+	if advanced == nil {
 		return &ParsedConfig{Client: p.ClientName(), Path: path}, nil
 	}
 
-	servers, err := parseMCPServersMap(serversMap, "mcpServers", "url")
-	if err != nil {
-		return nil, err
+	// Real Augment persists augment.advanced.mcpServers as a JSON ARRAY (each
+	// element carries its own "name"). The object-keyed form only appears in
+	// the "Import from JSON" box and the Auggie CLI settings file, so support
+	// both shapes.
+	var servers []ServerDef
+	switch raw := advanced["mcpServers"].(type) {
+	case []any:
+		servers = parseMCPServersList(raw, "url")
+	case map[string]any:
+		parsed, err := parseMCPServersMap(advanced, "mcpServers", "url")
+		if err != nil {
+			return nil, err
+		}
+		servers = parsed
 	}
 
 	return &ParsedConfig{Client: p.ClientName(), Path: path, Servers: servers}, nil

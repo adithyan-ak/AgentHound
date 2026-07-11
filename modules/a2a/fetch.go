@@ -26,7 +26,7 @@ const (
 	maxBodyLen = 5 * 1024 * 1024
 )
 
-func FetchAgentCard(ctx context.Context, targetURL string, authToken string, insecure bool) (*RawCard, error) {
+func FetchAgentCard(ctx context.Context, targetURL string, authToken string, insecure bool, timeout time.Duration) (*RawCard, error) {
 	base := normalizeBaseURL(targetURL)
 
 	transport := &http.Transport{}
@@ -34,9 +34,12 @@ func FetchAgentCard(ctx context.Context, targetURL string, authToken string, ins
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   15 * time.Second,
+		Timeout:   timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return fmt.Errorf("too many redirects (max 5)")
