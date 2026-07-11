@@ -51,10 +51,10 @@ This is what you want for hot-fixing a broken regex in a shipped rule, or for ad
 
 A bundle is one of:
 
-- A directory containing `*.yaml` files (one rule per file).
-- A `.tar.gz` archive containing `fingerprints/*.yaml` entries.
+- A directory containing `*.yaml` files (one rule per file). Non-yaml files and sub-directories are skipped.
+- A `.tar.gz` archive containing one or more `*.yaml` regular-file entries (the archive path prefix does not matter — the loader accepts `foo.yaml`, `fingerprints/foo.yaml`, or any other layout). Non-yaml entries, directories, and symlinks are skipped.
 
-The loader reads `*.yaml` and skips other file types. Each YAML file follows the same shape as the embedded rules at `sdk/rules/builtin/fingerprints/`:
+Each YAML file follows the same shape as the embedded rules at `sdk/rules/builtin/fingerprints/`:
 
 ```yaml
 id: ollama-hotfix-2026-06
@@ -84,7 +84,7 @@ emit:
     version: "{capture:version}"
 ```
 
-Rule IDs MUST be globally unique within a bundle (and across the bundle + embedded merge — the bundle's same-id rule wins, but two same-id rules within one bundle is a load-time conflict).
+Rule IDs SHOULD be unique within a bundle. `MergeFingerprintRules` deduplicates by ID with last-write-wins semantics — if the same ID appears twice in one bundle, the last one parsed silently overwrites the earlier one (there is no load-time conflict error). Across the bundle + embedded merge, any bundle rule always wins over an embedded rule with the same ID.
 
 ---
 
@@ -111,7 +111,7 @@ The release artifacts:
 
 **Bundle loads but my override doesn't take effect.** Same-id-wins requires the bundle's rule ID to match the embedded rule ID exactly. Check the embedded set with `agenthound rules list`.
 
-**Bundle loads but a rule is silently dropped.** The loader skips files that fail YAML parsing. Run `agenthound rules validate <yaml-path>` against each file in your bundle to catch parse errors. Per-file size cap is 1 MiB.
+**Bundle loads but a rule is silently dropped.** The loader skips files that fail YAML parsing. Sanity-check bundle files with `yamllint` — `agenthound rules validate` uses the *detection*-rule schema (`sdk/rules/rule.go`) rather than the *fingerprint*-rule schema (`sdk/rules/fingerprint.go`), so it will not accept a fingerprint YAML. The tar.gz reader also caps per-entry size at 1 MiB (fingerprint YAMLs are tiny; larger entries are treated as suspicious and skipped). The directory reader has no per-file size cap.
 
 **Cosign verification fails.** The `--certificate-identity-regexp` in the example matches GitHub Actions OIDC. If you forked the repo and re-released, your cert identity will differ — adjust the regex. Time skew can cause verification failures if your machine clock is off; sync NTP.
 

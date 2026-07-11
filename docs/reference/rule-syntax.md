@@ -22,9 +22,9 @@ tags: ["supply-chain", "injection"]
 
 scope:
   collector: mcp|a2a|config|all    # Which collector's output to scan
-  targets:                         # Node property fields to evaluate
-    - description
-    - name
+  targets:                         # Node.property fields to evaluate (must be qualified — see allowlist below)
+    - tool.description
+    - tool.name
 
 matcher:
   type: keyword|prefix|regex|entropy|compound
@@ -44,6 +44,19 @@ tests:                             # Unit tests (not shipped in binary)
     should_match: false
     description: "benign file operation"
 ```
+
+### `scope.targets` allowlist
+
+Every entry in `scope.targets` must be a qualified `<subject>.<field>` name from this fixed list (`sdk/rules/validate.go`); unknown targets fail rule load:
+
+| Target | Subject |
+|--------|---------|
+| `tool.description`, `tool.name`, `tool.input_schema`, `tool.combined` | MCP tool |
+| `skill.description` | A2A skill |
+| `resource.uri` | MCP resource |
+| `instruction.content` | Instruction file |
+| `credential.name`, `credential.value` | Credential |
+| `server.command`, `server.args`, `server.env_keys`, `server.env_values`, `server.instructions` | MCP server |
 
 ### Matcher Types
 
@@ -100,7 +113,7 @@ Boolean combination of child matchers.
 ```yaml
 matcher:
   type: compound
-  operator: and|or                 # Default: or
+  operator: and|or                 # Required — omitting the field fails validation
   matchers:
     - type: keyword
       keywords: ["exec", "spawn"]
@@ -181,7 +194,7 @@ Probes are limited to `GET` and `HEAD` methods (read-only contract). Response bo
 
 ```yaml
 - type: body_equals
-  value: "OK"                      # Exact match after trimming trailing whitespace
+  value: "OK"                      # Exact match after strings.TrimSpace (both leading and trailing Unicode whitespace)
 ```
 
 #### `body_contains`

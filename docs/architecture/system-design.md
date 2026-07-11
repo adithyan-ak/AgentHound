@@ -50,9 +50,10 @@ scan --config         scan --mcp --url <url>           scan --a2a --target <url>
          |  2. Normalize (snake_case)   |
          |  3. Deduplicate (MERGE)      |
          |  4. Batch write to Neo4j     |
-         |  5. Post-process (15 stages  |
-         |     producing composite      |
-         |     edges, plus risk score)  |
+         |  5. Post-process (15         |
+         |     processors producing 12  |
+         |     composite edge kinds,    |
+         |     plus node risk scoring)  |
          +------------------------------+
                         |
                         v

@@ -53,7 +53,7 @@ The server and offensive modules persist state under `~/.agenthound/`:
       <engagement>.json          # Per-module engagement state (e.g. scanner session, poison undo log)
 ```
 
-When `XDG_CONFIG_HOME` is set, the base path becomes `$XDG_CONFIG_HOME/agenthound/` instead.
+`AGENTHOUND_STATE_DIR` overrides the state-root path (`~/.agenthound/state/`). Sentinels (`loot-acknowledged`, `poison-acknowledged`, `extract-acknowledged`) always live under `~/.agenthound/`, resolved via `os.UserHomeDir()`.
 
 ---
 

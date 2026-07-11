@@ -80,8 +80,12 @@ Positive:
 - Collector binary is ~9 MiB stripped (linux/amd64). Easy to land on a target
   host, easy to detect-and-evade for blue team analysis, fast to upgrade.
 - The collector deps tree no longer includes `neo4j-go-driver`, `pgx`,
-  `chi`, `go-jose`, `golang-jwt`, or `bcrypt`. A `deps-check` CI gate
-  enforces that boundary going forward.
+  `chi`, `golang-jwt`, or `bcrypt`. A `deps-check` CI gate enforces that
+  boundary going forward. (`go-jose` remains a legitimate collector
+  dependency: `modules/a2a` uses it for JWS signature verification of A2A
+  Agent Cards per RFC 7515, and it is explicitly on the collector
+  allowlist — see `scripts/deps-check.sh` and
+  `scripts/collector-allowlist.txt`.)
 - Releases ship two binaries, two Homebrew formulas, two Docker images —
   but the GoReleaser config covers all of that in one job.
 - The server's API surface shrinks. No `/api/v1/auth/*`, no

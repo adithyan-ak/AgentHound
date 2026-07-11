@@ -39,13 +39,15 @@ For modules that mutate on-disk files, `revert` restores the file's prior state 
 - **Pre-existing file** keeps its **original permission mode** — revert no longer narrows it to `0o600`. The mode captured at mutation time (`orig_mode`) is reapplied.
 - Receipts written before these fields existed default to the prior conservative behavior (leave the file, mode `0o600`), so older receipts still revert safely.
 
-## v0.4 modules
+## Shipped destructive modules
 
-| `--type` | Source → Target | Reverter behavior |
-|---|---|---|
-| `mcp.tool.description` | `MCPServer` → `MCPTool.description` | PUT the original description back via the operator-specified admin endpoint. Idempotent — checks current state before writing. |
+| `--type` | Verb(s) | Source → Target | Reverter behavior |
+|---|---|---|---|
+| `mcp.tool.description` | `poison` | `MCPServer` → `MCPTool.description` | PUT the original description back via the operator-specified admin endpoint. Idempotent — checks current state before writing. |
+| `instruction.file` | `poison`, `implant` | operator machine → `CLAUDE.md` / `AGENTS.md` / `.cursorrules` | Rewrite the file to remove the sentinel-bracketed block; if the file did not exist before mutation (`file_existed=false` on the receipt), remove it entirely. Pre-existing files keep their original permission mode (`orig_mode`). |
+| `mcp.config.malicious-server` | `implant` | operator machine → MCP client config (`.cursor/mcp.json` etc.) | Remove the AgentHound-owned entry from the config's `mcpServers` (or equivalent) map; drop the file if AgentHound created it. |
 
-v4-Phase 2 lands two more: `instruction.file.append` (CLAUDE.md / AGENTS.md / `.cursorrules`) and `mcp.config.malicious-server` (Implanter targeting MCP client configs).
+`agenthound implant --type instruction.file` accepts the Poisoner-backed module too — the implant dispatcher falls back to the shared poison runner when no Implanter matches the requested target kind, so operators get consistent CLI ergonomics regardless of which contract the module implements.
 
 ## Worked example — MCP tool description
 
@@ -119,7 +121,35 @@ The defaults match a typical MCP stub with a `PUT /admin/tools/{id}` admin surfa
 
 - It does not detect EDR or audit logging on the target. Probes show up in HTTP access logs unconditionally.
 - It does not anonymize the operator. `--engagement-id` is recorded on every emitted edge's evidence map for downstream IR coordination, NOT for evasion.
-- It does not chain implants. Each Poisoner does one thing; the v4-Phase 2 Implanter is separate.
+- It does not chain implants. Each Poisoner does one thing; persistence-installing modules run under the separate `agenthound implant` verb (see the shipped-modules table above and the [CLI reference](../reference/cli.md)).
+
+## `agenthound extract` — read-only, gated
+
+The `extract` verb is the third gated primitive alongside `poison` and `implant`. It runs a registered `Extractor` (`sdk/action/extractor.go`) against a local artifact, produces derived-signal graph data, and — like `poison` / `implant` — refuses to run without an operator-typed `AUTHORIZED` acknowledgement.
+
+- **Shipped module:** `embedding-invert` (`modules/embeddinginvert/`). Detects fine-tune training signals via statistical outlier analysis of a GGUF model's embedding layer.
+- **Gates:**
+  - `--commit=false` by default — without it the Extractor runs end-to-end but emits a dry-run summary only, no ingest data.
+  - `~/.agenthound/extract-acknowledged` sentinel + AUTHORIZED prompt on first run (separate sentinel from `poison-acknowledged`, since `extract` is billing/CPU-heavy rather than target-mutating).
+  - `--artifact <path>` is required — Extractors operate only on local files the operator has already obtained out-of-band (e.g. GGUF blobs copied from `~/.ollama/models/blobs/`). AgentHound never downloads model weights on your behalf.
+- **Output:** emits `ExtractedTrainingSignal` nodes linked to their source `AIModel` via `EXTRACTED_FROM` edges.
+- **Non-destructive:** the module returns `IsDestructive() = false`; it does not modify the on-disk artifact and does not embed the `Reverter` contract.
+
+```bash
+# Dry-run first.
+agenthound extract <ai-model-node-id> \
+    --type embedding-invert \
+    --artifact /path/to/support-agent-v3.gguf \
+    --engagement-id DC35-DEMO
+
+# With --commit, emit ingest data.
+agenthound extract <ai-model-node-id> \
+    --type embedding-invert \
+    --artifact /path/to/support-agent-v3.gguf \
+    --commit \
+    --engagement-id DC35-DEMO \
+    --output -
+```
 
 ## See also
 

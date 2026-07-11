@@ -90,10 +90,10 @@ Returns node and edge counts by kind.
 
 Free-text search across node names, IDs, and identifying properties.
 
-| Param | Type | Description |
-|-------|------|-------------|
-| `q` | string | Search term |
-| `limit` | int | Max results (default 50) |
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `q` | string | _(required)_ | Search term. Must be at least 2 characters; shorter values return `400 VALIDATION_ERROR`. |
+| `limit` | int | 20 | Max results (1–100; values above the cap are silently clamped). |
 
 ### `GET /api/v1/graph/nodes`
 
@@ -125,7 +125,7 @@ Returns the N-hop neighborhood subgraph rooted at the node.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `depth` | int | 1 | Hop count (1–5) |
+| `depth` | int | 1 | Hop count (1–3; values above the cap are silently clamped). |
 
 ### `GET /api/v1/graph/nodes/{id}/blast-radius`
 
@@ -144,7 +144,7 @@ Returns reachable nodes grouped by ring (1-hop, 2-hop, ...). Useful for "what ca
 
 ## Ingest
 
-### `POST /api/v1/ingest` *(token required)*
+### `POST /api/v1/ingest` *(Origin-gated)*
 
 **Max body:** 100 MB.
 
@@ -167,7 +167,7 @@ Upload collector JSON output. Runs the full pipeline: validate → normalize →
 
 ## Analysis
 
-### `POST /api/v1/analysis/shortest-path` *(token required)*
+### `POST /api/v1/analysis/shortest-path` *(Origin-gated)*
 
 Find the shortest path between two nodes.
 
@@ -193,7 +193,7 @@ Find the shortest path between two nodes.
 }
 ```
 
-### `POST /api/v1/analysis/all-paths` *(token required)*
+### `POST /api/v1/analysis/all-paths` *(Origin-gated)*
 
 Enumerate all paths between two nodes (bounded). Same request as shortest-path, plus:
 
@@ -201,7 +201,7 @@ Enumerate all paths between two nodes (bounded). Same request as shortest-path, 
 |-------|------|---------|-------------|
 | `limit` | int | 10 | Max paths returned (1–100) |
 
-### `POST /api/v1/analysis/weighted-path` *(token required)*
+### `POST /api/v1/analysis/weighted-path` *(Origin-gated)*
 
 Find the lowest-risk-weight path using Dijkstra (APOC) or `shortestPath` + `reduce` fallback.
 
@@ -230,7 +230,7 @@ Return the cross-scan triage decision for a finding fingerprint (16-char hex). O
 { "status": "accepted-risk", "note": "Approved by sec-review", "updated_at": "2026-06-19T12:00:00Z" }
 ```
 
-### `PUT /api/v1/findings/triage/{fingerprint}` *(token required)*
+### `PUT /api/v1/findings/triage/{fingerprint}` *(Origin-gated)*
 
 Record (or update) the triage decision for a finding fingerprint. Triage state has no foreign key to findings, so it survives scan deletion and re-detection.
 
@@ -269,7 +269,7 @@ Like findings, pre-built queries carry an optional `atlas_map` (`[]string`) of [
 
 ## Query
 
-### `POST /api/v1/query` *(token required)*
+### `POST /api/v1/query` *(Origin-gated)*
 
 Execute raw Cypher against Neo4j.
 
@@ -281,7 +281,7 @@ Execute raw Cypher against Neo4j.
 }
 ```
 
-The token-gated endpoint protects against browser drive-by Cypher injection from a hostile origin. CLI use (`agenthound-server query`) bypasses HTTP and doesn't need the token.
+The Origin gate protects against browser drive-by Cypher injection from a hostile origin: a browser request from outside `AGENTHOUND_CORS_ORIGINS` returns `403 Forbidden` before Cypher is executed. CLI use (`agenthound-server query`) bypasses HTTP and never goes through the gate.
 
 ---
 
@@ -304,7 +304,7 @@ Scan records serialize `model.Scan` verbatim. The `status` field is one of:
 | `limit` | int | 50 | Max results |
 | `offset` | int | 0 | Pagination offset |
 
-### `POST /api/v1/scans` *(token required)*
+### `POST /api/v1/scans` *(Origin-gated)*
 
 Register a new scan (sets `scan_id`, `started_at`, `status: pending`). Used by the UI's "New scan" flow; CLI ingest creates scan records implicitly.
 
@@ -312,7 +312,7 @@ Register a new scan (sets `scan_id`, `started_at`, `status: pending`). Used by t
 
 Get scan details by ID.
 
-### `DELETE /api/v1/scans/{id}` *(token required)*
+### `DELETE /api/v1/scans/{id}` *(Origin-gated)*
 
 Delete a scan after deleting the nodes and edges that scan owned from Neo4j. If graph cleanup fails, the scan record is retained and the endpoint returns an internal error.
 

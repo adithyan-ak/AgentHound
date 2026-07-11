@@ -10,7 +10,7 @@
 
 The **collector** (`agenthound`) has zero runtime dependencies -- single static binary, no DB clients, no outbound network calls except to scan targets. The **server** (`agenthound-server`) requires Neo4j 4.4+ and PostgreSQL 16+, both provided via Docker Compose.
 
-> **Preflight built in.** The newcomer-facing `make` targets — `build`, `build-collector`, `build-server`, `up`, `down`, `docker*`, `standard*`, `seed`, `demo` — verify their prerequisites before running. (`test`, `lint`, `release`, `clean` and the `prerelease` gate are developer targets and skip the preflight.) `agenthound-server serve` itself probes Neo4j and Postgres on startup. If you see `Neo4j unreachable at bolt://localhost:7687`, the database stack isn't running — bring it up with `docker compose -f docker/docker-compose.yml up -d graph-db app-db` (or `make up` for the full stack). `AGENTHOUND_SKIP_PREFLIGHT=1` bypasses **only** the shell/Make checks; the runtime DB probe inside `agenthound-server` ignores it.
+> **Preflight built in.** The newcomer-facing `make` targets — `build`, `build-collector`, `build-server`, `up`, `down`, `docker*`, `standard*`, `seed` — verify their prerequisites before running. (`test`, `lint`, `release`, `clean` and the `prerelease` gate are developer targets and skip the preflight.) `agenthound-server serve` itself probes Neo4j and Postgres on startup. If you see `Neo4j unreachable at bolt://localhost:7687`, the database stack isn't running — bring it up with `docker compose -f docker/docker-compose.yml up -d graph-db app-db` (or `make up` for the full stack). `AGENTHOUND_SKIP_PREFLIGHT=1` bypasses **only** the shell/Make checks; the runtime DB probe inside `agenthound-server` ignores it.
 
 ## Homebrew (macOS / Linux)
 
