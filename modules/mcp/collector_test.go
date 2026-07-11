@@ -106,13 +106,49 @@ func TestComputeServerID(t *testing.T) {
 		}
 	})
 
-	t.Run("arg_order_independent", func(t *testing.T) {
+	t.Run("arg_order_sensitive_v2_with_legacy_alias", func(t *testing.T) {
 		spec1 := ServerSpec{Transport: "stdio", Command: "npx", Args: []string{"b", "a"}}
 		spec2 := ServerSpec{Transport: "stdio", Command: "npx", Args: []string{"a", "b"}}
-		if computeServerID(spec1) != computeServerID(spec2) {
-			t.Error("server IDs should be equal regardless of arg order")
+		if computeServerID(spec1) == computeServerID(spec2) {
+			t.Error("v2 server IDs must preserve arg order")
+		}
+		first := serverIdentityForSpec(spec1)
+		second := serverIdentityForSpec(spec2)
+		if first.LegacyObjectID == "" || first.LegacyObjectID != second.LegacyObjectID {
+			t.Fatalf("reordered definitions must expose their shared ambiguous v1 ID: %+v %+v", first, second)
 		}
 	})
+}
+
+func TestMCPCoverageKeyUsesCanonicalServerIdentity(t *testing.T) {
+	first := ServerSpec{
+		Transport: "stdio",
+		Command:   "node",
+		Args:      []string{"server-a.js"},
+	}
+	equivalent := first
+	second := ServerSpec{
+		Transport: "stdio",
+		Command:   "node",
+		Args:      []string{"server-b.js"},
+	}
+	if mcpCoverageKey(first) != mcpCoverageKey(equivalent) {
+		t.Fatal("equivalent server identities received different coverage keys")
+	}
+	if mcpCoverageKey(first) == mcpCoverageKey(second) {
+		t.Fatal("two targeted MCP servers received the same coverage key")
+	}
+	httpFirst := ServerSpec{
+		Transport: "http",
+		URL:       "https://MCP.example:443/api/?b=2&a=1",
+	}
+	httpEquivalent := ServerSpec{
+		Transport: "http",
+		URL:       "https://mcp.example/api?a=1&b=2",
+	}
+	if mcpCoverageKey(httpFirst) != mcpCoverageKey(httpEquivalent) {
+		t.Fatal("equivalent HTTP target spellings received different coverage keys")
+	}
 }
 
 func TestParseConfigForSpecs(t *testing.T) {

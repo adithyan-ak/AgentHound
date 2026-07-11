@@ -8,9 +8,9 @@ func TestAuthPostureScore(t *testing.T) {
 		schemes []SecurityScheme
 		want    int
 	}{
-		{"no schemes", nil, 100},
+		{"no schemes", nil, -1},
 		{"apiKey", []SecurityScheme{{Name: "ak", Type: "apiKey"}}, 70},
-		{"http/bearer", []SecurityScheme{{Name: "bearer", Type: "http"}}, 50},
+		{"http/bearer", []SecurityScheme{{Name: "bearer", Type: "http", Scheme: "bearer"}}, 50},
 		{"oauth2", []SecurityScheme{{Name: "oauth", Type: "oauth2"}}, 25},
 		{"openIdConnect", []SecurityScheme{{Name: "oidc", Type: "openIdConnect"}}, 20},
 		{"mutualTLS", []SecurityScheme{{Name: "mtls", Type: "mutualTLS"}}, 10},
@@ -48,9 +48,11 @@ func TestDeriveAuthMethod(t *testing.T) {
 		refs    []any
 		want    string
 	}{
-		{"no schemes", nil, nil, "none"},
+		{"no schemes", nil, nil, "unknown"},
 		{"apiKey only", []SecurityScheme{{Name: "ak", Type: "apiKey"}}, nil, "apiKey"},
-		{"http bearer", []SecurityScheme{{Name: "b", Type: "http"}}, nil, "bearer"},
+		{"http bearer", []SecurityScheme{{Name: "b", Type: "http", Scheme: "bearer"}}, nil, "bearer"},
+		{"http basic", []SecurityScheme{{Name: "b", Type: "http", Scheme: "basic"}}, nil, "basic"},
+		{"http scheme missing", []SecurityScheme{{Name: "b", Type: "http"}}, nil, "unknown"},
 		{"oauth2", []SecurityScheme{{Name: "o", Type: "oauth2"}}, nil, "oauth"},
 		{"openIdConnect", []SecurityScheme{{Name: "oidc", Type: "openIdConnect"}}, nil, "oidc"},
 		{"mutualTLS", []SecurityScheme{{Name: "m", Type: "mutualTLS"}}, nil, "mtls"},
@@ -100,8 +102,13 @@ func TestDetectDelegation(t *testing.T) {
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 delegation edge, got %d", len(edges))
 	}
-	if edges[0].Confidence != 0.7 {
-		t.Errorf("expected confidence 0.7, got %f", edges[0].Confidence)
+	if edges[0].Confidence != 0.5 {
+		t.Errorf("expected confidence 0.5, got %f", edges[0].Confidence)
+	}
+	if edges[0].EvidenceState != "hypothesis" ||
+		edges[0].MatchType != "lexical_name" ||
+		edges[0].MatchField != "agent.description" {
+		t.Errorf("unexpected delegation provenance: %+v", edges[0])
 	}
 }
 
@@ -124,7 +131,7 @@ func TestDetectDelegation_ByURL(t *testing.T) {
 			URL:         "https://orch.example.com",
 		},
 		{
-			Name:        "Worker",
+			Name:        "WorkerTarget",
 			Description: "Executes work",
 			URL:         "https://worker.example.com",
 		},
@@ -132,6 +139,46 @@ func TestDetectDelegation_ByURL(t *testing.T) {
 	edges := DetectDelegation(cards)
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 delegation edge, got %d", len(edges))
+	}
+	if edges[0].MatchType != "lexical_url" {
+		t.Fatalf("match type = %q, want lexical_url", edges[0].MatchType)
+	}
+}
+
+func TestDetectDelegation_RequiresBoundaryAndDelegationContext(t *testing.T) {
+	tests := []struct {
+		name        string
+		description string
+		want        int
+	}{
+		{
+			name:        "name substring is not an agent reference",
+			description: "The betaagent compatibility matrix is documented here",
+		},
+		{
+			name:        "plain documentation mention is not delegation",
+			description: "AgentBeta is listed in the compatibility matrix",
+		},
+		{
+			name:        "negated delegation remains benign",
+			description: "This agent does not delegate to AgentBeta",
+		},
+		{
+			name:        "contextual delegation is a hypothesis",
+			description: "Route summarization tasks to AgentBeta",
+			want:        1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			edges := DetectDelegation([]*AgentCardData{
+				{Name: "AgentAlpha", URL: "https://alpha.example.com", Description: tt.description},
+				{Name: "AgentBeta", URL: "https://beta.example.com"},
+			})
+			if len(edges) != tt.want {
+				t.Fatalf("DetectDelegation() = %+v, want %d edges", edges, tt.want)
+			}
+		})
 	}
 }
 

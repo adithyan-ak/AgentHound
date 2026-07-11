@@ -27,6 +27,10 @@ export function EdgeTooltip() {
   const viaCred = props["via_credential"] ? String(props["via_credential"]) : "";
   const hops = typeof props["hops"] === "number" ? (props["hops"] as number) : null;
   const confidence = d.confidence || Number(props["confidence"] ?? 0);
+  const configuredReference = props["assertion_type"] === "configured_reference";
+  const configurationConfidence =
+    configuredReference &&
+    props["confidence_scope"] === "configuration_presence";
 
   const vw = typeof window !== "undefined" ? window.innerWidth : 1920;
   const vh = typeof window !== "undefined" ? window.innerHeight : 1080;
@@ -58,8 +62,16 @@ export function EdgeTooltip() {
         </div>
 
         <div className="mt-1.5 text-[11px] leading-snug text-foreground/85">
-          {edgeDescription(d.kind)}
+          {configuredReference
+            ? "Configuration references this backend; service existence was not probed"
+            : edgeDescription(d.kind)}
         </div>
+        {configuredReference && (
+          <div className="mt-1.5 rounded border border-amber-400/30 bg-amber-400/10 px-2 py-1 text-[10px] leading-snug text-amber-200">
+            Configuration reference observed; backend availability and
+            authentication were not directly verified.
+          </div>
+        )}
 
         {d.bundledCount > 1 && (
           <div className="mt-1 font-mono text-[10px] text-primary/80">
@@ -71,7 +83,7 @@ export function EdgeTooltip() {
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10px] text-muted-foreground">
           {confidence > 0 && (
             <span>
-              conf{" "}
+              {configurationConfidence ? "configuration presence" : "conf"}{" "}
               <span className="tabular-nums text-foreground/80">
                 {Math.round(confidence * 100)}%
               </span>
@@ -86,6 +98,7 @@ export function EdgeTooltip() {
             <span className="text-purple-300">cross-protocol</span>
           )}
           {d.isComposite && <span>composite</span>}
+          {configuredReference && <span>configured-only</span>}
         </div>
 
         {(viaServer || viaTool || viaCred) && (

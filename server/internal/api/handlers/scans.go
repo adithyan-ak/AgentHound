@@ -18,32 +18,54 @@ import (
 
 type ScanHandler struct {
 	scanStore scanStore
-	graphDB   graph.GraphDB
 }
 
 type scanStore interface {
 	ListScans(ctx context.Context, limit, offset int) ([]model.Scan, error)
+	ListScansPage(ctx context.Context, limit, offset int, revision string, order appdb.ScanListOrder) ([]model.Scan, appdb.ScanPageInfo, error)
 	GetScan(ctx context.Context, id string) (*model.Scan, error)
 	CreateScan(ctx context.Context, scan *model.Scan) error
 	DeleteScan(ctx context.Context, id string) error
 }
 
 func NewScanHandler(store *appdb.ScanStore, graphDB graph.GraphDB) *ScanHandler {
-	return &ScanHandler{scanStore: store, graphDB: graphDB}
+	_ = graphDB // retained in the constructor for additive call-site compatibility
+	return &ScanHandler{scanStore: store}
 }
 
 func (h *ScanHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	limit := parseIntParam(r, "limit", 50)
-	offset := parseIntParam(r, "offset", 0)
+	offset := parseOffsetParam(r, "offset")
+	revision := r.URL.Query().Get("revision")
+	order := appdb.ScanListOrder(r.URL.Query().Get("order"))
+	if order == "" {
+		order = appdb.ScanListOrderStarted
+	}
+	switch order {
+	case appdb.ScanListOrderStarted, appdb.ScanListOrderCompleted, appdb.ScanListOrderPublished:
+	default:
+		WriteValidationError(w, "order must be one of: started, completed, published")
+		return
+	}
 
-	scans, err := h.scanStore.ListScans(r.Context(), limit, offset)
+	scans, page, err := h.scanStore.ListScansPage(r.Context(), limit, offset, revision, order)
 	if err != nil {
+		var mismatch *appdb.ScanRevisionMismatchError
+		if errors.As(err, &mismatch) {
+			w.Header().Set(headerRevision, mismatch.Actual)
+			WriteError(w, http.StatusConflict, "REVISION_CONFLICT", "scan history changed during pagination; restart from offset 0")
+			return
+		}
 		WriteInternalError(w, r, fmt.Errorf("list scans: %w", err))
 		return
 	}
 	if scans == nil {
 		scans = []model.Scan{}
 	}
+	writePaginationHeaders(w, graph.PageInfo{
+		Offset: page.Offset, Limit: page.Limit, Total: page.Total,
+		HasMore: page.HasMore, Complete: page.Complete, Revision: page.Revision,
+	})
 	WriteJSON(w, http.StatusOK, scans)
 }
 
@@ -110,45 +132,19 @@ func (h *ScanHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify the scan exists before doing graph cleanup.
-	if _, err := h.scanStore.GetScan(r.Context(), id); err != nil {
+	if err := h.scanStore.DeleteScan(r.Context(), id); err != nil {
+		var conflict *appdb.ScanDeleteConflictError
+		if errors.As(err, &conflict) {
+			WriteError(w, http.StatusConflict, "SCAN_DELETE_CONFLICT", conflict.Reason)
+			return
+		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			WriteNotFound(w, "scan not found")
 			return
 		}
-		WriteInternalError(w, r, fmt.Errorf("get scan: %w", err))
-		return
-	}
-
-	if err := h.deleteScanGraphData(r.Context(), id); err != nil {
-		WriteInternalError(w, r, err)
-		return
-	}
-
-	// Delete PG scan record.
-	if err := h.scanStore.DeleteScan(r.Context(), id); err != nil {
 		WriteInternalError(w, r, fmt.Errorf("delete scan: %w", err))
 		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *ScanHandler) deleteScanGraphData(ctx context.Context, id string) error {
-	if h.graphDB == nil {
-		return fmt.Errorf("delete scan graph data: graph database unavailable")
-	}
-	if _, err := h.graphDB.ExecuteWrite(ctx,
-		`MATCH ()-[r]->() WHERE r.scan_id = $scan_id DELETE r RETURN count(r) AS deleted`,
-		map[string]any{"scan_id": id}); err != nil {
-		return fmt.Errorf("delete scan graph edges: %w", err)
-	}
-	if _, err := h.graphDB.ExecuteWrite(ctx,
-		`MATCH (n) WHERE n.scan_id = $scan_id
-		 AND NOT EXISTS { MATCH (n)-[]-() }
-		 DELETE n RETURN count(n) AS deleted`,
-		map[string]any{"scan_id": id}); err != nil {
-		return fmt.Errorf("delete scan graph nodes: %w", err)
-	}
-	return nil
 }

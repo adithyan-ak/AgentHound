@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 )
 
@@ -36,7 +37,9 @@ func AgentRiskScore(ctx context.Context, db graph.GraphDB, objectID string) (flo
 func agentCredentialRisk(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
 	cypher := `
 MATCH (a {objectid: $id})-[:TRUSTS_SERVER]->(s:MCPServer)-[:HAS_ENV_VAR]->(c:Credential)
-RETURN c.high_entropy AS high_entropy, c.type AS cred_type`
+RETURN c.high_entropy AS high_entropy, c.type AS cred_type,
+       c.material_status AS material_status, c.exposure_status AS exposure_status,
+       c.merge_key AS merge_key`
 
 	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
 	if err != nil {
@@ -46,13 +49,29 @@ RETURN c.high_entropy AS high_entropy, c.type AS cred_type`
 		return 0, nil
 	}
 
+	eligible := false
 	for _, row := range rows {
+		if mergeKey, _ := row["merge_key"].(string); mergeKey == "identity" {
+			continue
+		}
+		material, _ := row["material_status"].(string)
+		exposure, _ := row["exposure_status"].(string)
+		if material != "" || exposure != "" {
+			if material != string(common.CredentialMaterialObserved) ||
+				exposure != string(common.CredentialExposureExposed) {
+				continue
+			}
+		}
+		eligible = true
 		if he, ok := row["high_entropy"].(bool); ok && he {
 			return 100, nil
 		}
 		if ct, ok := row["cred_type"].(string); ok && ct == "hardcoded" {
 			return 100, nil
 		}
+	}
+	if !eligible {
+		return 0, nil
 	}
 	return 60, nil
 }

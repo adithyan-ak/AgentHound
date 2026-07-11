@@ -8,7 +8,7 @@ import { buildExplorerGraph, type HexNodeData } from "../graph";
 import { getLens } from "../lens-config";
 import type { ExplorerRawData } from "../useExplorerGraph";
 import type { BlastRadiusData } from "../useBlastRadius";
-import type { APIEdge, APINode } from "@entities/graph/dto";
+import type { APIEdge, APINode, EdgeKind } from "@entities/graph/dto";
 import type { Finding } from "@entities/finding/model";
 
 function n(id: string, kind: string): APINode {
@@ -18,7 +18,7 @@ function n(id: string, kind: string): APINode {
 function e(
   source: string,
   target: string,
-  kind: string,
+  kind: EdgeKind,
   props: Record<string, unknown> = {},
 ): APIEdge {
   return { source, target, kind, properties: props };
@@ -53,11 +53,23 @@ const FINDINGS: Finding[] = [
     target_name: "resource-1",
     target_kind: "MCPResource",
     confidence: 0.95,
+    variant: "default",
+    evidence: { state: "inferred" },
     owasp_map: [],
   },
 ];
 
-const DATA: ExplorerRawData = { nodes: NODES, edges: EDGES, findings: FINDINGS };
+const DATA: ExplorerRawData = {
+  nodes: NODES,
+  edges: EDGES,
+  findings: FINDINGS,
+  collection: {
+    complete: true,
+    revision: "rev-1",
+    nodeTotal: NODES.length,
+    edgeTotal: EDGES.length,
+  },
+};
 
 const ATTACK = getLens("attack-surface");
 const ATTACK_PRESETS = [...ATTACK.edgeKinds];
@@ -74,6 +86,10 @@ describe("explorer view-model — three distinct shapes", () => {
         nodeCount: 4,
         edgeCount: 4,
         findingCount: 1,
+        collectionComplete: true,
+        expectedNodeCount: 4,
+        expectedEdgeCount: 4,
+        incompleteReason: undefined,
       });
     });
 
@@ -82,6 +98,35 @@ describe("explorer view-model — three distinct shapes", () => {
         nodeCount: 0,
         edgeCount: 0,
         findingCount: 0,
+        collectionComplete: true,
+        expectedNodeCount: 0,
+        expectedEdgeCount: 0,
+        incompleteReason: undefined,
+      });
+    });
+
+    it("preserves incomplete collection metadata", () => {
+      expect(
+        computeTotals({
+          ...DATA,
+          nodes: NODES.slice(0, 2),
+          edges: EDGES.slice(0, 1),
+          collection: {
+            complete: false,
+            revision: null,
+            nodeTotal: NODES.length,
+            edgeTotal: EDGES.length,
+            incompleteReason: "revision-changed",
+          },
+        }),
+      ).toEqual({
+        nodeCount: 2,
+        edgeCount: 1,
+        findingCount: 1,
+        collectionComplete: false,
+        expectedNodeCount: 4,
+        expectedEdgeCount: 4,
+        incompleteReason: "revision-changed",
       });
     });
 
@@ -91,6 +136,10 @@ describe("explorer view-model — three distinct shapes", () => {
         nodeCount: 4,
         edgeCount: 4,
         findingCount: 1,
+        collectionComplete: true,
+        expectedNodeCount: 4,
+        expectedEdgeCount: 4,
+        incompleteReason: undefined,
       });
     });
   });

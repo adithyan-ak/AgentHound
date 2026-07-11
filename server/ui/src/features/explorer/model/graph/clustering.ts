@@ -31,6 +31,7 @@ export function buildOrphanClusters(
       data: {
         kind,
         kindTag: kindTag(kind),
+        lensLabel: opts.lens.label,
         count: members.length,
         orphanNodes,
       } satisfies OrphanClusterData,

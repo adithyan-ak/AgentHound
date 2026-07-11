@@ -3,11 +3,91 @@ package appdb
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/adithyan-ak/agenthound/server/model"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+type emptyReplacementTx struct {
+	pgx.Tx
+	query string
+	args  []any
+}
+
+func (tx *emptyReplacementTx) Exec(
+	_ context.Context,
+	query string,
+	args ...any,
+) (pgconn.CommandTag, error) {
+	tx.query = query
+	tx.args = args
+	return pgconn.NewCommandTag("DELETE 1"), nil
+}
+
+func TestReplaceFindingsTxEmptyDeletesPriorSnapshot(t *testing.T) {
+	tx := &emptyReplacementTx{}
+	if err := replaceFindingsTx(
+		context.Background(),
+		tx,
+		"same-scan-id",
+		[]model.Finding{},
+	); err != nil {
+		t.Fatalf("replace empty findings: %v", err)
+	}
+	if tx.query != `DELETE FROM findings WHERE scan_id = $1` {
+		t.Fatalf("replacement query = %q, want per-scan delete", tx.query)
+	}
+	if len(tx.args) != 1 || tx.args[0] != "same-scan-id" {
+		t.Fatalf("replacement args = %#v, want [same-scan-id]", tx.args)
+	}
+}
+
+func TestSafeLegacyFindingDescriptionNamesStoredRolesWithoutInventingCapability(t *testing.T) {
+	description := safeLegacyFindingDescription(model.Finding{
+		EdgeKind:   "CAN_EXECUTE",
+		SourceID:   "tool-id",
+		SourceName: "Runner",
+		SourceKind: "MCPTool",
+		TargetID:   "host-id",
+		TargetName: "prod-host",
+		TargetKind: "Host",
+	})
+	for _, want := range []string{
+		"source Runner (MCPTool)",
+		"target prod-host (Host)",
+		"detector CAN_EXECUTE",
+		"witness evidence was not retained",
+	} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("description %q missing %q", description, want)
+		}
+	}
+	if strings.Contains(description, "arbitrary") || strings.Contains(description, "network") {
+		t.Fatalf("legacy description invents capability: %q", description)
+	}
+}
+
+func TestExactFindingEvidenceMigrationAddsSnapshotAndSafeLegacyBackfill(t *testing.T) {
+	migration, err := migrationFS.ReadFile("migrations/007_exact_finding_evidence.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(migration)
+	for _, want := range []string{
+		"ADD COLUMN IF NOT EXISTS exact_evidence JSONB",
+		"source %s (%s) and target %s (%s)",
+		"predicate-specific witness evidence was not retained",
+		"WHERE exact_evidence IS NULL",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("007 migration missing %q:\n%s", want, sql)
+		}
+	}
+}
 
 // TestIntegrationFindingStore exercises the FindingStore against a real
 // Postgres (skipped without AGENTHOUND_PG_URI; CI's test-integration job
@@ -65,7 +145,23 @@ func TestIntegrationFindingStore(t *testing.T) {
 	findings := []model.Finding{
 		{ID: fpA, Severity: "critical", Category: "Data Exfiltration", Title: "exfil", EdgeKind: "CAN_EXFILTRATE_VIA",
 			SourceID: "s1", SourceName: "agent", SourceKind: "AgentInstance", TargetID: "t1", TargetName: "tool", TargetKind: "MCPTool",
-			Confidence: 0.9, OWASPMap: []string{"MCP04", "ASI08"}},
+			Confidence: 0.9, Variant: model.FindingVariantDefault,
+			Evidence: model.FindingEvidence{
+				State: model.FindingEvidenceInferred, Detector: "mcp",
+				Channels: []string{"file_write"},
+			},
+			ExactEvidence: &model.ExactFindingEvidence{
+				Version: 1, Complete: true, Reasons: []string{},
+				Nodes: []model.ExactFindingEvidenceNode{
+					{ID: "s1", Kinds: []string{"AgentInstance"}, Properties: map[string]any{"name": "agent"}},
+					{ID: "t1", Kinds: []string{"MCPTool"}, Properties: map[string]any{"name": "tool"}},
+				},
+				Edges: []model.ExactFindingEvidenceEdge{{
+					Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL",
+					Properties: map[string]any{"risk_weight": 0.1},
+				}},
+			},
+			OWASPMap: []string{"MCP04", "ASI08"}, ATLASMap: []string{"AML.T0086"}},
 		{ID: fpB, Severity: "high", Category: "Tool Shadowing", Title: "shadow", EdgeKind: "SHADOWS",
 			SourceKind: "MCPTool", TargetKind: "MCPTool", Confidence: 0.6},
 	}
@@ -81,6 +177,30 @@ func TestIntegrationFindingStore(t *testing.T) {
 	}
 	if len(all) != 2 {
 		t.Fatalf("expected 2 findings, got %d", len(all))
+	}
+	var foundATLAS bool
+	for _, f := range all {
+		if f.ID == fpA {
+			if len(f.ATLASMap) != 1 || f.ATLASMap[0] != "AML.T0086" {
+				t.Fatalf("persisted atlas_map = %v, want [AML.T0086]", f.ATLASMap)
+			}
+			if f.Variant != model.FindingVariantDefault ||
+				f.Evidence.State != model.FindingEvidenceInferred ||
+				len(f.Evidence.Channels) != 1 ||
+				f.Evidence.Channels[0] != "file_write" {
+				t.Fatalf("persisted finding evidence = %+v", f)
+			}
+			if f.ExactEvidence == nil ||
+				!f.ExactEvidence.Complete ||
+				len(f.ExactEvidence.Nodes) != 2 ||
+				len(f.ExactEvidence.Edges) != 1 {
+				t.Fatalf("persisted exact evidence = %+v", f.ExactEvidence)
+			}
+			foundATLAS = true
+		}
+	}
+	if !foundATLAS {
+		t.Fatal("ATLAS-mapped finding not returned from persisted list")
 	}
 
 	crit, err := fs.ListLatestPerFingerprint(ctx, "critical", false)
@@ -131,6 +251,24 @@ func TestIntegrationFindingStore(t *testing.T) {
 		t.Fatalf("GetTriage(unknown): want (nil,nil), got (%+v,%v)", none, err)
 	}
 
+	// A real-store status-only update must preserve the existing note. The
+	// handler's pointer semantics are insufficient if the SQL conflict clause
+	// still overwrites note.
+	statusOnly, err := fs.UpdateTriageStatus(ctx, fpA, "confirmed")
+	if err != nil {
+		t.Fatalf("UpdateTriageStatus: %v", err)
+	}
+	if statusOnly.Status != "confirmed" || statusOnly.Note != "benign" {
+		t.Fatalf("status-only update = %+v, want confirmed with preserved note", statusOnly)
+	}
+	persistedTriage, err := fs.GetTriage(ctx, fpA)
+	if err != nil {
+		t.Fatalf("GetTriage after status-only update: %v", err)
+	}
+	if persistedTriage == nil || persistedTriage.Status != "confirmed" || persistedTriage.Note != "benign" {
+		t.Fatalf("persisted triage after status-only update = %+v", persistedTriage)
+	}
+
 	// Diff: scan2 keeps fpA, drops fpB, adds fpD.
 	findings2 := []model.Finding{
 		findings[0],
@@ -152,5 +290,17 @@ func TestIntegrationFindingStore(t *testing.T) {
 	}
 	if len(diff.Unchanged) != 1 || diff.Unchanged[0].ID != fpA {
 		t.Fatalf("diff.Unchanged = %+v, want [%s]", diff.Unchanged, fpA)
+	}
+
+	// A successful same-ID empty retry is an atomic replacement, not a no-op.
+	if err := fs.InsertFindings(ctx, scanID2, []model.Finding{}); err != nil {
+		t.Fatalf("empty replacement: %v", err)
+	}
+	empty, err := fs.ListForScan(ctx, scanID2, "", true)
+	if err != nil {
+		t.Fatalf("list after empty replacement: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("empty replacement retained %d stale findings", len(empty))
 	}
 }

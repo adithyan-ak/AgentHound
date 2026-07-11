@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/sdk/collector"
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	jose "github.com/go-jose/go-jose/v4"
 )
 
@@ -227,6 +228,48 @@ func TestCollector_FailedTarget(t *testing.T) {
 
 	if len(data.Graph.Nodes) != 0 {
 		t.Errorf("expected 0 nodes for failed target, got %d", len(data.Graph.Nodes))
+	}
+	if data.Meta.Collection == nil || data.Meta.Collection.State != ingest.OutcomeFailed {
+		t.Fatalf("failed-empty target lost collection failure: %+v", data.Meta.Collection)
+	}
+}
+
+func TestCollector_MixedTargetOutcomesArePartial(t *testing.T) {
+	body := loadFixture(t, "agent_card_v030.json")
+	okServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	defer okServer.Close()
+	failedServer := httptest.NewServer(http.NotFoundHandler())
+	defer failedServer.Close()
+
+	c := NewA2ACollector()
+	data, err := c.Collect(context.Background(), collector.CollectOptions{
+		TargetURLs: []string{okServer.URL, failedServer.URL},
+		ScanID:     "test-scan-partial",
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if data.Meta.Collection == nil || data.Meta.Collection.State != ingest.OutcomePartial {
+		t.Fatalf("mixed target report = %+v, want partial", data.Meta.Collection)
+	}
+	if len(data.Meta.Collection.Outcomes) != 2 {
+		t.Fatalf("outcomes = %d, want 2", len(data.Meta.Collection.Outcomes))
+	}
+	if len(data.Meta.Collection.CoverageKeys) != 2 {
+		t.Fatalf("coverage keys = %v, want one per target", data.Meta.Collection.CoverageKeys)
+	}
+	okScope := a2aCoverageKey(okServer.URL)
+	failedScope := a2aCoverageKey(failedServer.URL)
+	if okScope == failedScope {
+		t.Fatal("distinct targets received the same coverage scope")
+	}
+	for _, node := range data.Graph.Nodes {
+		if len(node.ObservationDomains) != 1 || node.ObservationDomains[0] != okScope {
+			t.Fatalf("successful target fact domains = %v, want [%s]", node.ObservationDomains, okScope)
+		}
 	}
 }
 

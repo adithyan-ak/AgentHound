@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
@@ -37,6 +38,22 @@ func (h *IngestHandler) Handle(w http.ResponseWriter, r *http.Request) {
 					Code:    "VALIDATION_ERROR",
 					Message: "validation failed",
 					Details: ve.Errors,
+				},
+			})
+			return
+		}
+		if result != nil {
+			slog.Error("ingest failed after graph mutation",
+				"error", err,
+				"scan_id", result.ScanID,
+				"nodes_written", result.NodesWritten,
+				"edges_written", result.EdgesWritten,
+			)
+			WriteJSON(w, http.StatusInternalServerError, ErrorResponse{
+				Error: ErrorDetail{
+					Code:    "INGEST_FAILED",
+					Message: "Ingest failed after partial graph mutation.",
+					Details: result,
 				},
 			})
 			return

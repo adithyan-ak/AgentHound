@@ -11,15 +11,13 @@ import { cn } from "@shared/lib/utils";
 
 /**
  * A lens is "filtered" when its enabled sub-presets resolve to a different set
- * of visible edge kinds than the lens default. An empty selection is NOT
- * filtered: the graph builder treats "none enabled" as "show the full lens set"
- * (see build-edges.ts), so it matches the default's visible scope.
+ * of visible edge kinds than the lens default. Empty means no relationships,
+ * matching the unchecked controls literally.
  */
 function lensIsFiltered(lens: LensDefinition, enabled: string[]): boolean {
   if (lens.subPresets.length === 0) return false;
-  const effective = (ids: string[]) => (ids.length === 0 ? lens.edgeKinds : ids);
-  const current = effective(enabled);
-  const base = effective(DEFAULT_SUB_PRESETS[lens.id] ?? []);
+  const current = enabled;
+  const base = DEFAULT_SUB_PRESETS[lens.id] ?? [];
   return (
     current.length !== base.length || current.some((k) => !base.includes(k))
   );

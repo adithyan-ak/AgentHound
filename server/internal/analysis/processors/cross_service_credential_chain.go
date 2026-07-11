@@ -72,15 +72,19 @@ func (p *CrossServiceCredentialChain) Process(ctx context.Context, db graph.Grap
 	// merge_key='value_hash' (or the historic missing merge_key from
 	// pre-U-MED-4 emissions) is eligible for the join.
 	cypher := `
-MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(s:MCPServer)
-      -[:HAS_ENV_VAR]->(c1:Credential)
+MATCH (a:AgentInstance)-[trust:TRUSTS_SERVER]->(s:MCPServer)
+      -[environment:HAS_ENV_VAR]->(c1:Credential)
 WHERE c1.value_hash IS NOT NULL AND c1.value_hash <> ''
   AND (c1.merge_key IS NULL OR c1.merge_key = 'value_hash')
-MATCH (gw:LiteLLMGateway)-[:EXPOSES_CREDENTIAL]->(c1master:Credential)
+  AND c1.material_status = 'observed'
+  AND c1.exposure_status = 'exposed'
+MATCH (gw:LiteLLMGateway)-[exposes_master:EXPOSES_CREDENTIAL]->(c1master:Credential)
 WHERE c1master.value_hash = c1.value_hash
   AND c1master.objectid <> c1.objectid
   AND (c1master.merge_key IS NULL OR c1master.merge_key = 'value_hash')
-MATCH (gw)-[:EXPOSES_CREDENTIAL]->(c2:Credential)
+  AND c1master.material_status = 'observed'
+  AND c1master.exposure_status = 'exposed'
+MATCH (gw)-[exposes_upstream:EXPOSES_CREDENTIAL]->(c2:Credential)
 WHERE c2.type IN ['apiKey', 'virtual_key'] AND c2.objectid <> c1master.objectid
 WITH s, c1, c1master, c2, gw, collect(DISTINCT a) AS agents
 WITH s, c1, c1master, c2, gw, agents, size(agents) AS reachable_agents
@@ -97,7 +101,19 @@ SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true,
     e.upstream_provider = COALESCE(c2.provider, 'unknown'),
     e.hops = 5,
     e.confidence = 0.95,
-    e.risk_weight = 0.1
+    e.risk_weight = 0.1,
+    e.evidence_version = 1,
+    e.evidence_node_ids = [
+      a.objectid, s.objectid, c1.objectid, c1master.objectid,
+      gw.objectid, c2.objectid
+    ],
+    e.evidence_relationship_ids = [
+      id(trust), id(environment), id(exposes_master), id(exposes_upstream)
+    ],
+    e.evidence_synthetic_edge = [
+      c1.objectid, c1master.objectid, 'VALUE_HASH_MATCH',
+      'identity_correlation', 'value_hash', 'cross_service_credential_chain'
+    ]
 RETURN count(e) AS written`
 
 	written, err := db.ExecuteWrite(ctx, cypher, map[string]any{"scan_id": scanID})

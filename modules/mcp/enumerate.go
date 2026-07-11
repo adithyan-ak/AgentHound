@@ -17,21 +17,30 @@ import (
 )
 
 type ServerResult struct {
-	Nodes []ingest.Node
-	Edges []ingest.Edge
-	Error error
+	Target      string
+	CoverageKey string
+	State       ingest.OutcomeState
+	Outcomes    []ingest.CollectionOutcome
+	Nodes       []ingest.Node
+	Edges       []ingest.Edge
+	Error       error
 }
 
 const defaultMaxItems = 10000
 
 func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, scanID string) *ServerResult {
-	result := &ServerResult{}
+	result := &ServerResult{
+		Target:      serverTarget(spec),
+		CoverageKey: mcpCoverageKey(spec),
+	}
 	serverID := computeServerID(spec)
 
 	transport, err := buildTransport(spec, c.insecure)
 	if err != nil {
 		result.Error = fmt.Errorf("build transport for %s: %w", spec.Name, err)
 		result.Nodes = append(result.Nodes, buildUnreachableServerNode(serverID, spec, err.Error()))
+		result.Outcomes = append(result.Outcomes, methodOutcome(spec, "initialize", ingest.OutcomeFailed, 0, err))
+		result.State = ingest.OutcomeFailed
 		return result
 	}
 
@@ -50,6 +59,8 @@ func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, sca
 		}
 		result.Error = fmt.Errorf("connect to %s: %w", spec.Name, err)
 		result.Nodes = append(result.Nodes, buildUnreachableServerNode(serverID, spec, err.Error()))
+		result.Outcomes = append(result.Outcomes, methodOutcome(spec, "initialize", ingest.OutcomeFailed, 0, err))
+		result.State = ingest.OutcomeFailed
 		return result
 	}
 	defer session.Close()
@@ -58,6 +69,7 @@ func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, sca
 
 	serverNode := buildServerNode(serverID, spec, initResult, c.engine)
 	result.Nodes = append(result.Nodes, serverNode)
+	result.Outcomes = append(result.Outcomes, methodOutcome(spec, "initialize", ingest.OutcomeComplete, 1, nil))
 
 	if spec.Transport == "http" && spec.URL != "" {
 		hostResult := buildHostNodes(serverID, spec.URL, scanID)
@@ -69,6 +81,7 @@ func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, sca
 		result.Nodes = append(result.Nodes, common.NewNode(hostID, []string{"Host"}, map[string]any{
 			"hostname":   hostInfo.Hostname,
 			"ip":         hostInfo.IP,
+			"scope":      hostInfo.Scope,
 			"is_local":   hostInfo.IsLocal,
 			"is_private": hostInfo.IsPrivate,
 			"is_public":  hostInfo.IsPublic,
@@ -84,23 +97,35 @@ func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, sca
 		tools := c.enumerateTools(ctx, session, serverID, scanID)
 		result.Nodes = append(result.Nodes, tools.nodes...)
 		result.Edges = append(result.Edges, tools.edges...)
+		result.Outcomes = append(result.Outcomes, tools.outcome)
 		untrustedTools = tools.sourceTrust
+	} else {
+		result.Outcomes = append(result.Outcomes, methodOutcome(spec, "tools/list", ingest.OutcomeNotApplicable, 0, nil))
 	}
 
 	if caps != nil && caps.Resources != nil {
 		resources := c.enumerateResources(ctx, session, serverID, scanID)
 		result.Nodes = append(result.Nodes, resources.nodes...)
 		result.Edges = append(result.Edges, resources.edges...)
+		result.Outcomes = append(result.Outcomes, resources.outcome)
 
 		templates := c.enumerateResourceTemplates(ctx, session, serverID, scanID)
 		result.Nodes = append(result.Nodes, templates.nodes...)
 		result.Edges = append(result.Edges, templates.edges...)
+		result.Outcomes = append(result.Outcomes, templates.outcome)
+	} else {
+		result.Outcomes = append(result.Outcomes,
+			methodOutcome(spec, "resources/list", ingest.OutcomeNotApplicable, 0, nil),
+			methodOutcome(spec, "resources/templates/list", ingest.OutcomeNotApplicable, 0, nil))
 	}
 
 	if caps != nil && caps.Prompts != nil {
 		prompts := c.enumeratePrompts(ctx, session, serverID, scanID)
 		result.Nodes = append(result.Nodes, prompts.nodes...)
 		result.Edges = append(result.Edges, prompts.edges...)
+		result.Outcomes = append(result.Outcomes, prompts.outcome)
+	} else {
+		result.Outcomes = append(result.Outcomes, methodOutcome(spec, "prompts/list", ingest.OutcomeNotApplicable, 0, nil))
 	}
 
 	// INGESTS_UNTRUSTED join: a tool tagged with an untrusted source_trust
@@ -109,12 +134,16 @@ func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, sca
 	// future tightening can match by URI scheme.
 	result.Edges = append(result.Edges,
 		buildIngestsUntrustedEdges(result.Nodes, untrustedTools, scanID)...)
+	finalizeServerResult(result, serverID)
 
 	return result
 }
 
 func (c *MCPCollector) retryWithSSE(ctx context.Context, spec ServerSpec, scanID, serverID string, origErr error) *ServerResult {
-	result := &ServerResult{}
+	result := &ServerResult{
+		Target:      serverTarget(spec),
+		CoverageKey: mcpCoverageKey(spec),
+	}
 
 	sseTransport := buildSSETransport(spec, c.insecure)
 
@@ -130,6 +159,8 @@ func (c *MCPCollector) retryWithSSE(ctx context.Context, spec ServerSpec, scanID
 	if err != nil {
 		result.Error = fmt.Errorf("connect to %s (streamable failed: %v, SSE failed: %v)", spec.Name, origErr, err)
 		result.Nodes = append(result.Nodes, buildUnreachableServerNode(serverID, spec, err.Error()))
+		result.Outcomes = append(result.Outcomes, methodOutcome(spec, "initialize", ingest.OutcomeFailed, 0, result.Error))
+		result.State = ingest.OutcomeFailed
 		return result
 	}
 	defer session.Close()
@@ -138,6 +169,7 @@ func (c *MCPCollector) retryWithSSE(ctx context.Context, spec ServerSpec, scanID
 
 	serverNode := buildServerNode(serverID, spec, initResult, c.engine)
 	result.Nodes = append(result.Nodes, serverNode)
+	result.Outcomes = append(result.Outcomes, methodOutcome(spec, "initialize", ingest.OutcomeComplete, 1, nil))
 
 	if spec.URL != "" {
 		hostResult := buildHostNodes(serverID, spec.URL, scanID)
@@ -152,23 +184,35 @@ func (c *MCPCollector) retryWithSSE(ctx context.Context, spec ServerSpec, scanID
 		tools := c.enumerateTools(ctx, session, serverID, scanID)
 		result.Nodes = append(result.Nodes, tools.nodes...)
 		result.Edges = append(result.Edges, tools.edges...)
+		result.Outcomes = append(result.Outcomes, tools.outcome)
 		untrustedTools = tools.sourceTrust
+	} else {
+		result.Outcomes = append(result.Outcomes, methodOutcome(spec, "tools/list", ingest.OutcomeNotApplicable, 0, nil))
 	}
 
 	if caps != nil && caps.Resources != nil {
 		resources := c.enumerateResources(ctx, session, serverID, scanID)
 		result.Nodes = append(result.Nodes, resources.nodes...)
 		result.Edges = append(result.Edges, resources.edges...)
+		result.Outcomes = append(result.Outcomes, resources.outcome)
 
 		templates := c.enumerateResourceTemplates(ctx, session, serverID, scanID)
 		result.Nodes = append(result.Nodes, templates.nodes...)
 		result.Edges = append(result.Edges, templates.edges...)
+		result.Outcomes = append(result.Outcomes, templates.outcome)
+	} else {
+		result.Outcomes = append(result.Outcomes,
+			methodOutcome(spec, "resources/list", ingest.OutcomeNotApplicable, 0, nil),
+			methodOutcome(spec, "resources/templates/list", ingest.OutcomeNotApplicable, 0, nil))
 	}
 
 	if caps != nil && caps.Prompts != nil {
 		prompts := c.enumeratePrompts(ctx, session, serverID, scanID)
 		result.Nodes = append(result.Nodes, prompts.nodes...)
 		result.Edges = append(result.Edges, prompts.edges...)
+		result.Outcomes = append(result.Outcomes, prompts.outcome)
+	} else {
+		result.Outcomes = append(result.Outcomes, methodOutcome(spec, "prompts/list", ingest.OutcomeNotApplicable, 0, nil))
 	}
 
 	// INGESTS_UNTRUSTED join: a tool tagged with an untrusted source_trust
@@ -177,13 +221,15 @@ func (c *MCPCollector) retryWithSSE(ctx context.Context, spec ServerSpec, scanID
 	// future tightening can match by URI scheme.
 	result.Edges = append(result.Edges,
 		buildIngestsUntrustedEdges(result.Nodes, untrustedTools, scanID)...)
+	finalizeServerResult(result, serverID)
 
 	return result
 }
 
 type enumResult struct {
-	nodes []ingest.Node
-	edges []ingest.Edge
+	nodes   []ingest.Node
+	edges   []ingest.Edge
+	outcome ingest.CollectionOutcome
 	// sourceTrust maps an untrusted tool's node ID to its rule-derived
 	// source_trust label (untrusted_web | untrusted_email |
 	// untrusted_fileshare). Populated only by enumerateTools; consumed by
@@ -196,18 +242,28 @@ func (c *MCPCollector) enumerateTools(ctx context.Context, session *mcpsdk.Clien
 
 	var tools []*mcpsdk.Tool
 	count := 0
+	state := ingest.OutcomeComplete
+	var outcomeErr error
 	for tool, err := range session.Tools(ctx, nil) {
 		if err != nil {
 			logEnumerationError("tool", serverID, err)
+			outcomeErr = err
+			if len(tools) > 0 {
+				state = ingest.OutcomePartial
+			} else {
+				state = ingest.OutcomeFailed
+			}
 			break
 		}
 		count++
 		if count > c.maxItems {
 			log.Printf("[mcp] tool enumeration hit safety valve (%d items) for server %s", c.maxItems, serverID)
+			state = ingest.OutcomeTruncated
 			break
 		}
 		tools = append(tools, tool)
 	}
+	result.outcome = enumerationOutcome(serverID, "tools/list", state, len(tools), outcomeErr)
 
 	allNames := make(map[string]bool, len(tools))
 	for _, t := range tools {
@@ -255,15 +311,24 @@ func (c *MCPCollector) enumerateTools(ctx context.Context, session *mcpsdk.Clien
 func (c *MCPCollector) enumerateResources(ctx context.Context, session *mcpsdk.ClientSession, serverID, scanID string) enumResult {
 	var result enumResult
 	count := 0
+	state := ingest.OutcomeComplete
+	var outcomeErr error
 
 	for res, err := range session.Resources(ctx, nil) {
 		if err != nil {
 			logEnumerationError("resource", serverID, err)
+			outcomeErr = err
+			if count > 0 {
+				state = ingest.OutcomePartial
+			} else {
+				state = ingest.OutcomeFailed
+			}
 			break
 		}
 		count++
 		if count > c.maxItems {
 			log.Printf("[mcp] resource enumeration hit safety valve (%d items) for server %s", c.maxItems, serverID)
+			state = ingest.OutcomeTruncated
 			break
 		}
 
@@ -271,17 +336,20 @@ func (c *MCPCollector) enumerateResources(ctx context.Context, session *mcpsdk.C
 		resID := ingest.ComputeNodeID("MCPResource", serverID, res.URI)
 
 		result.nodes = append(result.nodes, common.NewNode(resID, []string{"MCPResource"}, map[string]any{
-			"uri":         res.URI,
-			"name":        res.Name,
-			"mime_type":   res.MIMEType,
-			"size":        res.Size,
-			"description": res.Description,
-			"uri_scheme":  signals.URIScheme,
-			"sensitivity": signals.Sensitivity,
+			"uri":                  res.URI,
+			"name":                 res.Name,
+			"mime_type":            res.MIMEType,
+			"size":                 res.Size,
+			"description":          res.Description,
+			"uri_scheme":           signals.URIScheme,
+			"sensitivity":          signals.Sensitivity,
+			"sensitivity_rule_id":  signals.SensitivityRuleID,
+			"sensitivity_evidence": signals.SensitivityEvidence,
 		}))
 		result.edges = append(result.edges, common.NewEdge(serverID, resID, "PROVIDES_RESOURCE", "MCPServer", "MCPResource",
 			common.NewEdgeProps(scanID, 1.0, 0.2)))
 	}
+	result.outcome = enumerationOutcome(serverID, "resources/list", state, len(result.nodes), outcomeErr)
 
 	return result
 }
@@ -289,15 +357,24 @@ func (c *MCPCollector) enumerateResources(ctx context.Context, session *mcpsdk.C
 func (c *MCPCollector) enumerateResourceTemplates(ctx context.Context, session *mcpsdk.ClientSession, serverID, scanID string) enumResult {
 	var result enumResult
 	count := 0
+	state := ingest.OutcomeComplete
+	var outcomeErr error
 
 	for tmpl, err := range session.ResourceTemplates(ctx, nil) {
 		if err != nil {
 			logEnumerationError("resource template", serverID, err)
+			outcomeErr = err
+			if count > 0 {
+				state = ingest.OutcomePartial
+			} else {
+				state = ingest.OutcomeFailed
+			}
 			break
 		}
 		count++
 		if count > c.maxItems {
 			log.Printf("[mcp] resource template enumeration hit safety valve (%d items) for server %s", c.maxItems, serverID)
+			state = ingest.OutcomeTruncated
 			break
 		}
 
@@ -305,17 +382,20 @@ func (c *MCPCollector) enumerateResourceTemplates(ctx context.Context, session *
 		resID := ingest.ComputeNodeID("MCPResource", serverID, tmpl.URITemplate)
 
 		result.nodes = append(result.nodes, common.NewNode(resID, []string{"MCPResource"}, map[string]any{
-			"uri":         tmpl.URITemplate,
-			"name":        tmpl.Name,
-			"mime_type":   tmpl.MIMEType,
-			"description": tmpl.Description,
-			"uri_scheme":  signals.URIScheme,
-			"sensitivity": signals.Sensitivity,
-			"is_template": true,
+			"uri":                  tmpl.URITemplate,
+			"name":                 tmpl.Name,
+			"mime_type":            tmpl.MIMEType,
+			"description":          tmpl.Description,
+			"uri_scheme":           signals.URIScheme,
+			"sensitivity":          signals.Sensitivity,
+			"sensitivity_rule_id":  signals.SensitivityRuleID,
+			"sensitivity_evidence": signals.SensitivityEvidence,
+			"is_template":          true,
 		}))
 		result.edges = append(result.edges, common.NewEdge(serverID, resID, "PROVIDES_RESOURCE", "MCPServer", "MCPResource",
 			common.NewEdgeProps(scanID, 1.0, 0.2)))
 	}
+	result.outcome = enumerationOutcome(serverID, "resources/templates/list", state, len(result.nodes), outcomeErr)
 
 	return result
 }
@@ -323,15 +403,24 @@ func (c *MCPCollector) enumerateResourceTemplates(ctx context.Context, session *
 func (c *MCPCollector) enumeratePrompts(ctx context.Context, session *mcpsdk.ClientSession, serverID, scanID string) enumResult {
 	var result enumResult
 	count := 0
+	state := ingest.OutcomeComplete
+	var outcomeErr error
 
 	for prompt, err := range session.Prompts(ctx, nil) {
 		if err != nil {
 			logEnumerationError("prompt", serverID, err)
+			outcomeErr = err
+			if count > 0 {
+				state = ingest.OutcomePartial
+			} else {
+				state = ingest.OutcomeFailed
+			}
 			break
 		}
 		count++
 		if count > c.maxItems {
 			log.Printf("[mcp] prompt enumeration hit safety valve (%d items) for server %s", c.maxItems, serverID)
+			state = ingest.OutcomeTruncated
 			break
 		}
 
@@ -345,18 +434,28 @@ func (c *MCPCollector) enumeratePrompts(ctx context.Context, session *mcpsdk.Cli
 		result.edges = append(result.edges, common.NewEdge(serverID, promptID, "PROVIDES_PROMPT", "MCPServer", "MCPPrompt",
 			common.NewEdgeProps(scanID, 1.0, 0.1)))
 	}
+	result.outcome = enumerationOutcome(serverID, "prompts/list", state, len(result.nodes), outcomeErr)
 
 	return result
 }
 
 func computeServerID(spec ServerSpec) string {
+	return serverIdentityForSpec(spec).ObjectID
+}
+
+func mcpCoverageKey(spec ServerSpec) string {
+	scope := computeServerID(spec)
 	if spec.Transport == "http" {
-		return ingest.ComputeMCPServerID("http", spec.URL)
+		scope = ingest.CanonicalURLScope(spec.URL)
 	}
-	sorted := make([]string, len(spec.Args))
-	copy(sorted, spec.Args)
-	sort.Strings(sorted)
-	return ingest.ComputeMCPServerID("stdio", spec.Command, sorted...)
+	return ingest.CanonicalCoverageKey("mcp", "target", scope)
+}
+
+func serverIdentityForSpec(spec ServerSpec) ingest.MCPServerIdentity {
+	if spec.Transport == "http" {
+		return ingest.ResolveMCPServerIdentity("http", spec.URL)
+	}
+	return ingest.ResolveMCPServerIdentity("stdio", spec.Command, spec.Args...)
 }
 
 func buildServerNode(serverID string, spec ServerSpec, initResult *mcpsdk.InitializeResult, engine *rules.Engine) ingest.Node {
@@ -394,6 +493,9 @@ func buildServerNode(serverID string, spec ServerSpec, initResult *mcpsdk.Initia
 		serverVersion = initResult.ServerInfo.Version
 	}
 
+	authMethod, authEvidence := observedServerAuth(spec)
+	authAssessment := common.AssessAuth(string(authMethod))
+	identity := serverIdentityForSpec(spec)
 	props := map[string]any{
 		"name":             serverName,
 		"endpoint":         endpoint,
@@ -403,6 +505,15 @@ func buildServerNode(serverID string, spec ServerSpec, initResult *mcpsdk.Initia
 		"capabilities":     capabilities,
 		"server_version":   serverVersion,
 		"status":           "reachable",
+		"auth_method":      string(authMethod),
+		"auth_assurance":   string(authAssessment.Assurance),
+		"auth_evidence":    authEvidence,
+		"id_scheme":        identity.Scheme,
+	}
+	if identity.LegacyObjectID != "" {
+		props["legacy_objectid"] = identity.LegacyObjectID
+		props["command"] = spec.Command
+		props["args"] = append([]string(nil), spec.Args...)
 	}
 
 	if initResult.Instructions != "" {
@@ -429,13 +540,24 @@ func buildUnreachableServerNode(serverID string, spec ServerSpec, errMsg string)
 		endpoint = spec.URL
 	}
 
-	return common.NewNode(serverID, []string{"MCPServer"}, map[string]any{
-		"name":      spec.Name,
-		"endpoint":  endpoint,
-		"transport": spec.Transport,
-		"status":    "unreachable",
-		"error":     errMsg,
-	})
+	identity := serverIdentityForSpec(spec)
+	props := map[string]any{
+		"name":           spec.Name,
+		"endpoint":       endpoint,
+		"transport":      spec.Transport,
+		"status":         "unreachable",
+		"error":          errMsg,
+		"auth_method":    string(common.AuthUnknown),
+		"auth_assurance": string(common.AuthAssuranceUnknown),
+		"auth_evidence":  common.AuthEvidenceUnknown,
+		"id_scheme":      identity.Scheme,
+	}
+	if identity.LegacyObjectID != "" {
+		props["legacy_objectid"] = identity.LegacyObjectID
+		props["command"] = spec.Command
+		props["args"] = append([]string(nil), spec.Args...)
+	}
+	return common.NewNode(serverID, []string{"MCPServer"}, props)
 }
 
 type hostResult struct {
@@ -458,6 +580,7 @@ func buildHostNodes(serverID, serverURL, scanID string) hostResult {
 	result.nodes = append(result.nodes, common.NewNode(hostID, []string{"Host"}, map[string]any{
 		"hostname":   hostInfo.Hostname,
 		"ip":         hostInfo.IP,
+		"scope":      hostInfo.Scope,
 		"is_local":   hostInfo.IsLocal,
 		"is_private": hostInfo.IsPrivate,
 		"is_public":  hostInfo.IsPublic,
@@ -508,6 +631,138 @@ func buildIngestsUntrustedEdges(nodes []ingest.Node, untrustedTools map[string]s
 		}
 	}
 	return edges
+}
+
+func observedServerAuth(spec ServerSpec) (common.AuthMethod, string) {
+	if spec.Transport == "stdio" {
+		// Starting a local child process proves process-local access, not
+		// anonymous network access.
+		return common.AuthUnknown, common.AuthEvidenceLocalProcess
+	}
+	for name, value := range spec.Headers {
+		if !strings.EqualFold(name, "Authorization") || strings.TrimSpace(value) == "" {
+			continue
+		}
+		fields := strings.Fields(value)
+		if len(fields) > 0 {
+			if method, ok := common.RecognizeAuthMethod(fields[0]); ok &&
+				method != common.AuthNone && method != common.AuthUnknown {
+				return method, common.AuthEvidenceConfiguredCredential
+			}
+		}
+		return common.AuthCustom, common.AuthEvidenceConfiguredCredential
+	}
+	for name, value := range spec.Headers {
+		upper := strings.ToUpper(name)
+		if strings.TrimSpace(value) != "" &&
+			(strings.Contains(upper, "KEY") || strings.Contains(upper, "TOKEN") ||
+				strings.Contains(upper, "SECRET") || strings.Contains(upper, "AUTH")) {
+			return common.AuthAPIKey, common.AuthEvidenceConfiguredCredential
+		}
+	}
+	// A successful MCP initialize without credential-bearing headers is direct
+	// positive evidence that this access path is anonymous.
+	return common.AuthNone, common.AuthEvidenceAnonymousProbeSucceeded
+}
+
+func serverTarget(spec ServerSpec) string {
+	if spec.Transport == "http" {
+		return spec.URL
+	}
+	if len(spec.Args) == 0 {
+		return spec.Command
+	}
+	return spec.Command + " " + strings.Join(spec.Args, " ")
+}
+
+func methodOutcome(
+	spec ServerSpec,
+	method string,
+	state ingest.OutcomeState,
+	items int,
+	err error,
+) ingest.CollectionOutcome {
+	outcome := ingest.CollectionOutcome{
+		Collector:   "mcp",
+		CoverageKey: mcpCoverageKey(spec),
+		Target:      serverTarget(spec),
+		Method:      method,
+		State:       state,
+		Items:       items,
+	}
+	if err != nil {
+		outcome.Error = err.Error()
+	}
+	return outcome
+}
+
+func enumerationOutcome(
+	serverID, method string,
+	state ingest.OutcomeState,
+	items int,
+	err error,
+) ingest.CollectionOutcome {
+	outcome := ingest.CollectionOutcome{
+		Collector:   "mcp",
+		CoverageKey: ingest.CanonicalCoverageKey("mcp", "target", serverID),
+		Target:      serverID,
+		Method:      method,
+		State:       state,
+		Items:       items,
+	}
+	if err != nil {
+		outcome.Error = err.Error()
+	}
+	return outcome
+}
+
+func finalizeServerResult(result *ServerResult, serverID string) {
+	result.State = ingest.AggregateOutcomeState(result.Outcomes)
+	for i := range result.Nodes {
+		node := &result.Nodes[i]
+		if node.ID == serverID {
+			node.Properties["collection_state"] = string(result.State)
+			continue
+		}
+		legacyParent, _ := serverLegacyID(result.Nodes, serverID)
+		if legacyParent == "" {
+			continue
+		}
+		switch {
+		case nodeHasMCPKind(*node, "MCPTool"):
+			if name, _ := node.Properties["name"].(string); name != "" {
+				node.Properties["legacy_objectid"] = ingest.ComputeNodeID("MCPTool", legacyParent, name)
+			}
+		case nodeHasMCPKind(*node, "MCPResource"):
+			if uri, _ := node.Properties["uri"].(string); uri != "" {
+				node.Properties["legacy_objectid"] = ingest.ComputeNodeID("MCPResource", legacyParent, uri)
+			}
+		case nodeHasMCPKind(*node, "MCPPrompt"):
+			if name, _ := node.Properties["name"].(string); name != "" {
+				node.Properties["legacy_objectid"] = ingest.ComputeNodeID("MCPPrompt", legacyParent, name)
+			}
+		}
+	}
+}
+
+func serverLegacyID(nodes []ingest.Node, serverID string) (string, bool) {
+	for _, node := range nodes {
+		if node.ID != serverID {
+			continue
+		}
+		legacy, ok := node.Properties["legacy_objectid"].(string)
+		return legacy, ok && legacy != ""
+	}
+	return "", false
+}
+
+func nodeHasMCPKind(node ingest.Node, want string) bool {
+	for _, kind := range node.Kinds {
+		if kind == want {
+			return true
+		}
+	}
+	return false
 }
 
 func marshalJSON(v any) string {

@@ -1,30 +1,44 @@
 import { useMemo } from "react";
 import { Lock } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
-import { useNodes, authMethod } from "@entities/node";
+import {
+  useNodes,
+  authMethod,
+  hasConfirmedAnonymousAccess,
+} from "@entities/node";
 import { Skeleton } from "@shared/ui/primitives/skeleton";
 import { AsyncBoundary } from "@shared/ui/feedback";
 import { WidgetCard } from "@shared/ui/widgets";
 import { CHART_THEME, SEVERITY, ACCENT, SIGNAL_OK, INSTRUMENT } from "@shared/theme/tokens";
 
 const INFO =
-  "Authentication method distribution across MCP servers and A2A agents. 'none' (red) means no authentication — your highest-priority targets.";
+  "Authentication state across MCP servers and A2A agents. 'None' requires a successful anonymous network probe; local stdio processes are shown separately.";
 
 const AUTH_COLORS: Record<string, string> = {
+  unknown: INSTRUMENT.grayMuted,
+  localProcess: INSTRUMENT.teal,
   none: SEVERITY.critical.solid,
+  basic: SEVERITY.high.solid,
   apiKey: ACCENT,
   bearer: INSTRUMENT.grayMuted,
   oauth: SIGNAL_OK,
-  mTLS: INSTRUMENT.teal,
+  oidc: SIGNAL_OK,
+  mtls: INSTRUMENT.teal,
+  custom: CHART_THEME.axis,
 };
 const FALLBACK = CHART_THEME.axis;
 
 const AUTH_LABELS: Record<string, string> = {
+  unknown: "Unknown",
+  localProcess: "Local Process",
   none: "None",
+  basic: "Basic",
   apiKey: "API Key",
   bearer: "Bearer",
   oauth: "OAuth",
-  mTLS: "mTLS",
+  oidc: "OIDC",
+  mtls: "mTLS",
+  custom: "Custom",
 };
 
 export function AuthCoverage() {
@@ -34,7 +48,9 @@ export function AuthCoverage() {
     const grouped: Record<string, number> = {};
     for (const node of nodes ?? []) {
       if (!node.kinds.includes("MCPServer") && !node.kinds.includes("A2AAgent")) continue;
-      const method = authMethod(node);
+      const method = hasConfirmedAnonymousAccess(node.properties)
+        ? "none"
+        : authMethod(node);
       grouped[method] = (grouped[method] ?? 0) + 1;
     }
     const data = Object.entries(grouped)

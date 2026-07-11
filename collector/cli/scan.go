@@ -181,11 +181,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := context.Background()
+	rulesEngine, ruleset := loadEffectiveRules()
 
 	merged, enabled, failed := collectAll(ctx, runConfig, runMCP, runA2A,
 		path, paths, projectDir, includeCredValues,
 		url, target, targets, targetsFile, authToken,
-		concurrency, timeout, insecure, noVerifyJWKS, a2aTrustedKeys)
+		concurrency, timeout, insecure, noVerifyJWKS, a2aTrustedKeys,
+		rulesEngine, ruleset)
 
 	// Default behavior: if no --output set, auto-name to scan-<scan_id>.json in CWD.
 	if output == "" {
@@ -273,7 +275,9 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 	path string, paths []string, projectDir string, includeCredValues bool,
 	url, target string, targets []string, targetsFile, authToken string,
 	concurrency int, timeout time.Duration, insecure bool,
-	noVerifyJWKS bool, a2aTrustedKeys string) (data *ingest.IngestData, enabled, failed int) {
+	noVerifyJWKS bool, a2aTrustedKeys string,
+	rulesEngine *rules.Engine, ruleset *ingest.RulesetManifest,
+) (data *ingest.IngestData, enabled, failed int) {
 
 	merged := &ingest.IngestData{
 		Meta: ingest.IngestMeta{
@@ -284,58 +288,136 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 			Timestamp:        time.Now().UTC().Format(time.RFC3339),
 			ScanID:           uuid.New().String(),
 		},
+		Graph: ingest.GraphData{
+			Nodes: []ingest.Node{},
+			Edges: []ingest.Edge{},
+		},
 	}
+	merged.Meta.Ruleset = ruleset
+	merged.Meta.IdentitySchemes = []ingest.IdentityScheme{{
+		EntityKind:   "MCPServer",
+		Transport:    "stdio",
+		Scheme:       ingest.MCPStdioIdentitySchemeV2,
+		Version:      2,
+		LegacyScheme: ingest.MCPStdioIdentitySchemeV1,
+	}}
+	var reports []*ingest.CollectionReport
 
 	if runConfig {
 		enabled++
-		data, err := collectConfig(ctx, path, paths, projectDir, includeCredValues)
+		data, err := collectConfig(ctx, path, paths, projectDir, includeCredValues, merged.Meta.ScanID, rulesEngine)
 		if err != nil {
 			failed++
 			slog.Error("config collector failed", "error", err)
+			reports = append(reports, failedCollectionReport("config", err))
 		} else {
 			merged.Graph.Nodes = append(merged.Graph.Nodes, data.Graph.Nodes...)
 			merged.Graph.Edges = append(merged.Graph.Edges, data.Graph.Edges...)
+			reports = append(reports, data.Meta.Collection)
 		}
 	}
 
 	if runMCP {
 		enabled++
-		data, err := collectMCP(ctx, url, concurrency, timeout, insecure)
+		data, err := collectMCP(ctx, url, concurrency, timeout, insecure, merged.Meta.ScanID, rulesEngine)
 		if err != nil {
 			failed++
 			slog.Error("mcp collector failed", "error", err)
+			reports = append(reports, failedCollectionReport("mcp", err))
 		} else {
 			merged.Graph.Nodes = append(merged.Graph.Nodes, data.Graph.Nodes...)
 			merged.Graph.Edges = append(merged.Graph.Edges, data.Graph.Edges...)
+			reports = append(reports, data.Meta.Collection)
 		}
 	}
 
 	if runA2A {
 		enabled++
-		data, err := collectA2A(ctx, target, targets, targetsFile, authToken, concurrency, timeout, insecure, noVerifyJWKS, a2aTrustedKeys)
+		data, err := collectA2A(ctx, target, targets, targetsFile, authToken, concurrency, timeout, insecure, noVerifyJWKS, a2aTrustedKeys, merged.Meta.ScanID, rulesEngine)
 		if err != nil {
 			failed++
 			slog.Error("a2a collector failed", "error", err)
+			reports = append(reports, failedCollectionReport("a2a", err))
 		} else {
 			merged.Graph.Nodes = append(merged.Graph.Nodes, data.Graph.Nodes...)
 			merged.Graph.Edges = append(merged.Graph.Edges, data.Graph.Edges...)
+			reports = append(reports, data.Meta.Collection)
 		}
 	}
+	merged.Meta.Collection = ingest.MergeCollectionReports(reports...)
+	merged.Meta.IdentityAliases = ingest.BuildMCPIdentityAliases(
+		merged.Graph.Nodes,
+		ingest.CollectionCoverageComplete(merged.Meta.Collection),
+	)
 
 	return merged, enabled, failed
 }
 
-func loadRulesEngineOrNil() *rules.Engine {
+func loadEffectiveRules() (*rules.Engine, *ingest.RulesetManifest) {
+	var loadFailures []string
 	engine, err := buildRulesEngine()
 	if err != nil {
-		slog.Warn("failed to load rules engine, falling back to legacy patterns", "error", err)
-		return nil
+		slog.Warn("failed to load configured rules engine; falling back to built-ins", "error", err)
+		loadFailures = append(
+			loadFailures,
+			"load configured text rules: "+err.Error(),
+		)
+		engine, err = rules.NewEngine(rules.LoadOptions{})
+		if err != nil {
+			loadFailures = append(
+				loadFailures,
+				"load builtin text rules: "+err.Error(),
+			)
+			manifest := &ingest.RulesetManifest{
+				LoadState:    ingest.OutcomeFailed,
+				Errors:       loadFailures,
+				Authenticity: "unverified",
+			}
+			return nil, manifest
+		}
 	}
-	slog.Info("rules engine loaded", "rules", engine.RuleCount())
-	return engine
+	loadFailures = append(loadFailures, engine.LoadFailures()...)
+	fingerprints, fingerprintErr := rules.LoadFingerprints()
+	loadFailures = append(loadFailures, rules.FingerprintLoadFailures()...)
+	if fingerprintErr != nil {
+		loadFailures = append(
+			loadFailures,
+			"load fingerprint rules: "+fingerprintErr.Error(),
+		)
+	}
+	manifest := rules.BuildManifest(
+		engine.Rules(),
+		fingerprints,
+		loadFailures...,
+	)
+	slog.Info("rules engine loaded",
+		"text_rules", engine.RuleCount(),
+		"fingerprint_rules", len(fingerprints),
+		"ruleset_digest", manifest.Digest)
+	return engine, &manifest
 }
 
-func collectConfig(ctx context.Context, path string, paths []string, projectDir string, includeCredValues bool) (*ingest.IngestData, error) {
+func failedCollectionReport(collectorName string, err error) *ingest.CollectionReport {
+	return &ingest.CollectionReport{
+		State:        ingest.OutcomeFailed,
+		CoverageKeys: []string{collectorName},
+		Outcomes: []ingest.CollectionOutcome{{
+			Collector: collectorName,
+			State:     ingest.OutcomeFailed,
+			Error:     err.Error(),
+		}},
+	}
+}
+
+func collectConfig(
+	ctx context.Context,
+	path string,
+	paths []string,
+	projectDir string,
+	includeCredValues bool,
+	scanID string,
+	engine *rules.Engine,
+) (*ingest.IngestData, error) {
 	c := configcollector.NewConfigCollector()
 	opts := icollector.CollectOptions{
 		Discover:                path == "" && len(paths) == 0,
@@ -343,13 +425,22 @@ func collectConfig(ctx context.Context, path string, paths []string, projectDir 
 		ConfigPaths:             paths,
 		ProjectDir:              projectDir,
 		IncludeCredentialValues: includeCredValues,
-		RulesEngine:             loadRulesEngineOrNil(),
+		ScanID:                  scanID,
+		RulesEngine:             engine,
 	}
 	slog.Info("running config collector", "discover", opts.Discover, "path", path)
 	return c.Collect(ctx, opts)
 }
 
-func collectMCP(ctx context.Context, url string, concurrency int, timeout time.Duration, insecure bool) (*ingest.IngestData, error) {
+func collectMCP(
+	ctx context.Context,
+	url string,
+	concurrency int,
+	timeout time.Duration,
+	insecure bool,
+	scanID string,
+	engine *rules.Engine,
+) (*ingest.IngestData, error) {
 	var mcpOpts []mcpcollector.Option
 	if concurrency > 0 {
 		mcpOpts = append(mcpOpts, mcpcollector.WithConcurrency(concurrency))
@@ -363,7 +454,8 @@ func collectMCP(ctx context.Context, url string, concurrency int, timeout time.D
 		Discover:    url == "",
 		TargetURL:   url,
 		Insecure:    insecure,
-		RulesEngine: loadRulesEngineOrNil(),
+		ScanID:      scanID,
+		RulesEngine: engine,
 	}
 	slog.Info("running mcp collector", "discover", opts.Discover, "url", url)
 	return c.Collect(ctx, opts)
@@ -371,7 +463,9 @@ func collectMCP(ctx context.Context, url string, concurrency int, timeout time.D
 
 func collectA2A(ctx context.Context, target string, targets []string, targetsFile, authToken string,
 	concurrency int, timeout time.Duration, insecure bool,
-	noVerifyJWKS bool, a2aTrustedKeys string) (*ingest.IngestData, error) {
+	noVerifyJWKS bool, a2aTrustedKeys, scanID string,
+	engine *rules.Engine,
+) (*ingest.IngestData, error) {
 	var a2aOpts []a2acollector.Option
 	if concurrency > 0 {
 		a2aOpts = append(a2aOpts, a2acollector.WithConcurrency(concurrency))
@@ -396,7 +490,8 @@ func collectA2A(ctx context.Context, target string, targets []string, targetsFil
 		TargetURLsFile: targetsFile,
 		AuthToken:      authToken,
 		Insecure:       insecure,
-		RulesEngine:    loadRulesEngineOrNil(),
+		ScanID:         scanID,
+		RulesEngine:    engine,
 	}
 	slog.Info("running a2a collector", "target", target, "targets", len(targets))
 	return c.Collect(ctx, opts)
@@ -525,6 +620,23 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 	// Jupyter, LangServe, OpenWebUI in v0.2 — fingerprinters land in
 	// v0.3/v0.4) emit no node; this is intentional per design F.
 	envelope := buildNetworkScanEnvelope(spec, targets, authzFile, authzHash, allowPublic)
+	_, ruleset := loadEffectiveRules()
+	envelope.Meta.Ruleset = ruleset
+	networkState := ingest.OutcomeComplete
+	if ctx.Err() != nil {
+		networkState = ingest.OutcomePartial
+	}
+	envelope.Meta.Collection = &ingest.CollectionReport{
+		State:        networkState,
+		CoverageKeys: []string{"network"},
+		Outcomes: []ingest.CollectionOutcome{{
+			Collector: "network",
+			Target:    spec,
+			Method:    "port_scan",
+			State:     networkState,
+			Items:     len(targets),
+		}},
+	}
 	// On cancellation (Ctrl-C), every fingerprint probe would immediately fail
 	// against the dead context, so skip dispatch and write the partial
 	// port-sweep envelope instead of spinning through guaranteed-failing probes.
@@ -561,6 +673,10 @@ func buildNetworkScanEnvelope(spec string, targets []action.Target, authzFile, a
 			CollectorVersion: "0.2.0-dev",
 			Timestamp:        time.Now().UTC().Format(time.RFC3339),
 			ScanID:           scanID,
+		},
+		Graph: ingest.GraphData{
+			Nodes: []ingest.Node{},
+			Edges: []ingest.Edge{},
 		},
 	}
 	// Authorization watermark is recorded as a top-level Meta extension via

@@ -17,6 +17,7 @@ import (
 type triageStore interface {
 	GetTriage(ctx context.Context, fingerprint string) (*model.TriageState, error)
 	UpsertTriage(ctx context.Context, fingerprint, status, note string) (*model.TriageState, error)
+	UpdateTriageStatus(ctx context.Context, fingerprint, status string) (*model.TriageState, error)
 }
 
 type TriageHandler struct {
@@ -67,9 +68,13 @@ func (h *TriageHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, ts)
 }
 
+// triageUpdateRequest is the PUT body. Note is a pointer so a status-only
+// change (note omitted) is distinguishable from an explicit note edit or clear
+// (note present, possibly ""). Omitted note preserves the existing note;
+// present note overwrites it (AH-UI-34).
 type triageUpdateRequest struct {
-	Status string `json:"status"`
-	Note   string `json:"note"`
+	Status string  `json:"status"`
+	Note   *string `json:"note"`
 }
 
 // maxTriageBodySize bounds the PUT body (a tiny {status, note} JSON);
@@ -99,7 +104,7 @@ func (h *TriageHandler) HandleSet(w http.ResponseWriter, r *http.Request) {
 		WriteValidationError(w, "invalid status; must be one of: new, triaging, confirmed, accepted-risk, false-positive")
 		return
 	}
-	if len(req.Note) > maxTriageNoteLen {
+	if req.Note != nil && len(*req.Note) > maxTriageNoteLen {
 		WriteValidationError(w, "note exceeds 4096 characters")
 		return
 	}
@@ -108,7 +113,16 @@ func (h *TriageHandler) HandleSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ts, err := h.store.UpsertTriage(r.Context(), fp, req.Status, req.Note)
+	var (
+		ts  *model.TriageState
+		err error
+	)
+	if req.Note == nil {
+		// Status-only change: preserve the existing analyst note.
+		ts, err = h.store.UpdateTriageStatus(r.Context(), fp, req.Status)
+	} else {
+		ts, err = h.store.UpsertTriage(r.Context(), fp, req.Status, *req.Note)
+	}
 	if err != nil {
 		WriteInternalError(w, r, fmt.Errorf("upsert triage: %w", err))
 		return

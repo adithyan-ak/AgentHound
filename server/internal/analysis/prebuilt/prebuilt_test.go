@@ -1,6 +1,9 @@
 package prebuilt
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestGet_ValidID(t *testing.T) {
 	q, ok := Get("agents-shell-access")
@@ -69,6 +72,20 @@ func TestList_AllHaveCategory(t *testing.T) {
 	for _, q := range List() {
 		if q.Category == "" {
 			t.Errorf("query %q has empty Category", q.ID)
+		}
+	}
+}
+
+func TestShortestToDatabaseFallbackIsDirectedAndScoped(t *testing.T) {
+	if strings.Contains(CypherShortestToDatabase, "]-(") {
+		t.Fatal("shortest-to-database must not use an undirected relationship pattern")
+	}
+	if !strings.Contains(CypherShortestToDatabase, "]->(r)") {
+		t.Fatal("shortest-to-database must follow outgoing relationships")
+	}
+	for _, kind := range []string{"TRUSTS_SERVER", "PROVIDES_TOOL", "HAS_ACCESS_TO"} {
+		if !strings.Contains(CypherShortestToDatabase, kind) {
+			t.Fatalf("shortest-to-database relationship scope missing %s", kind)
 		}
 	}
 }

@@ -8,3 +8,15 @@ tests:
   - input: "Reads a CSV file and returns rows"
     should_match: false
     description: "no code execution keywords present"
+  - input: "list_scripts List available Python scripts in the workspace to run later"
+    should_match: false
+    description: "script inventory is not execution"
+  - input: "pipeline_status Show whether the Python data pipeline is ready to execute"
+    should_match: false
+    description: "pipeline readiness is not execution"
+  - input: "run_python Execute Python code supplied by the caller"
+    should_match: true
+    description: "direct Python execution remains classified"
+  - input: "compile_source Compile source code supplied by the caller"
+    should_match: true
+    description: "direct source compilation remains classified"

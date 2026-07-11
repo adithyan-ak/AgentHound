@@ -122,6 +122,24 @@ func TestKeywordMatcher(t *testing.T) {
 			input: "anything",
 			wantN: 0,
 		},
+		{
+			name:  "word boundary rejects embedded keyword",
+			spec:  MatcherSpec{Type: "keyword", Keywords: []string{"exec"}, CaseInsensitive: true, WordBoundary: true},
+			input: "execute_query reads database rows",
+			wantN: 0,
+		},
+		{
+			name:  "word boundary accepts later standalone keyword",
+			spec:  MatcherSpec{Type: "keyword", Keywords: []string{"shell"}, CaseInsensitive: true, WordBoundary: true},
+			input: "powershell docs; run a shell command",
+			wantN: 1,
+		},
+		{
+			name:  "word boundary treats underscore as token content",
+			spec:  MatcherSpec{Type: "keyword", Keywords: []string{"command"}, CaseInsensitive: true, WordBoundary: true},
+			input: "command_reference",
+			wantN: 0,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

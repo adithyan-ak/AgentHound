@@ -203,7 +203,7 @@ func TestEdgeCypherForKinds(t *testing.T) {
 		if !strings.Contains(cypher, "MERGE (a)-[r:PROVIDES_TOOL]->(b)") {
 			t.Error("missing MERGE with PROVIDES_TOOL relationship")
 		}
-		if !strings.Contains(cypher, "SET r += edge.properties") {
+		if !strings.Contains(cypher, "r += edge.properties") {
 			t.Error("missing SET clause for properties")
 		}
 		if !strings.Contains(cypher, "r.scan_id = $scan_id") {

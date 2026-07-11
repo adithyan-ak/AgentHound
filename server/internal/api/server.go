@@ -67,6 +67,7 @@ func NewServer(deps ServerDeps) *Server {
 	queryH := handlers.NewQueryHandler(deps.Reader)
 	analysisH := handlers.NewAnalysisHandler(deps.GraphDB, deps.FindingStore)
 	scanH := handlers.NewScanHandler(deps.ScanStore, deps.GraphDB)
+	postureH := handlers.NewPostureHandler(deps.FindingStore)
 	rulesH := handlers.NewRulesHandler(deps.RulesEngine)
 	triageH := handlers.NewTriageHandler(deps.FindingStore)
 
@@ -90,6 +91,8 @@ func NewServer(deps ServerDeps) *Server {
 		r.Get("/analysis/findings/{id}", analysisH.HandleFindingDetail)
 		r.Get("/analysis/prebuilt", analysisH.HandleListPreBuilt)
 		r.Get("/analysis/prebuilt/{id}", analysisH.HandlePreBuilt)
+		r.Get("/posture", postureH.HandleState)
+		r.Get("/posture/export", postureH.HandleExport)
 
 		// Triage read is open (same posture as findings reads); the
 		// mutating PUT is gated below.

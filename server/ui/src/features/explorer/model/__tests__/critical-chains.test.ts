@@ -19,6 +19,8 @@ function finding(overrides: Partial<Finding> = {}): Finding {
     confidence: 0.9,
     owasp_map: [],
     ...overrides,
+    variant: overrides.variant ?? "default",
+    evidence: overrides.evidence ?? { state: "inferred" },
   };
 }
 

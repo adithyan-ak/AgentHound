@@ -141,7 +141,7 @@ func TestComputeResourceSignals(t *testing.T) {
 		{"file:///etc/shadow", "file", "critical"},
 		{"file:///tmp/data.txt", "file", "medium"},
 		{"https://api.example.com/data", "https", "medium"},
-		{"custom://some-resource", "custom", "low"},
+		{"custom://some-resource", "custom", "unknown"},
 	}
 
 	for _, tt := range tests {

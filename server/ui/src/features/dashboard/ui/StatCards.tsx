@@ -1,7 +1,12 @@
 import { Bot, Server, Users, Wrench, KeyRound } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useGraphStats } from "@entities/graph-stats";
-import { useNodes, isUnauth, riskScore } from "@entities/node";
+import {
+  useNodes,
+  isUnauth,
+  isCredentialExposed,
+  riskScore,
+} from "@entities/node";
 import { Skeleton } from "@shared/ui/primitives/skeleton";
 import { AsyncBoundary } from "@shared/ui/feedback";
 import { StatTile } from "@shared/ui/widgets";
@@ -32,16 +37,14 @@ export function StatCards() {
   const ofKind = (k: string) => all.filter((n) => n.kinds.includes(k));
 
   const highRiskAgents = ofKind("AgentInstance").filter(
-    (n) => riskScore(n) >= HIGH_RISK,
+    (n) => (riskScore(n) ?? -1) >= HIGH_RISK,
   ).length;
   const unauthServers = ofKind("MCPServer").filter(isUnauth).length;
   const unauthA2A = ofKind("A2AAgent").filter(isUnauth).length;
   const dangerousTools = ofKind("MCPTool").filter((n) =>
     isDangerous(n.properties.capability_surface),
   ).length;
-  const exposedCreds = ofKind("Credential").filter(
-    (n) => n.properties.is_exposed === true || String(n.properties.type) === "hardcoded",
-  ).length;
+  const exposedCreds = ofKind("Credential").filter(isCredentialExposed).length;
 
   const tiles: TileDef[] = [
     { kind: "AgentInstance", icon: Bot, label: "Agents", sub: { value: highRiskAgents, label: "high-risk" } },

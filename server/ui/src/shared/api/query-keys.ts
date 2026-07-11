@@ -12,8 +12,7 @@ export const qk = {
   // ["explorer","graph"] bundle, so this key has a single consumer.
   nodes: (kind?: string, limit?: number) =>
     ["nodes", kind ?? null, limit ?? null] as const,
-  // Single node-detail cache — unifies the inspector (["node",id]) and the
-  // explorer drawer (formerly ["explorer","node",id]).
+  // Single node-detail cache for the Explorer drawer.
   node: (id: string) => ["node", id] as const,
 
   edges: () => ["edges", "all"] as const,
@@ -38,6 +37,11 @@ export const qk = {
   // dashboard (20) keep distinct cache entries so a write to one does not
   // disturb the other.
   scans: (limit: number) => ["scans", limit] as const,
+  scan: (id: string) => ["scan", id] as const,
+  scanPage: (limit: number, offset: number, revision?: string) =>
+    ["scans", limit, "page", offset, revision ?? null] as const,
+  latestScan: (order: "completed" | "published") =>
+    ["scans", "latest", order] as const,
 
   rules: (filters: { collector?: string; severity?: string; tag?: string }) =>
     ["rules", filters] as const,
@@ -49,6 +53,7 @@ export const qk = {
   prebuiltResult: (id: string) => ["prebuilt", id] as const,
 
   health: () => ["health"] as const,
+  posture: () => ["posture"] as const,
 
   explorerGraph: () => ["explorer", "graph"] as const,
   blastRadius: (

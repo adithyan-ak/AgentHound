@@ -1,9 +1,9 @@
 id: capability-code-execution
 name: Code Execution Capability
 description: >
-  Classifies tools with arbitrary code execution capability based on
-  keywords in tool name, description, and input schema properties.
-version: 1
+  Classifies tools with arbitrary code execution capability only from
+  direct execution-specific phrases in tool metadata.
+version: 2
 enabled: true
 scope:
   collector: mcp
@@ -12,10 +12,8 @@ severity: high
 owasp: [MCP01]
 tags: [capability, code-execution]
 matcher:
-  type: keyword
-  keywords: [eval, execute, run_code, python, javascript, compile, interpret, lambda, exec_code]
-  case_insensitive: true
-  match_mode: any
+  type: regex
+  pattern: '(?is)(?:\beval\b|\b(?:run|execute|exec|compile|interpret)[_ -]?(?:code|python|javascript|lambda|script)\b|\bshell[ _-]?command\b|\b(?:run|execute|exec|compile|interpret)(?:s|d|ing)?\b\s+(?:(?:a|an|the)\s+)?(?:(?:arbitrary|provided|supplied|user[- ]provided|source)\s+)?(?:code|python|javascript|lambda|script)\b)'
 emit:
   finding_type: capability_classification
   property_key: capability_surface

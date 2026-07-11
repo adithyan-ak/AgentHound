@@ -93,8 +93,8 @@ scan --config         scan --mcp --url <url>           scan --a2a --target <url>
 | AIService | Multi-label umbrella | Companion label shared by AI service nodes |
 | AIModel | Looter | Model artifact served by an AI service |
 | ExtractedTrainingSignal | Extractor | Signal recovered from a model artifact |
-| ResourceGroup | Post-processor | Synthetic: groups resources by sensitivity |
-| TrustZone | Post-processor | Synthetic: groups nodes by trust level |
+| ResourceGroup | Reserved / unimplemented | Compatibility label with no current producer; excluded from public inventory |
+| TrustZone | Reserved / unimplemented | Compatibility label with no current producer; excluded from public inventory |
 
 Node IDs are deterministic SHA-256 hashes of `Kind:` + identifying properties. MCPServer IDs
 match across Config and MCP collectors -- this is the merge point connecting trust to capabilities.

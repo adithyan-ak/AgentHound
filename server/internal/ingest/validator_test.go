@@ -36,6 +36,33 @@ func TestValidatorAcceptsValid(t *testing.T) {
 	}
 }
 
+func TestValidatorAcceptsDeclaredObservationDomains(t *testing.T) {
+	v := NewValidator()
+	data := validIngestData()
+	data.Meta.Collection = &ingest.CollectionReport{
+		State:        ingest.OutcomeComplete,
+		CoverageKeys: []string{"mcp"},
+	}
+	data.Graph.Nodes[0].ObservationDomains = []string{"mcp"}
+	data.Graph.Edges[0].ObservationDomains = []string{"mcp"}
+	if err := v.Validate(data); err != nil {
+		t.Fatalf("declared observation domain rejected: %v", err)
+	}
+}
+
+func TestValidatorRejectsUndeclaredObservationDomain(t *testing.T) {
+	v := NewValidator()
+	data := validIngestData()
+	data.Meta.Collection = &ingest.CollectionReport{
+		State:        ingest.OutcomeComplete,
+		CoverageKeys: []string{"config"},
+	}
+	data.Graph.Nodes[0].ObservationDomains = []string{"mcp"}
+
+	err := v.Validate(data)
+	assertValidationError(t, err, "graph.nodes[0].observation_domains[0]")
+}
+
 func TestValidatorRejectsBadVersion(t *testing.T) {
 	v := NewValidator()
 	data := validIngestData()
@@ -164,6 +191,124 @@ func TestValidatorAcceptsValidExplicitEdgeKinds(t *testing.T) {
 	data.Graph.Edges[0].TargetKind = "MCPTool"
 	if err := v.Validate(data); err != nil {
 		t.Fatalf("expected explicit valid edge kinds to validate, got: %v", err)
+	}
+}
+
+func TestValidatorRejectsIncompatibleSourceKind(t *testing.T) {
+	// MCPTool is a valid node label but not a valid *source* for PROVIDES_TOOL
+	// (which must be MCPServer -> MCPTool). AH-UI-30: reject the inverted role.
+	v := NewValidator()
+	data := validIngestData()
+	data.Graph.Edges[0].SourceKind = "MCPTool"
+	err := v.Validate(data)
+	assertValidationError(t, err, "graph.edges[0].source_kind")
+}
+
+func TestValidatorRejectsIncompatibleTargetKind(t *testing.T) {
+	v := NewValidator()
+	data := validIngestData()
+	data.Graph.Edges[0].TargetKind = "MCPServer"
+	err := v.Validate(data)
+	assertValidationError(t, err, "graph.edges[0].target_kind")
+}
+
+func TestValidatorAcceptsCompatibleEndpointKinds(t *testing.T) {
+	// PROVIDES_RESOURCE permits multiple valid sources; JupyterServer is one.
+	v := NewValidator()
+	data := validIngestData()
+	data.Graph.Nodes = append(data.Graph.Nodes,
+		ingest.Node{ID: "sha256:jup", Kinds: []string{"JupyterServer"}, Properties: map[string]any{"name": "j"}},
+		ingest.Node{ID: "sha256:res", Kinds: []string{"MCPResource"}, Properties: map[string]any{"name": "r"}},
+	)
+	data.Graph.Edges = append(data.Graph.Edges, ingest.Edge{
+		Source: "sha256:jup", Target: "sha256:res", Kind: "PROVIDES_RESOURCE",
+		SourceKind: "JupyterServer", TargetKind: "MCPResource", Properties: map[string]any{},
+	})
+	if err := v.Validate(data); err != nil {
+		t.Fatalf("expected compatible endpoint kinds to validate, got: %v", err)
+	}
+}
+
+func TestValidatorAcceptsOmittedAlternateEndpointKindsFromActualNodes(t *testing.T) {
+	v := NewValidator()
+	data := validIngestData()
+	data.Graph.Nodes = []ingest.Node{
+		{ID: "sha256:jup", Kinds: []string{"JupyterServer", "AIService"}, Properties: map[string]any{"name": "j"}},
+		{ID: "sha256:res", Kinds: []string{"MCPResource"}, Properties: map[string]any{"name": "r"}},
+	}
+	data.Graph.Edges = []ingest.Edge{{
+		Source: "sha256:jup", Target: "sha256:res", Kind: "PROVIDES_RESOURCE",
+	}}
+
+	if err := v.Validate(data); err != nil {
+		t.Fatalf("expected omitted kinds to resolve from actual nodes, got: %v", err)
+	}
+}
+
+func TestValidatorAcceptsConcreteExposesEndpointKinds(t *testing.T) {
+	v := NewValidator()
+	data := validIngestData()
+	data.Graph.Nodes = []ingest.Node{
+		{ID: "sha256:webui", Kinds: []string{"OpenWebUIInstance", "AIService"}, Properties: map[string]any{"name": "webui"}},
+		{ID: "sha256:ollama", Kinds: []string{"OllamaInstance", "AIService"}, Properties: map[string]any{"name": "ollama"}},
+	}
+	data.Graph.Edges = []ingest.Edge{{
+		Source:     "sha256:webui",
+		Target:     "sha256:ollama",
+		Kind:       "EXPOSES",
+		SourceKind: "OpenWebUIInstance",
+		TargetKind: "OllamaInstance",
+	}}
+
+	if err := v.Validate(data); err != nil {
+		t.Fatalf("expected producer's concrete EXPOSES labels to validate, got: %v", err)
+	}
+}
+
+func TestValidatorRejectsDeclaredKindThatDoesNotMatchReferencedNode(t *testing.T) {
+	v := NewValidator()
+	data := validIngestData()
+	data.Graph.Edges[0].SourceKind = "MCPServer"
+	data.Graph.Edges[0].TargetKind = "MCPTool"
+	// Both declared kinds are valid for PROVIDES_TOOL, but the referenced
+	// source node does not actually carry the declared MCPServer label.
+	data.Graph.Nodes[0].Kinds = []string{"MCPTool"}
+
+	err := v.Validate(data)
+	assertValidationError(t, err, "graph.edges[0].source_kind")
+}
+
+func TestValidatorRejectsMissingReferencedNode(t *testing.T) {
+	v := NewValidator()
+	data := validIngestData()
+	data.Graph.Edges[0].Target = "sha256:not-in-artifact"
+
+	err := v.Validate(data)
+	assertValidationError(t, err, "graph.edges[0].target")
+}
+
+func TestValidatorAcceptsReferencedUmbrellaLabel(t *testing.T) {
+	v := NewValidator()
+	data := validIngestData()
+	data.Graph.Nodes = []ingest.Node{
+		{
+			ID:         "sha256:gateway",
+			Kinds:      []string{"LiteLLMGateway", "AIService"},
+			Properties: map[string]any{"name": "gateway"},
+		},
+		{
+			ID:         "sha256:credential",
+			Kinds:      []string{"Credential"},
+			Properties: map[string]any{"name": "key", "value_hash": "abc"},
+		},
+	}
+	data.Graph.Edges = []ingest.Edge{{
+		Source: "sha256:gateway", Target: "sha256:credential",
+		Kind: "EXPOSES_CREDENTIAL", SourceKind: "AIService", TargetKind: "Credential",
+	}}
+
+	if err := v.Validate(data); err != nil {
+		t.Fatalf("expected actual AIService umbrella label to validate, got: %v", err)
 	}
 }
 

@@ -6,12 +6,16 @@ type IngestData struct {
 }
 
 type IngestMeta struct {
-	Version          int    `json:"version"`
-	Type             string `json:"type"`
-	Collector        string `json:"collector"`
-	CollectorVersion string `json:"collector_version"`
-	Timestamp        string `json:"timestamp"`
-	ScanID           string `json:"scan_id"`
+	Version          int               `json:"version"`
+	Type             string            `json:"type"`
+	Collector        string            `json:"collector"`
+	CollectorVersion string            `json:"collector_version"`
+	Timestamp        string            `json:"timestamp"`
+	ScanID           string            `json:"scan_id"`
+	Collection       *CollectionReport `json:"collection,omitempty"`
+	Ruleset          *RulesetManifest  `json:"ruleset,omitempty"`
+	IdentitySchemes  []IdentityScheme  `json:"identity_schemes,omitempty"`
+	IdentityAliases  []IdentityAlias   `json:"identity_aliases,omitempty"`
 
 	// Extra carries collector-specific or scan-mode-specific metadata that
 	// doesn't fit the structured fields above. v0.2 introduces this for the

@@ -1,10 +1,13 @@
 package mcp
 
 import (
+	"errors"
 	"testing"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
 )
 
@@ -15,6 +18,74 @@ func testEnumerateEngine(t *testing.T) *rules.Engine {
 		t.Fatalf("failed to create rules engine: %v", err)
 	}
 	return engine
+}
+
+func TestFinalizeServerResultRecordsMethodFailure(t *testing.T) {
+	serverID := "server-v2"
+	result := &ServerResult{
+		Nodes: []ingest.Node{{
+			ID:    serverID,
+			Kinds: []string{"MCPServer"},
+			Properties: map[string]any{
+				"legacy_objectid": "server-v1",
+			},
+		}, {
+			ID:    "tool-v2",
+			Kinds: []string{"MCPTool"},
+			Properties: map[string]any{
+				"name": "tool",
+			},
+		}},
+		Outcomes: []ingest.CollectionOutcome{
+			{Collector: "mcp", Method: "initialize", State: ingest.OutcomeComplete},
+			{Collector: "mcp", Method: "tools/list", State: ingest.OutcomeFailed, Error: "boom"},
+		},
+	}
+	finalizeServerResult(result, serverID)
+
+	if result.State != ingest.OutcomePartial {
+		t.Fatalf("server state = %q, want partial", result.State)
+	}
+	if result.Nodes[0].Properties["collection_state"] != "partial" {
+		t.Fatalf("server node lost collection state: %+v", result.Nodes[0].Properties)
+	}
+	wantLegacyTool := ingest.ComputeNodeID("MCPTool", "server-v1", "tool")
+	if result.Nodes[1].Properties["legacy_objectid"] != wantLegacyTool {
+		t.Fatalf("tool legacy ID = %v, want %s", result.Nodes[1].Properties["legacy_objectid"], wantLegacyTool)
+	}
+}
+
+func TestEnumerationOutcomePreservesFailure(t *testing.T) {
+	outcome := enumerationOutcome("server", "tools/list", ingest.OutcomeFailed, 0, errors.New("list failed"))
+	if outcome.State != ingest.OutcomeFailed || outcome.Error != "list failed" {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+}
+
+func TestObservedServerAuthDistinguishesLocalProcessFromAnonymousHTTP(t *testing.T) {
+	localMethod, localEvidence := observedServerAuth(ServerSpec{Transport: "stdio"})
+	if localMethod != common.AuthUnknown ||
+		localEvidence != common.AuthEvidenceLocalProcess {
+		t.Fatalf(
+			"stdio auth = (%q, %q), want (%q, %q)",
+			localMethod,
+			localEvidence,
+			common.AuthUnknown,
+			common.AuthEvidenceLocalProcess,
+		)
+	}
+
+	networkMethod, networkEvidence := observedServerAuth(ServerSpec{Transport: "http"})
+	if networkMethod != common.AuthNone ||
+		networkEvidence != common.AuthEvidenceAnonymousProbeSucceeded {
+		t.Fatalf(
+			"anonymous HTTP auth = (%q, %q), want (%q, %q)",
+			networkMethod,
+			networkEvidence,
+			common.AuthNone,
+			common.AuthEvidenceAnonymousProbeSucceeded,
+		)
+	}
 }
 
 func TestBuildServerNodeInstructionSignals(t *testing.T) {

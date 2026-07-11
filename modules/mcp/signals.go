@@ -22,8 +22,10 @@ type ToolSignals struct {
 }
 
 type ResourceSignals struct {
-	URIScheme   string
-	Sensitivity string
+	URIScheme           string
+	Sensitivity         string
+	SensitivityRuleID   string
+	SensitivityEvidence string
 }
 
 func computeToolSignals(tool *mcpsdk.Tool, allToolNames map[string]bool, engine *rules.Engine) ToolSignals {
@@ -112,6 +114,7 @@ func computeResourceSignals(uri string, engine *rules.Engine) ResourceSignals {
 	matches := engine.EvaluateAll("mcp", fields)
 
 	bestSeverity := ""
+	bestRuleID := ""
 	severityRank := map[string]int{"critical": 0, "high": 1, "medium": 2, "low": 3}
 
 	for _, m := range matches {
@@ -124,16 +127,24 @@ func computeResourceSignals(uri string, engine *rules.Engine) ResourceSignals {
 		}
 		if bestSeverity == "" {
 			bestSeverity = sev
+			bestRuleID = m.RuleID
 		} else if rank, ok := severityRank[sev]; ok {
 			if bestRank, ok2 := severityRank[bestSeverity]; ok2 && rank < bestRank {
 				bestSeverity = sev
+				bestRuleID = m.RuleID
+			} else if rank == bestRank && (bestRuleID == "" || m.RuleID < bestRuleID) {
+				bestRuleID = m.RuleID
 			}
 		}
 	}
 	if bestSeverity == "" {
-		bestSeverity = "low"
+		bestSeverity = string(common.SensitivityUnknown)
+		sig.SensitivityEvidence = "no_rule_match"
+	} else {
+		sig.SensitivityEvidence = "rule_match"
 	}
 	sig.Sensitivity = bestSeverity
+	sig.SensitivityRuleID = bestRuleID
 
 	if u, err := url.Parse(uri); err == nil && u.Scheme != "" {
 		sig.URIScheme = u.Scheme

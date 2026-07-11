@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
+	"github.com/adithyan-ak/agenthound/server/model"
 )
 
 func TestGetFindingByID_Found(t *testing.T) {
@@ -38,6 +39,31 @@ func TestGetFindingByID_Found(t *testing.T) {
 	}
 }
 
+func TestGetFindingByID_PreservesATLASMap(t *testing.T) {
+	mock := &graph.MockGraphDB{
+		QueryResult: []map[string]any{
+			{
+				"source_id": "tool-1", "source_name": "PoisonedTool", "source_kind": "MCPTool",
+				"target_id": "tool-1", "target_name": "PoisonedTool", "target_kind": "MCPTool",
+				"edge_kind": "POISONED_DESCRIPTION", "confidence": 1.0,
+			},
+		},
+	}
+	id := findingFingerprint("POISONED_DESCRIPTION", "tool-1", "tool-1")
+
+	f, err := GetFindingByID(context.Background(), mock, id)
+	if err != nil {
+		t.Fatalf("GetFindingByID() error = %v", err)
+	}
+	if f == nil {
+		t.Fatal("expected finding, got nil")
+	}
+	want := []string{"AML.T0051", "AML.T0110"}
+	if !sameStrings(f.ATLASMap, want) {
+		t.Fatalf("detail atlas_map = %v, want %v", f.ATLASMap, want)
+	}
+}
+
 func TestGetFindingByID_NotFound(t *testing.T) {
 	mock := &graph.MockGraphDB{
 		QueryResult: []map[string]any{
@@ -65,6 +91,36 @@ func TestGetFindingByID_QueryError(t *testing.T) {
 	_, err := GetFindingByID(context.Background(), mock, "any-id")
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestAttackPathFromExactEvidenceUsesPersistedWitness(t *testing.T) {
+	finding := &Finding{
+		SourceID: "tool",
+		TargetID: "host",
+		ExactEvidence: &model.ExactFindingEvidence{
+			Version:  1,
+			Complete: true,
+			Reasons:  []string{},
+			Nodes: []model.ExactFindingEvidenceNode{
+				{ID: "server", Kinds: []string{"MCPServer"}, Properties: map[string]any{"name": "Server"}},
+				{ID: "tool", Kinds: []string{"MCPTool"}, Properties: map[string]any{"name": "Runner"}},
+				{ID: "host", Kinds: []string{"Host"}, Properties: map[string]any{"name": "Host"}},
+			},
+			Edges: []model.ExactFindingEvidenceEdge{
+				{Source: "server", Target: "tool", Kind: "PROVIDES_TOOL", Properties: map[string]any{"risk_weight": 0.1}},
+				{Source: "server", Target: "host", Kind: "RUNS_ON", Properties: map[string]any{"risk_weight": 0.1}},
+			},
+		},
+	}
+	path := AttackPathFromExactEvidence(finding)
+	if path == nil || len(path.Nodes) != 3 || len(path.Edges) != 2 {
+		t.Fatalf("path = %+v", path)
+	}
+	if path.Shape != EvidenceShapeLinear ||
+		path.Direction != EvidenceDirectionMixed ||
+		path.Linearization != nil {
+		t.Fatalf("detector DAG was falsely linearized: %+v", path)
 	}
 }
 
@@ -108,6 +164,16 @@ func TestGetCompositeEdgeProps_QueryError(t *testing.T) {
 	_, err := GetCompositeEdgeProps(context.Background(), mock, f)
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestGetCompositeEdgeProps_RejectsMalformedProperties(t *testing.T) {
+	mock := &graph.MockGraphDB{
+		QueryResult: []map[string]any{{"props": "not-an-object"}},
+	}
+	f := &Finding{SourceID: "src", TargetID: "target", EdgeKind: "CAN_REACH"}
+	if _, err := GetCompositeEdgeProps(context.Background(), mock, f); err == nil {
+		t.Fatal("expected malformed composite properties error")
 	}
 }
 
@@ -237,6 +303,41 @@ func TestReconstructAttackPath_NoPath(t *testing.T) {
 	}
 }
 
+func TestReconstructAttackPath_DoesNotMaskEvidenceQueryFailure(t *testing.T) {
+	fallbackCalled := false
+	mock := &graph.MockGraphDB{
+		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
+			if strings.Contains(cypher, "shortestPath") {
+				fallbackCalled = true
+				return []map[string]any{pathRowForTest("src", "target")}, nil
+			}
+			return nil, errors.New("evidence query failed")
+		},
+	}
+	f := &Finding{EdgeKind: "CAN_EXECUTE", SourceID: "src", TargetID: "target"}
+	if _, err := ReconstructAttackPath(context.Background(), mock, f, nil); err == nil {
+		t.Fatal("expected evidence query error")
+	}
+	if fallbackCalled {
+		t.Fatal("generic fallback must not mask a known evidence query failure")
+	}
+}
+
+func pathRowForTest(source, target string) map[string]any {
+	return map[string]any{
+		"nodes": []any{
+			map[string]any{"id": source, "kinds": []any{"MCPTool"}, "properties": map[string]any{}},
+			map[string]any{"id": target, "kinds": []any{"Host"}, "properties": map[string]any{}},
+		},
+		"edges": []any{
+			map[string]any{
+				"source": source, "target": target, "kind": "CAN_EXECUTE",
+				"properties": map[string]any{"risk_weight": 0.1},
+			},
+		},
+	}
+}
+
 func TestParseAttackPath(t *testing.T) {
 	row := map[string]any{
 		"nodes": []any{
@@ -264,8 +365,10 @@ func TestParseAttackPath(t *testing.T) {
 		t.Errorf("got %d edges, want 2", len(path.Edges))
 	}
 	wantWeight := 0.3
-	if path.TotalRiskWeight < wantWeight-0.001 || path.TotalRiskWeight > wantWeight+0.001 {
-		t.Errorf("TotalRiskWeight = %f, want ~%f", path.TotalRiskWeight, wantWeight)
+	if path.TotalRiskWeight == nil ||
+		*path.TotalRiskWeight < wantWeight-0.001 ||
+		*path.TotalRiskWeight > wantWeight+0.001 {
+		t.Errorf("TotalRiskWeight = %v, want ~%f", path.TotalRiskWeight, wantWeight)
 	}
 }
 
@@ -400,29 +503,6 @@ func TestParsePathEdge(t *testing.T) {
 	}
 }
 
-func TestFloatFromAny(t *testing.T) {
-	tests := []struct {
-		name string
-		in   any
-		want float64
-	}{
-		{"float64", float64(3.14), 3.14},
-		{"int64", int64(42), 42.0},
-		{"int", int(7), 7.0},
-		{"string defaults to 0", "hello", 0},
-		{"nil defaults to 0", nil, 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := floatFromAny(tt.in)
-			if got != tt.want {
-				t.Errorf("floatFromAny(%v) = %f, want %f", tt.in, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestBuildImpact_CAN_REACH(t *testing.T) {
 	f := &Finding{
 		EdgeKind:   "CAN_REACH",
@@ -467,7 +547,7 @@ func TestBuildImpact_CrossProtocol(t *testing.T) {
 	if impact == nil {
 		t.Fatal("expected impact, got nil")
 	}
-	if !strings.Contains(impact.Summary, "across protocol boundaries") {
+	if !strings.Contains(impact.Summary, "50%-confidence hypothesis") {
 		t.Errorf("Summary = %q, expected cross-protocol template", impact.Summary)
 	}
 }
@@ -572,7 +652,7 @@ func TestBuildImpact_PreservesStaticBlastRadius(t *testing.T) {
 	if strings.Contains(impact.BlastRadius, "%") {
 		t.Errorf("BlastRadius contains stray %% (Sprintf wart?): %q", impact.BlastRadius)
 	}
-	if impact.BlastRadius != "Full host compromise is possible through any agent with access to this tool." {
+	if impact.BlastRadius != "Confirm the tool implementation and sandbox boundary before treating this metadata-derived route as host compromise." {
 		t.Errorf("BlastRadius template was mutated: %q", impact.BlastRadius)
 	}
 }
@@ -698,32 +778,65 @@ func TestBuildImpact_SummaryNoExtraWart(t *testing.T) {
 	}
 }
 
-// TestBuildImpact_CredentialChain confirms the dedicated impact
-// template fires for credential-chain findings instead of the generic
-// CAN_REACH template that gives the operator no information about the
-// upstream provider exposure.
+// TestBuildImpact_CredentialChain keeps detail wording aligned with the
+// finding's observed-material classification.
 func TestBuildImpact_CredentialChain(t *testing.T) {
-	f := &Finding{
+	compositeProps := map[string]any{
+		"source_collector": "cross_service_credential_chain",
+	}
+	base := Finding{
 		EdgeKind:   "CAN_REACH",
 		SourceID:   "agent-1",
 		SourceName: "DevAgent",
 		TargetID:   "c2-1",
 		TargetName: "openai-upstream",
 	}
-	compositeProps := map[string]any{
-		"source_collector": "cross_service_credential_chain",
+
+	t.Run("reference only", func(t *testing.T) {
+		impact := BuildImpact(&base, nil, compositeProps)
+		if impact == nil {
+			t.Fatal("expected impact, got nil")
+		}
+		if !strings.Contains(impact.Summary, "usable material is not present") {
+			t.Errorf("Summary = %q, expected reference-only disclosure", impact.Summary)
+		}
+		if !strings.Contains(impact.BlastRadius, "verify material and exposure evidence") {
+			t.Errorf("BlastRadius = %q, expected verification guidance", impact.BlastRadius)
+		}
+	})
+
+	t.Run("observed usable material", func(t *testing.T) {
+		observed := base
+		observed.Category = "Credential Exposure"
+		observed.Severity = "critical"
+		impact := BuildImpact(&observed, nil, compositeProps)
+		if impact == nil {
+			t.Fatal("expected impact, got nil")
+		}
+		if !strings.Contains(impact.Summary, "observed usable material") {
+			t.Errorf("Summary = %q, expected observed-material wording", impact.Summary)
+		}
+		if !strings.Contains(impact.BlastRadius, "openai-upstream") {
+			t.Errorf("BlastRadius = %q, expected credential name to be interpolated", impact.BlastRadius)
+		}
+	})
+}
+
+func TestBuildImpact_ExfiltrationDoesNotAssumeNetworkChannel(t *testing.T) {
+	f := &Finding{
+		EdgeKind:   "CAN_EXFILTRATE_VIA",
+		SourceName: "OpsAgent",
+		TargetName: "ArchiveWriter",
 	}
-	impact := BuildImpact(f, nil, compositeProps)
+	impact := BuildImpact(f, nil, nil)
 	if impact == nil {
 		t.Fatal("expected impact, got nil")
 	}
-	if !strings.Contains(impact.Summary, "value_hash") {
-		t.Errorf("Summary = %q, expected credential-chain template mentioning value_hash", impact.Summary)
+	text := strings.ToLower(impact.Summary + " " + impact.BlastRadius)
+	if strings.Contains(text, "outbound network") || strings.Contains(text, "external destinations") {
+		t.Errorf("impact overstates network evidence: %+v", impact)
 	}
-	if !strings.Contains(impact.BlastRadius, "openai-upstream") {
-		t.Errorf("BlastRadius = %q, expected upstream credential name to be interpolated", impact.BlastRadius)
-	}
-	if strings.Contains(impact.BlastRadius, "%s") {
-		t.Errorf("BlastRadius leaked placeholder: %q", impact.BlastRadius)
+	if !strings.Contains(impact.Summary, "OpsAgent") || !strings.Contains(impact.Summary, "ArchiveWriter") {
+		t.Errorf("Summary = %q, expected actor and channel tool names", impact.Summary)
 	}
 }

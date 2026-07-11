@@ -661,6 +661,126 @@ func TestWriteEdges_DifferentKindsDifferentBatches(t *testing.T) {
 	}
 }
 
+func TestWriterCarriesObservationOwnershipWithoutTrustingReservedProperties(t *testing.T) {
+	nodeRecorder := &recordedExec{}
+	writer := newTestWriter(nodeRecorder.exec, false)
+	node := ingest.Node{
+		ID:                 "shared",
+		Kinds:              []string{"MCPServer"},
+		ObservationDomains: []string{"mcp", "config"},
+		Properties: map[string]any{
+			"name":                "shared",
+			"observation_tokens":  []string{"attacker-controlled"},
+			"legacy_observation":  false,
+			"observation_managed": false,
+		},
+	}
+	if _, err := writer.WriteNodes(context.Background(), []ingest.Node{node}, "scan-1"); err != nil {
+		t.Fatalf("WriteNodes: %v", err)
+	}
+	nodeRow := rowsAt(t, nodeRecorder.snapshot()[0].Params, "nodes")[0]
+	tokens, _ := nodeRow["observation_tokens"].([]string)
+	wantTokens := []string{"config\x1fscan-1", "mcp\x1fscan-1"}
+	if len(tokens) != len(wantTokens) || tokens[0] != wantTokens[0] || tokens[1] != wantTokens[1] {
+		t.Fatalf("node tokens = %q, want %q", tokens, wantTokens)
+	}
+	props := propsAt(t, nodeRow, "properties")
+	for _, reserved := range []string{
+		"observation_tokens",
+		"legacy_observation",
+		"observation_managed",
+		"observation_properties_complete",
+	} {
+		if _, exists := props[reserved]; exists {
+			t.Fatalf("reserved property %q was accepted from artifact", reserved)
+		}
+	}
+	if !strings.Contains(nodeRecorder.snapshot()[0].Cypher, "legacy_observation") {
+		t.Fatal("node merge must preserve pre-lifecycle legacy ownership")
+	}
+
+	edgeRecorder := &recordedExec{}
+	writer = newTestWriter(edgeRecorder.exec, false)
+	edge := ingest.Edge{
+		Source:             "s",
+		Target:             "t",
+		Kind:               "PROVIDES_TOOL",
+		ObservationDomains: []string{"mcp"},
+	}
+	if _, err := writer.WriteEdges(context.Background(), []ingest.Edge{edge}, "scan-1"); err != nil {
+		t.Fatalf("WriteEdges: %v", err)
+	}
+	edgeRow := rowsAt(t, edgeRecorder.snapshot()[0].Params, "edges")[0]
+	edgeTokens, _ := edgeRow["observation_tokens"].([]string)
+	if len(edgeTokens) != 1 || edgeTokens[0] != "mcp\x1fscan-1" {
+		t.Fatalf("edge tokens = %q, want mcp ownership", edgeTokens)
+	}
+}
+
+func TestCompleteObservationReplacesManagedPropertiesAndMigratesLegacy(t *testing.T) {
+	scope := "mcp:target:sha256:server-a"
+	recorder := &recordedExec{}
+	writer := newTestWriter(recorder.exec, false)
+	node := ingest.Node{
+		ID:                 "server-a",
+		Kinds:              []string{"MCPServer"},
+		ObservationDomains: []string{scope},
+		Properties:         map[string]any{"name": "fresh"},
+	}
+
+	if _, err := writer.WriteObservationNodes(
+		context.Background(),
+		[]ingest.Node{node},
+		"scan-current",
+		[]string{scope},
+	); err != nil {
+		t.Fatalf("WriteObservationNodes: %v", err)
+	}
+	call := recorder.snapshot()[0]
+	row := rowsAt(t, call.Params, "nodes")[0]
+	prefixes, _ := row["complete_domain_prefixes"].([]string)
+	if want := scope + "\x1f"; len(prefixes) != 1 || prefixes[0] != want {
+		t.Fatalf("complete prefixes = %q, want [%q]", prefixes, want)
+	}
+	for _, fragment := range []string{
+		"SET n = node.properties",
+		"NOT observation_created AND NOT replace_properties",
+		"WHEN replace_properties THEN false",
+		"n.observation_properties_complete",
+	} {
+		if !strings.Contains(call.Cypher, fragment) {
+			t.Fatalf("managed replacement query missing %q:\n%s", fragment, call.Cypher)
+		}
+	}
+}
+
+func TestUnknownObservationCannotBlindlyReplaceProperties(t *testing.T) {
+	recorder := &recordedExec{}
+	writer := newTestWriter(recorder.exec, false)
+	node := ingest.Node{
+		ID:         "legacy",
+		Kinds:      []string{"MCPServer"},
+		Properties: map[string]any{"name": "legacy-update"},
+	}
+
+	if _, err := writer.WriteObservationNodes(
+		context.Background(),
+		[]ingest.Node{node},
+		"scan-legacy",
+		nil,
+	); err != nil {
+		t.Fatalf("WriteObservationNodes: %v", err)
+	}
+	call := recorder.snapshot()[0]
+	row := rowsAt(t, call.Params, "nodes")[0]
+	if prefixes, _ := row["complete_domain_prefixes"].([]string); len(prefixes) != 0 {
+		t.Fatalf("unknown observation received replacement prefixes: %q", prefixes)
+	}
+	if !strings.Contains(call.Cypher, "size(node.observation_tokens) > 0") {
+		t.Fatal("property replacement is not gated on managed ownership")
+	}
+}
+
 // --- Helpers ----------------------------------------------------------------
 
 func intToStr(i int) string {

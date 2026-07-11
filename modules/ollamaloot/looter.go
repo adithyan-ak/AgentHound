@@ -126,6 +126,10 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 			"discovered_via":    "ollama_loot",
 			"service_kind":      "ollama",
 			"auth_method":       "none",
+			"auth_assurance":    string(common.AuthAssuranceUnauthenticated),
+			"auth_evidence":     common.AuthEvidenceAnonymousProbeSucceeded,
+			"probe_status":      string(common.VerificationVerified),
+			"last_verified_at":  time.Now().UTC().Format(time.RFC3339),
 			"is_anonymous_loot": "true",
 		},
 	})

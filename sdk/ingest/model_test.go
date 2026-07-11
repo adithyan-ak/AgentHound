@@ -94,6 +94,76 @@ func TestIngestDataJSONRoundTrip(t *testing.T) {
 	if len(d.Graph.Edges) != 1 {
 		t.Errorf("edges count: got %d, want 1", len(d.Graph.Edges))
 	}
+	if d.Meta.Collection != nil || d.Meta.Ruleset != nil || len(d.Meta.IdentitySchemes) != 0 {
+		t.Fatal("legacy artifact must preserve absent evidence metadata as unknown")
+	}
+}
+
+func TestIngestEvidenceMetadataJSONRoundTrip(t *testing.T) {
+	input := IngestData{
+		Meta: IngestMeta{
+			Version:   1,
+			Type:      "agenthound-ingest",
+			Collector: "scan",
+			ScanID:    "scan-001",
+			Collection: &CollectionReport{
+				State:        OutcomePartial,
+				CoverageKeys: []string{"a2a", "mcp"},
+				Outcomes: []CollectionOutcome{{
+					Collector: "a2a",
+					Target:    "https://agent.example",
+					Method:    "agent_card",
+					State:     OutcomeFailed,
+					Error:     "connection refused",
+				}},
+			},
+			Ruleset: &RulesetManifest{
+				Digest:       "sha256:rules",
+				LoadState:    OutcomeComplete,
+				Authenticity: "unverified",
+				Entries: []RuleManifestEntry{{
+					Type:             "text",
+					ID:               "rule",
+					Version:          1,
+					SemanticSHA256:   "sha256:entry",
+					Source:           "custom",
+					EffectiveMatcher: json.RawMessage(`{"type":"keyword","keywords":["test"]}`),
+				}},
+			},
+			IdentitySchemes: []IdentityScheme{{
+				EntityKind:   "MCPServer",
+				Transport:    "stdio",
+				Scheme:       MCPStdioIdentitySchemeV2,
+				Version:      2,
+				LegacyScheme: MCPStdioIdentitySchemeV1,
+			}},
+		},
+		Graph: GraphData{Nodes: []Node{}, Edges: []Edge{}},
+	}
+
+	raw, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got IngestData
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Meta.Collection == nil || got.Meta.Collection.State != OutcomePartial {
+		t.Fatalf("collection metadata lost: %+v", got.Meta.Collection)
+	}
+	if got.Meta.Ruleset == nil || got.Meta.Ruleset.Authenticity != "unverified" {
+		t.Fatalf("ruleset metadata lost: %+v", got.Meta.Ruleset)
+	}
+	if len(got.Meta.Ruleset.Entries) != 1 ||
+		string(got.Meta.Ruleset.Entries[0].EffectiveMatcher) !=
+			`{"type":"keyword","keywords":["test"]}` {
+		t.Fatalf("effective matcher metadata lost: %+v", got.Meta.Ruleset)
+	}
+	if len(got.Meta.IdentitySchemes) != 1 ||
+		got.Meta.IdentitySchemes[0].Scheme != MCPStdioIdentitySchemeV2 {
+		t.Fatalf("identity metadata lost: %+v", got.Meta.IdentitySchemes)
+	}
 }
 
 func TestAllowedNodeKindsComplete(t *testing.T) {

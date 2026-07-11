@@ -340,8 +340,20 @@ func TestLoot_OpenWebUI_OllamaConfig_KeyField(t *testing.T) {
 			if vh, _ := n.Properties["value_hash"].(string); vh != common.HashCredentialValue("sk-ollama-idx") {
 				t.Errorf("value_hash mismatch: %v", vh)
 			}
+			if n.Properties["material_status"] != "observed" ||
+				n.Properties["exposure_status"] != "exposed" {
+				t.Errorf("observed OpenWebUI secret missing evidence state: %+v", n.Properties)
+			}
 		case "OllamaInstance":
 			ollamaCount++
+			if _, claimed := n.Properties["auth_method"]; claimed {
+				t.Errorf("configured backend claimed observed auth: %+v", n.Properties)
+			}
+			if n.Properties["configuration_observed"] != true ||
+				n.Properties["configured_auth_method"] != "apiKey" ||
+				n.Properties["probe_status"] != string(common.VerificationConfiguredUnverified) {
+				t.Errorf("configured backend evidence missing: %+v", n.Properties)
+			}
 		}
 	}
 	if credCount != 1 {
@@ -355,6 +367,10 @@ func TestLoot_OpenWebUI_OllamaConfig_KeyField(t *testing.T) {
 			exposesCount++
 			if e.SourceKind != "OpenWebUIInstance" || e.TargetKind != "OllamaInstance" {
 				t.Errorf("EXPOSES edge kinds = %s -> %s", e.SourceKind, e.TargetKind)
+			}
+			if e.Properties["assertion_type"] != "configured_reference" ||
+				e.Properties["confidence_scope"] != "configuration_presence" {
+				t.Errorf("configured edge overclaimed verification: %+v", e.Properties)
 			}
 		}
 	}

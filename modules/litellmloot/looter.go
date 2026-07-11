@@ -98,6 +98,12 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		"value_hash":   masterValueHash,
 		"merge_key":    "value_hash",
 	}
+	common.ApplyCredentialEvidence(
+		masterProps,
+		common.CredentialIdentityValueHash,
+		common.CredentialMaterialObserved,
+		common.CredentialExposureExposed,
+	)
 	if opts.IncludeCredentialValues {
 		masterProps["value"] = masterKey
 	}
@@ -133,8 +139,8 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 			"name":         "upstream-" + uc.Name,
 			"provider":     uc.Provider,
 			"source":       "litellm",
-			"is_exposed":   true,
-			"high_entropy": true,
+			"is_exposed":   false,
+			"high_entropy": false,
 			"format":       "upstream-provider",
 			"value_hash":   uc.ValueHash,
 			// LiteLLM's /model/info strips upstream api_key server-side
@@ -145,11 +151,24 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 			// these out via WHERE c1master.merge_key = 'value_hash'.
 			"merge_key": "identity",
 		}
+		common.ApplyCredentialEvidence(
+			props,
+			common.CredentialIdentityProviderName,
+			common.CredentialMaterialMasked,
+			common.CredentialExposureNotObserved,
+		)
 		res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, ingest.Node{
 			ID: credID, Kinds: []string{"Credential"}, Properties: props,
 		})
 		res.IngestData.Graph.Edges = append(res.IngestData.Graph.Edges,
-			ingest.ExposesCredentialEdge(gatewayObjectID, credID, opts.EngagementID, "model_info", uc.Endpoint))
+			ingest.CredentialEvidenceEdge(
+				gatewayObjectID,
+				credID,
+				opts.EngagementID,
+				"model_info",
+				uc.Endpoint,
+				string(common.CredentialExposureNotObserved),
+			))
 		res.Summary.CredentialsFound++
 	}
 
@@ -174,7 +193,7 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 			"type":         "virtual_key",
 			"name":         "virtual-" + vk.KeyID,
 			"source":       "litellm",
-			"is_exposed":   true,
+			"is_exposed":   false,
 			"high_entropy": false,
 			"format":       "litellm-virtual",
 			"value_hash":   vk.ValueHash,
@@ -182,6 +201,18 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 			"spend_usd":    vk.Spend,
 			"models":       vk.Models,
 		}
+		identityBasis := common.CredentialIdentityValueHash
+		materialStatus := common.CredentialMaterialHashed
+		if vk.MergeKey == "identity" {
+			identityBasis = common.CredentialIdentityMetadata
+			materialStatus = common.CredentialMaterialUnobserved
+		}
+		common.ApplyCredentialEvidence(
+			props,
+			identityBasis,
+			materialStatus,
+			common.CredentialExposureNotObserved,
+		)
 		if opts.IncludeCredentialValues && vk.Value != "" {
 			props["value"] = vk.Value
 		}
@@ -189,7 +220,14 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 			ID: credID, Kinds: []string{"Credential"}, Properties: props,
 		})
 		res.IngestData.Graph.Edges = append(res.IngestData.Graph.Edges,
-			ingest.ExposesCredentialEdge(gatewayObjectID, credID, opts.EngagementID, "key_list", baseURL))
+			ingest.CredentialEvidenceEdge(
+				gatewayObjectID,
+				credID,
+				opts.EngagementID,
+				"key_list",
+				baseURL,
+				string(common.CredentialExposureNotObserved),
+			))
 		res.Summary.CredentialsFound++
 	}
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -24,6 +25,13 @@ import (
 var (
 	bundleOverridePathMu sync.RWMutex
 	bundleOverridePath   string
+
+	fingerprintCacheMu          sync.RWMutex
+	fingerprintCachePath        string
+	fingerprintCacheInitialized bool
+	fingerprintCacheRules       []FingerprintRule
+	fingerprintCacheFailures    []string
+	fingerprintCacheErr         error
 )
 
 // SetBundleOverridePath configures the process-global rules-bundle
@@ -31,8 +39,16 @@ var (
 // LoadFingerprints merge bundle rules into the embedded set.
 func SetBundleOverridePath(path string) {
 	bundleOverridePathMu.Lock()
-	defer bundleOverridePathMu.Unlock()
 	bundleOverridePath = path
+	bundleOverridePathMu.Unlock()
+
+	fingerprintCacheMu.Lock()
+	fingerprintCachePath = ""
+	fingerprintCacheInitialized = false
+	fingerprintCacheRules = nil
+	fingerprintCacheFailures = nil
+	fingerprintCacheErr = nil
+	fingerprintCacheMu.Unlock()
 }
 
 // getBundleOverridePath returns the current override or empty string.
@@ -72,25 +88,41 @@ const (
 // caller's slog (this function does NOT log directly — it returns the
 // successful subset and lets the caller decide policy).
 func LoadFingerprintBundle(path string) ([]FingerprintRule, error) {
+	rules, failures, err := loadFingerprintBundleWithFailures(path)
+	if err != nil {
+		return rules, err
+	}
+	if len(failures) > 0 {
+		return rules, errors.New(strings.Join(failures, "; "))
+	}
+	return rules, nil
+}
+
+func loadFingerprintBundleWithFailures(
+	path string,
+) ([]FingerprintRule, []string, error) {
 	if path == "" {
-		return nil, errors.New("LoadFingerprintBundle: empty path")
+		return nil, nil, errors.New("LoadFingerprintBundle: empty path")
 	}
 	st, err := os.Stat(path)
 	if err != nil {
-		return nil, fmt.Errorf("stat bundle path: %w", err)
+		return nil, nil, fmt.Errorf("stat bundle path: %w", err)
 	}
 	if st.IsDir() {
-		return loadBundleFromDir(path)
+		return loadBundleFromDirWithFailures(path)
 	}
-	return loadBundleFromTarball(path)
+	return loadBundleFromTarballWithFailures(path)
 }
 
-func loadBundleFromDir(dir string) ([]FingerprintRule, error) {
+func loadBundleFromDirWithFailures(
+	dir string,
+) ([]FingerprintRule, []string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("read bundle dir: %w", err)
+		return nil, nil, fmt.Errorf("read bundle dir: %w", err)
 	}
 	var rules []FingerprintRule
+	var failures []string
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
 			continue
@@ -98,39 +130,51 @@ func loadBundleFromDir(dir string) ([]FingerprintRule, error) {
 		full := filepath.Join(dir, e.Name())
 		data, err := os.ReadFile(full)
 		if err != nil {
+			failures = append(
+				failures,
+				fmt.Sprintf("read fingerprint rule %s: %v", full, err),
+			)
 			continue
 		}
 		r, err := parseBundleRule(data, full)
 		if err != nil {
+			failures = append(
+				failures,
+				fmt.Sprintf("parse fingerprint rule %s: %v", full, err),
+			)
 			continue
 		}
 		rules = append(rules, *r)
 	}
-	return rules, nil
+	sort.Strings(failures)
+	return rules, failures, nil
 }
 
-func loadBundleFromTarball(path string) ([]FingerprintRule, error) {
+func loadBundleFromTarballWithFailures(
+	path string,
+) ([]FingerprintRule, []string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("open bundle tarball: %w", err)
+		return nil, nil, fmt.Errorf("open bundle tarball: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 
 	gz, err := gzip.NewReader(f)
 	if err != nil {
-		return nil, fmt.Errorf("gunzip bundle: %w", err)
+		return nil, nil, fmt.Errorf("gunzip bundle: %w", err)
 	}
 	defer func() { _ = gz.Close() }()
 
 	tr := tar.NewReader(gz)
 	var rules []FingerprintRule
+	var failures []string
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			return rules, fmt.Errorf("tar read: %w", err)
+			return rules, failures, fmt.Errorf("tar read: %w", err)
 		}
 		if hdr.Typeflag != tar.TypeReg {
 			continue
@@ -142,15 +186,24 @@ func loadBundleFromTarball(path string) ([]FingerprintRule, error) {
 		// anything larger is suspicious.
 		data, err := io.ReadAll(io.LimitReader(tr, 1<<20))
 		if err != nil {
+			failures = append(
+				failures,
+				fmt.Sprintf("read fingerprint rule %s: %v", hdr.Name, err),
+			)
 			continue
 		}
 		r, err := parseBundleRule(data, "bundle:"+hdr.Name)
 		if err != nil {
+			failures = append(
+				failures,
+				fmt.Sprintf("parse fingerprint rule %s: %v", hdr.Name, err),
+			)
 			continue
 		}
 		rules = append(rules, *r)
 	}
-	return rules, nil
+	sort.Strings(failures)
+	return rules, failures, nil
 }
 
 func parseBundleRule(data []byte, source string) (*FingerprintRule, error) {

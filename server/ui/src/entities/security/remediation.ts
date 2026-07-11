@@ -27,27 +27,82 @@ export function deriveRemediations(
       body: "The server was launched without a pinned version (e.g. `npx -y @pkg` without `@x.y.z`). A malicious update could ship new tool descriptions or behavior without warning. Pin the version in the client config.",
     });
   }
+  if (
+    kind === "MCPServer" &&
+    (props.pinning_status === "unknown" ||
+      (props.pinning_status == null && props.is_pinned == null))
+  ) {
+    items.push({
+      severity: "low",
+      title: "Verify package pinning",
+      body: "Package pinning was not assessed for this server. Confirm the executable or package reference resolves to an immutable version before treating the supply-chain posture as clean.",
+    });
+  }
 
   // No auth
-  if ((kind === "MCPServer" || kind === "A2AAgent") && props.auth_method === "none") {
+  const isAuthEntity = kind === "MCPServer" || kind === "A2AAgent";
+  const explicitAnonymous =
+    props.auth_method === "none" &&
+    props.auth_evidence === "anonymous_probe_succeeded";
+  if (isAuthEntity && explicitAnonymous) {
     items.push({
       severity: "high",
       title: "Add an authentication method",
       body: "This endpoint accepts requests without any authentication. Configure at minimum a bearer token or API key, and prefer OAuth or mTLS for anything reaching sensitive resources.",
     });
   }
+  if (
+    isAuthEntity &&
+    (props.auth_method == null ||
+      props.auth_method === "unknown" ||
+      (props.auth_method === "none" && !explicitAnonymous))
+  ) {
+    items.push({
+      severity: "low",
+      title: "Verify authentication posture",
+      body: "Authentication was not assessed for this endpoint. Collect or directly probe it before concluding that it is authenticated or anonymous.",
+    });
+  }
 
   // Exposed credential
-  if (kind === "Credential" && props.is_exposed === true) {
+  const observedExposure =
+    props.exposure_status === "exposed" &&
+    props.material_status === "observed" &&
+    props.merge_key !== "identity";
+  if (kind === "Credential" && observedExposure) {
+    const source =
+      typeof props.source === "string" && props.source.trim() !== ""
+        ? props.source.trim()
+        : null;
     items.push({
       severity: "critical",
       title: "Rotate this credential",
-      body: "This credential was found inlined in a config file or environment variable in plaintext. Rotate it immediately, move it to a secret manager, and reference it by env var alone.",
+      body: source
+        ? `AgentHound observed usable exposed credential material from ${source}. Revoke or rotate it, then restrict or remove that recorded source.`
+        : "AgentHound observed usable exposed credential material, but the capture source was not recorded. Revoke or rotate it and investigate the producer before choosing a storage remediation.",
+    });
+  }
+  if (
+    kind === "Credential" &&
+    (props.material_status === "masked" ||
+      props.material_status === "hashed" ||
+      props.material_status === "unobserved" ||
+      props.merge_key === "identity")
+  ) {
+    items.push({
+      severity: "low",
+      title: "Credential material was not observed",
+      body: "This node is a credential reference or one-way digest. AgentHound did not observe usable secret material, so exposure and rotation cannot be concluded from this evidence alone.",
     });
   }
 
   // High entropy secret
-  if (kind === "Credential" && props.high_entropy === true && props.is_exposed !== true) {
+  if (
+    kind === "Credential" &&
+    props.high_entropy === true &&
+    props.material_status === "observed" &&
+    !observedExposure
+  ) {
     items.push({
       severity: "medium",
       title: "Review this high-entropy value",
@@ -93,9 +148,9 @@ export function deriveRemediations(
   );
   if (hasCriticalCanReach) {
     items.push({
-      severity: "critical",
-      title: "Close the cross-protocol pivot",
-      body: "This node is on a cross-protocol CAN_REACH path (A2A agent pivoting through an MCP server). Enforce auth on the delegated agent AND remove the shared host correlation between the two protocols.",
+      severity: "medium",
+      title: "Verify the cross-protocol correlation",
+      body: "This node appears in a 50%-confidence shared-host correlation between A2A and MCP services. That correlation is a hypothesis, not proof of end-to-end invocation. Verify an actual directed path before changing authentication or deployment boundaries.",
     });
   }
 

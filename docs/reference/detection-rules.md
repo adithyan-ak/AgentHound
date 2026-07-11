@@ -15,6 +15,26 @@ The two layers feed each other: the rules engine emits structured signals (`capa
 
 The detections summarized below are the **pre-built-query** layer. The 35 underlying YAML rules are not enumerated here individually — read them directly in `sdk/rules/builtin/` for the canonical truth. Composite-edge detections (`TAINTS`, `IFC_VIOLATION`, `CONFUSED_DEPUTY`, `POISONS_CONTEXT`) surface through `GET /api/v1/analysis/findings` rather than a named pre-built query.
 
+## Scan-specific ruleset provenance
+
+Each scan artifact records the effective text and fingerprint rules that
+actually ran. Every manifest entry includes the rule ID/version/source class,
+a semantic SHA-256 content identifier, and a canonical
+`effective_matcher` JSON definition. Text entries preserve the compiled matcher
+shape; fingerprint entries preserve the effective probe and response-matcher
+sequence, including same-ID bundle overrides.
+
+Files that cannot be read, parsed, validated, or compiled are not silently
+treated as loaded. Their failures are persisted in `ruleset.errors` and make
+`ruleset.load_state` `partial` (or `failed` when no rule loaded). The Rules page
+can load a requested scan directly by ID, including scans older than the first
+history page, and displays these recorded definitions separately from the
+server's current catalog.
+
+`ruleset.digest` and each `semantic_sha256` are content identities only.
+`authenticity: unverified` is explicit: no digest is a signature or a claim
+that the rule source was trusted.
+
 ## Detection summary
 
 | Detection | Severity | Pre-built query | OWASP mapping | MITRE ATLAS |
@@ -30,7 +50,7 @@ The detections summarized below are the **pre-built-query** layer. The 35 underl
 | Shell access paths | critical | `agents-shell-access` | MCP01, ASI06 | — |
 | Database access paths | critical | `shortest-to-database` | MCP04, ASI08 | — |
 | Data exfiltration routes | critical | `exfiltration-routes` | MCP04, ASI08, ASI10 | AML.T0086 |
-| Cross-protocol attack paths | critical | `cross-protocol-paths` | MCP01, ASI01, ASI06 | — |
+| Cross-protocol host correlations | medium | `cross-protocol-paths` | MCP01, ASI01, ASI06 | — |
 | Credential chain paths | critical | `credential-chain` | MCP03, ASI04 | — |
 | LiteLLM credential leak | critical | `litellm-credential-leak` | MCP03, ASI04 | — |
 | Unpinned packages | medium | `unpinned-packages` | MCP09, ASI09 | — |
@@ -68,11 +88,11 @@ The per-edge crosswalk (composite-edge findings from `GET /api/v1/analysis/findi
 
 ## Tool poisoning (MCP05)
 
-**What:** MCP tool descriptions contain prompt injection patterns that manipulate agent behavior.
+**What:** MCP tool descriptions match configured suspicious-instruction patterns.
 
 **How detected:** The MCP Collector scans tool descriptions for injection markers (imperative instructions, base64 blobs, hidden Unicode, references to ignoring safety instructions). Detected tools get a `POISONED_DESCRIPTION` self-edge.
 
-**Risk:** A poisoned tool can cause an agent to execute unintended actions, leak data, or bypass safety controls when the agent reads the tool description during planning.
+**Risk:** A matched description may influence agent planning. The pattern match identifies content for review; it does not prove that an agent followed it.
 
 **Example finding:**
 ```
@@ -105,11 +125,16 @@ MCPTool:dangerous-tool has injection pattern: "ignore all previous instructions"
 
 ## Unauthenticated servers (MCP03)
 
-**What:** MCP servers with no authentication configured, meaning any client can connect and use all tools.
+**What:** Network MCP servers that accepted a probe without credentials.
 
-**How detected:** The Config Collector parses auth configuration for each server. Servers with `auth_method: none` or missing auth configuration are flagged via the `no-auth-servers` query.
+**How detected:** Direct probes emit canonical auth evidence. A no-auth query
+requires both `auth_method: none` and
+`auth_evidence: anonymous_probe_succeeded`; configuration with no credential,
+local stdio transport, missing evidence, and `unknown` posture do not match.
 
-**Risk:** No authentication means no access control. Any process on the same machine (stdio) or network (HTTP) can invoke all tools and access all resources.
+**Risk:** Confirmed anonymous network access removes an authentication boundary
+for reachable clients. A local stdio child process is a separate process-local
+trust path and is not classified as anonymous network access.
 
 ## Instruction file poisoning (MCP05, ASI03)
 
@@ -123,17 +148,36 @@ MCPTool:dangerous-tool has injection pattern: "ignore all previous instructions"
 
 **What:** High-entropy strings in MCP server configuration that are likely hardcoded API keys or secrets.
 
-**How detected:** The Config Collector measures Shannon entropy of credential values. Base64 strings with entropy > 4.5 and hex strings with entropy > 3.0 are flagged as `high_entropy`.
+**How detected:** The Config Collector measures Shannon entropy of observed credential values. Base64 strings with entropy > 4.5 and hex strings with entropy > 3.0 are flagged as `high_entropy`. Masked, hashed, unobserved, and identity-only credential references are excluded.
 
 **Risk:** Secrets in config files end up in version control, backups, and logs. Rotation is difficult because the secret is embedded in client configurations across machines.
+
+## Unsigned agent cards (MCP09, ASI09)
+
+**How detected:** The query requires
+`signature_verification_status=unsigned`. For legacy nodes only, an explicit
+`is_signed=false` remains accepted when the richer status is absent. Missing
+both fields is unknown and does not match.
 
 ## Shell access paths (MCP01)
 
 **What:** An agent can reach tools with shell execution or code execution capabilities.
 
-**How detected:** The CAN_EXECUTE post-processor identifies tools with `shell_access` or `code_execution` in their `capability_surface`. The `agents-shell-access` query traces paths from agents through trust relationships to these tools.
+**How detected:** The CAN_EXECUTE post-processor identifies tools with
+`shell_access` or `code_execution` in their `capability_surface`. Built-in
+execution matchers use token boundaries and require either an explicit
+execution phrase or execution verb plus shell/language context. Database-only
+names such as `execute_query`, Python documentation search, `terminally`, and
+`command_reference` do not classify as shell/code execution. Inventory and
+readiness prose such as "List available Python scripts ... to run later" and
+"Show whether the Python data pipeline is ready to execute" is also excluded;
+the classifier requires the execution action to directly govern code, a
+language runtime, or a script. The
+`agents-shell-access` query traces configured trust relationships to classified
+tools. The metadata-derived edge carries 80% confidence and remains an
+inference pending implementation and sandbox verification.
 
-**Risk:** Shell access from an agent means arbitrary command execution on the server host. Combined with no-auth or weak-auth servers, this is a critical RCE vector.
+**Risk:** Confirmed shell access can become arbitrary command execution on the server host. The classifier and trust path identify a candidate route; confirm tool implementation, authorization, and sandboxing before treating it as RCE.
 
 ## Data exfiltration routes (MCP04, ASI08)
 
@@ -144,7 +188,7 @@ MCPTool:dangerous-tool has injection pattern: "ignore all previous instructions"
 - **`auto_fetch_render`** — tools that return content the host may auto-fetch/render (markdown images, HTML previews). *Caveat:* this detects tools that **return** renderable content, not the host's render policy — host-side rendering behavior is not observable by the collector, so treat it as a candidate channel.
 - **`allowlisted_proxy`** — tools that proxy requests through an allowlisted egress, which can slip exfiltration past naive egress controls.
 
-**Risk:** This is the complete attack chain: access sensitive data, then send it somewhere. Two capabilities that are safe independently become critical when combined.
+**Risk:** The combined capabilities form a potential output route. The detector does not observe data transfer or prove that the agent can invoke every relationship at runtime.
 
 ## Untrusted input sources & taint (MCP05, ASI03)
 
@@ -163,7 +207,7 @@ Keyword sets are kept deliberately narrow — universal taint destroys signal.
 
 **What:** A weakly-authenticated A2A agent can drive a strongly-authenticated one through delegation, borrowing its privileges.
 
-**How detected:** The `auth_strength` pre-pass materializes a numeric weakness score onto every node with an `auth_method`. The `confused_deputy` post-processor emits a `CONFUSED_DEPUTY` edge for `DELEGATES_TO` pairs where the caller's `auth_strength` ≥ 80 (none/apiKey-class) and the callee's ≤ 30 (oauth/mtls-class).
+**How detected:** The `auth_strength` pre-pass materializes both canonical `auth_assurance` and a numeric weakness only for known methods. The `confused_deputy` post-processor requires an unauthenticated/weak caller and a strong callee. Unknown/custom methods have no numeric weakness and cannot satisfy either side.
 
 **Risk:** The anonymous or low-trust caller effectively escalates to the callee's privilege level — a classic confused-deputy escalation across an agent trust boundary.
 
@@ -175,13 +219,23 @@ Keyword sets are kept deliberately narrow — universal taint destroys signal.
 
 **Risk:** Unlike `SHADOWS` (which requires the poisoner to name its target), context poisoning models the broader case where injected text in one tool's description influences how the agent invokes a dangerous sibling tool.
 
-## Cross-protocol attack paths (MCP01, ASI01)
+## Cross-protocol host correlations (MCP01, ASI01)
 
-**What:** An A2A agent can reach MCP resources by traversing the A2A-MCP protocol boundary.
+**What:** An A2A delegation chain and an MCP resource path correlate through services recorded on the same host.
 
-**How detected:** The cross-protocol post-processor correlates A2A agents with MCP servers running on the same host. When an A2A agent delegates to another agent that shares a host with an MCP server, a cross-protocol `CAN_REACH` edge is created from the A2A agent to MCP resources.
+**How detected:** A2A delegation detection requires a boundary-delimited target
+name or URL near delegation language and records `match_type`, `match_field`,
+and `matched_reference` on the `DELEGATES_TO` edge. Plain compatibility mentions
+and negated delegation are benign counterexamples. The lexical edge remains a
+50%-confidence hypothesis. The cross-protocol post-processor additionally
+requires explicit anonymous-probe evidence for the external A2A actor, then
+correlates its possible delegation target with an MCP server recorded on the
+same host. The compatibility edge is retained as `CAN_REACH`, but carries
+`cross_protocol=true`, 50% confidence,
+`variant=cross_protocol_host_correlation`, and
+`evidence.state=hypothesis`.
 
-**Risk:** Cross-protocol paths are invisible to single-protocol analysis tools. An attacker exploiting an A2A agent can pivot through host co-location to access MCP resources that were never explicitly trusted by any A2A agent.
+**Risk:** Host co-location is an investigation lead, not proof of an invocation bridge. Validate process isolation, identities, authorization, and an authorized end-to-end call before treating the correlation as reachability.
 
 ## Credential chain paths (MCP03, ASI04)
 
@@ -193,9 +247,9 @@ Keyword sets are kept deliberately narrow — universal taint destroys signal.
 
 ## LiteLLM credential leak (MCP03, ASI04)
 
-**What:** LiteLLM gateways that expose upstream provider credentials reachable from agent-discovered configuration secrets.
+**What:** LiteLLM gateways with explicitly observed, exposed upstream provider credential material reachable from agent-discovered configuration secrets.
 
-**How detected:** The `litellm-credential-leak` pre-built query joins LiteLLM `EXPOSES_CREDENTIAL` edges with credentials discovered elsewhere by matching `value_hash`.
+**How detected:** The `litellm-credential-leak` pre-built query joins LiteLLM `EXPOSES_CREDENTIAL` edges with credentials discovered elsewhere by matching `value_hash`, and requires `material_status=observed`, `exposure_status=exposed`, and non-identity merge keys on the leak path. Masked, hashed, and identity-only references remain `credential_chain_reference` findings and are not labeled leaks.
 
 **Risk:** A leaked LiteLLM master key can expose upstream provider credentials, expanding one config secret into access to multiple model providers.
 

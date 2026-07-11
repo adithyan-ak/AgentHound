@@ -40,10 +40,10 @@ func init() {
 		},
 		"cross-protocol-paths": {
 			ID:          "cross-protocol-paths",
-			Name:        "Cross-Protocol Attack Paths",
-			Description: "Finds A2A-to-MCP cross-protocol attack paths that span protocol boundaries.",
-			Category:    "Critical Paths",
-			Severity:    "critical",
+			Name:        "Cross-Protocol Host Correlations",
+			Description: "Finds 50%-confidence A2A-to-MCP shared-host correlations; these are hypotheses, not proven end-to-end invocation paths.",
+			Category:    "Exposure Hypotheses",
+			Severity:    "medium",
 			Cypher:      CypherCrossProtocolPaths,
 			OWASPMap:    []string{"MCP01", "ASI01", "ASI06"},
 		},
@@ -100,7 +100,7 @@ func init() {
 		"no-auth-servers": {
 			ID:          "no-auth-servers",
 			Name:        "Unauthenticated MCP Servers",
-			Description: "Finds MCP servers with no authentication configured.",
+			Description: "Finds MCP servers where an anonymous network probe succeeded.",
 			Category:    "Vulnerabilities",
 			Severity:    "high",
 			Cypher:      CypherNoAuthServers,
@@ -109,7 +109,7 @@ func init() {
 		"no-auth-a2a": {
 			ID:          "no-auth-a2a",
 			Name:        "Unauthenticated A2A Agents",
-			Description: "Finds A2A agents with no authentication configured.",
+			Description: "Finds A2A agents where anonymous access was affirmatively observed.",
 			Category:    "Vulnerabilities",
 			Severity:    "high",
 			Cypher:      CypherNoAuthA2A,

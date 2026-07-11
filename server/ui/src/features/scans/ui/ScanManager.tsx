@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { ScanSearch, Plus, Upload } from "lucide-react";
-import { useScans } from "@entities/scan";
+import { SCANS_LIST_LIMIT, useScanPage } from "@entities/scan";
 import { Skeleton } from "@shared/ui/primitives/skeleton";
 import { WidgetCard } from "@shared/ui/widgets";
+import { DataStateNotice } from "@shared/ui/feedback";
 import { ScanHistory } from "./ScanHistory";
 import { NewScan } from "./NewScan";
 import { ScanImport } from "./ScanImport";
@@ -15,12 +16,49 @@ const primaryBtn =
 export function ScanManager() {
   const [showNewScan, setShowNewScan] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [offset, setOffset] = useState(0);
+  const [revision, setRevision] = useState<string>();
 
-  // Scan-manager list (page size 50). Upload/delete mutations invalidate this
-  // exact key, so the list refreshes automatically after a write.
-  const { data: scans, isLoading } = useScans();
+  const {
+    data: page,
+    isLoading,
+    isError,
+    error,
+    dataUpdatedAt,
+  } = useScanPage(
+    SCANS_LIST_LIMIT,
+    offset,
+    revision,
+  );
+  const scans = page?.scans;
+  const loaded = scans?.length ?? 0;
+  const total = page?.total ?? loaded;
+  const coldError = isError && page === undefined;
+  const cachedError = isError && page !== undefined;
+  const limited = offset > 0 || total > loaded || page?.hasMore === true;
+  const rangeStart = loaded > 0 ? offset + 1 : 0;
+  const rangeEnd = offset + loaded;
+  const canGoBack = offset > 0;
+  const canGoForward =
+    page?.hasMore === true &&
+    page.revision != null &&
+    !page.revisionConflict;
 
-  const total = scans?.length ?? 0;
+  function showPreviousPage() {
+    const previousOffset = Math.max(0, offset - SCANS_LIST_LIMIT);
+    setOffset(previousOffset);
+  }
+
+  function showNextPage() {
+    if (!canGoForward || !page?.revision) return;
+    setRevision(page.revision);
+    setOffset(offset + SCANS_LIST_LIMIT);
+  }
+
+  function restartPagination() {
+    setRevision(page?.revision ?? undefined);
+    setOffset(0);
+  }
 
   return (
     <div className="dashboard-bg min-h-full p-3 sm:p-4 lg:p-5">
@@ -59,6 +97,25 @@ export function ScanManager() {
           </div>
         </header>
 
+        {cachedError && (
+          <DataStateNotice tone="warning" title="Showing cached scan history">
+            The refresh failed. Rows are from{" "}
+            {new Date(dataUpdatedAt).toLocaleString()} and may be stale.
+          </DataStateNotice>
+        )}
+        {page && !page.revisionConflict && page.revision == null && (
+          <DataStateNotice tone="warning" title="Scan history page incomplete">
+            Pagination metadata was unavailable. The {loaded} loaded rows are
+            not a complete history total.
+          </DataStateNotice>
+        )}
+        {page?.revisionConflict && (
+          <DataStateNotice tone="warning" title="Scan history changed">
+            The scan history changed while paging. Restart from the newest page
+            to avoid mixing revisions.
+          </DataStateNotice>
+        )}
+
         <WidgetCard title="Ingest Log" icon={ScanSearch} flush>
           {isLoading ? (
             <div className="space-y-2 p-3">
@@ -66,8 +123,57 @@ export function ScanManager() {
               <Skeleton className="h-10 w-full rounded-[2px]" />
               <Skeleton className="h-10 w-3/4 rounded-[2px]" />
             </div>
+          ) : coldError ? (
+            <div className="p-3">
+              <DataStateNotice tone="error" title="Scan history unavailable">
+                {error instanceof Error
+                  ? error.message
+                  : "The scan history request failed."}
+              </DataStateNotice>
+            </div>
+          ) : page?.revisionConflict ? (
+            <div className="flex items-center justify-between gap-3 p-3">
+              <span className="text-sm text-muted-foreground">
+                This page belongs to an older scan-history revision.
+              </span>
+              <button className={ghostBtn} onClick={restartPagination}>
+                Restart pagination
+              </button>
+            </div>
           ) : (
-            <ScanHistory scans={scans ?? []} />
+            <>
+              {limited && (
+                <div className="border-b border-border/70 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+                  Showing scans {rangeStart}–{rangeEnd} of {total} (newest
+                  first; page size {SCANS_LIST_LIMIT})
+                </div>
+              )}
+              <ScanHistory scans={scans ?? []} />
+              {(canGoBack || canGoForward) && (
+                <nav
+                  aria-label="Scan history pagination"
+                  className="flex items-center justify-between border-t border-border/70 px-3 py-2"
+                >
+                  <button
+                    className={ghostBtn}
+                    onClick={showPreviousPage}
+                    disabled={!canGoBack}
+                  >
+                    Previous
+                  </button>
+                  <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+                    {rangeStart}–{rangeEnd} of {total}
+                  </span>
+                  <button
+                    className={ghostBtn}
+                    onClick={showNextPage}
+                    disabled={!canGoForward}
+                  >
+                    Next
+                  </button>
+                </nav>
+              )}
+            </>
           )}
         </WidgetCard>
 

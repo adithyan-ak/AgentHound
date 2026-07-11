@@ -54,7 +54,14 @@ export function FindingHeader({ detail, prevId, nextId, onCopyReport }: FindingH
   const { data: triage } = useTriage(f.id);
   const triageStatus = (triage?.status as TriageStatus) ?? "new";
 
-  const hops = detail.composite_props?.hops;
+  const path = detail.attack_path;
+  const hops =
+    path?.shape === "linear" &&
+    path.direction === "forward" &&
+    path.continuity.state === "continuous" &&
+    path.completeness.state === "complete"
+      ? path.edges.length
+      : null;
 
   function handleCopy() {
     onCopyReport();
@@ -157,6 +164,13 @@ export function FindingHeader({ detail, prevId, nextId, onCopyReport }: FindingH
               <Chip>
                 <span className="tabular-nums">{Math.round(f.confidence * 100)}%</span> conf
               </Chip>
+              <Chip>{(f.variant ?? "unknown").replace(/_/g, " ")}</Chip>
+              <Chip>{(f.evidence?.state ?? "unknown").replace(/_/g, " ")}</Chip>
+              {detail.snapshot?.stale && (
+                <Chip className="text-amber-400/90">
+                  stale published snapshot
+                </Chip>
+              )}
               {f.owasp_map?.map((tag) => (
                 <Chip key={tag} className="text-primary/80">
                   {tag}

@@ -3,6 +3,7 @@ package processors
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
@@ -42,6 +43,18 @@ func TestCanReach_ProcessSuccess(t *testing.T) {
 	calls := mock.CallsTo("ExecuteWrite")
 	if len(calls) != 2 {
 		t.Errorf("ExecuteWrite called %d times, want 2 (direct + credential chain)", len(calls))
+	}
+	direct, _ := calls[0].Args[0].(string)
+	if strings.Contains(direct, "WHERE NOT EXISTS((a)-[:CAN_REACH]->(r))") {
+		t.Fatalf("direct CAN_REACH must refresh an existing inferred edge:\n%s", direct)
+	}
+	credential, _ := calls[1].Args[0].(string)
+	if !strings.Contains(credential, "current.scan_id = $scan_id") {
+		t.Fatalf("credential pass must preserve a direct path refreshed this scan:\n%s", credential)
+	}
+	if strings.Contains(credential, "s1.auth_method IS NULL OR") ||
+		!strings.Contains(credential, "s1.auth_assurance IN ['unauthenticated', 'weak']") {
+		t.Fatalf("unknown auth must not satisfy credential delegation:\n%s", credential)
 	}
 }
 

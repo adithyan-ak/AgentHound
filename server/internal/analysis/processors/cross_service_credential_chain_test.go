@@ -131,10 +131,18 @@ func TestCrossServiceCredentialChain_MergeKeyFilter(t *testing.T) {
 	for _, side := range []string{
 		"c1.merge_key IS NULL OR c1.merge_key = 'value_hash'",
 		"c1master.merge_key IS NULL OR c1master.merge_key = 'value_hash'",
+		"c1.material_status = 'observed'",
+		"c1master.material_status = 'observed'",
+		"c1.exposure_status = 'exposed'",
+		"c1master.exposure_status = 'exposed'",
 	} {
 		if !strings.Contains(captured, side) {
 			t.Errorf("Cypher missing merge_key filter %q; query:\n%s", side, captured)
 		}
+	}
+	if strings.Contains(captured, "material_status IS NULL") ||
+		strings.Contains(captured, "exposure_status IS NULL") {
+		t.Fatalf("detector accepts missing credential evidence as observed:\n%s", captured)
 	}
 	// The clause must NOT accidentally accept identity-marked nodes.
 	if strings.Contains(captured, "merge_key = 'identity'") {

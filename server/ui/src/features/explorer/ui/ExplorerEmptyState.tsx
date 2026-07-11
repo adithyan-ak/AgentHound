@@ -151,12 +151,12 @@ const LENS_EMPTY_COPY: Record<LensId, LensEmptyCopy> = {
   "blast-radius": {
     eyebrow: "Blast radius",
     title: "Pick a node to begin",
-    hint: "Select any node to trace everything reachable from it.",
+    hint: "Select a node to calculate reachability for the chosen direction and hop cap.",
   },
   chokepoints: {
     eyebrow: "Empty graph",
     title: "No chokepoints",
-    hint: "No connected nodes to rank in this scan.",
+    hint: "No loaded relationships are available for degree-based ranking.",
   },
 };
 

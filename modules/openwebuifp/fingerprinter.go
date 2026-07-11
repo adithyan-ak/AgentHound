@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
 )
@@ -104,6 +105,12 @@ func (f *Fingerprinter) Fingerprint(ctx context.Context, t action.Target) (*acti
 	if _, ok := props["auth_method"]; !ok {
 		props["auth_method"] = "none"
 	}
+	auth := common.AssessAuth(fmt.Sprint(props["auth_method"]))
+	props["auth_method"] = string(auth.Method)
+	props["auth_assurance"] = string(auth.Assurance)
+	props["auth_evidence"] = common.AuthEvidenceAnonymousProbeSucceeded
+	props["probe_status"] = string(common.VerificationVerified)
+	props["last_verified_at"] = time.Now().UTC().Format(time.RFC3339)
 
 	out := &ingest.IngestData{
 		Graph: ingest.GraphData{

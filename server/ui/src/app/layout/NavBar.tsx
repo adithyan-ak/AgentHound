@@ -1,4 +1,4 @@
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
   Compass,
@@ -6,12 +6,10 @@ import {
   ScanSearch,
   BookOpen,
   ShieldCheck,
-  PanelRight,
 } from "lucide-react";
 import { useHealth } from "@entities/health";
-import { useUIStore } from "@shared/model/ui-store";
 import { cn } from "@shared/lib/utils";
-import { SIGNAL_OK } from "@shared/theme/tokens";
+import { FEEDBACK, SEVERITY, SIGNAL_OK } from "@shared/theme/tokens";
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -24,30 +22,43 @@ const navItems = [
 
 interface HealthLedProps {
   label: string;
-  ok: boolean;
+  state: "ok" | "unavailable" | "unknown" | "stale";
 }
 
-function HealthLed({ label, ok }: HealthLedProps) {
+function HealthLed({ label, state }: HealthLedProps) {
+  const color =
+    state === "ok"
+      ? SIGNAL_OK
+      : state === "unavailable"
+        ? SEVERITY.critical.solid
+        : FEEDBACK.warning.solid;
   return (
-    <span className="flex items-center gap-1.5">
+    <span className="flex items-center gap-1.5" title={`${label}: ${state}`}>
       <span
-        className={cn("h-1.5 w-1.5 rounded-[1px]", ok ? "bg-emerald-500 animate-led-pulse" : "bg-destructive")}
-        style={ok ? { boxShadow: `0 0 6px -1px ${SIGNAL_OK}` } : undefined}
+        className={cn(
+          "h-1.5 w-1.5 rounded-[1px]",
+          state === "ok" && "animate-led-pulse",
+        )}
+        style={{
+          backgroundColor: color,
+          boxShadow: state === "ok" ? `0 0 6px -1px ${SIGNAL_OK}` : undefined,
+        }}
       />
-      <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{label}</span>
+      <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+        {label} {state === "ok" ? "" : state}
+      </span>
     </span>
   );
 }
 
 export function NavBar() {
-  const location = useLocation();
-  const toggleSidebar = useUIStore((s) => s.toggleSidebar);
-  const sidebarOpen = useUIStore((s) => s.sidebarOpen);
-  const suppressSidebarToggle = location.pathname.startsWith("/explorer");
-  const { data: health } = useHealth();
-
-  const neo4jOk = (health?.neo4j ?? "").toLowerCase() === "ok";
-  const postgresOk = (health?.postgres ?? "").toLowerCase() === "ok";
+  const { data: health, isError } = useHealth();
+  const healthState = (
+    component: "neo4j" | "postgres",
+  ): HealthLedProps["state"] => {
+    if (isError) return health ? "stale" : "unknown";
+    return health?.[component] ?? "unknown";
+  };
 
   return (
     <header className="flex h-12 items-center border-b border-border bg-carbon-900 px-4">
@@ -78,21 +89,9 @@ export function NavBar() {
         ))}
       </nav>
       <div className="ml-auto flex items-center gap-4">
-        {!suppressSidebarToggle && (
-          <button
-            onClick={toggleSidebar}
-            className={cn(
-              "flex h-7 w-7 items-center justify-center rounded-[3px] text-muted-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground",
-              sidebarOpen && "bg-primary/10 text-primary",
-            )}
-            title="Toggle Inspector (i)"
-          >
-            <PanelRight className="h-4 w-4" />
-          </button>
-        )}
         <div className="hidden items-center gap-3 sm:flex">
-          <HealthLed label="Neo4j" ok={neo4jOk} />
-          <HealthLed label="PG" ok={postgresOk} />
+          <HealthLed label="Neo4j" state={healthState("neo4j")} />
+          <HealthLed label="PG" state={healthState("postgres")} />
         </div>
       </div>
     </header>

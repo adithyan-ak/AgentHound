@@ -26,6 +26,12 @@ function HexNodeComponent({ data, selected }: NodeProps) {
 
   const opacity = d.dim ? 0.08 : 1;
   const scale = d.emphasized ? 1.35 : d.sizeMultiplier ?? 1;
+  const evidenceLabel =
+    d.evidenceStatus === "configured-unverified"
+      ? "Configured, not verified"
+      : d.evidenceStatus === "verified"
+        ? "Directly verified"
+        : null;
 
   return (
     <div
@@ -39,7 +45,7 @@ function HexNodeComponent({ data, selected }: NodeProps) {
         transform: `scale(${scale})`,
         transformOrigin: "center center",
       }}
-      aria-label={`${d.kindTag}: ${d.label}`}
+      aria-label={`${d.kindTag}: ${d.label}${evidenceLabel ? `. ${evidenceLabel}` : ""}`}
       role="button"
       tabIndex={0}
     >
@@ -150,6 +156,18 @@ function HexNodeComponent({ data, selected }: NodeProps) {
         <div className="text-[8px] tracking-[0.12em] text-muted-foreground font-medium mt-0.5">
           {d.kindTag}
         </div>
+        {evidenceLabel && (
+          <div
+            className={cn(
+              "mt-0.5 font-mono text-[8px] uppercase tracking-[0.08em]",
+              d.evidenceStatus === "verified"
+                ? "text-emerald-300"
+                : "text-amber-300",
+            )}
+          >
+            {evidenceLabel}
+          </div>
+        )}
       </div>
     </div>
   );

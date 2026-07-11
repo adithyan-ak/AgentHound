@@ -1,0 +1,345 @@
+package appdb
+
+import (
+	"context"
+	"errors"
+	"os"
+	"testing"
+	"time"
+
+	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
+	"github.com/adithyan-ak/agenthound/server/model"
+)
+
+func TestIntegrationPublicationLifecycle(t *testing.T) {
+	skipIfNoPG(t)
+	ctx := context.Background()
+	pool, err := NewPool(os.Getenv("AGENTHOUND_PG_URI"))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pool.Close()
+	if err := RunMigrations(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	scans := NewScanStore(pool)
+	findings := NewFindingStore(pool)
+	prefix := "publication-test-" + time.Now().Format("20060102150405.000000")
+	publishedID := prefix + "-published"
+	comparableID := prefix + "-comparable"
+	headID := prefix + "-head"
+	pendingID := prefix + "-pending"
+	cleanup := func() {
+		_, _ = pool.Exec(ctx, `UPDATE posture_state SET
+		    published_revision = NULL, published_scan_id = NULL, published_at = NULL,
+		    dirty_coverage = '[]'::jsonb, projection_error = NULL
+		    WHERE singleton = TRUE`)
+		_, _ = pool.Exec(ctx, `DELETE FROM coverage_heads WHERE scan_id LIKE $1`, prefix+"%")
+		_, _ = pool.Exec(ctx, `DELETE FROM scans WHERE id LIKE $1`, prefix+"%")
+	}
+	cleanup()
+	defer cleanup()
+
+	started := time.Now().UTC()
+	observed := started.Add(-time.Minute)
+	mustCreateScan := func(id, status string) {
+		t.Helper()
+		if err := scans.CreateScan(ctx, &model.Scan{
+			ID:                 id,
+			Collector:          "mcp",
+			Status:             status,
+			StartedAt:          started,
+			ArtifactObservedAt: &observed,
+		}); err != nil {
+			t.Fatalf("create scan %s: %v", id, err)
+		}
+	}
+	mustCreateScan(publishedID, model.ScanStatusRunning)
+
+	completed := time.Now().UTC()
+	graphBefore := &model.GraphSnapshot{
+		NodeCounts: map[string]int64{"MCPServer": 1},
+		EdgeCounts: map[string]int64{},
+		TotalNodes: 1,
+	}
+	graphAfter := &model.GraphSnapshot{
+		NodeCounts: map[string]int64{"MCPServer": 2},
+		EdgeCounts: map[string]int64{"PROVIDES_TOOL": 1},
+		TotalNodes: 2,
+		TotalEdges: 1,
+	}
+	finding := model.Finding{
+		ID:         "aaaaaaaaaaaaaaaa",
+		Severity:   "high",
+		Category:   "test",
+		Title:      "persisted",
+		EdgeKind:   "CAN_REACH",
+		SourceID:   "source",
+		TargetID:   "target",
+		Confidence: 0.9,
+		Variant:    model.FindingVariantCrossProtocolHostCorrelation,
+		Evidence: model.FindingEvidence{
+			State:       model.FindingEvidenceHypothesis,
+			Correlation: "shared_host",
+		},
+	}
+	result, err := findings.FinalizeScan(ctx, FinalizeScanParams{
+		Scan: model.Scan{
+			ID:                 publishedID,
+			Collector:          "mcp",
+			Status:             model.ScanStatusCompleted,
+			StartedAt:          started,
+			CompletedAt:        &completed,
+			ArtifactObservedAt: &observed,
+			NodeCount:          2,
+			EdgeCount:          1,
+			CollectionStatus:   model.LifecycleComplete,
+			GraphStatus:        model.LifecycleComplete,
+			AnalysisStatus:     model.LifecycleComplete,
+			SnapshotStatus:     model.LifecycleComplete,
+			ProjectionStatus:   model.ProjectionComplete,
+			ComparisonKey:      "sha256:test-comparison",
+		},
+		Findings:        []model.Finding{finding},
+		Stages:          []sdkingest.StageResult{},
+		CoverageKeys:    []string{"mcp"},
+		CompleteDomains: []string{"mcp"},
+		GraphBefore:     graphBefore,
+		GraphAfter:      graphAfter,
+		Publish:         true,
+	})
+	if err != nil {
+		t.Fatalf("FinalizeScan published: %v", err)
+	}
+	if result.Revision == nil {
+		t.Fatal("published revision is nil")
+	}
+
+	export, err := findings.GetPublishedExport(ctx)
+	if err != nil {
+		t.Fatalf("GetPublishedExport: %v", err)
+	}
+	if export == nil || export.Scope.ScanID != publishedID || len(export.Findings) != 1 {
+		t.Fatalf("published export = %+v", export)
+	}
+	if export.Findings[0].Variant != model.FindingVariantCrossProtocolHostCorrelation ||
+		export.Findings[0].Evidence.State != model.FindingEvidenceHypothesis {
+		t.Fatalf("published export lost finding evidence: %+v", export.Findings[0])
+	}
+	scoped, scope, err := findings.ListPublished(ctx, "", true)
+	if err != nil {
+		t.Fatalf("ListPublished: %v", err)
+	}
+	if !scope.Available || scope.Stale || len(scoped) != 1 {
+		t.Fatalf("published scope = %+v findings=%v", scope, scoped)
+	}
+
+	// A degraded retry of the currently published scan does not replace the
+	// prior published rows or persisted export.
+	if _, err := scans.BeginScan(ctx, &model.Scan{
+		ID:                 publishedID,
+		Collector:          "mcp",
+		Status:             model.ScanStatusRunning,
+		StartedAt:          started,
+		ArtifactObservedAt: &observed,
+		CollectionStatus:   model.LifecyclePartial,
+	}, []string{"mcp"}); err != nil {
+		t.Fatalf("BeginScan published retry: %v", err)
+	}
+	if _, err := findings.FinalizeScan(ctx, FinalizeScanParams{
+		Scan: model.Scan{
+			ID:                 publishedID,
+			Collector:          "mcp",
+			Status:             model.ScanStatusCompletedWithErrors,
+			StartedAt:          started,
+			CompletedAt:        &completed,
+			ArtifactObservedAt: &observed,
+			CollectionStatus:   model.LifecyclePartial,
+			GraphStatus:        model.LifecyclePartial,
+			AnalysisStatus:     model.LifecycleComplete,
+			SnapshotStatus:     model.LifecycleComplete,
+			ProjectionStatus:   model.ProjectionIncomplete,
+			Error:              "partial retry",
+		},
+		Findings:      []model.Finding{},
+		Stages:        []sdkingest.StageResult{},
+		DirtyCoverage: []string{"mcp"},
+		GraphAfter:    graphAfter,
+		Publish:       false,
+	}); err != nil {
+		t.Fatalf("FinalizeScan degraded retry: %v", err)
+	}
+	scoped, scope, err = findings.ListPublished(ctx, "", true)
+	if err != nil {
+		t.Fatalf("ListPublished after retry: %v", err)
+	}
+	if !scope.Stale || len(scoped) != 1 || scoped[0].ID != finding.ID {
+		t.Fatalf("degraded retry replaced published snapshot: scope=%+v findings=%v", scope, scoped)
+	}
+	exportAfter, err := findings.GetPublishedExport(ctx)
+	if err != nil {
+		t.Fatalf("GetPublishedExport after retry: %v", err)
+	}
+	if exportAfter == nil || exportAfter.Scope.Revision != export.Scope.Revision ||
+		len(exportAfter.Findings) != 1 {
+		t.Fatalf("persisted export changed after degraded retry: %+v", exportAfter)
+	}
+	preservedScan, err := scans.GetScan(ctx, publishedID)
+	if err != nil {
+		t.Fatalf("GetScan after degraded retry: %v", err)
+	}
+	if preservedScan.GraphTotalNodesAfter == nil ||
+		*preservedScan.GraphTotalNodesAfter != graphAfter.TotalNodes ||
+		preservedScan.PublishedRevision == nil ||
+		*preservedScan.PublishedRevision != *result.Revision {
+		t.Fatalf("published totals/revision changed after degraded retry: %+v", preservedScan)
+	}
+
+	if err := scans.DeleteScan(ctx, publishedID); err == nil {
+		t.Fatal("currently published scan deletion succeeded")
+	} else {
+		var conflict *ScanDeleteConflictError
+		if !errors.As(err, &conflict) {
+			t.Fatalf("published delete error = %T %v", err, err)
+		}
+	}
+
+	mustCreateScan(comparableID, model.ScanStatusRunning)
+	comparableGraph := &model.GraphSnapshot{
+		NodeCounts: map[string]int64{"MCPServer": 3, "MCPTool": 1},
+		EdgeCounts: map[string]int64{"PROVIDES_TOOL": 2},
+		TotalNodes: 4,
+		TotalEdges: 2,
+	}
+	comparableResult, err := findings.FinalizeScan(ctx, FinalizeScanParams{
+		Scan: model.Scan{
+			ID:                 comparableID,
+			Collector:          "mcp",
+			Status:             model.ScanStatusCompleted,
+			StartedAt:          started,
+			CompletedAt:        &completed,
+			ArtifactObservedAt: &observed,
+			CollectionStatus:   model.LifecycleComplete,
+			GraphStatus:        model.LifecycleComplete,
+			AnalysisStatus:     model.LifecycleComplete,
+			SnapshotStatus:     model.LifecycleComplete,
+			ProjectionStatus:   model.ProjectionComplete,
+			ComparisonKey:      "sha256:test-comparison",
+		},
+		Findings:        []model.Finding{},
+		Stages:          []sdkingest.StageResult{},
+		CoverageKeys:    []string{"mcp"},
+		CompleteDomains: []string{"mcp"},
+		GraphBefore:     graphAfter,
+		GraphAfter:      comparableGraph,
+		Publish:         true,
+	})
+	if err != nil {
+		t.Fatalf("FinalizeScan comparable: %v", err)
+	}
+	if comparableResult.ComparableToScanID != publishedID {
+		t.Fatalf("comparable_to = %q, want %q", comparableResult.ComparableToScanID, publishedID)
+	}
+	if comparableResult.Export == nil ||
+		!comparableResult.Export.Comparison.Comparable ||
+		comparableResult.Export.Comparison.NodeDelta == nil ||
+		*comparableResult.Export.Comparison.NodeDelta != 2 ||
+		comparableResult.Export.Comparison.EdgeDelta == nil ||
+		*comparableResult.Export.Comparison.EdgeDelta != 1 {
+		t.Fatalf("comparison = %+v", comparableResult.Export)
+	}
+	priorScan, err := scans.GetScan(ctx, publishedID)
+	if err != nil {
+		t.Fatalf("GetScan prior publication: %v", err)
+	}
+	if priorScan.PublicationStatus != model.PublicationSuperseded {
+		t.Fatalf("prior publication status = %q, want superseded", priorScan.PublicationStatus)
+	}
+
+	mustCreateScan(headID, model.ScanStatusCompleted)
+	if _, err := pool.Exec(ctx, `INSERT INTO coverage_heads (coverage_key, scan_id)
+		VALUES ('config', $1) ON CONFLICT (coverage_key) DO UPDATE SET scan_id = EXCLUDED.scan_id`,
+		headID); err != nil {
+		t.Fatalf("create coverage head: %v", err)
+	}
+	if err := scans.DeleteScan(ctx, headID); err == nil {
+		t.Fatal("active coverage-head deletion succeeded")
+	}
+
+	mustCreateScan(pendingID, model.ScanStatusPending)
+	if err := scans.DeleteScan(ctx, pendingID); err == nil {
+		t.Fatal("pending scan deletion succeeded")
+	}
+}
+
+func TestBuildPostureExportDeclaresHealthAndCompleteState(t *testing.T) {
+	now := time.Now().UTC()
+	params := FinalizeScanParams{
+		Scan: model.Scan{
+			ID:                 "scan-export-state",
+			StartedAt:          now.Add(-time.Minute),
+			CompletedAt:        &now,
+			CollectionStatus:   model.LifecycleComplete,
+			GraphStatus:        model.LifecycleComplete,
+			AnalysisStatus:     model.LifecycleComplete,
+			SnapshotStatus:     model.LifecycleComplete,
+			ProjectionStatus:   model.ProjectionComplete,
+			ComparisonKey:      "sha256:scope",
+			ArtifactObservedAt: &now,
+		},
+		Stages: []sdkingest.StageResult{{
+			Name:     "normalize",
+			State:    sdkingest.OutcomeComplete,
+			Required: true,
+		}},
+		NormalizationStatus: sdkingest.NormalizationStatusWarning,
+		NormalizationWarnings: []sdkingest.NormalizationWarning{{
+			Code:              "complex_property_serialized",
+			Status:            sdkingest.NormalizationStatusWarning,
+			Message:           "lossless serialization",
+			PublicationUnsafe: false,
+		}},
+		ObservationStatus:  model.LifecycleComplete,
+		ObservationDetails: model.PostureObservationCompleteness{},
+		CoverageKeys: []string{
+			"config:path:sha256:current",
+		},
+		GraphAfter: &model.GraphSnapshot{
+			NodeCounts: map[string]int64{},
+			EdgeCounts: map[string]int64{},
+		},
+	}
+	export := buildPostureExport(
+		params,
+		9,
+		now,
+		[]model.Finding{{ID: "finding-1"}},
+		model.PostureComparison{},
+		[]string{
+			"config:path:sha256:current",
+			"mcp:target:sha256:prior",
+		},
+	)
+
+	if export.SchemaVersion != 2 ||
+		export.Health.State != "not_captured" ||
+		export.Health.Captured {
+		t.Fatalf("health/schema state = %+v", export)
+	}
+	if export.Completeness.Normalization != sdkingest.NormalizationStatusWarning ||
+		export.Completeness.Observation != model.LifecycleComplete ||
+		len(export.Completeness.Warnings) != 1 ||
+		len(export.Completeness.Stages) != 1 {
+		t.Fatalf("completeness metadata = %+v", export.Completeness)
+	}
+	if len(export.Scope.DirtyCoverage) != 0 ||
+		len(export.Scope.ActiveCoverageKeys) != 2 {
+		t.Fatalf("coverage scope = %+v", export.Scope)
+	}
+	if export.Limits.Findings.Returned != 1 ||
+		export.Limits.Findings.Total != 1 ||
+		!export.Limits.Findings.Complete {
+		t.Fatalf("export cardinality = %+v", export.Limits)
+	}
+}

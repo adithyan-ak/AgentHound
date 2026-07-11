@@ -38,8 +38,9 @@ type SkillData struct {
 }
 
 type SecurityScheme struct {
-	Name string
-	Type string
+	Name   string
+	Type   string
+	Scheme string
 }
 
 func DetectVersion(raw map[string]any) string {
@@ -210,7 +211,11 @@ func parseSecuritySchemes(raw map[string]any) []SecurityScheme {
 		if t == "" {
 			continue
 		}
-		result = append(result, SecurityScheme{Name: name, Type: t})
+		result = append(result, SecurityScheme{
+			Name:   name,
+			Type:   t,
+			Scheme: getString030(obj, "scheme"),
+		})
 	}
 	return result
 }

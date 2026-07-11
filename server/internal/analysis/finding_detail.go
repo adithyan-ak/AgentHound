@@ -2,10 +2,12 @@ package analysis
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
+	"github.com/adithyan-ak/agenthound/server/model"
 )
 
 type FindingDetail struct {
@@ -14,12 +16,98 @@ type FindingDetail struct {
 	AttackPath     *AttackPath       `json:"attack_path"`
 	Remediation    []RemediationStep `json:"remediation"`
 	Impact         *Impact           `json:"impact"`
+	Snapshot       *FindingSnapshot  `json:"snapshot,omitempty"`
 }
 
+type FindingSnapshot struct {
+	Scope             string            `json:"scope"`
+	ScanID            string            `json:"scan_id"`
+	ProjectionStatus  string            `json:"projection_status"`
+	Stale             bool              `json:"stale"`
+	LiveEvidenceState LiveEvidenceState `json:"live_evidence_state"`
+}
+
+type LiveEvidenceState string
+
+const (
+	LiveEvidenceUnavailable                 LiveEvidenceState = "unavailable"
+	LiveEvidenceWithheldStaleProjection     LiveEvidenceState = "withheld_stale_projection"
+	LiveEvidenceLookupFailed                LiveEvidenceState = "lookup_failed"
+	LiveEvidenceClassificationMismatch      LiveEvidenceState = "classification_mismatch"
+	LiveEvidenceMatchingFindingNoGraph      LiveEvidenceState = "matching_finding_no_graph"
+	LiveEvidenceMatchingPublishedProjection LiveEvidenceState = "matching_published_projection"
+	LiveEvidencePersistedExact              LiveEvidenceState = "persisted_exact_evidence"
+)
+
 type AttackPath struct {
-	Nodes           []PathNode `json:"nodes"`
-	Edges           []PathEdge `json:"edges"`
-	TotalRiskWeight float64    `json:"total_risk_weight"`
+	Nodes           []PathNode             `json:"nodes"`
+	Edges           []PathEdge             `json:"edges"`
+	Shape           EvidenceShape          `json:"shape"`
+	Continuity      EvidenceContinuity     `json:"continuity"`
+	Direction       EvidenceDirection      `json:"direction"`
+	Completeness    EvidenceCompleteness   `json:"completeness"`
+	Linearization   *EvidenceLinearization `json:"linearization,omitempty"`
+	Cost            AttackCost             `json:"cost"`
+	TotalRiskWeight *float64               `json:"total_risk_weight"`
+}
+
+type EvidenceShape string
+
+const (
+	EvidenceShapeLinear       EvidenceShape = "linear"
+	EvidenceShapeBranched     EvidenceShape = "branched"
+	EvidenceShapeDisconnected EvidenceShape = "disconnected"
+	EvidenceShapeCyclic       EvidenceShape = "cyclic"
+	EvidenceShapeNodesOnly    EvidenceShape = "nodes_only"
+)
+
+type EvidenceDirection string
+
+const (
+	EvidenceDirectionForward       EvidenceDirection = "forward"
+	EvidenceDirectionReverse       EvidenceDirection = "reverse"
+	EvidenceDirectionMixed         EvidenceDirection = "mixed"
+	EvidenceDirectionNonLinear     EvidenceDirection = "non_linear"
+	EvidenceDirectionNotApplicable EvidenceDirection = "not_applicable"
+)
+
+type EvidenceState string
+
+const (
+	EvidenceStateComplete      EvidenceState = "complete"
+	EvidenceStateIncomplete    EvidenceState = "incomplete"
+	EvidenceStateNotApplicable EvidenceState = "not_applicable"
+)
+
+type EvidenceContinuityState string
+
+const (
+	EvidenceContinuityContinuous    EvidenceContinuityState = "continuous"
+	EvidenceContinuityDiscontinuous EvidenceContinuityState = "discontinuous"
+	EvidenceContinuityNotApplicable EvidenceContinuityState = "not_applicable"
+)
+
+type EvidenceContinuity struct {
+	State          EvidenceContinuityState `json:"state"`
+	ComponentCount int                     `json:"component_count"`
+	MissingNodeIDs []string                `json:"missing_node_ids"`
+}
+
+type EvidenceCompleteness struct {
+	State   EvidenceState `json:"state"`
+	Reasons []string      `json:"reasons"`
+}
+
+type EvidenceLinearization struct {
+	NodeIDs     []string `json:"node_ids"`
+	EdgeIndexes []int    `json:"edge_indexes"`
+}
+
+type AttackCost struct {
+	State                    EvidenceState `json:"state"`
+	Value                    *float64      `json:"value"`
+	Reasons                  []string      `json:"reasons"`
+	MissingWeightEdgeIndexes []int         `json:"missing_weight_edge_indexes"`
 }
 
 type PathNode struct {
@@ -29,18 +117,35 @@ type PathNode struct {
 }
 
 type PathEdge struct {
-	Source     string         `json:"source"`
-	Target     string         `json:"target"`
-	Kind       string         `json:"kind"`
-	Properties map[string]any `json:"properties"`
+	Source     string          `json:"source"`
+	Target     string          `json:"target"`
+	Kind       string          `json:"kind"`
+	Properties map[string]any  `json:"properties"`
+	Synthetic  bool            `json:"synthetic"`
+	Provenance *EdgeProvenance `json:"provenance,omitempty"`
+}
+
+type EdgeProvenance struct {
+	Type            string `json:"type"`
+	Basis           string `json:"basis,omitempty"`
+	SourceCollector string `json:"source_collector,omitempty"`
 }
 
 type RemediationStep struct {
-	Step        int      `json:"step"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	EdgeKind    string   `json:"edge_kind"`
-	Commands    []string `json:"commands,omitempty"`
+	Step        int              `json:"step"`
+	Title       string           `json:"title"`
+	Description string           `json:"description"`
+	EdgeKind    string           `json:"edge_kind"`
+	Source      RemediationActor `json:"source"`
+	Target      RemediationActor `json:"target"`
+	Channels    []string         `json:"channels,omitempty"`
+	Commands    []string         `json:"commands,omitempty"`
+}
+
+type RemediationActor struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
 }
 
 type Impact struct {
@@ -62,6 +167,62 @@ func GetFindingByID(ctx context.Context, db graph.GraphDB, findingID string) (*F
 	return nil, nil
 }
 
+// AttackPathFromExactEvidence renders the detector-selected witness persisted
+// with the finding. It never queries the mutable graph, so a published detail
+// cannot drift to a different LIMIT 1 match or disappear after publication.
+func AttackPathFromExactEvidence(f *Finding) *AttackPath {
+	if f == nil || f.ExactEvidence == nil {
+		return nil
+	}
+	exact := f.ExactEvidence
+	path := &AttackPath{
+		Nodes: make([]PathNode, 0, len(exact.Nodes)),
+		Edges: make([]PathEdge, 0, len(exact.Edges)),
+	}
+	for _, node := range exact.Nodes {
+		properties := node.Properties
+		if properties == nil {
+			properties = map[string]any{}
+		}
+		path.Nodes = append(path.Nodes, PathNode{
+			ID: node.ID, Kinds: append([]string(nil), node.Kinds...), Properties: properties,
+		})
+	}
+	for _, edge := range exact.Edges {
+		properties := edge.Properties
+		if properties == nil {
+			properties = map[string]any{}
+		}
+		pathEdge := PathEdge{
+			Source: edge.Source, Target: edge.Target, Kind: edge.Kind,
+			Properties: properties, Synthetic: edge.Synthetic,
+		}
+		if edge.Synthetic {
+			pathEdge.Provenance = &EdgeProvenance{
+				Type:            stringMapVal(edge.Provenance, "type"),
+				Basis:           stringMapVal(edge.Provenance, "basis"),
+				SourceCollector: stringMapVal(edge.Provenance, "source_collector"),
+			}
+		}
+		path.Edges = append(path.Edges, pathEdge)
+	}
+	issues := append([]string(nil), exact.Reasons...)
+	if !exact.Complete && len(issues) == 0 {
+		issues = append(issues, "detector_evidence_incomplete")
+	}
+	finalizeEvidenceGraph(path, issues)
+	markExpectedEvidenceEndpoints(path, f.SourceID, f.TargetID)
+	return path
+}
+
+func stringMapVal(values map[string]any, key string) string {
+	if values == nil {
+		return ""
+	}
+	value, _ := values[key].(string)
+	return value
+}
+
 const compositeEdgePropsQuery = `
 MATCH (src {objectid: $source})-[r]->(tgt {objectid: $target})
 WHERE type(r) = $edge_kind AND r.is_composite = true
@@ -80,7 +241,10 @@ func GetCompositeEdgeProps(ctx context.Context, db graph.GraphDB, f *Finding) (m
 	if len(rows) == 0 {
 		return nil, nil
 	}
-	props, _ := rows[0]["props"].(map[string]any)
+	props, ok := rows[0]["props"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("composite edge properties have unexpected type %T", rows[0]["props"])
+	}
 	return props, nil
 }
 
@@ -104,12 +268,12 @@ RETURN [n IN [a, s1, t1, c, i, s2, t2, r] | {id: n.objectid, name: n.name, kinds
 LIMIT 1`,
 	},
 	"CAN_REACH_CROSS_PROTOCOL": {
-		`MATCH (ext:A2AAgent {objectid: $source})-[d:DELEGATES_TO*1..3]->(int:A2AAgent)
+		`MATCH delegation = (ext:A2AAgent {objectid: $source})-[:DELEGATES_TO*1..3]->(int:A2AAgent)
 MATCH (int)-[r1:RUNS_ON]->(h:Host)<-[r2:RUNS_ON]-(s:MCPServer)
 MATCH (a:AgentInstance)-[r3:TRUSTS_SERVER]->(s)
       -[r4:PROVIDES_TOOL]->(t:MCPTool)-[r5:HAS_ACCESS_TO]->(r:MCPResource {objectid: $target})
-RETURN [n IN [ext, int, h, s, a, t, r] | {id: n.objectid, name: n.name, kinds: labels(n), properties: properties(n)}] AS nodes,
-       [{kind: 'DELEGATES_TO', source: ext.objectid, target: int.objectid, properties: {}}] + [rel IN [r1, r2, r3, r4, r5] | {kind: type(rel), source: startNode(rel).objectid, target: endNode(rel).objectid, properties: properties(rel)}] AS edges
+RETURN [n IN nodes(delegation) + [h, s, a, t, r] | {id: n.objectid, name: n.name, kinds: labels(n), properties: properties(n)}] AS nodes,
+       [rel IN relationships(delegation) + [r1, r2, r3, r4, r5] | {kind: type(rel), source: startNode(rel).objectid, target: endNode(rel).objectid, properties: properties(rel)}] AS edges
 LIMIT 1`,
 	},
 	// CAN_REACH_CREDENTIAL_CHAIN reconstructs the cross-service path emitted
@@ -127,19 +291,22 @@ WHERE c1master.value_hash = c1.value_hash AND c1master.objectid <> c1.objectid
 MATCH (gw)-[r4:EXPOSES_CREDENTIAL]->(c2:Credential {objectid: $target})
 RETURN [n IN [a, s, c1, c1master, gw, c2] | {id: n.objectid, name: n.name, kinds: labels(n), properties: properties(n)}] AS nodes,
        [rel IN [r1, r2, r3, r4] | {kind: type(rel), source: startNode(rel).objectid, target: endNode(rel).objectid, properties: properties(rel)}] +
-       [{kind: 'VALUE_HASH_MATCH', source: c1.objectid, target: c1master.objectid, properties: {merge_value_hash: c1.value_hash, is_synthetic: true}}] AS edges
+       [{kind: 'VALUE_HASH_MATCH', source: c1.objectid, target: c1master.objectid,
+         properties: {is_synthetic: true, provenance_type: 'identity_correlation',
+                      provenance_basis: 'value_hash',
+                      source_collector: 'cross_service_credential_chain'}}] AS edges
 LIMIT 1`,
 	},
 	"CAN_EXFILTRATE_VIA": {
-		`MATCH (a:AgentInstance {objectid: $source})-[:TRUSTS_SERVER]->(s1:MCPServer)
-      -[r1:PROVIDES_TOOL]->(outbound:MCPTool {objectid: $target})
-WHERE ANY(cap IN outbound.capability_surface WHERE cap IN ['email_send', 'network_outbound', 'file_write'])
-WITH a, s1, r1, outbound
-OPTIONAL MATCH (a)-[:TRUSTS_SERVER]->(s2:MCPServer)-[:PROVIDES_TOOL]->(t2:MCPTool)-[:HAS_ACCESS_TO]->(res:MCPResource)
+		`MATCH (a:AgentInstance {objectid: $source})-[r1:TRUSTS_SERVER]->(s1:MCPServer)
+      -[r2:PROVIDES_TOOL]->(outbound:MCPTool {objectid: $target})
+WHERE ANY(cap IN outbound.capability_surface WHERE cap IN ['email_send', 'network_outbound', 'file_write', 'auto_fetch_render', 'allowlisted_proxy'])
+WITH a, s1, r1, r2, outbound
+OPTIONAL MATCH (a)-[r3:TRUSTS_SERVER]->(s2:MCPServer)-[r4:PROVIDES_TOOL]->(t2:MCPTool)-[r5:HAS_ACCESS_TO]->(res:MCPResource)
 WHERE res.sensitivity IN ['critical', 'high']
-WITH a, s1, r1, outbound, s2, t2, res LIMIT 1
+WITH a, s1, r1, r2, outbound, s2, r3, t2, r4, res, r5 LIMIT 1
 RETURN [n IN [a, s1, outbound] + CASE WHEN res IS NOT NULL THEN [s2, t2, res] ELSE [] END | {id: n.objectid, name: n.name, kinds: labels(n), properties: properties(n)}] AS nodes,
-       [{kind: 'TRUSTS_SERVER', source: a.objectid, target: s1.objectid, properties: {}}] + [{kind: 'PROVIDES_TOOL', source: s1.objectid, target: outbound.objectid, properties: {}}] AS edges
+       [rel IN [r1, r2] + CASE WHEN res IS NOT NULL THEN [r3, r4, r5] ELSE [] END | {kind: type(rel), source: startNode(rel).objectid, target: endNode(rel).objectid, properties: properties(rel)}] AS edges
 LIMIT 1`,
 	},
 	"CAN_EXECUTE": {
@@ -215,19 +382,28 @@ func ReconstructAttackPath(ctx context.Context, db graph.GraphDB, f *Finding, co
 		queries = append(queries, qs...)
 	}
 
-	for _, q := range queries {
+	var queryErrs []error
+	for i, q := range queries {
 		path, err := tryPathQuery(ctx, db, q, params)
 		if err != nil {
+			queryErrs = append(queryErrs, fmt.Errorf("evidence query %d: %w", i, err))
 			continue
 		}
 		if path != nil {
 			return path, nil
 		}
 	}
+	if len(queryErrs) > 0 {
+		return nil, errors.Join(queryErrs...)
+	}
 
 	path, err := tryPathQuery(ctx, db, genericFallbackQuery, params)
 	if err != nil {
-		return nil, fmt.Errorf("fallback path query: %w", err)
+		queryErrs = append(queryErrs, fmt.Errorf("fallback path query: %w", err))
+		return nil, errors.Join(queryErrs...)
+	}
+	if path == nil && len(queryErrs) > 0 {
+		return nil, errors.Join(queryErrs...)
 	}
 	return path, nil
 }
@@ -240,26 +416,45 @@ func tryPathQuery(ctx context.Context, db graph.GraphDB, cypher string, params m
 	if len(rows) == 0 {
 		return nil, nil
 	}
-	return parseAttackPath(rows[0])
+	path, err := parseAttackPath(rows[0])
+	if err != nil || path == nil {
+		return path, err
+	}
+	source, _ := params["source"].(string)
+	target, _ := params["target"].(string)
+	markExpectedEvidenceEndpoints(path, source, target)
+	return path, nil
 }
 
 func parseAttackPath(row map[string]any) (*AttackPath, error) {
-	rawNodes, _ := row["nodes"].([]any)
-	rawEdges, _ := row["edges"].([]any)
+	rawNodes, nodesOK := anySlice(row["nodes"])
+	rawEdges, edgesOK := anySlice(row["edges"])
 
+	if !nodesOK {
+		return nil, fmt.Errorf("evidence nodes have unexpected type %T", row["nodes"])
+	}
 	if len(rawNodes) == 0 {
 		return nil, nil
 	}
 
+	var issues []string
+	if !edgesOK {
+		issues = append(issues, "edges_not_an_array")
+	}
 	nodes := make([]PathNode, 0, len(rawNodes))
 	seen := make(map[string]bool)
-	for _, rn := range rawNodes {
+	for i, rn := range rawNodes {
 		nm, ok := rn.(map[string]any)
 		if !ok {
+			issues = append(issues, fmt.Sprintf("node_%d_not_an_object", i))
 			continue
 		}
 		pn := parsePathNode(nm)
-		if pn.ID == "" || seen[pn.ID] {
+		if pn.ID == "" {
+			issues = append(issues, fmt.Sprintf("node_%d_missing_id", i))
+			continue
+		}
+		if seen[pn.ID] {
 			continue
 		}
 		seen[pn.ID] = true
@@ -267,33 +462,40 @@ func parseAttackPath(row map[string]any) (*AttackPath, error) {
 	}
 
 	edges := make([]PathEdge, 0, len(rawEdges))
-	var totalWeight float64
-	for _, re := range rawEdges {
+	for i, re := range rawEdges {
 		em, ok := re.(map[string]any)
 		if !ok {
+			issues = append(issues, fmt.Sprintf("edge_%d_not_an_object", i))
 			continue
 		}
 		pe := parsePathEdge(em)
-		if pe.Source == "" || pe.Target == "" {
+		if pe.Source == "" || pe.Target == "" || pe.Kind == "" {
+			issues = append(issues, fmt.Sprintf("edge_%d_missing_identity", i))
 			continue
 		}
 		edges = append(edges, pe)
-
-		if pe.Properties != nil {
-			totalWeight += floatFromAny(pe.Properties["risk_weight"])
-		}
 	}
 
-	return &AttackPath{
-		Nodes:           nodes,
-		Edges:           edges,
-		TotalRiskWeight: totalWeight,
-	}, nil
+	path := &AttackPath{Nodes: nodes, Edges: edges}
+	finalizeEvidenceGraph(path, issues)
+	return path, nil
+}
+
+func anySlice(value any) ([]any, bool) {
+	switch values := value.(type) {
+	case []any:
+		return values, true
+	case nil:
+		return []any{}, true
+	default:
+		return []any{}, false
+	}
 }
 
 func parsePathNode(m map[string]any) PathNode {
 	pn := PathNode{
 		Properties: make(map[string]any),
+		Kinds:      []string{},
 	}
 
 	if id, ok := m["id"].(string); ok {
@@ -335,20 +537,32 @@ func parsePathEdge(m map[string]any) PathEdge {
 	if props, ok := m["properties"].(map[string]any); ok {
 		pe.Properties = props
 	}
+	pe.Synthetic = boolFromAny(pe.Properties["is_synthetic"])
+	if pe.Synthetic {
+		provenanceType, _ := pe.Properties["provenance_type"].(string)
+		if provenanceType == "" {
+			provenanceType = "synthetic_join"
+		}
+		basis, _ := pe.Properties["provenance_basis"].(string)
+		sourceCollector, _ := pe.Properties["source_collector"].(string)
+		pe.Provenance = &EdgeProvenance{
+			Type:            provenanceType,
+			Basis:           basis,
+			SourceCollector: sourceCollector,
+		}
+	}
 
 	return pe
 }
 
-func floatFromAny(v any) float64 {
-	switch f := v.(type) {
-	case float64:
-		return f
-	case int64:
-		return float64(f)
-	case int:
-		return float64(f)
+func boolFromAny(v any) bool {
+	switch value := v.(type) {
+	case bool:
+		return value
+	case string:
+		return strings.EqualFold(value, "true")
 	default:
-		return 0
+		return false
 	}
 }
 
@@ -357,44 +571,48 @@ var impactTemplates = map[string]struct {
 	blastRadius string
 }{
 	"CAN_REACH": {
-		summary:     "Agent %s can transitively access resource %s through the trust chain.",
-		blastRadius: "Any prompt running in %s context can access %s.",
+		summary:     "Agent %s has an inferred transitive access path to resource %s through the observed trust graph.",
+		blastRadius: "Prompts handled by %s may be able to reach %s if the inferred relationships are invocable as modeled.",
 	},
 	"CAN_REACH_CROSS_PROTOCOL": {
-		summary:     "External A2A agent %s can reach %s resource across protocol boundaries (A2A -> MCP).",
-		blastRadius: "Any prompt running in %s context can access %s.",
+		summary:     "A2A agent %s correlates with the MCP path to %s through a shared host; this is a 50%%-confidence hypothesis, not proven end-to-end invocation.",
+		blastRadius: "The correlation identifies a boundary to investigate; it does not establish that %s can invoke %s.",
 	},
-	"CAN_REACH_CREDENTIAL_CHAIN": {
-		summary:     "Agent %s can reach upstream provider credential %s through a value_hash collision in a LiteLLM gateway.",
-		blastRadius: "Compromise of agent %s's MCP env-var credential exposes upstream provider key %s, enabling lateral movement to every service the gateway fronts.",
+	"CAN_REACH_CREDENTIAL_CHAIN_OBSERVED": {
+		summary:     "Agent %s has a path through a shared LiteLLM gateway to credential %s with observed usable material.",
+		blastRadius: "Agent %s can reach observed credential material for %s through the correlated gateway path.",
+	},
+	"CAN_REACH_CREDENTIAL_CHAIN_REFERENCE": {
+		summary:     "Agent %s has a path through a shared LiteLLM gateway to credential reference %s; usable material is not present in this finding evidence.",
+		blastRadius: "The path links agent %s to credential reference %s; verify material and exposure evidence before treating it as a credential leak.",
 	},
 	"CAN_EXFILTRATE_VIA": {
-		summary:     "Agent %s has access to sensitive data and can exfiltrate it via %s tool with outbound capability.",
-		blastRadius: "Data from resources with sensitive data can be sent to external destinations.",
+		summary:     "Agent %s has inferred sensitive-data access, and tool %s matched the configured exfiltration-channel predicate.",
+		blastRadius: "The matched capability creates a potential output route; this finding is not evidence that data was exfiltrated.",
 	},
 	"CAN_EXECUTE": {
-		summary:     "Tool %s can execute arbitrary commands on host %s.",
-		blastRadius: "Full host compromise is possible through any agent with access to this tool.",
+		summary:     "Tool metadata classifies %s as exposing shell or code execution that may run on host %s.",
+		blastRadius: "Confirm the tool implementation and sandbox boundary before treating this metadata-derived route as host compromise.",
 	},
 	"HAS_ACCESS_TO": {
 		summary:     "Tool %s has inferred access to resource %s based on capability matching.",
 		blastRadius: "Review the attack path for impact assessment.",
 	},
 	"SHADOWS": {
-		summary:     "Tool %s shadows tool %s, potentially intercepting requests meant for the legitimate tool.",
-		blastRadius: "Agents trusting the malicious server may unknowingly use the shadow tool.",
+		summary:     "Tool %s references tool %s by name from another server, matching the shadowing heuristic.",
+		blastRadius: "Review both tool descriptions and server trust before concluding that requests can be intercepted.",
 	},
 	"POISONED_DESCRIPTION": {
-		summary:     "Tool %s has injection patterns that could manipulate LLM behavior.",
-		blastRadius: "Any agent invoking this tool may execute attacker-controlled instructions.",
+		summary:     "Tool %s matched suspicious instruction patterns in its description.",
+		blastRadius: "Pattern matches identify content to review; they do not prove that an agent followed the instructions.",
 	},
 	"CAN_IMPERSONATE": {
-		summary:     "Agent %s can impersonate agent %s due to highly similar skill descriptions.",
-		blastRadius: "Clients may be tricked into delegating to the impersonating agent.",
+		summary:     "Agent %s has skill-description similarity to agent %s above the impersonation heuristic threshold.",
+		blastRadius: "Similarity can confuse discovery or delegation, but does not by itself prove malicious impersonation.",
 	},
 	"POISONED_INSTRUCTIONS": {
-		summary:     "Instruction file %s contains suspicious patterns that could hijack agent behavior.",
-		blastRadius: "All agents loading this instruction file are affected.",
+		summary:     "Instruction file %s matched suspicious instruction patterns.",
+		blastRadius: "Agents loading the file may be exposed; the pattern match does not prove that the instructions executed.",
 	},
 }
 
@@ -402,8 +620,20 @@ func BuildImpact(f *Finding, path *AttackPath, compositeProps map[string]any) *I
 	edgeKind := f.EdgeKind
 	if edgeKind == "CAN_REACH" {
 		switch {
+		case f.Variant == model.FindingVariantCredentialObservedMaterial:
+			edgeKind = "CAN_REACH_CREDENTIAL_CHAIN_OBSERVED"
+		case f.Variant == model.FindingVariantCredentialReference:
+			edgeKind = "CAN_REACH_CREDENTIAL_CHAIN_REFERENCE"
+		case f.Variant == model.FindingVariantCrossProtocolHostCorrelation:
+			edgeKind = "CAN_REACH_CROSS_PROTOCOL"
 		case isCredentialChain(compositeProps):
-			edgeKind = "CAN_REACH_CREDENTIAL_CHAIN"
+			// Compatibility for live findings produced before variants were
+			// persisted. Published rows use the explicit Variant above.
+			if f.Category == "Credential Exposure" && f.Severity == "critical" {
+				edgeKind = "CAN_REACH_CREDENTIAL_CHAIN_OBSERVED"
+			} else {
+				edgeKind = "CAN_REACH_CREDENTIAL_CHAIN_REFERENCE"
+			}
 		case boolVal(compositeProps, "cross_protocol"):
 			edgeKind = "CAN_REACH_CROSS_PROTOCOL"
 		}

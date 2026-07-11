@@ -51,33 +51,51 @@ func TestComputeMCPServerIDNormalizesEndpointWhitespace(t *testing.T) {
 	}
 }
 
-func TestComputeMCPServerIDNormalizesArgWhitespace(t *testing.T) {
+func TestComputeMCPServerIDPreservesArgWhitespace(t *testing.T) {
 	clean := ComputeMCPServerID("stdio", "npx", "-y", "pkg")
 	spaced := ComputeMCPServerID("stdio", "npx", " -y", "pkg ")
-	if clean != spaced {
-		t.Errorf("arg whitespace not normalized: produced %s != %s", clean, spaced)
+	if clean == spaced {
+		t.Errorf("semantically distinct argv whitespace collided: %s", clean)
 	}
 }
 
 func TestComputeMCPServerIDStableForCleanInputs(t *testing.T) {
-	// Guards the cross-collector merge invariant: already-clean inputs must
-	// hash to the same value before and after centralizing normalization.
-	cases := []struct {
-		transport string
-		endpoint  string
-		args      []string
-		want      string
-	}{
-		{"stdio", "npx", []string{"-y", "@modelcontextprotocol/server-postgres"},
-			ComputeNodeID("MCPServer", "stdio", "npx", "-y,@modelcontextprotocol/server-postgres")},
-		{"http", "https://example.com/mcp", nil,
-			ComputeNodeID("MCPServer", "http", "https://example.com/mcp")},
+	first := ComputeMCPServerID("stdio", "npx", "-y", "@modelcontextprotocol/server-postgres")
+	second := ComputeMCPServerID("stdio", "npx", "-y", "@modelcontextprotocol/server-postgres")
+	if first != second {
+		t.Fatalf("ordered stdio identity is not deterministic: %s != %s", first, second)
 	}
-	for _, tc := range cases {
-		got := ComputeMCPServerID(tc.transport, tc.endpoint, tc.args...)
-		if got != tc.want {
-			t.Errorf("ComputeMCPServerID(%q, %q, %v) = %s, want %s",
-				tc.transport, tc.endpoint, tc.args, got, tc.want)
-		}
+}
+
+func TestComputeMCPServerIDPreservesArgOrder(t *testing.T) {
+	first := ComputeMCPServerID("stdio", "node", "a.js", "b.js")
+	reversed := ComputeMCPServerID("stdio", "node", "b.js", "a.js")
+	if first == reversed {
+		t.Fatalf("reordered argv collided: %s", first)
+	}
+	if ComputeLegacyMCPServerID("stdio", "node", "a.js", "b.js") !=
+		ComputeLegacyMCPServerID("stdio", "node", "b.js", "a.js") {
+		t.Fatal("legacy helper no longer reproduces the v1 sorted collision")
+	}
+}
+
+func TestComputeMCPServerIDLengthFramesArgs(t *testing.T) {
+	oneArg := ComputeMCPServerID("stdio", "cmd", "a,b")
+	twoArgs := ComputeMCPServerID("stdio", "cmd", "a", "b")
+	if oneArg == twoArgs {
+		t.Fatalf("comma-containing argv collided: %s", oneArg)
+	}
+}
+
+func TestComputeMCPServerIDKeepsHTTPV1Stable(t *testing.T) {
+	want := ComputeNodeID("MCPServer", "http", "https://example.com/mcp")
+	got := ComputeMCPServerID("http", "https://example.com/mcp")
+	if got != want {
+		t.Fatalf("HTTP ID changed: got %s, want %s", got, want)
+	}
+	identity := ResolveMCPServerIdentity("http", "https://example.com/mcp")
+	if identity.ObjectID != want || identity.LegacyObjectID != "" ||
+		identity.Scheme != MCPHTTPIdentitySchemeV1 {
+		t.Fatalf("unexpected HTTP compatibility identity: %+v", identity)
 	}
 }

@@ -1,8 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { computeChokepoints, chokepointsToSizeMap } from "../chokepoints";
-import type { APIEdge } from "@entities/graph/dto";
+import type { APIEdge, EdgeKind } from "@entities/graph/dto";
 
-function edge(source: string, target: string, kind = "TRUSTS_SERVER"): APIEdge {
+function edge(
+  source: string,
+  target: string,
+  kind: EdgeKind = "TRUSTS_SERVER",
+): APIEdge {
   return {
     source,
     target,

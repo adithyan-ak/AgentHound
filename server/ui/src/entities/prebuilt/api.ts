@@ -10,14 +10,31 @@ export interface PreBuiltQuery {
   atlas_map?: string[];
 }
 
+function array<T>(value: unknown, field: string): T[] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new TypeError(`${field} must be an array`);
+  return value as T[];
+}
+
 export async function fetchPreBuiltQueries(): Promise<PreBuiltQuery[]> {
-  return api.get("analysis/prebuilt").json<PreBuiltQuery[]>();
+  return array<PreBuiltQuery>(
+    await api.get("analysis/prebuilt").json<unknown>(),
+    "queries",
+  );
 }
 
 export async function runPreBuiltQuery(
   id: string,
 ): Promise<{ query: PreBuiltQuery; rows: Record<string, unknown>[] }> {
-  return api
+  const result = await api
     .get(`analysis/prebuilt/${encodeURIComponent(id)}`)
-    .json<{ query: PreBuiltQuery; rows: Record<string, unknown>[] }>();
+    .json<unknown>();
+  if (result == null || typeof result !== "object" || Array.isArray(result)) {
+    throw new TypeError("prebuilt result must be an object");
+  }
+  const raw = result as Record<string, unknown>;
+  return {
+    query: raw.query as PreBuiltQuery,
+    rows: array<Record<string, unknown>>(raw.rows, "rows"),
+  };
 }

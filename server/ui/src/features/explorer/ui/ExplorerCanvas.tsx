@@ -17,6 +17,7 @@ import { useExplorerStore } from "@features/explorer/model/store";
 import { useMarksStore } from "@shared/model/marks";
 import { computeExplorerLayout } from "@features/explorer/model/layout";
 import { computeClickNeighbors } from "@features/explorer/model/click-neighbors";
+import { getLens } from "@features/explorer/model/lens-config";
 import type {
   BuildResult,
   LensEdgeData,
@@ -25,7 +26,7 @@ import type {
 import type { ExplorerRawData } from "@features/explorer/model/useExplorerGraph";
 import { useEscapeKey } from "@shared/lib/useEscapeKey";
 import { ACCENT } from "@shared/theme/tokens";
-import { Hexagon } from "lucide-react";
+import { AlertTriangle, Hexagon } from "lucide-react";
 import { HexNode } from "./nodes/HexNode";
 import { OrphanClusterNode } from "./nodes/OrphanClusterNode";
 import { LensEdge } from "./edges/LensEdge";
@@ -49,6 +50,8 @@ export interface ExplorerCanvasProps {
   error: Error | null;
   /** Full-option render graph from the view-model. */
   built: BuildResult | null;
+  verdictsAvailable: boolean;
+  verdictUnavailableReason?: string;
 }
 
 export function ExplorerCanvas({
@@ -56,8 +59,13 @@ export function ExplorerCanvas({
   isLoading,
   error,
   built,
+  verdictsAvailable,
+  verdictUnavailableReason,
 }: ExplorerCanvasProps) {
   const activeLens = useExplorerStore((s) => s.activeLens);
+  const activeSubPresets = useExplorerStore(
+    (s) => s.subPresets[activeLens] ?? [],
+  );
   const selectNode = useExplorerStore((s) => s.selectNode);
   const selectEdge = useExplorerStore((s) => s.selectEdge);
   const setHoveredEdge = useExplorerStore((s) => s.setHoveredEdge);
@@ -98,6 +106,16 @@ export function ExplorerCanvas({
     () => new Set(highValueNodeIds),
     [highValueNodeIds],
   );
+  const renderedEdgeIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const edge of built?.edges ?? []) {
+      const data = edge.data as LensEdgeData | undefined;
+      for (const kind of data?.bundledKinds ?? []) {
+        ids.add(`${edge.source}|${edge.target}|${kind}`);
+      }
+    }
+    return ids;
+  }, [built?.edges]);
 
   // Owned / High-Value are pure presentation badges (no structural, dim, or
   // size effect), so they are layered onto the already-positioned nodes here
@@ -214,18 +232,32 @@ export function ExplorerCanvas({
       selectNode(node.id);
       if (activeLens === "blast-radius") {
         setBlastRadiusSource(node.id);
+        clearHighlight();
       }
       openDrawer();
-      if (data && node.type === "hex") {
+      if (data && node.type === "hex" && activeLens !== "blast-radius") {
         const neighbors = computeClickNeighbors(
           node.id,
           data.edges,
-          activeLens,
+          {
+            edgeIds: renderedEdgeIds,
+            maxHops: activeLens === "credentials" ? 2 : 1,
+            direction: "both",
+          },
         );
         setHighlight(neighbors);
       }
     },
-    [selectNode, openDrawer, activeLens, setBlastRadiusSource, data, setHighlight],
+    [
+      selectNode,
+      openDrawer,
+      activeLens,
+      setBlastRadiusSource,
+      clearHighlight,
+      data,
+      renderedEdgeIds,
+      setHighlight,
+    ],
   );
 
   const onEdgeClick: EdgeMouseHandler = useCallback(
@@ -290,6 +322,21 @@ export function ExplorerCanvas({
   }
 
   if (!isLoading && data && data.nodes.length === 0 && data.edges.length === 0) {
+    if (data.collection?.complete === false || !verdictsAvailable) {
+      return (
+        <ExplorerEmptyState
+          fill
+          icon={AlertTriangle}
+          accent={ACCENT}
+          eyebrow="Incomplete graph"
+          title="No graph verdict available"
+          hint={
+            verdictUnavailableReason ??
+            "The graph changed or pagination metadata was unavailable. Refresh before drawing conclusions."
+          }
+        />
+      );
+    }
     return (
       <ExplorerEmptyState
         fill
@@ -321,6 +368,33 @@ export function ExplorerCanvas({
     built.metrics.visibleNodeCount === 0 &&
     built.metrics.visibleEdgeCount === 0;
   const emptyCopy = getLensEmptyCopy(activeLens);
+  const lens = getLens(activeLens);
+  const defaultPresetIds: string[] = lens.subPresets
+    .filter((preset) => preset.defaultEnabled)
+    .map((preset) => preset.id);
+  const filterScoped =
+    lens.subPresets.length > 0 &&
+    (activeSubPresets.length !== defaultPresetIds.length ||
+      activeSubPresets.some((id) => !defaultPresetIds.includes(id)));
+  const visibleEmptyCopy =
+    data?.collection?.complete === false || !verdictsAvailable
+      ? {
+          eyebrow: "Incomplete graph",
+          title: "No verdict available",
+          hint:
+            verdictUnavailableReason ??
+            "This lens is empty within the loaded subset. Refresh to load one stable published graph revision.",
+        }
+      : filterScoped
+        ? {
+            eyebrow: "Filtered lens",
+            title: "No relationships in selected scope",
+            hint:
+              activeSubPresets.length === 0
+                ? "No relationship types are selected. Enable at least one checkbox to inspect that scope."
+                : "No loaded relationships match the selected relationship filters. This is not an all-clear for the full lens.",
+          }
+      : emptyCopy;
 
   return (
     <>
@@ -360,9 +434,19 @@ export function ExplorerCanvas({
       </ReactFlow>
       {lensEmpty && (
         <ExplorerEmptyState
-          eyebrow={emptyCopy.eyebrow}
-          title={emptyCopy.title}
-          hint={emptyCopy.hint}
+          eyebrow={visibleEmptyCopy.eyebrow}
+          title={visibleEmptyCopy.title}
+          hint={visibleEmptyCopy.hint}
+          icon={
+            data?.collection?.complete === false || !verdictsAvailable
+              ? AlertTriangle
+              : undefined
+          }
+          accent={
+            data?.collection?.complete === false || !verdictsAvailable
+              ? ACCENT
+              : undefined
+          }
         />
       )}
     </>

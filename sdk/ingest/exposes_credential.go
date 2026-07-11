@@ -8,6 +8,28 @@ package ingest
 // the kinds registry's EXPOSES_CREDENTIAL constraint (source must be an
 // AIService — see sdk/ingest/kinds.go).
 func ExposesCredentialEdge(sourceID, credID, engagementID, source, endpoint string) Edge {
+	return CredentialEvidenceEdge(
+		sourceID,
+		credID,
+		engagementID,
+		source,
+		endpoint,
+		"exposed",
+	)
+}
+
+// CredentialEvidenceEdge preserves the legacy EXPOSES_CREDENTIAL topology
+// while making the evidence claim explicit. A credential reference with
+// exposure_status=not_observed is not usable secret exposure.
+func CredentialEvidenceEdge(
+	sourceID, credID, engagementID, source, endpoint, exposureStatus string,
+) Edge {
+	riskWeight := 0.0
+	assertionType := "credential_reference"
+	if exposureStatus == "exposed" {
+		riskWeight = 0.1
+		assertionType = "observed_credential_exposure"
+	}
 	return Edge{
 		Source:     sourceID,
 		Target:     credID,
@@ -15,8 +37,10 @@ func ExposesCredentialEdge(sourceID, credID, engagementID, source, endpoint stri
 		SourceKind: "AIService",
 		TargetKind: "Credential",
 		Properties: map[string]any{
-			"confidence":  1.0,
-			"risk_weight": 0.1,
+			"confidence":      1.0,
+			"risk_weight":     riskWeight,
+			"exposure_status": exposureStatus,
+			"assertion_type":  assertionType,
 			"evidence": map[string]any{
 				"endpoint":      endpoint,
 				"source":        source,

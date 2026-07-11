@@ -13,26 +13,43 @@ interface NewScanProps {
   onClose: () => void;
 }
 
+// `agenthound scan` only collects and writes a JSON artifact (default:
+// ./scan-<id>.json); it does NOT update the server graph on its own. The graph
+// and analysis are updated only by ingesting that artifact — either
+// `agenthound-server ingest <file>` or Import on the Scans page (AH-UI-23).
 const COMMANDS = [
   {
-    label: "Full Scan",
+    label: "Default Local Workflow",
+    command:
+      "agenthound scan --output agenthound-scan.json && agenthound-server ingest agenthound-scan.json",
+    description:
+      "Collect config and MCP evidence, then ingest only if collection succeeds; A2A requires the separate targeted command",
+  },
+  {
+    label: "Default Local Scan",
     command: "agenthound scan",
-    description: "Discover configs, enumerate MCP servers, ingest, and analyze",
+    description:
+      "Collection only: discover configs and enumerate MCP servers; then import the JSON artifact",
   },
   {
     label: "Config Discovery",
     command: "agenthound scan --config",
-    description: "Discover all MCP client configs on this machine",
+    description: "Discover all MCP client configs on this machine; writes a JSON artifact",
   },
   {
     label: "MCP Enumeration",
     command: "agenthound scan --mcp",
-    description: "Enumerate all discovered MCP servers",
+    description: "Enumerate all discovered MCP servers; writes a JSON artifact",
   },
   {
     label: "A2A Agent Card",
     command: "agenthound scan --a2a --target <url>",
-    description: "Fetch and ingest an A2A agent card",
+    description: "Fetch an A2A agent card; writes a JSON artifact",
+  },
+  {
+    label: "Ingest Artifact",
+    command: "agenthound-server ingest scan-<id>.json",
+    description: "Load a scan artifact into the graph and run analysis (or use Import on this page)",
   },
 ];
 
@@ -51,11 +68,12 @@ export function NewScan({ open, onClose }: NewScanProps) {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 font-mono uppercase tracking-[0.04em]">
             <Terminal className="h-4 w-4 text-primary" />
-            Trigger a Scan
+            Collect and Ingest
           </DialogTitle>
           <DialogDescription>
-            Scans are triggered from the CLI. Run one of these commands to collect data and ingest
-            it into the graph.
+            A collector scan alone writes JSON and does not update the server.
+            Use the complete local workflow, or collect first and then ingest
+            the artifact with the final command or Import on this page.
           </DialogDescription>
         </DialogHeader>
 

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/adithyan-ak/agenthound/server/internal/analysis"
+	"github.com/adithyan-ak/agenthound/server/internal/graph"
 	"github.com/spf13/cobra"
 )
 
@@ -280,6 +282,7 @@ func newQueryCmd() *cobra.Command {
 	cmd.Flags().Bool("shortest-path", false, "")
 	cmd.Flags().String("from", "", "")
 	cmd.Flags().String("to", "", "")
+	cmd.Flags().String("path-scope", "security", "")
 	cmd.Flags().String("format", "table", "")
 	cmd.Flags().String("fail-on", "", "")
 	cmd.Flags().Bool("all-findings", false, "")
@@ -334,7 +337,7 @@ func TestRunFindings_InvalidSeverity(t *testing.T) {
 }
 
 func TestRunShortestPath_MissingFlags(t *testing.T) {
-	err := runShortestPath(context.Background(), "", "", "table")
+	err := runShortestPath(context.Background(), "", "", "security", "table")
 	if err == nil {
 		t.Fatal("expected error for missing --from/--to")
 	}
@@ -344,7 +347,7 @@ func TestRunShortestPath_MissingFlags(t *testing.T) {
 }
 
 func TestRunShortestPath_InvalidFrom(t *testing.T) {
-	err := runShortestPath(context.Background(), "badformat", "MCPServer:srv", "table")
+	err := runShortestPath(context.Background(), "badformat", "MCPServer:srv", "security", "table")
 	if err == nil {
 		t.Fatal("expected error for invalid --from")
 	}
@@ -354,11 +357,63 @@ func TestRunShortestPath_InvalidFrom(t *testing.T) {
 }
 
 func TestRunShortestPath_InvalidTo(t *testing.T) {
-	err := runShortestPath(context.Background(), "MCPServer:srv", "badformat", "table")
+	err := runShortestPath(context.Background(), "MCPServer:srv", "badformat", "security", "table")
 	if err == nil {
 		t.Fatal("expected error for invalid --to")
 	}
 	if !strings.Contains(err.Error(), "--to") {
 		t.Errorf("error = %q, want to contain '--to'", err.Error())
+	}
+}
+
+func TestFindShortestPathUsesSharedDirectedSecurityTraversal(t *testing.T) {
+	db := &graph.MockGraphDB{}
+	db.QueryFunc = func(_ context.Context, cypher string, params map[string]any) ([]map[string]any, error) {
+		switch {
+		case strings.Contains(cypher, "traversal:resolve"):
+			value, _ := params["value"].(string)
+			return []map[string]any{{
+				"id": value, "name": value, "kinds": []any{"MCPServer"},
+				"properties": map[string]any{},
+			}}, nil
+		case strings.Contains(cypher, "traversal:adjacency"):
+			if !strings.Contains(cypher, "-[r]->") {
+				t.Fatalf("security traversal is not directed:\n%s", cypher)
+			}
+			if _, ok := params["relationship_kinds"]; !ok {
+				t.Fatal("security traversal omitted the shared relationship policy")
+			}
+			return []map[string]any{{
+				"traversal_source": "source",
+				"traversal_target": "target",
+				"next_id":          "target",
+				"next_name":        "target",
+				"next_kinds":       []any{"MCPResource"},
+				"next_properties":  map[string]any{},
+				"source":           "source",
+				"target":           "target",
+				"kind":             "HAS_ACCESS_TO",
+				"risk_weight":      0.2,
+			}}, nil
+		default:
+			t.Fatalf("unexpected query: %s", cypher)
+			return nil, nil
+		}
+	}
+
+	result, err := findShortestPath(
+		context.Background(),
+		db,
+		"MCPServer", "source",
+		"MCPResource", "target",
+		analysis.TraversalScopeSecurity,
+	)
+	if err != nil {
+		t.Fatalf("findShortestPath: %v", err)
+	}
+	if result.Metadata.Scope != analysis.TraversalScopeSecurity ||
+		result.Metadata.Direction != "out" ||
+		len(result.Paths) != 1 {
+		t.Fatalf("result = %+v", result)
 	}
 }

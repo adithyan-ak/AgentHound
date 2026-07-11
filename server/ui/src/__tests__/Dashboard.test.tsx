@@ -19,11 +19,34 @@ vi.mock("@entities/node/api", () => ({
 
 vi.mock("@entities/scan/api", () => ({
   fetchScans: vi.fn().mockResolvedValue([]),
+  fetchLatestCompletedScan: vi.fn().mockResolvedValue(undefined),
+  fetchLatestPublishedScan: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("@entities/posture/api", () => ({
+  fetchProjectionState: vi.fn().mockResolvedValue({
+    status: "unknown",
+    dirty_coverage: [],
+    updated_at: "2026-07-11T00:00:00Z",
+  }),
+  useProjectionState: vi.fn(() => ({
+    data: {
+      status: "unknown",
+      dirty_coverage: [],
+      updated_at: "2026-07-11T00:00:00Z",
+    },
+    isLoading: false,
+    isError: false,
+    error: null,
+    dataUpdatedAt: Date.parse("2026-07-11T00:00:00Z"),
+  })),
 }));
 
 import { useGraphStats } from "@entities/graph-stats/api";
+import { fetchFindings } from "@entities/finding/api";
 
 const mockedUseGraphStats = vi.mocked(useGraphStats);
+const mockedFetchFindings = vi.mocked(fetchFindings);
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -130,5 +153,29 @@ describe("Dashboard", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("Dashboard unavailable");
     expect(screen.queryByText("No attack surface mapped")).not.toBeInTheDocument();
+  });
+
+  it("withholds all-clear dashboard content when findings fail", async () => {
+    mockedUseGraphStats.mockReturnValue({
+      data: {
+        node_counts: { MCPServer: 1 },
+        edge_counts: {},
+        total_nodes: 1,
+        total_edges: 0,
+      },
+      isLoading: false,
+      error: null,
+      isError: false,
+      isPending: false,
+    } as unknown as ReturnType<typeof useGraphStats>);
+    mockedFetchFindings.mockRejectedValueOnce(new Error("findings unavailable"));
+
+    render(<Dashboard />, { wrapper: createWrapper() });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Dashboard unavailable",
+    );
+    expect(screen.queryByText("No critical alerts")).not.toBeInTheDocument();
+    expect(screen.queryByText("Low Risk")).not.toBeInTheDocument();
   });
 });

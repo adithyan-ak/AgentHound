@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/server/internal/analysis/riskscore"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 )
@@ -34,18 +35,21 @@ func (p *RiskScore) Process(ctx context.Context, db graph.GraphDB, scanID string
 
 	type scorer struct {
 		kind string
-		fn   func(context.Context, graph.GraphDB, string) (float64, error)
+		fn   func(context.Context, graph.GraphDB, string) (riskscore.Assessment, error)
 	}
 
 	scorers := []scorer{
-		{"AgentInstance", riskscore.AgentRiskScore},
-		{"A2AAgent", riskscore.A2AAgentRiskScore},
-		{"MCPServer", riskscore.ServerRiskScore},
-		{"MCPTool", riskscore.ToolRiskScore},
+		{"AgentInstance", func(ctx context.Context, db graph.GraphDB, id string) (riskscore.Assessment, error) {
+			score, err := riskscore.AgentRiskScore(ctx, db, id)
+			return riskscore.ExactAssessment(score), err
+		}},
+		{"A2AAgent", riskscore.A2AAgentRiskAssessment},
+		{"MCPServer", riskscore.ServerRiskAssessment},
+		{"MCPTool", riskscore.ToolRiskAssessment},
 	}
 
 	for _, s := range scorers {
-		n, err := scoreNodes(ctx, db, s.kind, s.fn)
+		n, err := scoreNodesAssessment(ctx, db, s.kind, s.fn)
 		if err != nil {
 			return graph.ProcessingStats{
 				ProcessorName: p.Name(),
@@ -64,21 +68,98 @@ func (p *RiskScore) Process(ctx context.Context, db graph.GraphDB, scanID string
 }
 
 func scoreNodes(ctx context.Context, db graph.GraphDB, kind string, scoreFn func(context.Context, graph.GraphDB, string) (float64, error)) (int, error) {
-	nodes, err := db.ListNodes(ctx, kind, 10000)
-	if err != nil {
-		return 0, fmt.Errorf("list %s: %w", kind, err)
+	return scoreNodesAssessment(
+		ctx,
+		db,
+		kind,
+		func(ctx context.Context, db graph.GraphDB, id string) (riskscore.Assessment, error) {
+			score, err := scoreFn(ctx, db, id)
+			return riskscore.ExactAssessment(score), err
+		},
+	)
+}
+
+func scoreNodesAssessment(
+	ctx context.Context,
+	db graph.GraphDB,
+	kind string,
+	scoreFn func(context.Context, graph.GraphDB, string) (riskscore.Assessment, error),
+) (int, error) {
+	var updated int
+	const pageSize = 1000
+	offset := 0
+	revision := ""
+	var total int64
+	havePage := false
+	var nodesToScore []ingest.Node
+
+	for {
+		nodes, page, err := db.ListNodesPage(ctx, kind, pageSize, offset, revision)
+		if err != nil {
+			return updated, fmt.Errorf("list %s at offset %d: %w", kind, offset, err)
+		}
+		if page.Offset != offset {
+			return updated, fmt.Errorf(
+				"list %s returned offset %d, want %d", kind, page.Offset, offset,
+			)
+		}
+		if !havePage {
+			revision = page.Revision
+			total = page.Total
+			havePage = true
+		} else {
+			if page.Revision != revision {
+				return updated, fmt.Errorf(
+					"list %s revision changed from %q to %q", kind, revision, page.Revision,
+				)
+			}
+			if page.Total != total {
+				return updated, fmt.Errorf(
+					"list %s total changed from %d to %d", kind, total, page.Total,
+				)
+			}
+		}
+		nodesToScore = append(nodesToScore, nodes...)
+
+		if !page.HasMore {
+			if !page.Complete {
+				return updated, fmt.Errorf("list %s ended with an incomplete page", kind)
+			}
+			if int64(len(nodesToScore)) != total {
+				return updated, fmt.Errorf(
+					"list %s returned %d nodes, want total %d", kind, len(nodesToScore), total,
+				)
+			}
+			break
+		}
+		if page.Complete {
+			return updated, fmt.Errorf("list %s returned complete=true with has_more=true", kind)
+		}
+		if revision == "" {
+			return updated, fmt.Errorf("list %s omitted a continuation revision", kind)
+		}
+		if len(nodes) == 0 {
+			return updated, fmt.Errorf("list %s returned an empty page with has_more=true at offset %d", kind, offset)
+		}
+		offset += len(nodes)
 	}
 
-	var updated int
-	for _, node := range nodes {
-		score, err := scoreFn(ctx, db, node.ID)
+	// Finish the revision-consistent read before mutating any node. Risk-score
+	// updates advance graph_updated_at, so interleaving writes with page reads
+	// would invalidate our own continuation token.
+	for _, node := range nodesToScore {
+		assessment, err := scoreFn(ctx, db, node.ID)
 		if err != nil {
 			slog.Warn("risk score computation failed", "kind", kind, "node", node.ID, "error", err)
 			continue
 		}
 
 		if err := db.UpdateNodeProperties(ctx, node.ID, map[string]any{
-			"risk_score": score,
+			"risk_score":               assessment.Score,
+			"risk_score_min":           assessment.Min,
+			"risk_score_max":           assessment.Max,
+			"risk_assessment_complete": assessment.Complete,
+			"risk_unknown_factors":     assessment.UnknownFactors,
 		}); err != nil {
 			slog.Warn("risk score update failed", "kind", kind, "node", node.ID, "error", err)
 			continue

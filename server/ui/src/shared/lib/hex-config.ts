@@ -24,6 +24,7 @@ import {
   Link2,
   MessageSquare,
   Boxes,
+  ScanSearch,
 } from "lucide-react";
 import {
   SEVERITY,
@@ -256,6 +257,14 @@ export const HEX_CONFIG: Record<string, HexKindConfig> = {
     kindTag: "AI MODEL",
     column: 3,
     groupLabel: "AI Models",
+  },
+  ExtractedTrainingSignal: {
+    strokeColor: NODE_KIND_COLORS.ExtractedTrainingSignal,
+    fillColor: EXPLORER_HEX_FILL,
+    icon: ScanSearch,
+    kindTag: "TRAINING SIGNAL",
+    column: 4,
+    groupLabel: "Extracted Signals",
   },
 };
 

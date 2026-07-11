@@ -153,8 +153,8 @@ func TestParseV030_NoAuth(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if card.AuthMethod != "none" {
-		t.Errorf("expected auth method none, got %s", card.AuthMethod)
+	if card.AuthMethod != "unknown" {
+		t.Errorf("expected unknown auth without explicit security schemes, got %s", card.AuthMethod)
 	}
 	if len(card.SecuritySchemes) != 0 {
 		t.Errorf("expected 0 security schemes, got %d", len(card.SecuritySchemes))

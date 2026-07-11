@@ -18,13 +18,6 @@ func RunPostProcessors(ctx context.Context, db graph.GraphDB, scanID string, col
 		return nil, fmt.Errorf("invalid processor ordering: %w", err)
 	}
 
-	deleted, err := cleanStaleCompositeEdges(ctx, db, scanID, collectors)
-	if err != nil {
-		slog.Warn("stale edge cleanup failed", "error", err)
-	} else if deleted > 0 {
-		slog.Info("cleaned stale composite edges", "deleted", deleted)
-	}
-
 	var allStats []ProcessingStats
 	var processorErrs []error
 	for _, p := range processors {
@@ -37,6 +30,19 @@ func RunPostProcessors(ctx context.Context, db graph.GraphDB, scanID string, col
 		}
 		allStats = append(allStats, stats)
 		slog.Info("post-processor complete", "name", p.Name(), "edges", stats.EdgesCreated, "nodes", stats.NodesUpdated, "duration", stats.Duration)
+	}
+
+	// Prior composite facts remain available until every processor has
+	// successfully recomputed its candidate output. Cleanup before this point
+	// can erase the last valid epoch when a later processor fails.
+	if len(processorErrs) == 0 {
+		deleted, err := cleanStaleCompositeEdges(ctx, db, scanID, collectors)
+		if err != nil {
+			slog.Error("stale edge cleanup failed", "error", err)
+			processorErrs = append(processorErrs, fmt.Errorf("stale composite cleanup: %w", err))
+		} else if deleted > 0 {
+			slog.Info("cleaned stale composite edges", "deleted", deleted)
+		}
 	}
 
 	return allStats, errors.Join(processorErrs...)
@@ -86,7 +92,12 @@ func expandCompositeCollectors(collectors []string) []string {
 	for _, collector := range collectors {
 		add(collector)
 		switch collector {
-		case "config", "scan":
+		case "mcp", "config":
+			add("cross_service_credential_chain")
+		case "scan":
+			add("mcp")
+			add("config")
+			add("a2a")
 			add("cross_service_credential_chain")
 		}
 	}

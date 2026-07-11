@@ -1,4 +1,5 @@
 import { Share2, ShieldCheck } from "lucide-react";
+import { hasConfirmedAnonymousAccess } from "@entities/node";
 import { usePreBuiltResult } from "@entities/prebuilt";
 import { Skeleton } from "@shared/ui/primitives/skeleton";
 import { AsyncBoundary } from "@shared/ui/feedback";
@@ -6,7 +7,9 @@ import { WidgetCard, MeterBar, StatusPill } from "@shared/ui/widgets";
 import { SEVERITY, INSTRUMENT } from "@shared/theme/tokens";
 
 const INFO =
-  "MCP servers trusted by multiple agents. Compromising one of these impacts every agent that trusts it — the highest-leverage targets.";
+  "MCP servers ranked by agent trust count in the loaded query result. This is a shared-trust concentration view, not a global reachability calculation.";
+
+const MAX_ROWS = 6;
 
 interface ServerRow {
   name: string;
@@ -21,20 +24,32 @@ function parse(rows: Record<string, unknown>[]): ServerRow[] {
       name: String(r["server_name"] ?? "unknown"),
       agentCount: Number(r["agent_count"] ?? 0),
       toolCount: Number(r["tool_count"] ?? 0),
-      unauth: String(r["auth_method"] ?? "none") === "none",
+      unauth: hasConfirmedAnonymousAccess(r),
     }))
     .sort((a, b) => b.agentCount - a.agentCount)
-    .slice(0, 6);
+    .slice(0, MAX_ROWS);
 }
 
 export function Chokepoints() {
   const { data, isLoading, isError } = usePreBuiltResult("chokepoint-servers");
 
   const rows = parse(data?.rows ?? []);
+  const total = data?.rows.length ?? 0;
   const maxAgents = rows.reduce((m, r) => Math.max(m, r.agentCount), 0);
 
   return (
-    <WidgetCard title="Blast Radius" info={INFO} icon={Share2}>
+    <WidgetCard
+      title="Shared Trust Chokepoints"
+      info={INFO}
+      icon={Share2}
+      action={
+        total > 0 ? (
+          <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
+            Top {rows.length} of {total} rows
+          </span>
+        ) : undefined
+      }
+    >
       <AsyncBoundary
         isLoading={isLoading}
         isEmpty={isError || rows.length === 0}

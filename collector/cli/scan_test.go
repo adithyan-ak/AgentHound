@@ -9,6 +9,7 @@ import (
 
 	"github.com/adithyan-ak/agenthound/collector/internal/clientcfg"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
+	"github.com/adithyan-ak/agenthound/sdk/rules"
 	"github.com/spf13/cobra"
 )
 
@@ -120,6 +121,19 @@ func TestRunScan_DefaultOutputCWD(t *testing.T) {
 	if got.Meta.Collector != "scan" {
 		t.Errorf("meta.collector = %q, want scan", got.Meta.Collector)
 	}
+	if got.Meta.Version != 1 {
+		t.Errorf("meta.version = %d, want legacy-compatible version 1", got.Meta.Version)
+	}
+	if got.Meta.Collection == nil || got.Meta.Collection.State != ingest.OutcomeComplete {
+		t.Errorf("complete-empty config coverage lost: %+v", got.Meta.Collection)
+	}
+	if got.Meta.Ruleset == nil || got.Meta.Ruleset.Digest == "" ||
+		len(got.Meta.Ruleset.Entries) == 0 {
+		t.Errorf("effective rules manifest missing: %+v", got.Meta.Ruleset)
+	}
+	if got.Graph.Nodes == nil || got.Graph.Edges == nil {
+		t.Fatalf("complete-empty graph serialized null collections: %+v", got.Graph)
+	}
 }
 
 // TestRunScan_HonoursAgentHoundOutputEnv verifies that runScan resolves
@@ -162,6 +176,65 @@ func TestRunScan_HonoursAgentHoundOutputEnv(t *testing.T) {
 	}
 	if got.Meta.Type != "agenthound-ingest" {
 		t.Errorf("meta.type = %q, want agenthound-ingest", got.Meta.Type)
+	}
+}
+
+func TestLoadEffectiveRulesPersistsMatchersAndLoadFailures(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTHOUND_RULES_DIR", dir)
+	rules.SetBundleOverridePath("")
+	defer rules.SetBundleOverridePath("")
+	if err := os.WriteFile(
+		filepath.Join(dir, "broken.yaml"),
+		[]byte("{{not yaml"),
+		0o600,
+	); err != nil {
+		t.Fatalf("write broken rule: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(dir, "valid.yaml"),
+		[]byte(`
+id: collector-custom-rule
+name: Collector custom rule
+version: 4
+severity: medium
+scope:
+  collector: mcp
+  targets: [tool.description]
+matcher:
+  type: keyword
+  keywords: [collector-custom]
+emit:
+  finding_type: custom
+`),
+		0o600,
+	); err != nil {
+		t.Fatalf("write valid rule: %v", err)
+	}
+
+	engine, manifest := loadEffectiveRules()
+	if engine == nil {
+		t.Fatal("effective rules engine is nil")
+	}
+	if manifest.LoadState != ingest.OutcomePartial ||
+		manifest.Authenticity != "unverified" ||
+		len(manifest.Errors) == 0 ||
+		!strings.Contains(strings.Join(manifest.Errors, "\n"), "broken.yaml") {
+		t.Fatalf("effective rules manifest = %+v", manifest)
+	}
+	var found bool
+	for _, entry := range manifest.Entries {
+		if entry.ID != "collector-custom-rule" {
+			continue
+		}
+		found = entry.Version == 4 &&
+			strings.Contains(
+				string(entry.EffectiveMatcher),
+				`"keywords":["collector-custom"]`,
+			)
+	}
+	if !found {
+		t.Fatalf("custom effective matcher absent: %+v", manifest.Entries)
 	}
 }
 

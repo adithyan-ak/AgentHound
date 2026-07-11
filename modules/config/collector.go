@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/adithyan-ak/agenthound/sdk/collector"
 	"github.com/adithyan-ak/agenthound/sdk/common"
@@ -76,6 +75,13 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 		scanID = common.GenerateScanID("config")
 	}
 	data := common.NewIngestData("config", scanID)
+	data.Meta.IdentitySchemes = []ingest.IdentityScheme{{
+		EntityKind:   "MCPServer",
+		Transport:    "stdio",
+		Scheme:       ingest.MCPStdioIdentitySchemeV2,
+		Version:      2,
+		LegacyScheme: ingest.MCPStdioIdentitySchemeV1,
+	}}
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -86,23 +92,71 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 	if err != nil {
 		return nil, err
 	}
+	coveragePaths, instructionPaths := c.coveragePaths(opts, homeDir)
+	data.Meta.Collection = &ingest.CollectionReport{
+		State: ingest.OutcomeComplete,
+	}
+	observedPaths := make(map[string]bool, len(configs))
+	for _, cfg := range configs {
+		observedPaths[canonicalConfigPath(cfg.Path)] = true
+	}
+	for _, path := range coveragePaths {
+		key := configCoverageKey(path)
+		data.Meta.Collection.CoverageKeys = append(data.Meta.Collection.CoverageKeys, key)
+		method := "config_discovery"
+		if instructionPaths[canonicalConfigPath(path)] {
+			method = "instruction_discovery"
+		}
+		items := 0
+		if observedPaths[canonicalConfigPath(path)] {
+			items = 1
+		}
+		data.Meta.Collection.Outcomes = append(data.Meta.Collection.Outcomes, ingest.CollectionOutcome{
+			Collector:   "config",
+			CoverageKey: key,
+			Target:      canonicalConfigPath(path),
+			Method:      method,
+			State:       ingest.OutcomeComplete,
+			Items:       items,
+		})
+	}
+	sort.Strings(data.Meta.Collection.CoverageKeys)
 
-	seen := make(map[string]bool)
-	addNode := func(n ingest.Node) {
-		if seen[n.ID] {
+	nodeIndex := make(map[string]int)
+	addNode := func(n ingest.Node, domains ...string) {
+		n.ObservationDomains = ingest.MergeObservationDomains(
+			n.ObservationDomains,
+			domains,
+		)
+		if index, seen := nodeIndex[n.ID]; seen {
+			data.Graph.Nodes[index].ObservationDomains = ingest.MergeObservationDomains(
+				data.Graph.Nodes[index].ObservationDomains,
+				n.ObservationDomains,
+			)
+			if data.Graph.Nodes[index].Properties == nil {
+				data.Graph.Nodes[index].Properties = make(map[string]any)
+			}
+			for key, value := range n.Properties {
+				data.Graph.Nodes[index].Properties[key] = value
+			}
 			return
 		}
-		seen[n.ID] = true
+		nodeIndex[n.ID] = len(data.Graph.Nodes)
 		data.Graph.Nodes = append(data.Graph.Nodes, n)
 	}
-	addEdge := func(e ingest.Edge) {
+	addEdge := func(e ingest.Edge, domains ...string) {
+		e.ObservationDomains = ingest.MergeObservationDomains(
+			e.ObservationDomains,
+			domains,
+		)
 		data.Graph.Edges = append(data.Graph.Edges, e)
 	}
 
 	var agentIDs []string
 
 	for _, cfg := range configs {
-		absPath, _ := filepath.Abs(cfg.Path)
+		absPath := canonicalConfigPath(cfg.Path)
+		scopeKey := configCoverageKey(absPath)
 		configFileID := ingest.ComputeNodeID("ConfigFile", absPath)
 
 		activeCount := 0
@@ -116,14 +170,14 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 			"path":         absPath,
 			"client":       cfg.Client,
 			"server_count": activeCount,
-		}))
+		}), scopeKey)
 
 		agentID := ingest.ComputeNodeID("AgentInstance", configFileID, cfg.Client)
 		addNode(common.NewNode(agentID, []string{"AgentInstance"}, map[string]any{
 			"name":        cfg.Client,
 			"framework":   cfg.Client,
 			"config_path": absPath,
-		}))
+		}), scopeKey)
 		agentIDs = append(agentIDs, agentID)
 
 		for _, srv := range cfg.Servers {
@@ -131,32 +185,59 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 				continue
 			}
 
-			serverID := computeServerID(srv)
+			serverIdentity := serverIdentityFor(srv)
+			serverID := serverIdentity.ObjectID
 			endpoint := srv.Command
 			if srv.Transport == "http" {
 				endpoint = srv.URL
 			}
 
-			authMethod := deriveAuthMethod(srv.Env, srv.Headers)
-			isPinned := true
+			creds := ExtractCredentials(srv.Env, srv.Headers, srv.Name, opts.IncludeCredentialValues, engine)
+			authMethod := deriveAuthMethod(srv.Transport, creds)
+			authAssessment := common.AssessAuth(string(authMethod))
+			authEvidence := common.AuthEvidenceConfiguredCredential
+			if len(creds) == 0 {
+				authEvidence = common.AuthEvidenceUnknown
+				if srv.Transport == "stdio" {
+					authEvidence = common.AuthEvidenceLocalProcess
+				}
+			}
+			pinningStatus := common.PinningNotApplicable
 			if srv.Transport == "stdio" {
-				isPinned = !IsUnpinned(srv.Command, srv.Args)
+				pinningStatus = AssessPinning(srv.Command, srv.Args)
 			}
 
-			addNode(common.NewNode(serverID, []string{"MCPServer"}, map[string]any{
-				"name":        srv.Name,
-				"endpoint":    endpoint,
-				"transport":   srv.Transport,
-				"auth_method": authMethod,
-				"is_pinned":   isPinned,
-			}))
+			serverProps := map[string]any{
+				"name":           srv.Name,
+				"endpoint":       endpoint,
+				"transport":      srv.Transport,
+				"auth_method":    string(authMethod),
+				"auth_assurance": string(authAssessment.Assurance),
+				"auth_evidence":  authEvidence,
+				"pinning_status": string(pinningStatus),
+				"id_scheme":      serverIdentity.Scheme,
+			}
+			if serverIdentity.LegacyObjectID != "" {
+				serverProps["legacy_objectid"] = serverIdentity.LegacyObjectID
+				serverProps["command"] = srv.Command
+				serverProps["args"] = append([]string(nil), srv.Args...)
+			}
+			switch pinningStatus {
+			case common.PinningPinned:
+				serverProps["is_pinned"] = true
+			case common.PinningUnpinned:
+				serverProps["is_pinned"] = false
+			}
+			addNode(common.NewNode(serverID, []string{"MCPServer"}, serverProps), scopeKey)
 
-			trustWeight := authRiskWeight(authMethod)
+			trustWeight := authRiskWeight(string(authMethod))
+			trustProps := common.NewEdgeProps(scanID, 1.0, trustWeight)
+			trustProps["auth_assessment_complete"] = authAssessment.Weakness != nil
 			addEdge(common.NewEdge(agentID, serverID, "TRUSTS_SERVER", "AgentInstance", "MCPServer",
-				common.NewEdgeProps(scanID, 1.0, trustWeight)))
+				trustProps), scopeKey)
 
 			addEdge(common.NewEdge(serverID, configFileID, "CONFIGURED_IN", "MCPServer", "ConfigFile",
-				common.DefaultEdgeProps(scanID)))
+				common.DefaultEdgeProps(scanID)), scopeKey)
 
 			hostName := hostForServer(srv)
 			hostID := common.HostNodeID(hostName)
@@ -164,22 +245,28 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 			addNode(common.NewNode(hostID, []string{"Host"}, map[string]any{
 				"hostname":   hostInfo.Hostname,
 				"ip":         hostInfo.IP,
+				"scope":      hostInfo.Scope,
 				"is_local":   hostInfo.IsLocal,
 				"is_private": hostInfo.IsPrivate,
 				"is_public":  hostInfo.IsPublic,
-			}))
+			}), scopeKey)
 			addEdge(common.NewEdge(serverID, hostID, "RUNS_ON", "MCPServer", "Host",
-				common.DefaultEdgeProps(scanID)))
+				common.DefaultEdgeProps(scanID)), scopeKey)
 
-			creds := ExtractCredentials(srv.Env, srv.Headers, srv.Name, opts.IncludeCredentialValues, engine)
 			for _, cred := range creds {
 				identityType := credToIdentityType(cred)
 				identityID := ingest.ComputeNodeID("Identity", serverID, identityType)
-				addNode(common.NewNode(identityID, []string{"Identity"}, map[string]any{
-					"type":      identityType,
-					"scope":     srv.Name,
-					"is_static": cred.Type == "hardcoded",
-				}))
+				identityProps := map[string]any{
+					"type":           identityType,
+					"scope":          srv.Name,
+					"is_static":      cred.Type == "hardcoded",
+					"auth_assurance": string(common.AssessAuth(identityType).Assurance),
+				}
+				if serverIdentity.LegacyObjectID != "" {
+					identityProps["legacy_objectid"] = ingest.ComputeNodeID(
+						"Identity", serverIdentity.LegacyObjectID, identityType)
+				}
+				addNode(common.NewNode(identityID, []string{"Identity"}, identityProps), scopeKey)
 
 				credID := ingest.ComputeNodeID("Credential", cred.Source, cred.Name)
 				// value_hash is the cross-collector merge primitive — see
@@ -199,23 +286,30 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 					"high_entropy": cred.HighEntropy,
 					"format":       cred.Format,
 					"value_hash":   cred.ValueHash,
+					"merge_key":    "value_hash",
 				}
+				common.ApplyCredentialEvidence(
+					credProps,
+					cred.IdentityBasis,
+					cred.MaterialStatus,
+					cred.ExposureStatus,
+				)
 				// Raw value only when the operator explicitly opts in — the
 				// hash above is sufficient for the chain join.
 				if opts.IncludeCredentialValues {
 					credProps["value"] = cred.Value
 				}
-				addNode(common.NewNode(credID, []string{"Credential"}, credProps))
+				addNode(common.NewNode(credID, []string{"Credential"}, credProps), scopeKey)
 
 				authWeight := identityAuthWeight(identityType)
 				addEdge(common.NewEdge(serverID, identityID, "AUTHENTICATES_WITH", "MCPServer", "Identity",
-					common.NewEdgeProps(scanID, 1.0, authWeight)))
+					common.NewEdgeProps(scanID, 1.0, authWeight)), scopeKey)
 				addEdge(common.NewEdge(identityID, credID, "USES_CREDENTIAL", "Identity", "Credential",
-					common.NewEdgeProps(scanID, 1.0, 0.5)))
+					common.NewEdgeProps(scanID, 1.0, 0.5)), scopeKey)
 
 				if cred.Type == "hardcoded" || cred.Type == "envVar" {
 					addEdge(common.NewEdge(serverID, credID, "HAS_ENV_VAR", "MCPServer", "Credential",
-						common.DefaultEdgeProps(scanID)))
+						common.DefaultEdgeProps(scanID)), scopeKey)
 				}
 			}
 		}
@@ -223,14 +317,15 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 
 	instructions := DiscoverInstructionFiles(homeDir, opts.ProjectDir, engine)
 	for _, inst := range instructions {
-		absPath, _ := filepath.Abs(inst.Path)
+		absPath := canonicalConfigPath(inst.Path)
+		scopeKey := configCoverageKey(absPath)
 		instrID := ingest.ComputeNodeID("InstructionFile", absPath)
 		addNode(common.NewNode(instrID, []string{"InstructionFile"}, map[string]any{
 			"path":          absPath,
 			"type":          inst.Type,
 			"hash":          inst.Hash,
 			"is_suspicious": inst.IsSuspicious,
-		}))
+		}), scopeKey)
 
 		riskWeight := 0.0
 		if inst.IsSuspicious {
@@ -238,11 +333,73 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 		}
 		for _, agentID := range agentIDs {
 			addEdge(common.NewEdge(agentID, instrID, "LOADS_INSTRUCTIONS", "AgentInstance", "InstructionFile",
-				common.NewEdgeProps(scanID, 1.0, riskWeight)))
+				common.NewEdgeProps(scanID, 1.0, riskWeight)), scopeKey)
 		}
 	}
 
+	data.Meta.IdentityAliases = ingest.BuildMCPIdentityAliases(data.Graph.Nodes, true)
 	return data, nil
+}
+
+func (c *ConfigCollector) coveragePaths(
+	opts collector.CollectOptions,
+	homeDir string,
+) ([]string, map[string]bool) {
+	seen := make(map[string]bool)
+	instructionPaths := make(map[string]bool)
+	var paths []string
+	add := func(raw string, instruction bool) {
+		path := canonicalConfigPath(raw)
+		if path == "" {
+			return
+		}
+		if instruction {
+			instructionPaths[path] = true
+		}
+		if seen[path] {
+			return
+		}
+		seen[path] = true
+		paths = append(paths, path)
+	}
+
+	if opts.Discover {
+		for _, path := range c.DiscoveryPaths(homeDir) {
+			add(path, false)
+		}
+	} else {
+		add(opts.ConfigPath, false)
+		for _, path := range opts.ConfigPaths {
+			add(path, false)
+		}
+	}
+	if homeDir != "" {
+		for _, target := range userTargets {
+			add(filepath.Join(homeDir, target.relPath), true)
+		}
+	}
+	if opts.ProjectDir != "" {
+		for _, target := range projectTargets {
+			add(filepath.Join(opts.ProjectDir, target.relPath), true)
+		}
+	}
+	sort.Strings(paths)
+	return paths, instructionPaths
+}
+
+func canonicalConfigPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return filepath.Clean(absolute)
+}
+
+func configCoverageKey(path string) string {
+	return ingest.CanonicalCoverageKey("config", "path", canonicalConfigPath(path))
 }
 
 func (c *ConfigCollector) discoverConfigs(ctx context.Context, opts collector.CollectOptions, homeDir string) ([]ParsedConfig, error) {
@@ -304,14 +461,11 @@ func (c *ConfigCollector) tryParsers(path string, data []byte) *ParsedConfig {
 	return nil
 }
 
-func computeServerID(srv ServerDef) string {
+func serverIdentityFor(srv ServerDef) ingest.MCPServerIdentity {
 	if srv.Transport == "http" {
-		return ingest.ComputeMCPServerID("http", srv.URL)
+		return ingest.ResolveMCPServerIdentity("http", srv.URL)
 	}
-	sorted := make([]string, len(srv.Args))
-	copy(sorted, srv.Args)
-	sort.Strings(sorted)
-	return ingest.ComputeMCPServerID("stdio", srv.Command, sorted...)
+	return ingest.ResolveMCPServerIdentity("stdio", srv.Command, srv.Args...)
 }
 
 func hostForServer(srv ServerDef) string {
@@ -325,65 +479,47 @@ func hostForServer(srv ServerDef) string {
 	return u.Hostname()
 }
 
-func deriveAuthMethod(env map[string]string, headers map[string]string) string {
-	for k, v := range env {
-		upper := strings.ToUpper(k)
-		if strings.Contains(upper, "OAUTH") || strings.Contains(upper, "CLIENT_ID") {
-			return "oauth"
-		}
-		_ = v
+// deriveAuthMethod classifies from the exact normalized credential evidence
+// that is emitted into the graph. A credential-bearing config therefore cannot
+// simultaneously receive auth_method=none.
+func deriveAuthMethod(_ string, creds []CredentialInfo) common.AuthMethod {
+	if len(creds) == 0 {
+		// Configuration alone cannot prove that an endpoint accepts anonymous
+		// requests. For stdio, process locality is recorded separately as
+		// auth_evidence=local_process.
+		return common.AuthUnknown
 	}
-	for k, v := range headers {
-		if strings.EqualFold(k, "Authorization") && strings.HasPrefix(v, "Bearer ") {
-			return "bearer"
+
+	priority := map[common.AuthMethod]int{
+		common.AuthCustom: 1,
+		common.AuthAPIKey: 2,
+		common.AuthBasic:  3,
+		common.AuthBearer: 4,
+		common.AuthOAuth:  5,
+		common.AuthOIDC:   6,
+		common.AuthMTLS:   7,
+	}
+	best := common.AuthCustom
+	for _, cred := range creds {
+		if priority[cred.AuthMethod] > priority[best] {
+			best = cred.AuthMethod
 		}
 	}
-	for k := range env {
-		upper := strings.ToUpper(k)
-		if strings.Contains(upper, "KEY") || strings.Contains(upper, "TOKEN") || strings.Contains(upper, "SECRET") {
-			return "apiKey"
-		}
-	}
-	return "none"
+	return best
 }
 
 func authRiskWeight(method string) float64 {
-	switch method {
-	case "none":
-		return 0.1
-	case "apiKey":
-		return 0.3
-	case "bearer":
-		return 0.5
-	case "oauth":
-		return 0.7
-	default:
-		return 0.1
-	}
+	return common.AuthTrustWeight(method)
 }
 
 func identityAuthWeight(identityType string) float64 {
-	switch identityType {
-	case "none":
-		return 0.1
-	case "apiKey":
-		return 0.3
-	case "bearer":
-		return 0.5
-	case "oauth":
-		return 0.7
-	default:
-		return 0.3
-	}
+	return common.AuthTrustWeight(identityType)
 }
 
 func credToIdentityType(cred CredentialInfo) string {
-	upper := strings.ToUpper(cred.Name)
-	if strings.Contains(upper, "OAUTH") || strings.Contains(upper, "CLIENT_ID") {
-		return "oauth"
+	method := cred.AuthMethod
+	if method == common.AuthUnknown {
+		return string(common.AuthCustom)
 	}
-	if strings.Contains(upper, "BEARER") || cred.Format == "anthropic" || cred.Format == "openai" {
-		return "bearer"
-	}
-	return "apiKey"
+	return string(method)
 }

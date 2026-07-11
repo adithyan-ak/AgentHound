@@ -140,6 +140,102 @@ func TestToolSignals_RulesEngineCapabilities(t *testing.T) {
 	}
 }
 
+func TestToolSignals_DatabaseExecuteQueryIsNotShellOrCodeExecution(t *testing.T) {
+	engine := testEngine(t)
+	tool := &mcpsdk.Tool{
+		Name:        "execute_query",
+		Description: "Execute a SQL query against the connected PostgreSQL database",
+		InputSchema: map[string]any{
+			"properties": map[string]any{
+				"query": map[string]any{"type": "string"},
+			},
+		},
+	}
+	signals := computeToolSignals(tool, nil, engine)
+	got := make(map[string]bool, len(signals.CapabilitySurface))
+	for _, capability := range signals.CapabilitySurface {
+		got[capability] = true
+	}
+	if !got["database_access"] {
+		t.Fatalf("database capability missing: %v", signals.CapabilitySurface)
+	}
+	if got["shell_access"] || got["code_execution"] {
+		t.Fatalf("database-only execute_query classified as execution: %v", signals.CapabilitySurface)
+	}
+}
+
+func TestToolSignals_ExecutionKeywordsRequireBoundariesAndContext(t *testing.T) {
+	engine := testEngine(t)
+	tests := []struct {
+		name        string
+		toolName    string
+		description string
+		wantExec    bool
+	}{
+		{
+			name:        "python documentation lookup is benign",
+			description: "Search the Python package documentation and return links",
+		},
+		{
+			name:        "terminal substring is benign",
+			description: "Explain terminally differentiated cell types",
+		},
+		{
+			name:        "command field reference is benign",
+			description: "Look up command_reference documentation without running it",
+		},
+		{
+			name:        "final audit script listing witness",
+			toolName:    "list_scripts",
+			description: "List available Python scripts in the workspace to run later",
+		},
+		{
+			name:        "final audit pipeline status witness",
+			toolName:    "pipeline_status",
+			description: "Show whether the Python data pipeline is ready to execute",
+		},
+		{
+			name:        "explicit shell execution",
+			toolName:    "run_shell",
+			description: "Run a shell command supplied by the caller",
+			wantExec:    true,
+		},
+		{
+			name:        "explicit python execution",
+			toolName:    "run_python",
+			description: "Execute Python code supplied by the caller",
+			wantExec:    true,
+		},
+		{
+			name:        "explicit source compilation",
+			toolName:    "compile_source",
+			description: "Compile source code supplied by the caller",
+			wantExec:    true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			toolName := tt.toolName
+			if toolName == "" {
+				toolName = "documentation_tool"
+			}
+			signals := computeToolSignals(
+				&mcpsdk.Tool{Name: toolName, Description: tt.description},
+				nil,
+				engine,
+			)
+			got := make(map[string]bool, len(signals.CapabilitySurface))
+			for _, capability := range signals.CapabilitySurface {
+				got[capability] = true
+			}
+			hasExecution := got["shell_access"] || got["code_execution"]
+			if hasExecution != tt.wantExec {
+				t.Fatalf("capabilities = %v, want execution=%v", signals.CapabilitySurface, tt.wantExec)
+			}
+		})
+	}
+}
+
 func TestResourceSignals_RulesEngine(t *testing.T) {
 	tests := []struct {
 		uri             string
@@ -156,7 +252,7 @@ func TestResourceSignals_RulesEngine(t *testing.T) {
 		{"file:///tmp/data.txt", "medium"},
 		{"https://api.example.com/data", "medium"},
 		{"s3://my-bucket/data", "medium"},
-		{"custom://some-resource", "low"},
+		{"custom://some-resource", "unknown"},
 	}
 
 	engine := testEngine(t)
@@ -167,6 +263,13 @@ func TestResourceSignals_RulesEngine(t *testing.T) {
 
 			if signals.Sensitivity != tt.wantSensitivity {
 				t.Errorf("sensitivity = %q, want %q", signals.Sensitivity, tt.wantSensitivity)
+			}
+			if tt.wantSensitivity == "unknown" {
+				if signals.SensitivityRuleID != "" || signals.SensitivityEvidence != "no_rule_match" {
+					t.Errorf("unknown sensitivity claimed rule evidence: %+v", signals)
+				}
+			} else if signals.SensitivityRuleID == "" || signals.SensitivityEvidence != "rule_match" {
+				t.Errorf("classified sensitivity missing rule provenance: %+v", signals)
 			}
 		})
 	}

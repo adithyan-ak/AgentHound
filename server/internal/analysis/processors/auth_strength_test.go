@@ -54,6 +54,13 @@ func TestAuthStrength_ProcessSuccess(t *testing.T) {
 	if !contains(cypher, "SET n.auth_strength =") {
 		t.Errorf("Cypher should SET the auth_strength property; query:\n%s", cypher)
 	}
+	if !contains(cypher, "n.auth_assurance =") {
+		t.Errorf("Cypher should SET categorical auth_assurance; query:\n%s", cypher)
+	}
+	if !contains(cypher, "n.auth_evidence") ||
+		!contains(cypher, "anonymous_probe_succeeded") {
+		t.Errorf("explicit none must require anonymous-probe evidence; query:\n%s", cypher)
+	}
 
 	// Drift guard: the CASE expression is built at runtime from
 	// riskscore.AuthStrengthScores (authStrengthCase uses %g formatting).
@@ -67,13 +74,25 @@ func TestAuthStrength_ProcessSuccess(t *testing.T) {
 		}
 	}
 
-	// Pin the fallback: an unknown or unrecognized auth_method must score
-	// WEAKEST (100). confused_deputy keys the weak caller on auth_strength
-	// >= 80, so flipping this to "ELSE 0" would silently invert the
-	// classification — a node with absent/novel auth would read as strongly
-	// authenticated and never be flagged as the confused deputy.
-	if !contains(cypher, "ELSE 100 END") {
-		t.Errorf("Cypher must render the weakest-class fallback 'ELSE 100 END'; query:\n%s", cypher)
+	// Unknown/custom methods have no numeric weakness. Setting null also
+	// removes a stale numeric property if richer evidence becomes unavailable.
+	if !contains(cypher, "ELSE null END") {
+		t.Errorf("Cypher must render unknown numeric auth as null; query:\n%s", cypher)
+	}
+}
+
+func TestAuthStrengthScores_OIDCIsStrong(t *testing.T) {
+	// AH-UI-15: OIDC (emitted by the A2A collector) is an OAuth2-based strong
+	// scheme. It must be present and score no weaker than oauth.
+	oidc, ok := riskscore.AuthStrengthScores["oidc"]
+	if !ok {
+		t.Fatal("AuthStrengthScores must include oidc")
+	}
+	if oidc > riskscore.AuthStrengthScores["oauth"] {
+		t.Errorf("oidc weakness %g should be <= oauth %g", oidc, riskscore.AuthStrengthScores["oauth"])
+	}
+	if oidc >= 80 {
+		t.Errorf("oidc weakness %g should be well below the confused_deputy weak threshold (80)", oidc)
 	}
 }
 

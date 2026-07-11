@@ -96,7 +96,10 @@ func expandSingle(host string, opts ExpandOptions) ([]string, error) {
 	if info.IsMulticast {
 		return nil, fmt.Errorf("%w: %s", ErrMulticast, host)
 	}
-	if info.IsPublic && !opts.AllowPublicTargets {
+	// DNS names remain scope=unknown until resolution. Preserve the scanner's
+	// fail-closed public-target gate: an unknown name may resolve publicly even
+	// though graph evidence must not label it public without that resolution.
+	if (info.IsPublic || info.Scope == common.HostScopeUnknown) && !opts.AllowPublicTargets {
 		return nil, fmt.Errorf("%w: %s", ErrPublicTarget, host)
 	}
 	return []string{host}, nil

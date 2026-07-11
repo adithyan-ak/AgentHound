@@ -76,7 +76,12 @@ type probeWriter struct {
 	inner      nodeEdgeWriter
 }
 
-func (p *probeWriter) WriteNodes(ctx context.Context, nodes []ingest.Node, scanID string) (int, error) {
+func (p *probeWriter) WriteObservationNodes(
+	ctx context.Context,
+	nodes []ingest.Node,
+	scanID string,
+	completeDomains []string,
+) (int, error) {
 	cur := p.concurrent.Add(1)
 	defer p.concurrent.Add(-1)
 	for {
@@ -85,9 +90,14 @@ func (p *probeWriter) WriteNodes(ctx context.Context, nodes []ingest.Node, scanI
 			break
 		}
 	}
-	return p.inner.WriteNodes(ctx, nodes, scanID)
+	return p.inner.WriteObservationNodes(ctx, nodes, scanID, completeDomains)
 }
 
-func (p *probeWriter) WriteEdges(ctx context.Context, edges []ingest.Edge, scanID string) (int, error) {
-	return p.inner.WriteEdges(ctx, edges, scanID)
+func (p *probeWriter) WriteObservationEdges(
+	ctx context.Context,
+	edges []ingest.Edge,
+	scanID string,
+	completeDomains []string,
+) (int, error) {
+	return p.inner.WriteObservationEdges(ctx, edges, scanID, completeDomains)
 }

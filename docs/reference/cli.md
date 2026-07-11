@@ -27,6 +27,13 @@ The collector is offline-by-default. No outbound HTTP, no DB clients, no phone-h
 
 Enumerate MCP servers, A2A agents, and client configs, then write the merged trust graph as JSON.
 
+Scan artifacts remain ingest wire version `1` and add optional evidence
+metadata: constituent `collection` coverage/outcomes, the effective text and
+fingerprint `ruleset` semantic digest/entries with canonical matcher
+definitions and load failures, and identity-scheme/legacy-alias metadata. A
+ruleset digest identifies what ran; `authenticity=unverified` explicitly avoids
+treating a digest as a trusted signature.
+
 ```
 agenthound scan [CIDR|host|@targets-file] [flags]
 ```
@@ -499,14 +506,17 @@ agenthound-server query "MATCH (n:MCPServer) RETURN n.name, n.transport"
 # Pre-built query
 agenthound-server query --prebuilt agents-shell-access
 
-# Findings (from the persisted snapshot, with triage state)
+# Findings (legacy latest-per-fingerprint history union, with triage state)
 agenthound-server query --findings [--severity critical] [--all-findings]
 
 # Diff two scans' findings
 agenthound-server query --diff scan_a,scan_b
 
-# Shortest path
+# Directed security shortest path (default)
 agenthound-server query --shortest-path --from AgentInstance:claude --to MCPResource:postgres://prod
+
+# Explicit legacy undirected topology path
+agenthound-server query --shortest-path --path-scope topology --from MCPResource:postgres://prod --to AgentInstance:claude
 ```
 
 #### Flags
@@ -514,13 +524,14 @@ agenthound-server query --shortest-path --from AgentInstance:claude --to MCPReso
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--prebuilt` | | Pre-built query ID. |
-| `--findings` | `false` | List findings from the latest persisted snapshot (suppressed hidden by default). |
+| `--findings` | `false` | List the legacy latest-per-fingerprint historical union (suppressed hidden by default). The product UI uses the exact published HTTP scope. |
 | `--all-findings` | `false` | Include suppressed (`accepted-risk` / `false-positive`) findings in `--findings` / `--diff` output. |
 | `--diff` | | Diff two scans' findings: `scanA,scanB`. Reports added / removed / unchanged. |
 | `--severity` | | Filter findings: `critical`, `high`, `medium`, `low`. |
-| `--shortest-path` | `false` | Find shortest path between two nodes. |
+| `--shortest-path` | `false` | Find a bounded shortest path with the shared traversal engine. |
 | `--from` | | Source node (`Kind:name`). |
 | `--to` | | Target node (`Kind:name`). |
+| `--path-scope` | `security` | `security` uses the directed security relationship policy; `topology` explicitly selects the legacy undirected graph view. |
 | `--format` | `table` | `table` or `json`. |
 | `--fail-on` | | Exit 1 if findings at or above severity (CI gate). Always ignores suppressed findings, even with `--all-findings`. |
 

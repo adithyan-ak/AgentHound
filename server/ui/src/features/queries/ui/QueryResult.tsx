@@ -5,12 +5,18 @@ interface QueryResultProps {
   query: PreBuiltQuery;
 }
 
-function formatCell(value: unknown): string {
+function isStructuredValue(value: unknown): value is object {
+  return value !== null && typeof value === "object";
+}
+
+function formatScalar(value: unknown): string {
   if (value == null) return "\u2014";
   if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (Array.isArray(value)) return value.join(", ") || "\u2014";
-  if (typeof value === "object") return JSON.stringify(value);
   return String(value);
+}
+
+function formatStructured(value: object): string {
+  return JSON.stringify(value, null, 2) ?? "\u2014";
 }
 
 export function QueryResult({ rows, query }: QueryResultProps) {
@@ -36,6 +42,7 @@ export function QueryResult({ rows, query }: QueryResultProps) {
               {columns.map((col) => (
                 <th
                   key={col}
+                  scope="col"
                   className="px-3 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground"
                 >
                   {col}
@@ -49,14 +56,28 @@ export function QueryResult({ rows, query }: QueryResultProps) {
                 key={i}
                 className="border-b border-border/50 transition-colors last:border-0 hover:bg-white/[0.03]"
               >
-                {columns.map((col) => (
-                  <td
-                    key={col}
-                    className="max-w-[300px] truncate px-3 py-1.5 font-mono text-[11px] text-foreground/90"
-                  >
-                    {formatCell(row[col])}
-                  </td>
-                ))}
+                {columns.map((col) => {
+                  const value = row[col];
+                  const structured = isStructuredValue(value);
+                  return (
+                    <td
+                      key={col}
+                      className={
+                        structured
+                          ? "max-w-[48rem] align-top px-3 py-1.5 font-mono text-[11px] text-foreground/90"
+                          : "max-w-[300px] truncate whitespace-nowrap px-3 py-1.5 font-mono text-[11px] text-foreground/90"
+                      }
+                    >
+                      {structured ? (
+                        <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[11px]">
+                          {formatStructured(value)}
+                        </pre>
+                      ) : (
+                        formatScalar(value)
+                      )}
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>

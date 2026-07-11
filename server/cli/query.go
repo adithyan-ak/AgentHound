@@ -11,6 +11,7 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/server/internal/analysis"
 	"github.com/adithyan-ak/agenthound/server/internal/analysis/prebuilt"
+	"github.com/adithyan-ak/agenthound/server/internal/graph"
 	"github.com/spf13/cobra"
 )
 
@@ -34,6 +35,7 @@ func init() {
 	queryCmd.Flags().Bool("shortest-path", false, "Find shortest path between two nodes")
 	queryCmd.Flags().String("from", "", "Source node in Kind:name format (e.g. AgentInstance:my-agent)")
 	queryCmd.Flags().String("to", "", "Target node in Kind:name format (e.g. MCPResource:postgres://prod)")
+	queryCmd.Flags().String("path-scope", "security", "Path relationship scope: security (directed) or topology (legacy undirected)")
 	queryCmd.Flags().String("format", "table", "Output format: table or json")
 	queryCmd.Flags().String("fail-on", "", "Exit 1 if findings at or above severity: critical, high, medium, low")
 	queryCmd.Flags().Bool("all-findings", false, "Include suppressed findings (accepted-risk, false-positive); --fail-on always ignores suppressed")
@@ -48,6 +50,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	shortestPath, _ := cmd.Flags().GetBool("shortest-path")
 	fromNode, _ := cmd.Flags().GetString("from")
 	toNode, _ := cmd.Flags().GetString("to")
+	pathScope, _ := cmd.Flags().GetString("path-scope")
 	format, _ := cmd.Flags().GetString("format")
 
 	failOn, _ := cmd.Flags().GetString("fail-on")
@@ -91,7 +94,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	case prebuiltID != "":
 		return runPrebuilt(ctx, prebuiltID, format)
 	case shortestPath:
-		return runShortestPath(ctx, fromNode, toNode, format)
+		return runShortestPath(ctx, fromNode, toNode, pathScope, format)
 	default:
 		return runRawCypher(ctx, args[0], format)
 	}
@@ -129,6 +132,22 @@ func runPrebuilt(ctx context.Context, id, format string) error {
 	}
 	defer cleanup()
 
+	if id == "shortest-to-database" {
+		result, err := analysis.FindShortestDatabasePaths(ctx, infra.GraphDB)
+		if err != nil {
+			return fmt.Errorf("query %s: %w", id, err)
+		}
+		_, _ = fmt.Fprintf(
+			os.Stderr,
+			"[path] scope=%s direction=%s algorithm=%s complete=%t\n\n",
+			result.Metadata.Scope,
+			result.Metadata.Direction,
+			result.Metadata.Algorithm,
+			result.Metadata.Complete,
+		)
+		return printRows(analysis.DatabasePathRows(result), format)
+	}
+
 	rows, err := infra.GraphDB.Query(ctx, q.Cypher, nil)
 	if err != nil {
 		return fmt.Errorf("query %s: %w", id, err)
@@ -152,9 +171,9 @@ func runFindings(ctx context.Context, severity, format, failOn string, includeSu
 	}
 	defer cleanup()
 
-	// Reads come from the persisted Postgres snapshot, not live graph
-	// edges: the snapshot is invariant under the next scan's stale-edge
-	// cleanup, and it carries triage state for suppression.
+	// Preserve the CLI's historical latest-per-fingerprint union for
+	// compatibility. Product posture surfaces request the exact published
+	// scope through HTTP instead.
 	findings, err := infra.FindingStore.ListLatestPerFingerprint(ctx, severity, includeSuppressed)
 	if err != nil {
 		return fmt.Errorf("query findings: %w", err)
@@ -210,7 +229,7 @@ func runFindings(ctx context.Context, severity, format, failOn string, includeSu
 	return nil
 }
 
-func runShortestPath(ctx context.Context, from, to, format string) error {
+func runShortestPath(ctx context.Context, from, to, scopeValue, format string) error {
 	if from == "" || to == "" {
 		return fmt.Errorf("--shortest-path requires both --from and --to flags in Kind:name format")
 	}
@@ -224,18 +243,9 @@ func runShortestPath(ctx context.Context, from, to, format string) error {
 		return fmt.Errorf("--to: %w", err)
 	}
 
-	cypher := fmt.Sprintf(
-		`MATCH (src:%s {name: $from_name}), (tgt:%s {name: $to_name})
-MATCH p = shortestPath((src)-[*..15]-(tgt))
-RETURN [n IN nodes(p) | coalesce(n.name, n.objectid)] AS path_nodes,
-       [n IN nodes(p) | labels(n)[0]] AS path_kinds,
-       [rel IN relationships(p) | type(rel)] AS path_edges,
-       length(p) AS path_length`,
-		fromKind, toKind)
-
-	params := map[string]any{
-		"from_name": fromName,
-		"to_name":   toName,
+	scope, err := analysis.ParseTraversalScope(scopeValue)
+	if err != nil {
+		return fmt.Errorf("--path-scope: %w", err)
 	}
 
 	infra, cleanup, err := Bootstrap(ctx)
@@ -244,17 +254,87 @@ RETURN [n IN nodes(p) | coalesce(n.name, n.objectid)] AS path_nodes,
 	}
 	defer cleanup()
 
-	rows, err := infra.GraphDB.Query(ctx, cypher, params)
+	result, err := findShortestPath(
+		ctx,
+		infra.GraphDB,
+		fromKind,
+		fromName,
+		toKind,
+		toName,
+		scope,
+	)
 	if err != nil {
 		return fmt.Errorf("shortest path: %w", err)
 	}
 
-	if len(rows) == 0 {
+	if len(result.Paths) == 0 {
 		fmt.Printf("No path found from %s:%s to %s:%s\n", fromKind, fromName, toKind, toName)
 		return nil
 	}
+	if format == "json" {
+		return printJSON(result)
+	}
+	return printRows(traversalPathRows(result), format)
+}
 
-	return printRows(rows, format)
+func findShortestPath(
+	ctx context.Context,
+	db graph.GraphDB,
+	fromKind, fromName, toKind, toName string,
+	scope analysis.TraversalScope,
+) (analysis.TraversalResult, error) {
+	sources, err := analysis.ResolveTraversalNodes(ctx, db, analysis.TraversalSelector{
+		Kind: fromKind, Property: "name", Value: &fromName,
+	})
+	if err != nil {
+		return analysis.TraversalResult{}, err
+	}
+	targets, err := analysis.ResolveTraversalNodes(ctx, db, analysis.TraversalSelector{
+		Kind: toKind, Property: "name", Value: &toName,
+	})
+	if err != nil {
+		return analysis.TraversalResult{}, err
+	}
+	return analysis.FindBoundedTraversalPaths(
+		ctx,
+		db,
+		sources,
+		targets,
+		analysis.TraversalOptions{
+			Scope: scope, Cost: analysis.TraversalCostHops,
+			MaxHops: 15, Limit: 1, MaxExpansions: 100000,
+		},
+	)
+}
+
+func traversalPathRows(result analysis.TraversalResult) []map[string]any {
+	rows := make([]map[string]any, 0, len(result.Paths))
+	for _, path := range result.Paths {
+		nodeNames := make([]string, 0, len(path.Nodes))
+		nodeKinds := make([]string, 0, len(path.Nodes))
+		for _, node := range path.Nodes {
+			nodeNames = append(nodeNames, node.Name)
+			kind := ""
+			if len(node.Kinds) > 0 {
+				kind = node.Kinds[0]
+			}
+			nodeKinds = append(nodeKinds, kind)
+		}
+		edgeKinds := make([]string, 0, len(path.Edges))
+		for _, edge := range path.Edges {
+			edgeKinds = append(edgeKinds, edge.Kind)
+		}
+		rows = append(rows, map[string]any{
+			"path_nodes":  nodeNames,
+			"path_kinds":  nodeKinds,
+			"path_edges":  edgeKinds,
+			"path_length": path.Hops,
+			"scope":       result.Metadata.Scope,
+			"direction":   result.Metadata.Direction,
+			"algorithm":   result.Metadata.Algorithm,
+		})
+	}
+	return rows
 }
 
 func parseNodeRef(ref string) (kind, name string, err error) {

@@ -4,45 +4,59 @@ import (
 	"context"
 	"math"
 
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 )
 
 func A2AAgentRiskScore(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
-	auth, err := a2aAuthStrength(ctx, db, objectID)
+	assessment, err := A2AAgentRiskAssessment(ctx, db, objectID)
 	if err != nil {
 		return 0, err
+	}
+	return assessment.Score, nil
+}
+
+func A2AAgentRiskAssessment(ctx context.Context, db graph.GraphDB, objectID string) (Assessment, error) {
+	auth, err := a2aAuthAssessment(ctx, db, objectID)
+	if err != nil {
+		return Assessment{}, err
 	}
 	blast, err := a2aBlastRadius(ctx, db, objectID)
 	if err != nil {
-		return 0, err
+		return Assessment{}, err
 	}
 	delegation, err := a2aDelegationSurface(ctx, db, objectID)
 	if err != nil {
-		return 0, err
+		return Assessment{}, err
 	}
 	impersonation, err := a2aImpersonationRisk(ctx, db, objectID)
 	if err != nil {
-		return 0, err
+		return Assessment{}, err
 	}
 
-	score := 0.30*auth + 0.30*blast + 0.25*delegation + 0.15*impersonation
-	return math.Round(score*100) / 100, nil
+	return combineAssessments(
+		weightedAssessment{weight: 0.30, value: auth},
+		weightedAssessment{weight: 0.30, value: exactAssessment(blast)},
+		weightedAssessment{weight: 0.25, value: exactAssessment(delegation)},
+		weightedAssessment{weight: 0.15, value: exactAssessment(impersonation)},
+	), nil
 }
 
-func a2aAuthStrength(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
+func a2aAuthAssessment(ctx context.Context, db graph.GraphDB, objectID string) (Assessment, error) {
 	cypher := `MATCH (a {objectid: $id}) RETURN a.auth_method AS am`
 	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
 	if err != nil {
-		return 0, err
+		return Assessment{}, err
 	}
 	if len(rows) == 0 {
-		return 100, nil
+		return unknownAssessment("auth_method", 0, 100), nil
 	}
 	am, _ := rows[0]["am"].(string)
-	if s, ok := AuthStrengthScores[am]; ok {
-		return s, nil
+	auth := common.AssessAuth(am)
+	if auth.Weakness == nil {
+		return unknownAssessment("auth_method", 0, 100), nil
 	}
-	return 100, nil
+	return exactAssessment(*auth.Weakness), nil
 }
 
 func a2aBlastRadius(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {

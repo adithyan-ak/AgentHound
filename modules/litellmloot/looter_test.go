@@ -351,6 +351,12 @@ func TestLoot_ModelInfoIsIdentityMergeKey(t *testing.T) {
 		if _, hasRaw := n.Properties["value"]; hasRaw {
 			t.Errorf("upstream node leaked raw value; /model/info strips upstream api_key server-side")
 		}
+		if n.Properties["material_status"] != "masked" ||
+			n.Properties["exposure_status"] != "not_observed" ||
+			n.Properties["is_exposed"] != false ||
+			n.Properties["high_entropy"] != false {
+			t.Errorf("masked provider reference claimed secret exposure: %+v", n.Properties)
+		}
 	}
 }
 
@@ -436,6 +442,10 @@ func TestLoot_KeyList_ValueHashPreserved(t *testing.T) {
 		hashes[vh] = true
 		if got, _ := n.Properties["merge_key"].(string); got != "value_hash" {
 			t.Errorf("virtual key %q merge_key = %q, want value_hash", n.Properties["name"], got)
+		}
+		if n.Properties["material_status"] != "hashed" ||
+			n.Properties["exposure_status"] != "not_observed" {
+			t.Errorf("hashed virtual-key reference claimed observed material: %+v", n.Properties)
 		}
 		// Regression: prior double-hash would produce SHA-256(hex) — a
 		// different hex string. Assert we pass the fixture through.

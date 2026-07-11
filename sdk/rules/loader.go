@@ -16,14 +16,27 @@ import (
 var builtinFS embed.FS
 
 func loadBuiltinRules() ([]Rule, error) {
-	return loadRulesFromFS(builtinFS, "builtin", "builtin")
+	rules, failures, err := loadBuiltinRulesWithFailures()
+	for _, failure := range failures {
+		slog.Warn("failed to load builtin rule", "error", failure)
+	}
+	return rules, err
 }
 
-func loadRulesFromFS(fsys fs.FS, root string, source string) ([]Rule, error) {
+func loadBuiltinRulesWithFailures() ([]Rule, []string, error) {
+	return loadRulesFromFSWithFailures(builtinFS, "builtin", "builtin")
+}
+
+func loadRulesFromFSWithFailures(
+	fsys fs.FS,
+	root string,
+	source string,
+) ([]Rule, []string, error) {
 	var rules []Rule
+	var failures []string
 	entries, err := fs.ReadDir(fsys, root)
 	if err != nil {
-		return nil, fmt.Errorf("reading %s directory: %w", root, err)
+		return nil, nil, fmt.Errorf("reading %s directory: %w", root, err)
 	}
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
@@ -31,35 +44,50 @@ func loadRulesFromFS(fsys fs.FS, root string, source string) ([]Rule, error) {
 		}
 		data, err := fs.ReadFile(fsys, filepath.Join(root, entry.Name()))
 		if err != nil {
-			slog.Warn("failed to read rule file", "file", entry.Name(), "error", err)
+			failures = append(
+				failures,
+				fmt.Sprintf("read rule %s: %v", entry.Name(), err),
+			)
 			continue
 		}
 		r, err := parseRuleFile(data, source)
 		if err != nil {
-			slog.Warn("failed to parse rule file", "file", entry.Name(), "error", err)
+			failures = append(
+				failures,
+				fmt.Sprintf("parse rule %s: %v", entry.Name(), err),
+			)
 			continue
 		}
 		rules = append(rules, *r)
 	}
-	return rules, nil
+	return rules, failures, nil
 }
 
 func loadCustomRules(dir string) ([]Rule, error) {
+	rules, failures, err := loadCustomRulesWithFailures(dir)
+	for _, failure := range failures {
+		slog.Warn("failed to load custom rule", "error", failure)
+	}
+	return rules, err
+}
+
+func loadCustomRulesWithFailures(dir string) ([]Rule, []string, error) {
 	info, err := os.Stat(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, fmt.Errorf("stat custom rules dir: %w", err)
+		return nil, nil, fmt.Errorf("stat custom rules dir: %w", err)
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("custom rules path is not a directory: %s", dir)
+		return nil, nil, fmt.Errorf("custom rules path is not a directory: %s", dir)
 	}
 
 	var rules []Rule
+	var failures []string
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("reading custom rules dir: %w", err)
+		return nil, nil, fmt.Errorf("reading custom rules dir: %w", err)
 	}
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
@@ -68,17 +96,23 @@ func loadCustomRules(dir string) ([]Rule, error) {
 		path := filepath.Join(dir, entry.Name())
 		data, err := os.ReadFile(path)
 		if err != nil {
-			slog.Warn("failed to read custom rule", "path", path, "error", err)
+			failures = append(
+				failures,
+				fmt.Sprintf("read custom rule %s: %v", path, err),
+			)
 			continue
 		}
 		r, err := parseRuleFile(data, path)
 		if err != nil {
-			slog.Warn("failed to parse custom rule", "path", path, "error", err)
+			failures = append(
+				failures,
+				fmt.Sprintf("parse custom rule %s: %v", path, err),
+			)
 			continue
 		}
 		rules = append(rules, *r)
 	}
-	return rules, nil
+	return rules, failures, nil
 }
 
 func parseRuleFile(data []byte, source string) (*Rule, error) {

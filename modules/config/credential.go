@@ -8,10 +8,12 @@ import (
 )
 
 type CredentialInfo struct {
-	Type      string // "envVar", "hardcoded", "vaultRef", "inputPrompt"
-	Name      string
-	Value     string // SHA-256 hash by default, actual value only if includeValues=true
-	ValueHash string // SHA-256 hash of the original raw value, ALWAYS populated.
+	Type       string // "envVar", "hardcoded", "vaultRef", "inputPrompt"
+	Name       string
+	Location   string // "env" or "header"
+	AuthMethod common.AuthMethod
+	Value      string // SHA-256 hash by default, actual value only if includeValues=true
+	ValueHash  string // SHA-256 hash of the original raw value, ALWAYS populated.
 	// ValueHash is the cross-collector merge primitive (v0.2). Even
 	// when includeValues=false replaces Value with the same hash, the
 	// LiteLLM Looter (which never sees the hashed form) needs an
@@ -19,10 +21,13 @@ type CredentialInfo struct {
 	// emissions so the cross_service_credential_chain post-processor
 	// can join Config Collector emissions to Looter emissions on this
 	// property. See sdk/common/hasher.go HashCredentialValue.
-	Source      string
-	IsExposed   bool
-	HighEntropy bool
-	Format      string // "openai", "anthropic", "github", "slack", "aws", "generic"
+	Source         string
+	IsExposed      bool
+	HighEntropy    bool
+	Format         string // "openai", "anthropic", "github", "slack", "aws", "generic"
+	IdentityBasis  common.CredentialIdentityBasis
+	MaterialStatus common.CredentialMaterialStatus
+	ExposureStatus common.CredentialExposureStatus
 }
 
 func ExtractCredentials(env map[string]string, headers map[string]string, source string, includeValues bool, engine *rules.Engine) []CredentialInfo {
@@ -32,14 +37,14 @@ func ExtractCredentials(env map[string]string, headers map[string]string, source
 		if !isCredentialName(name, engine) {
 			continue
 		}
-		creds = append(creds, classifyAndBuild(name, value, source, includeValues, engine))
+		creds = append(creds, classifyAndBuild(name, value, source, "env", includeValues, engine))
 	}
 
 	for name, value := range headers {
 		if !isCredentialName(name, engine) {
 			continue
 		}
-		creds = append(creds, classifyAndBuild(name, value, source, includeValues, engine))
+		creds = append(creds, classifyAndBuild(name, value, source, "header", includeValues, engine))
 	}
 
 	return creds
@@ -55,23 +60,32 @@ func classifyCredentialType(name, value string, engine *rules.Engine) string {
 	return "hardcoded"
 }
 
-func classifyAndBuild(name, value, source string, includeValues bool, engine *rules.Engine) CredentialInfo {
+func classifyAndBuild(name, value, source, location string, includeValues bool, engine *rules.Engine) CredentialInfo {
 	ci := CredentialInfo{
-		Name:      name,
-		Source:    source,
-		Format:    detectFormat(value, engine),
-		Type:      classifyCredentialType(name, value, engine),
-		ValueHash: common.HashCredentialValue(value),
+		Name:          name,
+		Location:      location,
+		AuthMethod:    credentialAuthMethod(name, value, location),
+		Source:        source,
+		Format:        detectFormat(value, engine),
+		Type:          classifyCredentialType(name, value, engine),
+		ValueHash:     common.HashCredentialValue(value),
+		IdentityBasis: common.CredentialIdentityValueHash,
 	}
 
 	switch ci.Type {
 	case "envVar":
 		ci.IsExposed = false
+		ci.MaterialStatus = common.CredentialMaterialUnobserved
+		ci.ExposureStatus = common.CredentialExposureNotObserved
 	case "vaultRef":
 		ci.IsExposed = false
+		ci.MaterialStatus = common.CredentialMaterialUnobserved
+		ci.ExposureStatus = common.CredentialExposureNotObserved
 	default:
 		ci.IsExposed = true
 		ci.HighEntropy = common.IsLikelySecret(value)
+		ci.MaterialStatus = common.CredentialMaterialObserved
+		ci.ExposureStatus = common.CredentialExposureExposed
 	}
 
 	if includeValues {
@@ -81,6 +95,28 @@ func classifyAndBuild(name, value, source string, includeValues bool, engine *ru
 	}
 
 	return ci
+}
+
+func credentialAuthMethod(name, value, location string) common.AuthMethod {
+	upperName := strings.ToUpper(name)
+	if strings.Contains(upperName, "OAUTH") || strings.Contains(upperName, "CLIENT_ID") {
+		return common.AuthOAuth
+	}
+	if location == "header" && strings.EqualFold(name, "Authorization") {
+		fields := strings.Fields(value)
+		if len(fields) > 0 {
+			if method, ok := common.RecognizeAuthMethod(fields[0]); ok &&
+				method != common.AuthNone && method != common.AuthUnknown {
+				return method
+			}
+		}
+		return common.AuthCustom
+	}
+	if strings.Contains(upperName, "KEY") || strings.Contains(upperName, "TOKEN") ||
+		strings.Contains(upperName, "SECRET") || strings.Contains(upperName, "AUTH") {
+		return common.AuthAPIKey
+	}
+	return common.AuthCustom
 }
 
 func isCredentialName(name string, engine *rules.Engine) bool {

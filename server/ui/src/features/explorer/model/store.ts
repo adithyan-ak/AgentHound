@@ -53,7 +53,7 @@ export interface PendingFocus {
   title?: string;
 }
 
-interface ExplorerState {
+export interface ExplorerState {
   activeLens: LensId;
   subPresets: Record<LensId, string[]>;
   selectedNodeId: string | null;
@@ -109,6 +109,67 @@ export const DEFAULT_SUB_PRESETS = Object.fromEntries(
     lens.subPresets.filter((sp) => sp.defaultEnabled).map((sp) => sp.id),
   ]),
 ) as Record<LensId, string[]>;
+
+const V1_DEFAULT_SUB_PRESETS: Partial<Record<LensId, string[]>> = {
+  "attack-surface": [
+    "HAS_ACCESS_TO",
+    "CAN_EXECUTE",
+    "CAN_REACH",
+    "CAN_EXFILTRATE_VIA",
+    "CAN_IMPERSONATE",
+  ],
+  poisoning: [
+    "POISONED_DESCRIPTION",
+    "SHADOWS",
+    "POISONED_INSTRUCTIONS",
+  ],
+};
+
+function samePresetSelection(actual: string[], expected: string[]): boolean {
+  return (
+    actual.length === expected.length &&
+    expected.every((preset) => actual.includes(preset))
+  );
+}
+
+/**
+ * Upgrade durable Explorer preferences without overwriting deliberate filters.
+ * Version 1 stored absolute arrays before five supported relationship kinds
+ * were added to the ordinary lenses. Only arrays equal to those old defaults
+ * are advanced; a user-selected subset remains unchanged.
+ */
+export function migrateExplorerState(
+  persisted: unknown,
+  version: number,
+): Partial<ExplorerState> {
+  const prev = (persisted ?? {}) as Partial<ExplorerState>;
+  if (version < 1) {
+    return {
+      ...prev,
+      subPresets: DEFAULT_SUB_PRESETS,
+    };
+  }
+  if (version < 2) {
+    const stored = prev.subPresets;
+    const subPresets = Object.fromEntries(
+      LENS_LIST.map((lens) => {
+        const current = stored?.[lens.id];
+        if (!Array.isArray(current)) {
+          return [lens.id, DEFAULT_SUB_PRESETS[lens.id]];
+        }
+        const oldDefault = V1_DEFAULT_SUB_PRESETS[lens.id];
+        return [
+          lens.id,
+          oldDefault && samePresetSelection(current, oldDefault)
+            ? DEFAULT_SUB_PRESETS[lens.id]
+            : current,
+        ];
+      }),
+    ) as Record<LensId, string[]>;
+    return { ...prev, subPresets };
+  }
+  return prev;
+}
 
 export const useExplorerStore = create<ExplorerState & ExplorerActions>()(
   persist(
@@ -205,28 +266,16 @@ export const useExplorerStore = create<ExplorerState & ExplorerActions>()(
       // restores the user's lens + sub-preset choices without restoring a
       // stale selection.
       name: "agenthound-explorer-view",
-      version: 1,
+      version: 2,
       partialize: (state) => ({
         activeLens: state.activeLens,
         subPresets: state.subPresets,
       }),
-      // v0 persisted the absolute sub-preset arrays. When a lens' DEFAULTS
-      // later expanded (new edge kinds added to lens-config, e.g. the AI-service
-      // topology edges and CAN_IMPERSONATE), the stored arrays no longer matched
-      // the live defaults — so LensBar lit a spurious "filtered" dot for users
-      // who never actually filtered, and switching lenses couldn't clear it.
-      // Drop the stale selection on upgrade so each lens tracks its live default
-      // again; genuine filters are re-applied in-session and persist normally.
-      migrate: (persisted, version) => {
-        const prev = (persisted ?? {}) as Partial<ExplorerState>;
-        if (version < 1) {
-          return {
-            ...prev,
-            subPresets: DEFAULT_SUB_PRESETS,
-          } as ExplorerState & ExplorerActions;
-        }
-        return prev as ExplorerState & ExplorerActions;
-      },
+      migrate: (persisted, version) =>
+        migrateExplorerState(
+          persisted,
+          version,
+        ) as ExplorerState & ExplorerActions,
     },
   ),
 );

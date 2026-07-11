@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -105,22 +106,65 @@ func (c *MCPCollector) Collect(ctx context.Context, opts collector.CollectOption
 	}
 
 	data := common.NewIngestData("mcp", scanID)
+	data.Meta.IdentitySchemes = []ingest.IdentityScheme{{
+		EntityKind:   "MCPServer",
+		Transport:    "stdio",
+		Scheme:       ingest.MCPStdioIdentitySchemeV2,
+		Version:      2,
+		LegacyScheme: ingest.MCPStdioIdentitySchemeV1,
+	}}
 
 	results := c.enumerateAll(ctx, specs, scanID)
 
 	seen := make(map[string]bool)
+	coverage := make(map[string]bool, len(results))
+	report := &ingest.CollectionReport{}
 	for _, r := range results {
 		if r.Error != nil {
 			log.Printf("[mcp] server error: %v", r.Error)
 		}
-		for _, n := range r.Nodes {
+		scopeKey := r.CoverageKey
+		if scopeKey == "" {
+			scopeKey = ingest.CanonicalCoverageKey("mcp", "target", r.Target)
+		}
+		coverage[scopeKey] = true
+		report.Outcomes = append(report.Outcomes, r.Outcomes...)
+		graph := ingest.GraphData{Nodes: r.Nodes, Edges: r.Edges}
+		ingest.TagObservationDomain(&graph, scopeKey)
+		for _, n := range graph.Nodes {
 			if !seen[n.ID] {
 				seen[n.ID] = true
 				data.Graph.Nodes = append(data.Graph.Nodes, n)
+				continue
+			}
+			for i := range data.Graph.Nodes {
+				if data.Graph.Nodes[i].ID == n.ID {
+					data.Graph.Nodes[i].ObservationDomains = ingest.MergeObservationDomains(
+						data.Graph.Nodes[i].ObservationDomains,
+						n.ObservationDomains,
+					)
+					if data.Graph.Nodes[i].Properties == nil {
+						data.Graph.Nodes[i].Properties = make(map[string]any)
+					}
+					for key, value := range n.Properties {
+						data.Graph.Nodes[i].Properties[key] = value
+					}
+					break
+				}
 			}
 		}
-		data.Graph.Edges = append(data.Graph.Edges, r.Edges...)
+		data.Graph.Edges = append(data.Graph.Edges, graph.Edges...)
 	}
+	for key := range coverage {
+		report.CoverageKeys = append(report.CoverageKeys, key)
+	}
+	sort.Strings(report.CoverageKeys)
+	report.State = ingest.AggregateOutcomeState(report.Outcomes)
+	data.Meta.Collection = report
+	data.Meta.IdentityAliases = ingest.BuildMCPIdentityAliases(
+		data.Graph.Nodes,
+		report.State == ingest.OutcomeComplete,
+	)
 
 	return data, nil
 }

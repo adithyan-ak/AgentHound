@@ -62,13 +62,18 @@ Every entry in `scope.targets` must be a qualified `<subject>.<field>` name from
 
 #### `keyword`
 
-Matches if any keyword appears in the target text. Use `match_mode: all` to require every keyword.
+Matches if any keyword appears in the target text. Use `match_mode: all` to
+require every keyword. Set `word_boundary: true` when a capability term must be
+a complete token: word letters, digits, and `_` on either side prevent a match,
+so `exec` does not match `execute_query` and `command` does not match
+`command_reference`.
 
 ```yaml
 matcher:
   type: keyword
   keywords: ["ignore previous", "disregard", "new instructions"]
   case_insensitive: true
+  word_boundary: true              # Optional; default false
   match_mode: any|all              # Default: any
 ```
 

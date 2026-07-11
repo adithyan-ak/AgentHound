@@ -6,12 +6,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
+	"github.com/adithyan-ak/agenthound/server/internal/appdb"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 	"github.com/adithyan-ak/agenthound/server/model"
 )
@@ -190,8 +192,10 @@ type fakeWriter struct {
 	edgeCalls []writerEdgeCall
 
 	// Configurable returns.
-	nodesErr error
-	edgesErr error
+	nodesErr          error
+	edgesErr          error
+	nodesWrittenOnErr int
+	edgesWrittenOnErr int
 
 	// Atomic flag tripped when WriteNodes is in flight; used by the
 	// concurrency test to prove the mutex actually serializes.
@@ -211,7 +215,12 @@ type writerEdgeCall struct {
 	At     time.Time
 }
 
-func (f *fakeWriter) WriteNodes(_ context.Context, nodes []sdkingest.Node, scanID string) (int, error) {
+func (f *fakeWriter) WriteObservationNodes(
+	_ context.Context,
+	nodes []sdkingest.Node,
+	scanID string,
+	_ []string,
+) (int, error) {
 	cur := f.inFlight.Add(1)
 	defer f.inFlight.Add(-1)
 	for {
@@ -228,17 +237,22 @@ func (f *fakeWriter) WriteNodes(_ context.Context, nodes []sdkingest.Node, scanI
 	defer f.mu.Unlock()
 	f.nodeCalls = append(f.nodeCalls, writerNodeCall{ScanID: scanID, Nodes: nodes, At: time.Now()})
 	if f.nodesErr != nil {
-		return 0, f.nodesErr
+		return f.nodesWrittenOnErr, f.nodesErr
 	}
 	return len(nodes), nil
 }
 
-func (f *fakeWriter) WriteEdges(_ context.Context, edges []sdkingest.Edge, scanID string) (int, error) {
+func (f *fakeWriter) WriteObservationEdges(
+	_ context.Context,
+	edges []sdkingest.Edge,
+	scanID string,
+	_ []string,
+) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.edgeCalls = append(f.edgeCalls, writerEdgeCall{ScanID: scanID, Edges: edges, At: time.Now()})
 	if f.edgesErr != nil {
-		return 0, f.edgesErr
+		return f.edgesWrittenOnErr, f.edgesErr
 	}
 	return len(edges), nil
 }
@@ -251,6 +265,59 @@ type fakeScanStore struct {
 
 	createErr error
 	updateErr error
+}
+
+type fakeLifecycleScanStore struct {
+	*fakeScanStore
+	dirtyCoverage []string
+}
+
+func (s *fakeLifecycleScanStore) BeginScan(
+	ctx context.Context,
+	scan *model.Scan,
+	dirtyCoverage []string,
+) ([]string, error) {
+	seen := make(map[string]bool)
+	merged := append([]string(nil), s.dirtyCoverage...)
+	for _, key := range merged {
+		seen[key] = true
+	}
+	for _, key := range dirtyCoverage {
+		if key != "" && !seen[key] {
+			seen[key] = true
+			merged = append(merged, key)
+		}
+	}
+	s.dirtyCoverage = append([]string(nil), merged...)
+	return merged, s.CreateScan(ctx, scan)
+}
+
+func (s *fakeLifecycleScanStore) RecordFailure(
+	_ context.Context,
+	failure appdb.ScanFailure,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, key := range failure.DirtyCoverage {
+		found := false
+		for _, existing := range s.dirtyCoverage {
+			if existing == key {
+				found = true
+				break
+			}
+		}
+		if key != "" && !found {
+			s.dirtyCoverage = append(s.dirtyCoverage, key)
+		}
+	}
+	s.updates = append(s.updates, scanUpdate{
+		ID:        failure.ID,
+		Status:    failure.Status,
+		NodeCount: failure.NodeCount,
+		EdgeCount: failure.EdgeCount,
+		Error:     failure.Error,
+	})
+	return s.updateErr
 }
 
 type scanUpdate struct {
@@ -287,6 +354,78 @@ func (s *fakeScanStore) lastUpdate(id string) (scanUpdate, bool) {
 	return scanUpdate{}, false
 }
 
+type fakePublisher struct {
+	finalizations []appdb.FinalizeScanParams
+	err           error
+	lifecycle     *fakeLifecycleScanStore
+}
+
+type snapshotCall struct {
+	scanID      string
+	findings    []model.Finding
+	findingsNil bool
+}
+
+type fakeSnapshotStore struct {
+	snapshots map[string][]model.Finding
+	calls     []snapshotCall
+	err       error
+}
+
+func (s *fakeSnapshotStore) InsertFindings(
+	_ context.Context,
+	scanID string,
+	findings []model.Finding,
+) error {
+	s.calls = append(s.calls, snapshotCall{
+		scanID:      scanID,
+		findings:    append([]model.Finding{}, findings...),
+		findingsNil: findings == nil,
+	})
+	if s.err != nil {
+		return s.err
+	}
+	if s.snapshots == nil {
+		s.snapshots = make(map[string][]model.Finding)
+	}
+	s.snapshots[scanID] = append([]model.Finding{}, findings...)
+	return nil
+}
+
+func (p *fakePublisher) InsertFindings(_ context.Context, _ string, _ []model.Finding) error {
+	return nil
+}
+
+func (p *fakePublisher) FinalizeScan(
+	_ context.Context,
+	params appdb.FinalizeScanParams,
+) (*appdb.PublicationResult, error) {
+	p.finalizations = append(p.finalizations, params)
+	if p.err != nil {
+		return nil, p.err
+	}
+	if p.lifecycle != nil {
+		if params.Publish {
+			p.lifecycle.dirtyCoverage = nil
+		} else {
+			p.lifecycle.dirtyCoverage = append(
+				[]string(nil),
+				params.DirtyCoverage...,
+			)
+		}
+	}
+	if !params.Publish {
+		return &appdb.PublicationResult{}, nil
+	}
+	revision := int64(7)
+	publishedAt := time.Now().UTC()
+	return &appdb.PublicationResult{
+		Revision:    &revision,
+		PublishedAt: &publishedAt,
+		Published:   true,
+	}, nil
+}
+
 // newTestPipeline wires the unit-test mocks together. The production
 // NewPipeline takes concrete types, so test code constructs the struct
 // directly via this helper. The interface fields make this safe.
@@ -312,6 +451,14 @@ func validIngestDataFor(scanID string) *sdkingest.IngestData {
 			CollectorVersion: "0.1.0",
 			Timestamp:        "2026-01-01T00:00:00Z",
 			ScanID:           scanID,
+			Collection: &sdkingest.CollectionReport{
+				State:        sdkingest.OutcomeComplete,
+				CoverageKeys: []string{"mcp"},
+				Outcomes: []sdkingest.CollectionOutcome{{
+					Collector: "mcp",
+					State:     sdkingest.OutcomeComplete,
+				}},
+			},
 		},
 		Graph: sdkingest.GraphData{
 			Nodes: []sdkingest.Node{
@@ -400,6 +547,197 @@ func TestPipeline_HappyPath(t *testing.T) {
 	}
 }
 
+func TestPipeline_PublishesAtomicEmptySnapshotAfterRequiredStages(t *testing.T) {
+	w := &fakeWriter{}
+	ss := &fakeScanStore{}
+	db := &graph.MockGraphDB{
+		StatsResult: &graph.GraphStats{
+			NodeCounts: map[string]int64{"MCPServer": 1},
+			EdgeCounts: map[string]int64{"PROVIDES_TOOL": 1},
+			TotalNodes: 1,
+			TotalEdges: 1,
+		},
+	}
+	publisher := &fakePublisher{}
+	p := newTestPipeline(w, db, ss, noOpRunPP)
+	p.findingStore = publisher
+
+	result, err := p.Ingest(context.Background(), validIngestDataFor("scan-publish"))
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.Outcome != sdkingest.OutcomeComplete ||
+		result.ProjectionStatus != model.ProjectionComplete {
+		t.Fatalf("result = %+v, want complete published projection", result)
+	}
+	if result.PublishedRevision == nil || *result.PublishedRevision != 7 {
+		t.Fatalf("published revision = %v, want 7", result.PublishedRevision)
+	}
+	if len(publisher.finalizations) != 1 {
+		t.Fatalf("finalizations = %d, want 1", len(publisher.finalizations))
+	}
+	finalized := publisher.finalizations[0]
+	if !finalized.Publish {
+		t.Fatal("complete scan was not published")
+	}
+	if finalized.Findings == nil || len(finalized.Findings) != 0 {
+		t.Fatalf("empty snapshot = %#v, want non-nil empty slice", finalized.Findings)
+	}
+	if len(finalized.CompleteDomains) != 1 || finalized.CompleteDomains[0] != "mcp" {
+		t.Fatalf("complete domains = %v, want [mcp]", finalized.CompleteDomains)
+	}
+	if finalized.GraphBefore == nil || finalized.GraphAfter == nil {
+		t.Fatal("publication did not freeze before/after graph totals")
+	}
+}
+
+func TestPipeline_CompatibilitySnapshotFailureClearsSameIDFindings(t *testing.T) {
+	const scanID = "scan-snapshot-retry"
+	w := &fakeWriter{}
+	ss := &fakeScanStore{}
+	db := &graph.MockGraphDB{QueryError: errors.New("snapshot query failed")}
+	store := &fakeSnapshotStore{
+		snapshots: map[string][]model.Finding{
+			scanID: {{ID: "stale-finding"}},
+		},
+	}
+	p := newTestPipeline(w, db, ss, noOpRunPP)
+	p.findingStore = store
+
+	result, err := p.Ingest(context.Background(), validIngestDataFor(scanID))
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.Outcome != sdkingest.OutcomePartial ||
+		result.ProjectionStatus != model.ProjectionIncomplete {
+		t.Fatalf("result = %+v, want partial incomplete projection", result)
+	}
+	if len(store.calls) != 1 {
+		t.Fatalf("snapshot replacement calls = %d, want 1", len(store.calls))
+	}
+	call := store.calls[0]
+	if call.scanID != scanID {
+		t.Fatalf("snapshot replacement scan ID = %q, want %q", call.scanID, scanID)
+	}
+	if call.findingsNil || len(call.findings) != 0 {
+		t.Fatalf("snapshot replacement = %#v (nil=%t), want explicit empty slice", call.findings, call.findingsNil)
+	}
+	if got := len(store.snapshots[scanID]); got != 0 {
+		t.Fatalf("same-ID replacement retained %d stale findings", got)
+	}
+	update, ok := ss.lastUpdate(scanID)
+	if !ok || update.Status != model.ScanStatusCompletedWithErrors {
+		t.Fatalf("scan update = %+v, found=%t; want completed_with_errors", update, ok)
+	}
+}
+
+func TestPipeline_PartialCoverageNeverPublishesOrReconciles(t *testing.T) {
+	w := &fakeWriter{}
+	ss := &fakeScanStore{}
+	db := &graph.MockGraphDB{}
+	publisher := &fakePublisher{}
+	p := newTestPipeline(w, db, ss, noOpRunPP)
+	p.findingStore = publisher
+
+	data := validIngestDataFor("scan-partial")
+	data.Meta.Collection.State = sdkingest.OutcomePartial
+	data.Meta.Collection.Outcomes[0].State = sdkingest.OutcomeFailed
+	result, err := p.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.Outcome != sdkingest.OutcomePartial ||
+		result.ProjectionStatus != model.ProjectionIncomplete {
+		t.Fatalf("result = %+v, want partial incomplete projection", result)
+	}
+	if len(publisher.finalizations) != 1 || publisher.finalizations[0].Publish {
+		t.Fatalf("partial scan publication = %+v, want withheld", publisher.finalizations)
+	}
+	if len(publisher.finalizations[0].CompleteDomains) != 0 {
+		t.Fatalf("partial domains promoted: %v", publisher.finalizations[0].CompleteDomains)
+	}
+	if got := len(db.CallsTo("ExecuteWrite")); got != 0 {
+		t.Fatalf("partial coverage executed %d retirement writes", got)
+	}
+}
+
+func TestPipeline_FailedMCPThenSuccessfulConfigKeepsMCPDirty(t *testing.T) {
+	lifecycle := &fakeLifecycleScanStore{fakeScanStore: &fakeScanStore{}}
+	publisher := &fakePublisher{lifecycle: lifecycle}
+	p := newTestPipeline(
+		&fakeWriter{},
+		&graph.MockGraphDB{},
+		lifecycle,
+		noOpRunPP,
+	)
+	p.findingStore = publisher
+
+	failedMCP := validIngestDataFor("scan-failed-mcp")
+	failedMCP.Meta.Collection.State = sdkingest.OutcomeFailed
+	failedMCP.Meta.Collection.Outcomes[0].State = sdkingest.OutcomeFailed
+	first, err := p.Ingest(context.Background(), failedMCP)
+	if err != nil {
+		t.Fatalf("failed MCP ingest: %v", err)
+	}
+	if first.Outcome != sdkingest.OutcomePartial {
+		t.Fatalf("failed MCP result = %+v", first)
+	}
+
+	successfulConfig := validIngestDataFor("scan-successful-config")
+	successfulConfig.Meta.Collector = "config"
+	successfulConfig.Meta.Collection = &sdkingest.CollectionReport{
+		State:        sdkingest.OutcomeComplete,
+		CoverageKeys: []string{"config"},
+		Outcomes: []sdkingest.CollectionOutcome{{
+			Collector: "config",
+			State:     sdkingest.OutcomeComplete,
+		}},
+	}
+	second, err := p.Ingest(context.Background(), successfulConfig)
+	if err != nil {
+		t.Fatalf("successful config ingest: %v", err)
+	}
+	if second.Outcome != sdkingest.OutcomePartial ||
+		second.ProjectionStatus != model.ProjectionIncomplete {
+		t.Fatalf("config result laundered MCP dirtiness: %+v", second)
+	}
+	if len(publisher.finalizations) != 2 {
+		t.Fatalf("finalizations = %d, want two", len(publisher.finalizations))
+	}
+	finalized := publisher.finalizations[1]
+	if finalized.Publish ||
+		len(finalized.DirtyCoverage) != 1 ||
+		finalized.DirtyCoverage[0] != "mcp" {
+		t.Fatalf("config finalization = %+v, want dirty MCP only", finalized)
+	}
+}
+
+func TestPipeline_PublicationFailureMarksProjectionIncomplete(t *testing.T) {
+	w := &fakeWriter{}
+	ss := &fakeLifecycleScanStore{fakeScanStore: &fakeScanStore{}}
+	publisher := &fakePublisher{err: errors.New("publication transaction failed")}
+	p := newTestPipeline(w, &graph.MockGraphDB{}, ss, noOpRunPP)
+	p.findingStore = publisher
+
+	result, err := p.Ingest(context.Background(), validIngestDataFor("scan-publication-fail"))
+
+	if err != nil {
+		t.Fatalf("post-write publication failure should be represented in stages: %v", err)
+	}
+	if result.Outcome != sdkingest.OutcomePartial ||
+		result.ProjectionStatus != model.ProjectionIncomplete {
+		t.Fatalf("result = %+v, want partial incomplete", result)
+	}
+	last := result.Stages[len(result.Stages)-1]
+	if last.Name != "publication" || last.State != sdkingest.OutcomeFailed {
+		t.Fatalf("publication stage = %+v", last)
+	}
+	update, ok := ss.lastUpdate("scan-publication-fail")
+	if !ok || update.Status != model.ScanStatusCompletedWithErrors {
+		t.Fatalf("failure lifecycle update = %+v, found=%t", update, ok)
+	}
+}
+
 func TestPipeline_OrderingNodesBeforeEdgesBeforePostProcess(t *testing.T) {
 	w := &fakeWriter{}
 	ss := &fakeScanStore{}
@@ -485,16 +823,19 @@ func TestPipeline_ValidationError_UnknownNodeKind(t *testing.T) {
 
 func TestPipeline_WriteNodesFailure_ScanMarkedFailed(t *testing.T) {
 	wantErr := errors.New("neo4j unavailable")
-	w := &fakeWriter{nodesErr: wantErr}
-	ss := &fakeScanStore{}
+	w := &fakeWriter{nodesErr: wantErr, nodesWrittenOnErr: 1}
+	ss := &fakeLifecycleScanStore{fakeScanStore: &fakeScanStore{}}
 	p := newTestPipeline(w, &graph.MockGraphDB{}, ss, noOpRunPP)
 
-	_, err := p.Ingest(context.Background(), validIngestDataFor("scan-write-fail"))
+	res, err := p.Ingest(context.Background(), validIngestDataFor("scan-write-fail"))
 	if err == nil {
 		t.Fatal("expected error from write")
 	}
 	if !errors.Is(err, wantErr) {
 		t.Errorf("expected wrapped wantErr, got %v", err)
+	}
+	if res == nil || res.NodesWritten != 1 {
+		t.Fatalf("partial result nodes_written = %+v, want 1", res)
 	}
 
 	upd, ok := ss.lastUpdate("scan-write-fail")
@@ -503,6 +844,9 @@ func TestPipeline_WriteNodesFailure_ScanMarkedFailed(t *testing.T) {
 	}
 	if upd.Status != model.ScanStatusFailed {
 		t.Errorf("expected failed status, got %s", upd.Status)
+	}
+	if upd.NodeCount != 1 || upd.EdgeCount != 0 {
+		t.Errorf("persisted partial counts = %d/%d, want 1/0", upd.NodeCount, upd.EdgeCount)
 	}
 	if upd.Error == "" {
 		t.Errorf("expected error message recorded, got empty string")
@@ -513,6 +857,26 @@ func TestPipeline_WriteNodesFailure_ScanMarkedFailed(t *testing.T) {
 	}
 }
 
+func TestPipeline_LifecycleStartFailureStopsBeforeGraphMutation(t *testing.T) {
+	w := &fakeWriter{}
+	ss := &fakeLifecycleScanStore{fakeScanStore: &fakeScanStore{
+		createErr: errors.New("postgres unavailable"),
+	}}
+	p := newTestPipeline(w, &graph.MockGraphDB{}, ss, noOpRunPP)
+
+	result, err := p.Ingest(context.Background(), validIngestDataFor("scan-start-fail"))
+
+	if err == nil {
+		t.Fatal("expected lifecycle start error")
+	}
+	if result != nil {
+		t.Fatalf("result = %+v, want nil before graph mutation", result)
+	}
+	if len(w.nodeCalls) != 0 || len(w.edgeCalls) != 0 {
+		t.Fatalf("graph mutated after lifecycle start failure: nodes=%d edges=%d", len(w.nodeCalls), len(w.edgeCalls))
+	}
+}
+
 // TestPipeline_WriteEdgesFailure_NoRollback documents an intentional design
 // choice: when WriteEdges fails after a successful WriteNodes, the nodes are
 // NOT rolled back. The pipeline records the scan as failed and surfaces the
@@ -520,16 +884,19 @@ func TestPipeline_WriteNodesFailure_ScanMarkedFailed(t *testing.T) {
 // future improvement).
 func TestPipeline_WriteEdgesFailure_NoRollback(t *testing.T) {
 	wantErr := errors.New("edge write busted")
-	w := &fakeWriter{edgesErr: wantErr}
+	w := &fakeWriter{edgesErr: wantErr, edgesWrittenOnErr: 1}
 	ss := &fakeScanStore{}
 	p := newTestPipeline(w, &graph.MockGraphDB{}, ss, noOpRunPP)
 
-	_, err := p.Ingest(context.Background(), validIngestDataFor("scan-edge-fail"))
+	res, err := p.Ingest(context.Background(), validIngestDataFor("scan-edge-fail"))
 	if err == nil {
 		t.Fatal("expected edge-write error")
 	}
 	if !errors.Is(err, wantErr) {
 		t.Errorf("expected wrapped wantErr, got %v", err)
+	}
+	if res == nil || res.NodesWritten != 2 || res.EdgesWritten != 1 {
+		t.Fatalf("partial result = %+v, want nodes=2 edges=1", res)
 	}
 
 	// Nodes were written before edges failed; no rollback.
@@ -543,6 +910,9 @@ func TestPipeline_WriteEdgesFailure_NoRollback(t *testing.T) {
 	}
 	if upd.Status != model.ScanStatusFailed {
 		t.Errorf("expected failed status, got %s", upd.Status)
+	}
+	if upd.NodeCount != 2 || upd.EdgeCount != 1 {
+		t.Errorf("persisted partial counts = %d/%d, want 2/1", upd.NodeCount, upd.EdgeCount)
 	}
 }
 
@@ -588,11 +958,11 @@ func TestPipeline_PostProcessorFailureMarksScanCompletedWithErrors(t *testing.T)
 	// Collection succeeded, so the real node/edge counts must still be
 	// persisted (validIngestDataFor writes 2 nodes + 1 edge) — not 0/0.
 	if upd.NodeCount != 2 || upd.EdgeCount != 1 {
-		t.Errorf("expected real counts persisted (nodes=2 edges=1); got nodes=%d edges=%d", upd.NodeCount, upd.EdgeCount)
+		t.Errorf("expected committed write rows persisted (nodes=2 edges=1); got nodes=%d edges=%d", upd.NodeCount, upd.EdgeCount)
 	}
 }
 
-func TestPipeline_EmptyData_NodesAndEdgesZero(t *testing.T) {
+func TestPipeline_LegacyEmptyDataIsNonDestructiveAndUnpublished(t *testing.T) {
 	w := &fakeWriter{}
 	ss := &fakeScanStore{}
 	p := newTestPipeline(w, &graph.MockGraphDB{}, ss, noOpRunPP)
@@ -618,8 +988,8 @@ func TestPipeline_EmptyData_NodesAndEdgesZero(t *testing.T) {
 	}
 
 	upd, _ := ss.lastUpdate("scan-empty")
-	if upd.Status != model.ScanStatusCompleted {
-		t.Errorf("empty ingest still completes; got %s", upd.Status)
+	if upd.Status != model.ScanStatusCompletedWithErrors {
+		t.Errorf("unknown legacy coverage must not publish; got %s", upd.Status)
 	}
 }
 
@@ -784,6 +1154,14 @@ func TestPipeline_PostProcessorReceivesCorrectCollector(t *testing.T) {
 	p := newTestPipeline(w, db, ss, runPP)
 	d := validIngestDataFor("scan-cfg")
 	d.Meta.Collector = "config"
+	d.Meta.Collection = &sdkingest.CollectionReport{
+		State:        sdkingest.OutcomeComplete,
+		CoverageKeys: []string{"config"},
+		Outcomes: []sdkingest.CollectionOutcome{{
+			Collector: "config",
+			State:     sdkingest.OutcomeComplete,
+		}},
+	}
 	if _, err := p.Ingest(context.Background(), d); err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -810,6 +1188,114 @@ func TestPipeline_NormalizerWarningsPropagated(t *testing.T) {
 	}
 	if len(res.Warnings) == 0 {
 		t.Error("expected normalizer warnings, got none")
+	}
+}
+
+func TestPipeline_SafeNormalizationWarningStillPublishes(t *testing.T) {
+	publisher := &fakePublisher{}
+	p := newTestPipeline(
+		&fakeWriter{},
+		&graph.MockGraphDB{},
+		&fakeScanStore{},
+		noOpRunPP,
+	)
+	p.findingStore = publisher
+	data := validIngestDataFor("scan-safe-normalization-warning")
+	data.Graph.Nodes[0].Properties["nested"] = map[string]any{
+		"kind": "lossless-json",
+	}
+
+	result, err := p.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.Outcome != sdkingest.OutcomeComplete ||
+		result.NormalizationStatus != sdkingest.NormalizationStatusWarning {
+		t.Fatalf("result = %+v, want published warning", result)
+	}
+	if len(publisher.finalizations) != 1 || !publisher.finalizations[0].Publish {
+		t.Fatalf("safe warning withheld publication: %+v", publisher.finalizations)
+	}
+	finalized := publisher.finalizations[0]
+	if finalized.NormalizationStatus != sdkingest.NormalizationStatusWarning ||
+		len(finalized.NormalizationWarnings) != 1 ||
+		finalized.NormalizationWarnings[0].PublicationUnsafe {
+		t.Fatalf("persisted normalization classification = %+v", finalized)
+	}
+}
+
+func TestPipeline_UnsafeNormalizationWarningWithholdsPublication(t *testing.T) {
+	publisher := &fakePublisher{}
+	p := newTestPipeline(
+		&fakeWriter{},
+		&graph.MockGraphDB{},
+		&fakeScanStore{},
+		noOpRunPP,
+	)
+	p.findingStore = publisher
+	data := validIngestDataFor("scan-unsafe-normalization-warning")
+	data.Graph.Nodes[0].Properties["nested"] = map[string]any{
+		"unsupported": make(chan int),
+	}
+
+	result, err := p.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.Outcome != sdkingest.OutcomePartial ||
+		result.NormalizationStatus != sdkingest.NormalizationStatusDegraded {
+		t.Fatalf("result = %+v, want degraded incomplete projection", result)
+	}
+	if len(publisher.finalizations) != 1 || publisher.finalizations[0].Publish {
+		t.Fatalf("unsafe warning publication = %+v, want withheld", publisher.finalizations)
+	}
+	if warnings := publisher.finalizations[0].NormalizationWarnings; len(warnings) != 1 || !warnings[0].PublicationUnsafe {
+		t.Fatalf("unsafe warning classification was not persisted: %+v", warnings)
+	}
+}
+
+func TestPipeline_PropertyIncompleteObservationWithholdsPublication(t *testing.T) {
+	db := &graph.MockGraphDB{
+		QueryFunc: func(
+			_ context.Context,
+			cypher string,
+			_ map[string]any,
+		) ([]map[string]any, error) {
+			if strings.Contains(cypher, "incomplete_property_nodes") {
+				return []map[string]any{{
+					"legacy_nodes":                      int64(0),
+					"legacy_relationships":              int64(0),
+					"unscoped_nodes":                    int64(0),
+					"unscoped_relationships":            int64(0),
+					"incomplete_property_nodes":         int64(1),
+					"incomplete_property_relationships": int64(0),
+				}}, nil
+			}
+			return []map[string]any{}, nil
+		},
+	}
+	publisher := &fakePublisher{}
+	p := newTestPipeline(&fakeWriter{}, db, &fakeScanStore{}, noOpRunPP)
+	p.findingStore = publisher
+
+	result, err := p.Ingest(
+		context.Background(),
+		validIngestDataFor("scan-property-incomplete"),
+	)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.Outcome != sdkingest.OutcomePartial ||
+		result.ProjectionStatus != model.ProjectionIncomplete {
+		t.Fatalf("property-incomplete result = %+v", result)
+	}
+	if len(publisher.finalizations) != 1 ||
+		publisher.finalizations[0].Publish ||
+		publisher.finalizations[0].ObservationStatus != model.LifecyclePartial {
+		t.Fatalf("property-incomplete finalization = %+v", publisher.finalizations)
+	}
+	if dirty := publisher.finalizations[0].DirtyCoverage; len(dirty) != 1 || dirty[0] != legacyUnknownCoverageKey {
+		t.Fatalf("property-incomplete dirty coverage = %v", dirty)
 	}
 }
 
@@ -897,6 +1383,73 @@ func TestPipeline_FailScanScanStoreError(t *testing.T) {
 	}
 	if !errors.Is(err, wantErr) {
 		t.Errorf("expected the original write error, got %v", err)
+	}
+}
+
+func TestPipeline_PersistsGraphResolvedIdentityQuarantine(t *testing.T) {
+	db := &graph.MockGraphDB{
+		QueryFunc: func(
+			_ context.Context,
+			cypher string,
+			_ map[string]any,
+		) ([]map[string]any, error) {
+			switch {
+			case strings.Contains(cypher, "collect(DISTINCT current.objectid)"):
+				return []map[string]any{{
+					"legacy_id":     "legacy-stdio",
+					"legacy_exists": true,
+					"current_ids":   []any{"current-a", "current-b"},
+				}}, nil
+			case strings.Contains(cypher, "identity_quarantined_nodes"):
+				return []map[string]any{{
+					"legacy_nodes":                      int64(0),
+					"legacy_relationships":              int64(0),
+					"unscoped_nodes":                    int64(0),
+					"unscoped_relationships":            int64(0),
+					"incomplete_property_nodes":         int64(0),
+					"incomplete_property_relationships": int64(0),
+					"identity_quarantined_nodes":        int64(3),
+				}}, nil
+			default:
+				return []map[string]any{}, nil
+			}
+		},
+	}
+	publisher := &fakePublisher{}
+	p := newTestPipeline(&fakeWriter{}, db, &fakeScanStore{}, noOpRunPP)
+	p.findingStore = publisher
+	data := validIngestDataFor("scan-identity-quarantine")
+	data.Meta.IdentityAliases = []sdkingest.IdentityAlias{{
+		LegacyID:   "legacy-stdio",
+		CurrentIDs: []string{"current-a"},
+		State:      sdkingest.IdentityAliasOneToOne,
+	}}
+
+	result, err := p.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.Outcome != sdkingest.OutcomePartial ||
+		result.ProjectionStatus != model.ProjectionIncomplete {
+		t.Fatalf("quarantined result = %+v", result)
+	}
+	if len(publisher.finalizations) != 1 || publisher.finalizations[0].Publish {
+		t.Fatalf("identity quarantine was published: %+v", publisher.finalizations)
+	}
+	aliases, ok := publisher.finalizations[0].Scan.Metadata["identity_aliases"].([]sdkingest.IdentityAlias)
+	if !ok || len(aliases) != 1 ||
+		aliases[0].State != sdkingest.IdentityAliasAmbiguous ||
+		len(aliases[0].CurrentIDs) != 2 {
+		t.Fatalf("persisted graph-resolved aliases = %#v", publisher.finalizations[0].Scan.Metadata["identity_aliases"])
+	}
+	var sawCompatibilityStage bool
+	for _, stage := range result.Stages {
+		if stage.Name == "identity_compatibility" {
+			sawCompatibilityStage = stage.State == sdkingest.OutcomeComplete
+		}
+	}
+	if !sawCompatibilityStage {
+		t.Fatalf("identity compatibility stage missing: %+v", result.Stages)
 	}
 }
 

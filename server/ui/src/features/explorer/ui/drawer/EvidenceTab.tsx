@@ -14,6 +14,12 @@ const EVIDENCE_KEYS = [
   "annotations",
   "security_schemes",
   "signatures",
+  "probe_status",
+  "configuration_observed",
+  "configured_via",
+  "configured_auth_method",
+  "assertion_type",
+  "confidence_scope",
 ];
 
 export function EvidenceTab({ node }: { node: APINode }) {
@@ -31,9 +37,47 @@ export function EvidenceTab({ node }: { node: APINode }) {
   const lastSeen = String(props.last_seen ?? "");
   const createdAt = String(props.created_at ?? "");
   const objectId = node.id;
+  const observation =
+    props.probe_status === "verified"
+      ? {
+          title: "Directly verified",
+          detail:
+            "A direct probe verified this entity at collection time.",
+          className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
+        }
+      : props.configuration_observed === true ||
+          props.probe_status === "configured_unverified"
+        ? {
+            title: "Configured, not verified",
+            detail:
+              "AgentHound observed a configuration reference. Service availability and authentication were not directly verified.",
+            className: "border-amber-400/30 bg-amber-400/10 text-amber-200",
+          }
+        : props.probe_status === "failed"
+          ? {
+              title: "Verification failed",
+              detail:
+                "A direct verification attempt failed; configuration presence does not establish current availability.",
+              className:
+                "border-destructive/30 bg-destructive/10 text-destructive",
+            }
+          : {
+              title: "Verification status unknown",
+              detail:
+                "No direct verification status was recorded. Do not infer availability or absence from this node alone.",
+              className: "border-border bg-black/30 text-muted-foreground",
+            };
 
   return (
     <div className="space-y-5">
+      <div className={`rounded-[3px] border p-3 ${observation.className}`}>
+        <div className="font-mono text-[10px] font-semibold uppercase tracking-[0.1em]">
+          {observation.title}
+        </div>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          {observation.detail}
+        </p>
+      </div>
       <div>
         <div className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
           Identity

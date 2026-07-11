@@ -436,6 +436,9 @@ func EmitDiscoveryNodes(targets []action.Target) ingest.GraphData {
 					"transport":      "http",
 					"discovered_via": "protoscan",
 					"protocol":       "mcp",
+					"auth_method":    string(common.AuthUnknown),
+					"auth_assurance": string(common.AuthAssuranceUnknown),
+					"auth_evidence":  common.AuthEvidenceUnknown,
 				},
 			})
 		case "a2a":
@@ -449,11 +452,15 @@ func EmitDiscoveryNodes(targets []action.Target) ingest.GraphData {
 				ID:    id,
 				Kinds: []string{"A2AAgent"},
 				Properties: map[string]any{
-					"objectid":       id,
-					"agent_card_url": cardURL,
-					"endpoint":       idInput,
-					"discovered_via": "protoscan",
-					"protocol":       "a2a",
+					"objectid":                      id,
+					"agent_card_url":                cardURL,
+					"endpoint":                      idInput,
+					"discovered_via":                "protoscan",
+					"protocol":                      "a2a",
+					"auth_method":                   string(common.AuthUnknown),
+					"auth_assurance":                string(common.AuthAssuranceUnknown),
+					"auth_evidence":                 common.AuthEvidenceUnknown,
+					"signature_verification_status": "unknown",
 				},
 			})
 		}

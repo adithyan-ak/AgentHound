@@ -3,6 +3,7 @@ package processors
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
@@ -63,8 +64,16 @@ func TestRiskScore_ProcessSuccess(t *testing.T) {
 	}
 	for _, c := range updateCalls {
 		props, _ := c.Args[1].(map[string]any)
-		if _, ok := props["risk_score"]; !ok {
-			t.Error("expected risk_score property in update")
+		for _, key := range []string{
+			"risk_score",
+			"risk_score_min",
+			"risk_score_max",
+			"risk_assessment_complete",
+			"risk_unknown_factors",
+		} {
+			if _, ok := props[key]; !ok {
+				t.Errorf("expected %s property in update: %+v", key, props)
+			}
 		}
 	}
 }
@@ -84,13 +93,113 @@ func TestRiskScore_ProcessIncludesA2AAgents(t *testing.T) {
 	}
 
 	var sawA2A bool
-	for _, call := range mock.CallsTo("ListNodes") {
+	for _, call := range mock.CallsTo("ListNodesPage") {
 		if kind, _ := call.Args[0].(string); kind == "A2AAgent" {
 			sawA2A = true
 		}
 	}
 	if !sawA2A {
 		t.Fatal("risk_score did not list A2AAgent nodes")
+	}
+}
+
+func TestScoreNodesPagesPastLegacyTenThousandCap(t *testing.T) {
+	const total = 10001
+	mock := &graph.MockGraphDB{}
+	mock.ListNodesPageFunc = func(_ context.Context, kind string, limit, offset int, revision string) ([]ingest.Node, graph.PageInfo, error) {
+		if kind != "MCPTool" {
+			t.Fatalf("kind = %q, want MCPTool", kind)
+		}
+		if offset > 0 && revision != "rev-1" {
+			t.Fatalf("continuation revision = %q, want rev-1", revision)
+		}
+		end := min(offset+limit, total)
+		nodes := make([]ingest.Node, 0, end-offset)
+		for i := offset; i < end; i++ {
+			nodes = append(nodes, ingest.Node{ID: fmt.Sprintf("tool-%05d", i)})
+		}
+		return nodes, graph.PageInfo{
+			Offset: offset, Limit: limit, Total: total,
+			HasMore: end < total, Complete: end == total, Revision: "rev-1",
+		}, nil
+	}
+
+	updated, err := scoreNodes(
+		context.Background(),
+		mock,
+		"MCPTool",
+		func(_ context.Context, _ graph.GraphDB, _ string) (float64, error) {
+			return 0.5, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("scoreNodes() error = %v", err)
+	}
+	if updated != total {
+		t.Fatalf("updated = %d, want %d", updated, total)
+	}
+	if got := len(mock.CallsTo("ListNodesPage")); got != 11 {
+		t.Fatalf("ListNodesPage calls = %d, want 11", got)
+	}
+}
+
+func TestScoreNodesRejectsIncompleteCollectionBeforeUpdating(t *testing.T) {
+	tests := []struct {
+		name string
+		page graph.PageInfo
+	}{
+		{
+			name: "incomplete final page",
+			page: graph.PageInfo{
+				Offset: 0, Limit: 1000, Total: 1,
+				Complete: false, Revision: "rev-1",
+			},
+		},
+		{
+			name: "count mismatch",
+			page: graph.PageInfo{
+				Offset: 0, Limit: 1000, Total: 2,
+				Complete: true, Revision: "rev-1",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &graph.MockGraphDB{
+				ListNodesPageFunc: func(
+					_ context.Context,
+					_ string,
+					_, _ int,
+					_ string,
+				) ([]ingest.Node, graph.PageInfo, error) {
+					return []ingest.Node{{ID: "tool-1"}}, tt.page, nil
+				},
+			}
+			scoreCalls := 0
+
+			updated, err := scoreNodes(
+				context.Background(),
+				mock,
+				"MCPTool",
+				func(_ context.Context, _ graph.GraphDB, _ string) (float64, error) {
+					scoreCalls++
+					return 0.5, nil
+				},
+			)
+
+			if err == nil {
+				t.Fatal("scoreNodes() error = nil, want incomplete collection error")
+			}
+			if updated != 0 || scoreCalls != 0 ||
+				len(mock.CallsTo("UpdateNodeProperties")) != 0 {
+				t.Fatalf(
+					"partial collection was scored: updated=%d score_calls=%d",
+					updated,
+					scoreCalls,
+				)
+			}
+		})
 	}
 }
 

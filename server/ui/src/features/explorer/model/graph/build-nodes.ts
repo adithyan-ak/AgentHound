@@ -135,9 +135,19 @@ export function buildLogicalNodes(
     }
 
     const severity = computeNodeSeverity(n, edges);
-    const riskScore = Number(
-      (n.properties as Record<string, unknown>)?.risk_score ?? 0,
-    );
+    const riskRaw = (n.properties as Record<string, unknown>)?.risk_score;
+    const riskScore =
+      riskRaw == null || riskRaw === "" || !Number.isFinite(Number(riskRaw))
+        ? null
+        : Number(riskRaw);
+    const probeStatus = n.properties?.probe_status;
+    const evidenceStatus =
+      probeStatus === "verified"
+        ? "verified"
+        : probeStatus === "configured_unverified" ||
+            n.properties?.configuration_observed === true
+          ? "configured-unverified"
+          : null;
     const sizeMultiplier = chokepoints?.get(n.id) ?? 1;
 
     hexNodes.push({
@@ -149,6 +159,7 @@ export function buildLogicalNodes(
         kindTag: kindTag(kind),
         severity,
         riskScore,
+        evidenceStatus,
         properties: n.properties ?? {},
         dim,
         emphasized,

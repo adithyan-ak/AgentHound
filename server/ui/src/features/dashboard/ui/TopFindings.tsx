@@ -16,14 +16,14 @@ export function TopFindings() {
   const navigate = useNavigate();
   const { data: findings, isLoading } = useFindings();
 
-  const top = (findings ?? [])
+  const ranked = (findings ?? [])
     .filter((f) => f.severity === "critical" || f.severity === "high")
     .sort(
       (a, b) =>
         (SEVERITY_RANK[b.severity] ?? 0) - (SEVERITY_RANK[a.severity] ?? 0) ||
         (b.confidence ?? 0) - (a.confidence ?? 0),
-    )
-    .slice(0, 7);
+    );
+  const top = ranked.slice(0, 7);
 
   return (
     <WidgetCard
@@ -32,12 +32,19 @@ export function TopFindings() {
       icon={Siren}
       accent={severityColor("critical")}
       action={
-        <Link
-          to="/findings"
-          className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.1em] text-primary transition-colors hover:text-primary/80"
-        >
-          View all <ArrowRight className="h-3 w-3" />
-        </Link>
+        <div className="flex items-center gap-3">
+          {ranked.length > 0 && (
+            <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
+              Top {top.length} of {ranked.length}
+            </span>
+          )}
+          <Link
+            to="/findings"
+            className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.1em] text-primary transition-colors hover:text-primary/80"
+          >
+            View all <ArrowRight className="h-3 w-3" />
+          </Link>
+        </div>
       }
     >
       <AsyncBoundary

@@ -11,6 +11,7 @@ import (
 type HostInfo struct {
 	Hostname  string
 	IP        string
+	Scope     HostScope
 	IsLocal   bool
 	IsPrivate bool
 	IsPublic  bool
@@ -23,6 +24,15 @@ type HostInfo struct {
 	// by the scanner — multicast is not a unicast scanning target.
 	IsMulticast bool
 }
+
+type HostScope string
+
+const (
+	HostScopeUnknown HostScope = "unknown"
+	HostScopeLocal   HostScope = "local"
+	HostScopePrivate HostScope = "private"
+	HostScopePublic  HostScope = "public"
+)
 
 func ClassifyHost(hostOrURL string) HostInfo {
 	host := hostOrURL
@@ -59,14 +69,20 @@ func ClassifyHost(hostOrURL string) HostInfo {
 	}
 
 	if isLocal(host) {
+		info.Scope = HostScopeLocal
 		info.IsLocal = true
 		return info
 	}
 	if isPrivate(host) {
+		info.Scope = HostScopePrivate
 		info.IsPrivate = true
 		return info
 	}
-
+	if net.ParseIP(host) == nil {
+		info.Scope = HostScopeUnknown
+		return info
+	}
+	info.Scope = HostScopePublic
 	info.IsPublic = true
 	return info
 }

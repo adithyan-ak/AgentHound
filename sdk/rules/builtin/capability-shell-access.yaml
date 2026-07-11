@@ -12,10 +12,8 @@ severity: high
 owasp: [MCP01]
 tags: [capability, shell-access]
 matcher:
-  type: keyword
-  keywords: [shell, bash, terminal, command, exec, subprocess, "sh -c", powershell]
-  case_insensitive: true
-  match_mode: any
+  type: regex
+  pattern: '(?is)(?:\b(?:run[_-]?shell[_-]?command|run[_-]?command|execute[_-]?command|exec[_-]?command)\b|\bsh\s+-c\b|\bshell[ _-]?command\b|\b(?:run|execute|exec|spawn|invoke)\b.{0,64}\b(?:shell|bash|terminal|command|subprocess|powershell)\b|\b(?:shell|bash|terminal|command|subprocess|powershell)\b.{0,64}\b(?:run|execute|exec|spawn|invoke)\b)'
 emit:
   finding_type: capability_classification
   property_key: capability_surface

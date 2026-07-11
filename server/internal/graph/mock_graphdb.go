@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
@@ -30,8 +31,13 @@ type MockGraphDB struct {
 	GetNodeEdges  []ingest.Edge
 	GetNodeError  error
 
-	ListNodesResult []ingest.Node
-	ListNodesError  error
+	ListNodesResult   []ingest.Node
+	ListNodesError    error
+	ListNodesPageInfo PageInfo
+	ListNodesPageFunc func(ctx context.Context, kind string, limit, offset int, revision string) ([]ingest.Node, PageInfo, error)
+
+	StatsResult *GraphStats
+	StatsError  error
 
 	HasAPOCResult bool
 
@@ -69,6 +75,17 @@ func (m *MockGraphDB) Query(ctx context.Context, cypher string, params map[strin
 	if m.QueryFunc != nil {
 		return m.QueryFunc(ctx, cypher, params)
 	}
+	if m.QueryResult == nil && strings.Contains(cypher, "legacy_nodes") {
+		return []map[string]any{{
+			"legacy_nodes":                      int64(0),
+			"legacy_relationships":              int64(0),
+			"unscoped_nodes":                    int64(0),
+			"unscoped_relationships":            int64(0),
+			"incomplete_property_nodes":         int64(0),
+			"incomplete_property_relationships": int64(0),
+			"identity_quarantined_nodes":        int64(0),
+		}}, m.QueryError
+	}
 	return m.QueryResult, m.QueryError
 }
 
@@ -104,6 +121,40 @@ func (m *MockGraphDB) GetNode(ctx context.Context, objectID string) (*ingest.Nod
 func (m *MockGraphDB) ListNodes(ctx context.Context, kind string, limit int) ([]ingest.Node, error) {
 	m.record("ListNodes", kind, limit)
 	return m.ListNodesResult, m.ListNodesError
+}
+
+func (m *MockGraphDB) ListNodesPage(
+	ctx context.Context,
+	kind string,
+	limit, offset int,
+	revision string,
+) ([]ingest.Node, PageInfo, error) {
+	m.record("ListNodesPage", kind, limit, offset, revision)
+	if m.ListNodesPageFunc != nil {
+		return m.ListNodesPageFunc(ctx, kind, limit, offset, revision)
+	}
+	page := m.ListNodesPageInfo
+	if page == (PageInfo{}) {
+		page = PageInfo{
+			Offset:   offset,
+			Limit:    limit,
+			Total:    int64(len(m.ListNodesResult)),
+			Complete: true,
+			Revision: "mock-revision",
+		}
+	}
+	return m.ListNodesResult, page, m.ListNodesError
+}
+
+func (m *MockGraphDB) GetStats(ctx context.Context) (*GraphStats, error) {
+	m.record("GetStats")
+	if m.StatsResult != nil || m.StatsError != nil {
+		return m.StatsResult, m.StatsError
+	}
+	return &GraphStats{
+		NodeCounts: map[string]int64{},
+		EdgeCounts: map[string]int64{},
+	}, nil
 }
 
 func (m *MockGraphDB) HasAPOC(ctx context.Context) bool {

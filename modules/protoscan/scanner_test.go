@@ -151,6 +151,9 @@ func TestEmitDiscoveryNodes_MCP(t *testing.T) {
 	if got, _ := n.Properties["discovered_via"].(string); got != "protoscan" {
 		t.Errorf("discovered_via = %q, want protoscan", got)
 	}
+	if n.Properties["auth_method"] != "unknown" || n.Properties["auth_assurance"] != "unknown" {
+		t.Errorf("sparse discovery claimed auth absence: %+v", n.Properties)
+	}
 }
 
 // mcpStubAtPath answers the JSON-RPC initialize ONLY at wantPath (404
@@ -241,6 +244,10 @@ func TestEmitDiscoveryNodes_A2AUsesBaseURLID(t *testing.T) {
 	}
 	if got, _ := g.Nodes[0].Properties["endpoint"].(string); got != "https://agent.example.com" {
 		t.Errorf("endpoint = %q, want normalized base URL", got)
+	}
+	if g.Nodes[0].Properties["auth_method"] != "unknown" ||
+		g.Nodes[0].Properties["signature_verification_status"] != "unknown" {
+		t.Errorf("sparse A2A discovery claimed assessed posture: %+v", g.Nodes[0].Properties)
 	}
 }
 

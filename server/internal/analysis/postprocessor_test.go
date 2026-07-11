@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -65,26 +66,32 @@ func TestCleanStaleCompositeEdges_CallsExecuteWrite(t *testing.T) {
 		t.Fatalf("expected current_scan_id=scan-42, got %v", params["current_scan_id"])
 	}
 	collectors, _ := params["collectors"].([]string)
-	if len(collectors) != 3 || collectors[0] != "mcp" || collectors[1] != "config" || collectors[2] != "cross_service_credential_chain" {
-		t.Fatalf("unexpected collectors param: %v", params["collectors"])
+	want := []string{"mcp", "cross_service_credential_chain", "config"}
+	if len(collectors) != len(want) {
+		t.Fatalf("collectors = %v, want %v", collectors, want)
+	}
+	for i := range want {
+		if collectors[i] != want[i] {
+			t.Fatalf("collectors = %v, want %v", collectors, want)
+		}
 	}
 }
 
-func TestCleanStaleCompositeEdges_IncludesDerivedCredentialChain(t *testing.T) {
-	db := &graph.MockGraphDB{ExecuteWriteResult: 1}
-	_, err := cleanStaleCompositeEdges(context.Background(), db, "scan-42", []string{"config"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestExpandCompositeCollectors_CoversMergedAndCredentialDependencies(t *testing.T) {
+	got := expandCompositeCollectors([]string{"scan"})
+	want := []string{"scan", "mcp", "config", "a2a", "cross_service_credential_chain"}
+	if len(got) != len(want) {
+		t.Fatalf("expanded collectors = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("expanded collectors = %v, want %v", got, want)
+		}
 	}
 
-	calls := db.CallsTo("ExecuteWrite")
-	if len(calls) != 1 {
-		t.Fatalf("expected 1 ExecuteWrite call, got %d", len(calls))
-	}
-	params, _ := calls[0].Args[1].(map[string]any)
-	collectors, _ := params["collectors"].([]string)
-	if len(collectors) != 2 || collectors[0] != "config" || collectors[1] != "cross_service_credential_chain" {
-		t.Fatalf("unexpected collectors param: %v", params["collectors"])
+	got = expandCompositeCollectors([]string{"mcp"})
+	if len(got) != 2 || got[0] != "mcp" || got[1] != "cross_service_credential_chain" {
+		t.Fatalf("mcp dependencies = %v", got)
 	}
 }
 
@@ -115,6 +122,31 @@ func TestRunPostProcessors_RunsAll(t *testing.T) {
 	for _, p := range processors {
 		if !namesSeen[p.Name()] {
 			t.Errorf("processor %q not found in stats", p.Name())
+		}
+	}
+	writes := db.CallsTo("ExecuteWrite")
+	if len(writes) == 0 {
+		t.Fatal("expected processor and cleanup writes")
+	}
+	lastCypher, _ := writes[len(writes)-1].Args[0].(string)
+	if !strings.Contains(lastCypher, "r.scan_id <> $current_scan_id") {
+		t.Fatalf("stale cleanup was not the final write: %s", lastCypher)
+	}
+}
+
+func TestRunPostProcessors_FailureKeepsPriorCompositeEpoch(t *testing.T) {
+	db := &graph.MockGraphDB{
+		ExecuteWriteError: errors.New("processor write failed"),
+	}
+
+	_, err := RunPostProcessors(context.Background(), db, "scan-test", []string{"mcp"})
+	if err == nil {
+		t.Fatal("expected processor failure")
+	}
+	for _, call := range db.CallsTo("ExecuteWrite") {
+		cypher, _ := call.Args[0].(string)
+		if strings.Contains(cypher, "r.scan_id <> $current_scan_id") {
+			t.Fatal("stale composite cleanup ran after a processor failure")
 		}
 	}
 }

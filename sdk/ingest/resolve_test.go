@@ -52,14 +52,20 @@ func TestResolveEdgeEndpoints_PartialOverrideTarget(t *testing.T) {
 	}
 }
 
-func TestResolveEdgeEndpoints_AllRegisteredKindsResolvable(t *testing.T) {
+func TestResolveEdgeEndpoints_OnlyInfersUnambiguousKinds(t *testing.T) {
 	for kind, ep := range EdgeKindEndpoints {
 		src, tgt := ResolveEdgeEndpoints(kind, "", "")
-		if src == "" {
-			t.Errorf("%s: source resolved to empty (registry has %v)", kind, ep.SourceKinds)
+		if len(ep.SourceKinds) == 1 && src == "" {
+			t.Errorf("%s: unambiguous source resolved to empty (registry has %v)", kind, ep.SourceKinds)
 		}
-		if tgt == "" {
-			t.Errorf("%s: target resolved to empty (registry has %v)", kind, ep.TargetKinds)
+		if len(ep.SourceKinds) > 1 && src != "" {
+			t.Errorf("%s: ambiguous source resolved to %q (registry has %v)", kind, src, ep.SourceKinds)
+		}
+		if len(ep.TargetKinds) == 1 && tgt == "" {
+			t.Errorf("%s: unambiguous target resolved to empty (registry has %v)", kind, ep.TargetKinds)
+		}
+		if len(ep.TargetKinds) > 1 && tgt != "" {
+			t.Errorf("%s: ambiguous target resolved to %q (registry has %v)", kind, tgt, ep.TargetKinds)
 		}
 	}
 }
@@ -94,5 +100,26 @@ func TestProvidesResource_AcceptsMLflowAndQdrantSources(t *testing.T) {
 			t.Errorf("ResolveEdgeEndpoints(PROVIDES_RESOURCE, %q, MCPResource) = (%q, %q), want (%q, MCPResource)",
 				src, gotSrc, gotTgt, src)
 		}
+	}
+}
+
+func TestEdgeKindEndpoints_ReflectsProducedVariants(t *testing.T) {
+	if !TargetKindAllowed("CAN_REACH", "Credential") {
+		t.Fatal("CAN_REACH must permit the credential-chain processor's Credential target")
+	}
+	if !SourceKindAllowed("EXPOSES", "OpenWebUIInstance") {
+		t.Fatal("EXPOSES must permit OpenWebUIInstance producer labels")
+	}
+	if !TargetKindAllowed("EXPOSES", "OllamaInstance") {
+		t.Fatal("EXPOSES must permit OllamaInstance producer labels")
+	}
+}
+
+func TestEndpointKindAllowed_FailsClosedForUnknownEdge(t *testing.T) {
+	if SourceKindAllowed("MADE_UP_KIND", "MCPServer") {
+		t.Fatal("unknown edge kind must not accept a source kind")
+	}
+	if TargetKindAllowed("MADE_UP_KIND", "MCPTool") {
+		t.Fatal("unknown edge kind must not accept a target kind")
 	}
 }

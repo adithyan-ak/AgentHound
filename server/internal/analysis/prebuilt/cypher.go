@@ -7,17 +7,28 @@ package prebuilt
 // CypherLitellmCredentialLeak surfaces the full v0.2 credential-chain
 // finding: an Agent instance whose Config Collector emission has the
 // same value_hash as a LiteLLM master-key Credential, and that
-// LiteLLM gateway exposes upstream provider keys. The
+// LiteLLM gateway exposes upstream provider keys with explicitly observed
+// usable material. Masked/hashed references remain visible through the
+// generic credential-chain variant but are not labeled leaks. The
 // cross_service_credential_chain post-processor pre-populates the
 // agent → upstream-key CAN_REACH edge; this query joins the path
 // for human-readable findings output.
 const CypherLitellmCredentialLeak = `
 MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(s:MCPServer)-[:HAS_ENV_VAR]->(c1:Credential)
 WHERE c1.value_hash IS NOT NULL
+  AND c1.material_status = 'observed'
+  AND c1.exposure_status = 'exposed'
+  AND coalesce(c1.merge_key, 'value_hash') = 'value_hash'
 MATCH (gw:LiteLLMGateway)-[:EXPOSES_CREDENTIAL]->(c1master:Credential)
 WHERE c1master.value_hash = c1.value_hash AND c1master.objectid <> c1.objectid
+  AND c1master.material_status = 'observed'
+  AND c1master.exposure_status = 'exposed'
+  AND coalesce(c1master.merge_key, 'value_hash') = 'value_hash'
 MATCH (gw)-[:EXPOSES_CREDENTIAL]->(c2:Credential)
 WHERE c2.type IN ['apiKey', 'virtual_key']
+  AND c2.material_status = 'observed'
+  AND c2.exposure_status = 'exposed'
+  AND coalesce(c2.merge_key, 'value_hash') <> 'identity'
 RETURN a.name AS agent_name,
        s.name AS via_server,
        c1.name AS via_credential,
@@ -46,7 +57,7 @@ ORDER BY a.name, s.name, t.name`
 const CypherShortestToDatabase = `
 MATCH (a:AgentInstance), (r:MCPResource)
 WHERE r.uri_scheme IN ['postgres', 'mysql', 'mongodb', 'redis']
-MATCH p = shortestPath((a)-[*..10]-(r))
+MATCH p = shortestPath((a)-[:TRUSTS_SERVER|PROVIDES_TOOL|HAS_ACCESS_TO*1..10]->(r))
 RETURN a.name AS agent_name,
        r.uri AS resource_uri,
        r.sensitivity AS sensitivity,
@@ -67,6 +78,8 @@ RETURN src.name AS source_name,
        r.via_mcp_server AS via_mcp_server,
        r.via_mcp_tool AS via_mcp_tool,
        r.confidence AS confidence,
+       'hypothesis' AS evidence_state,
+       'shared_host' AS correlation,
        src.objectid AS source_id,
        tgt.objectid AS target_id
 ORDER BY r.confidence DESC`
@@ -127,7 +140,8 @@ ORDER BY r.confidence DESC`
 
 const CypherNoAuthServers = `
 MATCH (s:MCPServer)
-WHERE s.auth_method = 'none' OR s.auth_method IS NULL
+WHERE s.auth_method = 'none'
+  AND s.auth_evidence = 'anonymous_probe_succeeded'
 OPTIONAL MATCH (s)-[:PROVIDES_TOOL]->(t:MCPTool)
 RETURN s.name AS server_name,
        s.endpoint AS endpoint,
@@ -138,7 +152,8 @@ ORDER BY tool_count DESC`
 
 const CypherNoAuthA2A = `
 MATCH (a:A2AAgent)
-WHERE a.auth_method = 'none' OR a.auth_method IS NULL
+WHERE a.auth_method = 'none'
+  AND a.auth_evidence = 'anonymous_probe_succeeded'
 OPTIONAL MATCH (a)-[:ADVERTISES_SKILL]->(sk:A2ASkill)
 RETURN a.name AS agent_name,
        a.url AS url,
@@ -190,7 +205,7 @@ ORDER BY r.confidence DESC`
 
 const CypherUnsignedCards = `
 MATCH (a:A2AAgent)
-WHERE a.is_signed = false OR a.is_signed IS NULL
+WHERE a.signature_verification_status = 'unsigned'
 RETURN a.name AS agent_name,
        a.url AS url,
        a.provider AS provider,
@@ -201,6 +216,9 @@ ORDER BY a.name`
 const CypherHighEntropySecrets = `
 MATCH (c:Credential)
 WHERE c.high_entropy = true
+  AND c.material_status = 'observed'
+  AND c.exposure_status = 'exposed'
+  AND coalesce(c.merge_key, 'value_hash') <> 'identity'
 OPTIONAL MATCH (s:MCPServer)-[:HAS_ENV_VAR]->(c)
 RETURN c.name AS credential_name,
        c.type AS credential_type,
@@ -221,6 +239,7 @@ RETURN s.name AS server_name,
        agent_count,
        count(t) AS tool_count,
        s.auth_method AS auth_method,
+       s.auth_evidence AS auth_evidence,
        s.endpoint AS endpoint,
        s.objectid AS server_id
 ORDER BY agent_count DESC, tool_count DESC`

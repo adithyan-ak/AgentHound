@@ -1,4 +1,10 @@
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import {
+  act,
+  render,
+  screen,
+  waitFor,
+  fireEvent,
+} from "@testing-library/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -6,9 +12,17 @@ import { ScanImport, validateScanFile } from "./ScanImport";
 
 vi.mock("@entities/scan/api", () => ({
   uploadScan: vi.fn(),
+  IngestRequestError: class IngestRequestError extends Error {
+    result?: unknown;
+
+    constructor(message: string, result?: unknown) {
+      super(message);
+      this.result = result;
+    }
+  },
 }));
 
-import { uploadScan } from "@entities/scan/api";
+import { IngestRequestError, uploadScan } from "@entities/scan/api";
 
 const mockedUploadScan = vi.mocked(uploadScan);
 
@@ -61,8 +75,18 @@ describe("ScanImport", () => {
   it("uploads a dropped JSON file and calls onSuccess", async () => {
     mockedUploadScan.mockResolvedValue({
       scan_id: "test-scan-1",
+      outcome: "complete",
+      projection_status: "complete",
       nodes_written: 5,
       edges_written: 3,
+      published_revision: 1,
+      stages: [
+        { name: "write_nodes", state: "complete", required: true, duration: 1 },
+        { name: "write_edges", state: "complete", required: true, duration: 1 },
+        { name: "analysis", state: "complete", required: true, duration: 1 },
+        { name: "snapshot", state: "complete", required: true, duration: 1 },
+        { name: "publication", state: "complete", required: true, duration: 1 },
+      ],
     });
     const onSuccess = vi.fn();
 
@@ -84,7 +108,15 @@ describe("ScanImport", () => {
       expect(onSuccess).toHaveBeenCalled();
     });
     expect(screen.getByText(/imported scan\.json/i)).toBeInTheDocument();
-    expect(screen.getByText(/5 nodes, 3 edges written/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/5 node write rows, 3 edge write rows/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /view findings/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /open graph/i }),
+    ).toBeInTheDocument();
   });
 
   it("shows an error and does not upload when the file is not valid JSON", async () => {
@@ -132,6 +164,57 @@ describe("ScanImport", () => {
       screen.getByText(/server error \(500\): check server logs/i),
     ).toBeInTheDocument();
     expect(onSuccess).not.toHaveBeenCalled();
+  });
+
+  it("renders partial-write details returned with a failed ingest", async () => {
+    mockedUploadScan.mockRejectedValue(
+      new IngestRequestError("ingest failed after partial graph mutation", {
+        scan_id: "failed-partial",
+        outcome: "failed",
+        projection_status: "incomplete",
+        nodes_written: 1000,
+        edges_written: 0,
+        stages: [
+          {
+            name: "write_nodes",
+            state: "complete",
+            required: true,
+            duration: 1,
+          },
+          {
+            name: "write_edges",
+            state: "failed",
+            required: true,
+            duration: 1,
+            error: "neo4j transaction failed",
+          },
+        ],
+      }),
+    );
+    render(<ScanImport open={true} onClose={() => {}} />, {
+      wrapper: createWrapper(),
+    });
+
+    fireEvent.drop(screen.getByTestId("dropzone"), {
+      dataTransfer: { files: [makeJSONFile("partial-failure.json", validScanJSON)] },
+    });
+
+    expect(
+      await screen.findByText(/import failed after writing partial-failure\.json/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/1000 node write rows/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.tagName === "LI" &&
+          /write_edges\s+— failed: neo4j transaction failed/i.test(
+            element.textContent ?? "",
+          ),
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /open graph/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("rejects files larger than 100 MB without reading them", async () => {
@@ -210,6 +293,128 @@ describe("ScanImport", () => {
     await waitFor(() => {
       expect(mockedUploadScan).toHaveBeenCalledWith(file);
     });
+  });
+
+  it("uses a semantic keyboard-operable file chooser control", () => {
+    render(<ScanImport open={true} onClose={() => {}} />, {
+      wrapper: createWrapper(),
+    });
+
+    expect(
+      screen.getByRole("button", {
+        name: /drop scan json here or choose a file/i,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders degraded stages and withholds findings and Explorer actions", async () => {
+    mockedUploadScan.mockResolvedValue({
+      scan_id: "partial-scan",
+      outcome: "partial",
+      projection_status: "incomplete",
+      nodes_written: 4,
+      edges_written: 2,
+      warnings: ["normalization dropped one property"],
+      stages: [
+        { name: "write_nodes", state: "complete", required: true, duration: 1 },
+        { name: "write_edges", state: "complete", required: true, duration: 1 },
+        {
+          name: "analysis",
+          state: "failed",
+          required: true,
+          duration: 1,
+          error: "processor failed",
+        },
+        {
+          name: "snapshot",
+          state: "not_applicable",
+          required: true,
+          duration: 1,
+        },
+        {
+          name: "publication",
+          state: "not_applicable",
+          required: true,
+          duration: 1,
+        },
+      ],
+    });
+    render(<ScanImport open={true} onClose={() => {}} />, {
+      wrapper: createWrapper(),
+    });
+
+    fireEvent.drop(screen.getByTestId("dropzone"), {
+      dataTransfer: { files: [makeJSONFile("partial.json", validScanJSON)] },
+    });
+
+    expect(
+      await screen.findByText(/imported partial\.json with incomplete results/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.tagName === "LI" &&
+          /analysis\s+— failed: processor failed/i.test(
+            element.textContent ?? "",
+          ),
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/normalization dropped one property/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /view findings/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /open graph/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("ignores an upload completion after the dialog closes", async () => {
+    let resolveUpload!: (value: {
+      scan_id: string;
+      outcome: "complete";
+      projection_status: string;
+      nodes_written: number;
+      edges_written: number;
+      stages: [];
+    }) => void;
+    mockedUploadScan.mockReturnValue(
+      new Promise((resolve) => {
+        resolveUpload = resolve;
+      }),
+    );
+    const onSuccess = vi.fn();
+    const { rerender } = render(
+      <ScanImport open={true} onClose={() => {}} onSuccess={onSuccess} />,
+      { wrapper: createWrapper() },
+    );
+
+    fireEvent.drop(screen.getByTestId("dropzone"), {
+      dataTransfer: { files: [makeJSONFile("delayed.json", validScanJSON)] },
+    });
+    await waitFor(() => expect(mockedUploadScan).toHaveBeenCalled());
+
+    rerender(
+      <ScanImport open={false} onClose={() => {}} onSuccess={onSuccess} />,
+    );
+    await act(async () => {
+      resolveUpload({
+        scan_id: "delayed",
+        outcome: "complete",
+        projection_status: "complete",
+        nodes_written: 1,
+        edges_written: 1,
+        stages: [],
+      });
+    });
+    rerender(
+      <ScanImport open={true} onClose={() => {}} onSuccess={onSuccess} />,
+    );
+
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(screen.queryByText(/imported delayed\.json/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId("dropzone")).toBeInTheDocument();
   });
 });
 

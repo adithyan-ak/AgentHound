@@ -14,6 +14,9 @@ export interface ExplorerViewModel {
   data: ExplorerRawData | undefined;
   isLoading: boolean;
   error: Error | null;
+  dataUpdatedAt: number;
+  blastError: Error | null;
+  blastLoading: boolean;
   /** (1) Raw totals for the StatusStrip. */
   totals: ExplorerTotals;
   /** (2) Full-option build for the canvas (null until data loads). */
@@ -30,7 +33,7 @@ export interface ExplorerViewModel {
  * canvas / info card / status strip.
  */
 export function useExplorerViewModel(): ExplorerViewModel {
-  const { data, isLoading, error } = useExplorerGraph();
+  const { data, isLoading, error, dataUpdatedAt } = useExplorerGraph();
 
   const activeLens = useExplorerStore((s) => s.activeLens);
   const subPresets = useExplorerStore((s) => s.subPresets[activeLens] ?? []);
@@ -40,7 +43,11 @@ export function useExplorerViewModel(): ExplorerViewModel {
   const blastMaxHops = useExplorerStore((s) => s.blastRadiusMaxHops);
   const highlight = useExplorerStore((s) => s.highlight);
 
-  const { data: blastData } = useBlastRadius(
+  const {
+    data: blastData,
+    error: blastError,
+    isLoading: blastLoading,
+  } = useBlastRadius(
     activeLens === "blast-radius" ? blastRadiusSourceId : null,
     blastDirection,
     blastMaxHops,
@@ -100,5 +107,15 @@ export function useExplorerViewModel(): ExplorerViewModel {
     ],
   );
 
-  return { data, isLoading, error, totals, render, lensMetrics };
+  return {
+    data,
+    isLoading,
+    error,
+    dataUpdatedAt,
+    blastError,
+    blastLoading,
+    totals,
+    render,
+    lensMetrics,
+  };
 }

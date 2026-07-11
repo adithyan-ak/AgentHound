@@ -1,8 +1,9 @@
 import { MeterBar } from "@shared/ui/widgets";
 import { SEVERITY, FEEDBACK } from "@shared/theme/tokens";
+import type { AttackPath } from "@entities/finding/model";
 
 interface AttackCostMeterProps {
-  totalWeight: number;
+  cost: AttackPath["cost"];
 }
 
 /**
@@ -10,7 +11,34 @@ interface AttackCostMeterProps {
  * a high cost (hard to exploit) reads green. Rendered as a flat segmented
  * instrument meter to match the SOC panel language.
  */
-export function AttackCostMeter({ totalWeight }: AttackCostMeterProps) {
+export function AttackCostMeter({ cost }: AttackCostMeterProps) {
+  if (cost.state !== "complete" || cost.value == null) {
+    const notApplicable = cost.state === "not_applicable";
+    const detail =
+      cost.missing_weight_edge_indexes.length > 0
+        ? `${cost.missing_weight_edge_indexes.length} unweighted`
+        : cost.reasons.map((reason) => reason.replace(/_/g, " ")).join(", ");
+    return (
+      <div className="flex items-center gap-2.5">
+        <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+          Attack cost
+        </span>
+        <span
+          className="font-mono text-[10px] font-bold uppercase tracking-[0.08em]"
+          style={{ color: notApplicable ? undefined : FEEDBACK.warning.text }}
+        >
+          {notApplicable ? "Not applicable" : "Incomplete"}
+        </span>
+        {!notApplicable && detail && (
+          <span className="font-mono text-[10px] text-muted-foreground">
+            ({detail})
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  const totalWeight = cost.value;
   const level = totalWeight < 0.5 ? "LOW" : totalWeight < 1.5 ? "MEDIUM" : "HIGH";
   const color =
     level === "LOW"

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
+	"github.com/adithyan-ak/agenthound/server/internal/graph"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -40,6 +41,17 @@ func (m *mockGraphDB) GetNode(_ context.Context, _ string) (*ingest.Node, []inge
 
 func (m *mockGraphDB) ListNodes(_ context.Context, _ string, _ int) ([]ingest.Node, error) {
 	return nil, nil
+}
+
+func (m *mockGraphDB) ListNodesPage(_ context.Context, _ string, _, _ int, _ string) ([]ingest.Node, graph.PageInfo, error) {
+	return nil, graph.PageInfo{Complete: true}, nil
+}
+
+func (m *mockGraphDB) GetStats(_ context.Context) (*graph.GraphStats, error) {
+	return &graph.GraphStats{
+		NodeCounts: map[string]int64{},
+		EdgeCounts: map[string]int64{},
+	}, nil
 }
 
 func (m *mockGraphDB) HasAPOC(_ context.Context) bool {

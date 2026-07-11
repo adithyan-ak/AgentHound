@@ -6,10 +6,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/server/internal/analysis"
+	"github.com/adithyan-ak/agenthound/server/internal/appdb"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 	"github.com/adithyan-ak/agenthound/server/model"
 	"github.com/go-chi/chi/v5"
@@ -28,6 +30,29 @@ func (m *recordingFindingLister) ListLatestPerFingerprint(_ context.Context, sev
 	m.gotSeverity = severity
 	m.gotSuppressed = includeSuppressed
 	return m.findings, nil
+}
+
+type publishedFindingStore struct {
+	recordingFindingLister
+	scope   appdb.FindingScope
+	finding *model.Finding
+}
+
+func (m *publishedFindingStore) ListPublished(
+	_ context.Context,
+	severity string,
+	includeSuppressed bool,
+) ([]model.Finding, appdb.FindingScope, error) {
+	m.gotSeverity = severity
+	m.gotSuppressed = includeSuppressed
+	return m.findings, m.scope, nil
+}
+
+func (m *publishedFindingStore) GetPublished(
+	_ context.Context,
+	_ string,
+) (*model.Finding, appdb.FindingScope, error) {
+	return m.finding, m.scope, nil
 }
 
 func TestHandleFindings_SuppressedHiddenByDefault(t *testing.T) {
@@ -69,6 +94,46 @@ func TestHandleFindings_SeverityForwarded(t *testing.T) {
 
 	if mock.gotSeverity != "critical" {
 		t.Errorf("severity filter not forwarded: got %q", mock.gotSeverity)
+	}
+}
+
+func TestHandleFindings_PublishedScopeIsExactAndAttributed(t *testing.T) {
+	revision := int64(9)
+	store := &publishedFindingStore{
+		recordingFindingLister: recordingFindingLister{
+			findings: []model.Finding{{ID: "aaaaaaaaaaaaaaaa", ScanID: "scan-published"}},
+		},
+		scope: appdb.FindingScope{
+			Mode:             "published",
+			ScanID:           "scan-published",
+			Revision:         &revision,
+			ProjectionStatus: model.ProjectionIncomplete,
+			SnapshotStatus:   model.LifecycleComplete,
+			Available:        true,
+			Stale:            true,
+		},
+	}
+	h := &AnalysisHandler{findingStore: store}
+	w := httptest.NewRecorder()
+	r := newTestRequest(
+		http.MethodGet,
+		"/api/v1/analysis/findings?scope=published&severity=high",
+		nil,
+	)
+
+	h.HandleFindings(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	if store.gotSeverity != "high" {
+		t.Fatalf("severity = %q, want high", store.gotSeverity)
+	}
+	if got := w.Header().Get("X-Snapshot-Scan-ID"); got != "scan-published" {
+		t.Fatalf("X-Snapshot-Scan-ID = %q", got)
+	}
+	if got := w.Header().Get("X-Snapshot-Stale"); got != "true" {
+		t.Fatalf("X-Snapshot-Stale = %q", got)
 	}
 }
 
@@ -284,23 +349,108 @@ func TestHandleWeightedPath_MissingFields(t *testing.T) {
 	}
 }
 
+func TestHandleWeightedPath_UsesBoundedDirectedMinimumWeight(t *testing.T) {
+	mock := &graph.MockGraphDB{
+		HasAPOCResult: true,
+		QueryFunc: func(_ context.Context, cypher string, params map[string]any) ([]map[string]any, error) {
+			if strings.Contains(cypher, "traversal:resolve") {
+				value, _ := params["value"].(string)
+				return []map[string]any{{
+					"id": value, "name": value,
+					"kinds":      []any{"AgentInstance"},
+					"properties": map[string]any{"objectid": value, "name": value},
+				}}, nil
+			}
+			if !strings.Contains(cypher, "traversal:adjacency") {
+				t.Fatalf("unexpected query: %s", cypher)
+			}
+			if params["relationship_kinds"] == nil {
+				t.Fatal("security traversal must send an explicit relationship scope")
+			}
+			ids, _ := params["ids"].([]string)
+			rows := make([]map[string]any, 0)
+			for _, id := range ids {
+				switch id {
+				case "A":
+					rows = append(rows,
+						traversalAdjacencyRow("A", "T", "HAS_ACCESS_TO", 0.9),
+						traversalAdjacencyRow("A", "B", "PROVIDES_TOOL", 0.1),
+					)
+				case "B":
+					rows = append(rows, traversalAdjacencyRow("B", "T", "HAS_ACCESS_TO", 0.1))
+				}
+			}
+			return rows, nil
+		},
+	}
+	h := NewAnalysisHandler(mock, nil)
+	w := httptest.NewRecorder()
+	r := newTestRequest(http.MethodPost, "/api/v1/analysis/weighted-path", []byte(
+		`{"source":"A","source_kind":"AgentInstance","target":"T","target_kind":"MCPResource","scope":"security","max_hops":2}`,
+	))
+
+	h.HandleWeightedPath(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var response struct {
+		Paths     []analysis.TraversalPath   `json:"paths"`
+		Algorithm string                     `json:"algorithm"`
+		Metadata  analysis.TraversalMetadata `json:"metadata"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Paths) != 1 || response.Paths[0].Weight != 0.2 {
+		t.Fatalf("paths = %+v, want minimum weight 0.2", response.Paths)
+	}
+	if response.Algorithm != "bounded-min-weight" ||
+		response.Metadata.Scope != analysis.TraversalScopeSecurity ||
+		response.Metadata.Direction != "out" {
+		t.Fatalf("metadata = %+v, algorithm = %q", response.Metadata, response.Algorithm)
+	}
+	if len(mock.CallsTo("HasAPOC")) != 0 {
+		t.Fatal("weighted traversal must be independent of APOC availability")
+	}
+}
+
+func traversalAdjacencyRow(source, target, kind string, weight float64) map[string]any {
+	return map[string]any{
+		"traversal_source": source,
+		"traversal_target": target,
+		"next_id":          target,
+		"next_name":        target,
+		"next_kinds":       []any{"MCPResource"},
+		"next_properties":  map[string]any{"objectid": target, "name": target},
+		"source":           source,
+		"target":           target,
+		"kind":             kind,
+		"risk_weight":      weight,
+	}
+}
+
 // --- HandleFindingDetail tests using graph.MockGraphDB with QueryFunc ---
 
 // findingID for CAN_REACH|src001|tgt001 = SHA256("CAN_REACH|src001|tgt001")[:16] = "9fd26fdabddf168f"
 const testFindingID = "9fd26fdabddf168f"
 
 func findingsRow() map[string]any {
+	evidence := pathRow()
 	return map[string]any{
-		"source_id":          "src001",
-		"source_name":        "test-agent",
-		"source_kind":        "AgentInstance",
-		"target_id":          "tgt001",
-		"target_name":        "prod-db",
-		"target_kind":        "MCPResource",
-		"edge_kind":          "CAN_REACH",
-		"confidence":         0.9,
-		"cross_protocol":     false,
-		"target_sensitivity": "critical",
+		"source_id":            "src001",
+		"source_name":          "test-agent",
+		"source_kind":          "AgentInstance",
+		"target_id":            "tgt001",
+		"target_name":          "prod-db",
+		"target_kind":          "MCPResource",
+		"edge_kind":            "CAN_REACH",
+		"confidence":           0.9,
+		"cross_protocol":       false,
+		"target_sensitivity":   "critical",
+		"evidence_version":     int64(1),
+		"exact_evidence_nodes": evidence["nodes"],
+		"exact_evidence_edges": evidence["edges"],
 	}
 }
 
@@ -361,6 +511,85 @@ func TestHandleFindingDetail_Success(t *testing.T) {
 	}
 	if resp.Impact == nil {
 		t.Error("expected non-nil impact")
+	}
+	if callCount.Load() != 1 {
+		t.Fatalf("detail queried mutable graph %d times, want one detector finding query", callCount.Load())
+	}
+}
+
+func TestHandleFindingDetail_PublishedRowSurvivesMissingLiveEdge(t *testing.T) {
+	revision := int64(12)
+	persisted := &model.Finding{
+		ID:         testFindingID,
+		ScanID:     "scan-published",
+		Severity:   "high",
+		Category:   "Transitive Access",
+		Title:      "persisted finding",
+		EdgeKind:   "CAN_REACH",
+		SourceID:   "src001",
+		TargetID:   "tgt001",
+		Confidence: 0.9,
+		ExactEvidence: &model.ExactFindingEvidence{
+			Version:  1,
+			Complete: true,
+			Reasons:  []string{},
+			Nodes: []model.ExactFindingEvidenceNode{
+				{ID: "src001", Kinds: []string{"AgentInstance"}, Properties: map[string]any{"name": "source"}},
+				{ID: "tgt001", Kinds: []string{"MCPResource"}, Properties: map[string]any{"name": "target"}},
+			},
+			Edges: []model.ExactFindingEvidenceEdge{{
+				Source: "src001", Target: "tgt001", Kind: "CAN_REACH",
+				Properties: map[string]any{"risk_weight": 0.1},
+			}},
+		},
+	}
+	store := &publishedFindingStore{
+		scope: appdb.FindingScope{
+			Mode:             "published",
+			ScanID:           "scan-published",
+			Revision:         &revision,
+			ProjectionStatus: model.ProjectionIncomplete,
+			SnapshotStatus:   model.LifecycleComplete,
+			Available:        true,
+			Stale:            true,
+		},
+		finding: persisted,
+	}
+	liveGraph := &graph.MockGraphDB{QueryError: errors.New("stale graph must not be read")}
+	h := &AnalysisHandler{
+		graphDB:      liveGraph,
+		findingStore: store,
+	}
+	w := httptest.NewRecorder()
+	r := newTestRequest(
+		http.MethodGet,
+		"/api/v1/analysis/findings/"+testFindingID+"?scope=published",
+		nil,
+	)
+	r = withChiURLParam(r, "id", testFindingID)
+
+	h.HandleFindingDetail(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	var response analysis.FindingDetail
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Finding.Title != "persisted finding" {
+		t.Fatalf("detail did not start from persisted row: %+v", response.Finding)
+	}
+	if response.AttackPath == nil || len(response.AttackPath.Edges) != 1 {
+		t.Fatalf("persisted exact evidence was not served: %+v", response.AttackPath)
+	}
+	if response.Snapshot == nil ||
+		response.Snapshot.LiveEvidenceState != "persisted_exact_evidence" ||
+		!response.Snapshot.Stale {
+		t.Fatalf("snapshot metadata = %+v", response.Snapshot)
+	}
+	if len(liveGraph.CallsTo("Query")) != 0 {
+		t.Fatal("stale published detail must not attach mutable live evidence")
 	}
 }
 

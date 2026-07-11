@@ -1,7 +1,7 @@
 import { Gauge } from "lucide-react";
 import { useNodes, isUnauth } from "@entities/node";
 import { useFindings, severityCounts } from "@entities/finding";
-import { useScans, isUsableScan } from "@entities/scan";
+import { comparablePublishedNodeDelta, useScans } from "@entities/scan";
 import {
   exposureScore,
   exposureBand,
@@ -66,13 +66,7 @@ export function ExposureGauge() {
   const color = pointer;
   const label = GAUGE_LABELS[exposureBand(score)];
 
-  // completed_with_errors populated the graph too, so its node count is a
-  // valid data point for the entity delta.
-  const completed = (scans ?? []).filter(isUsableScan);
-  const delta =
-    completed.length >= 2
-      ? (completed[0]?.node_count ?? 0) - (completed[1]?.node_count ?? 0)
-      : null;
+  const delta = comparablePublishedNodeDelta(scans ?? []);
 
   return (
     <AsyncBoundary
