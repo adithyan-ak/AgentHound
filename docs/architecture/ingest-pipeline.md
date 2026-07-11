@@ -84,22 +84,28 @@ Post-processing is non-fatal to the ingest: failures are logged and included in 
 
 ## Processing Order
 
+The annotations below are each processor's declared `Dependencies() []string` return — the *processor-level* ordering contract enforced by the pipeline. Raw collector edges (`INGESTS_UNTRUSTED`, `DELEGATES_TO`, `HAS_ENV_VAR`, etc.) and pre-existing node properties (`schema_keys`, `auth_method`, …) are Cypher traversal inputs, not processor dependencies — they are present from ingest, so they do not appear here.
+
 ```
- 1. auth_strength                    (no deps; pre-pass, sets node property)
- 2. has_access_to                    (no deps)
- 3. can_execute                      (no deps)
- 4. shadows                          (no deps; also emits POISONS_CONTEXT)
- 5. poisoned_description             (no deps)
- 6. poisoned_instructions            (no deps)
- 7. taints                           (INGESTS_UNTRUSTED + schema_keys; runs before can_reach)
- 8. can_reach                        (depends: has_access_to)
- 9. cross_service_credential_chain   (depends: has_access_to, can_reach)
-10. ifc_violation                    (depends: has_access_to + INGESTS_UNTRUSTED)
-11. can_exfiltrate                   (depends: can_reach)
-12. can_impersonate                  (no deps)
-13. confused_deputy                  (depends: auth_strength + can_reach)
-14. cross_protocol                   (depends: has_access_to + DELEGATES_TO)
-15. risk_score                       (depends: all above)
+ 1. auth_strength                    (deps: none; pre-pass, sets node property)
+ 2. has_access_to                    (deps: none)
+ 3. can_execute                      (deps: none)
+ 4. shadows                          (deps: none; also emits POISONS_CONTEXT)
+ 5. poisoned_description             (deps: none)
+ 6. poisoned_instructions            (deps: none)
+ 7. taints                           (deps: none; runs before can_reach so its cross-tool
+                                     edges influence transitive reachability)
+ 8. can_reach                        (deps: has_access_to)
+ 9. cross_service_credential_chain   (deps: has_access_to, can_reach)
+10. ifc_violation                    (deps: has_access_to)
+11. can_exfiltrate                   (deps: can_reach)
+12. can_impersonate                  (deps: none)
+13. confused_deputy                  (deps: auth_strength, can_reach)
+14. cross_protocol                   (deps: has_access_to)
+15. risk_score                       (deps: has_access_to, can_execute, shadows,
+                                     poisoned_description, poisoned_instructions,
+                                     can_reach, can_exfiltrate, can_impersonate,
+                                     cross_protocol)
 ```
 
 Dependency validation runs before the first processor executes. If a processor appears before a dependency it declares, the pipeline returns an ordering error immediately.
