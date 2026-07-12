@@ -21,6 +21,7 @@ import (
 	"github.com/adithyan-ak/agenthound/server/internal/appdb"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 	serveringest "github.com/adithyan-ak/agenthound/server/internal/ingest"
+	"github.com/adithyan-ak/agenthound/server/internal/projection"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -166,7 +167,7 @@ func runLiteLLMProducerQuery(
 	mutate func(*sdkingest.IngestData),
 ) []map[string]any {
 	t.Helper()
-	ctx, pipeline, db, _ := freshLiteLLMIntegrationHarness(t)
+	ctx, pipeline, db, publicationStore := freshLiteLLMIntegrationHarness(t)
 	fixture := newLiteLLMFixture(t)
 	defer fixture.Close()
 
@@ -187,9 +188,24 @@ func runLiteLLMProducerQuery(
 		t.Fatalf("validated loot output was not published: %+v", result)
 	}
 
-	rows, err := db.Query(ctx, prebuilt.CypherLitellmCredentialLeak, nil)
+	rows, identity, err := projection.GuardedRead(
+		ctx,
+		publicationStore,
+		func() ([]map[string]any, error) {
+			return db.Query(ctx, prebuilt.CypherLitellmCredentialLeak, nil)
+		},
+	)
 	if err != nil {
-		t.Fatalf("execute LiteLLM prebuilt query: %v", err)
+		t.Fatalf("execute guarded LiteLLM prebuilt query: %v", err)
+	}
+	if identity.ScanID != result.ScanID ||
+		identity.Revision != *result.PublishedRevision {
+		t.Fatalf(
+			"guarded query publication identity = %+v, want scan %q revision %d",
+			identity,
+			result.ScanID,
+			*result.PublishedRevision,
+		)
 	}
 	producedRows := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
