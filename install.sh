@@ -2,7 +2,7 @@
 # AgentHound collector installer.
 #
 # Pin to a release tag for integrity:
-#   curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/v0.8.0/install.sh | sh
+#   curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/v0.9.0/install.sh | sh
 #
 # Verifies the downloaded archive against checksums.txt before extracting,
 # and against cosign signatures if cosign is available on $PATH.
