@@ -125,11 +125,43 @@ MATCH (n)
 WHERE any(label IN labels(n) WHERE label IN $public_kinds)
   AND any(token IN coalesce(n.observation_tokens, [])
           WHERE any(prefix IN $domain_prefixes WHERE token STARTS WITH prefix))
-SET n.observation_tokens = [
-  token IN coalesce(n.observation_tokens, [])
-  WHERE none(prefix IN $domain_prefixes WHERE token STARTS WITH prefix)
-     OR token IN $current_tokens
-]
+WITH n,
+     coalesce(n.observation_tokens, []) AS old_tokens,
+     coalesce(n.observation_reference_tokens, []) AS old_reference_tokens,
+     n.objectid AS objectid,
+     n.scan_id AS scan_id,
+     n.first_seen AS first_seen,
+     n.last_seen AS last_seen
+WITH n, old_tokens, old_reference_tokens,
+     objectid, scan_id, first_seen, last_seen,
+     [token IN old_tokens
+      WHERE none(prefix IN $domain_prefixes WHERE token STARTS WITH prefix)
+         OR token IN $current_tokens] AS remaining_tokens,
+     [token IN old_reference_tokens
+      WHERE none(prefix IN $domain_prefixes WHERE token STARTS WITH prefix)
+         OR token IN $current_tokens] AS remaining_reference_tokens
+WITH n, remaining_tokens, remaining_reference_tokens,
+     objectid, scan_id, first_seen, last_seen,
+     [token IN old_tokens
+      WHERE NOT token IN old_reference_tokens] AS old_authoritative_tokens,
+     [token IN remaining_tokens
+      WHERE NOT token IN remaining_reference_tokens] AS remaining_authoritative_tokens
+SET n.observation_tokens = remaining_tokens,
+    n.observation_reference_tokens = remaining_reference_tokens
+FOREACH (_ IN CASE
+  WHEN size(old_authoritative_tokens) > 0
+   AND size(remaining_authoritative_tokens) = 0
+   AND size(remaining_tokens) > 0
+  THEN [1] ELSE [] END |
+  SET n = {
+    objectid: objectid,
+    scan_id: scan_id,
+    first_seen: first_seen,
+    last_seen: last_seen,
+    observation_tokens: remaining_tokens,
+    observation_reference_tokens: remaining_reference_tokens,
+    observation_properties_complete: true
+  })
 RETURN count(n) AS retired`
 
 const deleteUnownedNodesCypher = `

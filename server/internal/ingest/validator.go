@@ -249,6 +249,7 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 			declaredCoverage,
 			fmt.Sprintf("graph.nodes[%d].observation_domains", i),
 		)...)
+		errs = append(errs, validateNodePropertySemantics(node, i)...)
 		errs = append(errs, validateCanonicalPropertyKeys(
 			node.Properties,
 			fmt.Sprintf("graph.nodes[%d].properties", i),
@@ -257,9 +258,11 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 			node.Properties,
 			fmt.Sprintf("graph.nodes[%d].properties", i),
 		)...)
-		errs = append(errs, validateCanonicalNodeProperties(node, i)...)
-		if hasKind(node.Kinds, "Credential") {
-			errs = append(errs, validateCredentialProperties(node.Properties, i)...)
+		if node.PropertySemantics != ingest.NodePropertySemanticsReferenceOnly {
+			errs = append(errs, validateCanonicalNodeProperties(node, i)...)
+			if hasKind(node.Kinds, "Credential") {
+				errs = append(errs, validateCredentialProperties(node.Properties, i)...)
+			}
 		}
 	}
 
@@ -528,6 +531,27 @@ func validateObservationDomains(
 		}
 	}
 	return errs
+}
+
+func validateNodePropertySemantics(node ingest.Node, index int) []FieldError {
+	path := fmt.Sprintf("graph.nodes[%d].property_semantics", index)
+	switch node.PropertySemantics {
+	case "":
+		return nil
+	case ingest.NodePropertySemanticsReferenceOnly:
+		if len(node.Properties) != 0 {
+			return []FieldError{{
+				Path:    fmt.Sprintf("graph.nodes[%d].properties", index),
+				Message: "must be empty when property_semantics is reference_only",
+			}}
+		}
+		return nil
+	default:
+		return []FieldError{{
+			Path:    path,
+			Message: fmt.Sprintf("invalid node property semantics %q", node.PropertySemantics),
+		}}
+	}
 }
 
 func validateObservationSemantics(edge ingest.Edge, index int) []FieldError {

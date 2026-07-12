@@ -151,12 +151,11 @@ jobs:
       - name: Verify Neo4j version matrix and schema
         run: go test ./server/internal/graph -race -count=1 -run '^TestIntegrationNeo4jVersionMatrix$'
       # The ordinary integration suite runs the whole module in parallel and
-      # MUST NOT execute the destructive fresh-schema reset
-      # (TestIntegrationFreshSchemaCompleteIngestPublishes). That test does a
-      # global `MATCH (n) DETACH DELETE n` + `TRUNCATE scans, posture_state`,
-      # which would race the other DB-touching packages sharing this Neo4j /
-      # Postgres. AGENTHOUND_FRESH_DB_INTEGRATION is intentionally left unset
-      # here so the test self-skips.
+      # MUST NOT execute the destructive fresh-database integrations. Those
+      # tests globally reset Neo4j (and the ingest test also truncates
+      # PostgreSQL), which would race the other DB-touching packages sharing
+      # these services. AGENTHOUND_FRESH_DB_INTEGRATION is intentionally left
+      # unset here so those tests self-skip.
       - name: Run full test suite with DB
         run: go test ./... -race -coverprofile=coverage.out
       - name: Check coverage threshold
@@ -167,11 +166,18 @@ jobs:
             echo "::error::Coverage ${TOTAL}% is below 60% threshold"
             exit 1
           fi
+      - name: Run LiteLLM publication integrations (serialized)
+        env:
+          AGENTHOUND_FRESH_DB_INTEGRATION: "1"
+        run: |
+          go test ./server/internal/analysis/prebuilt -race -count=1 -p 1 -v \
+            -run '^TestIntegrationLiteLLM(FingerprintThenLootPreservesGatewayProperties|FirstPartyProducerSatisfiesMasterExposureQuery|QueryRejectsUnobservedMasterMaterial)$'
       # Dedicated, serialized step for the destructive fresh-schema integration.
       # It runs AFTER the ordinary suite has finished (so nothing else is
       # touching the shared DB), targets only that single test, and pins
-      # `-p 1` to forbid any parallel package execution. This is the only place
-      # the global reset opt-in is enabled.
+      # `-p 1` to forbid any parallel package execution. Together with the
+      # LiteLLM step above, these are the only places the reset opt-in is
+      # enabled.
       - name: Run destructive fresh-schema integration (serialized)
         env:
           AGENTHOUND_FRESH_DB_INTEGRATION: "1"

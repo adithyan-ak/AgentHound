@@ -124,7 +124,11 @@ func coalesceObservationGraph(graph sdkingest.GraphData) sdkingest.GraphData {
 	}
 	nodeIndex := make(map[string]int, len(graph.Nodes))
 	for _, node := range graph.Nodes {
-		if index, exists := nodeIndex[node.ID]; exists {
+		// Keep authoritative and reference-only observations as separate
+		// writer rows. Collapsing them would incorrectly promote the reference
+		// domains into property authors.
+		key := node.ID + "\x00" + string(node.PropertySemantics)
+		if index, exists := nodeIndex[key]; exists {
 			current := &merged.Nodes[index]
 			current.Kinds = mergeStringsPreservingOrder(current.Kinds, node.Kinds)
 			current.ObservationDomains = sdkingest.MergeObservationDomains(
@@ -141,7 +145,7 @@ func coalesceObservationGraph(graph sdkingest.GraphData) sdkingest.GraphData {
 		}
 		node.Properties = cloneProperties(node.Properties)
 		node.ObservationDomains = sdkingest.MergeObservationDomains(node.ObservationDomains)
-		nodeIndex[node.ID] = len(merged.Nodes)
+		nodeIndex[key] = len(merged.Nodes)
 		merged.Nodes = append(merged.Nodes, node)
 	}
 

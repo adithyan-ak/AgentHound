@@ -729,6 +729,151 @@ func TestIntegrationCompleteObservationReplacesStaleManagedProperties(t *testing
 	}
 }
 
+func TestIntegrationReferenceOwnerPreservesThenRetiresAuthoritativeProperties(t *testing.T) {
+	ctx := testDriver(t)
+	driver, err := NewDriver(
+		os.Getenv("AGENTHOUND_NEO4J_URI"),
+		os.Getenv("AGENTHOUND_NEO4J_USER"),
+		os.Getenv("AGENTHOUND_NEO4J_PASSWORD"),
+	)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer driver.Close(ctx)
+
+	writer := NewWriter(driver)
+	db := NewDB(NewReader(driver), writer)
+	const nodeID = "shared-reference-retirement"
+	cleanup := func() {
+		_, _ = db.ExecuteWrite(
+			ctx,
+			"MATCH (n {objectid: $id}) DETACH DELETE n",
+			map[string]any{"id": nodeID},
+		)
+	}
+	cleanup()
+	defer cleanup()
+
+	authoritativeScope := "scan:network:sha256:authoritative"
+	referenceScope := "scan:loot:sha256:reference"
+	authoritative := ingest.Node{
+		ID:                 nodeID,
+		Kinds:              []string{"LiteLLMGateway", "AIService"},
+		ObservationDomains: []string{authoritativeScope},
+		Properties: map[string]any{
+			"objectid":       nodeID,
+			"endpoint":       "http://127.0.0.1:4000",
+			"auth_method":    "master_key",
+			"discovered_via": "network_scan",
+		},
+	}
+	if _, err := writer.WriteObservationNodes(
+		ctx,
+		[]ingest.Node{authoritative},
+		"authoritative-scan",
+		[]string{authoritativeScope},
+	); err != nil {
+		t.Fatalf("write authoritative observation: %v", err)
+	}
+	if _, err := ReconcileObservations(
+		ctx,
+		db,
+		"authoritative-scan",
+		[]string{authoritativeScope},
+	); err != nil {
+		t.Fatalf("reconcile authoritative observation: %v", err)
+	}
+
+	reference := ingest.Node{
+		ID:                 nodeID,
+		Kinds:              []string{"LiteLLMGateway", "AIService"},
+		ObservationDomains: []string{referenceScope},
+		Properties:         map[string]any{"objectid": nodeID},
+		PropertySemantics:  ingest.NodePropertySemanticsReferenceOnly,
+	}
+	if _, err := writer.WriteObservationNodes(
+		ctx,
+		[]ingest.Node{reference},
+		"reference-scan",
+		[]string{referenceScope},
+	); err != nil {
+		t.Fatalf("write reference observation: %v", err)
+	}
+	if _, err := ReconcileObservations(
+		ctx,
+		db,
+		"reference-scan",
+		[]string{referenceScope},
+	); err != nil {
+		t.Fatalf("reconcile reference observation: %v", err)
+	}
+
+	rows, err := db.Query(
+		ctx,
+		`MATCH (n:LiteLLMGateway {objectid: $id})
+		 RETURN n.endpoint AS endpoint,
+		        n.auth_method AS auth_method,
+		        n.discovered_via AS discovered_via,
+		        n.observation_tokens AS tokens,
+		        n.observation_reference_tokens AS reference_tokens,
+		        n.observation_properties_complete AS properties_complete`,
+		map[string]any{"id": nodeID},
+	)
+	if err != nil {
+		t.Fatalf("query shared-owner node: %v", err)
+	}
+	if len(rows) != 1 ||
+		rows[0]["endpoint"] != "http://127.0.0.1:4000" ||
+		rows[0]["auth_method"] != "master_key" ||
+		rows[0]["discovered_via"] != "network_scan" ||
+		rows[0]["properties_complete"] != true {
+		t.Fatalf("reference observation changed authoritative properties: %+v", rows)
+	}
+	tokens, _ := rows[0]["tokens"].([]any)
+	referenceTokens, _ := rows[0]["reference_tokens"].([]any)
+	if len(tokens) != 2 || len(referenceTokens) != 1 {
+		t.Fatalf("shared ownership tokens = %v, reference tokens = %v", tokens, referenceTokens)
+	}
+
+	if _, err := ReconcileObservations(
+		ctx,
+		db,
+		"authoritative-retired",
+		[]string{authoritativeScope},
+	); err != nil {
+		t.Fatalf("retire authoritative owner: %v", err)
+	}
+	rows, err = db.Query(
+		ctx,
+		`MATCH (n:LiteLLMGateway {objectid: $id})
+		 RETURN properties(n) AS properties`,
+		map[string]any{"id": nodeID},
+	)
+	if err != nil {
+		t.Fatalf("query reference fallback: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("reference fallback node missing: %+v", rows)
+	}
+	properties, _ := rows[0]["properties"].(map[string]any)
+	if properties["objectid"] != nodeID ||
+		properties["endpoint"] != nil ||
+		properties["auth_method"] != nil ||
+		properties["discovered_via"] != nil ||
+		properties["observation_properties_complete"] != true {
+		t.Fatalf("authoritative retirement retained stale rich properties: %+v", properties)
+	}
+	remainingTokens, _ := properties["observation_tokens"].([]any)
+	remainingReferenceTokens, _ := properties["observation_reference_tokens"].([]any)
+	if len(remainingTokens) != 1 || len(remainingReferenceTokens) != 1 {
+		t.Fatalf(
+			"reference fallback ownership tokens = %v, reference tokens = %v",
+			remainingTokens,
+			remainingReferenceTokens,
+		)
+	}
+}
+
 func TestIntegrationCompleteObservationReplacesOnlyManagedLabels(t *testing.T) {
 	ctx := testDriver(t)
 	driver, err := NewDriver(

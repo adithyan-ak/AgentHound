@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/adithyan-ak/agenthound/server/internal/appdb"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 	serveringest "github.com/adithyan-ak/agenthound/server/internal/ingest"
+	"github.com/adithyan-ak/agenthound/server/internal/projection"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -35,8 +37,187 @@ func TestLiteLLMProductionLootArtifactIsStrictV2(t *testing.T) {
 	fixture.AssertLootRequests(t)
 }
 
+func TestIntegrationLiteLLMFingerprintThenLootPreservesGatewayProperties(t *testing.T) {
+	ctx, pipeline, db, publicationStore := freshLiteLLMIntegrationHarness(t)
+	fixture := newLiteLLMScanFixture(t)
+	defer fixture.Close()
+
+	fingerprintData := runAgentHoundLiteLLMScan(t)
+	if err := serveringest.NewValidator().Validate(&fingerprintData); err != nil {
+		t.Fatalf("strict ingest-v2 validation rejected agenthound scan output: %v", err)
+	}
+	gatewayID := sdkingest.ComputeNodeID("LiteLLMGateway", fixture.URL)
+	fingerprintGateway := findLiteLLMGateway(t, &fingerprintData, gatewayID)
+	if fingerprintGateway.PropertySemantics != "" ||
+		fingerprintGateway.Properties["endpoint"] != fixture.URL ||
+		fingerprintGateway.Properties["auth_method"] != "master_key" ||
+		fingerprintGateway.Properties["discovered_via"] != "network_scan" {
+		t.Fatalf("scan gateway is not rich and authoritative: %+v", fingerprintGateway)
+	}
+
+	first, err := pipeline.Ingest(ctx, &fingerprintData)
+	if err != nil {
+		t.Fatalf("pipeline ingest of validated fingerprint output: %v", err)
+	}
+	if first.PublishedRevision == nil ||
+		*first.PublishedRevision != 1 ||
+		first.Outcome != sdkingest.OutcomeComplete {
+		t.Fatalf("fingerprint publication revision 1 failed: %+v", first)
+	}
+
+	lootData := runAgentHoundLiteLLMLoot(t, fixture.URL)
+	assertStrictLiteLLMArtifact(t, &lootData, fixture.URL)
+	lootGateway := findLiteLLMGateway(t, &lootData, gatewayID)
+	if lootGateway.ID != fingerprintGateway.ID ||
+		strings.Join(lootGateway.Kinds, ",") != strings.Join(fingerprintGateway.Kinds, ",") {
+		t.Fatalf(
+			"fingerprint/loot gateway identity differs: fingerprint=%+v loot=%+v",
+			fingerprintGateway,
+			lootGateway,
+		)
+	}
+
+	second, err := pipeline.Ingest(ctx, &lootData)
+	if err != nil {
+		t.Fatalf("pipeline ingest of validated loot output: %v", err)
+	}
+	if second.PublishedRevision == nil ||
+		*second.PublishedRevision != 2 ||
+		second.Outcome != sdkingest.OutcomeComplete {
+		t.Fatalf("loot publication revision 2 failed: %+v", second)
+	}
+
+	rows, err := db.Query(
+		ctx,
+		`MATCH (gateway:LiteLLMGateway {objectid: $gateway_id})
+		 RETURN labels(gateway) AS kinds,
+		        properties(gateway) AS properties,
+		        gateway.observation_tokens AS owners,
+		        gateway.observation_reference_tokens AS reference_owners`,
+		map[string]any{"gateway_id": gatewayID},
+	)
+	if err != nil {
+		t.Fatalf("query shared LiteLLM gateway: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("shared LiteLLM gateway rows = %+v, want one", rows)
+	}
+	properties, _ := rows[0]["properties"].(map[string]any)
+	if properties["endpoint"] != fixture.URL ||
+		properties["auth_method"] != "master_key" ||
+		properties["discovered_via"] != "network_scan" ||
+		properties["service_kind"] != "litellm" ||
+		properties["observation_properties_complete"] != true {
+		t.Fatalf("loot replaced or downgraded fingerprint properties: %+v", properties)
+	}
+	kinds, _ := rows[0]["kinds"].([]any)
+	if !containsValue(kinds, "LiteLLMGateway") || !containsValue(kinds, "AIService") {
+		t.Fatalf("shared gateway kinds = %v", kinds)
+	}
+	owners, _ := rows[0]["owners"].([]any)
+	referenceOwners, _ := rows[0]["reference_owners"].([]any)
+	if len(owners) != 2 || len(referenceOwners) != 1 {
+		t.Fatalf("shared gateway owners = %v, reference owners = %v", owners, referenceOwners)
+	}
+
+	projection, err := publicationStore.GetProjectionState(ctx)
+	if err != nil {
+		t.Fatalf("read publication state: %v", err)
+	}
+	if len(projection.DirtyCoverage) != 0 ||
+		projection.PublishedRevision == nil ||
+		*projection.PublishedRevision != 2 {
+		t.Fatalf("fingerprint-to-loot publication left dirty coverage: %+v", projection)
+	}
+
+	queryRows, err := db.Query(ctx, prebuilt.CypherLitellmCredentialLeak, nil)
+	if err != nil {
+		t.Fatalf("execute guarded LiteLLM prebuilt query: %v", err)
+	}
+	var produced []map[string]any
+	for _, row := range queryRows {
+		if row["gateway_id"] == gatewayID {
+			produced = append(produced, row)
+		}
+	}
+	assertLiteLLMReferenceRows(t, produced)
+	fixture.AssertFingerprintThenLootRequests(t)
+}
+
 func TestIntegrationLiteLLMFirstPartyProducerSatisfiesMasterExposureQuery(t *testing.T) {
 	rows := runLiteLLMProducerQuery(t, nil)
+	assertLiteLLMReferenceRows(t, rows)
+}
+
+func TestIntegrationLiteLLMQueryRejectsUnobservedMasterMaterial(t *testing.T) {
+	rows := runLiteLLMProducerQuery(t, func(data *sdkingest.IngestData) {
+		for i := range data.Graph.Nodes {
+			if data.Graph.Nodes[i].Properties["type"] == "master_key" {
+				data.Graph.Nodes[i].Properties["material_status"] = "masked"
+			}
+		}
+	})
+	if len(rows) != 0 {
+		t.Fatalf("masked master material satisfied observed-exposure query: %+v", rows)
+	}
+}
+
+func runLiteLLMProducerQuery(
+	t *testing.T,
+	mutate func(*sdkingest.IngestData),
+) []map[string]any {
+	t.Helper()
+	ctx, pipeline, db, publicationStore := freshLiteLLMIntegrationHarness(t)
+	fixture := newLiteLLMFixture(t)
+	defer fixture.Close()
+
+	data := runAgentHoundLiteLLMLoot(t, fixture.URL)
+	if mutate != nil {
+		mutate(&data)
+	}
+	assertStrictLiteLLMArtifact(t, &data, fixture.URL)
+	fixture.AssertLootRequests(t)
+
+	gatewayID := sdkingest.ComputeNodeID("LiteLLMGateway", fixture.URL)
+	result, err := pipeline.Ingest(ctx, &data)
+	if err != nil {
+		t.Fatalf("pipeline ingest of validated loot output: %v", err)
+	}
+	if result.PublishedRevision == nil ||
+		result.Outcome != sdkingest.OutcomeComplete {
+		t.Fatalf("validated loot output was not published: %+v", result)
+	}
+
+	rows, identity, err := projection.GuardedRead(
+		ctx,
+		publicationStore,
+		func() ([]map[string]any, error) {
+			return db.Query(ctx, prebuilt.CypherLitellmCredentialLeak, nil)
+		},
+	)
+	if err != nil {
+		t.Fatalf("execute guarded LiteLLM prebuilt query: %v", err)
+	}
+	if identity.ScanID != result.ScanID ||
+		identity.Revision != *result.PublishedRevision {
+		t.Fatalf(
+			"guarded query publication identity = %+v, want scan %q revision %d",
+			identity,
+			result.ScanID,
+			*result.PublishedRevision,
+		)
+	}
+	producedRows := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		if row["gateway_id"] == gatewayID {
+			producedRows = append(producedRows, row)
+		}
+	}
+	return producedRows
+}
+
+func assertLiteLLMReferenceRows(t *testing.T, rows []map[string]any) {
+	t.Helper()
 	if len(rows) != 2 {
 		t.Fatalf("query returned %d rows, want masked apiKey and hashed virtual-key references", len(rows))
 	}
@@ -60,58 +241,6 @@ func TestIntegrationLiteLLMFirstPartyProducerSatisfiesMasterExposureQuery(t *tes
 		referenceStatuses["virtual_key"] != "hashed" {
 		t.Fatalf("reference evidence = %v", referenceStatuses)
 	}
-}
-
-func TestIntegrationLiteLLMQueryRejectsUnobservedMasterMaterial(t *testing.T) {
-	rows := runLiteLLMProducerQuery(t, func(data *sdkingest.IngestData) {
-		for i := range data.Graph.Nodes {
-			if data.Graph.Nodes[i].Properties["type"] == "master_key" {
-				data.Graph.Nodes[i].Properties["material_status"] = "masked"
-			}
-		}
-	})
-	if len(rows) != 0 {
-		t.Fatalf("masked master material satisfied observed-exposure query: %+v", rows)
-	}
-}
-
-func runLiteLLMProducerQuery(
-	t *testing.T,
-	mutate func(*sdkingest.IngestData),
-) []map[string]any {
-	t.Helper()
-	ctx, pipeline, db := freshLiteLLMIntegrationHarness(t)
-	fixture := newLiteLLMFixture(t)
-	defer fixture.Close()
-
-	data := runAgentHoundLiteLLMLoot(t, fixture.URL)
-	if mutate != nil {
-		mutate(&data)
-	}
-	assertStrictLiteLLMArtifact(t, &data, fixture.URL)
-	fixture.AssertLootRequests(t)
-
-	gatewayID := sdkingest.ComputeNodeID("LiteLLMGateway", fixture.URL)
-	result, err := pipeline.Ingest(ctx, &data)
-	if err != nil {
-		t.Fatalf("pipeline ingest of validated loot output: %v", err)
-	}
-	if result.PublishedRevision == nil ||
-		result.Outcome != sdkingest.OutcomeComplete {
-		t.Fatalf("validated loot output was not published: %+v", result)
-	}
-
-	rows, err := db.Query(ctx, prebuilt.CypherLitellmCredentialLeak, nil)
-	if err != nil {
-		t.Fatalf("execute LiteLLM prebuilt query: %v", err)
-	}
-	producedRows := make([]map[string]any, 0, len(rows))
-	for _, row := range rows {
-		if row["gateway_id"] == gatewayID {
-			producedRows = append(producedRows, row)
-		}
-	}
-	return producedRows
 }
 
 func assertStrictLiteLLMArtifact(
@@ -138,8 +267,9 @@ func assertStrictLiteLLMArtifact(
 	if len(gateway.Kinds) != 2 ||
 		gateway.Kinds[0] != "LiteLLMGateway" ||
 		gateway.Kinds[1] != "AIService" ||
-		gateway.Properties["endpoint"] != fixtureURL {
-		t.Fatalf("production loot gateway is not canonical: %+v", gateway)
+		len(gateway.Properties) != 0 ||
+		gateway.PropertySemantics != sdkingest.NodePropertySemanticsReferenceOnly {
+		t.Fatalf("production loot gateway is not a property-neutral reference: %+v", gateway)
 	}
 	for _, property := range []string{
 		"auth_method",
@@ -153,6 +283,30 @@ func assertStrictLiteLLMArtifact(
 	}
 }
 
+func findLiteLLMGateway(
+	t *testing.T,
+	data *sdkingest.IngestData,
+	gatewayID string,
+) *sdkingest.Node {
+	t.Helper()
+	for i := range data.Graph.Nodes {
+		if data.Graph.Nodes[i].ID == gatewayID {
+			return &data.Graph.Nodes[i]
+		}
+	}
+	t.Fatalf("artifact omitted LiteLLM gateway %q", gatewayID)
+	return nil
+}
+
+func containsValue(values []any, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 type liteLLMFixture struct {
 	*httptest.Server
 
@@ -164,8 +318,25 @@ type liteLLMFixture struct {
 
 func newLiteLLMFixture(t *testing.T) *liteLLMFixture {
 	t.Helper()
+	return newLiteLLMFixtureWithListener(t, nil)
+}
+
+func newLiteLLMScanFixture(t *testing.T) *liteLLMFixture {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:4000")
+	if err != nil {
+		t.Fatalf("bind first-party LiteLLM scan fixture to 127.0.0.1:4000: %v", err)
+	}
+	return newLiteLLMFixtureWithListener(t, listener)
+}
+
+func newLiteLLMFixtureWithListener(
+	t *testing.T,
+	listener net.Listener,
+) *liteLLMFixture {
+	t.Helper()
 	fixture := &liteLLMFixture{}
-	fixture.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fixture.mu.Lock()
 		switch r.URL.Path {
 		case "/model/info":
@@ -177,6 +348,10 @@ func newLiteLLMFixture(t *testing.T) *liteLLMFixture {
 		}
 		fixture.mu.Unlock()
 
+		if r.URL.Path == "/health/liveliness" {
+			_, _ = w.Write([]byte("I'm alive!"))
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer sk-integration-master-key" {
 			http.Error(w, "missing fixture master key", http.StatusUnauthorized)
 			return
@@ -203,7 +378,15 @@ func newLiteLLMFixture(t *testing.T) *liteLLMFixture {
 		default:
 			http.NotFound(w, r)
 		}
-	}))
+	})
+	if listener == nil {
+		fixture.Server = httptest.NewServer(handler)
+		return fixture
+	}
+	fixture.Server = httptest.NewUnstartedServer(handler)
+	_ = fixture.Listener.Close()
+	fixture.Listener = listener
+	fixture.Start()
 	return fixture
 }
 
@@ -223,20 +406,41 @@ func (f *liteLLMFixture) AssertLootRequests(t *testing.T) {
 	}
 }
 
+func (f *liteLLMFixture) AssertFingerprintThenLootRequests(t *testing.T) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.healthRequests != 1 ||
+		f.modelInfoRequests != 1 ||
+		f.keyListRequests != 1 {
+		t.Fatalf(
+			"LiteLLM fixture requests: health=%d model/info=%d key/list=%d, want one each",
+			f.healthRequests,
+			f.modelInfoRequests,
+			f.keyListRequests,
+		)
+	}
+}
+
+func runAgentHoundLiteLLMScan(t *testing.T) sdkingest.IngestData {
+	t.Helper()
+	binaryPath, repositoryRoot := buildAgentHound(t)
+	command := exec.Command(
+		binaryPath,
+		"scan",
+		"127.0.0.1",
+		"--ports",
+		"4000",
+		"--scan-output",
+		"-",
+		"--quiet",
+	)
+	return runAgentHoundArtifactCommand(t, command, repositoryRoot, "scan")
+}
+
 func runAgentHoundLiteLLMLoot(t *testing.T, fixtureURL string) sdkingest.IngestData {
 	t.Helper()
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve integration test source path")
-	}
-	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", ".."))
-	binaryPath := filepath.Join(t.TempDir(), "agenthound")
-	build := exec.Command("go", "build", "-o", binaryPath, "./collector/cmd/agenthound")
-	build.Dir = repositoryRoot
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build agenthound for production loot regression: %v\n%s", err, output)
-	}
-
+	binaryPath, repositoryRoot := buildAgentHound(t)
 	command := exec.Command(
 		binaryPath,
 		"loot",
@@ -251,20 +455,47 @@ func runAgentHoundLiteLLMLoot(t *testing.T, fixtureURL string) sdkingest.IngestD
 		"-",
 		"--quiet",
 	)
+	command.Stdin = strings.NewReader("AUTHORIZED\n")
+	return runAgentHoundArtifactCommand(t, command, repositoryRoot, "loot")
+}
+
+func buildAgentHound(t *testing.T) (string, string) {
+	t.Helper()
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve integration test source path")
+	}
+	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", ".."))
+	binaryPath := filepath.Join(t.TempDir(), "agenthound")
+	build := exec.Command("go", "build", "-o", binaryPath, "./collector/cmd/agenthound")
+	build.Dir = repositoryRoot
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build agenthound for production loot regression: %v\n%s", err, output)
+	}
+	return binaryPath, repositoryRoot
+}
+
+func runAgentHoundArtifactCommand(
+	t *testing.T,
+	command *exec.Cmd,
+	repositoryRoot string,
+	verb string,
+) sdkingest.IngestData {
+	t.Helper()
 	command.Dir = repositoryRoot
 	command.Env = integrationCommandEnv(t.TempDir())
-	command.Stdin = strings.NewReader("AUTHORIZED\n")
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
-		t.Fatalf("agenthound loot failed: %v\nstderr:\n%s", err, stderr.String())
+		t.Fatalf("agenthound %s failed: %v\nstderr:\n%s", verb, err, stderr.String())
 	}
 
 	var data sdkingest.IngestData
 	if err := sdkingest.DecodeStrict(bytes.NewReader(stdout.Bytes()), &data); err != nil {
 		t.Fatalf(
-			"strict JSON decode rejected agenthound loot output: %v\nstdout:\n%s\nstderr:\n%s",
+			"strict JSON decode rejected agenthound %s output: %v\nstdout:\n%s\nstderr:\n%s",
+			verb,
 			err,
 			stdout.String(),
 			stderr.String(),
@@ -287,7 +518,7 @@ func integrationCommandEnv(home string) []string {
 
 func freshLiteLLMIntegrationHarness(
 	t *testing.T,
-) (context.Context, *serveringest.Pipeline, *graph.DB) {
+) (context.Context, *serveringest.Pipeline, *graph.DB, *appdb.FindingStore) {
 	t.Helper()
 	if os.Getenv("AGENTHOUND_FRESH_DB_INTEGRATION") != "1" {
 		t.Skip("set AGENTHOUND_FRESH_DB_INTEGRATION=1 for destructive fresh-database integration")
@@ -354,10 +585,12 @@ func freshLiteLLMIntegrationHarness(
 		t.Fatalf("migrate PostgreSQL: %v", err)
 	}
 
+	scanStore := appdb.NewScanStore(pool)
+	findingStore := appdb.NewFindingStore(pool)
 	return ctx, serveringest.NewPipeline(
 		writer,
 		db,
-		appdb.NewScanStore(pool),
-		appdb.NewFindingStore(pool),
-	), db
+		scanStore,
+		findingStore,
+	), db, findingStore
 }

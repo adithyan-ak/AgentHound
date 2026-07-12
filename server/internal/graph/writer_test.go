@@ -796,6 +796,7 @@ func TestWriterCarriesObservationOwnershipWithoutTrustingReservedProperties(t *t
 	for _, reserved := range []string{
 		"observation_tokens",
 		"observation_properties_complete",
+		"observation_reference_tokens",
 	} {
 		if _, exists := props[reserved]; exists {
 			t.Fatalf("reserved property %q was accepted from artifact", reserved)
@@ -909,6 +910,125 @@ func TestCompleteObservationReplacesManagedProperties(t *testing.T) {
 	}
 	if strings.Contains(call.Cypher, "REMOVE n:SchemaVersion") {
 		t.Fatal("managed replacement removes internal labels")
+	}
+}
+
+func TestReferenceOnlyObservationPreservesAuthoritativeProperties(t *testing.T) {
+	scope := "scan:loot:sha256:reference"
+	recorder := &recordedExec{}
+	writer := newTestWriter(recorder.exec, false)
+	node := ingest.Node{
+		ID:                 "litellm",
+		Kinds:              []string{"LiteLLMGateway", "AIService"},
+		ObservationDomains: []string{scope},
+		Properties:         map[string]any{"objectid": "litellm"},
+		PropertySemantics:  ingest.NodePropertySemanticsReferenceOnly,
+	}
+
+	if _, err := writer.WriteObservationNodes(
+		context.Background(),
+		[]ingest.Node{node},
+		"loot-scan",
+		[]string{scope},
+	); err != nil {
+		t.Fatalf("WriteObservationNodes: %v", err)
+	}
+	call := recorder.snapshot()[0]
+	row := rowsAt(t, call.Params, "nodes")[0]
+	if referenceOnly, _ := row["reference_only"].(bool); !referenceOnly {
+		t.Fatalf("writer row did not preserve reference-only semantics: %+v", row)
+	}
+	properties := propsAt(t, row, "properties")
+	if len(properties) != 1 || properties["objectid"] != "litellm" {
+		t.Fatalf("reference properties = %+v, want objectid only", properties)
+	}
+	for _, fragment := range []string{
+		"old_authoritative_tokens",
+		"AND NOT node.reference_only",
+		"old_properties_complete OR",
+		"n.observation_reference_tokens",
+		"NOT replace_properties AND NOT node.reference_only",
+	} {
+		if !strings.Contains(call.Cypher, fragment) {
+			t.Fatalf("reference-only merge query missing %q:\n%s", fragment, call.Cypher)
+		}
+	}
+}
+
+func TestWriterSeparatesAuthoritativeAndReferenceRows(t *testing.T) {
+	recorder := &recordedExec{}
+	writer := newTestWriter(recorder.exec, false)
+	nodes := []ingest.Node{
+		{
+			ID:                 "shared",
+			Kinds:              []string{"LiteLLMGateway", "AIService"},
+			ObservationDomains: []string{"scan:network:sha256:authoritative"},
+			Properties:         map[string]any{"endpoint": "http://127.0.0.1:4000"},
+		},
+		{
+			ID:                 "shared",
+			Kinds:              []string{"LiteLLMGateway", "AIService"},
+			ObservationDomains: []string{"scan:loot:sha256:reference"},
+			Properties:         map[string]any{"objectid": "shared"},
+			PropertySemantics:  ingest.NodePropertySemanticsReferenceOnly,
+		},
+	}
+
+	if _, err := writer.WriteObservationNodes(
+		context.Background(),
+		nodes,
+		"shared-owner",
+		[]string{
+			"scan:network:sha256:authoritative",
+			"scan:loot:sha256:reference",
+		},
+	); err != nil {
+		t.Fatalf("WriteObservationNodes: %v", err)
+	}
+	calls := recorder.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("mixed property semantics produced %d batches, want 2", len(calls))
+	}
+	var referenceRows, authoritativeRows int
+	for _, call := range calls {
+		for _, row := range rowsAt(t, call.Params, "nodes") {
+			if referenceOnly, _ := row["reference_only"].(bool); referenceOnly {
+				referenceRows++
+			} else {
+				authoritativeRows++
+			}
+		}
+	}
+	if referenceRows != 1 || authoritativeRows != 1 {
+		t.Fatalf(
+			"writer rows: reference=%d authoritative=%d",
+			referenceRows,
+			authoritativeRows,
+		)
+	}
+}
+
+func TestWriterRejectsPropertiesOnReferenceOnlyNode(t *testing.T) {
+	recorder := &recordedExec{}
+	writer := newTestWriter(recorder.exec, false)
+	node := ingest.Node{
+		ID:                 "litellm",
+		Kinds:              []string{"LiteLLMGateway", "AIService"},
+		ObservationDomains: []string{"scan:loot:sha256:reference"},
+		Properties:         map[string]any{"endpoint": "fabricated"},
+		PropertySemantics:  ingest.NodePropertySemanticsReferenceOnly,
+	}
+
+	if _, err := writer.WriteObservationNodes(
+		context.Background(),
+		[]ingest.Node{node},
+		"loot-scan",
+		[]string{"scan:loot:sha256:reference"},
+	); err == nil {
+		t.Fatal("writer accepted properties on a reference-only observation")
+	}
+	if calls := recorder.snapshot(); len(calls) != 0 {
+		t.Fatalf("invalid reference reached graph execution: %+v", calls)
 	}
 }
 

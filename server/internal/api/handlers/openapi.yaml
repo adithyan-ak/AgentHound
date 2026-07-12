@@ -342,6 +342,10 @@ components:
           minItems: 1
           uniqueItems: true
           items: { type: string }
+        property_semantics:
+          type: string
+          enum: [reference_only]
+          description: Omit for an authoritative property observation. reference_only asserts only id and kinds and requires an empty properties object.
 
     IngestEdgeV2:
       type: object
