@@ -17,9 +17,12 @@ export interface Scan {
   started_at: string;
   completed_at?: string;
   artifact_observed_at?: string;
-  // Legacy Neo4j write-row counters. They are not unique discoveries.
-  node_count: number;
-  edge_count: number;
+  submitted: ScanCounts;
+  write_rows: ScanCounts;
+  graph_totals: {
+    before: ScanGraphTotal | null;
+    after: ScanGraphTotal | null;
+  };
   error?: string;
   collection_status?: string;
   graph_status?: string;
@@ -28,15 +31,21 @@ export interface Scan {
   projection_status?: string;
   publication_status?: string;
   comparison_key?: string;
-  graph_total_nodes_before?: number;
-  graph_total_edges_before?: number;
-  graph_total_nodes_after?: number;
-  graph_total_edges_after?: number;
   comparable_to_scan_id?: string;
   published_revision?: number;
   published_at?: string;
   lifecycle_updated_at?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface ScanCounts {
+  nodes: number;
+  edges: number;
+}
+
+export interface ScanGraphTotal {
+  total_nodes: number;
+  total_edges: number;
 }
 
 /**
@@ -83,8 +92,10 @@ export interface ComparablePublishedScan extends Scan {
   publication_status: "published" | "superseded";
   published_revision: number;
   comparison_key: string;
-  graph_total_nodes_after: number;
-  graph_total_edges_after: number;
+  graph_totals: {
+    before: ScanGraphTotal | null;
+    after: ScanGraphTotal;
+  };
 }
 
 function isPublishedGraphSnapshot(scan: Scan): scan is ComparablePublishedScan {
@@ -93,8 +104,7 @@ function isPublishedGraphSnapshot(scan: Scan): scan is ComparablePublishedScan {
       scan.publication_status === "superseded") &&
     scan.published_revision != null &&
     !!scan.comparison_key &&
-    scan.graph_total_nodes_after != null &&
-    scan.graph_total_edges_after != null
+    scan.graph_totals.after != null
   );
 }
 
@@ -115,5 +125,8 @@ export function comparablePublishedNodeDelta(scans: Scan[]): number | null {
     (scan) => scan.id === current.comparable_to_scan_id,
   );
   if (!previous) return null;
-  return current.graph_total_nodes_after - previous.graph_total_nodes_after;
+  return (
+    current.graph_totals.after.total_nodes -
+    previous.graph_totals.after.total_nodes
+  );
 }

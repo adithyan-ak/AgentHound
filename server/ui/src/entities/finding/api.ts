@@ -12,27 +12,40 @@ import type {
   TriageState,
 } from "./model";
 
+const FINDING_VARIANTS = new Set<Finding["variant"]>([
+  "unknown",
+  "default",
+  "credential_chain_observed_material",
+  "credential_chain_reference",
+  "credential_node_reference",
+  "cross_protocol_host_correlation",
+]);
+
+const FINDING_EVIDENCE_STATES = new Set<FindingEvidence["state"]>([
+  "unknown",
+  "observed_signal",
+  "inferred",
+  "hypothesis",
+  "reference_only",
+]);
+
 export async function fetchFindings(
   severity?: string,
   includeSuppressed?: boolean,
 ): Promise<PublishedFindings> {
-  const params: Record<string, string> = { scope: "published" };
+  const params: Record<string, string> = {};
   if (severity) params["severity"] = severity;
   if (includeSuppressed) params["include_suppressed"] = "true";
   const response = await api.get("analysis/findings", { searchParams: params });
-  const raw = await response.json<unknown>();
+  const raw = record(await response.json<unknown>(), "findings response");
   return {
-    findings: decodeFindings(raw),
-    scope: decodePublishedFindingScope(response.headers),
+    findings: decodeFindings(raw.findings),
+    scope: decodePublishedFindingScope(raw.scope),
   };
 }
 
 export async function fetchFindingDetail(id: string): Promise<FindingDetail> {
-  const raw = await api
-    .get(`analysis/findings/${id}`, {
-      searchParams: { scope: "published" },
-    })
-    .json<unknown>();
+  const raw = await api.get(`analysis/findings/${id}`).json<unknown>();
   return decodeFindingDetail(raw);
 }
 
@@ -51,37 +64,53 @@ export async function setTriage(
   const json: { status: string; note?: string } = { status };
   if (note !== undefined) json.note = note;
   return api
-    .put(`findings/triage/${fingerprint}`, { json })
+    .patch(`findings/triage/${fingerprint}`, { json })
     .json<TriageState>();
 }
 
-/**
- * Fetch findings across all severities in a single call by fanning out
- * parallel requests (the backend only filters one severity at a time) and
- * flattening. Used by the explorer's bundled graph fetch.
- */
-export async function fetchAllFindings(): Promise<Finding[]> {
-  const severities = ["critical", "high", "medium", "low"];
-  const results = await Promise.all(
-    severities.map((sev) =>
-      fetchFindings(sev),
-    ),
-  );
-  return results.flatMap((result) => result.findings);
+/** Fetch the complete published finding snapshot in one coherent read. */
+export async function fetchAllFindings(): Promise<PublishedFindings> {
+  return fetchFindings();
 }
 
 export function decodePublishedFindingScope(
-  headers: Pick<Headers, "get">,
+  value: unknown,
 ): PublishedFindingScope {
+  const scope = record(value, "findings response.scope");
+  if (scope.mode !== "published") {
+    throw new TypeError('findings response.scope.mode must be "published"');
+  }
+  const scanId =
+    scope.scan_id === "" ? "" : requiredString(scope.scan_id, "findings response.scope.scan_id");
+  const revision =
+    scope.revision === null
+      ? null
+      : finiteNumber(scope.revision, "findings response.scope.revision");
+  const publishedAt =
+    scope.published_at === null
+      ? null
+      : requiredString(
+          scope.published_at,
+          "findings response.scope.published_at",
+        );
   return {
-    mode: headers.get("X-Finding-Scope"),
-    scanId: headers.get("X-Snapshot-Scan-ID"),
-    revision: optionalFiniteNumber(headers.get("X-Published-Revision")),
-    publishedAt: headers.get("X-Published-At"),
-    projectionStatus: headers.get("X-Projection-Status"),
-    snapshotStatus: headers.get("X-Snapshot-Status"),
-    available: optionalBoolean(headers.get("X-Snapshot-Available")),
-    stale: optionalBoolean(headers.get("X-Snapshot-Stale")),
+    mode: scope.mode,
+    scanId,
+    revision,
+    publishedAt,
+    projectionStatus: requiredString(
+      scope.projection_status,
+      "findings response.scope.projection_status",
+    ),
+    snapshotStatus: requiredString(
+      scope.snapshot_status,
+      "findings response.scope.snapshot_status",
+    ),
+    available: requiredBoolean(
+      scope.available,
+      "findings response.scope.available",
+    ),
+    stale: requiredBoolean(scope.stale, "findings response.scope.stale"),
   };
 }
 
@@ -95,19 +124,12 @@ export function decodeFindingDetail(value: unknown): FindingDetail {
     detail.impact == null
       ? null
       : (record(detail.impact, "finding detail.impact") as unknown as FindingDetail["impact"]);
-  const compositeProps =
-    detail.composite_props == null
-      ? undefined
-      : record(detail.composite_props, "finding detail.composite_props");
-  const snapshot =
-    detail.snapshot == null
-      ? undefined
-      : (record(detail.snapshot, "finding detail.snapshot") as unknown as NonNullable<
-          FindingDetail["snapshot"]
-        >);
+  const snapshot = decodeFindingSnapshot(
+    detail.snapshot,
+    "finding detail.snapshot",
+  );
   return {
     finding: decodeFinding(detail.finding, "finding detail.finding"),
-    composite_props: compositeProps,
     attack_path: attackPath,
     remediation: collection(detail.remediation, "finding detail.remediation").map(
       (step, index) =>
@@ -126,12 +148,26 @@ function decodeFindings(value: unknown): Finding[] {
 
 function decodeFinding(value: unknown, path: string): Finding {
   const finding = record(value, path);
-  const evidence =
-    finding.evidence == null
-      ? undefined
-      : decodeFindingEvidence(finding.evidence, `${path}.evidence`);
+  const evidence = decodeFindingEvidence(finding.evidence, `${path}.evidence`);
+  if (!FINDING_VARIANTS.has(finding.variant as Finding["variant"])) {
+    throw new TypeError(`${path}.variant is invalid`);
+  }
   return {
     ...(finding as unknown as Finding),
+    id: requiredString(finding.id, `${path}.id`),
+    severity: requiredString(finding.severity, `${path}.severity`),
+    category: requiredString(finding.category, `${path}.category`),
+    title: requiredString(finding.title, `${path}.title`),
+    description: stringValue(finding.description, `${path}.description`),
+    edge_kind: requiredString(finding.edge_kind, `${path}.edge_kind`),
+    source_id: requiredString(finding.source_id, `${path}.source_id`),
+    source_name: stringValue(finding.source_name, `${path}.source_name`),
+    source_kind: requiredString(finding.source_kind, `${path}.source_kind`),
+    target_id: requiredString(finding.target_id, `${path}.target_id`),
+    target_name: stringValue(finding.target_name, `${path}.target_name`),
+    target_kind: requiredString(finding.target_kind, `${path}.target_kind`),
+    confidence: finiteNumber(finding.confidence, `${path}.confidence`),
+    variant: requiredString(finding.variant, `${path}.variant`) as Finding["variant"],
     owasp_map: stringCollection(finding.owasp_map, `${path}.owasp_map`),
     atlas_map: stringCollection(finding.atlas_map, `${path}.atlas_map`),
     evidence,
@@ -140,6 +176,9 @@ function decodeFinding(value: unknown, path: string): Finding {
 
 function decodeFindingEvidence(value: unknown, path: string): FindingEvidence {
   const evidence = record(value, path);
+  if (!FINDING_EVIDENCE_STATES.has(evidence.state as FindingEvidence["state"])) {
+    throw new TypeError(`${path}.state is invalid`);
+  }
   return {
     ...(evidence as unknown as FindingEvidence),
     channels: stringCollection(evidence.channels, `${path}.channels`),
@@ -207,8 +246,7 @@ function decodeAttackPathNode(value: unknown, path: string): AttackPathNode {
   return {
     ...(node as unknown as AttackPathNode),
     kinds: stringCollection(node.kinds, `${path}.kinds`),
-    properties:
-      node.properties == null ? {} : record(node.properties, `${path}.properties`),
+    properties: record(node.properties, `${path}.properties`),
   };
 }
 
@@ -216,8 +254,7 @@ function decodeAttackPathEdge(value: unknown, path: string): AttackPathEdge {
   const edge = record(value, path);
   return {
     ...(edge as unknown as AttackPathEdge),
-    properties:
-      edge.properties == null ? {} : record(edge.properties, `${path}.properties`),
+    properties: record(edge.properties, `${path}.properties`),
   };
 }
 
@@ -232,8 +269,44 @@ function decodeRemediationStep(value: unknown, path: string): RemediationStep {
   };
 }
 
+function decodeFindingSnapshot(
+  value: unknown,
+  path: string,
+): FindingDetail["snapshot"] {
+  const snapshot = record(value, path);
+  if (snapshot.scope !== "published") {
+    throw new TypeError(`${path}.scope must be "published"`);
+  }
+  if (snapshot.evidence_state !== "unavailable" &&
+      snapshot.evidence_state !== "persisted_exact_evidence") {
+    throw new TypeError(`${path}.evidence_state is invalid`);
+  }
+  return {
+    scope: snapshot.scope,
+    scan_id: requiredString(snapshot.scan_id, `${path}.scan_id`),
+    revision:
+      snapshot.revision === null
+        ? null
+        : finiteNumber(snapshot.revision, `${path}.revision`),
+    published_at:
+      snapshot.published_at === null
+        ? null
+        : requiredString(snapshot.published_at, `${path}.published_at`),
+    projection_status: requiredString(
+      snapshot.projection_status,
+      `${path}.projection_status`,
+    ),
+    snapshot_status: requiredString(
+      snapshot.snapshot_status,
+      `${path}.snapshot_status`,
+    ),
+    available: requiredBoolean(snapshot.available, `${path}.available`),
+    stale: requiredBoolean(snapshot.stale, `${path}.stale`),
+    evidence_state: snapshot.evidence_state,
+  };
+}
+
 function collection(value: unknown, path: string): unknown[] {
-  if (value == null) return [];
   if (!Array.isArray(value)) {
     throw new TypeError(`${path} must be an array`);
   }
@@ -265,14 +338,30 @@ function record(value: unknown, path: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function optionalBoolean(value: string | null): boolean | null {
-  if (value === "true") return true;
-  if (value === "false") return false;
-  return null;
+function requiredBoolean(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${path} must be a boolean`);
+  }
+  return value;
 }
 
-function optionalFiniteNumber(value: string | null): number | null {
-  if (value == null || value.trim() === "") return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+function finiteNumber(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new TypeError(`${path} must be a finite number`);
+  }
+  return value;
+}
+
+function requiredString(value: unknown, path: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError(`${path} must be a non-empty string`);
+  }
+  return value;
+}
+
+function stringValue(value: unknown, path: string): string {
+  if (typeof value !== "string") {
+    throw new TypeError(`${path} must be a string`);
+  }
+  return value;
 }

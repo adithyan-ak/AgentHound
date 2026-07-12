@@ -9,15 +9,10 @@ func TestPublicNodeKindPrefersConcreteServiceLabel(t *testing.T) {
 	}
 }
 
-func TestPublicNodeKindExcludesInternalAndReservedLabels(t *testing.T) {
-	for _, labels := range [][]any{
-		{"SchemaVersion"},
-		{"ResourceGroup"},
-		{"TrustZone"},
-	} {
-		if got := publicNodeKind(labels); got != "" {
-			t.Errorf("labels %v produced public kind %q", labels, got)
-		}
+func TestPublicNodeKindExcludesInternalLabels(t *testing.T) {
+	labels := []any{"SchemaVersion"}
+	if got := publicNodeKind(labels); got != "" {
+		t.Errorf("labels %v produced public kind %q", labels, got)
 	}
 }
 

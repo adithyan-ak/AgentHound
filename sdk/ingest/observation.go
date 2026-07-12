@@ -121,16 +121,11 @@ func appendUniqueSorted(values []string, value string) []string {
 }
 
 func outcomeCoverageKey(outcome CollectionOutcome) string {
-	if key := strings.TrimSpace(outcome.CoverageKey); key != "" {
-		return key
-	}
-	return strings.TrimSpace(outcome.Collector)
+	return strings.TrimSpace(outcome.CoverageKey)
 }
 
 // CoverageStates returns the best supported state for each declared coverage
-// key. A report-level state is authoritative only for a single-key report;
-// multi-domain reports need constituent outcomes to avoid treating one failed
-// child as complete merely because another child succeeded.
+// key from its explicit scoped outcomes.
 func CoverageStates(report *CollectionReport) map[string]OutcomeState {
 	states := make(map[string]OutcomeState)
 	if report == nil {
@@ -149,12 +144,9 @@ func CoverageStates(report *CollectionReport) map[string]OutcomeState {
 				outcomes = append(outcomes, outcome)
 			}
 		}
-		switch {
-		case len(outcomes) > 0:
+		if len(outcomes) > 0 {
 			states[key] = AggregateOutcomeState(outcomes)
-		case len(keys) == 1 && report.State != "":
-			states[key] = report.State
-		default:
+		} else {
 			states[key] = OutcomeUnknown
 		}
 	}

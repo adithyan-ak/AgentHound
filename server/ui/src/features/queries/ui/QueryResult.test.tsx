@@ -85,3 +85,46 @@ describe("QueryResult nested values", () => {
     expect(screen.queryByText(/\[object Object\]/)).not.toBeInTheDocument();
   });
 });
+
+describe("QueryResult traversal completeness", () => {
+  const metadata = {
+    scope: "security" as const,
+    direction: "out" as const,
+    relationshipKinds: ["TRUSTS_SERVER"],
+    maxHops: 10,
+    algorithm: "bounded-min-weight",
+    complete: false,
+    truncated: true,
+    expansionLimit: 100,
+    expansions: 101,
+    incompleteReason: "expansion limit reached",
+  };
+
+  it("does not make an authoritative empty claim for incomplete traversal", () => {
+    render(<QueryResult query={query} rows={[]} metadata={metadata} />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Traversal result is incomplete",
+    );
+    expect(screen.getByText(/Result unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText(/No results for/)).not.toBeInTheDocument();
+  });
+
+  it("renders the truncation warning before the returned row count", () => {
+    render(
+      <QueryResult
+        query={query}
+        rows={[{ name: "limited" }]}
+        metadata={{ ...metadata, incompleteReason: "result limit reached" }}
+      />,
+    );
+
+    const warning = screen.getByRole("alert");
+    const count = screen.getByText("1 row");
+    expect(
+      warning.compareDocumentPosition(count) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(warning).toHaveTextContent("result limit reached");
+  });
+});

@@ -13,8 +13,9 @@ function scan(overrides: Partial<Scan>): Scan {
     collector: "scan",
     status: "completed",
     started_at: "2026-07-11T00:00:00Z",
-    node_count: 1000,
-    edge_count: 1000,
+    submitted: { nodes: 1000, edges: 1000 },
+    write_rows: { nodes: 1000, edges: 1000 },
+    graph_totals: { before: null, after: null },
     ...overrides,
   };
 }
@@ -27,8 +28,10 @@ describe("published graph comparability", () => {
         publication_status: "published",
         published_revision: 3,
         comparison_key: "key-a",
-        graph_total_nodes_after: 12,
-        graph_total_edges_after: 8,
+        graph_totals: {
+          before: null,
+          after: { total_nodes: 12, total_edges: 8 },
+        },
         comparable_to_scan_id: "previous",
       }),
       scan({
@@ -36,16 +39,20 @@ describe("published graph comparability", () => {
         publication_status: "superseded",
         published_revision: 2,
         comparison_key: "key-b",
-        graph_total_nodes_after: 500,
-        graph_total_edges_after: 400,
+        graph_totals: {
+          before: null,
+          after: { total_nodes: 500, total_edges: 400 },
+        },
       }),
       scan({
         id: "previous",
         publication_status: "superseded",
         published_revision: 1,
         comparison_key: "key-a",
-        graph_total_nodes_after: 10,
-        graph_total_edges_after: 7,
+        graph_totals: {
+          before: null,
+          after: { total_nodes: 10, total_edges: 7 },
+        },
       }),
       scan({ id: "partial", status: "completed_with_errors" }),
     ];
@@ -64,8 +71,10 @@ describe("published graph comparability", () => {
           publication_status: "published",
           published_revision: 1,
           comparison_key: "key-a",
-          graph_total_nodes_after: 12,
-          graph_total_edges_after: 8,
+          graph_totals: {
+            before: null,
+            after: { total_nodes: 12, total_edges: 8 },
+          },
         }),
       ]),
     ).toBeNull();

@@ -7,8 +7,7 @@ import (
 )
 
 // GraphSnapshot is a frozen public-inventory count captured in one Neo4j read
-// transaction. It is intentionally distinct from scan node_count/edge_count,
-// which retain their legacy write-row semantics.
+// transaction. It is intentionally distinct from scan write-row counts.
 type GraphSnapshot struct {
 	NodeCounts map[string]int64 `json:"node_counts"`
 	EdgeCounts map[string]int64 `json:"edge_counts"`
@@ -43,13 +42,8 @@ type PostureCompleteness struct {
 }
 
 type PostureObservationCompleteness struct {
-	LegacyNodes                     int64 `json:"legacy_nodes"`
-	LegacyRelationships             int64 `json:"legacy_relationships"`
-	UnscopedNodes                   int64 `json:"unscoped_nodes"`
-	UnscopedRelationships           int64 `json:"unscoped_relationships"`
 	IncompletePropertyNodes         int64 `json:"incomplete_property_nodes"`
 	IncompletePropertyRelationships int64 `json:"incomplete_property_relationships"`
-	IdentityQuarantinedNodes        int64 `json:"identity_quarantined_nodes"`
 }
 
 type PostureObservationTimes struct {

@@ -27,8 +27,8 @@ export function InventoryTrend() {
         t: shortDate(
           s.artifact_observed_at ?? s.published_at ?? s.completed_at ?? s.started_at,
         ),
-        nodes: s.graph_total_nodes_after,
-        edges: s.graph_total_edges_after,
+        nodes: s.graph_totals.after.total_nodes,
+        edges: s.graph_totals.after.total_edges,
       }));
   }, [scans]);
 

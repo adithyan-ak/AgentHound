@@ -79,12 +79,9 @@ func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, sca
 		hostID := common.HostNodeID("localhost")
 		hostInfo := common.ClassifyHost("localhost")
 		result.Nodes = append(result.Nodes, common.NewNode(hostID, []string{"Host"}, map[string]any{
-			"hostname":   hostInfo.Hostname,
-			"ip":         hostInfo.IP,
-			"scope":      hostInfo.Scope,
-			"is_local":   hostInfo.IsLocal,
-			"is_private": hostInfo.IsPrivate,
-			"is_public":  hostInfo.IsPublic,
+			"hostname": hostInfo.Hostname,
+			"ip":       hostInfo.IP,
+			"scope":    hostInfo.Scope,
 		}))
 		result.Edges = append(result.Edges, common.NewEdge(serverID, hostID, "RUNS_ON", "MCPServer", "Host",
 			common.DefaultEdgeProps(scanID)))
@@ -510,8 +507,7 @@ func buildServerNode(serverID string, spec ServerSpec, initResult *mcpsdk.Initia
 		"auth_evidence":    authEvidence,
 		"id_scheme":        identity.Scheme,
 	}
-	if identity.LegacyObjectID != "" {
-		props["legacy_objectid"] = identity.LegacyObjectID
+	if spec.Transport == "stdio" {
 		props["command"] = spec.Command
 		props["args"] = append([]string(nil), spec.Args...)
 	}
@@ -552,8 +548,7 @@ func buildUnreachableServerNode(serverID string, spec ServerSpec, errMsg string)
 		"auth_evidence":  common.AuthEvidenceUnknown,
 		"id_scheme":      identity.Scheme,
 	}
-	if identity.LegacyObjectID != "" {
-		props["legacy_objectid"] = identity.LegacyObjectID
+	if spec.Transport == "stdio" {
 		props["command"] = spec.Command
 		props["args"] = append([]string(nil), spec.Args...)
 	}
@@ -578,12 +573,9 @@ func buildHostNodes(serverID, serverURL, scanID string) hostResult {
 
 	hostID := common.HostNodeID(hostname)
 	result.nodes = append(result.nodes, common.NewNode(hostID, []string{"Host"}, map[string]any{
-		"hostname":   hostInfo.Hostname,
-		"ip":         hostInfo.IP,
-		"scope":      hostInfo.Scope,
-		"is_local":   hostInfo.IsLocal,
-		"is_private": hostInfo.IsPrivate,
-		"is_public":  hostInfo.IsPublic,
+		"hostname": hostInfo.Hostname,
+		"ip":       hostInfo.IP,
+		"scope":    hostInfo.Scope,
 	}))
 	result.edges = append(result.edges, common.NewEdge(serverID, hostID, "RUNS_ON", "MCPServer", "Host",
 		common.DefaultEdgeProps(scanID)))
@@ -722,47 +714,8 @@ func finalizeServerResult(result *ServerResult, serverID string) {
 		node := &result.Nodes[i]
 		if node.ID == serverID {
 			node.Properties["collection_state"] = string(result.State)
-			continue
-		}
-		legacyParent, _ := serverLegacyID(result.Nodes, serverID)
-		if legacyParent == "" {
-			continue
-		}
-		switch {
-		case nodeHasMCPKind(*node, "MCPTool"):
-			if name, _ := node.Properties["name"].(string); name != "" {
-				node.Properties["legacy_objectid"] = ingest.ComputeNodeID("MCPTool", legacyParent, name)
-			}
-		case nodeHasMCPKind(*node, "MCPResource"):
-			if uri, _ := node.Properties["uri"].(string); uri != "" {
-				node.Properties["legacy_objectid"] = ingest.ComputeNodeID("MCPResource", legacyParent, uri)
-			}
-		case nodeHasMCPKind(*node, "MCPPrompt"):
-			if name, _ := node.Properties["name"].(string); name != "" {
-				node.Properties["legacy_objectid"] = ingest.ComputeNodeID("MCPPrompt", legacyParent, name)
-			}
 		}
 	}
-}
-
-func serverLegacyID(nodes []ingest.Node, serverID string) (string, bool) {
-	for _, node := range nodes {
-		if node.ID != serverID {
-			continue
-		}
-		legacy, ok := node.Properties["legacy_objectid"].(string)
-		return legacy, ok && legacy != ""
-	}
-	return "", false
-}
-
-func nodeHasMCPKind(node ingest.Node, want string) bool {
-	for _, kind := range node.Kinds {
-		if kind == want {
-			return true
-		}
-	}
-	return false
 }
 
 func marshalJSON(v any) string {

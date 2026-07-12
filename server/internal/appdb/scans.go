@@ -17,7 +17,7 @@ type ScanStore struct {
 }
 
 const scanSelectColumns = `id, collector, status, started_at, completed_at,
-	node_count, edge_count, error, artifact_observed_at,
+	node_write_rows, edge_write_rows, error, artifact_observed_at,
 	collection_status, graph_status, analysis_status, snapshot_status,
 	projection_status, publication_status, coalesce(comparison_key, ''),
 	graph_total_nodes_before, graph_total_edges_before,
@@ -28,8 +28,8 @@ const scanSelectColumns = `id, collector, status, started_at, completed_at,
 type ScanFailure struct {
 	ID               string
 	Status           string
-	NodeCount        int
-	EdgeCount        int
+	NodeWriteRows    int
+	EdgeWriteRows    int
 	Error            string
 	CollectionStatus string
 	GraphStatus      string
@@ -132,7 +132,7 @@ func (s *ScanStore) BeginScan(
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	_, err = tx.Exec(ctx, `INSERT INTO scans (
-	    id, collector, status, started_at, completed_at, node_count, edge_count,
+	    id, collector, status, started_at, completed_at, node_write_rows, edge_write_rows,
 	    error, artifact_observed_at, metadata, collection_status, graph_status,
 	    analysis_status, snapshot_status, projection_status, publication_status,
 	    comparison_key, graph_total_nodes_before, graph_total_edges_before,
@@ -146,8 +146,8 @@ func (s *ScanStore) BeginScan(
 	    status = EXCLUDED.status,
 	    started_at = EXCLUDED.started_at,
 	    completed_at = NULL,
-	    node_count = 0,
-	    edge_count = 0,
+	    node_write_rows = 0,
+	    edge_write_rows = 0,
 	    error = NULL,
 	    artifact_observed_at = EXCLUDED.artifact_observed_at,
 	    metadata = EXCLUDED.metadata,
@@ -242,19 +242,6 @@ func (s *ScanStore) BeginScan(
 	return cumulativeDirty, nil
 }
 
-func (s *ScanStore) UpdateScan(ctx context.Context, id, status string, nodeCount, edgeCount int, scanErr string) error {
-	now := time.Now().UTC()
-	_, err := s.pool.Exec(ctx,
-		`UPDATE scans SET status = $1, completed_at = $2, node_count = $3, edge_count = $4, error = $5,
-		 lifecycle_updated_at = NOW()
-		 WHERE id = $6`,
-		status, now, nodeCount, edgeCount, scanErr, id)
-	if err != nil {
-		return fmt.Errorf("update scan: %w", err)
-	}
-	return nil
-}
-
 func (s *ScanStore) RecordFailure(ctx context.Context, failure ScanFailure) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -266,8 +253,8 @@ func (s *ScanStore) RecordFailure(ctx context.Context, failure ScanFailure) erro
 	tag, err := tx.Exec(ctx, `UPDATE scans SET
 	    status = $1,
 	    completed_at = $2,
-	    node_count = $3,
-	    edge_count = $4,
+	    node_write_rows = $3,
+	    edge_write_rows = $4,
 	    error = $5,
 	    collection_status = $6,
 	    graph_status = $7,
@@ -279,8 +266,8 @@ func (s *ScanStore) RecordFailure(ctx context.Context, failure ScanFailure) erro
 	WHERE id = $12`,
 		failure.Status,
 		now,
-		failure.NodeCount,
-		failure.EdgeCount,
+		failure.NodeWriteRows,
+		failure.EdgeWriteRows,
 		failure.Error,
 		lifecycleOrUnknown(failure.CollectionStatus),
 		lifecycleOrUnknown(failure.GraphStatus),
@@ -504,8 +491,8 @@ func scanScan(row rowScanner) (*model.Scan, error) {
 		&scan.Status,
 		&scan.StartedAt,
 		&scan.CompletedAt,
-		&scan.NodeCount,
-		&scan.EdgeCount,
+		&scan.NodeWriteRows,
+		&scan.EdgeWriteRows,
 		&scanErr,
 		&scan.ArtifactObservedAt,
 		&scan.CollectionStatus,

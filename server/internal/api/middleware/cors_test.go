@@ -3,7 +3,6 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -72,7 +71,7 @@ func TestCORSDoesNotAllowCredentials(t *testing.T) {
 	}
 }
 
-func TestCORSExposesPaginationHeaders(t *testing.T) {
+func TestCORSDoesNotExposeRemovedPaginationHeaders(t *testing.T) {
 	r := chi.NewRouter()
 	r.Use(CORS([]string{"http://localhost:8080"}))
 	r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
@@ -84,20 +83,7 @@ func TestCORSExposesPaginationHeaders(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
-	exposed := strings.ToLower(rec.Header().Get("Access-Control-Expose-Headers"))
-	for _, header := range []string{
-		"x-total-count",
-		"x-has-more",
-		"x-offset",
-		"x-collection-complete",
-		"x-revision",
-		"x-finding-scope",
-		"x-projection-status",
-		"x-snapshot-scan-id",
-		"x-published-revision",
-	} {
-		if !strings.Contains(exposed, header) {
-			t.Errorf("Access-Control-Expose-Headers %q missing %q", exposed, header)
-		}
+	if exposed := rec.Header().Get("Access-Control-Expose-Headers"); exposed != "" {
+		t.Errorf("Access-Control-Expose-Headers = %q, want empty; pagination metadata is in response bodies", exposed)
 	}
 }

@@ -63,9 +63,9 @@ Concrete decisions:
   `main.go` blank-imports each module to bring it into the binary.
   Future modules slot in by adding a directory and a blank import, without
   touching shared code.
-- **Auth, RBAC, audit, users, API tokens — deleted.** All gone. The
-  `users`, `api_tokens`, and `audit_log` Postgres tables are dropped via
-  migration. `AGENTHOUND_JWT_SECRET`, `AGENTHOUND_ADMIN_PASSWORD`, and
+- **Auth, RBAC, audit, users, API tokens — deleted.** All gone. The current
+  single-user Postgres baseline never creates `users`, `api_tokens`, or
+  `audit_log`. `AGENTHOUND_JWT_SECRET`, `AGENTHOUND_ADMIN_PASSWORD`, and
   `AGENTHOUND_API_TOKEN` env vars are removed.
 - **Server binds 127.0.0.1:8080 by default.** Remote access is the
   operator's responsibility (VPN, SSH tunnel, Tailscale). The application
@@ -97,10 +97,10 @@ Negative / accepted:
 - **No multi-user support.** Single-user only. Anyone with network access
   to the server has full access to its data and API. Operators must scope
   network access accordingly.
-- **Upgrading destroys existing user/token/audit data.** The first server
-  startup after upgrade runs the drop-table migration. There is no
-  data-preservation path because there is no equivalent storage in the
-  new model.
+- **Pre-launch database history is disposable.** Development Neo4j and
+  Postgres state from before the single-user baseline must be dropped and
+  recreated. There is no compatibility migration for the removed
+  user/token/audit schema.
 - **Public SDK at `sdk/` is unstable until 1.0.** Type renames, removals,
   and signature changes are possible across pre-1.0 minor releases.
   Documented in `sdk/ingest/doc.go`.

@@ -148,8 +148,9 @@ func (e *Extractor) Extract(ctx context.Context, t action.Target, opts action.Ex
 			SourceKind: "AIModel",
 			TargetKind: "ExtractedTrainingSignal",
 			Properties: map[string]any{
-				"confidence": confidence,
-				"method":     "embedding-outlier",
+				"confidence":  confidence,
+				"risk_weight": 0.1,
+				"method":      "embedding-outlier",
 				"evidence": map[string]any{
 					"z_score":       sig.ZScore,
 					"magnitude":     sig.Norm,

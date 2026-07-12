@@ -253,8 +253,8 @@ func finalizeScanRow(
 	tag, err := tx.Exec(ctx, `UPDATE scans SET
 	    status = $1,
 	    completed_at = $2,
-	    node_count = $3,
-	    edge_count = $4,
+	    node_write_rows = $3,
+	    edge_write_rows = $4,
 	    error = NULLIF($5, ''),
 	    collection_status = $6,
 	    graph_status = $7,
@@ -287,8 +287,8 @@ func finalizeScanRow(
 	WHERE id = $21`,
 		params.Scan.Status,
 		params.Scan.CompletedAt,
-		params.Scan.NodeCount,
-		params.Scan.EdgeCount,
+		params.Scan.NodeWriteRows,
+		params.Scan.EdgeWriteRows,
 		params.Scan.Error,
 		lifecycleOrUnknown(params.Scan.CollectionStatus),
 		lifecycleOrUnknown(params.Scan.GraphStatus),
@@ -571,45 +571,6 @@ func (s *FindingStore) GetPublishedExport(ctx context.Context) (*model.PostureEx
 	var export model.PostureExport
 	if err := json.Unmarshal(data, &export); err != nil {
 		return nil, fmt.Errorf("decode published export: %w", err)
-	}
-	if export.Findings == nil {
-		export.Findings = []model.Finding{}
-	}
-	if export.Scope.CoverageKeys == nil {
-		export.Scope.CoverageKeys = []string{}
-	}
-	if export.Scope.ActiveCoverageKeys == nil {
-		export.Scope.ActiveCoverageKeys = append(
-			[]string{},
-			export.Scope.CoverageKeys...,
-		)
-	}
-	if export.Scope.DirtyCoverage == nil {
-		export.Scope.DirtyCoverage = []string{}
-	}
-	if export.Completeness.Normalization == "" {
-		export.Completeness.Normalization = sdkingest.NormalizationStatusUnknown
-	}
-	if export.Completeness.Observation == "" {
-		export.Completeness.Observation = model.LifecycleUnknown
-	}
-	if export.Completeness.Warnings == nil {
-		export.Completeness.Warnings = []sdkingest.NormalizationWarning{}
-	}
-	if export.Completeness.Stages == nil {
-		export.Completeness.Stages = []sdkingest.StageResult{}
-	}
-	if export.Health.State == "" {
-		export.Health.State = "not_captured"
-		export.Health.Captured = false
-	}
-	for i := range export.Findings {
-		if export.Findings[i].Variant == "" {
-			export.Findings[i].Variant = model.FindingVariantUnknown
-		}
-		if export.Findings[i].Evidence.State == "" {
-			export.Findings[i].Evidence.State = model.FindingEvidenceUnknown
-		}
 	}
 	return &export, nil
 }

@@ -174,14 +174,8 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 			"size_bytes":     tag.Size,
 			"family":         show.Family,
 			"parameter_size": show.Parameters, // canonical Ollama Details.ParameterSize
-			// TODO(v0.5): drop the "parameters" alias below; downstream
-			// graph consumers migrate to "parameter_size" per
-			// docs/reference/graph-model.md. Dual-emitted for one
-			// release cycle to avoid breaking external UI/query
-			// consumers.
-			"parameters":  show.Parameters,
-			"is_finetune": show.IsFinetune,
-			"modified_at": tag.ModifiedAt,
+			"is_finetune":    show.IsFinetune,
+			"modified_at":    tag.ModifiedAt,
 		}
 		if show.Modelfile != "" {
 			// value_hash is the cross-collector merge primitive. A leaked

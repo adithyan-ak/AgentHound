@@ -18,17 +18,17 @@ MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(s:MCPServer)-[:HAS_ENV_VAR]->(c1:Cred
 WHERE c1.value_hash IS NOT NULL
   AND c1.material_status = 'observed'
   AND c1.exposure_status = 'exposed'
-  AND coalesce(c1.merge_key, 'value_hash') = 'value_hash'
+  AND c1.merge_key = 'value_hash'
 MATCH (gw:LiteLLMGateway)-[:EXPOSES_CREDENTIAL]->(c1master:Credential)
 WHERE c1master.value_hash = c1.value_hash AND c1master.objectid <> c1.objectid
   AND c1master.material_status = 'observed'
   AND c1master.exposure_status = 'exposed'
-  AND coalesce(c1master.merge_key, 'value_hash') = 'value_hash'
+  AND c1master.merge_key = 'value_hash'
 MATCH (gw)-[:EXPOSES_CREDENTIAL]->(c2:Credential)
 WHERE c2.type IN ['apiKey', 'virtual_key']
   AND c2.material_status = 'observed'
   AND c2.exposure_status = 'exposed'
-  AND coalesce(c2.merge_key, 'value_hash') <> 'identity'
+  AND c2.merge_key = 'value_hash'
 RETURN a.name AS agent_name,
        s.name AS via_server,
        c1.name AS via_credential,
@@ -218,7 +218,7 @@ MATCH (c:Credential)
 WHERE c.high_entropy = true
   AND c.material_status = 'observed'
   AND c.exposure_status = 'exposed'
-  AND coalesce(c.merge_key, 'value_hash') <> 'identity'
+  AND c.merge_key = 'value_hash'
 OPTIONAL MATCH (s:MCPServer)-[:HAS_ENV_VAR]->(c)
 RETURN c.name AS credential_name,
        c.type AS credential_type,

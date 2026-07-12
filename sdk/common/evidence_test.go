@@ -2,9 +2,8 @@ package common
 
 import "testing"
 
-func TestApplyCredentialEvidenceClearsUnsupportedExposureClaims(t *testing.T) {
+func TestApplyCredentialEvidenceUsesCanonicalExposureStatus(t *testing.T) {
 	props := map[string]any{
-		"is_exposed":   true,
 		"high_entropy": true,
 	}
 	ApplyCredentialEvidence(
@@ -14,8 +13,11 @@ func TestApplyCredentialEvidenceClearsUnsupportedExposureClaims(t *testing.T) {
 		CredentialExposureNotObserved,
 	)
 
-	if props["is_exposed"] != false || props["high_entropy"] != false {
+	if props["high_entropy"] != false {
 		t.Fatalf("masked identity retained exposure claims: %+v", props)
+	}
+	if _, legacy := props["is_exposed"]; legacy {
+		t.Fatalf("legacy is_exposed alias was emitted: %+v", props)
 	}
 	if props["identity_basis"] != "provider_name" ||
 		props["material_status"] != "masked" ||

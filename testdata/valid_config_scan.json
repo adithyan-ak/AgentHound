@@ -1,11 +1,36 @@
 {
   "meta": {
-    "version": 1,
+    "version": 2,
     "type": "agenthound-ingest",
     "collector": "config",
     "collector_version": "0.1.0",
     "timestamp": "2026-04-07T09:00:00Z",
-    "scan_id": "scan-config-001"
+    "scan_id": "scan-config-001",
+    "collection": {
+      "state": "complete",
+      "coverage_keys": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"],
+      "outcomes": [{
+        "collector": "config",
+        "coverage_key": "config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1",
+        "target": "/Users/dev/.config/claude/claude_desktop_config.json",
+        "method": "fixture",
+        "state": "complete",
+        "items": 7
+      }]
+    },
+    "ruleset": {
+      "digest": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e64a8f8bff093b2f5f2cf4e",
+      "entries": [],
+      "load_state": "complete",
+      "errors": [],
+      "authenticity": "unverified"
+    },
+    "identity_schemes": [{
+      "entity_kind": "MCPServer",
+      "transport": "stdio",
+      "scheme": "mcp_stdio_v2_ordered",
+      "version": 2
+    }]
   },
   "graph": {
     "nodes": [
@@ -17,7 +42,8 @@
           "client": "claude-desktop",
           "server_count": 2,
           "objectid": "sha256:55ded6ce9a6992962ab8989d228fccd4a1ba9d2c8bf241bec3c5f8e9523f5397"
-        }
+        },
+        "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
         "id": "sha256:55555669cfdb8a62247a7d5b857df9dfbac760df7330fdf454b07e422ea384d4",
@@ -27,41 +53,55 @@
           "framework": "claude",
           "config_path": "/Users/dev/.config/claude/claude_desktop_config.json",
           "objectid": "sha256:55555669cfdb8a62247a7d5b857df9dfbac760df7330fdf454b07e422ea384d4"
-        }
+        },
+        "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
-        "id": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "id": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
         "kinds": ["MCPServer"],
         "properties": {
           "name": "postgres-server",
           "endpoint": "npx",
           "transport": "stdio",
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-postgres"],
+          "id_scheme": "mcp_stdio_v2_ordered",
           "auth_method": "apiKey",
+          "auth_assurance": "weak",
+          "auth_evidence": "configured_credential",
           "is_pinned": false,
-          "objectid": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a"
-        }
+          "objectid": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6"
+        },
+        "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
-        "id": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3",
+        "id": "sha256:564c3e9ef22e223e1530ecd9895e5f295dfa89ff080e7ad014d003dacbfb57dc",
         "kinds": ["MCPServer"],
         "properties": {
           "name": "slack-server",
           "endpoint": "npx",
           "transport": "stdio",
-          "auth_method": "none",
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-slack"],
+          "id_scheme": "mcp_stdio_v2_ordered",
+          "auth_method": "unknown",
+          "auth_assurance": "unknown",
+          "auth_evidence": "local_process",
           "is_pinned": false,
-          "objectid": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3"
-        }
+          "objectid": "sha256:564c3e9ef22e223e1530ecd9895e5f295dfa89ff080e7ad014d003dacbfb57dc"
+        },
+        "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
-        "id": "sha256:54f40d14e157405da76434d4b84b46d25e0705309db224694439a463d1cb3867",
+        "id": "sha256:9c89f380dee67385c1a567e067f32a16db451bae2aa831957036955347773722",
         "kinds": ["Identity"],
         "properties": {
           "type": "apiKey",
           "scope": "postgres-access",
           "is_static": true,
-          "objectid": "sha256:54f40d14e157405da76434d4b84b46d25e0705309db224694439a463d1cb3867"
-        }
+          "objectid": "sha256:9c89f380dee67385c1a567e067f32a16db451bae2aa831957036955347773722"
+        },
+        "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
         "id": "sha256:3911bb77e94767de23f943d45df97118c1ac33e0221194f6f433022d8dac22c7",
@@ -70,119 +110,147 @@
           "type": "envVar",
           "name": "POSTGRES_API_KEY",
           "source": "/Users/dev/.config/claude/claude_desktop_config.json",
-          "is_exposed": false,
           "high_entropy": true,
+          "value_hash": "sha256:3911bb77e94767de23f943d45df97118c1ac33e0221194f6f433022d8dac22c7",
+          "merge_key": "value_hash",
+          "identity_basis": "value_hash",
+          "material_status": "observed",
+          "exposure_status": "exposed",
           "objectid": "sha256:3911bb77e94767de23f943d45df97118c1ac33e0221194f6f433022d8dac22c7"
-        }
+        },
+        "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
         "id": "sha256:e064ba278c66ee6985b52020aba0cd6fc426a8a1369191333fd6fdae688acd3a",
         "kinds": ["Host"],
         "properties": {
           "hostname": "localhost",
-          "is_local": true,
-          "is_private": true,
-          "is_public": false,
+          "scope": "local",
           "objectid": "sha256:e064ba278c66ee6985b52020aba0cd6fc426a8a1369191333fd6fdae688acd3a"
-        }
+        },
+        "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       }
     ],
     "edges": [
       {
         "source": "sha256:55555669cfdb8a62247a7d5b857df9dfbac760df7330fdf454b07e422ea384d4",
-        "target": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "target": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
         "kind": "TRUSTS_SERVER",
+        "source_kind": "AgentInstance",
+        "target_kind": "MCPServer",
         "properties": {
           "scan_id": "scan-config-001",
           "last_seen": "2026-04-07T09:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.3,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
         "source": "sha256:55555669cfdb8a62247a7d5b857df9dfbac760df7330fdf454b07e422ea384d4",
-        "target": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3",
+        "target": "sha256:564c3e9ef22e223e1530ecd9895e5f295dfa89ff080e7ad014d003dacbfb57dc",
         "kind": "TRUSTS_SERVER",
+        "source_kind": "AgentInstance",
+        "target_kind": "MCPServer",
         "properties": {
           "scan_id": "scan-config-001",
           "last_seen": "2026-04-07T09:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.1,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
-        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "source": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
         "target": "sha256:55ded6ce9a6992962ab8989d228fccd4a1ba9d2c8bf241bec3c5f8e9523f5397",
         "kind": "CONFIGURED_IN",
+        "source_kind": "MCPServer",
+        "target_kind": "ConfigFile",
         "properties": {
           "scan_id": "scan-config-001",
           "last_seen": "2026-04-07T09:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.0,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
-        "source": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3",
+        "source": "sha256:564c3e9ef22e223e1530ecd9895e5f295dfa89ff080e7ad014d003dacbfb57dc",
         "target": "sha256:55ded6ce9a6992962ab8989d228fccd4a1ba9d2c8bf241bec3c5f8e9523f5397",
         "kind": "CONFIGURED_IN",
+        "source_kind": "MCPServer",
+        "target_kind": "ConfigFile",
         "properties": {
           "scan_id": "scan-config-001",
           "last_seen": "2026-04-07T09:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.0,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
-        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
-        "target": "sha256:54f40d14e157405da76434d4b84b46d25e0705309db224694439a463d1cb3867",
+        "source": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
+        "target": "sha256:9c89f380dee67385c1a567e067f32a16db451bae2aa831957036955347773722",
         "kind": "AUTHENTICATES_WITH",
+        "source_kind": "MCPServer",
+        "target_kind": "Identity",
         "properties": {
           "scan_id": "scan-config-001",
           "last_seen": "2026-04-07T09:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.3,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
-        "source": "sha256:54f40d14e157405da76434d4b84b46d25e0705309db224694439a463d1cb3867",
+        "source": "sha256:9c89f380dee67385c1a567e067f32a16db451bae2aa831957036955347773722",
         "target": "sha256:3911bb77e94767de23f943d45df97118c1ac33e0221194f6f433022d8dac22c7",
         "kind": "USES_CREDENTIAL",
+        "source_kind": "Identity",
+        "target_kind": "Credential",
         "properties": {
           "scan_id": "scan-config-001",
           "last_seen": "2026-04-07T09:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.5,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
-        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "source": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
         "target": "sha256:e064ba278c66ee6985b52020aba0cd6fc426a8a1369191333fd6fdae688acd3a",
         "kind": "RUNS_ON",
+        "source_kind": "MCPServer",
+        "target_kind": "Host",
         "properties": {
           "scan_id": "scan-config-001",
           "last_seen": "2026-04-07T09:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.0,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
-        "source": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3",
+        "source": "sha256:564c3e9ef22e223e1530ecd9895e5f295dfa89ff080e7ad014d003dacbfb57dc",
         "target": "sha256:e064ba278c66ee6985b52020aba0cd6fc426a8a1369191333fd6fdae688acd3a",
         "kind": "RUNS_ON",
+        "source_kind": "MCPServer",
+        "target_kind": "Host",
         "properties": {
           "scan_id": "scan-config-001",
           "last_seen": "2026-04-07T09:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.0,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       }
     ]
   }

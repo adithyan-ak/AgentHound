@@ -81,6 +81,9 @@ func (w *Writer) WriteObservationNodes(
 	if len(nodes) == 0 {
 		return 0, nil
 	}
+	if err := validateWriterNodes(nodes); err != nil {
+		return 0, err
+	}
 	return w.writeNodesBatched(ctx, nodes, scanID, completeDomains)
 }
 
@@ -141,23 +144,20 @@ WITH n, node,
      n.input_schema_hash AS old_input_schema_hash,
      n.instructions_hash AS old_instructions_hash,
      n.first_seen AS old_first_seen,
-     coalesce(n.observation_tokens, []) AS old_tokens,
-     coalesce(n.observation_managed, false) AS old_managed,
-     coalesce(n.legacy_observation, NOT coalesce(n.observation_managed, false)) AS old_legacy
+     coalesce(n.observation_tokens, []) AS old_tokens
 WITH n, node, observation_created,
      old_description_hash, old_input_schema_hash, old_instructions_hash,
-     old_first_seen, old_tokens, old_managed, old_legacy,
+     old_first_seen, old_tokens,
      (size(node.observation_tokens) > 0
       AND all(token IN node.observation_tokens WHERE
           any(prefix IN node.complete_domain_prefixes WHERE token STARTS WITH prefix))) AS incoming_complete
 WITH n, node, observation_created,
      old_description_hash, old_input_schema_hash, old_instructions_hash,
-     old_first_seen, old_tokens, old_managed, old_legacy, incoming_complete,
+     old_first_seen, old_tokens, incoming_complete,
      (NOT observation_created
       AND incoming_complete
-      AND (NOT old_managed OR
-          all(token IN old_tokens WHERE
-              any(prefix IN node.observation_domain_prefixes WHERE token STARTS WITH prefix)))) AS replace_properties
+      AND all(token IN old_tokens WHERE
+          any(prefix IN node.observation_domain_prefixes WHERE token STARTS WITH prefix))) AS replace_properties
 FOREACH (_ IN CASE WHEN observation_created OR replace_properties THEN [1] ELSE [] END |
   SET n = node.properties)
 FOREACH (_ IN CASE WHEN NOT observation_created AND NOT replace_properties THEN [1] ELSE [] END |
@@ -171,19 +171,27 @@ SET n.objectid = node.id,
     n.previous_instructions_hash = CASE WHEN observation_created THEN node.properties.instructions_hash ELSE old_instructions_hash END,
     n.observation_tokens = reduce(tokens = old_tokens, token IN node.observation_tokens |
       CASE WHEN token IN tokens THEN tokens ELSE tokens + token END),
-    n.observation_managed = old_managed OR size(node.observation_tokens) > 0,
     n.observation_properties_complete = CASE
       WHEN observation_created THEN incoming_complete
       WHEN replace_properties THEN true
       ELSE false
-    END,
-    n.legacy_observation = CASE
-      WHEN observation_created THEN size(node.observation_tokens) = 0
-      WHEN replace_properties THEN false
-      WHEN size(node.observation_tokens) > 0 AND NOT old_managed THEN true
-      ELSE old_legacy
-    END
-REMOVE n.__agenthound_observation_created`)
+    END`)
+	incomingLabels := make(map[string]bool, len(extraLabels)+1)
+	incomingLabels[primaryKind] = true
+	for _, label := range extraLabels {
+		incomingLabels[label] = true
+	}
+	for _, label := range ingest.PublicNodeLabels {
+		if incomingLabels[label] {
+			continue
+		}
+		fmt.Fprintf(
+			&sb,
+			"\nFOREACH (_ IN CASE WHEN replace_properties THEN [1] ELSE [] END | REMOVE n:%s)",
+			label,
+		)
+	}
+	sb.WriteString("\nREMOVE n.__agenthound_observation_created")
 	for _, lbl := range extraLabels {
 		fmt.Fprintf(&sb, "\nSET n:%s", lbl)
 	}
@@ -204,7 +212,35 @@ func (w *Writer) WriteObservationEdges(
 	if len(edges) == 0 {
 		return 0, nil
 	}
+	if err := validateRawWriterEdges(edges); err != nil {
+		return 0, err
+	}
+	return w.writeEdges(ctx, edges, scanID, completeDomains)
+}
 
+// WriteCompositeEdges is the postprocessor-only edge path. Composite facts do
+// not carry raw observation ownership; they are retired and rebuilt as one
+// explicit composite epoch by the ingest lifecycle.
+func (w *Writer) WriteCompositeEdges(
+	ctx context.Context,
+	edges []ingest.Edge,
+	scanID string,
+) (int, error) {
+	if len(edges) == 0 {
+		return 0, nil
+	}
+	if err := validateCompositeWriterEdges(edges); err != nil {
+		return 0, err
+	}
+	return w.writeEdges(ctx, edges, scanID, nil)
+}
+
+func (w *Writer) writeEdges(
+	ctx context.Context,
+	edges []ingest.Edge,
+	scanID string,
+	completeDomains []string,
+) (int, error) {
 	w.detectAPOC(ctx)
 
 	if w.hasAPOC {
@@ -230,40 +266,37 @@ func (w *Writer) writeEdgesAPOC(
 		cypher := fmt.Sprintf(`UNWIND $edges AS edge
 %s
 %s
-CALL apoc.merge.relationship(a, $kind, {}, edge.create_properties, b, edge.properties) YIELD rel
+CALL apoc.merge.relationship(a, $kind, {}, edge.create_properties, b, {}) YIELD rel
 WITH rel, edge, coalesce(rel.__agenthound_observation_created, false) AS observation_created
 WITH rel, edge, observation_created,
      coalesce(rel.observation_tokens, []) AS old_tokens,
-     coalesce(rel.observation_managed, false) AS old_managed,
-     coalesce(rel.legacy_observation, NOT coalesce(rel.observation_managed, false)) AS old_legacy
-WITH rel, edge, observation_created, old_tokens, old_managed, old_legacy,
-     (size(edge.observation_tokens) > 0
-      AND all(token IN edge.observation_tokens WHERE
+     coalesce(rel.observation_dependency_tokens, []) AS old_dependency_tokens
+WITH rel, edge, observation_created, old_tokens, old_dependency_tokens,
+     CASE WHEN edge.observation_semantics = 'all_dependencies'
+          THEN old_dependency_tokens ELSE old_tokens END AS old_ownership_tokens
+WITH rel, edge, observation_created, old_tokens, old_dependency_tokens, old_ownership_tokens,
+     (size(edge.ownership_tokens) > 0
+      AND all(token IN edge.ownership_tokens WHERE
           any(prefix IN edge.complete_domain_prefixes WHERE token STARTS WITH prefix))) AS incoming_complete
-WITH rel, edge, observation_created, old_tokens, old_managed, old_legacy, incoming_complete,
+WITH rel, edge, observation_created, old_tokens, old_dependency_tokens, old_ownership_tokens, incoming_complete,
      (NOT observation_created
       AND incoming_complete
-      AND (NOT old_managed OR
-          all(token IN old_tokens WHERE
-              any(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix)))) AS replace_properties
+      AND all(token IN old_ownership_tokens WHERE
+          any(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix))) AS replace_properties
 FOREACH (_ IN CASE WHEN NOT observation_created AND replace_properties THEN [1] ELSE [] END |
   SET rel = edge.properties)
 FOREACH (_ IN CASE WHEN NOT observation_created AND NOT replace_properties THEN [1] ELSE [] END |
   SET rel += edge.properties)
-SET rel.legacy_observation = CASE
-      WHEN observation_created THEN size(edge.observation_tokens) = 0
-      WHEN replace_properties THEN false
-      WHEN size(edge.observation_tokens) > 0 AND NOT old_managed THEN true
-      ELSE old_legacy
-    END,
-    rel.observation_managed = old_managed OR size(edge.observation_tokens) > 0,
-    rel.observation_properties_complete = CASE
+SET rel.observation_properties_complete = CASE
       WHEN observation_created THEN incoming_complete
       WHEN replace_properties THEN true
       ELSE false
     END,
     rel.observation_tokens = reduce(tokens = old_tokens, token IN edge.observation_tokens |
       CASE WHEN token IN tokens THEN tokens ELSE tokens + token END),
+    rel.observation_dependency_tokens = reduce(tokens = old_dependency_tokens, token IN edge.observation_dependency_tokens |
+      CASE WHEN token IN tokens THEN tokens ELSE tokens + token END),
+    rel.observation_semantics = edge.observation_semantics,
     rel.scan_id = $scan_id,
     rel.last_seen = datetime()
 REMOVE rel.__agenthound_observation_created
@@ -278,18 +311,21 @@ RETURN count(*) AS written`, sourceMatch, targetMatch)
 				props := factProperties(e.Properties)
 				createProps := cloneProperties(props)
 				createProps["__agenthound_observation_created"] = true
-				tokens := observationTokens(e.ObservationDomains, scanID)
+				tokens, dependencyTokens := edgeObservationTokens(e, scanID)
 				createProps["observation_tokens"] = tokens
-				createProps["observation_managed"] = len(tokens) > 0
-				createProps["legacy_observation"] = len(tokens) == 0
+				createProps["observation_dependency_tokens"] = dependencyTokens
+				createProps["observation_semantics"] = string(e.ObservationSemantics)
 				params[j] = map[string]any{
-					"source":                      e.Source,
-					"target":                      e.Target,
-					"properties":                  props,
-					"create_properties":           createProps,
-					"observation_tokens":          tokens,
-					"observation_domain_prefixes": observationDomainPrefixes(e.ObservationDomains),
-					"complete_domain_prefixes":    completePrefixes,
+					"source":                        e.Source,
+					"target":                        e.Target,
+					"properties":                    props,
+					"create_properties":             createProps,
+					"observation_tokens":            tokens,
+					"observation_dependency_tokens": dependencyTokens,
+					"observation_semantics":         string(e.ObservationSemantics),
+					"ownership_tokens":              ownershipTokens(tokens, dependencyTokens),
+					"observation_domain_prefixes":   observationDomainPrefixes(e.ObservationDomains),
+					"complete_domain_prefixes":      completePrefixes,
 				}
 			}
 
@@ -327,13 +363,17 @@ func (w *Writer) writeEdgesFallback(
 			params := make([]map[string]any, len(batch))
 			for j, e := range batch {
 				props := factProperties(e.Properties)
+				tokens, dependencyTokens := edgeObservationTokens(e, scanID)
 				params[j] = map[string]any{
-					"source":                      e.Source,
-					"target":                      e.Target,
-					"properties":                  props,
-					"observation_tokens":          observationTokens(e.ObservationDomains, scanID),
-					"observation_domain_prefixes": observationDomainPrefixes(e.ObservationDomains),
-					"complete_domain_prefixes":    completePrefixes,
+					"source":                        e.Source,
+					"target":                        e.Target,
+					"properties":                    props,
+					"observation_tokens":            tokens,
+					"observation_dependency_tokens": dependencyTokens,
+					"observation_semantics":         string(e.ObservationSemantics),
+					"ownership_tokens":              ownershipTokens(tokens, dependencyTokens),
+					"observation_domain_prefixes":   observationDomainPrefixes(e.ObservationDomains),
+					"complete_domain_prefixes":      completePrefixes,
 				}
 			}
 
@@ -367,18 +407,19 @@ ON CREATE SET r.__agenthound_observation_created = true
 WITH r, edge,
      coalesce(r.__agenthound_observation_created, false) AS observation_created,
      coalesce(r.observation_tokens, []) AS old_tokens,
-     coalesce(r.observation_managed, false) AS old_managed,
-     coalesce(r.legacy_observation, NOT coalesce(r.observation_managed, false)) AS old_legacy
-WITH r, edge, observation_created, old_tokens, old_managed, old_legacy,
-     (size(edge.observation_tokens) > 0
-      AND all(token IN edge.observation_tokens WHERE
+     coalesce(r.observation_dependency_tokens, []) AS old_dependency_tokens
+WITH r, edge, observation_created, old_tokens, old_dependency_tokens,
+     CASE WHEN edge.observation_semantics = 'all_dependencies'
+          THEN old_dependency_tokens ELSE old_tokens END AS old_ownership_tokens
+WITH r, edge, observation_created, old_tokens, old_dependency_tokens, old_ownership_tokens,
+     (size(edge.ownership_tokens) > 0
+      AND all(token IN edge.ownership_tokens WHERE
           any(prefix IN edge.complete_domain_prefixes WHERE token STARTS WITH prefix))) AS incoming_complete
-WITH r, edge, observation_created, old_tokens, old_managed, old_legacy, incoming_complete,
+WITH r, edge, observation_created, old_tokens, old_dependency_tokens, old_ownership_tokens, incoming_complete,
      (NOT observation_created
       AND incoming_complete
-      AND (NOT old_managed OR
-          all(token IN old_tokens WHERE
-              any(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix)))) AS replace_properties
+      AND all(token IN old_ownership_tokens WHERE
+          any(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix))) AS replace_properties
 FOREACH (_ IN CASE WHEN observation_created OR replace_properties THEN [1] ELSE [] END |
   SET r = edge.properties)
 FOREACH (_ IN CASE WHEN NOT observation_created AND NOT replace_properties THEN [1] ELSE [] END |
@@ -387,17 +428,13 @@ SET r.scan_id = $scan_id,
     r.last_seen = datetime(),
     r.observation_tokens = reduce(tokens = old_tokens, token IN edge.observation_tokens |
       CASE WHEN token IN tokens THEN tokens ELSE tokens + token END),
-    r.observation_managed = old_managed OR size(edge.observation_tokens) > 0,
+    r.observation_dependency_tokens = reduce(tokens = old_dependency_tokens, token IN edge.observation_dependency_tokens |
+      CASE WHEN token IN tokens THEN tokens ELSE tokens + token END),
+    r.observation_semantics = edge.observation_semantics,
     r.observation_properties_complete = CASE
       WHEN observation_created THEN incoming_complete
       WHEN replace_properties THEN true
       ELSE false
-    END,
-    r.legacy_observation = CASE
-      WHEN observation_created THEN size(edge.observation_tokens) = 0
-      WHEN replace_properties THEN false
-      WHEN size(edge.observation_tokens) > 0 AND NOT old_managed THEN true
-      ELSE old_legacy
     END
 REMOVE r.__agenthound_observation_created
 RETURN count(*) AS written`, matchClause("a", sourceKind, "source"), matchClause("b", targetKind, "target"), edgeKind)
@@ -476,9 +513,9 @@ func cloneProperties(props map[string]any) map[string]any {
 func factProperties(props map[string]any) map[string]any {
 	out := cloneProperties(props)
 	delete(out, "observation_tokens")
-	delete(out, "observation_managed")
+	delete(out, "observation_dependency_tokens")
+	delete(out, "observation_semantics")
 	delete(out, "observation_properties_complete")
-	delete(out, "legacy_observation")
 	delete(out, "__agenthound_observation_created")
 	return out
 }
@@ -501,15 +538,12 @@ type nodeKindTuple struct {
 func groupNodesByKindTuple(nodes []ingest.Node) map[string]*nodeKindTuple {
 	grouped := make(map[string]*nodeKindTuple)
 	for _, n := range nodes {
-		primary := "Node"
+		primary := n.Kinds[0]
 		var extras []string
-		if len(n.Kinds) > 0 {
-			primary = n.Kinds[0]
-			if len(n.Kinds) > 1 {
-				extras = make([]string, len(n.Kinds)-1)
-				copy(extras, n.Kinds[1:])
-				sort.Strings(extras)
-			}
+		if len(n.Kinds) > 1 {
+			extras = make([]string, len(n.Kinds)-1)
+			copy(extras, n.Kinds[1:])
+			sort.Strings(extras)
 		}
 		key := primary
 		if len(extras) > 0 {
@@ -528,21 +562,6 @@ func groupNodesByKindTuple(nodes []ingest.Node) map[string]*nodeKindTuple {
 	return grouped
 }
 
-// groupNodesByKind is kept for backwards compatibility with existing tests
-// that assert grouping by primary kind only. New code should use
-// groupNodesByKindTuple.
-func groupNodesByKind(nodes []ingest.Node) map[string][]ingest.Node {
-	grouped := make(map[string][]ingest.Node)
-	for _, n := range nodes {
-		kind := "Node"
-		if len(n.Kinds) > 0 {
-			kind = n.Kinds[0]
-		}
-		grouped[kind] = append(grouped[kind], n)
-	}
-	return grouped
-}
-
 type edgeGroupKey struct {
 	Kind       string
 	SourceKind string
@@ -552,9 +571,126 @@ type edgeGroupKey struct {
 func groupEdgesByEndpoints(edges []ingest.Edge) map[edgeGroupKey][]ingest.Edge {
 	grouped := make(map[edgeGroupKey][]ingest.Edge)
 	for _, e := range edges {
-		sk, tk := ingest.ResolveEdgeEndpoints(e.Kind, e.SourceKind, e.TargetKind)
-		key := edgeGroupKey{Kind: e.Kind, SourceKind: sk, TargetKind: tk}
+		key := edgeGroupKey{
+			Kind:       e.Kind,
+			SourceKind: e.SourceKind,
+			TargetKind: e.TargetKind,
+		}
 		grouped[key] = append(grouped[key], e)
 	}
 	return grouped
+}
+
+func validateWriterNodes(nodes []ingest.Node) error {
+	for i, node := range nodes {
+		if ingest.ConcreteNodeKind(node.Kinds) == "" {
+			return fmt.Errorf("node %d (%s) requires a valid concrete kind", i, node.ID)
+		}
+		if len(normalizedDomains(node.ObservationDomains)) == 0 {
+			return fmt.Errorf("node %d (%s) requires at least one observation domain", i, node.ID)
+		}
+	}
+	return nil
+}
+
+func validateRawWriterEdges(edges []ingest.Edge) error {
+	for i, edge := range edges {
+		if err := validateWriterEdgeEndpoints(i, edge); err != nil {
+			return err
+		}
+		if !ingest.RawEdgeKinds[edge.Kind] {
+			return fmt.Errorf("edge %d (%s) is not a raw edge kind", i, edge.Kind)
+		}
+		if !ingest.SourceKindAllowed(edge.Kind, edge.SourceKind) ||
+			!ingest.TargetKindAllowed(edge.Kind, edge.TargetKind) {
+			return fmt.Errorf(
+				"edge %d (%s) has invalid explicit endpoint kinds %s -> %s",
+				i,
+				edge.Kind,
+				edge.SourceKind,
+				edge.TargetKind,
+			)
+		}
+		if isComposite, _ := edge.Properties["is_composite"].(bool); isComposite {
+			return fmt.Errorf(
+				"edge %d (%s) is raw and cannot declare is_composite=true",
+				i,
+				edge.Kind,
+			)
+		}
+		domains := normalizedDomains(edge.ObservationDomains)
+		if len(domains) == 0 {
+			return fmt.Errorf(
+				"edge %d (%s) requires at least one observation domain",
+				i,
+				edge.Kind,
+			)
+		}
+		switch edge.ObservationSemantics {
+		case "", ingest.ObservationSemanticsAnyOwner:
+		case ingest.ObservationSemanticsAllDependencies:
+			if len(domains) < 2 {
+				return fmt.Errorf(
+					"edge %d (%s) all_dependencies requires at least two observation domains",
+					i,
+					edge.Kind,
+				)
+			}
+		default:
+			return fmt.Errorf(
+				"edge %d (%s) has invalid observation semantics %q",
+				i,
+				edge.Kind,
+				edge.ObservationSemantics,
+			)
+		}
+	}
+	return nil
+}
+
+func validateCompositeWriterEdges(edges []ingest.Edge) error {
+	for i, edge := range edges {
+		if err := validateWriterEdgeEndpoints(i, edge); err != nil {
+			return err
+		}
+		if !ingest.AllowedEdgeKinds[edge.Kind] || ingest.RawEdgeKinds[edge.Kind] {
+			return fmt.Errorf("edge %d (%s) is not a composite edge kind", i, edge.Kind)
+		}
+		isComposite, _ := edge.Properties["is_composite"].(bool)
+		if !isComposite {
+			return fmt.Errorf("edge %d (%s) must declare is_composite=true", i, edge.Kind)
+		}
+		if len(normalizedDomains(edge.ObservationDomains)) != 0 ||
+			edge.ObservationSemantics != "" {
+			return fmt.Errorf("edge %d (%s) must not carry raw observation ownership", i, edge.Kind)
+		}
+	}
+	return nil
+}
+
+func validateWriterEdgeEndpoints(index int, edge ingest.Edge) error {
+	if strings.TrimSpace(edge.SourceKind) == "" ||
+		strings.TrimSpace(edge.TargetKind) == "" {
+		return fmt.Errorf(
+			"edge %d (%s) requires explicit source_kind and target_kind",
+			index,
+			edge.Kind,
+		)
+	}
+	return nil
+}
+
+func edgeObservationTokens(edge ingest.Edge, scanID string) ([]string, []string) {
+	tokens := observationTokens(edge.ObservationDomains, scanID)
+	if edge.ObservationSemantics == ingest.ObservationSemanticsAllDependencies {
+		return []string{}, tokens
+	}
+	return tokens, []string{}
+}
+
+func ownershipTokens(tokens, dependencyTokens []string) []string {
+	if len(dependencyTokens) > 0 {
+		return dependencyTokens
+	}
+	return tokens
 }

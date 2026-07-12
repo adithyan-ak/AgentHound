@@ -59,7 +59,7 @@ The server and offensive modules persist state under `~/.agenthound/`:
 
 ## CSRF defense (OriginGuard)
 
-Mutating API endpoints (`POST /api/v1/ingest`, `POST /api/v1/query`, path operations, scan CRUD, triage PUT) are gated by an `Origin` allowlist. Browsers must originate from a value in `AGENTHOUND_CORS_ORIGINS` (default covers `http://localhost:8080` and `http://127.0.0.1:8080`). Non-browser callers (curl, the agenthound CLI, cron pipelines) send no `Origin` header and pass through. CLI commands (`agenthound-server ingest`, `query`) bypass HTTP entirely. See [`security.md`](../operator/security.md#origin-guard-on-mutating-endpoints).
+Mutating API endpoints (`POST /api/v1/ingest`, `POST /api/v1/query`, security/topology path operations, scan CRUD, triage PATCH) are gated by an `Origin` allowlist. Browsers must originate from a value in `AGENTHOUND_CORS_ORIGINS` (default covers `http://localhost:8080` and `http://127.0.0.1:8080`). Non-browser callers (curl, the agenthound CLI, cron pipelines) send no `Origin` header and pass through. CLI commands (`agenthound-server ingest`, `query`) bypass HTTP entirely. See [`security.md`](../operator/security.md#origin-guard-on-mutating-endpoints).
 
 ---
 

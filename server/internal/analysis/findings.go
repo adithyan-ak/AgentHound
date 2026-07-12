@@ -20,9 +20,6 @@ func findingFingerprint(edgeKind, sourceID, targetID string) string {
 	return hex.EncodeToString(h[:])[:16]
 }
 
-// Finding is an alias for model.Finding so existing callers (analysis.Finding) keep working.
-type Finding = model.Finding
-
 // findingMeta describes how a composite edge kind is presented as a finding.
 // Description text is formatted separately with named source/target roles and
 // detector evidence; a single positional placeholder cannot safely represent
@@ -284,8 +281,6 @@ RETURN src.objectid AS source_id,
        tgt.sensitivity AS target_sensitivity,
        r.source_collector AS source_collector,
        r.match_type AS match_type,
-       r.via_gateway AS via_gateway,
-       r.merge_value_hash AS merge_value_hash,
        tgt.capability_surface AS target_capabilities,
        tgt.merge_key AS target_merge_key,
        tgt.material_status AS target_material_status,
@@ -297,13 +292,13 @@ RETURN src.objectid AS source_id,
 ORDER BY r.confidence DESC`
 
 // QueryFindings queries all composite edges and maps them to findings with severity.
-func QueryFindings(ctx context.Context, db graph.GraphDB, severity string) ([]Finding, error) {
+func QueryFindings(ctx context.Context, db graph.GraphDB, severity string) ([]model.Finding, error) {
 	rows, err := db.Query(ctx, findingsQuery, nil)
 	if err != nil {
 		return nil, fmt.Errorf("query findings: %w", err)
 	}
 
-	var findings []Finding
+	var findings []model.Finding
 	for _, row := range rows {
 		edgeKind := stringVal(row, "edge_kind")
 		sourceID := stringVal(row, "source_id")
@@ -375,7 +370,7 @@ func QueryFindings(ctx context.Context, db graph.GraphDB, severity string) ([]Fi
 			confidence:               confidence,
 		})
 
-		findings = append(findings, Finding{
+		findings = append(findings, model.Finding{
 			ID:            findingFingerprint(edgeKind, sourceID, targetID),
 			Severity:      sev,
 			Category:      meta.category,
@@ -392,8 +387,8 @@ func QueryFindings(ctx context.Context, db graph.GraphDB, severity string) ([]Fi
 			Variant:       variant,
 			Evidence:      evidence,
 			ExactEvidence: exactFindingEvidenceFromRow(row),
-			OWASPMap:      meta.owasp,
-			ATLASMap:      meta.atlas,
+			OWASPMap:      append([]string{}, meta.owasp...),
+			ATLASMap:      append([]string{}, meta.atlas...),
 		})
 	}
 
@@ -401,27 +396,18 @@ func QueryFindings(ctx context.Context, db graph.GraphDB, severity string) ([]Fi
 }
 
 func isCredentialChainFinding(row map[string]any) bool {
-	if stringVal(row, "edge_kind") != "CAN_REACH" || stringVal(row, "target_kind") != "Credential" {
-		return false
-	}
-	if stringVal(row, "source_collector") == "cross_service_credential_chain" {
-		return true
-	}
-	// Backward-compatible evidence for edges produced before source_collector
-	// was populated.
-	return stringVal(row, "via_gateway") != "" && stringVal(row, "merge_value_hash") != ""
+	return stringVal(row, "edge_kind") == "CAN_REACH" &&
+		stringVal(row, "target_kind") == "Credential" &&
+		stringVal(row, "source_collector") == "cross_service_credential_chain"
 }
 
-// hasObservedUsableCredentialMaterial requires the additive evidence contract.
-// A legacy value/value_hash/is_exposed tuple cannot distinguish returned
-// digests, masked values, and usable material, so absence remains unknown and
-// is rendered as a reference-only finding.
+// hasObservedUsableCredentialMaterial requires the canonical evidence contract.
 func hasObservedUsableCredentialMaterial(row map[string]any) bool {
 	materialStatus := stringVal(row, "target_material_status")
 	exposureStatus := stringVal(row, "target_exposure_status")
 	return materialStatus == string(common.CredentialMaterialObserved) &&
 		exposureStatus == string(common.CredentialExposureExposed) &&
-		stringVal(row, "target_merge_key") != "identity"
+		stringVal(row, "target_merge_key") == "value_hash"
 }
 
 var exfiltrationCapabilityOrder = []string{
@@ -477,7 +463,7 @@ func buildFindingEvidence(
 		State:          state,
 		Detector:       detector,
 		MatchType:      stringVal(row, "match_type"),
-		Channels:       append([]string(nil), channels...),
+		Channels:       append([]string{}, channels...),
 		MaterialStatus: materialStatus,
 		ExposureStatus: exposureStatus,
 	}
@@ -595,6 +581,22 @@ func exactFindingEvidenceFromRow(row map[string]any) *model.ExactFindingEvidence
 	exact.Reasons = sortedUnique(exact.Reasons)
 	exact.Complete = len(exact.Reasons) == 0
 	return exact
+}
+
+func anySlice(value any) ([]any, bool) {
+	if value == nil {
+		return []any{}, true
+	}
+	values, ok := value.([]any)
+	if !ok {
+		return []any{}, false
+	}
+	return values, true
+}
+
+func boolFromAny(value any) bool {
+	enabled, _ := value.(bool)
+	return enabled
 }
 
 func publicWitnessRelationshipProperties(properties map[string]any) map[string]any {

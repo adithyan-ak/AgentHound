@@ -16,12 +16,14 @@ func NewIngestData(collector, scanID string) *ingest.IngestData {
 	}
 	return &ingest.IngestData{
 		Meta: ingest.IngestMeta{
-			Version:          1,
-			Type:             "agenthound-ingest",
+			Version:          ingest.CurrentVersion,
+			Type:             ingest.IngestType,
 			Collector:        collector,
 			CollectorVersion: CollectorVersion,
 			Timestamp:        time.Now().UTC().Format(time.RFC3339),
 			ScanID:           scanID,
+			Ruleset:          ingest.EmptyRulesetManifest(),
+			IdentitySchemes:  ingest.CurrentIdentitySchemes(),
 		},
 		Graph: ingest.GraphData{
 			Nodes: []ingest.Node{},

@@ -13,7 +13,6 @@ describe("deriveRemediations evidence states", () => {
         merge_key: "identity",
         material_status: "masked",
         exposure_status: "not_observed",
-        is_exposed: false,
       }),
       "Credential",
       [],
@@ -68,12 +67,12 @@ describe("deriveRemediations evidence states", () => {
   });
 
   it("requires explicit exposure evidence and retains the recorded source", () => {
-    const legacy = deriveRemediations(
-      node("Credential", { is_exposed: true, type: "hardcoded" }),
+    const incomplete = deriveRemediations(
+      node("Credential", { type: "hardcoded" }),
       "Credential",
       [],
     );
-    expect(legacy.some((item) => item.title === "Rotate this credential")).toBe(false);
+    expect(incomplete.some((item) => item.title === "Rotate this credential")).toBe(false);
 
     const observed = deriveRemediations(
       node("Credential", {

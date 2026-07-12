@@ -6,10 +6,11 @@ paths:
 ---
 # Graph Schema Rules
 
-- 23 collector-produced node kinds + 2 synthetic (ResourceGroup, TrustZone) = 25 in AllNodeLabels
+- 23 collector-produced node kinds in AllNodeLabels
 - 18 raw edge kinds + 12 composite = 30 in AllowedEdgeKinds
 - AIService is an UmbrellaLabel — skip uniqueness constraint in schema-init
-- All properties stored as snake_case. Normalizer converts camelCase from collector JSON.
+- All collector and stored properties use canonical snake_case; non-canonical
+  keys are rejected before normalization.
 - Edge structs carry: Source, Target, Kind, SourceKind, TargetKind, Properties
 - EdgeKindEndpoints maps each edge to expected source/target node labels
 - When adding a node kind: update AllowedNodeKinds, AllNodeLabels, model_test.go counts

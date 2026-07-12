@@ -50,33 +50,28 @@ type DeclaredAuthMethod = Exclude<AuthMethod, "localProcess">;
 function declaredAuthMethod(
   properties: Record<string, unknown>,
 ): DeclaredAuthMethod {
-  const raw = String(properties.auth_method ?? "").trim();
-  const normalized = raw.toLowerCase().replace(/[-_\s]/g, "");
-  switch (normalized) {
+  const method = properties.auth_method;
+  switch (method) {
     case "none":
       return "none";
     case "basic":
       return "basic";
-    case "apikey":
+    case "apiKey":
       return "apiKey";
     case "bearer":
       return "bearer";
     case "oauth":
-    case "oauth2":
       return "oauth";
     case "oidc":
-    case "openidconnect":
       return "oidc";
     case "mtls":
-    case "mutualtls":
       return "mtls";
     case "custom":
       return "custom";
-    case "":
     case "unknown":
       return "unknown";
     default:
-      return "custom";
+      return typeof method === "string" ? "custom" : "unknown";
   }
 }
 
@@ -93,7 +88,7 @@ export function hasConfirmedAnonymousAccess(
 /**
  * Evidence-aware authentication state for display and classification.
  *
- * Legacy `none + local_process` observations are normalized to a dedicated
+ * Canonical `none + local_process` observations are rendered as a dedicated
  * local-process state, while an unverified `none` claim remains unknown.
  */
 export function authMethodFromProperties(
@@ -151,7 +146,7 @@ export function riskAssessment(node: APINode): RiskAssessment {
 export function isCredentialExposed(node: APINode): boolean {
   if (!node.kinds.includes("Credential")) return false;
   return (
-    node.properties.merge_key !== "identity" &&
+    node.properties.merge_key === "value_hash" &&
     node.properties.exposure_status === "exposed" &&
     node.properties.material_status === "observed"
   );

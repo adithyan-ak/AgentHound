@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -68,7 +67,7 @@ func (h *TriageHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, ts)
 }
 
-// triageUpdateRequest is the PUT body. Note is a pointer so a status-only
+// triageUpdateRequest is the PATCH body. Note is a pointer so a status-only
 // change (note omitted) is distinguishable from an explicit note edit or clear
 // (note present, possibly ""). Omitted note preserves the existing note;
 // present note overwrites it (AH-UI-34).
@@ -77,7 +76,7 @@ type triageUpdateRequest struct {
 	Note   *string `json:"note"`
 }
 
-// maxTriageBodySize bounds the PUT body (a tiny {status, note} JSON);
+// maxTriageBodySize bounds the PATCH body (a tiny {status, note} JSON);
 // mirrors the ingest handler's MaxBytesReader guard. maxTriageNoteLen caps
 // the note so a single field cannot bloat the finding_triage table.
 const (
@@ -96,7 +95,7 @@ func (h *TriageHandler) HandleSet(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxTriageBodySize)
 	var req triageUpdateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := DecodeStrictJSON(r.Body, &req); err != nil {
 		WriteValidationError(w, "invalid JSON: "+err.Error())
 		return
 	}

@@ -353,9 +353,11 @@ func TestLoot_ModelInfoIsIdentityMergeKey(t *testing.T) {
 		}
 		if n.Properties["material_status"] != "masked" ||
 			n.Properties["exposure_status"] != "not_observed" ||
-			n.Properties["is_exposed"] != false ||
 			n.Properties["high_entropy"] != false {
 			t.Errorf("masked provider reference claimed secret exposure: %+v", n.Properties)
+		}
+		if _, legacy := n.Properties["is_exposed"]; legacy {
+			t.Errorf("masked provider reference emitted legacy is_exposed alias: %+v", n.Properties)
 		}
 	}
 }

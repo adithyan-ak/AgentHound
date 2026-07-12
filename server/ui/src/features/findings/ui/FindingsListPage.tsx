@@ -258,7 +258,7 @@ export function FindingsListPage() {
               : groupBy === "category"
                 ? f.category || "—"
                 : groupBy === "owasp"
-                  ? f.owasp_map?.[0] ?? "—"
+                  ? f.owasp_map[0] ?? "—"
                   : groupBy === "edge_kind"
                     ? f.edge_kind
                     : statusOf(f.id);
@@ -1312,7 +1312,7 @@ function FindingRow({
       </td>
       <td className="px-2 py-3 align-middle">
         <p className="truncate text-[12px] text-foreground/80">{f.category}</p>
-        {(f.owasp_map?.length ?? 0) > 0 && (
+        {f.owasp_map.length > 0 && (
           <div className="mt-1 flex flex-wrap gap-1">
             {(f.owasp_map ?? []).map((tag) => (
               <span

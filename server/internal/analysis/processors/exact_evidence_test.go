@@ -72,9 +72,9 @@ func TestCanImpersonatePersistsExactWitnessNodes(t *testing.T) {
 	if _, err := (&CanImpersonate{}).Process(context.Background(), db, "scan-1"); err != nil {
 		t.Fatal(err)
 	}
-	calls := db.CallsTo("WriteEdges")
+	calls := db.CallsTo("WriteCompositeEdges")
 	if len(calls) != 1 {
-		t.Fatalf("WriteEdges calls = %d", len(calls))
+		t.Fatalf("WriteCompositeEdges calls = %d", len(calls))
 	}
 	edges, _ := calls[0].Args[0].([]ingest.Edge)
 	if len(edges) != 2 {

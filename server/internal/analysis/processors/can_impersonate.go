@@ -125,7 +125,7 @@ func (p *CanImpersonate) Process(ctx context.Context, db graph.GraphDB, scanID s
 		}, nil
 	}
 
-	written, err := db.WriteEdges(ctx, edges, scanID)
+	written, err := db.WriteCompositeEdges(ctx, edges, scanID)
 	if err != nil {
 		return graph.ProcessingStats{
 			ProcessorName: p.Name(),

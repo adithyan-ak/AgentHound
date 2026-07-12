@@ -5,28 +5,113 @@ import (
 	"testing"
 )
 
-func TestDirtyCoverageSurvivesUnrelatedSuccessfulScan(t *testing.T) {
-	mcpTarget := "mcp:target:sha256:failed"
-	configPath := "config:path:sha256:complete"
+func finalizeCoverageAttempt(
+	inherited []string,
+	coverage []string,
+	complete []string,
+	dirty []string,
+) []string {
+	begun := normalizeCoverageKeys(inherited, coverage)
+	return finalizedDirtyCoverage(begun, complete, nil, dirty)
+}
 
-	afterMCPFailure := normalizeCoverageKeys(nil, []string{mcpTarget})
-	afterConfigBegin := normalizeCoverageKeys(afterMCPFailure, []string{configPath})
-	afterConfigSuccess := finalizedDirtyCoverage(
-		afterConfigBegin,
-		[]string{configPath},
-		nil,
-		nil,
+func TestDirtyCollectorRootClearedByLaterCompleteRoot(t *testing.T) {
+	const (
+		failedScanID   = "mcp-scan-failed"
+		completeScanID = "mcp-scan-complete"
+		mcpRoot        = "mcp"
+		mcpTarget      = "mcp:target:sha256:complete"
 	)
 
-	if want := []string{mcpTarget}; !reflect.DeepEqual(afterConfigSuccess, want) {
+	dirty := finalizeCoverageAttempt(
+		nil,
+		[]string{mcpRoot},
+		nil,
+		[]string{mcpRoot},
+	)
+	if want := []string{mcpRoot}; !reflect.DeepEqual(dirty, want) {
+		t.Fatalf("dirty coverage after %s = %v, want %v", failedScanID, dirty, want)
+	}
+
+	dirty = finalizeCoverageAttempt(
+		dirty,
+		[]string{mcpRoot, mcpTarget},
+		[]string{mcpRoot, mcpTarget},
+		nil,
+	)
+	if len(dirty) != 0 {
 		t.Fatalf(
-			"dirty coverage after unrelated config success = %v, want %v",
-			afterConfigSuccess,
+			"dirty coverage after %s then %s = %v, want none",
+			failedScanID,
+			completeScanID,
+			dirty,
+		)
+	}
+}
+
+func TestPartialCollectorRootRemainsDirty(t *testing.T) {
+	const (
+		failedScanID  = "mcp-scan-failed"
+		partialScanID = "mcp-scan-partial"
+		mcpRoot       = "mcp"
+		complete      = "mcp:target:sha256:complete"
+		failed        = "mcp:target:sha256:failed"
+	)
+
+	dirty := finalizeCoverageAttempt(
+		nil,
+		[]string{mcpRoot},
+		nil,
+		[]string{mcpRoot},
+	)
+	dirty = finalizeCoverageAttempt(
+		dirty,
+		[]string{mcpRoot, complete, failed},
+		[]string{complete},
+		[]string{mcpRoot, failed},
+	)
+
+	if want := []string{mcpRoot, failed}; !reflect.DeepEqual(dirty, want) {
+		t.Fatalf(
+			"dirty coverage after %s then %s = %v, want %v",
+			failedScanID,
+			partialScanID,
+			dirty,
 			want,
 		)
 	}
-	if len(afterConfigSuccess) == 0 {
-		t.Fatal("unrelated success would incorrectly permit global publication")
+}
+
+func TestDirtyMCPRootSurvivesCompleteConfigScan(t *testing.T) {
+	const (
+		mcpScanID    = "mcp-scan-failed"
+		configScanID = "config-scan-complete"
+		mcpRoot      = "mcp"
+		configRoot   = "config"
+		configPath   = "config:path:sha256:complete"
+	)
+
+	dirty := finalizeCoverageAttempt(
+		nil,
+		[]string{mcpRoot},
+		nil,
+		[]string{mcpRoot},
+	)
+	dirty = finalizeCoverageAttempt(
+		dirty,
+		[]string{configRoot, configPath},
+		[]string{configRoot, configPath},
+		nil,
+	)
+
+	if want := []string{mcpRoot}; !reflect.DeepEqual(dirty, want) {
+		t.Fatalf(
+			"dirty coverage after %s then %s = %v, want %v",
+			mcpScanID,
+			configScanID,
+			dirty,
+			want,
+		)
 	}
 }
 

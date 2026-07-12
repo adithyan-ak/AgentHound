@@ -5,9 +5,9 @@ Neo4j projection and, only after all required stages succeed, publishes an
 immutable posture revision in PostgreSQL. It runs as a serialized lifecycle
 within `server/internal/ingest/`.
 
-Serialization is intentional: raw observation promotion and post-success
-composite cleanup mutate shared ownership epochs. Two concurrent attempts could
-otherwise retire one another's fresh tokens.
+Serialization is intentional: raw observation promotion and global composite
+epoch replacement mutate shared graph state. Two concurrent attempts could
+otherwise retire one another's fresh tokens or derived epoch.
 
 ## Entry Points
 
@@ -16,6 +16,9 @@ otherwise retire one another's fresh tokens.
 - **UI:** Drag-drop import in Scan Manager (hits the same HTTP endpoint)
 
 All paths invoke `Pipeline.Ingest(ctx, *sdkingest.IngestData)`.
+Every ingest requires the lifecycle store's `BeginScan` and `RecordFailure`
+operations and the publication store's atomic `FinalizeScan`; there is no
+non-publishing compatibility path.
 
 ## Wire Contract
 
@@ -24,7 +27,7 @@ Input is the `sdk/ingest.IngestData` struct:
 ```json
 {
   "meta": {
-    "version": 1,
+    "version": 2,
     "type": "agenthound-ingest",
     "collector": "mcp",
     "scan_id": "...",
@@ -52,52 +55,60 @@ Input is the `sdk/ingest.IngestData` struct:
       }],
       "errors": []
     },
-    "identity_schemes": []
+    "identity_schemes": [{
+      "entity_kind": "MCPServer",
+      "transport": "stdio",
+      "scheme": "mcp_stdio_v2_ordered",
+      "version": 2
+    }]
   },
   "graph": {
     "nodes": [{ "id": "sha256:...", "kinds": ["MCPServer"], "properties": {...}, "observation_domains": ["mcp:target:sha256:..."] }],
-    "edges": [{ "source": "sha256:...", "target": "sha256:...", "kind": "PROVIDES_TOOL", "properties": {...}, "observation_domains": ["mcp:target:sha256:..."] }]
+    "edges": [{ "source": "sha256:...", "target": "sha256:...", "kind": "PROVIDES_TOOL", "source_kind": "MCPServer", "target_kind": "MCPTool", "properties": {...}, "observation_domains": ["mcp:target:sha256:..."] }]
   }
 }
 ```
 
-Wire version `1` is unchanged. `collection`, `ruleset`,
-`identity_schemes`, and `identity_aliases` are optional additive contracts.
-Their absence in a legacy artifact means unknown. Collection outcomes
-distinguish complete-empty from failed/partial/truncated-empty collection;
-ruleset entries persist canonical effective matcher definitions and every
-non-fatal load failure. Digests identify semantics but do not attest
-authenticity.
-`observation_domains` is also optional. A single declared coverage domain can
-be attributed unambiguously by the server; merged artifacts preserve each
-child collector's per-fact domain. Missing attribution in a multi-domain or
-legacy artifact disables retirement.
+Wire version `2` is the only accepted contract. `collection`, `ruleset`, and
+`identity_schemes` are required. Every collection outcome names a canonical
+scoped coverage key, target, method, and explicit state; complete-empty
+collection is represented by an outcome with `items: 0`. Ruleset entries
+persist canonical effective matcher definitions and every non-fatal load
+failure. Digests identify semantics but do not attest authenticity.
+Every node and edge must carry one or more `observation_domains` drawn from the
+declared coverage keys. The server never infers fact ownership from a
+single-domain report. Edge endpoint kinds are likewise explicit in v2.
 
 ## Stage 1: Validate
 
 `Validator.Validate()` rejects malformed payloads before any graph writes.
 
 Checks performed:
-- `meta.version` must be `1`
+- `meta.version` must be `2`; v1 is rejected
 - `meta.type` must be `"agenthound-ingest"`
 - `meta.collector` must be in `AllowedCollectors` (mcp, a2a, config, scan)
-- `meta.scan_id` must be non-empty
+- collector version, RFC3339 timestamp, and scan ID must be non-empty
+- collection, ruleset, and current identity-scheme metadata must be complete
+- coverage keys must use `<collector>:<scope>:sha256:<digest>`
+- every raw fact must carry explicit declared observation domains
 - Every node must have a non-empty `id` and at least one `kind` from `AllowedNodeKinds` (23 kinds)
 - Every edge must have non-empty `source`/`target` and a `kind` from `RawEdgeKinds` (18 kinds)
+- v1 property aliases are rejected; canonical status/evidence fields are
+  required for credentials, hosts, MCP servers, and A2A agents
 
 Validation errors are structured (`FieldError` with JSON path + message) and returned as a `ValidationError` to the caller. On failure, the pipeline aborts -- no partial writes.
 
 ## Stage 2: Normalize
 
 `Normalizer.Normalize()` transforms collector output into Neo4j-ready shape and
-returns deterministic typed warnings. Lossless coercions are classified
-`warning` and do not block publication. Dropped properties and normalized-key
-collisions are classified `degraded`, marked `publication_unsafe`, and prevent
+returns deterministic typed warnings. Property keys must already be canonical
+snake_case because validation runs first. Lossless value coercions are
+classified `warning` and do not block publication. Dropped properties are
+classified `degraded`, marked `publication_unsafe`, and prevent
 replacement/reconciliation/publication for that attempt.
 
 Transformations:
 - Sets `objectid` property to match node `id`
-- Converts all property keys from camelCase to snake_case (`CamelToSnake`)
 - Strips nil values
 - Serializes complex values (nested maps, heterogeneous arrays) to JSON strings
 - Preserves homogeneous arrays (all-string, all-number, all-bool) as native Neo4j lists
@@ -129,39 +140,21 @@ Implementation details:
   publication until a complete observation replaces every active owner.
 - New facts carry length-delimited observation owner tokens. Shared facts keep
   one token per active coverage domain.
-- Existing pre-lifecycle facts are marked `legacy_observation` and remain
-  non-destructive. A complete exact re-observation replaces their properties
-  and migrates them to managed ownership.
 - On merge, preserves `previous_description_hash` for rug-pull detection: `ON MATCH SET n.previous_description_hash = n.description_hash`
-- Edge writes use per-kind Cypher strings (`edgeKindCypher` map) to support different source/target label pairs per edge kind
-- `EdgeKindEndpoints` registry resolves source/target labels when not explicitly set by the collector
+- Edge writes use per-kind Cypher strings selected from the explicitly
+  validated `source_kind` and `target_kind` values
 
 Each 1000-row batch commits independently. On failure, the scan and HTTP error
 details preserve the actual node/edge write rows committed before the failed
 batch, and the projection is marked incomplete.
 
-## Stage 7: Reconcile stdio Identity Compatibility
-
-When an artifact carries stdio-v1 compatibility aliases, the server queries
-Neo4j for every already-persisted v2 node with the same `legacy_objectid`.
-Only a complete one-candidate claim that remains one-candidate in the graph is
-persisted as `one_to_one`. Multiple candidates quarantine the legacy aggregate
-and all candidate nodes without changing their relationships. A proven
-one-to-one alias is migrated in one Neo4j transaction: node properties and
-observation owners are merged into the v2 node, every allowlisted incoming,
-outgoing, and self-relationship is merged without fan-out, and the v1 node is
-deleted. The transaction rechecks that the exact v2 target exists and remains
-the sole candidate; it uses static per-kind Cypher and does not require APOC.
-A failed compatibility write disables observation promotion and publication
-for the attempt.
-
-## Stage 8: Reconcile Complete Observation Domains
+## Stage 7: Reconcile Complete Observation Domains
 
 Only domain states derived as explicit `complete` outcomes may replace their
 prior owner token. Reconciliation removes old owner tokens, deletes unowned raw
 relationships, then deletes unowned isolated nodes. Facts with another active
-owner survive. Partial, failed, truncated, unknown, and unattributed legacy
-coverage performs no retirement.
+owner survive. Partial, failed, truncated, and unknown coverage performs no
+retirement.
 
 Coverage keys are target/config scoped opaque hashes (for example,
 `mcp:target:sha256:...`, `a2a:target:sha256:...`, and
@@ -172,29 +165,32 @@ comparison keys also include the scan revisions of every *other* active
 coverage head, so global graph deltas are withheld when an intervening target
 or config scope changed.
 
-## Stages 9–13: Analyze, Snapshot, and Publish
+## Stages 8–12: Analyze, Snapshot, and Publish
 
 `analysis.RunPostProcessors()` computes composite edges and risk scores from graph state.
 
-It runs all 15 processors in dependency-validated order. Prior composite edges
-remain until every processor succeeds; only then does the pipeline delete
-composite edges not refreshed by the current scan within the
-dependency-expanded complete collector scope. See
-`docs/architecture/post-processors.md`.
+It runs all 15 processors in dependency-validated order. When any complete raw
+domain was promoted, the pipeline first retires the entire prior composite
+epoch, then rebuilds every derived edge from the retained current raw
+projection. This global replacement is required because a narrow MCP, config,
+or A2A change can invalidate cross-domain evidence whose `source_collector`
+names another detector domain. Unknown, partial, and failed collection does not
+publish. An attempt with no promotably complete domain skips derived processing
+and leaves the epoch untouched. See `docs/architecture/post-processors.md`.
 
-After analysis, the pipeline explicitly counts legacy/unknown raw observations,
-including pre-target-scope collector-wide ownership tokens, incomplete
-property ownership, and quarantined stdio identities. Their presence is
-persisted as an incomplete required stage and the `legacy:unknown` dirty
-sentinel until every such fact is migrated, re-observed, or resolved. The
-pipeline then freezes a second public graph total and queries
+After analysis, the pipeline checks property completeness for public managed
+raw facts. Internal nodes such as `SchemaVersion` and derived relationships are
+excluded. Incomplete shared-owner property coverage remains dirty and withholds
+publication. The pipeline then freezes a second public graph total and queries
 the candidate finding snapshot. PostgreSQL finalization atomically replaces all
 finding rows for the scan (including a successful empty retry), advances
 complete coverage heads, finalizes scan state, and optionally inserts a
 persisted export/publication revision. Analysis, stats, or snapshot failure
 withholds publication and leaves the prior published revision available.
 Finalization re-locks cumulative dirty state and publishes only when no inherited
-or current dirty key remains.
+or current dirty key remains. Epoch-retirement or processor failure can leave
+the mutable Neo4j projection incomplete, but it cannot advance or overwrite the
+previous immutable PostgreSQL publication.
 
 ## Processing Order
 
@@ -229,20 +225,18 @@ Dependency validation runs before the first processor executes. If a processor a
 `Pipeline.Ingest()` returns `*sdkingest.IngestResult`:
 - `ScanID` -- the scan identifier
 - `Outcome`, `ProjectionStatus` -- attempt result and mutable projection state
-- `NodesWritten`, `EdgesWritten` -- Neo4j write-result rows (compatibility
-  fields, not unique discoveries)
-- `NodesSubmitted`, `EdgesSubmitted`, `CountSemantics` -- literal artifact row
-  counts and the interpretation of the legacy write counts
+- `Submitted` -- literal artifact node/edge counts
+- `WriteRows` -- Neo4j write-result rows, not unique discoveries
+- `GraphTotals` -- frozen public inventory totals before and after processing
 - `Warnings` -- normalizer warnings
 - `NormalizationStatus`, `NormalizationWarnings` -- deterministic
   `complete`/`warning`/`degraded` classification, codes, context, and the
   explicit publication-safety bit
-- `Collection` -- optional collection report echoed by integrations that carry it
+- `Collection` -- required collection report echoed from the artifact
 - `Stages` -- typed required/optional outcomes (`complete`, `partial`,
   `failed`, `truncated`, `unknown`, `not_applicable`)
 - `PostProcessingStats` -- per-processor name, edges created, nodes updated, duration, error
-- `GraphBefore`, `GraphAfter`, `PublishedRevision` -- frozen public totals and
-  the revision published by this attempt, when any
+- `PublishedRevision` -- revision published by this attempt, when any
 - `Duration` -- total pipeline wall-clock time
 
 ## Scan Lifecycle

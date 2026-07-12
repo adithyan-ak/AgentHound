@@ -77,7 +77,7 @@ export function TopRiskyEntities() {
         <ol className="space-y-1.5">
           {top.map((entity, i) => {
             const color = riskColor(entity.riskScore);
-            const kindColor = NODE_KIND_COLORS_BY_KEY[entity.kind] ?? NODE_KIND_COLORS.ResourceGroup;
+            const kindColor = NODE_KIND_COLORS_BY_KEY[entity.kind] ?? NODE_KIND_COLORS.Identity;
             return (
               <li
                 key={entity.id}

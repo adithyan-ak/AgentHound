@@ -1,9 +1,12 @@
 package analysis
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestEvidenceGraphLinearizesOnlyCompleteDirectedPath(t *testing.T) {
-	path, err := parseAttackPath(evidenceRow(
+	path, err := testAttackPath(evidenceRow(
 		[]string{"a", "b", "c"},
 		[]map[string]any{
 			evidenceEdge("a", "b", "TRUSTS_SERVER", map[string]any{"risk_weight": 0.1}),
@@ -33,7 +36,7 @@ func TestEvidenceGraphLinearizesOnlyCompleteDirectedPath(t *testing.T) {
 }
 
 func TestEvidenceGraphMissingWeightHasNullableIncompleteCost(t *testing.T) {
-	path, err := parseAttackPath(evidenceRow(
+	path, err := testAttackPath(evidenceRow(
 		[]string{"a", "b", "c"},
 		[]map[string]any{
 			evidenceEdge("a", "b", "TRUSTS_SERVER", map[string]any{"risk_weight": 0.1}),
@@ -60,7 +63,7 @@ func TestEvidenceGraphMissingWeightHasNullableIncompleteCost(t *testing.T) {
 
 func TestEvidenceGraphPreservesBranchedAndDisconnectedShapes(t *testing.T) {
 	t.Run("branched", func(t *testing.T) {
-		path, err := parseAttackPath(evidenceRow(
+		path, err := testAttackPath(evidenceRow(
 			[]string{"a", "b", "c", "d"},
 			[]map[string]any{
 				evidenceEdge("a", "b", "TRUSTS_SERVER", map[string]any{"risk_weight": 0.1}),
@@ -83,7 +86,7 @@ func TestEvidenceGraphPreservesBranchedAndDisconnectedShapes(t *testing.T) {
 	})
 
 	t.Run("disconnected", func(t *testing.T) {
-		path, err := parseAttackPath(evidenceRow(
+		path, err := testAttackPath(evidenceRow(
 			[]string{"a", "b", "c", "d"},
 			[]map[string]any{
 				evidenceEdge("a", "b", "PROVIDES_TOOL", map[string]any{"risk_weight": 0.1}),
@@ -108,7 +111,7 @@ func TestEvidenceGraphPreservesBranchedAndDisconnectedShapes(t *testing.T) {
 }
 
 func TestEvidenceGraphMarksSyntheticJoinProvenance(t *testing.T) {
-	path, err := parseAttackPath(evidenceRow(
+	path, err := testAttackPath(evidenceRow(
 		[]string{"credential-a", "credential-b"},
 		[]map[string]any{
 			evidenceEdge(
@@ -137,7 +140,7 @@ func TestEvidenceGraphMarksSyntheticJoinProvenance(t *testing.T) {
 }
 
 func TestEvidenceGraphWithholdsMixedDirectionLinearization(t *testing.T) {
-	path, err := parseAttackPath(evidenceRow(
+	path, err := testAttackPath(evidenceRow(
 		[]string{"a", "b", "c"},
 		[]map[string]any{
 			evidenceEdge("a", "b", "RUNS_ON", map[string]any{"risk_weight": 0.1}),
@@ -159,7 +162,7 @@ func TestEvidenceGraphWithholdsMixedDirectionLinearization(t *testing.T) {
 }
 
 func TestEvidenceGraphWithholdsReverseToFindingLinearization(t *testing.T) {
-	path, err := parseAttackPath(evidenceRow(
+	path, err := testAttackPath(evidenceRow(
 		[]string{"a", "b", "c"},
 		[]map[string]any{
 			evidenceEdge("c", "b", "RUNS_ON", map[string]any{"risk_weight": 0.1}),
@@ -201,4 +204,73 @@ func evidenceEdge(
 	return map[string]any{
 		"source": source, "target": target, "kind": kind, "properties": properties,
 	}
+}
+
+func testAttackPath(row map[string]any) (*AttackPath, error) {
+	path := &AttackPath{Nodes: []PathNode{}, Edges: []PathEdge{}}
+	rawNodes, ok := row["nodes"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("test nodes have unexpected type %T", row["nodes"])
+	}
+	for _, raw := range rawNodes {
+		node, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("test node has unexpected type %T", raw)
+		}
+		kinds, ok := node["kinds"].([]any)
+		if !ok || len(kinds) == 0 {
+			return nil, fmt.Errorf("test node kinds have unexpected value %v", node["kinds"])
+		}
+		id, ok := node["id"].(string)
+		if !ok {
+			return nil, fmt.Errorf("test node id has unexpected type %T", node["id"])
+		}
+		kind, ok := kinds[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("test node kind has unexpected type %T", kinds[0])
+		}
+		properties, ok := node["properties"].(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("test node properties have unexpected type %T", node["properties"])
+		}
+		path.Nodes = append(path.Nodes, PathNode{
+			ID:         id,
+			Kinds:      []string{kind},
+			Properties: properties,
+		})
+	}
+	rawEdges, ok := row["edges"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("test edges have unexpected type %T", row["edges"])
+	}
+	for _, raw := range rawEdges {
+		edge, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("test edge has unexpected type %T", raw)
+		}
+		source, sourceOK := edge["source"].(string)
+		target, targetOK := edge["target"].(string)
+		kind, kindOK := edge["kind"].(string)
+		properties, propertiesOK := edge["properties"].(map[string]any)
+		if !sourceOK || !targetOK || !kindOK || !propertiesOK {
+			return nil, fmt.Errorf("test edge is malformed: %v", edge)
+		}
+		pathEdge := PathEdge{
+			Source:     source,
+			Target:     target,
+			Kind:       kind,
+			Properties: properties,
+		}
+		if synthetic, _ := properties["is_synthetic"].(bool); synthetic {
+			pathEdge.Synthetic = true
+			pathEdge.Provenance = &EdgeProvenance{
+				Type:            stringMapVal(properties, "provenance_type"),
+				Basis:           stringMapVal(properties, "provenance_basis"),
+				SourceCollector: stringMapVal(properties, "source_collector"),
+			}
+		}
+		path.Edges = append(path.Edges, pathEdge)
+	}
+	finalizeEvidenceGraph(path, nil)
+	return path, nil
 }

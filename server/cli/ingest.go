@@ -1,8 +1,8 @@
 package cli
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -42,7 +42,7 @@ stdin form is the standard pipe target for 'agenthound scan --output -':
 		}
 
 		var ingestData ingest.IngestData
-		if err := json.Unmarshal(data, &ingestData); err != nil {
+		if err := ingest.DecodeStrict(bytes.NewReader(data), &ingestData); err != nil {
 			return fmt.Errorf("parse JSON: %w", err)
 		}
 
@@ -59,8 +59,8 @@ stdin form is the standard pipe target for 'agenthound scan --output -':
 
 		fmt.Printf("Ingest complete:\n")
 		fmt.Printf("  Scan ID:       %s\n", result.ScanID)
-		fmt.Printf("  Nodes written: %d\n", result.NodesWritten)
-		fmt.Printf("  Edges written: %d\n", result.EdgesWritten)
+		fmt.Printf("  Node write rows: %d\n", result.WriteRows.Nodes)
+		fmt.Printf("  Edge write rows: %d\n", result.WriteRows.Edges)
 		fmt.Printf("  Duration:      %s\n", result.Duration)
 		if len(result.Warnings) > 0 {
 			fmt.Printf("  Warnings:      %d\n", len(result.Warnings))

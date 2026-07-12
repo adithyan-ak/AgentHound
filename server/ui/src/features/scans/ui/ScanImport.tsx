@@ -346,8 +346,8 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
                       : `Imported ${status.fileName} with incomplete results`}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {status.result.nodes_written} node write rows,{" "}
-                  {status.result.edges_written} edge write rows. Scan ID:{" "}
+                  {status.result.write_rows.nodes} node write rows,{" "}
+                  {status.result.write_rows.edges} edge write rows. Scan ID:{" "}
                   <code className="font-mono text-foreground/80">
                     {status.result.scan_id}
                   </code>

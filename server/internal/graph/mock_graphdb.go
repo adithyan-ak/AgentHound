@@ -18,8 +18,8 @@ type MockGraphDB struct {
 	QueryError  error
 	QueryFunc   func(ctx context.Context, cypher string, params map[string]any) ([]map[string]any, error)
 
-	WriteEdgesResult int
-	WriteEdgesError  error
+	WriteCompositeEdgesResult int
+	WriteCompositeEdgesError  error
 
 	UpdateNodeError error
 
@@ -75,27 +75,26 @@ func (m *MockGraphDB) Query(ctx context.Context, cypher string, params map[strin
 	if m.QueryFunc != nil {
 		return m.QueryFunc(ctx, cypher, params)
 	}
-	if m.QueryResult == nil && strings.Contains(cypher, "legacy_nodes") {
+	if m.QueryResult == nil && strings.Contains(cypher, "incomplete_property_nodes") {
 		return []map[string]any{{
-			"legacy_nodes":                      int64(0),
-			"legacy_relationships":              int64(0),
-			"unscoped_nodes":                    int64(0),
-			"unscoped_relationships":            int64(0),
 			"incomplete_property_nodes":         int64(0),
 			"incomplete_property_relationships": int64(0),
-			"identity_quarantined_nodes":        int64(0),
 		}}, m.QueryError
 	}
 	return m.QueryResult, m.QueryError
 }
 
-func (m *MockGraphDB) WriteEdges(ctx context.Context, edges []ingest.Edge, scanID string) (int, error) {
-	m.record("WriteEdges", edges, scanID)
-	if m.WriteEdgesError != nil {
-		return 0, m.WriteEdgesError
+func (m *MockGraphDB) WriteCompositeEdges(
+	ctx context.Context,
+	edges []ingest.Edge,
+	scanID string,
+) (int, error) {
+	m.record("WriteCompositeEdges", edges, scanID)
+	if m.WriteCompositeEdgesError != nil {
+		return 0, m.WriteCompositeEdgesError
 	}
-	if m.WriteEdgesResult > 0 {
-		return m.WriteEdgesResult, nil
+	if m.WriteCompositeEdgesResult > 0 {
+		return m.WriteCompositeEdgesResult, nil
 	}
 	return len(edges), nil
 }

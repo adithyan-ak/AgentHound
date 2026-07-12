@@ -73,10 +73,6 @@ func TestComputeMCPServerIDPreservesArgOrder(t *testing.T) {
 	if first == reversed {
 		t.Fatalf("reordered argv collided: %s", first)
 	}
-	if ComputeLegacyMCPServerID("stdio", "node", "a.js", "b.js") !=
-		ComputeLegacyMCPServerID("stdio", "node", "b.js", "a.js") {
-		t.Fatal("legacy helper no longer reproduces the v1 sorted collision")
-	}
 }
 
 func TestComputeMCPServerIDLengthFramesArgs(t *testing.T) {
@@ -94,8 +90,7 @@ func TestComputeMCPServerIDKeepsHTTPV1Stable(t *testing.T) {
 		t.Fatalf("HTTP ID changed: got %s, want %s", got, want)
 	}
 	identity := ResolveMCPServerIdentity("http", "https://example.com/mcp")
-	if identity.ObjectID != want || identity.LegacyObjectID != "" ||
-		identity.Scheme != MCPHTTPIdentitySchemeV1 {
-		t.Fatalf("unexpected HTTP compatibility identity: %+v", identity)
+	if identity.ObjectID != want || identity.Scheme != MCPHTTPIdentitySchemeV1 {
+		t.Fatalf("unexpected HTTP identity: %+v", identity)
 	}
 }

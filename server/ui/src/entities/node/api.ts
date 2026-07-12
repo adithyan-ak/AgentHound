@@ -2,18 +2,28 @@ import { api } from "@shared/api/client";
 import {
   parseAPIEdges,
   parseAPINodes,
+  parseProjectionIdentity,
   type APIEdge,
   type APINode,
+  type ProjectionIdentity,
 } from "@entities/graph/dto";
 import {
-  pageMetadata,
+  parsePageMetadata,
+  type PageMetadata,
   type CollectionResult,
 } from "@shared/api/pagination";
+import { ProjectionConflictError } from "@shared/api/conflicts";
 
 interface NodePage {
   items: APINode[];
-  metadata: ReturnType<typeof pageMetadata>;
+  metadata?: PageMetadata;
+  projection?: ProjectionIdentity;
   revisionConflict: boolean;
+  conflictRevision?: string;
+}
+
+export interface NodeCollectionResult extends CollectionResult<APINode> {
+  projection: ProjectionIdentity | null;
 }
 
 async function fetchNodePage(
@@ -33,19 +43,35 @@ async function fetchNodePage(
     throwHttpErrors: false,
   });
   if (response.status === 409) {
+    const error = record(await response.json<unknown>(), "revision conflict");
+    const detail = record(error.error, "revision conflict.error");
+    if (detail.code === "PROJECTION_CONFLICT") {
+      throw new ProjectionConflictError(
+        typeof detail.message === "string" ? detail.message : undefined,
+      );
+    }
+    if (detail.code !== "REVISION_CONFLICT") {
+      throw new Error("node page request conflicted");
+    }
     return {
       items: [],
-      metadata: pageMetadata(response.headers, offset, 0),
       revisionConflict: true,
+      conflictRevision: conflictRevision(error),
     };
   }
   if (!response.ok) {
     throw new Error(`node page request failed with status ${response.status}`);
   }
-  const items = parseAPINodes(await response.json<unknown>());
+  const envelope = record(await response.json<unknown>(), "node list");
+  const items = parseAPINodes(envelope.nodes);
+  const metadata = parsePageMetadata(envelope.page, "node list.page");
   return {
     items,
-    metadata: pageMetadata(response.headers, offset, items.length),
+    metadata,
+    projection: parseProjectionIdentity(
+      record(envelope.page, "node list.page").projection,
+      "node list.page.projection",
+    ),
     revisionConflict: false,
   };
 }
@@ -54,10 +80,11 @@ export async function fetchNodeCollection(
   kind?: string,
   pageSize = 10000,
   expectedRevision?: string,
-): Promise<CollectionResult<APINode>> {
+): Promise<NodeCollectionResult> {
   const items: APINode[] = [];
   let offset = 0;
   let revision = expectedRevision ?? null;
+  let projection: ProjectionIdentity | null = null;
   let total = 0;
 
   for (;;) {
@@ -72,47 +99,57 @@ export async function fetchNodeCollection(
         items,
         total,
         complete: false,
-        revision,
+        revision: page.conflictRevision ?? revision,
+        projection,
         incompleteReason: "revision-changed",
       };
     }
-    if (!page.metadata.supported) {
-      return {
-        items: [...items, ...page.items],
-        total: items.length + page.items.length,
-        complete: false,
-        revision,
-        incompleteReason: "metadata-missing",
-      };
+    const metadata = page.metadata;
+    if (!metadata) {
+      throw new TypeError("node list.page is required");
     }
-    if (page.metadata.offset !== offset) {
+    if (metadata.offset !== offset) {
+      throw new TypeError("node list.page.offset does not match the requested offset");
+    }
+    if (revision !== null && metadata.revision !== revision) {
       return {
         items,
         total,
         complete: false,
         revision,
-        incompleteReason: "metadata-missing",
+        projection,
+        incompleteReason: "revision-changed",
       };
     }
-    if (revision !== null && page.metadata.revision !== revision) {
+    if (!page.projection) {
+      throw new TypeError("node list.page.projection is required");
+    }
+    if (
+      projection !== null &&
+      (projection.scanId !== page.projection.scanId ||
+        projection.revision !== page.projection.revision)
+    ) {
       return {
         items,
         total,
         complete: false,
         revision,
-        incompleteReason: "revision-changed",
+        projection,
+        incompleteReason: "projection-changed",
       };
     }
-    revision = page.metadata.revision;
-    total = page.metadata.total;
+    projection = page.projection;
+    revision = metadata.revision;
+    total = metadata.total;
     items.push(...page.items);
 
-    if (!page.metadata.hasMore) {
+    if (!metadata.hasMore) {
       return {
         items,
         total,
-        complete: page.metadata.complete && items.length === total,
+        complete: metadata.complete && items.length === total,
         revision,
+        projection,
       };
     }
     if (page.items.length === 0) {
@@ -121,6 +158,7 @@ export async function fetchNodeCollection(
         total,
         complete: false,
         revision,
+        projection,
         incompleteReason: "empty-page",
       };
     }
@@ -154,6 +192,27 @@ export async function fetchNode(
   const node = parseAPINodes([raw.node])[0];
   if (!node) throw new TypeError("node detail is missing node");
   return { node, edges: parseAPIEdges(raw.edges) };
+}
+
+function record(value: unknown, path: string): Record<string, unknown> {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${path} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function conflictRevision(envelope: Record<string, unknown>): string {
+  const error = record(envelope.error, "revision conflict.error");
+  const details = record(error.details, "revision conflict.error.details");
+  if (
+    typeof details.actual_revision !== "string" ||
+    details.actual_revision.length === 0
+  ) {
+    throw new TypeError(
+      "revision conflict.error.details.actual_revision must be a non-empty string",
+    );
+  }
+  return details.actual_revision;
 }
 
 export interface BlastRadiusResponse {

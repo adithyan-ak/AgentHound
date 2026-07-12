@@ -12,8 +12,8 @@ import (
 
 // TestPipeline_HasMutex is a structural regression: the Pipeline must
 // embed a sync.Mutex so concurrent Ingest() calls serialize. Without
-// it, the post-processor's stale-edge cleanup races between scans and
-// produces edge flapping. We verify the field exists and satisfies
+// it, post-processor epoch replacement races between scans and produces
+// edge flapping. We verify the field exists and satisfies
 // sync.Locker — if it is renamed or its type changes, this fails to
 // compile. The runtime invariant is enforced by
 // TestPipeline_MutexActuallySerializes below.

@@ -64,16 +64,41 @@ func TestEdgeJSONRoundTrip(t *testing.T) {
 func TestIngestDataJSONRoundTrip(t *testing.T) {
 	input := `{
 		"meta": {
-			"version": 1,
+			"version": 2,
 			"type": "agenthound-ingest",
 			"collector": "mcp",
 			"collector_version": "0.1.0",
 			"timestamp": "2026-04-06T10:30:00Z",
-			"scan_id": "scan-001"
+			"scan_id": "scan-001",
+			"collection": {
+				"state": "complete",
+				"coverage_keys": ["mcp:target:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+				"outcomes": [{
+					"collector": "mcp",
+					"coverage_key": "mcp:target:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					"target": "https://mcp.example",
+					"method": "enumerate",
+					"state": "complete"
+				}]
+			},
+			"ruleset": {
+				"digest": "sha256:rules",
+				"load_state": "complete",
+				"authenticity": "unverified"
+			},
+			"identity_schemes": [{
+				"entity_kind": "MCPServer",
+				"transport": "stdio",
+				"scheme": "mcp_stdio_v2_ordered",
+				"version": 2
+			}]
 		},
 		"graph": {
-			"nodes": [{"id": "sha256:aaa", "kinds": ["MCPServer"], "properties": {"name": "srv"}}],
-			"edges": [{"source": "sha256:aaa", "target": "sha256:bbb", "kind": "PROVIDES_TOOL", "properties": {}}]
+			"nodes": [
+				{"id": "sha256:aaa", "kinds": ["MCPServer"], "properties": {"name": "srv"}, "observation_domains": ["mcp:target:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]},
+				{"id": "sha256:bbb", "kinds": ["MCPTool"], "properties": {"name": "tool"}, "observation_domains": ["mcp:target:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}
+			],
+			"edges": [{"source": "sha256:aaa", "target": "sha256:bbb", "kind": "PROVIDES_TOOL", "source_kind": "MCPServer", "target_kind": "MCPTool", "properties": {}, "observation_domains": ["mcp:target:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}]
 		}
 	}`
 
@@ -82,39 +107,40 @@ func TestIngestDataJSONRoundTrip(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	if d.Meta.Version != 1 {
-		t.Errorf("meta.version: got %d, want 1", d.Meta.Version)
+	if d.Meta.Version != CurrentVersion {
+		t.Errorf("meta.version: got %d, want %d", d.Meta.Version, CurrentVersion)
 	}
 	if d.Meta.Collector != "mcp" {
 		t.Errorf("meta.collector: got %q, want mcp", d.Meta.Collector)
 	}
-	if len(d.Graph.Nodes) != 1 {
-		t.Errorf("nodes count: got %d, want 1", len(d.Graph.Nodes))
+	if len(d.Graph.Nodes) != 2 {
+		t.Errorf("nodes count: got %d, want 2", len(d.Graph.Nodes))
 	}
 	if len(d.Graph.Edges) != 1 {
 		t.Errorf("edges count: got %d, want 1", len(d.Graph.Edges))
 	}
-	if d.Meta.Collection != nil || d.Meta.Ruleset != nil || len(d.Meta.IdentitySchemes) != 0 {
-		t.Fatal("legacy artifact must preserve absent evidence metadata as unknown")
+	if d.Meta.Collection == nil || d.Meta.Ruleset == nil || len(d.Meta.IdentitySchemes) == 0 {
+		t.Fatal("strict v2 metadata was not preserved")
 	}
 }
 
 func TestIngestEvidenceMetadataJSONRoundTrip(t *testing.T) {
 	input := IngestData{
 		Meta: IngestMeta{
-			Version:   1,
+			Version:   CurrentVersion,
 			Type:      "agenthound-ingest",
 			Collector: "scan",
 			ScanID:    "scan-001",
 			Collection: &CollectionReport{
 				State:        OutcomePartial,
-				CoverageKeys: []string{"a2a", "mcp"},
+				CoverageKeys: []string{"a2a:target:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 				Outcomes: []CollectionOutcome{{
-					Collector: "a2a",
-					Target:    "https://agent.example",
-					Method:    "agent_card",
-					State:     OutcomeFailed,
-					Error:     "connection refused",
+					Collector:   "a2a",
+					CoverageKey: "a2a:target:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					Target:      "https://agent.example",
+					Method:      "agent_card",
+					State:       OutcomeFailed,
+					Error:       "connection refused",
 				}},
 			},
 			Ruleset: &RulesetManifest{
@@ -131,11 +157,10 @@ func TestIngestEvidenceMetadataJSONRoundTrip(t *testing.T) {
 				}},
 			},
 			IdentitySchemes: []IdentityScheme{{
-				EntityKind:   "MCPServer",
-				Transport:    "stdio",
-				Scheme:       MCPStdioIdentitySchemeV2,
-				Version:      2,
-				LegacyScheme: MCPStdioIdentitySchemeV1,
+				EntityKind: "MCPServer",
+				Transport:  "stdio",
+				Scheme:     MCPStdioIdentitySchemeV2,
+				Version:    2,
 			}},
 		},
 		Graph: GraphData{Nodes: []Node{}, Edges: []Edge{}},
@@ -173,8 +198,8 @@ func TestAllowedNodeKindsComplete(t *testing.T) {
 }
 
 func TestAllNodeLabelsComplete(t *testing.T) {
-	if len(AllNodeLabels) != 25 {
-		t.Errorf("AllNodeLabels: got %d entries, want 25", len(AllNodeLabels))
+	if len(AllNodeLabels) != 23 {
+		t.Errorf("AllNodeLabels: got %d entries, want 23", len(AllNodeLabels))
 	}
 }
 

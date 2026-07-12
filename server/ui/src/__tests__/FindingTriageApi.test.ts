@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  put: vi.fn(),
+  patch: vi.fn(),
   json: vi.fn(),
 }));
 
 vi.mock("@shared/api/client", () => ({
   api: {
-    put: mocks.put,
+    patch: mocks.patch,
   },
 }));
 
@@ -21,13 +21,13 @@ describe("setTriage", () => {
       note: "preserved",
       updated_at: "2026-07-11T00:00:00Z",
     });
-    mocks.put.mockReturnValue({ json: mocks.json });
+    mocks.patch.mockReturnValue({ json: mocks.json });
   });
 
   it("omits note for a status-only update", async () => {
     await setTriage("aaaaaaaaaaaaaaaa", "confirmed");
 
-    expect(mocks.put).toHaveBeenCalledWith(
+    expect(mocks.patch).toHaveBeenCalledWith(
       "findings/triage/aaaaaaaaaaaaaaaa",
       { json: { status: "confirmed" } },
     );
@@ -36,7 +36,7 @@ describe("setTriage", () => {
   it("sends an explicitly cleared note", async () => {
     await setTriage("aaaaaaaaaaaaaaaa", "confirmed", "");
 
-    expect(mocks.put).toHaveBeenCalledWith(
+    expect(mocks.patch).toHaveBeenCalledWith(
       "findings/triage/aaaaaaaaaaaaaaaa",
       { json: { status: "confirmed", note: "" } },
     );

@@ -37,7 +37,10 @@ MATCH (c)<-[uses:USES_CREDENTIAL]-(i:Identity)<-[authenticates:AUTHENTICATES_WIT
 MATCH (s2)-[provides2:PROVIDES_TOOL]->(t2:MCPTool)-[access:HAS_ACCESS_TO]->(r:MCPResource)
 WHERE s1 <> s2
   AND s1.auth_assurance IN ['unauthenticated', 'weak']
-  AND NOT EXISTS((a)-[current:CAN_REACH]->(r) WHERE current.scan_id = $scan_id)
+  AND NOT EXISTS {
+    MATCH (a)-[current:CAN_REACH]->(r)
+    WHERE current.scan_id = $scan_id
+  }
 MERGE (a)-[e:CAN_REACH]->(r)
 SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true, e.source_collector = 'mcp',
     e.via_credential = c.name, e.hops = 6, e.confidence = 0.6, e.risk_weight = 0.1,

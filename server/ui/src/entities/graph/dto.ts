@@ -25,9 +25,7 @@ export type NodeKind =
   | "OpenWebUIInstance"
   | "AIService"
   | "AIModel"
-  | "ExtractedTrainingSignal"
-  | "ResourceGroup"
-  | "TrustZone";
+  | "ExtractedTrainingSignal";
 
 export const EDGE_KINDS = [
   "TRUSTS_SERVER",
@@ -85,8 +83,24 @@ export interface APIEdge {
   properties: Record<string, unknown>;
 }
 
+export interface ProjectionIdentity {
+  scanId: string;
+  revision: number;
+}
+
+export function sameProjectionIdentity(
+  left: ProjectionIdentity | null | undefined,
+  right: ProjectionIdentity | null | undefined,
+): boolean {
+  return (
+    left != null &&
+    right != null &&
+    left.scanId === right.scanId &&
+    left.revision === right.revision
+  );
+}
+
 function collection(value: unknown, field: string): unknown[] {
-  if (value == null) return [];
   if (!Array.isArray(value)) {
     throw new TypeError(`${field} must be an array`);
   }
@@ -94,8 +108,7 @@ function collection(value: unknown, field: string): unknown[] {
 }
 
 function object(value: unknown, field: string): Record<string, unknown> {
-  if (value == null) return {};
-  if (typeof value !== "object" || Array.isArray(value)) {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError(`${field} must be an object`);
   }
   return value as Record<string, unknown>;
@@ -106,6 +119,23 @@ function requiredString(value: unknown, field: string): string {
     throw new TypeError(`${field} must be a non-empty string`);
   }
   return value;
+}
+
+export function parseProjectionIdentity(
+  value: unknown,
+  field: string,
+): ProjectionIdentity {
+  const projection = object(value, field);
+  if (
+    !Number.isSafeInteger(projection.revision) ||
+    (projection.revision as number) < 1
+  ) {
+    throw new TypeError(`${field}.revision must be a positive integer`);
+  }
+  return {
+    scanId: requiredString(projection.scan_id, `${field}.scan_id`),
+    revision: projection.revision as number,
+  };
 }
 
 export function parseAPINodes(value: unknown): APINode[] {

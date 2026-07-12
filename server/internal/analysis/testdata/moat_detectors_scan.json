@@ -1,11 +1,36 @@
 {
   "meta": {
-    "version": 1,
+    "version": 2,
     "type": "agenthound-ingest",
     "collector": "mcp",
     "collector_version": "0.1.0",
     "timestamp": "2026-06-19T10:00:00Z",
-    "scan_id": "moat-e2e-fixture"
+    "scan_id": "moat-e2e-fixture",
+    "collection": {
+      "state": "complete",
+      "coverage_keys": ["mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82"],
+      "outcomes": [{
+        "collector": "mcp",
+        "coverage_key": "mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82",
+        "target": "moat-e2e-fixture",
+        "method": "fixture",
+        "state": "complete",
+        "items": 10
+      }]
+    },
+    "ruleset": {
+      "digest": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e64a8f8bff093b2f5f2cf4e",
+      "entries": [],
+      "load_state": "complete",
+      "errors": [],
+      "authenticity": "unverified"
+    },
+    "identity_schemes": [{
+      "entity_kind": "MCPServer",
+      "transport": "stdio",
+      "scheme": "mcp_stdio_v2_ordered",
+      "version": 2
+    }]
   },
   "graph": {
     "nodes": [
@@ -15,8 +40,11 @@
         "properties": {
           "objectid": "moat-srv-a",
           "name": "server-a",
-          "auth_method": "apiKey"
-        }
+          "auth_method": "apiKey",
+          "auth_assurance": "weak",
+          "auth_evidence": "configured_credential"
+        },
+        "observation_domains": ["mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82"]
       },
       {
         "id": "moat-srv-b",
@@ -24,8 +52,11 @@
         "properties": {
           "objectid": "moat-srv-b",
           "name": "server-b",
-          "auth_method": "oauth"
-        }
+          "auth_method": "oauth",
+          "auth_assurance": "strong",
+          "auth_evidence": "declared_security_scheme"
+        },
+        "observation_domains": ["mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82"]
       },
       {
         "id": "moat-src",
@@ -37,7 +68,8 @@
           "schema_keys": ["query", "table", "filter"],
           "has_injection_patterns": true,
           "capability_surface": ["database_access"]
-        }
+        },
+        "observation_domains": ["mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82"]
       },
       {
         "id": "moat-taint-sink",
@@ -49,7 +81,8 @@
           "schema_keys": ["query", "table", "extra"],
           "has_injection_patterns": false,
           "capability_surface": ["database_access"]
-        }
+        },
+        "observation_domains": ["mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82"]
       },
       {
         "id": "moat-sensitive",
@@ -59,8 +92,9 @@
           "name": "credential_reader",
           "description": "Reads credentials.",
           "has_injection_patterns": false,
-          "capability_surface": ["credential_access"]
-        }
+          "capability_surface": ["credential_access", "database_access"]
+        },
+        "observation_domains": ["mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82"]
       },
       {
         "id": "moat-poison-sink",
@@ -71,16 +105,21 @@
           "description": "Runs shell commands.",
           "has_injection_patterns": false,
           "capability_surface": ["shell_access"]
-        }
+        },
+        "observation_domains": ["mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82"]
       },
       {
         "id": "moat-res",
         "kinds": ["MCPResource"],
         "properties": {
           "objectid": "moat-res",
+          "uri": "postgres://fixture.invalid/untrusted-feed",
           "name": "untrusted-feed",
+          "mime_type": "application/x-postgresql",
+          "uri_scheme": "postgres",
           "sensitivity": "high"
-        }
+        },
+        "observation_domains": ["mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82"]
       },
       {
         "id": "moat-agent-weak",
@@ -88,8 +127,13 @@
         "properties": {
           "objectid": "moat-agent-weak",
           "name": "anon_agent",
-          "auth_method": "none"
-        }
+          "auth_method": "none",
+          "auth_assurance": "unauthenticated",
+          "auth_evidence": "anonymous_probe_succeeded",
+          "is_signed": false,
+          "signature_verification_status": "unsigned"
+        },
+        "observation_domains": ["mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82"]
       },
       {
         "id": "moat-agent-strong",
@@ -97,8 +141,13 @@
         "properties": {
           "objectid": "moat-agent-strong",
           "name": "mtls_agent",
-          "auth_method": "mtls"
-        }
+          "auth_method": "mtls",
+          "auth_assurance": "strong",
+          "auth_evidence": "declared_security_scheme",
+          "is_signed": false,
+          "signature_verification_status": "unsigned"
+        },
+        "observation_domains": ["mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82"]
       },
       {
         "id": "moat-agent-host",
@@ -106,7 +155,8 @@
         "properties": {
           "objectid": "moat-agent-host",
           "name": "host_agent"
-        }
+        },
+        "observation_domains": ["mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82"]
       }
     ],
     "edges": [
@@ -116,7 +166,8 @@
         "kind": "PROVIDES_TOOL",
         "source_kind": "MCPServer",
         "target_kind": "MCPTool",
-        "properties": {"is_composite": false}
+        "properties": {"is_composite": false},
+        "observation_domains": ["mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82"]
       },
       {
         "source": "moat-srv-a",
@@ -124,7 +175,8 @@
         "kind": "PROVIDES_TOOL",
         "source_kind": "MCPServer",
         "target_kind": "MCPTool",
-        "properties": {"is_composite": false}
+        "properties": {"is_composite": false},
+        "observation_domains": ["mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82"]
       },
       {
         "source": "moat-srv-a",
@@ -132,7 +184,8 @@
         "kind": "PROVIDES_TOOL",
         "source_kind": "MCPServer",
         "target_kind": "MCPTool",
-        "properties": {"is_composite": false}
+        "properties": {"is_composite": false},
+        "observation_domains": ["mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82"]
       },
       {
         "source": "moat-srv-b",
@@ -140,7 +193,8 @@
         "kind": "PROVIDES_TOOL",
         "source_kind": "MCPServer",
         "target_kind": "MCPTool",
-        "properties": {"is_composite": false}
+        "properties": {"is_composite": false},
+        "observation_domains": ["mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82"]
       },
       {
         "source": "moat-src",
@@ -148,15 +202,23 @@
         "kind": "INGESTS_UNTRUSTED",
         "source_kind": "MCPTool",
         "target_kind": "MCPResource",
-        "properties": {"is_composite": false}
+        "properties": {"is_composite": false},
+        "observation_domains": ["mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82"]
       },
       {
-        "source": "moat-sensitive",
+        "source": "moat-srv-a",
         "target": "moat-res",
-        "kind": "HAS_ACCESS_TO",
-        "source_kind": "MCPTool",
+        "kind": "PROVIDES_RESOURCE",
+        "source_kind": "MCPServer",
         "target_kind": "MCPResource",
-        "properties": {"is_composite": false}
+        "properties": {
+          "scan_id": "moat-e2e-fixture",
+          "last_seen": "2026-06-19T10:00:00Z",
+          "confidence": 1.0,
+          "risk_weight": 0.2,
+          "is_composite": false
+        },
+        "observation_domains": ["mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82"]
       },
       {
         "source": "moat-agent-weak",
@@ -164,7 +226,8 @@
         "kind": "DELEGATES_TO",
         "source_kind": "A2AAgent",
         "target_kind": "A2AAgent",
-        "properties": {"is_composite": false}
+        "properties": {"is_composite": false},
+        "observation_domains": ["mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82"]
       },
       {
         "source": "moat-agent-host",
@@ -172,7 +235,8 @@
         "kind": "TRUSTS_SERVER",
         "source_kind": "AgentInstance",
         "target_kind": "MCPServer",
-        "properties": {"is_composite": false}
+        "properties": {"is_composite": false},
+        "observation_domains": ["mcp:fixture:sha256:bf184844a9ecb90bcc4fd65cc86ae325a3ee15b5df87e30348ca0c6e97b1ec82"]
       }
     ]
   }

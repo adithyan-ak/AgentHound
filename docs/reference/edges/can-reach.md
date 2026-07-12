@@ -74,14 +74,14 @@ This models an unauthenticated A2A agent delegating through a chain that lands o
 | `scan_id` | string | Scan that created this edge |
 | `last_seen` | datetime | Timestamp of last computation |
 | `is_composite` | bool | Always `true` |
-| `source_collector` | string | `mcp`, `a2a`, or processor-owned source such as `cross_service_credential_chain` (scopes stale-edge cleanup) |
+| `source_collector` | string | Detector provenance: `mcp`, `a2a`, or a processor-owned source such as `cross_service_credential_chain` |
 | `hops` | int | Path length: 3 (direct) or 6 (credential chain) |
 | `via_server` | string | MCP server name in the path |
 | `via_tool` | string | Tool name in the path |
 | `via_credential` | string | Credential name (chain variant only) |
 | `cross_protocol` | bool | True for A2A-to-MCP paths |
 | `confidence` | float | 0.5-1.0 based on auth strength |
-| `risk_weight` | float | 0.1 (constant, used by Dijkstra) |
+| `risk_weight` | float | 0.1 (constant, used by weighted traversal) |
 
 ---
 

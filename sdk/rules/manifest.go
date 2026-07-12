@@ -10,6 +10,16 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
+// ManifestForEngine records the exact text-rule semantics used by a collector.
+// Fingerprint rules are added by the CLI when they participate in a scan.
+func ManifestForEngine(engine *Engine) *ingest.RulesetManifest {
+	if engine == nil {
+		return ingest.EmptyRulesetManifest()
+	}
+	manifest := BuildManifest(engine.Rules(), nil, engine.LoadFailures()...)
+	return &manifest
+}
+
 // BuildManifest records the effective text and fingerprint semantics. Digests
 // identify content; authenticity remains unverified unless a separate trusted
 // signature workflow attests the artifact.

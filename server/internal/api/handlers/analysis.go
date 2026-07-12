@@ -2,12 +2,9 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/server/internal/analysis"
@@ -18,30 +15,22 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// findingLister is the subset of *appdb.FindingStore that the findings
-// endpoint reads from. When nil (e.g. in unit tests without Postgres),
-// HandleFindings falls back to live composite edges in the graph.
-type findingLister interface {
-	ListLatestPerFingerprint(ctx context.Context, severity string, includeSuppressed bool) ([]model.Finding, error)
-}
-
-type publishedFindingLister interface {
+type publishedFindingStore interface {
 	ListPublished(ctx context.Context, severity string, includeSuppressed bool) ([]model.Finding, appdb.FindingScope, error)
 	GetPublished(ctx context.Context, fingerprint string) (*model.Finding, appdb.FindingScope, error)
 }
 
 type AnalysisHandler struct {
-	graphDB      graph.GraphDB
-	findingStore findingLister
+	graphDB          graph.GraphDB
+	findingStore     publishedFindingStore
+	projectionReader projectionStateReader
 }
 
 func NewAnalysisHandler(db graph.GraphDB, findingStore *appdb.FindingStore) *AnalysisHandler {
 	h := &AnalysisHandler{graphDB: db}
-	// Avoid the typed-nil-into-interface trap: only populate the
-	// interface field when the concrete pointer is non-nil so the
-	// `h.findingStore != nil` fallback check stays correct.
 	if findingStore != nil {
 		h.findingStore = findingStore
+		h.projectionReader = findingStore
 	}
 	return h
 }
@@ -63,14 +52,25 @@ type pathRequest struct {
 	Target     string `json:"target"`
 	SourceKind string `json:"source_kind"`
 	TargetKind string `json:"target_kind"`
-	Scope      string `json:"scope,omitempty"`
 	MaxHops    int    `json:"max_hops"`
 	Limit      int    `json:"limit"`
 }
 
 func (h *AnalysisHandler) HandleShortestPath(w http.ResponseWriter, r *http.Request) {
+	h.handleShortestPath(w, r, analysis.TraversalScopeSecurity)
+}
+
+func (h *AnalysisHandler) HandleTopologyShortestPath(w http.ResponseWriter, r *http.Request) {
+	h.handleShortestPath(w, r, analysis.TraversalScopeTopology)
+}
+
+func (h *AnalysisHandler) handleShortestPath(
+	w http.ResponseWriter,
+	r *http.Request,
+	scope analysis.TraversalScope,
+) {
 	var req pathRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := DecodeStrictJSON(r.Body, &req); err != nil {
 		WriteValidationError(w, "invalid JSON: "+err.Error())
 		return
 	}
@@ -89,39 +89,54 @@ func (h *AnalysisHandler) HandleShortestPath(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	scope, err := analysis.ParseTraversalScope(req.Scope)
-	if err != nil {
-		WriteValidationError(w, err.Error())
-		return
-	}
-	sources, targets, err := h.resolveTraversalEndpoints(
-		r.Context(), req, targetKind, targetName,
-	)
-	if err != nil {
-		WriteInternalError(w, r, fmt.Errorf("resolve shortest path endpoints: %w", err))
-		return
-	}
-	result, err := analysis.FindBoundedTraversalPaths(
+	result, projection, err := guardedProjectionRead(
 		r.Context(),
-		h.graphDB,
-		sources,
-		targets,
-		analysis.TraversalOptions{
-			Scope: scope, Cost: analysis.TraversalCostHops,
-			MaxHops: clamp(req.MaxHops, 1, 20, 10),
-			Limit:   10, MaxExpansions: 100000,
+		h.projectionReader,
+		func() (analysis.TraversalResult, error) {
+			sources, targets, err := h.resolveTraversalEndpoints(
+				r.Context(), req, targetKind, targetName,
+			)
+			if err != nil {
+				return analysis.TraversalResult{}, fmt.Errorf("resolve shortest path endpoints: %w", err)
+			}
+			return analysis.FindBoundedTraversalPaths(
+				r.Context(),
+				h.graphDB,
+				sources,
+				targets,
+				analysis.TraversalOptions{
+					Scope: scope, Cost: analysis.TraversalCostHops,
+					MaxHops: clamp(req.MaxHops, 1, 20, 10),
+					Limit:   10, MaxExpansions: 100000,
+				},
+			)
 		},
 	)
 	if err != nil {
+		if writeProjectionConflict(w, err) {
+			return
+		}
 		WriteInternalError(w, r, fmt.Errorf("shortest path query: %w", err))
 		return
 	}
-	writeTraversalResult(w, result)
+	writeTraversalResult(w, result, projection)
 }
 
 func (h *AnalysisHandler) HandleAllPaths(w http.ResponseWriter, r *http.Request) {
+	h.handleAllPaths(w, r, analysis.TraversalScopeSecurity)
+}
+
+func (h *AnalysisHandler) HandleTopologyAllPaths(w http.ResponseWriter, r *http.Request) {
+	h.handleAllPaths(w, r, analysis.TraversalScopeTopology)
+}
+
+func (h *AnalysisHandler) handleAllPaths(
+	w http.ResponseWriter,
+	r *http.Request,
+	scope analysis.TraversalScope,
+) {
 	var req pathRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := DecodeStrictJSON(r.Body, &req); err != nil {
 		WriteValidationError(w, "invalid JSON: "+err.Error())
 		return
 	}
@@ -140,40 +155,55 @@ func (h *AnalysisHandler) HandleAllPaths(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	scope, err := analysis.ParseTraversalScope(req.Scope)
-	if err != nil {
-		WriteValidationError(w, err.Error())
-		return
-	}
-	sources, targets, err := h.resolveTraversalEndpoints(
-		r.Context(), req, targetKind, targetName,
-	)
-	if err != nil {
-		WriteInternalError(w, r, fmt.Errorf("resolve all path endpoints: %w", err))
-		return
-	}
-	result, err := analysis.FindBoundedTraversalPaths(
+	result, projection, err := guardedProjectionRead(
 		r.Context(),
-		h.graphDB,
-		sources,
-		targets,
-		analysis.TraversalOptions{
-			Scope: scope, Cost: analysis.TraversalCostHops,
-			MaxHops:       clamp(req.MaxHops, 1, 20, 10),
-			Limit:         clamp(req.Limit, 1, 100, 10),
-			MaxExpansions: 100000, AllPaths: true,
+		h.projectionReader,
+		func() (analysis.TraversalResult, error) {
+			sources, targets, err := h.resolveTraversalEndpoints(
+				r.Context(), req, targetKind, targetName,
+			)
+			if err != nil {
+				return analysis.TraversalResult{}, fmt.Errorf("resolve all path endpoints: %w", err)
+			}
+			return analysis.FindBoundedTraversalPaths(
+				r.Context(),
+				h.graphDB,
+				sources,
+				targets,
+				analysis.TraversalOptions{
+					Scope: scope, Cost: analysis.TraversalCostHops,
+					MaxHops:       clamp(req.MaxHops, 1, 20, 10),
+					Limit:         clamp(req.Limit, 1, 100, 10),
+					MaxExpansions: 100000, AllPaths: true,
+				},
+			)
 		},
 	)
 	if err != nil {
+		if writeProjectionConflict(w, err) {
+			return
+		}
 		WriteInternalError(w, r, fmt.Errorf("all paths query: %w", err))
 		return
 	}
-	writeTraversalResult(w, result)
+	writeTraversalResult(w, result, projection)
 }
 
 func (h *AnalysisHandler) HandleWeightedPath(w http.ResponseWriter, r *http.Request) {
+	h.handleWeightedPath(w, r, analysis.TraversalScopeSecurity)
+}
+
+func (h *AnalysisHandler) HandleTopologyWeightedPath(w http.ResponseWriter, r *http.Request) {
+	h.handleWeightedPath(w, r, analysis.TraversalScopeTopology)
+}
+
+func (h *AnalysisHandler) handleWeightedPath(
+	w http.ResponseWriter,
+	r *http.Request,
+	scope analysis.TraversalScope,
+) {
 	var req pathRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := DecodeStrictJSON(r.Body, &req); err != nil {
 		WriteValidationError(w, "invalid JSON: "+err.Error())
 		return
 	}
@@ -196,35 +226,38 @@ func (h *AnalysisHandler) HandleWeightedPath(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	scope, err := analysis.ParseTraversalScope(req.Scope)
-	if err != nil {
-		WriteValidationError(w, err.Error())
-		return
-	}
-	sources, targets, err := h.resolveTraversalEndpoints(
-		r.Context(), req, targetKind, targetName,
-	)
-	if err != nil {
-		WriteInternalError(w, r, fmt.Errorf("resolve weighted path endpoints: %w", err))
-		return
-	}
-	result, err := analysis.FindBoundedTraversalPaths(
+	result, projection, err := guardedProjectionRead(
 		r.Context(),
-		h.graphDB,
-		sources,
-		targets,
-		analysis.TraversalOptions{
-			Scope: scope, Cost: analysis.TraversalCostRisk,
-			MaxHops:       clamp(req.MaxHops, 1, 20, 10),
-			Limit:         clamp(req.Limit, 1, 100, 10),
-			MaxExpansions: 100000,
+		h.projectionReader,
+		func() (analysis.TraversalResult, error) {
+			sources, targets, err := h.resolveTraversalEndpoints(
+				r.Context(), req, targetKind, targetName,
+			)
+			if err != nil {
+				return analysis.TraversalResult{}, fmt.Errorf("resolve weighted path endpoints: %w", err)
+			}
+			return analysis.FindBoundedTraversalPaths(
+				r.Context(),
+				h.graphDB,
+				sources,
+				targets,
+				analysis.TraversalOptions{
+					Scope: scope, Cost: analysis.TraversalCostRisk,
+					MaxHops:       clamp(req.MaxHops, 1, 20, 10),
+					Limit:         clamp(req.Limit, 1, 100, 10),
+					MaxExpansions: 100000,
+				},
+			)
 		},
 	)
 	if err != nil {
+		if writeProjectionConflict(w, err) {
+			return
+		}
 		WriteInternalError(w, r, fmt.Errorf("weighted path query: %w", err))
 		return
 	}
-	writeTraversalResult(w, result)
+	writeTraversalResult(w, result, projection)
 }
 
 func (h *AnalysisHandler) resolveTraversalEndpoints(
@@ -255,50 +288,52 @@ func (h *AnalysisHandler) resolveTraversalEndpoints(
 	return sources, targets, nil
 }
 
-func writeTraversalResult(w http.ResponseWriter, result analysis.TraversalResult) {
+func writeTraversalResult(
+	w http.ResponseWriter,
+	result analysis.TraversalResult,
+	projection projectionIdentity,
+) {
 	if result.Paths == nil {
 		result.Paths = []analysis.TraversalPath{}
 	}
-	WriteJSON(w, http.StatusOK, map[string]any{
-		"paths":     result.Paths,
-		"algorithm": result.Metadata.Algorithm,
-		"metadata":  result.Metadata,
+	WriteJSON(w, http.StatusOK, struct {
+		Paths      []analysis.TraversalPath   `json:"paths"`
+		Metadata   analysis.TraversalMetadata `json:"metadata"`
+		Projection projectionIdentity         `json:"projection"`
+	}{
+		Paths:      result.Paths,
+		Metadata:   result.Metadata,
+		Projection: projection,
 	})
 }
 
 func (h *AnalysisHandler) HandleFindings(w http.ResponseWriter, r *http.Request) {
 	severity := r.URL.Query().Get("severity")
-	includeSuppressed := r.URL.Query().Get("include_suppressed") == "true"
-	scopeMode := r.URL.Query().Get("scope")
-	if scopeMode == "" {
-		scopeMode = "history"
-	}
-	if scopeMode != "history" && scopeMode != "published" {
-		WriteValidationError(w, "scope must be history or published")
+	switch severity {
+	case "", "critical", "high", "medium", "low":
+	default:
+		WriteValidationError(w, "severity must be one of: critical, high, medium, low")
 		return
 	}
-
-	var findings []model.Finding
-	var err error
-	if scopeMode == "published" {
-		store, ok := h.findingStore.(publishedFindingLister)
-		if !ok {
-			WriteInternalError(w, r, fmt.Errorf("published finding scope is unavailable"))
-			return
-		}
-		var scope appdb.FindingScope
-		findings, scope, err = store.ListPublished(r.Context(), severity, includeSuppressed)
-		writeFindingScopeHeaders(w, scope)
-	} else if h.findingStore != nil {
-		// Default data source: the persisted per-scan snapshot, with
-		// triage state joined in and suppressed findings hidden unless
-		// include_suppressed=true.
-		findings, err = h.findingStore.ListLatestPerFingerprint(r.Context(), severity, includeSuppressed)
-	} else {
-		// Fallback for setups without a Postgres snapshot (unit tests):
-		// read live composite edges directly from the graph.
-		findings, err = analysis.QueryFindings(r.Context(), h.graphDB, severity)
+	includeSuppressedValue := r.URL.Query().Get("include_suppressed")
+	if includeSuppressedValue != "" &&
+		includeSuppressedValue != "true" &&
+		includeSuppressedValue != "false" {
+		WriteValidationError(w, "include_suppressed must be true or false")
+		return
 	}
+	includeSuppressed := includeSuppressedValue == "true"
+	if r.URL.Query().Has("scope") {
+		WriteValidationError(w, "scope is not supported; findings are always read from the published snapshot")
+		return
+	}
+	if h.findingStore == nil {
+		WriteServiceError(w, "published finding store")
+		return
+	}
+	findings, scope, err := h.findingStore.ListPublished(
+		r.Context(), severity, includeSuppressed,
+	)
 	if err != nil {
 		WriteInternalError(w, r, fmt.Errorf("findings query: %w", err))
 		return
@@ -306,7 +341,13 @@ func (h *AnalysisHandler) HandleFindings(w http.ResponseWriter, r *http.Request)
 	if findings == nil {
 		findings = []model.Finding{}
 	}
-	WriteJSON(w, http.StatusOK, findings)
+	WriteJSON(w, http.StatusOK, struct {
+		Findings []model.Finding    `json:"findings"`
+		Scope    appdb.FindingScope `json:"scope"`
+	}{
+		Findings: findings,
+		Scope:    scope,
+	})
 }
 
 func (h *AnalysisHandler) HandleFindingDetail(w http.ResponseWriter, r *http.Request) {
@@ -322,50 +363,15 @@ func (h *AnalysisHandler) HandleFindingDetail(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	scopeMode := r.URL.Query().Get("scope")
-	if scopeMode == "published" {
-		h.handlePublishedFindingDetail(w, r, findingID)
+	if r.URL.Query().Has("scope") {
+		WriteValidationError(w, "scope is not supported; finding detail is always read from the published snapshot")
 		return
 	}
-	if scopeMode != "" && scopeMode != "history" {
-		WriteValidationError(w, "scope must be history or published")
+	if h.findingStore == nil {
+		WriteServiceError(w, "published finding store")
 		return
 	}
-
-	finding, err := analysis.GetFindingByID(r.Context(), h.graphDB, findingID)
-	if err != nil {
-		WriteInternalError(w, r, fmt.Errorf("get finding: %w", err))
-		return
-	}
-	if finding == nil {
-		WriteNotFound(w, "finding not found: "+findingID)
-		return
-	}
-
-	attackPath := analysis.AttackPathFromExactEvidence(finding)
-	remediation := analysis.BuildRemediation(attackPath, finding)
-	impact := analysis.BuildImpact(finding, attackPath, nil)
-
-	WriteJSON(w, http.StatusOK, analysis.FindingDetail{
-		Finding:     *finding,
-		AttackPath:  attackPath,
-		Remediation: remediation,
-		Impact:      impact,
-	})
-}
-
-func (h *AnalysisHandler) handlePublishedFindingDetail(
-	w http.ResponseWriter,
-	r *http.Request,
-	findingID string,
-) {
-	store, ok := h.findingStore.(publishedFindingLister)
-	if !ok {
-		WriteInternalError(w, r, fmt.Errorf("published finding scope is unavailable"))
-		return
-	}
-	finding, scope, err := store.GetPublished(r.Context(), findingID)
-	writeFindingScopeHeaders(w, scope)
+	finding, scope, err := h.findingStore.GetPublished(r.Context(), findingID)
 	if err != nil {
 		WriteInternalError(w, r, fmt.Errorf("get published finding: %w", err))
 		return
@@ -376,41 +382,28 @@ func (h *AnalysisHandler) handlePublishedFindingDetail(
 	}
 
 	attackPath := analysis.AttackPathFromExactEvidence(finding)
-	liveEvidenceState := analysis.LiveEvidenceUnavailable
+	evidenceState := analysis.FindingDetailEvidenceUnavailable
 	if finding.ExactEvidence != nil {
-		liveEvidenceState = analysis.LiveEvidencePersistedExact
+		evidenceState = analysis.FindingDetailEvidencePersistedExact
 	}
 
 	WriteJSON(w, http.StatusOK, analysis.FindingDetail{
 		Finding:     *finding,
 		AttackPath:  attackPath,
 		Remediation: analysis.BuildRemediation(attackPath, finding),
-		Impact:      analysis.BuildImpact(finding, attackPath, nil),
+		Impact:      analysis.BuildImpact(finding, attackPath),
 		Snapshot: &analysis.FindingSnapshot{
-			Scope:             "published",
-			ScanID:            scope.ScanID,
-			ProjectionStatus:  scope.ProjectionStatus,
-			Stale:             scope.Stale,
-			LiveEvidenceState: liveEvidenceState,
+			Scope:            "published",
+			ScanID:           scope.ScanID,
+			Revision:         scope.Revision,
+			PublishedAt:      scope.PublishedAt,
+			ProjectionStatus: scope.ProjectionStatus,
+			SnapshotStatus:   scope.SnapshotStatus,
+			Available:        scope.Available,
+			Stale:            scope.Stale,
+			EvidenceState:    evidenceState,
 		},
 	})
-}
-
-func writeFindingScopeHeaders(w http.ResponseWriter, scope appdb.FindingScope) {
-	w.Header().Set("X-Finding-Scope", scope.Mode)
-	w.Header().Set("X-Projection-Status", scope.ProjectionStatus)
-	w.Header().Set("X-Snapshot-Status", scope.SnapshotStatus)
-	w.Header().Set("X-Snapshot-Available", strconv.FormatBool(scope.Available))
-	w.Header().Set("X-Snapshot-Stale", strconv.FormatBool(scope.Stale))
-	if scope.ScanID != "" {
-		w.Header().Set("X-Snapshot-Scan-ID", scope.ScanID)
-	}
-	if scope.Revision != nil {
-		w.Header().Set("X-Published-Revision", strconv.FormatInt(*scope.Revision, 10))
-	}
-	if scope.PublishedAt != nil {
-		w.Header().Set("X-Published-At", scope.PublishedAt.UTC().Format(time.RFC3339))
-	}
 }
 
 func (h *AnalysisHandler) HandleListPreBuilt(w http.ResponseWriter, _ *http.Request) {
@@ -429,8 +422,17 @@ func (h *AnalysisHandler) HandlePreBuilt(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	rows, err := h.graphDB.Query(r.Context(), q.Cypher, nil)
+	rows, projection, err := guardedProjectionRead(
+		r.Context(),
+		h.projectionReader,
+		func() ([]map[string]any, error) {
+			return h.graphDB.Query(r.Context(), q.Cypher, nil)
+		},
+	)
 	if err != nil {
+		if writeProjectionConflict(w, err) {
+			return
+		}
 		WriteInternalError(w, r, fmt.Errorf("prebuilt query %s: %w", id, err))
 		return
 	}
@@ -438,8 +440,9 @@ func (h *AnalysisHandler) HandlePreBuilt(w http.ResponseWriter, r *http.Request)
 		rows = []map[string]any{}
 	}
 	WriteJSON(w, http.StatusOK, map[string]any{
-		"query": q,
-		"rows":  rows,
+		"query":      q,
+		"rows":       rows,
+		"projection": projection,
 	})
 }
 
@@ -448,16 +451,26 @@ func (h *AnalysisHandler) handleShortestToDatabase(
 	r *http.Request,
 	query prebuilt.PreBuiltQuery,
 ) {
-	result, err := analysis.FindShortestDatabasePaths(r.Context(), h.graphDB)
+	result, projection, err := guardedProjectionRead(
+		r.Context(),
+		h.projectionReader,
+		func() (analysis.TraversalResult, error) {
+			return analysis.FindShortestDatabasePaths(r.Context(), h.graphDB)
+		},
+	)
 	if err != nil {
+		if writeProjectionConflict(w, err) {
+			return
+		}
 		WriteInternalError(w, r, fmt.Errorf("shortest database paths: %w", err))
 		return
 	}
 
 	WriteJSON(w, http.StatusOK, map[string]any{
-		"query":    query,
-		"rows":     analysis.DatabasePathRows(result),
-		"metadata": result.Metadata,
+		"query":      query,
+		"rows":       analysis.DatabasePathRows(result),
+		"metadata":   result.Metadata,
+		"projection": projection,
 	})
 }
 

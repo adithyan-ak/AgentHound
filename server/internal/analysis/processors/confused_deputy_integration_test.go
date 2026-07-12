@@ -9,11 +9,11 @@ import (
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 )
 
-// TestIntegrationConfusedDeputyAuthGradient locks the auth-gradient predicate
-// in confused_deputy.go: low.auth_strength >= 80 AND high.auth_strength <= 30.
-// auth_strength is materialized from auth_method by the AuthStrength pre-pass
-// (none=100, apiKey=70, bearer=50, oauth=25, mtls=10), so we run that first.
-//   - POSITIVE: weak (none, 100) -> strong (mtls, 10) delegation fires once.
+// TestIntegrationConfusedDeputyAuthGradient locks the categorical assurance
+// predicate in confused_deputy.go. AuthStrength materializes assurance from
+// method plus evidence, so explicit anonymous access requires a successful
+// anonymous probe.
+//   - POSITIVE: unauthenticated -> strong delegation fires once.
 //   - FP-GUARD A: inverted gradient strong -> weak must not fire.
 //   - FP-GUARD B: equal strong -> strong delegation must not fire.
 func TestIntegrationConfusedDeputyAuthGradient(t *testing.T) {
@@ -46,7 +46,8 @@ func TestIntegrationConfusedDeputyAuthGradient(t *testing.T) {
 	nodes := []ingest.Node{
 		{ID: "cd-weak", Kinds: []string{"A2AAgent"}, Properties: map[string]any{
 			"objectid": "cd-weak", "name": "anon_agent",
-			"auth_method": "none", "scan_id": scanID,
+			"auth_method": "none", "auth_evidence": "anonymous_probe_succeeded",
+			"scan_id": scanID,
 		}},
 		{ID: "cd-strong", Kinds: []string{"A2AAgent"}, Properties: map[string]any{
 			"objectid": "cd-strong", "name": "mtls_agent",
@@ -57,19 +58,20 @@ func TestIntegrationConfusedDeputyAuthGradient(t *testing.T) {
 			"auth_method": "oauth", "scan_id": scanID,
 		}},
 	}
-	if _, err := graph.NewWriter(driver).WriteNodes(ctx, nodes, scanID); err != nil {
+	writer := graph.NewWriter(driver)
+	if _, err := writer.WriteNodes(ctx, managedProcessorNodes(nodes), scanID); err != nil {
 		t.Fatalf("write nodes: %v", err)
 	}
 
 	edges := []ingest.Edge{
-		// POSITIVE: weak (100) -> strong (10).
+		// POSITIVE: unauthenticated -> strong.
 		{Source: "cd-weak", Target: "cd-strong", Kind: "DELEGATES_TO", SourceKind: "A2AAgent", TargetKind: "A2AAgent"},
-		// FP-GUARD A: inverted, strong (10) -> weak (100).
+		// FP-GUARD A: inverted, strong -> unauthenticated.
 		{Source: "cd-strong", Target: "cd-weak", Kind: "DELEGATES_TO", SourceKind: "A2AAgent", TargetKind: "A2AAgent"},
-		// FP-GUARD B: equal-ish strong (10) -> strong (25); low side fails >= 80.
+		// FP-GUARD B: strong -> strong; low side is not weak.
 		{Source: "cd-strong", Target: "cd-strong2", Kind: "DELEGATES_TO", SourceKind: "A2AAgent", TargetKind: "A2AAgent"},
 	}
-	if _, err := db.WriteEdges(ctx, edges, scanID); err != nil {
+	if _, err := writer.WriteEdges(ctx, managedProcessorEdges(edges), scanID); err != nil {
 		t.Fatalf("write edges: %v", err)
 	}
 

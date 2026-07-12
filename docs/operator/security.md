@@ -85,7 +85,7 @@ For remote access use a VPN, an SSH tunnel
 
 ### Triage state retention
 
-Triage decisions written via `PUT /findings/triage/{fingerprint}` live
+Triage decisions written via `PATCH /findings/triage/{fingerprint}` live
 in the Postgres `finding_triage` table, keyed by the finding fingerprint.
 This table has **no foreign key** to the per-scan `findings` snapshot: an
 analyst's `accepted-risk` / `false-positive` decisions deliberately

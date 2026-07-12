@@ -279,7 +279,6 @@ func emitUpstreamCredential(
 		"type":         "apiKey",
 		"name":         nameSlug,
 		"source":       "openwebui",
-		"is_exposed":   true,
 		"high_entropy": true,
 		"format":       format,
 		"value_hash":   common.HashCredentialValue(value),
@@ -485,12 +484,9 @@ func runOllamaConfig(
 		remaining--
 	}
 
-	// Promote the canonicalized base URLs onto the OpenWebUIInstance
-	// posture props (first URL is exposed as ollama_backend_url for
-	// backward-compat with the historic property name).
+	// Promote the canonicalized base URLs onto the OpenWebUIInstance posture.
 	if len(canonicalBaseURLs) > 0 {
 		props := res.IngestData.Graph.Nodes[0].Properties
-		props["ollama_backend_url"] = canonicalBaseURLs[0]
 		props["ollama_backend_urls"] = canonicalBaseURLs
 	}
 	return remaining

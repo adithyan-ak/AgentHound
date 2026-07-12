@@ -432,7 +432,6 @@ The post-v0.1 trunk reshaped AgentHound around a two-binary split and a single-u
 
 ### CLI surface
 
-- `agenthound collect config|mcp|a2a` was unified into a single `agenthound scan` verb with collector-selection flags (`--config`, `--mcp`, `--a2a`).
 - Stub verbs `agenthound loot|extract|poison|implant` added — print "not yet implemented" today, reserve the verb space for the v0.2 offensive-primitives milestone.
 
 ### Hardening
@@ -474,7 +473,7 @@ Initial release. AgentHound is a BloodHound-style security tool for AI agent inf
 
 ### Ingest pipeline
 
-- JSON schema validation, camelCase-to-snake_case normalization, deduplication by objectid
+- JSON schema validation, canonical snake_case properties, deduplication by objectid
 - Rug pull detection via description_hash tracking across scans
 - Stale composite edge cleanup scoped to source collector
 

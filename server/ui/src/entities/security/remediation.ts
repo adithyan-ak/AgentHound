@@ -68,7 +68,7 @@ export function deriveRemediations(
   const observedExposure =
     props.exposure_status === "exposed" &&
     props.material_status === "observed" &&
-    props.merge_key !== "identity";
+    props.merge_key === "value_hash";
   if (kind === "Credential" && observedExposure) {
     const source =
       typeof props.source === "string" && props.source.trim() !== ""

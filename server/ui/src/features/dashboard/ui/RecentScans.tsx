@@ -35,7 +35,7 @@ export function RecentScans() {
       return comparablePublishedScans(scans ?? [])
         .slice(0, 12)
         .reverse()
-        .map((scan) => scan.graph_total_nodes_after);
+        .map((scan) => scan.graph_totals.after.total_nodes);
     },
     [scans],
   );
@@ -93,10 +93,10 @@ export function RecentScans() {
                     </StatusPill>
                   </TableCell>
                   <TableCell className="px-3 py-2 text-right font-mono text-[12px] tabular-nums text-foreground/80">
-                    {scan.node_count.toLocaleString()}
+                    {scan.write_rows.nodes.toLocaleString()}
                   </TableCell>
                   <TableCell className="px-3 py-2 text-right font-mono text-[12px] tabular-nums text-foreground/80">
-                    {scan.edge_count.toLocaleString()}
+                    {scan.write_rows.edges.toLocaleString()}
                   </TableCell>
                   <TableCell className="px-3 py-2 text-right font-mono text-[11px] text-muted-foreground">
                     {timeAgo(scan.completed_at ?? scan.started_at)}

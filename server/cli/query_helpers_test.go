@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/server/internal/analysis"
+	"github.com/adithyan-ak/agenthound/server/internal/appdb"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
+	"github.com/adithyan-ak/agenthound/server/model"
 	"github.com/spf13/cobra"
 )
 
@@ -254,6 +256,104 @@ func TestPrintJSON(t *testing.T) {
 	}
 }
 
+func TestPrintPublishedFindingsRejectsUnavailableAndStaleScopes(t *testing.T) {
+	revision := int64(7)
+	for _, test := range []struct {
+		name  string
+		scope appdb.FindingScope
+	}{
+		{
+			name:  "unavailable",
+			scope: appdb.FindingScope{Mode: "published"},
+		},
+		{
+			name: "stale",
+			scope: appdb.FindingScope{
+				Mode:             "published",
+				ScanID:           "scan-7",
+				Revision:         &revision,
+				ProjectionStatus: model.ProjectionIncomplete,
+				SnapshotStatus:   model.LifecycleComplete,
+				Available:        true,
+				Stale:            true,
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var gotErr error
+			stdout := captureStdout(t, func() {
+				stderr := captureStderr(t, func() {
+					gotErr = printPublishedFindings(nil, test.scope, "table")
+				})
+				if stderr != "" {
+					t.Fatalf("stderr = %q, want no output", stderr)
+				}
+			})
+			if gotErr == nil {
+				t.Fatal("expected fail-closed publication error")
+			}
+			if stdout != "" {
+				t.Fatalf("stdout = %q, want no empty claim", stdout)
+			}
+		})
+	}
+}
+
+func TestPrintPublishedFindingsCurrentEmptyIncludesProjectionIdentity(t *testing.T) {
+	revision := int64(7)
+	scope := appdb.FindingScope{
+		Mode:             "published",
+		ScanID:           "scan-7",
+		Revision:         &revision,
+		ProjectionStatus: model.ProjectionComplete,
+		SnapshotStatus:   model.LifecycleComplete,
+		Available:        true,
+	}
+	var stderr string
+	stdout := captureStdout(t, func() {
+		stderr = captureStderr(t, func() {
+			if err := printPublishedFindings(nil, scope, "table"); err != nil {
+				t.Fatal(err)
+			}
+		})
+	})
+
+	if !strings.Contains(stderr, "scan=scan-7 revision=7") {
+		t.Fatalf("stderr missing projection identity: %q", stderr)
+	}
+	if !strings.Contains(stdout, "No findings found.") {
+		t.Fatalf("stdout missing authoritative empty result: %q", stdout)
+	}
+}
+
+func TestPrintPublishedFindingsJSONIncludesProjectionIdentity(t *testing.T) {
+	revision := int64(7)
+	scope := appdb.FindingScope{
+		Mode:             "published",
+		ScanID:           "scan-7",
+		Revision:         &revision,
+		ProjectionStatus: model.ProjectionComplete,
+		SnapshotStatus:   model.LifecycleComplete,
+		Available:        true,
+	}
+	stdout := captureStdout(t, func() {
+		if err := printPublishedFindings([]model.Finding{}, scope, "json"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	var result struct {
+		Scope appdb.FindingScope `json:"scope"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Scope.ScanID != "scan-7" ||
+		result.Scope.Revision == nil ||
+		*result.Scope.Revision != 7 {
+		t.Fatalf("scope = %+v", result.Scope)
+	}
+}
+
 // --- printPrebuiltList tests ---
 
 func TestPrintPrebuiltList(t *testing.T) {
@@ -282,7 +382,7 @@ func newQueryCmd() *cobra.Command {
 	cmd.Flags().Bool("shortest-path", false, "")
 	cmd.Flags().String("from", "", "")
 	cmd.Flags().String("to", "", "")
-	cmd.Flags().String("path-scope", "security", "")
+	cmd.Flags().String("path-mode", "security", "")
 	cmd.Flags().String("format", "table", "")
 	cmd.Flags().String("fail-on", "", "")
 	cmd.Flags().Bool("all-findings", false, "")

@@ -51,7 +51,7 @@ const NODE_KEY_BY_LENS: Record<string, NodeKeyItem[]> = {
   ],
   chokepoints: [
     { color: NODE_KIND_COLORS.AgentInstance, label: "High centrality" },
-    { color: NODE_KIND_COLORS.ResourceGroup, label: "Medium" },
+    { color: NODE_KIND_COLORS.Host, label: "Medium" },
     { color: DIMMED.mid, label: "Low" },
   ],
 };

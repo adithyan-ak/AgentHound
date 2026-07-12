@@ -26,21 +26,16 @@ export interface Finding {
   target_name: string;
   target_kind: string;
   confidence: number;
-  // Optional only for legacy persisted exports created before the additive
-  // evidence contract; consumers must present absence as unknown.
-  variant?:
+  variant:
     | "unknown"
     | "default"
     | "credential_chain_observed_material"
     | "credential_chain_reference"
     | "credential_node_reference"
     | "cross_protocol_host_correlation";
-  evidence?: FindingEvidence;
-  // Optional: the Go side emits owasp_map with `omitempty`, so a composite
-  // edge kind absent from findingsMeta (no mapping) omits the field entirely.
-  // Every consumer must guard with `?.` / `?? []` — matches atlas_map.
-  owasp_map?: string[];
-  atlas_map?: string[];
+  evidence: FindingEvidence;
+  owasp_map: string[];
+  atlas_map: string[];
   triage?: TriageState | null;
 }
 
@@ -60,14 +55,14 @@ export interface FindingEvidence {
 }
 
 export interface PublishedFindingScope {
-  mode: string | null;
-  scanId: string | null;
+  mode: "published";
+  scanId: string;
   revision: number | null;
   publishedAt: string | null;
-  projectionStatus: string | null;
-  snapshotStatus: string | null;
-  available: boolean | null;
-  stale: boolean | null;
+  projectionStatus: string;
+  snapshotStatus: string;
+  available: boolean;
+  stale: boolean;
 }
 
 export interface PublishedFindings {
@@ -84,8 +79,10 @@ export function isCurrentPublishedFindingScope(
     scope.stale === false &&
     scope.projectionStatus === "complete" &&
     scope.snapshotStatus === "complete" &&
-    scope.scanId != null &&
-    scope.revision != null
+    scope.scanId.length > 0 &&
+    Number.isSafeInteger(scope.revision) &&
+    scope.revision != null &&
+    scope.revision > 0
   );
 }
 
@@ -162,22 +159,20 @@ export interface Impact {
 
 export interface FindingDetail {
   finding: Finding;
-  composite_props?: Record<string, unknown>;
   attack_path: AttackPath | null;
   remediation: RemediationStep[];
   impact: Impact | null;
-  snapshot?: {
+  snapshot: {
     scope: string;
     scan_id: string;
+    revision: number | null;
+    published_at: string | null;
     projection_status: string;
+    snapshot_status: string;
+    available: boolean;
     stale: boolean;
-    live_evidence_state:
+    evidence_state:
       | "unavailable"
-      | "withheld_stale_projection"
-      | "lookup_failed"
-      | "classification_mismatch"
-      | "matching_finding_no_graph"
-      | "matching_published_projection"
       | "persisted_exact_evidence";
   };
 }

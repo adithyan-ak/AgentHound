@@ -2,7 +2,7 @@
 
 Post-processors compute composite edges and risk scores from raw graph state after the batch write phase. They run in `server/internal/analysis/processors/` and are orchestrated by `analysis.RunPostProcessors()`.
 
-All composite edges carry: `scan_id`, `last_seen`, `confidence` (0.0-1.0), `risk_weight`, `is_composite=true`, `source_collector`.
+All composite edges carry: `scan_id`, `last_seen`, `confidence` (0.0-1.0), `risk_weight`, `is_composite=true`, `source_collector`. `source_collector` is detector provenance, not lifecycle ownership.
 
 ## Dependency DAG
 
@@ -67,7 +67,7 @@ bearer=50/moderate, oauth=25/strong, oidc=20/strong, and mtls=10/strong.
 Unknown/custom methods receive `auth_assurance=unknown` and a null numeric
 property, removing any stale score. It writes only node properties — no
 composite edges — so it needs no `source_collector` and is untouched by
-stale-edge cleanup.
+composite epoch retirement.
 
 ---
 
@@ -143,7 +143,7 @@ Emits a `TAINTS` edge when a tool that ingests untrusted input (it has an `INGES
 
 **Computes:** `AgentInstance -[CAN_REACH]-> MCPResource`
 
-The inferred transitive-access compatibility edge. Two passes:
+The inferred transitive-access summary edge. Two passes:
 
 **Direct path (3 hops):**
 ```
@@ -189,7 +189,10 @@ The `value_hash` is the cross-collector merge primitive -- same secret value reg
 
 Emits an information-flow-control violation edge when an untrusted-input tool (`INGESTS_UNTRUSTED -> MCPResource`) shares a resource within **3 `HAS_ACCESS_TO` hops** with a sink tool carrying a high-impact capability (`credential_access`, `file_write`, `email_send`). The 1..3 hop cap is the false-positive / performance guard. Depends on `has_access_to`. Confidence: 0.6, risk_weight: 0.3, `source_collector='mcp'`.
 
-> **Cleanup semantics:** `IFC_VIOLATION` carries `source_collector='mcp'`, so it is only swept by stale-edge cleanup when the `mcp` collector re-runs. If an operator runs only `a2a` / `config` scans afterward, IFC edges from a prior `mcp` scan persist (the underlying tools were not re-enumerated). This is acceptable.
+`IFC_VIOLATION` carries `source_collector='mcp'` as detector provenance.
+Its lifecycle is nevertheless part of the global composite epoch: any promoted
+complete domain causes all detectors, including IFC, to rebuild from the
+retained current raw projection.
 
 ## 8. can_exfiltrate
 
@@ -260,8 +263,11 @@ A2AAgent, MCPServer, and MCPTool nodes.
 Depends on ALL prior processors (uses their edges for scoring). It reads every
 page of each scored kind under one graph revision before writing any scores;
 an incomplete page, revision/total change, or count mismatch aborts the
-processor rather than publishing scores for a partial node set. Per-kind
-scoring functions live in `analysis/riskscore/`.
+processor rather than publishing scores for a partial node set. Per-node
+calculation and update failures are aggregated while best-effort scoring
+continues across every node kind; the joined error fails the processor and
+withholds publication. Per-kind scoring functions live in
+`analysis/riskscore/`.
 
 **Agent score (0-100):**
 - 0.30 x credential exposure
@@ -290,25 +296,52 @@ scoring functions live in `analysis/riskscore/`.
 
 ---
 
-## Post-success stale-edge cleanup
+## Composite epoch replacement
 
-`cleanStaleCompositeEdges()` runs only after every registered processor
-successfully recomputes its candidate output. A processor failure leaves the
-prior composite epoch available and marks the live projection incomplete.
+When at least one explicit complete raw domain is promoted,
+`beginCompositeEpoch()` atomically removes every `is_composite=true` edge and
+clears processor-owned `Credential.blast_radius`. All registered processors
+then rebuild the global derived graph from the retained current raw projection
+in dependency order.
 
 ```cypher
-MATCH ()-[r]->()
-WHERE r.is_composite = true
-  AND r.scan_id <> $current_scan_id
-  AND r.source_collector IN $collectors
-DELETE r
+CALL {
+  MATCH ()-[r]->()
+  WHERE r.is_composite = true
+  WITH r
+  DELETE r
+  RETURN count(r) AS deleted
+}
+CALL {
+  MATCH (c:Credential)
+  WHERE c.blast_radius IS NOT NULL
+  REMOVE c.blast_radius
+  RETURN count(c) AS cleared
+}
+RETURN deleted
 ```
 
-Cleanup is enabled only when at least one explicit complete raw-coverage domain
-was promoted. Collector names are dependency-expanded (for example MCP/config
-also refresh `cross_service_credential_chain`), but unrelated collector-owned
-composites are preserved. Unknown/partial legacy coverage does not enable
-cleanup.
+The epoch is global because a narrow MCP, config, or A2A replacement can
+invalidate a composite whose `source_collector` names another domain. Examples
+include cross-protocol host pivots, transitive reachability, exfiltration, and
+cross-service credential chains. Keeping the prior epoch available while
+recomputing would also let downstream processors consume stale `HAS_ACCESS_TO`
+or `CAN_REACH` inputs and incorrectly refresh them into the new epoch.
+
+When no domain is promotably complete (unknown, partial, failed, or
+publication-unsafe coverage), derived processing is skipped and the current
+composite epoch is left untouched. If epoch retirement or any processor fails
+after a complete promotion, analysis is incomplete and publication is
+withheld. The mutable projection may contain an incomplete new epoch, but the
+previously published PostgreSQL revision and its frozen evidence remain
+unchanged. A later complete attempt starts from another empty derived epoch and
+rebuilds it.
+
+This invariant requires every composite edge to be produced by the registered
+processor set and every processor to rebuild solely from retained raw facts or
+outputs of earlier processors in the declared order. New processors must obey
+that contract; manually persisted `is_composite=true` relationships are not
+preserved across complete replacements.
 
 ### INGESTS_UNTRUSTED raw-edge accumulation
 
@@ -327,11 +360,10 @@ all rows for that scan in one transaction, including an empty retry.
 
 Every finding-producing processor records the exact witness node object IDs and
 Neo4j relationship IDs selected by its detector on the composite edge. During
-the same ingest, `QueryFindings` dereferences those IDs once and migration
-`007_exact_finding_evidence.sql` stores the resulting node/edge snapshots as
-JSONB with the finding row. Finding detail serves that frozen witness graph; it
-does not re-run detector-like `LIMIT 1` queries against the mutable projection.
-Legacy rows disclose that no exact witness was retained.
+the same ingest, `QueryFindings` dereferences those IDs once and atomic
+finalization stores the resulting node/edge snapshots as JSONB with the finding
+row. Finding detail serves that frozen witness graph; it does not re-run
+detector-like `LIMIT 1` queries against the mutable projection.
 
 When all required stages and complete coverage succeed, the same transaction
 inserts an immutable `posture_publications` revision, persists its export, and

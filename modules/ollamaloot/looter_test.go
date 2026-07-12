@@ -83,16 +83,12 @@ func TestLoot_AnonymousHappyPath(t *testing.T) {
 		case "OllamaInstance":
 			ollama++
 		case "AIModel":
-			// Dual-emit contract: both parameter_size (canonical) and
-			// parameters (deprecated alias) must be populated with the
-			// same value.
 			ps, _ := n.Properties["parameter_size"].(string)
-			pa, _ := n.Properties["parameters"].(string)
 			if ps == "" {
 				t.Errorf("AIModel.parameter_size should be populated (canonical field per graph-model.md)")
 			}
-			if pa != ps {
-				t.Errorf("AIModel dual-emit mismatch: parameters=%q parameter_size=%q; must be equal for one release", pa, ps)
+			if _, legacy := n.Properties["parameters"]; legacy {
+				t.Error("AIModel emitted legacy parameters alias")
 			}
 			if name, _ := n.Properties["name"].(string); strings.Contains(name, "support-agent") {
 				modelFinetune++

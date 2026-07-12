@@ -2,8 +2,8 @@ package processors
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
@@ -32,6 +32,7 @@ func (p *RiskScore) Dependencies() []string {
 func (p *RiskScore) Process(ctx context.Context, db graph.GraphDB, scanID string) (graph.ProcessingStats, error) {
 	start := time.Now()
 	var updated int
+	var scoringErrs []error
 
 	type scorer struct {
 		kind string
@@ -39,10 +40,7 @@ func (p *RiskScore) Process(ctx context.Context, db graph.GraphDB, scanID string
 	}
 
 	scorers := []scorer{
-		{"AgentInstance", func(ctx context.Context, db graph.GraphDB, id string) (riskscore.Assessment, error) {
-			score, err := riskscore.AgentRiskScore(ctx, db, id)
-			return riskscore.ExactAssessment(score), err
-		}},
+		{"AgentInstance", riskscore.AgentRiskAssessment},
 		{"A2AAgent", riskscore.A2AAgentRiskAssessment},
 		{"MCPServer", riskscore.ServerRiskAssessment},
 		{"MCPTool", riskscore.ToolRiskAssessment},
@@ -50,33 +48,23 @@ func (p *RiskScore) Process(ctx context.Context, db graph.GraphDB, scanID string
 
 	for _, s := range scorers {
 		n, err := scoreNodesAssessment(ctx, db, s.kind, s.fn)
-		if err != nil {
-			return graph.ProcessingStats{
-				ProcessorName: p.Name(),
-				NodesUpdated:  updated,
-				Duration:      time.Since(start),
-			}, fmt.Errorf("scoring %s nodes: %w", s.kind, err)
-		}
 		updated += n
+		if err != nil {
+			scoringErrs = append(
+				scoringErrs,
+				fmt.Errorf("scoring %s nodes: %w", s.kind, err),
+			)
+		}
 	}
 
+	// Continue across nodes and kinds to report every integrity failure, but
+	// return the joined error: risk scoring is a required stage, so any missing
+	// assessment must fail publication rather than publish a best-effort mix.
 	return graph.ProcessingStats{
 		ProcessorName: p.Name(),
 		NodesUpdated:  updated,
 		Duration:      time.Since(start),
-	}, nil
-}
-
-func scoreNodes(ctx context.Context, db graph.GraphDB, kind string, scoreFn func(context.Context, graph.GraphDB, string) (float64, error)) (int, error) {
-	return scoreNodesAssessment(
-		ctx,
-		db,
-		kind,
-		func(ctx context.Context, db graph.GraphDB, id string) (riskscore.Assessment, error) {
-			score, err := scoreFn(ctx, db, id)
-			return riskscore.ExactAssessment(score), err
-		},
-	)
+	}, errors.Join(scoringErrs...)
 }
 
 func scoreNodesAssessment(
@@ -86,6 +74,7 @@ func scoreNodesAssessment(
 	scoreFn func(context.Context, graph.GraphDB, string) (riskscore.Assessment, error),
 ) (int, error) {
 	var updated int
+	var nodeErrs []error
 	const pageSize = 1000
 	offset := 0
 	revision := ""
@@ -150,7 +139,7 @@ func scoreNodesAssessment(
 	for _, node := range nodesToScore {
 		assessment, err := scoreFn(ctx, db, node.ID)
 		if err != nil {
-			slog.Warn("risk score computation failed", "kind", kind, "node", node.ID, "error", err)
+			nodeErrs = append(nodeErrs, fmt.Errorf("compute %s %s: %w", kind, node.ID, err))
 			continue
 		}
 
@@ -161,11 +150,11 @@ func scoreNodesAssessment(
 			"risk_assessment_complete": assessment.Complete,
 			"risk_unknown_factors":     assessment.UnknownFactors,
 		}); err != nil {
-			slog.Warn("risk score update failed", "kind", kind, "node", node.ID, "error", err)
+			nodeErrs = append(nodeErrs, fmt.Errorf("update %s %s: %w", kind, node.ID, err))
 			continue
 		}
 		updated++
 	}
 
-	return updated, nil
+	return updated, errors.Join(nodeErrs...)
 }

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
 type ReconciliationStats struct {
@@ -15,76 +17,69 @@ type ReconciliationStats struct {
 }
 
 type ObservationCompleteness struct {
-	LegacyNodes                     int64 `json:"legacy_nodes"`
-	LegacyRelationships             int64 `json:"legacy_relationships"`
-	UnscopedNodes                   int64 `json:"unscoped_nodes"`
-	UnscopedRelationships           int64 `json:"unscoped_relationships"`
 	IncompletePropertyNodes         int64 `json:"incomplete_property_nodes"`
 	IncompletePropertyRelationships int64 `json:"incomplete_property_relationships"`
-	IdentityQuarantinedNodes        int64 `json:"identity_quarantined_nodes"`
 }
 
 func (c ObservationCompleteness) Complete() bool {
-	return c.LegacyNodes == 0 &&
-		c.LegacyRelationships == 0 &&
-		c.UnscopedNodes == 0 &&
-		c.UnscopedRelationships == 0 &&
-		c.IncompletePropertyNodes == 0 &&
-		c.IncompletePropertyRelationships == 0 &&
-		c.IdentityQuarantinedNodes == 0
+	return c.IncompletePropertyNodes == 0 &&
+		c.IncompletePropertyRelationships == 0
 }
 
 const observationCompletenessCypher = `
 CALL {
   MATCH (n)
+  WHERE any(label IN labels(n) WHERE label IN $public_kinds)
+    AND size(coalesce(n.observation_tokens, [])) > 0
   RETURN count(CASE
-           WHEN coalesce(n.observation_managed, false) = false
-             OR coalesce(n.legacy_observation, false) = true
-           THEN 1
-         END) AS legacy_nodes,
-         count(CASE
-           WHEN any(token IN coalesce(n.observation_tokens, [])
-                    WHERE any(prefix IN $unscoped_prefixes
-                              WHERE token STARTS WITH prefix))
-           THEN 1
-         END) AS unscoped_nodes,
-         count(CASE
            WHEN coalesce(n.observation_properties_complete, false) = false
            THEN 1
-         END) AS incomplete_property_nodes,
-         count(CASE
-           WHEN coalesce(n.identity_quarantined, false) = true
-             OR coalesce(n.legacy_identity_quarantined, false) = true
-           THEN 1
-         END) AS identity_quarantined_nodes
+         END) AS incomplete_property_nodes
 }
 CALL {
-  MATCH ()-[r]->()
-  WHERE coalesce(r.is_composite, false) = false
+  MATCH (source)-[r]->(target)
+  WHERE type(r) IN $raw_edge_kinds
+    AND any(label IN labels(source) WHERE label IN $public_kinds)
+    AND any(label IN labels(target) WHERE label IN $public_kinds)
+    AND (size(coalesce(r.observation_tokens, [])) > 0
+         OR size(coalesce(r.observation_dependency_tokens, [])) > 0)
   RETURN count(CASE
-           WHEN coalesce(r.observation_managed, false) = false
-             OR coalesce(r.legacy_observation, false) = true
-           THEN 1
-         END) AS legacy_relationships,
-         count(CASE
-           WHEN any(token IN coalesce(r.observation_tokens, [])
-                    WHERE any(prefix IN $unscoped_prefixes
-                              WHERE token STARTS WITH prefix))
-           THEN 1
-         END) AS unscoped_relationships,
-         count(CASE
            WHEN coalesce(r.observation_properties_complete, false) = false
            THEN 1
          END) AS incomplete_property_relationships
 }
-RETURN legacy_nodes, legacy_relationships,
-       unscoped_nodes, unscoped_relationships,
-       incomplete_property_nodes, incomplete_property_relationships,
-       identity_quarantined_nodes`
+RETURN incomplete_property_nodes, incomplete_property_relationships`
+
+const deleteMissingDependencyRelationshipsCypher = `
+MATCH ()-[r]->()
+WHERE type(r) IN $raw_edge_kinds
+  AND r.observation_semantics = $all_dependencies_semantics
+  AND any(prefix IN $domain_prefixes WHERE
+        any(token IN coalesce(r.observation_dependency_tokens, [])
+            WHERE token STARTS WITH prefix)
+        AND none(token IN coalesce(r.observation_dependency_tokens, [])
+                 WHERE token STARTS WITH prefix
+                   AND token IN $current_tokens))
+DELETE r
+RETURN count(r) AS deleted`
+
+const retireDependencyOwnersCypher = `
+MATCH ()-[r]->()
+WHERE type(r) IN $raw_edge_kinds
+  AND r.observation_semantics = $all_dependencies_semantics
+  AND any(token IN coalesce(r.observation_dependency_tokens, [])
+          WHERE any(prefix IN $domain_prefixes WHERE token STARTS WITH prefix))
+SET r.observation_dependency_tokens = [
+  token IN coalesce(r.observation_dependency_tokens, [])
+  WHERE none(prefix IN $domain_prefixes WHERE token STARTS WITH prefix)
+     OR token IN $current_tokens
+]
+RETURN count(r) AS retired`
 
 const retireRelationshipOwnersCypher = `
 MATCH ()-[r]->()
-WHERE r.observation_managed = true
+WHERE type(r) IN $raw_edge_kinds
+  AND coalesce(r.observation_semantics, '') <> $all_dependencies_semantics
   AND any(token IN coalesce(r.observation_tokens, [])
           WHERE any(prefix IN $domain_prefixes WHERE token STARTS WITH prefix))
 SET r.observation_tokens = [
@@ -96,15 +91,15 @@ RETURN count(r) AS retired`
 
 const deleteUnownedRelationshipsCypher = `
 MATCH ()-[r]->()
-WHERE r.observation_managed = true
+WHERE type(r) IN $raw_edge_kinds
+  AND coalesce(r.observation_semantics, '') <> $all_dependencies_semantics
   AND size(coalesce(r.observation_tokens, [])) = 0
-  AND coalesce(r.legacy_observation, false) = false
 DELETE r
 RETURN count(r) AS deleted`
 
 const retireNodeOwnersCypher = `
 MATCH (n)
-WHERE n.observation_managed = true
+WHERE any(label IN labels(n) WHERE label IN $public_kinds)
   AND any(token IN coalesce(n.observation_tokens, [])
           WHERE any(prefix IN $domain_prefixes WHERE token STARTS WITH prefix))
 SET n.observation_tokens = [
@@ -116,16 +111,15 @@ RETURN count(n) AS retired`
 
 const deleteUnownedNodesCypher = `
 MATCH (n)
-WHERE n.observation_managed = true
+WHERE any(label IN labels(n) WHERE label IN $public_kinds)
   AND size(coalesce(n.observation_tokens, [])) = 0
-  AND coalesce(n.legacy_observation, false) = false
   AND NOT EXISTS { MATCH (n)--() }
 DELETE n
 RETURN count(n) AS deleted`
 
-// ReconcileObservations promotes only the explicitly complete domains supplied
-// by the caller. Unknown, partial, failed, and legacy observations are never
-// retired. Shared facts survive while any active owner token remains.
+// ReconcileObservations retires only the explicitly complete domains supplied
+// by the caller. Unknown, partial, and failed observations are never retired.
+// Shared facts survive while any active owner token remains.
 func ReconcileObservations(
 	ctx context.Context,
 	db GraphDB,
@@ -147,22 +141,45 @@ func ReconcileObservations(
 	params := map[string]any{
 		"domain_prefixes": prefixes,
 		"current_tokens":  currentTokens,
+		"public_kinds":    ingest.PublicNodeLabels,
+		"raw_edge_kinds":  rawEdgeKinds(),
+		"all_dependencies_semantics": string(
+			ingest.ObservationSemanticsAllDependencies,
+		),
 	}
 
 	var err error
-	stats.RelationshipOwnersRetired, err = db.ExecuteWrite(ctx, retireRelationshipOwnersCypher, params)
+	stats.RelationshipsDeleted, err = db.ExecuteWrite(
+		ctx,
+		deleteMissingDependencyRelationshipsCypher,
+		params,
+	)
+	if err != nil {
+		return stats, fmt.Errorf("delete stale dependency relationships: %w", err)
+	}
+	stats.RelationshipOwnersRetired, err = db.ExecuteWrite(
+		ctx,
+		retireDependencyOwnersCypher,
+		params,
+	)
+	if err != nil {
+		return stats, fmt.Errorf("retire dependency relationship observations: %w", err)
+	}
+	ordinaryOwnersRetired, err := db.ExecuteWrite(ctx, retireRelationshipOwnersCypher, params)
 	if err != nil {
 		return stats, fmt.Errorf("retire relationship observation owners: %w", err)
 	}
-	stats.RelationshipsDeleted, err = db.ExecuteWrite(ctx, deleteUnownedRelationshipsCypher, nil)
+	stats.RelationshipOwnersRetired += ordinaryOwnersRetired
+	unownedDeleted, err := db.ExecuteWrite(ctx, deleteUnownedRelationshipsCypher, params)
 	if err != nil {
 		return stats, fmt.Errorf("delete unowned relationships: %w", err)
 	}
+	stats.RelationshipsDeleted += unownedDeleted
 	stats.NodeOwnersRetired, err = db.ExecuteWrite(ctx, retireNodeOwnersCypher, params)
 	if err != nil {
 		return stats, fmt.Errorf("retire node observation owners: %w", err)
 	}
-	stats.NodesDeleted, err = db.ExecuteWrite(ctx, deleteUnownedNodesCypher, nil)
+	stats.NodesDeleted, err = db.ExecuteWrite(ctx, deleteUnownedNodesCypher, params)
 	if err != nil {
 		return stats, fmt.Errorf("delete unowned nodes: %w", err)
 	}
@@ -176,17 +193,18 @@ func PruneUnownedObservationNodes(ctx context.Context, db GraphDB) (int, error) 
 	if db == nil {
 		return 0, nil
 	}
-	deleted, err := db.ExecuteWrite(ctx, deleteUnownedNodesCypher, nil)
+	deleted, err := db.ExecuteWrite(ctx, deleteUnownedNodesCypher, map[string]any{
+		"public_kinds": ingest.PublicNodeLabels,
+	})
 	if err != nil {
 		return deleted, fmt.Errorf("prune post-analysis unowned nodes: %w", err)
 	}
 	return deleted, nil
 }
 
-// GetObservationCompleteness makes pre-lifecycle/unknown graph facts explicit.
-// Such facts remain non-destructive, but no publication may claim a complete
-// global projection until they are re-observed into managed ownership or
-// migrated.
+// GetObservationCompleteness checks property completeness only for public,
+// managed raw facts. Internal graph nodes and derived relationships cannot
+// block publication.
 func GetObservationCompleteness(
 	ctx context.Context,
 	db GraphDB,
@@ -196,11 +214,8 @@ func GetObservationCompleteness(
 		return completeness, fmt.Errorf("graph database unavailable")
 	}
 	rows, err := db.Query(ctx, observationCompletenessCypher, map[string]any{
-		"unscoped_prefixes": []string{
-			observationDomainPrefix("mcp"),
-			observationDomainPrefix("a2a"),
-			observationDomainPrefix("config"),
-		},
+		"public_kinds":   ingest.PublicNodeLabels,
+		"raw_edge_kinds": rawEdgeKinds(),
 	})
 	if err != nil {
 		return completeness, fmt.Errorf("query observation completeness: %w", err)
@@ -208,18 +223,20 @@ func GetObservationCompleteness(
 	if len(rows) == 0 {
 		return completeness, fmt.Errorf("query observation completeness returned no row")
 	}
-	completeness.LegacyNodes = int64Value(rows[0]["legacy_nodes"])
-	completeness.LegacyRelationships = int64Value(rows[0]["legacy_relationships"])
-	completeness.UnscopedNodes = int64Value(rows[0]["unscoped_nodes"])
-	completeness.UnscopedRelationships = int64Value(rows[0]["unscoped_relationships"])
 	completeness.IncompletePropertyNodes = int64Value(rows[0]["incomplete_property_nodes"])
 	completeness.IncompletePropertyRelationships = int64Value(
 		rows[0]["incomplete_property_relationships"],
 	)
-	completeness.IdentityQuarantinedNodes = int64Value(
-		rows[0]["identity_quarantined_nodes"],
-	)
 	return completeness, nil
+}
+
+func rawEdgeKinds() []string {
+	kinds := make([]string, 0, len(ingest.RawEdgeKinds))
+	for kind := range ingest.RawEdgeKinds {
+		kinds = append(kinds, kind)
+	}
+	sort.Strings(kinds)
+	return kinds
 }
 
 func int64Value(value any) int64 {

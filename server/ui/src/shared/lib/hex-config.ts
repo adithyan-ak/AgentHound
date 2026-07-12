@@ -12,8 +12,6 @@ import {
   KeyRound,
   FileCode2,
   FileText,
-  Layers,
-  ShieldCheck,
   Hexagon,
   Brain,
   Rocket,
@@ -145,23 +143,6 @@ export const HEX_CONFIG: Record<string, HexKindConfig> = {
     column: 4,
     groupLabel: "Resources",
   },
-  ResourceGroup: {
-    strokeColor: NODE_KIND_COLORS.ResourceGroup,
-    fillColor: EXPLORER_HEX_FILL,
-    icon: Layers,
-    kindTag: "RESOURCE GROUP",
-    column: 4,
-    groupLabel: "Resources",
-  },
-  TrustZone: {
-    strokeColor: NODE_KIND_COLORS.TrustZone,
-    fillColor: EXPLORER_HEX_FILL,
-    icon: ShieldCheck,
-    kindTag: "TRUST ZONE",
-    column: 3,
-    groupLabel: "Infra",
-  },
-
   // v0.2 AI services. All sit in column 2 ("Tools & Skills") so they
   // place between :MCPServer and :MCPResource in the layered explorer
   // view — visually consistent with how a LiteLLM gateway sits between

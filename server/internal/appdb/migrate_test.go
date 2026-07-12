@@ -1,30 +1,58 @@
 package appdb
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
 
-func TestMigration008CarriesCompleteDeterministicATLASBackfill(t *testing.T) {
-	data, err := migrationFS.ReadFile("migrations/008_atlas_rules_compat.sql")
+func TestMigrationsContainOnlyCurrentInitialSchema(t *testing.T) {
+	entries, err := migrationFS.ReadDir("migrations")
 	if err != nil {
-		t.Fatalf("read migration 008: %v", err)
+		t.Fatalf("read migrations: %v", err)
+	}
+	var names []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+	if want := []string{"001_initial.sql"}; !reflect.DeepEqual(names, want) {
+		t.Fatalf("migration files = %v, want %v", names, want)
+	}
+
+	data, err := migrationFS.ReadFile("migrations/001_initial.sql")
+	if err != nil {
+		t.Fatalf("read initial migration: %v", err)
 	}
 	sql := string(data)
 	for _, expected := range []string{
-		`WHEN 'CAN_EXFILTRATE_VIA' THEN '["AML.T0086"]'::jsonb`,
-		`WHEN 'POISONED_DESCRIPTION' THEN '["AML.T0051","AML.T0110"]'::jsonb`,
-		`WHEN 'SHADOWS' THEN '["AML.T0110"]'::jsonb`,
-		`WHEN 'POISONED_INSTRUCTIONS' THEN '["AML.T0051"]'::jsonb`,
-		`WHEN 'TAINTS' THEN '["AML.T0051"]'::jsonb`,
-		`WHEN 'IFC_VIOLATION' THEN '["AML.T0057","AML.T0086"]'::jsonb`,
-		`WHEN 'POISONS_CONTEXT' THEN '["AML.T0051","AML.T0110"]'::jsonb`,
+		"CREATE TABLE IF NOT EXISTS scans",
+		"artifact_observed_at",
+		"publication_status",
+		"CREATE TABLE IF NOT EXISTS findings",
+		"atlas_map",
+		"exact_evidence",
+		"CREATE TABLE IF NOT EXISTS finding_triage",
+		"CREATE TABLE IF NOT EXISTS coverage_heads",
+		"CREATE TABLE IF NOT EXISTS posture_publications",
+		"CREATE TABLE IF NOT EXISTS posture_state",
+		"ON CONFLICT (singleton) DO NOTHING",
 	} {
 		if !strings.Contains(sql, expected) {
-			t.Errorf("migration 008 missing deterministic mapping %q", expected)
+			t.Errorf("initial migration missing %q", expected)
 		}
 	}
-	if !strings.Contains(sql, `WHERE atlas_map = '[]'::jsonb`) {
-		t.Fatal("migration 008 can overwrite non-empty ATLAS evidence")
+	for _, forbidden := range []string{
+		"ALTER TABLE",
+		"DROP TABLE",
+		"\nUPDATE ",
+		"CREATE TABLE IF NOT EXISTS users",
+		"CREATE TABLE IF NOT EXISTS api_tokens",
+		"CREATE TABLE IF NOT EXISTS audit_log",
+	} {
+		if strings.Contains(sql, forbidden) {
+			t.Errorf("initial migration contains historical schema operation %q", forbidden)
+		}
 	}
 }

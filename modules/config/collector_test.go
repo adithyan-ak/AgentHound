@@ -68,8 +68,8 @@ func TestConfigCollector_CollectSingleConfig(t *testing.T) {
 	if result.Meta.ScanID != "test-scan-001" {
 		t.Errorf("meta.scan_id = %q, want %q", result.Meta.ScanID, "test-scan-001")
 	}
-	if result.Meta.Version != 1 {
-		t.Errorf("meta.version = %d, want 1", result.Meta.Version)
+	if result.Meta.Version != ingest.CurrentVersion {
+		t.Errorf("meta.version = %d, want %d", result.Meta.Version, ingest.CurrentVersion)
 	}
 	if result.Meta.Type != "agenthound-ingest" {
 		t.Errorf("meta.type = %q", result.Meta.Type)
@@ -237,8 +237,11 @@ func TestConfigCollector_CredentialExtraction(t *testing.T) {
 	if credNode.Properties["value"] == "sk-ant-secret123456789" {
 		t.Error("credential value should be hashed by default, got raw value")
 	}
-	if credNode.Properties["is_exposed"] != true {
-		t.Error("hardcoded credential should be is_exposed=true")
+	if credNode.Properties["exposure_status"] != "exposed" {
+		t.Error("hardcoded credential should have exposure_status=exposed")
+	}
+	if _, legacy := credNode.Properties["is_exposed"]; legacy {
+		t.Error("hardcoded credential emitted legacy is_exposed alias")
 	}
 
 	edgesByKind := countEdgesByKind(result)
@@ -427,9 +430,8 @@ func TestConfigCollector_HTTPServerHostExtraction(t *testing.T) {
 	if hostname != "mcp.example.com" {
 		t.Errorf("hostname = %q, want %q", hostname, "mcp.example.com")
 	}
-	if hostNode.Properties["is_public"] != false || hostNode.Properties["scope"] != common.HostScopeUnknown {
-		t.Errorf("hostname scope = %v (is_public=%v), want unknown/false",
-			hostNode.Properties["scope"], hostNode.Properties["is_public"])
+	if hostNode.Properties["scope"] != common.HostScopeUnknown {
+		t.Errorf("hostname scope = %v, want unknown", hostNode.Properties["scope"])
 	}
 }
 
@@ -458,8 +460,8 @@ func TestConfigCollector_StdioServerLocalhostHost(t *testing.T) {
 	if hostNode == nil {
 		t.Fatal("Host node not found")
 	}
-	if hostNode.Properties["is_local"] != true {
-		t.Errorf("is_local = %v, want true", hostNode.Properties["is_local"])
+	if hostNode.Properties["scope"] != common.HostScopeLocal {
+		t.Errorf("scope = %v, want local", hostNode.Properties["scope"])
 	}
 }
 
@@ -707,7 +709,7 @@ func TestConfigCollector_StdioWithoutCredentialUsesLocalProcessEvidence(t *testi
 	}
 }
 
-func TestConfigCollector_QuarantinesAmbiguousLegacyStdioIdentity(t *testing.T) {
+func TestConfigCollector_PreservesOrderedStdioIdentity(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	writeJSON(t, path, `{
 		"mcpServers": {
@@ -730,9 +732,13 @@ func TestConfigCollector_QuarantinesAmbiguousLegacyStdioIdentity(t *testing.T) {
 	if len(serverIDs) != 2 || serverIDs[0] == serverIDs[1] {
 		t.Fatalf("ordered stdio definitions collapsed: %v", serverIDs)
 	}
-	if len(result.Meta.IdentityAliases) != 1 ||
-		result.Meta.IdentityAliases[0].State != ingest.IdentityAliasAmbiguous {
-		t.Fatalf("legacy sorted aggregate not quarantined: %+v", result.Meta.IdentityAliases)
+	for _, node := range findNodesByKind(result, "MCPServer") {
+		if node.Properties["id_scheme"] != ingest.MCPStdioIdentitySchemeV2 {
+			t.Fatalf("stdio identity scheme = %v, want v2", node.Properties["id_scheme"])
+		}
+		if _, exists := node.Properties["legacy_objectid"]; exists {
+			t.Fatalf("stdio server exposed removed legacy identity: %+v", node.Properties)
+		}
 	}
 }
 

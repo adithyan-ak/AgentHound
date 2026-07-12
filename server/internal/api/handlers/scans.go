@@ -2,14 +2,12 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/adithyan-ak/agenthound/server/internal/appdb"
-	"github.com/adithyan-ak/agenthound/server/internal/graph"
 	"github.com/adithyan-ak/agenthound/server/model"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -21,15 +19,18 @@ type ScanHandler struct {
 }
 
 type scanStore interface {
-	ListScans(ctx context.Context, limit, offset int) ([]model.Scan, error)
 	ListScansPage(ctx context.Context, limit, offset int, revision string, order appdb.ScanListOrder) ([]model.Scan, appdb.ScanPageInfo, error)
 	GetScan(ctx context.Context, id string) (*model.Scan, error)
 	CreateScan(ctx context.Context, scan *model.Scan) error
 	DeleteScan(ctx context.Context, id string) error
 }
 
-func NewScanHandler(store *appdb.ScanStore, graphDB graph.GraphDB) *ScanHandler {
-	_ = graphDB // retained in the constructor for additive call-site compatibility
+type scanListResponse struct {
+	Scans []model.Scan `json:"scans"`
+	Page  pageMetadata `json:"page"`
+}
+
+func NewScanHandler(store *appdb.ScanStore) *ScanHandler {
 	return &ScanHandler{scanStore: store}
 }
 
@@ -52,8 +53,16 @@ func (h *ScanHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var mismatch *appdb.ScanRevisionMismatchError
 		if errors.As(err, &mismatch) {
-			w.Header().Set(headerRevision, mismatch.Actual)
-			WriteError(w, http.StatusConflict, "REVISION_CONFLICT", "scan history changed during pagination; restart from offset 0")
+			WriteJSON(w, http.StatusConflict, ErrorResponse{
+				Error: ErrorDetail{
+					Code:    "REVISION_CONFLICT",
+					Message: "scan history changed during pagination; restart from offset 0",
+					Details: revisionConflictDetails{
+						ExpectedRevision: mismatch.Expected,
+						ActualRevision:   mismatch.Actual,
+					},
+				},
+			})
 			return
 		}
 		WriteInternalError(w, r, fmt.Errorf("list scans: %w", err))
@@ -62,11 +71,13 @@ func (h *ScanHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	if scans == nil {
 		scans = []model.Scan{}
 	}
-	writePaginationHeaders(w, graph.PageInfo{
-		Offset: page.Offset, Limit: page.Limit, Total: page.Total,
-		HasMore: page.HasMore, Complete: page.Complete, Revision: page.Revision,
+	WriteJSON(w, http.StatusOK, scanListResponse{
+		Scans: scans,
+		Page: pageMetadata{
+			Offset: page.Offset, Limit: page.Limit, Total: page.Total,
+			HasMore: page.HasMore, Complete: page.Complete, Revision: page.Revision,
+		},
 	})
-	WriteJSON(w, http.StatusOK, scans)
 }
 
 func (h *ScanHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +106,7 @@ type createScanRequest struct {
 
 func (h *ScanHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	var req createScanRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := DecodeStrictJSON(r.Body, &req); err != nil {
 		WriteValidationError(w, "invalid request body")
 		return
 	}
@@ -110,11 +121,17 @@ func (h *ScanHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	scan := model.Scan{
-		ID:        uuid.New().String(),
-		Collector: req.Collector,
-		Status:    model.ScanStatusPending,
-		StartedAt: time.Now().UTC(),
-		Metadata:  req.Metadata,
+		ID:                uuid.New().String(),
+		Collector:         req.Collector,
+		Status:            model.ScanStatusPending,
+		StartedAt:         time.Now().UTC(),
+		Metadata:          req.Metadata,
+		CollectionStatus:  model.LifecyclePending,
+		GraphStatus:       model.LifecyclePending,
+		AnalysisStatus:    model.LifecyclePending,
+		SnapshotStatus:    model.LifecyclePending,
+		ProjectionStatus:  model.ProjectionUnknown,
+		PublicationStatus: model.PublicationUnpublished,
 	}
 
 	if err := h.scanStore.CreateScan(r.Context(), &scan); err != nil {

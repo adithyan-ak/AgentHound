@@ -106,12 +106,12 @@ func (c *MCPCollector) Collect(ctx context.Context, opts collector.CollectOption
 	}
 
 	data := common.NewIngestData("mcp", scanID)
+	data.Meta.Ruleset = rules.ManifestForEngine(c.engine)
 	data.Meta.IdentitySchemes = []ingest.IdentityScheme{{
-		EntityKind:   "MCPServer",
-		Transport:    "stdio",
-		Scheme:       ingest.MCPStdioIdentitySchemeV2,
-		Version:      2,
-		LegacyScheme: ingest.MCPStdioIdentitySchemeV1,
+		EntityKind: "MCPServer",
+		Transport:  "stdio",
+		Scheme:     ingest.MCPStdioIdentitySchemeV2,
+		Version:    2,
 	}}
 
 	results := c.enumerateAll(ctx, specs, scanID)
@@ -161,10 +161,6 @@ func (c *MCPCollector) Collect(ctx context.Context, opts collector.CollectOption
 	sort.Strings(report.CoverageKeys)
 	report.State = ingest.AggregateOutcomeState(report.Outcomes)
 	data.Meta.Collection = report
-	data.Meta.IdentityAliases = ingest.BuildMCPIdentityAliases(
-		data.Graph.Nodes,
-		report.State == ingest.OutcomeComplete,
-	)
 
 	return data, nil
 }

@@ -2,13 +2,15 @@ package appdb
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
 	"os"
 	"reflect"
 	"testing"
 	"time"
 
 	"github.com/adithyan-ak/agenthound/server/model"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func skipIfNoPG(t *testing.T) {
@@ -22,164 +24,106 @@ func TestIntegrationMigrations(t *testing.T) {
 	skipIfNoPG(t)
 	ctx := context.Background()
 
-	pool, err := NewPool(os.Getenv("AGENTHOUND_PG_URI"))
+	admin, err := NewPool(os.Getenv("AGENTHOUND_PG_URI"))
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	defer pool.Close()
+	defer admin.Close()
 
-	// Should succeed
+	schema := fmt.Sprintf("agenthound_migration_test_%d", time.Now().UnixNano())
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create isolated schema: %v", err)
+	}
+	defer func() {
+		if _, err := admin.Exec(ctx, "DROP SCHEMA "+quotedSchema+" CASCADE"); err != nil {
+			t.Errorf("drop isolated schema: %v", err)
+		}
+	}()
+
+	config, err := pgxpool.ParseConfig(os.Getenv("AGENTHOUND_PG_URI"))
+	if err != nil {
+		t.Fatalf("parse connection config: %v", err)
+	}
+	config.ConnConfig.RuntimeParams["search_path"] = schema
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatalf("connect isolated schema: %v", err)
+	}
+	defer pool.Close()
+	if err := pool.Ping(ctx); err != nil {
+		t.Fatalf("ping isolated schema: %v", err)
+	}
+
 	if err := RunMigrations(ctx, pool); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-
-	// Should be idempotent
 	if err := RunMigrations(ctx, pool); err != nil {
 		t.Fatalf("migrate (idempotent): %v", err)
 	}
 
-	// scans + schema_migrations must exist after migrations.
-	// users / api_tokens / audit_log were created by 001 then dropped by
-	// 002_remove_multiuser.sql, so they must NOT exist on a fresh install.
-	mustExist := []string{
-		"scans",
-		"schema_migrations",
+	rows, err := pool.Query(ctx, `SELECT table_name
+		FROM information_schema.tables
+		WHERE table_schema = current_schema()
+		ORDER BY table_name`)
+	if err != nil {
+		t.Fatalf("list fresh schema tables: %v", err)
+	}
+	var tables []string
+	for rows.Next() {
+		var table string
+		if err := rows.Scan(&table); err != nil {
+			rows.Close()
+			t.Fatalf("scan fresh schema table: %v", err)
+		}
+		tables = append(tables, table)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatalf("list fresh schema tables: %v", err)
+	}
+	wantTables := []string{
 		"coverage_heads",
+		"finding_triage",
+		"findings",
 		"posture_publications",
 		"posture_state",
+		"scans",
+		"schema_migrations",
 	}
-	mustNotExist := []string{"users", "api_tokens", "audit_log"}
-
-	for _, table := range mustExist {
-		var exists bool
-		err := pool.QueryRow(ctx,
-			"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)", table).Scan(&exists)
-		if err != nil {
-			t.Errorf("check table %s: %v", table, err)
-		}
-		if !exists {
-			t.Errorf("table %s does not exist after migrations", table)
-		}
+	if !reflect.DeepEqual(tables, wantTables) {
+		t.Fatalf("fresh schema tables = %v, want %v", tables, wantTables)
 	}
-	for _, table := range mustNotExist {
-		var exists bool
-		err := pool.QueryRow(ctx,
-			"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)", table).Scan(&exists)
-		if err != nil {
-			t.Errorf("check table %s: %v", table, err)
-		}
-		if exists {
-			t.Errorf("table %s should have been dropped by 002_remove_multiuser.sql", table)
-		}
-	}
-}
 
-func TestIntegrationMigration008BackfillsHistoricalATLASMappings(t *testing.T) {
-	skipIfNoPG(t)
-	ctx := context.Background()
-
-	pool, err := NewPool(os.Getenv("AGENTHOUND_PG_URI"))
+	var versions []int
+	versionRows, err := pool.Query(ctx, "SELECT version FROM schema_migrations ORDER BY version")
 	if err != nil {
-		t.Fatalf("connect: %v", err)
+		t.Fatalf("list migration versions: %v", err)
 	}
-	defer pool.Close()
-	if err := RunMigrations(ctx, pool); err != nil {
-		t.Fatalf("migrate: %v", err)
+	for versionRows.Next() {
+		var version int
+		if err := versionRows.Scan(&version); err != nil {
+			versionRows.Close()
+			t.Fatalf("scan migration version: %v", err)
+		}
+		versions = append(versions, version)
+	}
+	versionRows.Close()
+	if err := versionRows.Err(); err != nil {
+		t.Fatalf("list migration versions: %v", err)
+	}
+	if want := []int{1}; !reflect.DeepEqual(versions, want) {
+		t.Fatalf("migration versions = %v, want %v", versions, want)
 	}
 
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin upgrade fixture: %v", err)
+	var postureRows int
+	if err := pool.QueryRow(ctx,
+		"SELECT count(*) FROM posture_state WHERE singleton = TRUE",
+	).Scan(&postureRows); err != nil {
+		t.Fatalf("read posture singleton: %v", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	scanID := "atlas-upgrade-" + time.Now().Format("20060102150405.000000")
-	if _, err := tx.Exec(ctx, `INSERT INTO scans (id, collector, status, started_at)
-		VALUES ($1, 'mcp', 'completed', NOW())`, scanID); err != nil {
-		t.Fatalf("insert upgrade scan: %v", err)
-	}
-	fixtures := []struct {
-		fingerprint string
-		edgeKind    string
-		atlas       string
-	}{
-		{"atlas-map-000001", "CAN_EXFILTRATE_VIA", `[]`},
-		{"atlas-map-000002", "POISONED_DESCRIPTION", `[]`},
-		{"atlas-map-000003", "SHADOWS", `[]`},
-		{"atlas-map-000004", "POISONED_INSTRUCTIONS", `[]`},
-		{"atlas-map-000005", "TAINTS", `[]`},
-		{"atlas-map-000006", "IFC_VIOLATION", `[]`},
-		{"atlas-map-000007", "POISONS_CONTEXT", `[]`},
-		{"atlas-map-000008", "CAN_REACH", `[]`},
-		{"atlas-map-000009", "CAN_EXFILTRATE_VIA", `["AML.CUSTOM"]`},
-	}
-	for _, fixture := range fixtures {
-		if _, err := tx.Exec(ctx, `INSERT INTO findings
-			(scan_id, fingerprint, edge_kind, atlas_map)
-			VALUES ($1, $2, $3, $4::jsonb)`,
-			scanID,
-			fixture.fingerprint,
-			fixture.edgeKind,
-			fixture.atlas,
-		); err != nil {
-			t.Fatalf("insert historical finding %s: %v", fixture.edgeKind, err)
-		}
-	}
-
-	migration, err := migrationFS.ReadFile("migrations/008_atlas_rules_compat.sql")
-	if err != nil {
-		t.Fatalf("read migration 008: %v", err)
-	}
-	if _, err := tx.Exec(ctx, string(migration)); err != nil {
-		t.Fatalf("apply migration 008 to historical rows: %v", err)
-	}
-	if _, err := tx.Exec(ctx, string(migration)); err != nil {
-		t.Fatalf("reapply migration 008: %v", err)
-	}
-
-	want := map[string][]string{
-		"CAN_EXFILTRATE_VIA":    {"AML.T0086"},
-		"POISONED_DESCRIPTION":  {"AML.T0051", "AML.T0110"},
-		"SHADOWS":               {"AML.T0110"},
-		"POISONED_INSTRUCTIONS": {"AML.T0051"},
-		"TAINTS":                {"AML.T0051"},
-		"IFC_VIOLATION":         {"AML.T0057", "AML.T0086"},
-		"POISONS_CONTEXT":       {"AML.T0051", "AML.T0110"},
-		"CAN_REACH":             {},
-	}
-	rows, err := tx.Query(ctx, `SELECT fingerprint, edge_kind, atlas_map
-		FROM findings WHERE scan_id = $1 ORDER BY fingerprint`, scanID)
-	if err != nil {
-		t.Fatalf("read upgraded findings: %v", err)
-	}
-	defer rows.Close()
-	seen := 0
-	for rows.Next() {
-		seen++
-		var fingerprint, edgeKind string
-		var encoded []byte
-		if err := rows.Scan(&fingerprint, &edgeKind, &encoded); err != nil {
-			t.Fatalf("scan upgraded finding: %v", err)
-		}
-		var got []string
-		if err := json.Unmarshal(encoded, &got); err != nil {
-			t.Fatalf("decode upgraded atlas_map for %s: %v", fingerprint, err)
-		}
-		if fingerprint == "atlas-map-000009" {
-			if !reflect.DeepEqual(got, []string{"AML.CUSTOM"}) {
-				t.Fatalf("non-empty ATLAS evidence overwritten: %v", got)
-			}
-			continue
-		}
-		if !reflect.DeepEqual(got, want[edgeKind]) {
-			t.Fatalf("atlas_map for %s = %v, want %v", edgeKind, got, want[edgeKind])
-		}
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("read upgraded findings: %v", err)
-	}
-	if seen != len(fixtures) {
-		t.Fatalf("upgraded finding rows = %d, want %d", seen, len(fixtures))
+	if postureRows != 1 {
+		t.Fatalf("posture singleton rows = %d, want 1", postureRows)
 	}
 }
 
@@ -250,22 +194,6 @@ func TestIntegrationScansCRUD(t *testing.T) {
 	matcher, ok := entry["effective_matcher"].(map[string]any)
 	if !ok || matcher["type"] != "keyword" {
 		t.Fatalf("persisted canonical matcher = %#v", entry["effective_matcher"])
-	}
-
-	// Update
-	if err := store.UpdateScan(ctx, scanID, model.ScanStatusCompleted, 10, 5, ""); err != nil {
-		t.Fatalf("update: %v", err)
-	}
-
-	got, err = store.GetScan(ctx, scanID)
-	if err != nil {
-		t.Fatalf("get after update: %v", err)
-	}
-	if got.Status != model.ScanStatusCompleted {
-		t.Errorf("status: got %q, want completed", got.Status)
-	}
-	if got.NodeCount != 10 {
-		t.Errorf("node_count: got %d, want 10", got.NodeCount)
 	}
 
 	// List

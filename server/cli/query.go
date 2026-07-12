@@ -11,7 +11,9 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/server/internal/analysis"
 	"github.com/adithyan-ak/agenthound/server/internal/analysis/prebuilt"
+	"github.com/adithyan-ak/agenthound/server/internal/appdb"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
+	"github.com/adithyan-ak/agenthound/server/model"
 	"github.com/spf13/cobra"
 )
 
@@ -35,7 +37,7 @@ func init() {
 	queryCmd.Flags().Bool("shortest-path", false, "Find shortest path between two nodes")
 	queryCmd.Flags().String("from", "", "Source node in Kind:name format (e.g. AgentInstance:my-agent)")
 	queryCmd.Flags().String("to", "", "Target node in Kind:name format (e.g. MCPResource:postgres://prod)")
-	queryCmd.Flags().String("path-scope", "security", "Path relationship scope: security (directed) or topology (legacy undirected)")
+	queryCmd.Flags().String("path-mode", "security", "Path mode: security (directed policy) or topology (undirected graph)")
 	queryCmd.Flags().String("format", "table", "Output format: table or json")
 	queryCmd.Flags().String("fail-on", "", "Exit 1 if findings at or above severity: critical, high, medium, low")
 	queryCmd.Flags().Bool("all-findings", false, "Include suppressed findings (accepted-risk, false-positive); --fail-on always ignores suppressed")
@@ -50,7 +52,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	shortestPath, _ := cmd.Flags().GetBool("shortest-path")
 	fromNode, _ := cmd.Flags().GetString("from")
 	toNode, _ := cmd.Flags().GetString("to")
-	pathScope, _ := cmd.Flags().GetString("path-scope")
+	pathMode, _ := cmd.Flags().GetString("path-mode")
 	format, _ := cmd.Flags().GetString("format")
 
 	failOn, _ := cmd.Flags().GetString("fail-on")
@@ -94,7 +96,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	case prebuiltID != "":
 		return runPrebuilt(ctx, prebuiltID, format)
 	case shortestPath:
-		return runShortestPath(ctx, fromNode, toNode, pathScope, format)
+		return runShortestPath(ctx, fromNode, toNode, pathMode, format)
 	default:
 		return runRawCypher(ctx, args[0], format)
 	}
@@ -164,6 +166,14 @@ func runFindings(ctx context.Context, severity, format, failOn string, includeSu
 			return fmt.Errorf("invalid severity %q: must be critical, high, medium, or low", severity)
 		}
 	}
+	threshold := 0
+	if failOn != "" {
+		var ok bool
+		threshold, ok = severityRank[failOn]
+		if !ok {
+			return fmt.Errorf("invalid --fail-on value %q: must be critical, high, medium, or low", failOn)
+		}
+	}
 
 	infra, cleanup, err := Bootstrap(ctx)
 	if err != nil {
@@ -171,61 +181,131 @@ func runFindings(ctx context.Context, severity, format, failOn string, includeSu
 	}
 	defer cleanup()
 
-	// Preserve the CLI's historical latest-per-fingerprint union for
-	// compatibility. Product posture surfaces request the exact published
-	// scope through HTTP instead.
-	findings, err := infra.FindingStore.ListLatestPerFingerprint(ctx, severity, includeSuppressed)
+	findings, scope, err := infra.FindingStore.ListPublished(ctx, severity, includeSuppressed)
 	if err != nil {
 		return fmt.Errorf("query findings: %w", err)
 	}
-
-	if len(findings) == 0 {
-		fmt.Println("No findings found.")
-	} else if format == "json" {
-		if err := printJSON(findings); err != nil {
-			return err
-		}
-	} else {
-		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		_, _ = fmt.Fprintln(w, "ID\tSEVERITY\tTRIAGE\tCATEGORY\tTITLE\tSOURCE\tTARGET")
-		for _, f := range findings {
-			srcLabel := f.SourceName
-			if srcLabel == "" {
-				srcLabel = f.SourceID
-			}
-			tgtLabel := f.TargetName
-			if tgtLabel == "" {
-				tgtLabel = f.TargetID
-			}
-			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				f.ID, f.Severity, triageStatus(f), f.Category, f.Title, srcLabel, tgtLabel)
-		}
-		_ = w.Flush()
-		_, _ = fmt.Fprintf(os.Stderr, "\n%d finding(s)\n", len(findings))
+	if err := validateCurrentFindingScope(scope); err != nil {
+		return err
 	}
 
+	failureCount := 0
 	if failOn != "" {
-		threshold, ok := severityRank[failOn]
-		if !ok {
-			return fmt.Errorf("invalid --fail-on value %q: must be critical, high, medium, or low", failOn)
-		}
 		// --fail-on ALWAYS evaluates against the non-suppressed set so an
 		// accepted-risk / false-positive never breaks CI, regardless of
 		// whether --all-findings was passed to widen the display.
 		gate := findings
 		if includeSuppressed {
-			gate, err = infra.FindingStore.ListLatestPerFingerprint(ctx, severity, false)
+			var gateScope appdb.FindingScope
+			gate, gateScope, err = infra.FindingStore.ListPublished(ctx, severity, false)
 			if err != nil {
 				return fmt.Errorf("query findings for fail-on: %w", err)
 			}
+			if err := validateCurrentFindingScope(gateScope); err != nil {
+				return fmt.Errorf("query findings for fail-on: %w", err)
+			}
+			if !sameFindingScope(scope, gateScope) {
+				return fmt.Errorf(
+					"published findings snapshot changed during query: scan=%s revision=%d became scan=%s revision=%d",
+					scope.ScanID,
+					*scope.Revision,
+					gateScope.ScanID,
+					*gateScope.Revision,
+				)
+			}
 		}
-		count := countAtOrAbove(gate, threshold)
-		if count > 0 {
-			_, _ = fmt.Fprintf(os.Stderr, "Failed: %d finding(s) at severity %q or above\n", count, failOn)
-			os.Exit(1)
-		}
+		failureCount = countAtOrAbove(gate, threshold)
 	}
 
+	if err := printPublishedFindings(findings, scope, format); err != nil {
+		return err
+	}
+	if failureCount > 0 {
+		_, _ = fmt.Fprintf(
+			os.Stderr,
+			"Failed: %d finding(s) at severity %q or above\n",
+			failureCount,
+			failOn,
+		)
+		return fmt.Errorf("%d finding(s) at severity %q or above", failureCount, failOn)
+	}
+
+	return nil
+}
+
+func validateCurrentFindingScope(scope appdb.FindingScope) error {
+	if !scope.Available ||
+		scope.ScanID == "" ||
+		scope.Revision == nil ||
+		*scope.Revision < 1 {
+		return fmt.Errorf("no complete published findings snapshot is available")
+	}
+	if scope.Stale ||
+		scope.ProjectionStatus != model.ProjectionComplete ||
+		scope.SnapshotStatus != model.LifecycleComplete {
+		return fmt.Errorf(
+			"published findings snapshot is stale: scan=%s revision=%d projection=%s snapshot=%s",
+			scope.ScanID,
+			*scope.Revision,
+			scope.ProjectionStatus,
+			scope.SnapshotStatus,
+		)
+	}
+	return nil
+}
+
+func sameFindingScope(left, right appdb.FindingScope) bool {
+	return left.ScanID == right.ScanID &&
+		left.Revision != nil &&
+		right.Revision != nil &&
+		*left.Revision == *right.Revision
+}
+
+func printPublishedFindings(
+	findings []model.Finding,
+	scope appdb.FindingScope,
+	format string,
+) error {
+	if err := validateCurrentFindingScope(scope); err != nil {
+		return err
+	}
+	if format == "json" {
+		return printJSON(struct {
+			Findings []model.Finding    `json:"findings"`
+			Scope    appdb.FindingScope `json:"scope"`
+		}{
+			Findings: findings,
+			Scope:    scope,
+		})
+	}
+
+	_, _ = fmt.Fprintf(
+		os.Stderr,
+		"Published snapshot: scan=%s revision=%d\n",
+		scope.ScanID,
+		*scope.Revision,
+	)
+	if len(findings) == 0 {
+		fmt.Println("No findings found.")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	_, _ = fmt.Fprintln(w, "ID\tSEVERITY\tTRIAGE\tCATEGORY\tTITLE\tSOURCE\tTARGET")
+	for _, f := range findings {
+		srcLabel := f.SourceName
+		if srcLabel == "" {
+			srcLabel = f.SourceID
+		}
+		tgtLabel := f.TargetName
+		if tgtLabel == "" {
+			tgtLabel = f.TargetID
+		}
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			f.ID, f.Severity, triageStatus(f), f.Category, f.Title, srcLabel, tgtLabel)
+	}
+	_ = w.Flush()
+	_, _ = fmt.Fprintf(os.Stderr, "\n%d finding(s)\n", len(findings))
 	return nil
 }
 
@@ -245,7 +325,7 @@ func runShortestPath(ctx context.Context, from, to, scopeValue, format string) e
 
 	scope, err := analysis.ParseTraversalScope(scopeValue)
 	if err != nil {
-		return fmt.Errorf("--path-scope: %w", err)
+		return fmt.Errorf("--path-mode: %w", err)
 	}
 
 	infra, cleanup, err := Bootstrap(ctx)
@@ -442,7 +522,7 @@ var severityRank = map[string]int{
 	"low":      3,
 }
 
-func countAtOrAbove(findings []analysis.Finding, threshold int) int {
+func countAtOrAbove(findings []model.Finding, threshold int) int {
 	count := 0
 	for _, f := range findings {
 		if rank, ok := severityRank[f.Severity]; ok && rank <= threshold {
@@ -452,7 +532,7 @@ func countAtOrAbove(findings []analysis.Finding, threshold int) int {
 	return count
 }
 
-func triageStatus(f analysis.Finding) string {
+func triageStatus(f model.Finding) string {
 	if f.Triage != nil && f.Triage.Status != "" {
 		return f.Triage.Status
 	}
@@ -493,7 +573,7 @@ func runDiff(ctx context.Context, diffArg, format string, includeSuppressed bool
 	return nil
 }
 
-func printDiffSection(label string, findings []analysis.Finding) {
+func printDiffSection(label string, findings []model.Finding) {
 	if len(findings) == 0 {
 		return
 	}

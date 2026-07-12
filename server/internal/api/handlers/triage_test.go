@@ -158,7 +158,7 @@ func TestTriageHandler_Set_NoteTooLong(t *testing.T) {
 }
 
 func TestTriageHandler_Set_StatusOnlyPreservesNote(t *testing.T) {
-	// AH-UI-34: a PUT with no note field must NOT overwrite the note. The
+	// AH-UI-34: a PATCH with no note field must NOT overwrite the note. The
 	// handler routes to UpdateTriageStatus (note-preserving), not UpsertTriage.
 	store := &mockTriageStore{}
 	h := &TriageHandler{store: store}

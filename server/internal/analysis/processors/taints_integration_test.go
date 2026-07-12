@@ -71,7 +71,8 @@ func TestIntegrationTaintsSchemaOverlapThreshold(t *testing.T) {
 			"objectid": "tn-res", "name": "untrusted-feed", "scan_id": scanID,
 		}},
 	}
-	if _, err := graph.NewWriter(driver).WriteNodes(ctx, nodes, scanID); err != nil {
+	writer := graph.NewWriter(driver)
+	if _, err := writer.WriteNodes(ctx, managedProcessorNodes(nodes), scanID); err != nil {
 		t.Fatalf("write nodes: %v", err)
 	}
 
@@ -81,7 +82,7 @@ func TestIntegrationTaintsSchemaOverlapThreshold(t *testing.T) {
 		{Source: "tn-srv-b", Target: "tn-snk-miss", Kind: "PROVIDES_TOOL", SourceKind: "MCPServer", TargetKind: "MCPTool"},
 		{Source: "tn-src", Target: "tn-res", Kind: "INGESTS_UNTRUSTED", SourceKind: "MCPTool", TargetKind: "MCPResource"},
 	}
-	if _, err := db.WriteEdges(ctx, edges, scanID); err != nil {
+	if _, err := writer.WriteEdges(ctx, managedProcessorEdges(edges), scanID); err != nil {
 		t.Fatalf("write edges: %v", err)
 	}
 

@@ -37,7 +37,10 @@ func TestServer_GatesMutatingEndpointsByOrigin(t *testing.T) {
 		{"POST", "/api/v1/analysis/shortest-path", "shortest-path"},
 		{"POST", "/api/v1/analysis/all-paths", "all-paths"},
 		{"POST", "/api/v1/analysis/weighted-path", "weighted-path"},
-		{"PUT", "/api/v1/findings/triage/0123456789abcdef", "triage update"},
+		{"POST", "/api/v1/analysis/topology/shortest-path", "topology shortest-path"},
+		{"POST", "/api/v1/analysis/topology/all-paths", "topology all-paths"},
+		{"POST", "/api/v1/analysis/topology/weighted-path", "topology weighted-path"},
+		{"PATCH", "/api/v1/findings/triage/0123456789abcdef", "triage update"},
 	}
 
 	for _, c := range mutating {

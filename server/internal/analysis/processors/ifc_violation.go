@@ -26,9 +26,8 @@ func (p *IfcViolation) Dependencies() []string { return []string{"has_access_to"
 func (p *IfcViolation) Process(ctx context.Context, db graph.GraphDB, scanID string) (graph.ProcessingStats, error) {
 	start := time.Now()
 
-	// source_collector='mcp' (a real collector): the edge participates in
-	// stale-edge cleanup whenever the mcp collector re-runs. See
-	// docs/architecture/post-processors.md for the cleanup-only-on-mcp note.
+	// source_collector='mcp' records detector provenance. Composite lifecycle is
+	// epoch-wide because another domain can invalidate this edge indirectly.
 	cypher := `
 MATCH witness = (untrusted:MCPTool)-[:INGESTS_UNTRUSTED]->(:MCPResource)<-[:HAS_ACCESS_TO*1..3]-(sensitive:MCPTool)
 WHERE untrusted <> sensitive

@@ -50,9 +50,9 @@ const (
 	VerificationFailed               VerificationStatus = "failed"
 )
 
-// ApplyCredentialEvidence writes canonical evidence properties and maintains
-// the legacy booleans conservatively. In particular, masked/hashed/unobserved
-// material explicitly clears stale is_exposed/high_entropy values on MERGE.
+// ApplyCredentialEvidence writes the canonical credential evidence fields.
+// high_entropy remains an active material signal and is cleared whenever raw
+// credential material was not observed.
 func ApplyCredentialEvidence(
 	props map[string]any,
 	identity CredentialIdentityBasis,
@@ -63,12 +63,6 @@ func ApplyCredentialEvidence(
 	props["material_status"] = string(material)
 	props["exposure_status"] = string(exposure)
 
-	switch exposure {
-	case CredentialExposureExposed:
-		props["is_exposed"] = true
-	case CredentialExposureNotObserved:
-		props["is_exposed"] = false
-	}
 	if material != CredentialMaterialObserved {
 		props["high_entropy"] = false
 	}

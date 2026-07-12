@@ -8,8 +8,9 @@ function scan(status: Scan["status"]): Scan {
     collector: "mcp",
     status,
     started_at: "2026-07-11T00:00:00Z",
-    node_count: 0,
-    edge_count: 0,
+    submitted: { nodes: 0, edges: 0 },
+    write_rows: { nodes: 0, edges: 0 },
+    graph_totals: { before: null, after: null },
   };
 }
 

@@ -27,10 +27,10 @@ The collector is offline-by-default. No outbound HTTP, no DB clients, no phone-h
 
 Enumerate MCP servers, A2A agents, and client configs, then write the merged trust graph as JSON.
 
-Scan artifacts remain ingest wire version `1` and add optional evidence
+Scan artifacts use strict ingest wire version `2` with required evidence
 metadata: constituent `collection` coverage/outcomes, the effective text and
 fingerprint `ruleset` semantic digest/entries with canonical matcher
-definitions and load failures, and identity-scheme/legacy-alias metadata. A
+definitions and load failures, and canonical identity-scheme metadata. A
 ruleset digest identifies what ran; `authenticity=unverified` explicitly avoids
 treating a digest as a trusted signature.
 
@@ -482,7 +482,7 @@ agenthound-server ingest <file.json>
 agenthound-server ingest -
 ```
 
-Pipeline stages: validate, normalize (camelCase to snake_case), deduplicate (MERGE by objectid), batch write (1000 ops/txn), post-process (composite edges + risk scores).
+Pipeline stages: validate the strict v2 contract, normalize supported values, deduplicate (MERGE by objectid), batch write (1000 ops/txn), post-process (composite edges + risk scores).
 
 All three ingest entry points (CLI, `POST /api/v1/ingest`, UI drag-drop) run the same pipeline.
 
@@ -506,7 +506,7 @@ agenthound-server query "MATCH (n:MCPServer) RETURN n.name, n.transport"
 # Pre-built query
 agenthound-server query --prebuilt agents-shell-access
 
-# Findings (legacy latest-per-fingerprint history union, with triage state)
+# Findings from the current published snapshot, with triage state
 agenthound-server query --findings [--severity critical] [--all-findings]
 
 # Diff two scans' findings
@@ -515,8 +515,8 @@ agenthound-server query --diff scan_a,scan_b
 # Directed security shortest path (default)
 agenthound-server query --shortest-path --from AgentInstance:claude --to MCPResource:postgres://prod
 
-# Explicit legacy undirected topology path
-agenthound-server query --shortest-path --path-scope topology --from MCPResource:postgres://prod --to AgentInstance:claude
+# Explicit undirected topology path
+agenthound-server query --shortest-path --path-mode topology --from MCPResource:postgres://prod --to AgentInstance:claude
 ```
 
 #### Flags
@@ -524,14 +524,14 @@ agenthound-server query --shortest-path --path-scope topology --from MCPResource
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--prebuilt` | | Pre-built query ID. |
-| `--findings` | `false` | List the legacy latest-per-fingerprint historical union (suppressed hidden by default). The product UI uses the exact published HTTP scope. |
+| `--findings` | `false` | List the current immutable published snapshot (suppressed hidden by default). |
 | `--all-findings` | `false` | Include suppressed (`accepted-risk` / `false-positive`) findings in `--findings` / `--diff` output. |
 | `--diff` | | Diff two scans' findings: `scanA,scanB`. Reports added / removed / unchanged. |
 | `--severity` | | Filter findings: `critical`, `high`, `medium`, `low`. |
 | `--shortest-path` | `false` | Find a bounded shortest path with the shared traversal engine. |
 | `--from` | | Source node (`Kind:name`). |
 | `--to` | | Target node (`Kind:name`). |
-| `--path-scope` | `security` | `security` uses the directed security relationship policy; `topology` explicitly selects the legacy undirected graph view. |
+| `--path-mode` | `security` | `security` uses the directed security relationship policy; `topology` explicitly selects the undirected graph view. |
 | `--format` | `table` | `table` or `json`. |
 | `--fail-on` | | Exit 1 if findings at or above severity (CI gate). Always ignores suppressed findings, even with `--all-findings`. |
 

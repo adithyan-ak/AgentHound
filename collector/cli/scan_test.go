@@ -2,12 +2,14 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/collector/internal/clientcfg"
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
 	"github.com/spf13/cobra"
@@ -58,6 +60,99 @@ func TestRunScan_A2ANoTarget(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "A2A requires") {
 		t.Errorf("error = %q, want 'A2A requires'", err.Error())
+	}
+}
+
+func TestRootedCollectionReportStableAcrossScanIDs(t *testing.T) {
+	targetKey := ingest.CanonicalCoverageKey("mcp", "target", "https://mcp.example")
+	newScan := func(scanID string) *ingest.IngestData {
+		data := common.NewIngestData("mcp", scanID)
+		data.Meta.Collection = &ingest.CollectionReport{
+			State:        ingest.OutcomeComplete,
+			CoverageKeys: []string{targetKey},
+			Outcomes: []ingest.CollectionOutcome{{
+				Collector:   "mcp",
+				CoverageKey: targetKey,
+				Target:      "https://mcp.example",
+				Method:      "enumerate",
+				State:       ingest.OutcomeComplete,
+				Items:       1,
+			}},
+		}
+		data.Graph.Nodes = []ingest.Node{{
+			ID:                 "mcp-server",
+			Kinds:              []string{"MCPServer"},
+			ObservationDomains: []string{targetKey},
+		}}
+		return data
+	}
+
+	first := newScan("scan-one")
+	second := newScan("scan-two")
+	firstReport := rootedCollectionReport("mcp", first.Meta.Collection)
+	secondReport := rootedCollectionReport("mcp", second.Meta.Collection)
+	rootKey := collectorRootCoverageKey("mcp")
+
+	if rootKey != "mcp" {
+		t.Fatalf("collector root key = %q, want mcp", rootKey)
+	}
+	for scanID, report := range map[string]*ingest.CollectionReport{
+		first.Meta.ScanID:  firstReport,
+		second.Meta.ScanID: secondReport,
+	} {
+		states := ingest.CoverageStates(report)
+		if states[rootKey] != ingest.OutcomeComplete {
+			t.Fatalf("scan %s root state = %q, want complete", scanID, states[rootKey])
+		}
+		if states[targetKey] != ingest.OutcomeComplete {
+			t.Fatalf("scan %s target state = %q, want complete", scanID, states[targetKey])
+		}
+	}
+	if firstReport.CoverageKeys[0] != secondReport.CoverageKeys[0] {
+		t.Fatalf(
+			"collector root changed across scan IDs: %v != %v",
+			firstReport.CoverageKeys,
+			secondReport.CoverageKeys,
+		)
+	}
+	for _, data := range []*ingest.IngestData{first, second} {
+		if got := data.Graph.Nodes[0].ObservationDomains; len(got) != 1 || got[0] != targetKey {
+			t.Fatalf("scan %s fact ownership = %v, want [%s]", data.Meta.ScanID, got, targetKey)
+		}
+	}
+}
+
+func TestRootedCollectionReportPreservesPartialAttempt(t *testing.T) {
+	targetKey := ingest.CanonicalCoverageKey("mcp", "target", "https://mcp.example")
+	report := rootedCollectionReport("mcp", &ingest.CollectionReport{
+		State:        ingest.OutcomePartial,
+		CoverageKeys: []string{targetKey},
+		Outcomes: []ingest.CollectionOutcome{{
+			Collector:   "mcp",
+			CoverageKey: targetKey,
+			State:       ingest.OutcomeFailed,
+		}},
+	})
+
+	states := ingest.CoverageStates(report)
+	if states[collectorRootCoverageKey("mcp")] != ingest.OutcomePartial {
+		t.Fatalf("root states = %v, want partial MCP root", states)
+	}
+}
+
+func TestFailedCollectionReportUsesCollectorRoot(t *testing.T) {
+	report := failedCollectionReport("mcp", errors.New("collector failed"))
+	rootKey := collectorRootCoverageKey("mcp")
+
+	if len(report.CoverageKeys) != 1 || report.CoverageKeys[0] != rootKey {
+		t.Fatalf("failed coverage keys = %v, want [%s]", report.CoverageKeys, rootKey)
+	}
+	states := ingest.CoverageStates(report)
+	if states[rootKey] != ingest.OutcomeFailed {
+		t.Fatalf("failed root states = %v, want failed MCP root", states)
+	}
+	if got := report.Outcomes[0].Error; got != "collector failed" {
+		t.Fatalf("failed root error = %q, want collector failed", got)
 	}
 }
 
@@ -121,8 +216,8 @@ func TestRunScan_DefaultOutputCWD(t *testing.T) {
 	if got.Meta.Collector != "scan" {
 		t.Errorf("meta.collector = %q, want scan", got.Meta.Collector)
 	}
-	if got.Meta.Version != 1 {
-		t.Errorf("meta.version = %d, want legacy-compatible version 1", got.Meta.Version)
+	if got.Meta.Version != ingest.CurrentVersion {
+		t.Errorf("meta.version = %d, want strict version %d", got.Meta.Version, ingest.CurrentVersion)
 	}
 	if got.Meta.Collection == nil || got.Meta.Collection.State != ingest.OutcomeComplete {
 		t.Errorf("complete-empty config coverage lost: %+v", got.Meta.Collection)

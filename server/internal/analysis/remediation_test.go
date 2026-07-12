@@ -22,7 +22,7 @@ func TestBuildRemediation_WithPath(t *testing.T) {
 		},
 	}
 
-	f := &Finding{EdgeKind: "CAN_REACH", SourceID: "agent-1", TargetID: "res-1"}
+	f := &model.Finding{EdgeKind: "CAN_REACH", SourceID: "agent-1", TargetID: "res-1"}
 	steps := BuildRemediation(path, f)
 
 	if len(steps) != 3 {
@@ -57,7 +57,7 @@ func TestBuildRemediation_DuplicateEdgeKinds(t *testing.T) {
 		},
 	}
 
-	f := &Finding{EdgeKind: "CAN_REACH", SourceID: "a1", TargetID: "s2"}
+	f := &model.Finding{EdgeKind: "CAN_REACH", SourceID: "a1", TargetID: "s2"}
 	steps := BuildRemediation(path, f)
 
 	if len(steps) != 2 {
@@ -69,7 +69,7 @@ func TestBuildRemediation_DuplicateEdgeKinds(t *testing.T) {
 }
 
 func TestBuildRemediation_NilPath(t *testing.T) {
-	f := &Finding{
+	f := &model.Finding{
 		EdgeKind:   "CAN_EXECUTE",
 		SourceID:   "tool-1",
 		SourceName: "RunCode",
@@ -94,7 +94,7 @@ func TestBuildRemediation_EmptyEdges(t *testing.T) {
 		Nodes: []PathNode{{ID: "n1", Properties: map[string]any{}}},
 		Edges: []PathEdge{},
 	}
-	f := &Finding{
+	f := &model.Finding{
 		EdgeKind:   "POISONED_DESCRIPTION",
 		SourceID:   "tool-1",
 		SourceName: "MalTool",
@@ -112,7 +112,7 @@ func TestBuildRemediation_EmptyEdges(t *testing.T) {
 }
 
 func TestBuildFindingOnlyRemediation(t *testing.T) {
-	f := &Finding{
+	f := &model.Finding{
 		EdgeKind:   "CAN_EXECUTE",
 		SourceID:   "tool-1",
 		SourceName: "RunCode",
@@ -138,7 +138,7 @@ func TestBuildFindingOnlyRemediation(t *testing.T) {
 func TestBuildFindingOnlyRemediation_UnknownEdgeKind(t *testing.T) {
 	// AH-UI-11: an unknown edge kind yields an empty (non-nil) slice so the
 	// JSON response is `[]` and the client's steps.length read is safe.
-	f := &Finding{EdgeKind: "DOES_NOT_EXIST", SourceID: "a", TargetID: "b"}
+	f := &model.Finding{EdgeKind: "DOES_NOT_EXIST", SourceID: "a", TargetID: "b"}
 	steps := buildFindingOnlyRemediation(f)
 	if steps == nil {
 		t.Error("expected non-nil empty slice for unknown edge kind, got nil")
@@ -159,7 +159,7 @@ func TestBuildRemediation_TrustsServerNamesActorsCorrectly(t *testing.T) {
 		},
 		Edges: []PathEdge{{Source: "agent-1", Target: "srv-1", Kind: "TRUSTS_SERVER"}},
 	}
-	f := &Finding{EdgeKind: "TRUSTS_SERVER", SourceID: "agent-1", TargetID: "srv-1"}
+	f := &model.Finding{EdgeKind: "TRUSTS_SERVER", SourceID: "agent-1", TargetID: "srv-1"}
 	steps := BuildRemediation(path, f)
 	if len(steps) == 0 {
 		t.Fatal("expected a remediation step")
@@ -222,7 +222,7 @@ func TestBuildRemediation_AuthenticationAdviceUsesTargetEvidence(t *testing.T) {
 				},
 				Edges: []PathEdge{{Source: "agent", Target: "server", Kind: "TRUSTS_SERVER"}},
 			}
-			steps := BuildRemediation(path, &Finding{EdgeKind: "CAN_REACH"})
+			steps := BuildRemediation(path, &model.Finding{EdgeKind: "CAN_REACH"})
 			if len(steps) != 1 {
 				t.Fatalf("steps = %+v", steps)
 			}
@@ -254,7 +254,7 @@ func TestBuildRemediation_RetainsFindingVariantAlongsideWitnessSteps(t *testing.
 			{Source: "server", Target: "credential", Kind: "HAS_ENV_VAR"},
 		},
 	}
-	finding := &Finding{
+	finding := &model.Finding{
 		EdgeKind:   "CAN_REACH",
 		SourceID:   "agent",
 		SourceName: "Agent",
@@ -281,7 +281,7 @@ func TestBuildRemediation_RetainsExfiltrationChannelsWithPath(t *testing.T) {
 		},
 		Edges: []PathEdge{{Source: "agent", Target: "tool", Kind: "PROVIDES_TOOL"}},
 	}
-	finding := &Finding{
+	finding := &model.Finding{
 		EdgeKind: "CAN_EXFILTRATE_VIA",
 		SourceID: "agent", SourceKind: "AgentInstance",
 		TargetID: "tool", TargetKind: "MCPTool",
@@ -294,7 +294,7 @@ func TestBuildRemediation_RetainsExfiltrationChannelsWithPath(t *testing.T) {
 }
 
 func TestBuildFindingOnlyRemediation_CredentialVariants(t *testing.T) {
-	base := Finding{
+	base := model.Finding{
 		EdgeKind:   "CAN_REACH",
 		SourceID:   "agent",
 		SourceName: "Agent",
@@ -322,7 +322,7 @@ func TestBuildFindingOnlyRemediation_CredentialVariants(t *testing.T) {
 }
 
 func TestBuildFindingOnlyRemediation_EmptyNames(t *testing.T) {
-	f := &Finding{
+	f := &model.Finding{
 		EdgeKind:   "CAN_EXECUTE",
 		SourceID:   "tool-1",
 		SourceName: "",

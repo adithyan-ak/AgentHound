@@ -1,11 +1,36 @@
 {
   "meta": {
-    "version": 1,
+    "version": 2,
     "type": "agenthound-ingest",
     "collector": "a2a",
     "collector_version": "0.1.0",
     "timestamp": "2026-04-07T11:00:00Z",
-    "scan_id": "scan-a2a-001"
+    "scan_id": "scan-a2a-001",
+    "collection": {
+      "state": "complete",
+      "coverage_keys": ["a2a:fixture:sha256:f7d24bf60c65861a3b91b51ca3a53db0ccf7e4a1ded5ef4891e3832405b2bc1e"],
+      "outcomes": [{
+        "collector": "a2a",
+        "coverage_key": "a2a:fixture:sha256:f7d24bf60c65861a3b91b51ca3a53db0ccf7e4a1ded5ef4891e3832405b2bc1e",
+        "target": "valid-a2a",
+        "method": "fixture",
+        "state": "complete",
+        "items": 5
+      }]
+    },
+    "ruleset": {
+      "digest": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e64a8f8bff093b2f5f2cf4e",
+      "entries": [],
+      "load_state": "complete",
+      "errors": [],
+      "authenticity": "unverified"
+    },
+    "identity_schemes": [{
+      "entity_kind": "MCPServer",
+      "transport": "stdio",
+      "scheme": "mcp_stdio_v2_ordered",
+      "version": 2
+    }]
   },
   "graph": {
     "nodes": [
@@ -22,11 +47,14 @@
           "capabilities": ["streaming", "pushNotifications"],
           "security_schemes": ["apiKey"],
           "auth_method": "apiKey",
+          "auth_assurance": "weak",
+          "auth_evidence": "declared_security_scheme",
           "is_signed": true,
-          "signature_valid": true,
+          "signature_verification_status": "verified",
           "card_hash": "d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5",
           "objectid": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1"
-        }
+        },
+        "observation_domains": ["a2a:fixture:sha256:f7d24bf60c65861a3b91b51ca3a53db0ccf7e4a1ded5ef4891e3832405b2bc1e"]
       },
       {
         "id": "sha256:f29d41afd3993adb0740cf7f7c3f302033e31316c541d57c2b1d2254eb6fbc64",
@@ -41,11 +69,14 @@
           "capabilities": ["streaming"],
           "security_schemes": ["none"],
           "auth_method": "none",
+          "auth_assurance": "unauthenticated",
+          "auth_evidence": "anonymous_probe_succeeded",
           "is_signed": false,
-          "signature_valid": false,
+          "signature_verification_status": "unsigned",
           "card_hash": "e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6",
           "objectid": "sha256:f29d41afd3993adb0740cf7f7c3f302033e31316c541d57c2b1d2254eb6fbc64"
-        }
+        },
+        "observation_domains": ["a2a:fixture:sha256:f7d24bf60c65861a3b91b51ca3a53db0ccf7e4a1ded5ef4891e3832405b2bc1e"]
       },
       {
         "id": "sha256:71cb852609a93c46e4056ddcc5fa594a92973b1b40ef64acafb871bfb90cff44",
@@ -59,7 +90,8 @@
           "description_hash": "f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1",
           "has_injection_patterns": false,
           "objectid": "sha256:71cb852609a93c46e4056ddcc5fa594a92973b1b40ef64acafb871bfb90cff44"
-        }
+        },
+        "observation_domains": ["a2a:fixture:sha256:f7d24bf60c65861a3b91b51ca3a53db0ccf7e4a1ded5ef4891e3832405b2bc1e"]
       },
       {
         "id": "sha256:1ae605b1d92096ac3219d2d2fe89a4bc22c53f3afbf6c1f849e2b2a5ff4e1f01",
@@ -73,7 +105,8 @@
           "description_hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
           "has_injection_patterns": false,
           "objectid": "sha256:1ae605b1d92096ac3219d2d2fe89a4bc22c53f3afbf6c1f849e2b2a5ff4e1f01"
-        }
+        },
+        "observation_domains": ["a2a:fixture:sha256:f7d24bf60c65861a3b91b51ca3a53db0ccf7e4a1ded5ef4891e3832405b2bc1e"]
       },
       {
         "id": "sha256:bbbf6ea338f40203f99d7f2f980812a47d0b452e157dc2349e40e10a99383d8f",
@@ -87,7 +120,8 @@
           "description_hash": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
           "has_injection_patterns": false,
           "objectid": "sha256:bbbf6ea338f40203f99d7f2f980812a47d0b452e157dc2349e40e10a99383d8f"
-        }
+        },
+        "observation_domains": ["a2a:fixture:sha256:f7d24bf60c65861a3b91b51ca3a53db0ccf7e4a1ded5ef4891e3832405b2bc1e"]
       }
     ],
     "edges": [
@@ -95,49 +129,61 @@
         "source": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1",
         "target": "sha256:71cb852609a93c46e4056ddcc5fa594a92973b1b40ef64acafb871bfb90cff44",
         "kind": "ADVERTISES_SKILL",
+        "source_kind": "A2AAgent",
+        "target_kind": "A2ASkill",
         "properties": {
           "scan_id": "scan-a2a-001",
           "last_seen": "2026-04-07T11:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.1,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["a2a:fixture:sha256:f7d24bf60c65861a3b91b51ca3a53db0ccf7e4a1ded5ef4891e3832405b2bc1e"]
       },
       {
         "source": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1",
         "target": "sha256:1ae605b1d92096ac3219d2d2fe89a4bc22c53f3afbf6c1f849e2b2a5ff4e1f01",
         "kind": "ADVERTISES_SKILL",
+        "source_kind": "A2AAgent",
+        "target_kind": "A2ASkill",
         "properties": {
           "scan_id": "scan-a2a-001",
           "last_seen": "2026-04-07T11:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.1,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["a2a:fixture:sha256:f7d24bf60c65861a3b91b51ca3a53db0ccf7e4a1ded5ef4891e3832405b2bc1e"]
       },
       {
         "source": "sha256:f29d41afd3993adb0740cf7f7c3f302033e31316c541d57c2b1d2254eb6fbc64",
         "target": "sha256:bbbf6ea338f40203f99d7f2f980812a47d0b452e157dc2349e40e10a99383d8f",
         "kind": "ADVERTISES_SKILL",
+        "source_kind": "A2AAgent",
+        "target_kind": "A2ASkill",
         "properties": {
           "scan_id": "scan-a2a-001",
           "last_seen": "2026-04-07T11:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.1,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["a2a:fixture:sha256:f7d24bf60c65861a3b91b51ca3a53db0ccf7e4a1ded5ef4891e3832405b2bc1e"]
       },
       {
         "source": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1",
         "target": "sha256:f29d41afd3993adb0740cf7f7c3f302033e31316c541d57c2b1d2254eb6fbc64",
         "kind": "DELEGATES_TO",
+        "source_kind": "A2AAgent",
+        "target_kind": "A2AAgent",
         "properties": {
           "scan_id": "scan-a2a-001",
           "last_seen": "2026-04-07T11:00:00Z",
           "confidence": 0.9,
           "risk_weight": 0.1,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["a2a:fixture:sha256:f7d24bf60c65861a3b91b51ca3a53db0ccf7e4a1ded5ef4891e3832405b2bc1e"]
       }
     ]
   }

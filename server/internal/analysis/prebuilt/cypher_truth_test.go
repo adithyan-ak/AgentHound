@@ -44,7 +44,7 @@ func TestHighEntropyQueryRequiresObservedMaterial(t *testing.T) {
 	for _, clause := range []string{
 		"c.material_status = 'observed'",
 		"c.exposure_status = 'exposed'",
-		"coalesce(c.merge_key, 'value_hash') <> 'identity'",
+		"c.merge_key = 'value_hash'",
 	} {
 		if !strings.Contains(CypherHighEntropySecrets, clause) {
 			t.Errorf("high-entropy query missing explicit evidence gate %q", clause)
@@ -62,7 +62,7 @@ func TestLiteLLMLeakQueryRequiresObservedUsableMaterial(t *testing.T) {
 		"c1master.material_status = 'observed'",
 		"c2.material_status = 'observed'",
 		"c2.exposure_status = 'exposed'",
-		"coalesce(c2.merge_key, 'value_hash') <> 'identity'",
+		"c2.merge_key = 'value_hash'",
 	} {
 		if !strings.Contains(CypherLitellmCredentialLeak, clause) {
 			t.Errorf("LiteLLM leak query missing observed-material gate %q", clause)

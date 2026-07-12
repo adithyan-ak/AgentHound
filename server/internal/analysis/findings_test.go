@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -188,6 +189,56 @@ func TestQueryFindings_CanReachMediumDefault(t *testing.T) {
 }
 
 func TestQueryFindings_UnknownEdgeKind(t *testing.T) {
+	finding := queryUnknownEdgeFinding(t)
+
+	if finding.Severity != "low" {
+		t.Errorf("severity = %q, want low", finding.Severity)
+	}
+	if finding.Category != "Other" {
+		t.Errorf("category = %q, want Other", finding.Category)
+	}
+	if finding.Evidence.State != model.FindingEvidenceUnknown {
+		t.Errorf("legacy finding evidence = %q, want unknown", finding.Evidence.State)
+	}
+	if finding.OWASPMap == nil {
+		t.Error("OWASPMap is nil, want empty array")
+	}
+	if finding.ATLASMap == nil {
+		t.Error("ATLASMap is nil, want empty array")
+	}
+	if finding.Evidence.Channels == nil {
+		t.Error("Evidence.Channels is nil, want empty array")
+	}
+}
+
+func TestQueryFindings_UnknownEdgeKindMarshalsEmptyArrays(t *testing.T) {
+	payload, err := json.Marshal(queryUnknownEdgeFinding(t))
+	if err != nil {
+		t.Fatalf("marshal finding: %v", err)
+	}
+	var wire struct {
+		OWASPMap json.RawMessage `json:"owasp_map"`
+		ATLASMap json.RawMessage `json:"atlas_map"`
+		Evidence struct {
+			Channels json.RawMessage `json:"channels"`
+		} `json:"evidence"`
+	}
+	if err := json.Unmarshal(payload, &wire); err != nil {
+		t.Fatalf("unmarshal finding: %v", err)
+	}
+	if got := string(wire.OWASPMap); got != "[]" {
+		t.Errorf("owasp_map = %s, want []", got)
+	}
+	if got := string(wire.ATLASMap); got != "[]" {
+		t.Errorf("atlas_map = %s, want []", got)
+	}
+	if got := string(wire.Evidence.Channels); got != "[]" {
+		t.Errorf("evidence.channels = %s, want []", got)
+	}
+}
+
+func queryUnknownEdgeFinding(t *testing.T) model.Finding {
+	t.Helper()
 	mock := &graph.MockGraphDB{
 		QueryResult: []map[string]any{
 			{
@@ -206,15 +257,7 @@ func TestQueryFindings_UnknownEdgeKind(t *testing.T) {
 	if len(findings) != 1 {
 		t.Fatalf("got %d findings, want 1", len(findings))
 	}
-	if findings[0].Severity != "low" {
-		t.Errorf("severity = %q, want low", findings[0].Severity)
-	}
-	if findings[0].Category != "Other" {
-		t.Errorf("category = %q, want Other", findings[0].Category)
-	}
-	if findings[0].Evidence.State != model.FindingEvidenceUnknown {
-		t.Errorf("legacy finding evidence = %q, want unknown", findings[0].Evidence.State)
-	}
+	return findings[0]
 }
 
 func TestQueryFindings_EmptyResult(t *testing.T) {
@@ -314,9 +357,9 @@ func TestQueryFindings_CredentialChainCritical(t *testing.T) {
 				"target_id": "cred-1", "target_name": "OPENAI_API_KEY", "target_kind": "Credential",
 				"edge_kind": "CAN_REACH", "confidence": 0.95,
 				"cross_protocol": false, "target_sensitivity": "",
-				"source_collector":  "cross_service_credential_chain",
-				"target_value_hash": "sha256-of-secret",
-				"target_merge_key":  "value_hash", "target_is_exposed": true,
+				"source_collector":       "cross_service_credential_chain",
+				"target_value_hash":      "sha256-of-secret",
+				"target_merge_key":       "value_hash",
 				"target_material_status": "observed", "target_exposure_status": "exposed",
 			},
 		},
@@ -355,7 +398,9 @@ func TestQueryFindings_CredentialTargetAloneIsNotCritical(t *testing.T) {
 				"target_id": "cred-1", "target_name": "KEY", "target_kind": "Credential",
 				"edge_kind": "CAN_REACH", "confidence": 0.95,
 				"cross_protocol": false, "target_sensitivity": "",
-				"target_value": "sk-secret", "target_is_exposed": true,
+				"target_value":     "sk-secret",
+				"via_gateway":      "legacy-gateway",
+				"merge_value_hash": "legacy-hash",
 			},
 		},
 	}
@@ -374,6 +419,10 @@ func TestQueryFindings_CredentialTargetAloneIsNotCritical(t *testing.T) {
 	if len(findings) != 1 || findings[0].Severity != "medium" {
 		t.Fatalf("target-kind-only finding = %+v, want one medium finding", findings)
 	}
+	if findings[0].Variant != model.FindingVariantCredentialNodeReference {
+		t.Fatalf("legacy properties without canonical provenance produced variant %q, want %q",
+			findings[0].Variant, model.FindingVariantCredentialNodeReference)
+	}
 	if contains(strings.ToLower(findings[0].Description), "exposed credential") {
 		t.Errorf("description %q must not claim exposure from target kind alone", findings[0].Description)
 	}
@@ -389,7 +438,6 @@ func TestQueryFindings_CredentialChainWithoutUsableMaterial(t *testing.T) {
 			row: map[string]any{
 				"target_merge_key":  "identity",
 				"target_value_hash": "synthetic-provider-name-hash",
-				"target_is_exposed": true,
 			},
 		},
 		{
@@ -397,7 +445,6 @@ func TestQueryFindings_CredentialChainWithoutUsableMaterial(t *testing.T) {
 			row: map[string]any{
 				"target_merge_key": "value_hash",
 				"target_value":     "same-returned-digest", "target_value_hash": "same-returned-digest",
-				"target_is_exposed": true,
 			},
 		},
 		{
@@ -405,7 +452,6 @@ func TestQueryFindings_CredentialChainWithoutUsableMaterial(t *testing.T) {
 			row: map[string]any{
 				"target_merge_key":  "value_hash",
 				"target_value_hash": "hash-without-raw-value",
-				"target_is_exposed": true,
 			},
 		},
 		{
@@ -414,7 +460,6 @@ func TestQueryFindings_CredentialChainWithoutUsableMaterial(t *testing.T) {
 				"target_merge_key":  "value_hash",
 				"target_value":      "sk-legacy",
 				"target_value_hash": "hash-of-legacy",
-				"target_is_exposed": true,
 			},
 		},
 		{
@@ -423,7 +468,6 @@ func TestQueryFindings_CredentialChainWithoutUsableMaterial(t *testing.T) {
 				"target_merge_key":       "identity",
 				"target_material_status": "masked",
 				"target_exposure_status": "not_observed",
-				"target_is_exposed":      false,
 			},
 		},
 	}
@@ -497,7 +541,7 @@ func TestQueryFindings_DescriptionNamesActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	byKind := map[string]Finding{}
+	byKind := map[string]model.Finding{}
 	for _, f := range findings {
 		byKind[f.EdgeKind] = f
 	}

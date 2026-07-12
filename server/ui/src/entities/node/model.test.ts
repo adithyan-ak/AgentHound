@@ -14,14 +14,14 @@ function node(properties: Record<string, unknown>, kinds = ["MCPServer"]): APINo
 }
 
 describe("node evidence accessors", () => {
-  it("requires affirmative evidence and normalizes legacy local processes", () => {
+  it("requires affirmative evidence and renders local processes", () => {
     const unknown = node({});
     const unsupportedClaim = node({ auth_method: "none", auth_evidence: "unknown" });
     const local = node({
       auth_method: "unknown",
       auth_evidence: "local_process",
     });
-    const legacyLocal = node({
+    const configuredLocal = node({
       auth_method: "none",
       auth_evidence: "local_process",
     });
@@ -34,8 +34,8 @@ describe("node evidence accessors", () => {
     expect(authMethod(unsupportedClaim)).toBe("unknown");
     expect(isUnauth(unsupportedClaim)).toBe(false);
     expect(authMethod(local)).toBe("localProcess");
-    expect(authMethod(legacyLocal)).toBe("localProcess");
-    expect(hasConfirmedAnonymousAccess(legacyLocal.properties)).toBe(false);
+    expect(authMethod(configuredLocal)).toBe("localProcess");
+    expect(hasConfirmedAnonymousAccess(configuredLocal.properties)).toBe(false);
     expect(authMethod(anonymous)).toBe("none");
     expect(isUnauth(anonymous)).toBe(true);
   });
@@ -60,7 +60,6 @@ describe("node evidence accessors", () => {
             merge_key: "identity",
             material_status: "masked",
             exposure_status: "not_observed",
-            is_exposed: true,
           },
           ["Credential"],
         ),
@@ -83,7 +82,6 @@ describe("node evidence accessors", () => {
         node(
           {
             merge_key: "value_hash",
-            is_exposed: true,
             type: "hardcoded",
           },
           ["Credential"],

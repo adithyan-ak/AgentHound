@@ -89,18 +89,16 @@ type TraversalPath struct {
 }
 
 type TraversalMetadata struct {
-	Scope              TraversalScope `json:"scope"`
-	Direction          string         `json:"direction"`
-	RelationshipKinds  []string       `json:"relationship_kinds"`
-	MaxHops            int            `json:"max_hops"`
-	Algorithm          string         `json:"algorithm"`
-	Complete           bool           `json:"complete"`
-	Truncated          bool           `json:"truncated"`
-	ExpansionLimit     int            `json:"expansion_limit"`
-	Expansions         int            `json:"expansions"`
-	DefaultRiskWeight  float64        `json:"default_risk_weight,omitempty"`
-	UsedDefaultWeights bool           `json:"used_default_weights"`
-	IncompleteReason   string         `json:"incomplete_reason,omitempty"`
+	Scope             TraversalScope `json:"scope"`
+	Direction         string         `json:"direction"`
+	RelationshipKinds []string       `json:"relationship_kinds"`
+	MaxHops           int            `json:"max_hops"`
+	Algorithm         string         `json:"algorithm"`
+	Complete          bool           `json:"complete"`
+	Truncated         bool           `json:"truncated"`
+	ExpansionLimit    int            `json:"expansion_limit"`
+	Expansions        int            `json:"expansions"`
+	IncompleteReason  string         `json:"incomplete_reason,omitempty"`
 }
 
 type TraversalResult struct {
@@ -274,8 +272,6 @@ type adjacency struct {
 	edge            TraversalEdge
 }
 
-const defaultTraversalRiskWeight = 0.5
-
 // FindBoundedTraversalPaths performs one deployment-independent bounded path
 // search. Minimum mode keeps the cheapest state per (source,node,hop), which
 // yields the exact minimum non-negative cost under a hop bound. AllPaths mode
@@ -286,7 +282,11 @@ func FindBoundedTraversalPaths(
 	sources, targets []TraversalNode,
 	opts TraversalOptions,
 ) (TraversalResult, error) {
-	opts = normalizeTraversalOptions(opts)
+	var err error
+	opts, err = normalizeTraversalOptions(opts)
+	if err != nil {
+		return TraversalResult{}, err
+	}
 	metadata := TraversalMetadata{
 		Scope:             opts.Scope,
 		Direction:         "both",
@@ -299,9 +299,6 @@ func FindBoundedTraversalPaths(
 	if opts.Scope == TraversalScopeSecurity {
 		metadata.Direction = "out"
 		metadata.RelationshipKinds = append([]string(nil), SecurityTraversalEdgeKinds...)
-	}
-	if opts.Cost == TraversalCostRisk {
-		metadata.DefaultRiskWeight = defaultTraversalRiskWeight
 	}
 	if opts.AllPaths {
 		metadata.Algorithm = "bounded-enumeration"
@@ -322,12 +319,18 @@ func FindBoundedTraversalPaths(
 	return minimumBoundedPaths(ctx, db, sources, targetIDs, opts, metadata)
 }
 
-func normalizeTraversalOptions(opts TraversalOptions) TraversalOptions {
-	if opts.Scope != TraversalScopeSecurity {
-		opts.Scope = TraversalScopeTopology
+func normalizeTraversalOptions(opts TraversalOptions) (TraversalOptions, error) {
+	if opts.Scope == "" {
+		opts.Scope = TraversalScopeSecurity
 	}
-	if opts.Cost != TraversalCostRisk {
+	if opts.Scope != TraversalScopeSecurity && opts.Scope != TraversalScopeTopology {
+		return TraversalOptions{}, fmt.Errorf("invalid traversal scope %q", opts.Scope)
+	}
+	if opts.Cost == "" {
 		opts.Cost = TraversalCostHops
+	}
+	if opts.Cost != TraversalCostHops && opts.Cost != TraversalCostRisk {
+		return TraversalOptions{}, fmt.Errorf("invalid traversal cost %q", opts.Cost)
 	}
 	if opts.MaxHops < 1 {
 		opts.MaxHops = 10
@@ -341,7 +344,7 @@ func normalizeTraversalOptions(opts TraversalOptions) TraversalOptions {
 	if opts.MaxExpansions < 1 {
 		opts.MaxExpansions = 100000
 	}
-	return opts
+	return opts, nil
 }
 
 func minimumBoundedPaths(
@@ -380,11 +383,10 @@ func minimumBoundedPaths(
 					metadata.IncompleteReason = "expansion limit reached before minimum cost was proven"
 					return TraversalResult{Paths: []TraversalPath{}, Metadata: metadata}, nil
 				}
-				stepCost, defaulted, err := traversalEdgeCost(edge.edge, opts.Cost)
+				stepCost, err := traversalEdgeCost(edge.edge, opts.Cost)
 				if err != nil {
 					return TraversalResult{}, err
 				}
-				metadata.UsedDefaultWeights = metadata.UsedDefaultWeights || defaulted
 				next := extendTraversalState(state, edge, stepCost)
 				key := stateMapKey(next.source.ID, next.node.ID)
 				if existing, ok := nextStates[key]; !ok || betterTraversalState(next, existing) {
@@ -610,21 +612,24 @@ func numericFloat(value any) (float64, bool) {
 	}
 }
 
-func traversalEdgeCost(edge TraversalEdge, cost TraversalCost) (float64, bool, error) {
+func traversalEdgeCost(edge TraversalEdge, cost TraversalCost) (float64, error) {
 	if cost == TraversalCostHops {
-		return 1, false, nil
+		return 1, nil
 	}
 	if edge.RiskWeight == nil {
-		return defaultTraversalRiskWeight, true, nil
+		return 0, fmt.Errorf(
+			"edge %s %s->%s is missing required risk_weight",
+			edge.Kind, edge.Source, edge.Target,
+		)
 	}
 	weight := *edge.RiskWeight
 	if math.IsNaN(weight) || math.IsInf(weight, 0) || weight < 0 {
-		return 0, false, fmt.Errorf(
+		return 0, fmt.Errorf(
 			"edge %s %s->%s has invalid risk_weight %v",
 			edge.Kind, edge.Source, edge.Target, weight,
 		)
 	}
-	return weight, false, nil
+	return weight, nil
 }
 
 func extendTraversalState(state traversalState, edge adjacency, stepCost float64) traversalState {

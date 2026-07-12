@@ -3,9 +3,14 @@ import { AlertCircle, ScanSearch, ArrowRight } from "lucide-react";
 import { useGraphStats } from "@entities/graph-stats";
 import { useFindings } from "@entities/finding";
 import { useNodes } from "@entities/node";
-import { useScans } from "@entities/scan";
+import {
+  latestPublishedScan,
+  useLatestPublishedScan,
+  useScans,
+} from "@entities/scan";
 import { useProjectionState } from "@entities/posture";
 import { AsyncBoundary, DataStateNotice } from "@shared/ui/feedback";
+import { sameDashboardProjection } from "../model/projection";
 import { DashboardHeader } from "./DashboardHeader";
 import { StatCards } from "./StatCards";
 import { ExposureGauge } from "./ExposureGauge";
@@ -121,6 +126,7 @@ export function Dashboard() {
   const findingsQuery = useFindings();
   const nodesQuery = useNodes();
   const scansQuery = useScans(20);
+  const latestPublishedQuery = useLatestPublishedScan();
   const postureQuery = useProjectionState();
 
   const required = [
@@ -128,6 +134,7 @@ export function Dashboard() {
     ["published findings", findingsQuery],
     ["node inventory", nodesQuery],
     ["scan history", scansQuery],
+    ["published scan", latestPublishedQuery],
     ["projection state", postureQuery],
   ] as const;
   const coldFailures = required.filter(
@@ -146,9 +153,8 @@ export function Dashboard() {
   const stats = statsQuery.data;
   const scans = scansQuery.data ?? [];
   const posture = postureQuery.data;
-  const latestPublished = scans.find(
-    (scan) => scan.publication_status === "published",
-  );
+  const latestPublished =
+    latestPublishedQuery.data ?? latestPublishedScan(scans);
   const publishedStagesComplete =
     latestPublished != null &&
     latestPublished.collection_status === "complete" &&
@@ -165,13 +171,43 @@ export function Dashboard() {
     (!posture?.published_scan_id || latestPublished == null);
   const publishedSnapshotIncomplete =
     latestPublished != null && !publishedStagesComplete;
+  const matchingProjection = sameDashboardProjection(
+    findingsQuery.snapshot?.scanId && findingsQuery.snapshot.revision != null
+      ? {
+          scanId: findingsQuery.snapshot.scanId,
+          revision: findingsQuery.snapshot.revision,
+        }
+      : null,
+    stats?.projection,
+    nodesQuery.snapshot,
+    latestPublished?.published_revision != null
+      ? {
+          scanId: latestPublished.id,
+          revision: latestPublished.published_revision,
+        }
+      : null,
+    posture?.published_scan_id && posture.published_revision != null
+      ? {
+          scanId: posture.published_scan_id,
+          revision: posture.published_revision,
+        }
+      : null,
+  );
+  const projectionMismatch =
+    findingsQuery.data !== undefined &&
+    stats !== undefined &&
+    nodesQuery.data !== undefined &&
+    scansQuery.data !== undefined &&
+    posture !== undefined &&
+    !matchingProjection;
   const verdictsWithheld =
     !isLoading &&
     coldFailures.length === 0 &&
     (projectionIncomplete ||
       unknownProjectionWithInventory ||
       missingPublishedSnapshot ||
-      publishedSnapshotIncomplete);
+      publishedSnapshotIncomplete ||
+      projectionMismatch);
   const isEmpty =
     !isLoading &&
     coldFailures.length === 0 &&
@@ -189,7 +225,9 @@ export function Dashboard() {
       ? "Projection completeness is unknown for the loaded graph. Rescan before treating inventory or finding gaps as complete."
       : missingPublishedSnapshot
         ? "The loaded graph has no matching complete published scan snapshot. Mutable graph values cannot support dashboard verdicts."
-      : "The published scan lacks complete collection, graph, analysis, or snapshot evidence. Missing legacy metadata is treated as unknown.";
+        : projectionMismatch
+          ? "Findings, graph inventory, scan history, and posture state do not identify the same published scan and revision. Mixed-revision data cannot support dashboard verdicts."
+          : "The published scan lacks complete collection, graph, analysis, or snapshot evidence. Missing metadata is treated as unknown.";
 
   return (
     <div className="dashboard-bg min-h-full p-3 sm:p-4 lg:p-5">

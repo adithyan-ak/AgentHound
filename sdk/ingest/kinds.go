@@ -34,8 +34,7 @@ var AllowedNodeKinds = map[string]bool{
 // PublicNodeLabels is the ordered set of node labels exposed by inventory
 // endpoints. Concrete AI-service labels precede the AIService umbrella so a
 // multi-label node is counted under its concrete kind. Internal labels such as
-// SchemaVersion and reserved synthetic labels (ResourceGroup, TrustZone) are
-// intentionally absent.
+// SchemaVersion are intentionally absent.
 var PublicNodeLabels = []string{
 	"MCPServer", "MCPTool", "MCPResource", "MCPPrompt",
 	"A2AAgent", "A2ASkill", "AgentInstance",
@@ -46,9 +45,9 @@ var PublicNodeLabels = []string{
 	"AIModel", "ExtractedTrainingSignal", "AIService",
 }
 
-// AllNodeLabels includes all 25 node labels (23 collector + 2 synthetic) for
-// Neo4j schema operations. Schema-init logic skips labels in UmbrellaLabels
-// when creating uniqueness constraints — see UmbrellaLabels for the why.
+// AllNodeLabels includes all collector-produced node labels for Neo4j schema
+// operations. Schema initialization skips labels in UmbrellaLabels when
+// creating uniqueness constraints.
 var AllNodeLabels = []string{
 	"MCPServer", "MCPTool", "MCPResource", "MCPPrompt",
 	"A2AAgent", "A2ASkill", "AgentInstance",
@@ -57,7 +56,6 @@ var AllNodeLabels = []string{
 	"OllamaInstance", "VLLMInstance", "QdrantInstance", "MLflowServer",
 	"LiteLLMGateway", "JupyterServer", "LangServeApp", "OpenWebUIInstance",
 	"AIService", "AIModel", "ExtractedTrainingSignal",
-	"ResourceGroup", "TrustZone",
 }
 
 // UmbrellaLabels are labels that nodes carry as a multi-label *companion* to a
@@ -69,6 +67,52 @@ var AllNodeLabels = []string{
 // across different per-kind hash inputs.
 var UmbrellaLabels = map[string]bool{
 	"AIService": true,
+}
+
+// UmbrellaCompanions enumerates the only valid public multi-label tuples.
+// Every key is a concrete kind that owns object identity; values are optional
+// query-convenience labels that may accompany it.
+var UmbrellaCompanions = map[string]map[string]bool{
+	"OllamaInstance":    {"AIService": true},
+	"VLLMInstance":      {"AIService": true},
+	"QdrantInstance":    {"AIService": true},
+	"MLflowServer":      {"AIService": true},
+	"LiteLLMGateway":    {"AIService": true},
+	"JupyterServer":     {"AIService": true},
+	"LangServeApp":      {"AIService": true},
+	"OpenWebUIInstance": {"AIService": true},
+}
+
+// ConcreteNodeKind returns the sole identity-owning kind in a valid node-kind
+// tuple. Invalid tuples return the empty string.
+func ConcreteNodeKind(kinds []string) string {
+	if len(kinds) == 0 {
+		return ""
+	}
+	seen := make(map[string]bool, len(kinds))
+	concrete := ""
+	for _, kind := range kinds {
+		if !AllowedNodeKinds[kind] || seen[kind] {
+			return ""
+		}
+		seen[kind] = true
+		if UmbrellaLabels[kind] {
+			continue
+		}
+		if concrete != "" {
+			return ""
+		}
+		concrete = kind
+	}
+	if concrete == "" || kinds[0] != concrete {
+		return ""
+	}
+	for _, kind := range kinds[1:] {
+		if !UmbrellaCompanions[concrete][kind] {
+			return ""
+		}
+	}
+	return concrete
 }
 
 // RawEdgeKinds are the 18 collector-produced edge kinds accepted in ingest
@@ -212,26 +256,4 @@ func TargetKindAllowed(edgeKind, targetKind string) bool {
 		return false
 	}
 	return endpointKindAllowed(ep.TargetKinds, targetKind)
-}
-
-// ResolveEdgeEndpoints returns the source and target node kinds for an edge,
-// using explicit values when set, falling back to the EdgeKindEndpoints registry.
-func ResolveEdgeEndpoints(kind, sourceKind, targetKind string) (string, string) {
-	if sourceKind != "" && targetKind != "" {
-		return sourceKind, targetKind
-	}
-	ep, ok := EdgeKindEndpoints[kind]
-	if !ok {
-		return sourceKind, targetKind
-	}
-	// Only infer an endpoint when the schema is unambiguous. Choosing the first
-	// member of a multi-kind endpoint silently mislabels valid alternate
-	// producers (for example JupyterServer-PROVIDES_RESOURCE).
-	if sourceKind == "" && len(ep.SourceKinds) == 1 {
-		sourceKind = ep.SourceKinds[0]
-	}
-	if targetKind == "" && len(ep.TargetKinds) == 1 {
-		targetKind = ep.TargetKinds[0]
-	}
-	return sourceKind, targetKind
 }

@@ -64,11 +64,6 @@ export function getPropertyChips(kind: string, properties: Record<string, unknow
         chips.push("exposed");
       } else if (typeof properties.material_status === "string") {
         chips.push(`material:${properties.material_status}`);
-      } else if (
-        properties.is_exposed === true &&
-        properties.merge_key !== "identity"
-      ) {
-        chips.push("exposed");
       }
       break;
     }

@@ -44,10 +44,35 @@ The output file is a standard ingest envelope. `discover` emits raw `:MCPServer`
 ```json
 {
   "meta": {
-    "version": 1,
+    "version": 2,
     "type": "agenthound-ingest",
     "collector": "scan",
+    "collector_version": "0.3.0-dev",
+    "timestamp": "2026-07-11T20:00:00Z",
     "scan_id": "...",
+    "collection": {
+      "state": "complete",
+      "coverage_keys": ["scan:discover:sha256:..."],
+      "outcomes": [{
+        "collector": "scan",
+        "coverage_key": "scan:discover:sha256:...",
+        "target": "10.0.0.0/24",
+        "method": "protocol_discovery",
+        "state": "complete",
+        "items": 3
+      }]
+    },
+    "ruleset": {
+      "digest": "sha256:...",
+      "load_state": "complete",
+      "authenticity": "unverified"
+    },
+    "identity_schemes": [{
+      "entity_kind": "MCPServer",
+      "transport": "stdio",
+      "scheme": "mcp_stdio_v2_ordered",
+      "version": 2
+    }],
     "extra": {
       "discover_spec": "10.0.0.0/24",
       "discover_targets": 3,
@@ -63,10 +88,15 @@ The output file is a standard ingest envelope. `discover` emits raw `:MCPServer`
           "endpoint": "http://10.0.0.42:3000",
           "transport": "http",
           "discovered_via": "protoscan",
-          "protocol": "mcp"
-        }
+          "protocol": "mcp",
+          "auth_method": "unknown",
+          "auth_assurance": "unknown",
+          "auth_evidence": "unknown"
+        },
+        "observation_domains": ["scan:discover:sha256:..."]
       }
-    ]
+    ],
+    "edges": []
   }
 }
 ```

@@ -146,6 +146,7 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 	wg.Wait()
 
 	data := common.NewIngestData("a2a", scanID)
+	data.Meta.Ruleset = rules.ManifestForEngine(engine)
 	nodeIndex := make(map[string]int)
 	addNode := func(node ingest.Node) {
 		if index, ok := nodeIndex[node.ID]; ok {
@@ -206,6 +207,9 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 
 	delegations := DetectDelegation(allCards)
 	for _, d := range delegations {
+		if d.SourceAgentID == d.TargetAgentID {
+			continue
+		}
 		riskWeight := 0.1
 		if hasAuth(allCards, d.TargetAgentID) {
 			riskWeight = 0.5
@@ -216,20 +220,25 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 		props["match_field"] = d.MatchField
 		props["matched_reference"] = d.MatchedRef
 		edge := common.NewEdge(d.SourceAgentID, d.TargetAgentID, "DELEGATES_TO", "A2AAgent", "A2AAgent", props)
-		edge.ObservationDomains = ingest.MergeObservationDomains(
-			[]string{agentScopes[d.SourceAgentID]},
-			[]string{agentScopes[d.TargetAgentID]},
+		setRelationObservationScopes(
+			&edge,
+			agentScopes[d.SourceAgentID],
+			agentScopes[d.TargetAgentID],
 		)
 		data.Graph.Edges = append(data.Graph.Edges, edge)
 	}
 
 	authDomains := DetectSameAuthDomain(allCards)
 	for _, ad := range authDomains {
+		if ad.AgentID1 == ad.AgentID2 {
+			continue
+		}
 		props := common.NewEdgeProps(scanID, 0.9, 0.0)
 		edge := common.NewEdge(ad.AgentID1, ad.AgentID2, "SAME_AUTH_DOMAIN", "A2AAgent", "A2AAgent", props)
-		edge.ObservationDomains = ingest.MergeObservationDomains(
-			[]string{agentScopes[ad.AgentID1]},
-			[]string{agentScopes[ad.AgentID2]},
+		setRelationObservationScopes(
+			&edge,
+			agentScopes[ad.AgentID1],
+			agentScopes[ad.AgentID2],
 		)
 		data.Graph.Edges = append(data.Graph.Edges, edge)
 	}
@@ -241,6 +250,18 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 	data.Meta.Collection = report
 
 	return data, nil
+}
+
+func setRelationObservationScopes(edge *ingest.Edge, sourceScope, targetScope string) {
+	edge.ObservationDomains = ingest.MergeObservationDomains(
+		[]string{sourceScope},
+		[]string{targetScope},
+	)
+	if len(edge.ObservationDomains) >= 2 {
+		edge.ObservationSemantics = ingest.ObservationSemanticsAllDependencies
+		return
+	}
+	edge.ObservationSemantics = ingest.ObservationSemanticsAnyOwner
 }
 
 func a2aCoverageKey(target string) string {
@@ -329,16 +350,11 @@ func buildGraph(card *AgentCardData, scanID string) ([]ingest.Node, []ingest.Edg
 		"auth_assurance":                string(authAssessment.Assurance),
 		"auth_evidence":                 authEvidence,
 		"is_signed":                     card.IsSigned,
-		"signature_valid":               card.SignatureValid,
 		"signature_verification_status": signatureStatus,
 		"is_https":                      card.IsHTTPS,
 		"card_hash":                     card.CardHash,
 		"collection_state":              string(ingest.OutcomeComplete),
 	}
-	if authAssessment.Weakness != nil {
-		agentProps["auth_posture"] = *authAssessment.Weakness
-	}
-
 	schemesData := make([]map[string]string, len(card.SecuritySchemes))
 	for i, s := range card.SecuritySchemes {
 		schemesData[i] = map[string]string{"name": s.Name, "type": s.Type, "scheme": s.Scheme}
@@ -372,12 +388,9 @@ func buildGraph(card *AgentCardData, scanID string) ([]ingest.Node, []ingest.Edg
 	if hostname != "" {
 		hostID := common.HostNodeID(hostname)
 		hostProps := map[string]any{
-			"hostname":   hostInfo.Hostname,
-			"ip":         hostInfo.IP,
-			"scope":      hostInfo.Scope,
-			"is_local":   hostInfo.IsLocal,
-			"is_private": hostInfo.IsPrivate,
-			"is_public":  hostInfo.IsPublic,
+			"hostname": hostInfo.Hostname,
+			"ip":       hostInfo.IP,
+			"scope":    hostInfo.Scope,
 		}
 		nodes = append(nodes, common.NewNode(hostID, []string{"Host"}, hostProps))
 

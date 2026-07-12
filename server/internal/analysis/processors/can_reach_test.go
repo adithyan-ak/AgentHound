@@ -52,6 +52,10 @@ func TestCanReach_ProcessSuccess(t *testing.T) {
 	if !strings.Contains(credential, "current.scan_id = $scan_id") {
 		t.Fatalf("credential pass must preserve a direct path refreshed this scan:\n%s", credential)
 	}
+	if !strings.Contains(credential, "NOT EXISTS {") ||
+		!strings.Contains(credential, "MATCH (a)-[current:CAN_REACH]->(r)") {
+		t.Fatalf("credential pass must use Neo4j-4.4-compatible EXISTS subquery:\n%s", credential)
+	}
 	if strings.Contains(credential, "s1.auth_method IS NULL OR") ||
 		!strings.Contains(credential, "s1.auth_assurance IN ['unauthenticated', 'weak']") {
 		t.Fatalf("unknown auth must not satisfy credential delegation:\n%s", credential)

@@ -58,7 +58,7 @@ scan --config         scan --mcp --url <url>           scan --a2a --target <url>
                         |
                         v
               Query / Pathfinding
-              (Cypher, APOC Dijkstra,
+              (Cypher, bounded traversal,
                19 pre-built queries)
 ```
 
@@ -93,8 +93,6 @@ scan --config         scan --mcp --url <url>           scan --a2a --target <url>
 | AIService | Multi-label umbrella | Companion label shared by AI service nodes |
 | AIModel | Looter | Model artifact served by an AI service |
 | ExtractedTrainingSignal | Extractor | Signal recovered from a model artifact |
-| ResourceGroup | Reserved / unimplemented | Compatibility label with no current producer; excluded from public inventory |
-| TrustZone | Reserved / unimplemented | Compatibility label with no current producer; excluded from public inventory |
 
 Node IDs are deterministic SHA-256 hashes of `Kind:` + identifying properties. MCPServer IDs
 match across Config and MCP collectors -- this is the merge point connecting trust to capabilities.
@@ -154,8 +152,8 @@ Docker Compose runs three containers:
 
 | Container | Image | Purpose | Default Port (host) |
 |-----------|-------|---------|---------------------|
-| graph-db | neo4j:4.4-community | Graph storage, Cypher queries, APOC pathfinding | 127.0.0.1:7687 (bolt), 127.0.0.1:7474 (browser) |
-| app-db | postgres:16-alpine | scans table only (no users/tokens/audit) | 127.0.0.1:5432 |
+| graph-db | neo4j:4.4-community | Graph storage and Cypher queries | 127.0.0.1:7687 (bolt), 127.0.0.1:7474 (browser) |
+| app-db | postgres:16-alpine | scan lifecycle, finding snapshots/triage, posture publications (no users/tokens/audit) | 127.0.0.1:5432 |
 | agenthound | golang:1.25-alpine (multi-stage) | API server + embedded UI | 127.0.0.1:8080 |
 
 ```bash

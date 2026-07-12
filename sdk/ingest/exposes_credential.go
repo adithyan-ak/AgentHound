@@ -18,9 +18,10 @@ func ExposesCredentialEdge(sourceID, credID, engagementID, source, endpoint stri
 	)
 }
 
-// CredentialEvidenceEdge preserves the legacy EXPOSES_CREDENTIAL topology
-// while making the evidence claim explicit. A credential reference with
-// exposure_status=not_observed is not usable secret exposure.
+// CredentialEvidenceEdge builds the EXPOSES_CREDENTIAL topology from an
+// AIService source to a Credential target while making the evidence claim
+// explicit. A credential reference with exposure_status=not_observed is not
+// usable secret exposure.
 func CredentialEvidenceEdge(
 	sourceID, credID, engagementID, source, endpoint, exposureStatus string,
 ) Edge {

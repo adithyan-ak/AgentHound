@@ -24,7 +24,7 @@ export function buildFindingsTableMarkdown(findings: Finding[]): string {
     const owasp = (f.owasp_map ?? []).join(", ") || "—";
     const atlas = (f.atlas_map ?? []).join(", ") || "—";
     lines.push(
-      `| ${markdownCell(f.severity.toUpperCase())} | ${markdownCell(f.title)} | ${markdownCell(f.variant ?? "unknown")} | ${markdownCell(f.evidence?.state ?? "unknown")} | ${markdownCell(f.edge_kind)} | ${src} → ${tgt} | ${markdownCell(owasp)} | ${markdownCell(atlas)} | ${Math.round(
+      `| ${markdownCell(f.severity.toUpperCase())} | ${markdownCell(f.title)} | ${markdownCell(f.variant)} | ${markdownCell(f.evidence.state)} | ${markdownCell(f.edge_kind)} | ${src} → ${tgt} | ${markdownCell(owasp)} | ${markdownCell(atlas)} | ${Math.round(
         f.confidence * 100,
       )}% |`,
     );
@@ -40,7 +40,7 @@ export function buildMarkdownReport(
   snapshot?: FindingDetail["snapshot"],
 ): string {
   const lines: string[] = [];
-  const findingChannels = finding.evidence?.channels ?? [];
+  const findingChannels = finding.evidence.channels ?? [];
 
   lines.push(
     `## [${markdownText(finding.severity.toUpperCase())}] ${markdownText(finding.title)}`,
@@ -49,7 +49,7 @@ export function buildMarkdownReport(
   lines.push(`**Finding:** ${finding.id} | Confidence: ${Math.round(finding.confidence * 100)}%`);
   lines.push(`**References:** OWASP: ${(finding.owasp_map ?? []).join(", ") || "—"} | MITRE ATLAS: ${(finding.atlas_map ?? []).join(", ") || "—"}`);
   lines.push(
-    `**Classification:** ${finding.category} | Variant: ${finding.variant ?? "unknown"} | Evidence: ${finding.evidence?.state ?? "unknown"}`,
+    `**Classification:** ${finding.category} | Variant: ${finding.variant} | Evidence: ${finding.evidence.state}`,
   );
   lines.push(`**Source:** ${markdownText(finding.source_name || finding.source_id)} (${markdownText(finding.source_kind)})`);
   lines.push(`**Target:** ${markdownText(finding.target_name || finding.target_id)} (${markdownText(finding.target_kind)})`);
@@ -58,7 +58,7 @@ export function buildMarkdownReport(
   }
   if (snapshot) {
     lines.push(
-      `**Snapshot:** ${snapshot.scan_id} | Projection: ${snapshot.projection_status} | Evidence: ${snapshot.live_evidence_state}${snapshot.stale ? " | stale" : ""}`,
+      `**Snapshot:** ${snapshot.scan_id} | Projection: ${snapshot.projection_status} | Evidence: ${snapshot.evidence_state}${snapshot.stale ? " | stale" : ""}`,
     );
   }
   lines.push("");

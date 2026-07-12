@@ -103,6 +103,7 @@ describe("QueryLibrary", () => {
     mockedRunQuery.mockResolvedValue({
       query: mockQueries[0]!,
       rows: [{ name: "test-server", risk: 85 }],
+      projection: { scanId: "scan-1", revision: 1 },
     });
 
     render(<QueryLibrary />, { wrapper: createWrapper() });

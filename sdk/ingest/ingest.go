@@ -1,5 +1,10 @@
 package ingest
 
+const (
+	CurrentVersion = 2
+	IngestType     = "agenthound-ingest"
+)
+
 type IngestData struct {
 	Meta  IngestMeta `json:"meta"`
 	Graph GraphData  `json:"graph"`
@@ -15,7 +20,6 @@ type IngestMeta struct {
 	Collection       *CollectionReport `json:"collection,omitempty"`
 	Ruleset          *RulesetManifest  `json:"ruleset,omitempty"`
 	IdentitySchemes  []IdentityScheme  `json:"identity_schemes,omitempty"`
-	IdentityAliases  []IdentityAlias   `json:"identity_aliases,omitempty"`
 
 	// Extra carries collector-specific or scan-mode-specific metadata that
 	// doesn't fit the structured fields above. v0.2 introduces this for the

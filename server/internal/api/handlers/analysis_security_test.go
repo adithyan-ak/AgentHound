@@ -70,11 +70,6 @@ func TestValidNodeKindAcceptsAllLabels(t *testing.T) {
 			t.Errorf("validNodeKind(%q) = false, want true", label)
 		}
 	}
-	for _, reserved := range []string{"ResourceGroup", "TrustZone"} {
-		if validNodeKind(reserved) {
-			t.Errorf("reserved label %q must not be public path input", reserved)
-		}
-	}
 }
 
 func TestCypherInjectionViaTargetKind(t *testing.T) {

@@ -11,7 +11,7 @@ AgentHound surfaces findings through two complementary layers:
 | **YAML rules engine** | Inside collectors at scan time. Drives capability classification, credential extraction, prompt-injection pattern matching, instruction-file poisoning, source-trust tagging, and resource-sensitivity classification. | **35 builtin rules** | `sdk/rules/builtin/*.yaml`. Inspect with `agenthound rules list`; test with `agenthound rules test`; query the running server via `GET /api/v1/rules`. |
 | **Pre-built graph queries** | Inside `agenthound-server` against the post-processed Neo4j graph. Each query expresses a high-level finding as a Cypher path or pattern. | **19 queries** | `server/internal/analysis/prebuilt/`. Surface as findings via `GET /api/v1/analysis/findings`, runnable via `GET /api/v1/analysis/prebuilt/{id}` or `agenthound-server query --prebuilt <id>`. |
 
-The two layers feed each other: the rules engine emits structured signals (`capability_surface`, `is_exposed`, `has_injection_patterns`, `source_trust`, sensitivity classifications) on collected nodes; the post-processors and pre-built queries consume those signals to compute composite edges (`HAS_ACCESS_TO`, `CAN_REACH`, `POISONED_DESCRIPTION`, `TAINTS`, `IFC_VIOLATION`, `CONFUSED_DEPUTY`, `POISONS_CONTEXT`, etc.) and enumerate attack paths.
+The two layers feed each other: the rules engine emits structured signals (`capability_surface`, `exposure_status`, `material_status`, `high_entropy`, `has_injection_patterns`, `source_trust`, sensitivity classifications) on collected nodes; the post-processors and pre-built queries consume those signals to compute composite edges (`HAS_ACCESS_TO`, `CAN_REACH`, `POISONED_DESCRIPTION`, `TAINTS`, `IFC_VIOLATION`, `CONFUSED_DEPUTY`, `POISONS_CONTEXT`, etc.) and enumerate attack paths.
 
 The detections summarized below are the **pre-built-query** layer. The 35 underlying YAML rules are not enumerated here individually — read them directly in `sdk/rules/builtin/` for the canonical truth. Composite-edge detections (`TAINTS`, `IFC_VIOLATION`, `CONFUSED_DEPUTY`, `POISONS_CONTEXT`) surface through `GET /api/v1/analysis/findings` rather than a named pre-built query.
 
@@ -155,9 +155,8 @@ trust path and is not classified as anonymous network access.
 ## Unsigned agent cards (MCP09, ASI09)
 
 **How detected:** The query requires
-`signature_verification_status=unsigned`. For legacy nodes only, an explicit
-`is_signed=false` remains accepted when the richer status is absent. Missing
-both fields is unknown and does not match.
+`signature_verification_status=unsigned`. Missing verification status is
+unknown and does not match.
 
 ## Shell access paths (MCP01)
 
@@ -230,7 +229,7 @@ and negated delegation are benign counterexamples. The lexical edge remains a
 50%-confidence hypothesis. The cross-protocol post-processor additionally
 requires explicit anonymous-probe evidence for the external A2A actor, then
 correlates its possible delegation target with an MCP server recorded on the
-same host. The compatibility edge is retained as `CAN_REACH`, but carries
+same host. The correlation is represented as `CAN_REACH`, but carries
 `cross_protocol=true`, 50% confidence,
 `variant=cross_protocol_host_correlation`, and
 `evidence.state=hypothesis`.

@@ -128,84 +128,32 @@ type RulesetManifest struct {
 	Authenticity string              `json:"authenticity"`
 }
 
+// EmptyRulesetManifest explicitly records that a producer evaluated no
+// runtime rules. It is complete metadata, not an omitted/unknown ruleset.
+func EmptyRulesetManifest() *RulesetManifest {
+	return &RulesetManifest{
+		Digest:       "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e64a8f8bff093b2f5f2cf4e",
+		Entries:      []RuleManifestEntry{},
+		LoadState:    OutcomeComplete,
+		Errors:       []string{},
+		Authenticity: "unverified",
+	}
+}
+
 type IdentityScheme struct {
-	EntityKind   string `json:"entity_kind"`
-	Transport    string `json:"transport,omitempty"`
-	Scheme       string `json:"scheme"`
-	Version      int    `json:"version"`
-	LegacyScheme string `json:"legacy_scheme,omitempty"`
+	EntityKind string `json:"entity_kind"`
+	Transport  string `json:"transport,omitempty"`
+	Scheme     string `json:"scheme"`
+	Version    int    `json:"version"`
 }
 
-type IdentityAliasState string
-
-const (
-	IdentityAliasUnresolved IdentityAliasState = "unresolved"
-	IdentityAliasOneToOne   IdentityAliasState = "one_to_one"
-	IdentityAliasAmbiguous  IdentityAliasState = "ambiguous"
-)
-
-// IdentityAlias carries compatibility evidence without mutating legacy IDs.
-// An ambiguous legacy ID is a quarantine signal, never an instruction to merge.
-type IdentityAlias struct {
-	LegacyID   string             `json:"legacy_id"`
-	CurrentIDs []string           `json:"current_ids"`
-	State      IdentityAliasState `json:"state"`
-}
-
-// BuildMCPIdentityAliases summarizes the v2 candidates for each legacy sorted
-// stdio ID. Only a complete coverage domain can prove a one-to-one alias;
-// multiple candidates are always ambiguous and must be quarantined.
-func BuildMCPIdentityAliases(nodes []Node, coverageComplete bool) []IdentityAlias {
-	byLegacy := make(map[string]map[string]bool)
-	for _, node := range nodes {
-		if !nodeHasKind(node, "MCPServer") ||
-			node.Properties["id_scheme"] != MCPStdioIdentitySchemeV2 {
-			continue
-		}
-		legacyID, _ := node.Properties["legacy_objectid"].(string)
-		if legacyID == "" {
-			continue
-		}
-		if byLegacy[legacyID] == nil {
-			byLegacy[legacyID] = make(map[string]bool)
-		}
-		byLegacy[legacyID][node.ID] = true
-	}
-
-	legacyIDs := make([]string, 0, len(byLegacy))
-	for legacyID := range byLegacy {
-		legacyIDs = append(legacyIDs, legacyID)
-	}
-	sort.Strings(legacyIDs)
-
-	aliases := make([]IdentityAlias, 0, len(legacyIDs))
-	for _, legacyID := range legacyIDs {
-		currentIDs := make([]string, 0, len(byLegacy[legacyID]))
-		for currentID := range byLegacy[legacyID] {
-			currentIDs = append(currentIDs, currentID)
-		}
-		sort.Strings(currentIDs)
-		state := IdentityAliasUnresolved
-		switch {
-		case len(currentIDs) > 1:
-			state = IdentityAliasAmbiguous
-		case coverageComplete:
-			state = IdentityAliasOneToOne
-		}
-		aliases = append(aliases, IdentityAlias{
-			LegacyID:   legacyID,
-			CurrentIDs: currentIDs,
-			State:      state,
-		})
-	}
-	return aliases
-}
-
-func nodeHasKind(node Node, want string) bool {
-	for _, kind := range node.Kinds {
-		if kind == want {
-			return true
-		}
-	}
-	return false
+// CurrentIdentitySchemes returns the identity contract understood by every
+// current collector envelope.
+func CurrentIdentitySchemes() []IdentityScheme {
+	return []IdentityScheme{{
+		EntityKind: "MCPServer",
+		Transport:  "stdio",
+		Scheme:     MCPStdioIdentitySchemeV2,
+		Version:    2,
+	}}
 }

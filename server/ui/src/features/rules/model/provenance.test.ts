@@ -9,8 +9,9 @@ function scan(metadata?: Record<string, unknown>): Scan {
     status: "completed",
     started_at: "2026-07-11T00:00:00Z",
     completed_at: "2026-07-11T00:01:00Z",
-    node_count: 1,
-    edge_count: 1,
+    submitted: { nodes: 1, edges: 1 },
+    write_rows: { nodes: 1, edges: 1 },
+    graph_totals: { before: null, after: null },
     metadata,
   };
 }
@@ -54,7 +55,7 @@ describe("scanRulesetProvenance", () => {
     expect(result.manifest?.authenticity).toBe("unverified");
   });
 
-  it("does not substitute current server rules for legacy scans", () => {
+  it("does not substitute current rules when scan provenance is absent", () => {
     const result = scanRulesetProvenance(scan());
 
     expect(result.manifest).toBeNull();

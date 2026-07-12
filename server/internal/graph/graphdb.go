@@ -28,7 +28,7 @@ type ProcessingStats struct {
 // GraphDB abstracts graph read/write operations for post-processors.
 type GraphDB interface {
 	Query(ctx context.Context, cypher string, params map[string]any) ([]map[string]any, error)
-	WriteEdges(ctx context.Context, edges []ingest.Edge, scanID string) (int, error)
+	WriteCompositeEdges(ctx context.Context, edges []ingest.Edge, scanID string) (int, error)
 	UpdateNodeProperties(ctx context.Context, objectID string, props map[string]any) error
 	ExecuteWrite(ctx context.Context, cypher string, params map[string]any) (int, error)
 	GetNode(ctx context.Context, objectID string) (*ingest.Node, []ingest.Edge, error)
@@ -52,8 +52,8 @@ func (db *DB) Query(ctx context.Context, cypher string, params map[string]any) (
 	return db.reader.Query(ctx, cypher, params)
 }
 
-func (db *DB) WriteEdges(ctx context.Context, edges []ingest.Edge, scanID string) (int, error) {
-	return db.writer.WriteEdges(ctx, edges, scanID)
+func (db *DB) WriteCompositeEdges(ctx context.Context, edges []ingest.Edge, scanID string) (int, error) {
+	return db.writer.WriteCompositeEdges(ctx, edges, scanID)
 }
 
 func (db *DB) GetNode(ctx context.Context, objectID string) (*ingest.Node, []ingest.Edge, error) {

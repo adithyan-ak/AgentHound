@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
 func TestReconcileObservationsSkipsUnknownCoverage(t *testing.T) {
@@ -22,7 +24,7 @@ func TestReconcileObservationsSkipsUnknownCoverage(t *testing.T) {
 }
 
 func TestReconcileObservationsRetiresOnlySelectedDomains(t *testing.T) {
-	results := []int{7, 3, 5, 2}
+	results := []int{0, 0, 7, 3, 5, 2}
 	db := &MockGraphDB{
 		ExecuteWriteFunc: func(_ context.Context, _ string, _ map[string]any) (int, error) {
 			result := results[0]
@@ -48,8 +50,8 @@ func TestReconcileObservationsRetiresOnlySelectedDomains(t *testing.T) {
 	}
 
 	calls := db.CallsTo("ExecuteWrite")
-	if len(calls) != 4 {
-		t.Fatalf("ExecuteWrite calls = %d, want 4", len(calls))
+	if len(calls) != 6 {
+		t.Fatalf("ExecuteWrite calls = %d, want 6", len(calls))
 	}
 	params, ok := calls[0].Args[1].(map[string]any)
 	if !ok {
@@ -65,19 +67,66 @@ func TestReconcileObservationsRetiresOnlySelectedDomains(t *testing.T) {
 	if !reflect.DeepEqual(tokens, wantTokens) {
 		t.Fatalf("tokens = %q, want %q", tokens, wantTokens)
 	}
-	retireQuery, ok := calls[0].Args[0].(string)
+	retireQuery, ok := calls[2].Args[0].(string)
 	if !ok {
 		t.Fatalf("retire query type = %T", calls[0].Args[0])
 	}
 	if !strings.Contains(retireQuery, "token IN $current_tokens") {
 		t.Fatal("current observation tokens must survive owner retirement")
 	}
-	deleteQuery, ok := calls[1].Args[0].(string)
+	deleteQuery, ok := calls[3].Args[0].(string)
 	if !ok {
 		t.Fatalf("delete query type = %T", calls[1].Args[0])
 	}
-	if !strings.Contains(deleteQuery, "legacy_observation") {
-		t.Fatal("legacy observations must be protected from deletion")
+	if !strings.Contains(deleteQuery, "type(r) IN $raw_edge_kinds") {
+		t.Fatal("relationship retirement must remain limited to managed raw edges")
+	}
+}
+
+func TestReconcileDependencyEdgeRetiresWhenEitherDomainChanges(t *testing.T) {
+	db := &MockGraphDB{}
+	domainA := "a2a:target:sha256:a"
+	if _, err := ReconcileObservations(
+		context.Background(),
+		db,
+		"scan-current",
+		[]string{domainA},
+	); err != nil {
+		t.Fatalf("ReconcileObservations: %v", err)
+	}
+
+	calls := db.CallsTo("ExecuteWrite")
+	if len(calls) == 0 {
+		t.Fatal("dependency reconciliation was not executed")
+	}
+	query, _ := calls[0].Args[0].(string)
+	for _, fragment := range []string{
+		"r.observation_semantics = $all_dependencies_semantics",
+		"r.observation_dependency_tokens",
+		"token IN $current_tokens",
+		"DELETE r",
+	} {
+		if !strings.Contains(query, fragment) {
+			t.Fatalf("dependency reconciliation missing %q:\n%s", fragment, query)
+		}
+	}
+	params, _ := calls[0].Args[1].(map[string]any)
+	if params["all_dependencies_semantics"] !=
+		string(ingest.ObservationSemanticsAllDependencies) {
+		t.Fatalf("dependency semantics parameter = %v", params["all_dependencies_semantics"])
+	}
+	prefixes, _ := params["domain_prefixes"].([]string)
+	if !reflect.DeepEqual(prefixes, []string{domainA + "\x1f"}) {
+		t.Fatalf("dependency retirement prefixes = %q", prefixes)
+	}
+	retireQuery, _ := calls[1].Args[0].(string)
+	for _, fragment := range []string{
+		"SET r.observation_dependency_tokens",
+		"OR token IN $current_tokens",
+	} {
+		if !strings.Contains(retireQuery, fragment) {
+			t.Fatalf("dependency token retirement missing %q:\n%s", fragment, retireQuery)
+		}
 	}
 }
 
@@ -132,34 +181,39 @@ func TestPruneUnownedObservationNodesRunsAfterCompositeCleanup(t *testing.T) {
 	}
 }
 
-func TestObservationCompletenessIncludesLegacyAndUnscopedFacts(t *testing.T) {
+func TestObservationCompletenessScopesToPublicManagedRawFacts(t *testing.T) {
 	db := &MockGraphDB{QueryResult: []map[string]any{{
-		"legacy_nodes":                      int64(1),
-		"legacy_relationships":              int64(2),
-		"unscoped_nodes":                    int64(3),
-		"unscoped_relationships":            int64(4),
 		"incomplete_property_nodes":         int64(5),
 		"incomplete_property_relationships": int64(6),
-		"identity_quarantined_nodes":        int64(7),
 	}}}
 	completeness, err := GetObservationCompleteness(context.Background(), db)
 	if err != nil {
 		t.Fatalf("GetObservationCompleteness: %v", err)
 	}
 	if completeness.Complete() ||
-		completeness.LegacyNodes != 1 ||
-		completeness.UnscopedRelationships != 4 ||
-		completeness.IncompletePropertyRelationships != 6 ||
-		completeness.IdentityQuarantinedNodes != 7 {
+		completeness.IncompletePropertyNodes != 5 ||
+		completeness.IncompletePropertyRelationships != 6 {
 		t.Fatalf("observation completeness = %+v", completeness)
 	}
 	calls := db.CallsTo("Query")
 	if len(calls) != 1 {
 		t.Fatalf("query calls = %d, want one", len(calls))
 	}
+	query, _ := calls[0].Args[0].(string)
+	if !strings.Contains(query, "label IN $public_kinds") {
+		t.Fatalf("observation completeness includes internal nodes:\n%s", query)
+	}
+	if !strings.Contains(query, "type(r) IN $raw_edge_kinds") ||
+		!strings.Contains(query, "size(coalesce(n.observation_tokens, [])) > 0") ||
+		!strings.Contains(query, "size(coalesce(r.observation_tokens, [])) > 0") {
+		t.Fatalf("observation completeness is not scoped to managed raw facts:\n%s", query)
+	}
 	params, _ := calls[0].Args[1].(map[string]any)
-	prefixes, _ := params["unscoped_prefixes"].([]string)
-	if want := []string{"mcp\x1f", "a2a\x1f", "config\x1f"}; !reflect.DeepEqual(prefixes, want) {
-		t.Fatalf("unscoped prefixes = %q, want %q", prefixes, want)
+	if publicKinds, _ := params["public_kinds"].([]string); !reflect.DeepEqual(publicKinds, ingest.PublicNodeLabels) {
+		t.Fatalf("public kinds = %v, want %v", publicKinds, ingest.PublicNodeLabels)
+	}
+	rawKinds, _ := params["raw_edge_kinds"].([]string)
+	if !reflect.DeepEqual(rawKinds, rawEdgeKinds()) {
+		t.Fatalf("raw edge kinds = %v, want %v", rawKinds, rawEdgeKinds())
 	}
 }

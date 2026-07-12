@@ -72,7 +72,7 @@ export function StatCards() {
             icon={t.icon}
             label={t.label}
             value={nc[t.kind] ?? 0}
-            color={NODE_KIND_COLORS_BY_KEY[t.kind] ?? NODE_KIND_COLORS.ResourceGroup}
+            color={NODE_KIND_COLORS_BY_KEY[t.kind] ?? NODE_KIND_COLORS.Identity}
             sub={t.sub}
           />
         ))}

@@ -2,70 +2,53 @@ package ingest
 
 import "testing"
 
-func TestBuildMCPIdentityAliasesQuarantinesAmbiguousLegacyID(t *testing.T) {
-	legacy := ComputeLegacyMCPServerID("stdio", "node", "a.js", "b.js")
-	nodes := []Node{
-		stdioIdentityNode("node", []string{"a.js", "b.js"}, legacy),
-		stdioIdentityNode("node", []string{"b.js", "a.js"}, legacy),
-	}
-
-	aliases := BuildMCPIdentityAliases(nodes, true)
-	if len(aliases) != 1 || aliases[0].State != IdentityAliasAmbiguous {
-		t.Fatalf("ambiguous v1 aggregate was not quarantined: %+v", aliases)
-	}
-	if len(aliases[0].CurrentIDs) != 2 || aliases[0].CurrentIDs[0] == aliases[0].CurrentIDs[1] {
-		t.Fatalf("current candidates missing: %+v", aliases[0])
-	}
-}
-
-func TestBuildMCPIdentityAliasesRequiresCompleteCoverage(t *testing.T) {
-	legacy := ComputeLegacyMCPServerID("stdio", "npx", "pkg")
-	node := stdioIdentityNode("npx", []string{"pkg"}, legacy)
-
-	incomplete := BuildMCPIdentityAliases([]Node{node}, false)
-	if len(incomplete) != 1 || incomplete[0].State != IdentityAliasUnresolved {
-		t.Fatalf("incomplete coverage claimed an alias: %+v", incomplete)
-	}
-	complete := BuildMCPIdentityAliases([]Node{node}, true)
-	if len(complete) != 1 || complete[0].State != IdentityAliasOneToOne {
-		t.Fatalf("complete one-to-one alias not recognized: %+v", complete)
-	}
-
-	duplicateAcrossCollectors := BuildMCPIdentityAliases([]Node{node, node}, true)
-	if len(duplicateAcrossCollectors) != 1 ||
-		duplicateAcrossCollectors[0].State != IdentityAliasOneToOne ||
-		len(duplicateAcrossCollectors[0].CurrentIDs) != 1 {
-		t.Fatalf("same v2 identity from two collectors looked ambiguous: %+v", duplicateAcrossCollectors)
-	}
-}
-
 func TestMergeCollectionReportsPreservesCompleteEmptyState(t *testing.T) {
+	scope := CanonicalCoverageKey("config", "path", "/tmp/missing.json")
 	merged := MergeCollectionReports(&CollectionReport{
 		State:        OutcomeComplete,
-		CoverageKeys: []string{"config"},
-		Outcomes:     []CollectionOutcome{},
+		CoverageKeys: []string{scope},
+		Outcomes: []CollectionOutcome{{
+			Collector:   "config",
+			CoverageKey: scope,
+			Target:      "/tmp/missing.json",
+			Method:      "config_discovery",
+			State:       OutcomeComplete,
+			Items:       0,
+		}},
 	})
 
 	if merged.State != OutcomeComplete {
 		t.Fatalf("merged state = %q, want complete", merged.State)
 	}
-	if len(merged.Outcomes) != 0 {
-		t.Fatalf("synthetic outcomes leaked into merged report: %+v", merged.Outcomes)
+	if len(merged.Outcomes) != 1 {
+		t.Fatalf("explicit complete-empty outcome was lost: %+v", merged.Outcomes)
 	}
 }
 
 func TestMergeCollectionReportsAggregatesReportStates(t *testing.T) {
+	mcpScope := CanonicalCoverageKey("mcp", "target", "https://mcp.example")
+	a2aScope := CanonicalCoverageKey("a2a", "target", "https://a2a.example")
 	merged := MergeCollectionReports(
 		&CollectionReport{
 			State:        OutcomeComplete,
-			CoverageKeys: []string{"mcp"},
+			CoverageKeys: []string{mcpScope},
+			Outcomes: []CollectionOutcome{{
+				Collector:   "mcp",
+				CoverageKey: mcpScope,
+				Target:      "https://mcp.example",
+				Method:      "enumerate",
+				State:       OutcomeComplete,
+			}},
 		},
 		&CollectionReport{
 			State:        OutcomeFailed,
-			CoverageKeys: []string{"a2a"},
+			CoverageKeys: []string{a2aScope},
 			Outcomes: []CollectionOutcome{{
-				Collector: "a2a",
-				State:     OutcomeFailed,
+				Collector:   "a2a",
+				CoverageKey: a2aScope,
+				Target:      "https://a2a.example",
+				Method:      "agent_card",
+				State:       OutcomeFailed,
 			}},
 		},
 	)
@@ -74,23 +57,11 @@ func TestMergeCollectionReportsAggregatesReportStates(t *testing.T) {
 		t.Fatalf("merged state = %q, want partial", merged.State)
 	}
 	if len(merged.CoverageKeys) != 2 ||
-		merged.CoverageKeys[0] != "a2a" ||
-		merged.CoverageKeys[1] != "mcp" {
+		merged.CoverageKeys[0] != a2aScope ||
+		merged.CoverageKeys[1] != mcpScope {
 		t.Fatalf("merged coverage keys = %v", merged.CoverageKeys)
 	}
-	if len(merged.Outcomes) != 1 {
-		t.Fatalf("merged outcomes = %d, want 1", len(merged.Outcomes))
-	}
-}
-
-func stdioIdentityNode(command string, args []string, legacy string) Node {
-	id := ComputeMCPServerID("stdio", command, args...)
-	return Node{
-		ID:    id,
-		Kinds: []string{"MCPServer"},
-		Properties: map[string]any{
-			"id_scheme":       MCPStdioIdentitySchemeV2,
-			"legacy_objectid": legacy,
-		},
+	if len(merged.Outcomes) != 2 {
+		t.Fatalf("merged outcomes = %d, want 2", len(merged.Outcomes))
 	}
 }

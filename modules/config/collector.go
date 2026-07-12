@@ -75,12 +75,12 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 		scanID = common.GenerateScanID("config")
 	}
 	data := common.NewIngestData("config", scanID)
+	data.Meta.Ruleset = rules.ManifestForEngine(engine)
 	data.Meta.IdentitySchemes = []ingest.IdentityScheme{{
-		EntityKind:   "MCPServer",
-		Transport:    "stdio",
-		Scheme:       ingest.MCPStdioIdentitySchemeV2,
-		Version:      2,
-		LegacyScheme: ingest.MCPStdioIdentitySchemeV1,
+		EntityKind: "MCPServer",
+		Transport:  "stdio",
+		Scheme:     ingest.MCPStdioIdentitySchemeV2,
+		Version:    2,
 	}}
 
 	homeDir, err := os.UserHomeDir()
@@ -217,8 +217,7 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 				"pinning_status": string(pinningStatus),
 				"id_scheme":      serverIdentity.Scheme,
 			}
-			if serverIdentity.LegacyObjectID != "" {
-				serverProps["legacy_objectid"] = serverIdentity.LegacyObjectID
+			if srv.Transport == "stdio" {
 				serverProps["command"] = srv.Command
 				serverProps["args"] = append([]string(nil), srv.Args...)
 			}
@@ -243,12 +242,9 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 			hostID := common.HostNodeID(hostName)
 			hostInfo := common.ClassifyHost(hostName)
 			addNode(common.NewNode(hostID, []string{"Host"}, map[string]any{
-				"hostname":   hostInfo.Hostname,
-				"ip":         hostInfo.IP,
-				"scope":      hostInfo.Scope,
-				"is_local":   hostInfo.IsLocal,
-				"is_private": hostInfo.IsPrivate,
-				"is_public":  hostInfo.IsPublic,
+				"hostname": hostInfo.Hostname,
+				"ip":       hostInfo.IP,
+				"scope":    hostInfo.Scope,
 			}), scopeKey)
 			addEdge(common.NewEdge(serverID, hostID, "RUNS_ON", "MCPServer", "Host",
 				common.DefaultEdgeProps(scanID)), scopeKey)
@@ -261,10 +257,6 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 					"scope":          srv.Name,
 					"is_static":      cred.Type == "hardcoded",
 					"auth_assurance": string(common.AssessAuth(identityType).Assurance),
-				}
-				if serverIdentity.LegacyObjectID != "" {
-					identityProps["legacy_objectid"] = ingest.ComputeNodeID(
-						"Identity", serverIdentity.LegacyObjectID, identityType)
 				}
 				addNode(common.NewNode(identityID, []string{"Identity"}, identityProps), scopeKey)
 
@@ -282,7 +274,6 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 					"type":         cred.Type,
 					"name":         cred.Name,
 					"source":       cred.Source,
-					"is_exposed":   cred.IsExposed,
 					"high_entropy": cred.HighEntropy,
 					"format":       cred.Format,
 					"value_hash":   cred.ValueHash,
@@ -337,7 +328,6 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 		}
 	}
 
-	data.Meta.IdentityAliases = ingest.BuildMCPIdentityAliases(data.Graph.Nodes, true)
 	return data, nil
 }
 

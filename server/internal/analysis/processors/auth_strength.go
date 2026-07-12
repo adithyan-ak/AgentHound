@@ -19,7 +19,7 @@ import (
 //
 // Pre-pass: no dependencies, and it only updates node properties — it
 // writes no composite edges, so it needs no source_collector and is not
-// touched by the stale-edge cleanup.
+// touched by composite edge retirement.
 type AuthStrength struct{}
 
 func (p *AuthStrength) Name() string           { return "auth_strength" }

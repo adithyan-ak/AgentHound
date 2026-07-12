@@ -193,11 +193,11 @@ func TestBoundedMinimumWeightHonorsHopLimit(t *testing.T) {
 	}
 }
 
-func TestBoundedMinimumWeightDisclosesCompatibilityDefault(t *testing.T) {
+func TestBoundedMinimumWeightRejectsMissingWeight(t *testing.T) {
 	db := traversalFixtureDB(t, []traversalFixtureEdge{{
 		source: "A", target: "T", kind: "HAS_ACCESS_TO",
 	}})
-	result, err := FindBoundedTraversalPaths(
+	_, err := FindBoundedTraversalPaths(
 		context.Background(),
 		db,
 		[]TraversalNode{traversalNode("A")},
@@ -206,14 +206,7 @@ func TestBoundedMinimumWeightDisclosesCompatibilityDefault(t *testing.T) {
 			Scope: TraversalScopeSecurity, Cost: TraversalCostRisk, MaxHops: 1,
 		},
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Paths) != 1 || result.Paths[0].Weight != defaultTraversalRiskWeight {
-		t.Fatalf("defaulted path = %+v", result.Paths)
-	}
-	if !result.Metadata.UsedDefaultWeights ||
-		result.Metadata.DefaultRiskWeight != defaultTraversalRiskWeight {
-		t.Fatalf("default metadata = %+v", result.Metadata)
+	if err == nil || !strings.Contains(err.Error(), "missing required risk_weight") {
+		t.Fatalf("error = %v, want missing required risk_weight", err)
 	}
 }

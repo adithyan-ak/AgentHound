@@ -215,10 +215,10 @@ export function ScanHistory({ scans, onDeleted }: ScanHistoryProps) {
                     {formatDate(scan.completed_at)}
                   </td>
                   <td className="px-3 py-2.5 text-right align-middle font-mono text-[11px] tabular-nums text-foreground">
-                    {scan.node_count}
+                    {scan.write_rows.nodes}
                   </td>
                   <td className="px-3 py-2.5 text-right align-middle font-mono text-[11px] tabular-nums text-foreground">
-                    {scan.edge_count}
+                    {scan.write_rows.edges}
                   </td>
                   <td className="px-3 py-2.5 align-middle">
                     <div className="flex justify-end gap-1">

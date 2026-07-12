@@ -49,7 +49,7 @@ describe("dashboard authentication evidence", () => {
           auth_method: "none",
           auth_evidence: "anonymous_probe_succeeded",
         }),
-        node("legacy-local", {
+        node("stdio-local", {
           auth_method: "none",
           auth_evidence: "local_process",
         }),
@@ -84,7 +84,7 @@ describe("dashboard authentication evidence", () => {
             auth_evidence: "anonymous_probe_succeeded",
           },
           {
-            server_name: "legacy-local",
+            server_name: "stdio-local",
             agent_count: 3,
             tool_count: 1,
             auth_method: "none",
@@ -111,7 +111,7 @@ describe("dashboard authentication evidence", () => {
         .getByText("unauth"),
     ).toBeInTheDocument();
     expect(
-      within(screen.getByText("legacy-local").closest("li")!)
+      within(screen.getByText("stdio-local").closest("li")!)
         .queryByText("unauth"),
     ).not.toBeInTheDocument();
     expect(

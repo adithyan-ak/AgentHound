@@ -90,7 +90,7 @@ agenthound-server query --prebuilt litellm-credential-leak
 
 When an external A2A agent delegates to another A2A agent recorded on the same
 host as an MCP server, AgentHound can emit a cross-protocol `CAN_REACH`
-compatibility edge. This is a 50%-confidence shared-host correlation, not proof
+correlation edge. This is a 50%-confidence shared-host correlation, not proof
 that the A2A actor can invoke the MCP path end to end.
 
 ```text
@@ -112,10 +112,9 @@ The emitted edge is:
 }]->(:MCPResource)
 ```
 
-The processor requires explicit unauthenticated evidence
-(`auth_assurance = 'unauthenticated'`, with an explicit legacy
-`auth_method = 'none'` fallback). Missing authentication evidence is unknown and
-does not match.
+The processor requires canonical explicit unauthenticated evidence
+(`auth_assurance = 'unauthenticated'`). Missing authentication evidence is
+unknown and does not match.
 
 ### Pre-built query
 
@@ -254,35 +253,37 @@ The `can_impersonate` processor computes TF-IDF cosine similarity over A2A skill
 
 ### `CONFUSED_DEPUTY`
 
-The `auth_strength` pre-pass writes numeric auth weakness scores onto `MCPServer` and `A2AAgent` nodes. Higher is weaker (`none=100`, `apiKey=70`, `bearer=50`, `oauth=25`, `mtls=10`).
+The `auth_strength` pre-pass writes canonical categorical `auth_assurance` and,
+when supported by evidence, a numeric weakness score. An explicit
+`auth_method=none` is unauthenticated only when
+`auth_evidence=anonymous_probe_succeeded`; unknown/custom methods remain
+unknown.
 
 The `confused_deputy` processor emits `CONFUSED_DEPUTY` when a weakly authenticated A2A agent delegates to a strongly authenticated one:
 
 ```text
-(:A2AAgent {auth_strength >= 80})
+(:A2AAgent {auth_assurance: "unauthenticated|weak"})
   -[:CONFUSED_DEPUTY]->
-(:A2AAgent {auth_strength <= 30})
+(:A2AAgent {auth_assurance: "strong"})
 ```
 
 This models a low-trust caller borrowing the privileges of a higher-trust callee.
 
-## Traversal Scope and Minimum Weight
+## Traversal Operations and Minimum Weight
 
-The path APIs expose two explicit scopes:
-
-- `topology` (the default) preserves the legacy undirected graph-navigation
-  behavior.
-- `security` follows only outgoing relationships in the server's explicit
-  security relationship policy. Summary/similarity edges such as `CAN_REACH`,
-  `SAME_AUTH_DOMAIN`, `SHADOWS`, and `CAN_IMPERSONATE` are not composable
-  security-path steps.
+The default path operations use only outgoing relationships in the server's
+explicit security policy. Summary/similarity edges such as `CAN_REACH`,
+`SAME_AUTH_DOMAIN`, `SHADOWS`, and `CAN_IMPERSONATE` are not composable
+security-path steps. Undirected graph navigation is available only through the
+explicit `/api/v1/analysis/topology/...` operations; request bodies have no
+scope field.
 
 Shortest and weighted requests use one deployment-independent bounded
 minimum-cost implementation. Results do not depend on APOC packaging.
 `max_hops` and an expansion cap bound work; response metadata reports the
 direction, relationship kinds, algorithm, and whether the result is complete.
-Missing `risk_weight` uses the disclosed compatibility value `0.5`; invalid
-negative or non-finite weights fail rather than changing algorithm semantics.
+Weighted traversal requires every traversed relationship to carry a
+non-negative finite `risk_weight`; missing or invalid weights fail the request.
 
 The critical `shortest-to-database` pre-built query always uses security scope.
 
@@ -296,18 +297,17 @@ agenthound-server query --findings --severity critical,high
 
 # All CAN_REACH findings
 curl -s localhost:8080/api/v1/analysis/findings | \
-    jq '.[] | select(.edge_kind == "CAN_REACH")'
+    jq '.findings[] | select(.edge_kind == "CAN_REACH")'
 
-# Fetch one finding detail, including composite edge properties and reconstructed path
-finding_id=$(curl -s localhost:8080/api/v1/analysis/findings | jq -r '.[0].id')
+# Fetch one published finding detail and its persisted exact witness
+finding_id=$(curl -s localhost:8080/api/v1/analysis/findings | jq -r '.findings[0].id')
 curl -s "localhost:8080/api/v1/analysis/findings/${finding_id}" | jq .
 ```
 
-The finding detail response includes `composite_props`, which is where
-processor-specific properties such as `source_collector`, `via_gateway`,
-`merge_value_hash`, and `cross_protocol` appear. Its `attack_path` compatibility
-field is a typed evidence graph with shape, continuity, direction,
-completeness, synthetic-join provenance, and nullable attack cost.
+The finding detail response serves the detector witness persisted with the
+published row. Its `attack_path` field is a typed evidence graph with shape,
+continuity, direction, completeness, synthetic-join provenance, and nullable
+attack cost. It is never reconstructed from mutable Neo4j.
 
 The Findings panel renders a path strip only for a complete directed linear
 graph. Branched, disconnected, cyclic, mixed-direction, and nodes-only evidence
@@ -336,4 +336,7 @@ Processors run in dependency order. A processor may only read edges or propertie
 | 14 | `cross_protocol` | Cross-protocol `CAN_REACH` | `HAS_ACCESS_TO`, `DELEGATES_TO` |
 | 15 | `risk_score` | `risk_score` node property | Prior processors |
 
-Each post-processor is idempotent. Re-ingesting a scan re-runs the pipeline and updates composite edges in place with `MERGE` by source, target, and edge kind. Stale composite-edge cleanup is scoped by `source_collector`, so partial scans refresh only the composite findings derived from collectors that ran in the current scan.
+Each post-processor is idempotent. Promoting any complete raw scope retires the
+entire composite epoch, then re-runs every processor against the retained
+current raw projection. This global replacement ensures narrow MCP, config, or
+A2A rescans also refresh transitive and cross-domain findings.

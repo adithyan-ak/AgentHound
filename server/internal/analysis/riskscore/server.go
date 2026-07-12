@@ -100,7 +100,7 @@ RETURN t.capability_surface AS caps`
 func serverExposureAssessment(ctx context.Context, db graph.GraphDB, objectID string) (Assessment, error) {
 	cypher := `
 MATCH (s {objectid: $id})-[:RUNS_ON]->(h:Host)
-RETURN h.scope AS scope, h.is_public AS pub, h.is_private AS priv, h.is_local AS loc`
+RETURN h.scope AS scope`
 
 	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
 	if err != nil {
@@ -129,17 +129,6 @@ RETURN h.scope AS scope, h.is_public AS pub, h.is_private AS priv, h.is_local AS
 			continue
 		case string(common.HostScopeUnknown):
 			hasUnknown = true
-			continue
-		}
-		if pub, ok := row["pub"].(bool); ok && pub {
-			return exactAssessment(100), nil
-		}
-		if priv, ok := row["priv"].(bool); ok && priv && maxExposure < 50 {
-			maxExposure = 50
-			continue
-		}
-		if loc, ok := row["loc"].(bool); ok && loc && maxExposure < 20 {
-			maxExposure = 20
 			continue
 		}
 		hasUnknown = true
@@ -175,7 +164,7 @@ RETURN c.high_entropy AS high_entropy, c.type AS cred_type,
 		material, _ := row["material_status"].(string)
 		exposure, _ := row["exposure_status"].(string)
 		mergeKey, _ := row["merge_key"].(string)
-		if mergeKey == "identity" {
+		if mergeKey != "value_hash" {
 			continue
 		}
 		if material != string(common.CredentialMaterialObserved) ||

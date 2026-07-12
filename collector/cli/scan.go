@@ -22,6 +22,7 @@ import (
 	"github.com/adithyan-ak/agenthound/modules/networkscan"
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	icollector "github.com/adithyan-ak/agenthound/sdk/collector"
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/sdk/module"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
@@ -279,28 +280,9 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 	rulesEngine *rules.Engine, ruleset *ingest.RulesetManifest,
 ) (data *ingest.IngestData, enabled, failed int) {
 
-	merged := &ingest.IngestData{
-		Meta: ingest.IngestMeta{
-			Version:          1,
-			Type:             "agenthound-ingest",
-			Collector:        "scan",
-			CollectorVersion: "0.1.0",
-			Timestamp:        time.Now().UTC().Format(time.RFC3339),
-			ScanID:           uuid.New().String(),
-		},
-		Graph: ingest.GraphData{
-			Nodes: []ingest.Node{},
-			Edges: []ingest.Edge{},
-		},
-	}
+	merged := common.NewIngestData("scan", uuid.New().String())
+	merged.Meta.CollectorVersion = "0.1.0"
 	merged.Meta.Ruleset = ruleset
-	merged.Meta.IdentitySchemes = []ingest.IdentityScheme{{
-		EntityKind:   "MCPServer",
-		Transport:    "stdio",
-		Scheme:       ingest.MCPStdioIdentitySchemeV2,
-		Version:      2,
-		LegacyScheme: ingest.MCPStdioIdentitySchemeV1,
-	}}
 	var reports []*ingest.CollectionReport
 
 	if runConfig {
@@ -313,7 +295,7 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 		} else {
 			merged.Graph.Nodes = append(merged.Graph.Nodes, data.Graph.Nodes...)
 			merged.Graph.Edges = append(merged.Graph.Edges, data.Graph.Edges...)
-			reports = append(reports, data.Meta.Collection)
+			reports = append(reports, rootedCollectionReport("config", data.Meta.Collection))
 		}
 	}
 
@@ -327,7 +309,7 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 		} else {
 			merged.Graph.Nodes = append(merged.Graph.Nodes, data.Graph.Nodes...)
 			merged.Graph.Edges = append(merged.Graph.Edges, data.Graph.Edges...)
-			reports = append(reports, data.Meta.Collection)
+			reports = append(reports, rootedCollectionReport("mcp", data.Meta.Collection))
 		}
 	}
 
@@ -341,14 +323,10 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 		} else {
 			merged.Graph.Nodes = append(merged.Graph.Nodes, data.Graph.Nodes...)
 			merged.Graph.Edges = append(merged.Graph.Edges, data.Graph.Edges...)
-			reports = append(reports, data.Meta.Collection)
+			reports = append(reports, rootedCollectionReport("a2a", data.Meta.Collection))
 		}
 	}
 	merged.Meta.Collection = ingest.MergeCollectionReports(reports...)
-	merged.Meta.IdentityAliases = ingest.BuildMCPIdentityAliases(
-		merged.Graph.Nodes,
-		ingest.CollectionCoverageComplete(merged.Meta.Collection),
-	)
 
 	return merged, enabled, failed
 }
@@ -368,11 +346,9 @@ func loadEffectiveRules() (*rules.Engine, *ingest.RulesetManifest) {
 				loadFailures,
 				"load builtin text rules: "+err.Error(),
 			)
-			manifest := &ingest.RulesetManifest{
-				LoadState:    ingest.OutcomeFailed,
-				Errors:       loadFailures,
-				Authenticity: "unverified",
-			}
+			manifest := ingest.EmptyRulesetManifest()
+			manifest.LoadState = ingest.OutcomeFailed
+			manifest.Errors = loadFailures
 			return nil, manifest
 		}
 	}
@@ -397,14 +373,48 @@ func loadEffectiveRules() (*rules.Engine, *ingest.RulesetManifest) {
 	return engine, &manifest
 }
 
+func collectorRootCoverageKey(collectorName string) string {
+	return ingest.CanonicalCoverageKey(collectorName, "", "")
+}
+
+func rootedCollectionReport(
+	collectorName string,
+	report *ingest.CollectionReport,
+) *ingest.CollectionReport {
+	state := ingest.OutcomeUnknown
+	if report != nil {
+		state = report.State
+		if state == "" {
+			state = ingest.AggregateOutcomeState(report.Outcomes)
+		}
+	}
+	rootKey := collectorRootCoverageKey(collectorName)
+	root := &ingest.CollectionReport{
+		State:        state,
+		CoverageKeys: []string{rootKey},
+		Outcomes: []ingest.CollectionOutcome{{
+			Collector:   collectorName,
+			CoverageKey: rootKey,
+			Target:      collectorName,
+			Method:      "collect",
+			State:       state,
+		}},
+	}
+	return ingest.MergeCollectionReports(report, root)
+}
+
 func failedCollectionReport(collectorName string, err error) *ingest.CollectionReport {
+	coverageKey := collectorRootCoverageKey(collectorName)
 	return &ingest.CollectionReport{
 		State:        ingest.OutcomeFailed,
-		CoverageKeys: []string{collectorName},
+		CoverageKeys: []string{coverageKey},
 		Outcomes: []ingest.CollectionOutcome{{
-			Collector: collectorName,
-			State:     ingest.OutcomeFailed,
-			Error:     err.Error(),
+			Collector:   collectorName,
+			CoverageKey: coverageKey,
+			Target:      collectorName,
+			Method:      "collect",
+			State:       ingest.OutcomeFailed,
+			Error:       err.Error(),
 		}},
 	}
 }
@@ -628,13 +638,14 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 	}
 	envelope.Meta.Collection = &ingest.CollectionReport{
 		State:        networkState,
-		CoverageKeys: []string{"network"},
+		CoverageKeys: []string{ingest.CanonicalCoverageKey("scan", "network", spec)},
 		Outcomes: []ingest.CollectionOutcome{{
-			Collector: "network",
-			Target:    spec,
-			Method:    "port_scan",
-			State:     networkState,
-			Items:     len(targets),
+			Collector:   "scan",
+			CoverageKey: ingest.CanonicalCoverageKey("scan", "network", spec),
+			Target:      spec,
+			Method:      "port_scan",
+			State:       networkState,
+			Items:       len(targets),
 		}},
 	}
 	// On cancellation (Ctrl-C), every fingerprint probe would immediately fail
@@ -648,6 +659,7 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 	} else {
 		dispatchFingerprints(ctx, cmd.OutOrStderr(), targets, envelope, quiet)
 	}
+	ingest.TagObservationDomain(&envelope.Graph, envelope.Meta.Collection.CoverageKeys[0])
 
 	if output == "" {
 		output = fmt.Sprintf("scan-%s.json", envelope.Meta.ScanID)
@@ -665,19 +677,20 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 // to operate on watermark-less public-target scans.
 func buildNetworkScanEnvelope(spec string, targets []action.Target, authzFile, authzHash string, allowPublic bool) *ingest.IngestData {
 	scanID := uuid.New().String()
-	env := &ingest.IngestData{
-		Meta: ingest.IngestMeta{
-			Version:          1,
-			Type:             "agenthound-ingest",
-			Collector:        "scan",
-			CollectorVersion: "0.2.0-dev",
-			Timestamp:        time.Now().UTC().Format(time.RFC3339),
-			ScanID:           scanID,
-		},
-		Graph: ingest.GraphData{
-			Nodes: []ingest.Node{},
-			Edges: []ingest.Edge{},
-		},
+	env := common.NewIngestData("scan", scanID)
+	env.Meta.CollectorVersion = "0.2.0-dev"
+	coverageKey := ingest.CanonicalCoverageKey("scan", "network", spec)
+	env.Meta.Collection = &ingest.CollectionReport{
+		State:        ingest.OutcomeComplete,
+		CoverageKeys: []string{coverageKey},
+		Outcomes: []ingest.CollectionOutcome{{
+			Collector:   "scan",
+			CoverageKey: coverageKey,
+			Target:      spec,
+			Method:      "port_scan",
+			State:       ingest.OutcomeComplete,
+			Items:       len(targets),
+		}},
 	}
 	// Authorization watermark is recorded as a top-level Meta extension via
 	// a property on the envelope. Phase 2 fingerprinters append nodes/edges

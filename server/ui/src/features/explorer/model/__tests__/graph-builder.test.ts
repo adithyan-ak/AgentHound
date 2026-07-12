@@ -34,7 +34,12 @@ const FIXTURE_NODES: APINode[] = [
   n("a2a-1", "A2AAgent"),
   n("a2a-2", "A2AAgent"),
   n("host-1", "Host"),
-  n("cred-1", "Credential", { is_exposed: true }),
+  n("cred-1", "Credential", {
+    merge_key: "value_hash",
+    identity_basis: "value_hash",
+    material_status: "observed",
+    exposure_status: "exposed",
+  }),
   n("identity-1", "Identity"),
   n("litellm-1", "LiteLLMGateway"),
   n("ollama-1", "OllamaInstance"),
@@ -89,6 +94,7 @@ const FIXTURE_FINDINGS: Finding[] = [
     variant: "default",
     evidence: { state: "inferred" },
     owasp_map: ["MCP04"],
+    atlas_map: [],
   },
   {
     id: "f2",
@@ -107,6 +113,7 @@ const FIXTURE_FINDINGS: Finding[] = [
     variant: "default",
     evidence: { state: "inferred" },
     owasp_map: [],
+    atlas_map: [],
   },
   {
     id: "f3",
@@ -125,6 +132,7 @@ const FIXTURE_FINDINGS: Finding[] = [
     variant: "default",
     evidence: { state: "observed_signal" },
     owasp_map: [],
+    atlas_map: [],
   },
 ];
 

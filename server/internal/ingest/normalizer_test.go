@@ -7,36 +7,6 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
-func TestCamelToSnake(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"capabilitySurface", "capability_surface"},
-		{"hasInjectionPatterns", "has_injection_patterns"},
-		{"scanID", "scan_id"},
-		{"descriptionHash", "description_hash"},
-		{"already_snake", "already_snake"},
-		{"inputSchema", "input_schema"},
-		{"HTTPServer", "http_server"},
-		{"HTTPSEnabled", "https_enabled"},
-		{"name", "name"},
-		{"ID", "id"},
-		{"", ""},
-		{"a", "a"},
-		{"A", "a"},
-		{"isHTTPS", "is_https"},
-		{"collectorVersion", "collector_version"},
-	}
-
-	for _, tt := range tests {
-		got := CamelToSnake(tt.input)
-		if got != tt.expected {
-			t.Errorf("CamelToSnake(%q) = %q, want %q", tt.input, got, tt.expected)
-		}
-	}
-}
-
 func TestNormalizerSetsObjectID(t *testing.T) {
 	n := NewNormalizer()
 	data := &ingest.IngestData{
@@ -74,51 +44,10 @@ func TestNormalizerStripsNil(t *testing.T) {
 	}
 }
 
-func TestNormalizerConvertsKeysToSnakeCase(t *testing.T) {
-	n := NewNormalizer()
-	data := &ingest.IngestData{
-		Meta: ingest.IngestMeta{ScanID: "scan-1"},
-		Graph: ingest.GraphData{
-			Nodes: []ingest.Node{
-				{ID: "sha256:abc", Kinds: []string{"MCPServer"}, Properties: map[string]any{
-					"capabilitySurface": []any{"shell_access"},
-				}},
-			},
-		},
-	}
-	n.Normalize(data)
-
-	props := data.Graph.Nodes[0].Properties
-	if _, ok := props["capability_surface"]; !ok {
-		t.Errorf("expected snake_case key, got: %v", props)
-	}
-	if _, ok := props["capabilitySurface"]; ok {
-		t.Error("camelCase key should have been converted")
-	}
-}
-
-func TestNormalizerMarksLegacyStdioIdentityUnresolved(t *testing.T) {
+func TestNormalizerDoesNotRepairLocalProcessAuth(t *testing.T) {
 	data := &ingest.IngestData{
 		Graph: ingest.GraphData{Nodes: []ingest.Node{{
-			ID:    "legacy-v1",
-			Kinds: []string{"MCPServer"},
-			Properties: map[string]any{
-				"transport": "stdio",
-			},
-		}}},
-	}
-	NewNormalizer().Normalize(data)
-	props := data.Graph.Nodes[0].Properties
-	if props["id_scheme"] != ingest.MCPStdioIdentitySchemeV1 ||
-		props["identity_compatibility"] != string(ingest.IdentityAliasUnresolved) {
-		t.Fatalf("legacy stdio compatibility = %+v", props)
-	}
-}
-
-func TestNormalizerSeparatesLegacyLocalProcessFromAnonymousAuth(t *testing.T) {
-	data := &ingest.IngestData{
-		Graph: ingest.GraphData{Nodes: []ingest.Node{{
-			ID:    "legacy-local",
+			ID:    "local-process",
 			Kinds: []string{"MCPServer"},
 			Properties: map[string]any{
 				"transport":      "stdio",
@@ -131,32 +60,9 @@ func TestNormalizerSeparatesLegacyLocalProcessFromAnonymousAuth(t *testing.T) {
 
 	NewNormalizer().Normalize(data)
 	props := data.Graph.Nodes[0].Properties
-	if props["auth_method"] != string(common.AuthUnknown) ||
-		props["auth_assurance"] != string(common.AuthAssuranceUnknown) {
-		t.Fatalf("legacy local-process auth was not normalized: %+v", props)
-	}
-}
-
-func TestNormalizerQuarantinesAmbiguousLegacyAggregate(t *testing.T) {
-	data := &ingest.IngestData{
-		Meta: ingest.IngestMeta{IdentityAliases: []ingest.IdentityAlias{{
-			LegacyID:   "legacy-v1",
-			CurrentIDs: []string{"current-a", "current-b"},
-			State:      ingest.IdentityAliasAmbiguous,
-		}}},
-		Graph: ingest.GraphData{Nodes: []ingest.Node{{
-			ID:    "legacy-v1",
-			Kinds: []string{"MCPServer"},
-			Properties: map[string]any{
-				"transport": "stdio",
-			},
-		}}},
-	}
-	NewNormalizer().Normalize(data)
-	props := data.Graph.Nodes[0].Properties
-	if props["identity_compatibility"] != string(ingest.IdentityAliasAmbiguous) ||
-		props["identity_quarantined"] != true {
-		t.Fatalf("ambiguous legacy identity was not quarantined: %+v", props)
+	if props["auth_method"] != string(common.AuthNone) ||
+		props["auth_assurance"] != string(common.AuthAssuranceUnauthenticated) {
+		t.Fatalf("normalizer silently repaired malformed local-process auth: %+v", props)
 	}
 }
 
@@ -167,7 +73,7 @@ func TestNormalizerSerializesComplexValues(t *testing.T) {
 		Graph: ingest.GraphData{
 			Nodes: []ingest.Node{
 				{ID: "sha256:abc", Kinds: []string{"MCPTool"}, Properties: map[string]any{
-					"inputSchema": map[string]any{
+					"input_schema": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
 							"query": map[string]any{"type": "string"},
@@ -228,8 +134,8 @@ func TestNormalizerWarningsAreDeterministic(t *testing.T) {
 				ID:    "node",
 				Kinds: []string{"MCPServer"},
 				Properties: map[string]any{
-					"zNested": map[string]any{"z": true},
-					"aNested": map[string]any{"a": true},
+					"z_nested": map[string]any{"z": true},
+					"a_nested": map[string]any{"a": true},
 				},
 			}}},
 		}
@@ -280,7 +186,7 @@ func TestNormalizerEdgeProperties(t *testing.T) {
 	}
 }
 
-func TestNormalizerDerivesEndpointKindsFromReferencedNodes(t *testing.T) {
+func TestNormalizerDoesNotInferEndpointKinds(t *testing.T) {
 	n := NewNormalizer()
 	data := &ingest.IngestData{
 		Graph: ingest.GraphData{
@@ -299,32 +205,8 @@ func TestNormalizerDerivesEndpointKindsFromReferencedNodes(t *testing.T) {
 	n.Normalize(data)
 
 	edge := data.Graph.Edges[0]
-	if edge.SourceKind != "JupyterServer" || edge.TargetKind != "MCPResource" {
-		t.Fatalf("endpoint kinds = %q -> %q, want JupyterServer -> MCPResource", edge.SourceKind, edge.TargetKind)
-	}
-}
-
-func TestNormalizerDerivesEndpointKindsFromMergedDuplicateNodes(t *testing.T) {
-	data := &ingest.IngestData{
-		Graph: ingest.GraphData{
-			Nodes: []ingest.Node{
-				{ID: "service", Kinds: []string{"JupyterServer"}},
-				{ID: "service", Kinds: []string{"AIService"}},
-				{ID: "resource", Kinds: []string{"MCPResource"}},
-			},
-			Edges: []ingest.Edge{{
-				Source: "service",
-				Target: "resource",
-				Kind:   "PROVIDES_RESOURCE",
-			}},
-		},
-	}
-
-	NewNormalizer().Normalize(data)
-
-	edge := data.Graph.Edges[0]
-	if edge.SourceKind != "JupyterServer" || edge.TargetKind != "MCPResource" {
-		t.Fatalf("endpoint kinds = %q -> %q, want JupyterServer -> MCPResource", edge.SourceKind, edge.TargetKind)
+	if edge.SourceKind != "" || edge.TargetKind != "" {
+		t.Fatalf("normalizer inferred endpoint kinds %q -> %q", edge.SourceKind, edge.TargetKind)
 	}
 }
 
@@ -341,6 +223,7 @@ func TestNormalizerPreservesExplicitUmbrellaEndpointKind(t *testing.T) {
 				Target:     "credential",
 				Kind:       "EXPOSES_CREDENTIAL",
 				SourceKind: "AIService",
+				TargetKind: "Credential",
 			}},
 		},
 	}

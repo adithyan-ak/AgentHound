@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { LensEdgeData } from "../model/graph";
 import { useExplorerStore } from "../model/store";
+import { EDGE_COLORS } from "@shared/theme/tokens";
 import { EdgeTooltip } from "./EdgeTooltip";
 
 const configuredReference: LensEdgeData = {
@@ -23,7 +24,7 @@ const configuredReference: LensEdgeData = {
   dim: false,
   emphasized: false,
   showFlowDot: false,
-  color: "#ffffff",
+  color: EDGE_COLORS.structure,
 };
 
 describe("EdgeTooltip configured backend evidence", () => {

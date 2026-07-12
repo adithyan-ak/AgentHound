@@ -27,23 +27,9 @@ func TestValidateDependencyOrder_MissingDep(t *testing.T) {
 	}
 }
 
-func TestCleanStaleCompositeEdges_EmptyCollectors(t *testing.T) {
-	db := &graph.MockGraphDB{}
-	n, err := cleanStaleCompositeEdges(context.Background(), db, "scan-1", nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if n != 0 {
-		t.Fatalf("expected 0 deleted, got %d", n)
-	}
-	if len(db.Calls) != 0 {
-		t.Fatalf("expected no DB calls for empty collectors, got %d", len(db.Calls))
-	}
-}
-
-func TestCleanStaleCompositeEdges_CallsExecuteWrite(t *testing.T) {
+func TestBeginCompositeEpoch_RetiresAllDerivedState(t *testing.T) {
 	db := &graph.MockGraphDB{ExecuteWriteResult: 5}
-	n, err := cleanStaleCompositeEdges(context.Background(), db, "scan-42", []string{"mcp", "config"})
+	n, err := beginCompositeEpoch(context.Background(), db)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -60,38 +46,88 @@ func TestCleanStaleCompositeEdges_CallsExecuteWrite(t *testing.T) {
 	if !strings.Contains(cypher, "DELETE r") {
 		t.Fatalf("cypher should contain DELETE r, got: %s", cypher)
 	}
-
-	params, _ := calls[0].Args[1].(map[string]any)
-	if params["current_scan_id"] != "scan-42" {
-		t.Fatalf("expected current_scan_id=scan-42, got %v", params["current_scan_id"])
+	if !strings.Contains(cypher, "r.is_composite = true") {
+		t.Fatalf("cypher should restrict retirement to composite edges: %s", cypher)
 	}
-	collectors, _ := params["collectors"].([]string)
-	want := []string{"mcp", "cross_service_credential_chain", "config"}
-	if len(collectors) != len(want) {
-		t.Fatalf("collectors = %v, want %v", collectors, want)
+	if !strings.Contains(cypher, "REMOVE c.blast_radius") {
+		t.Fatalf("cypher should reset processor-owned blast radius: %s", cypher)
 	}
-	for i := range want {
-		if collectors[i] != want[i] {
-			t.Fatalf("collectors = %v, want %v", collectors, want)
-		}
+	if strings.Contains(cypher, "source_collector") ||
+		strings.Contains(cypher, "scan_id") {
+		t.Fatalf("epoch retirement must not be collector- or scan-scoped: %s", cypher)
 	}
 }
 
-func TestExpandCompositeCollectors_CoversMergedAndCredentialDependencies(t *testing.T) {
-	got := expandCompositeCollectors([]string{"scan"})
-	want := []string{"scan", "mcp", "config", "a2a", "cross_service_credential_chain"}
-	if len(got) != len(want) {
-		t.Fatalf("expanded collectors = %v, want %v", got, want)
+func TestRunPostProcessors_CompleteNarrowDomainRetiresCrossDomainEvidence(t *testing.T) {
+	domains := []string{
+		"mcp:target:sha256:mcp-scope",
+		"config:path:sha256:config-scope",
+		"a2a:target:sha256:a2a-scope",
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("expanded collectors = %v, want %v", got, want)
-		}
-	}
+	for _, domain := range domains {
+		t.Run(strings.SplitN(domain, ":", 2)[0], func(t *testing.T) {
+			remaining := map[string]bool{
+				"cross_protocol:a2a":                              true,
+				"transitive_reach:mcp":                            true,
+				"credential_chain:cross_service_credential_chain": true,
+				"instruction_poisoning:config":                    true,
+			}
+			retireCalls := 0
+			processorWrites := 0
+			db := &graph.MockGraphDB{
+				ExecuteWriteFunc: func(_ context.Context, cypher string, _ map[string]any) (int, error) {
+					if strings.Contains(cypher, "REMOVE c.blast_radius") {
+						retireCalls++
+						if strings.Contains(cypher, "source_collector") {
+							t.Fatalf(
+								"narrow %s replacement used collector-scoped cleanup: %s",
+								domain,
+								cypher,
+							)
+						}
+						for evidence := range remaining {
+							delete(remaining, evidence)
+						}
+						return 4, nil
+					}
+					processorWrites++
+					return 0, nil
+				},
+			}
 
-	got = expandCompositeCollectors([]string{"mcp"})
-	if len(got) != 2 || got[0] != "mcp" || got[1] != "cross_service_credential_chain" {
-		t.Fatalf("mcp dependencies = %v", got)
+			if _, err := RunPostProcessors(
+				context.Background(),
+				db,
+				"narrow-complete",
+				[]string{domain},
+			); err != nil {
+				t.Fatalf("RunPostProcessors: %v", err)
+			}
+			if retireCalls != 1 {
+				t.Fatalf("composite epoch retire calls = %d, want 1", retireCalls)
+			}
+			if len(remaining) != 0 {
+				t.Fatalf("cross-domain composite evidence survived %s replacement: %v", domain, remaining)
+			}
+			if processorWrites == 0 {
+				t.Fatalf("complete %s replacement retired without recomputing", domain)
+			}
+		})
+	}
+}
+
+func TestRunPostProcessors_NoCompleteDomainPreservesCompositeEpoch(t *testing.T) {
+	db := &graph.MockGraphDB{}
+	if _, err := RunPostProcessors(
+		context.Background(),
+		db,
+		"partial-scan",
+		[]string{"", " "},
+	); err != nil {
+		t.Fatalf("RunPostProcessors: %v", err)
+	}
+	if len(db.Calls) != 0 {
+		t.Fatalf("partial/failed coverage ran derived processing: %+v", db.Calls)
 	}
 }
 
@@ -126,28 +162,56 @@ func TestRunPostProcessors_RunsAll(t *testing.T) {
 	}
 	writes := db.CallsTo("ExecuteWrite")
 	if len(writes) == 0 {
-		t.Fatal("expected processor and cleanup writes")
+		t.Fatal("expected epoch retirement and processor writes")
 	}
-	lastCypher, _ := writes[len(writes)-1].Args[0].(string)
-	if !strings.Contains(lastCypher, "r.scan_id <> $current_scan_id") {
-		t.Fatalf("stale cleanup was not the final write: %s", lastCypher)
+	firstCypher, _ := writes[0].Args[0].(string)
+	if !strings.Contains(firstCypher, "REMOVE c.blast_radius") {
+		t.Fatalf("composite retirement was not the first write: %s", firstCypher)
 	}
 }
 
-func TestRunPostProcessors_FailureKeepsPriorCompositeEpoch(t *testing.T) {
+func TestRunPostProcessors_RetirementFailureStopsBeforeProcessors(t *testing.T) {
 	db := &graph.MockGraphDB{
-		ExecuteWriteError: errors.New("processor write failed"),
+		ExecuteWriteError: errors.New("retirement failed"),
+	}
+
+	_, err := RunPostProcessors(context.Background(), db, "scan-test", []string{"mcp"})
+	if err == nil {
+		t.Fatal("expected retirement failure")
+	}
+	if calls := db.CallsTo("ExecuteWrite"); len(calls) != 1 {
+		t.Fatalf("ExecuteWrite calls = %d, want only the failed retirement", len(calls))
+	}
+}
+
+func TestRunPostProcessors_ProcessorFailureLeavesIncompleteNewEpoch(t *testing.T) {
+	var writes int
+	db := &graph.MockGraphDB{
+		ExecuteWriteFunc: func(_ context.Context, cypher string, _ map[string]any) (int, error) {
+			writes++
+			if writes == 1 {
+				if !strings.Contains(cypher, "REMOVE c.blast_radius") {
+					t.Fatalf("first write did not retire the prior epoch: %s", cypher)
+				}
+				return 3, nil
+			}
+			return 0, errors.New("processor write failed")
+		},
 	}
 
 	_, err := RunPostProcessors(context.Background(), db, "scan-test", []string{"mcp"})
 	if err == nil {
 		t.Fatal("expected processor failure")
 	}
+	retireCalls := 0
 	for _, call := range db.CallsTo("ExecuteWrite") {
 		cypher, _ := call.Args[0].(string)
-		if strings.Contains(cypher, "r.scan_id <> $current_scan_id") {
-			t.Fatal("stale composite cleanup ran after a processor failure")
+		if strings.Contains(cypher, "REMOVE c.blast_radius") {
+			retireCalls++
 		}
+	}
+	if retireCalls != 1 {
+		t.Fatalf("composite epoch retire calls = %d, want 1", retireCalls)
 	}
 }
 

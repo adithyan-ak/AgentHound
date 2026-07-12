@@ -23,8 +23,7 @@ import (
 var allowedAlgorithms = []jose.SignatureAlgorithm{jose.RS256, jose.ES256}
 
 // Signature verification status values emitted on A2AAgent nodes. They
-// disambiguate the outcomes that the boolean signature_valid alone conflates:
-// a card with no key to check against ("unverifiable") vs. a card whose
+// distinguish a card with no resolvable key ("unverifiable") from a card whose
 // signatures were checked and none verified ("failed").
 const (
 	SigStatusUnsigned          = "unsigned"

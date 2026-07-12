@@ -190,26 +190,47 @@ func runLoot(cmd *cobra.Command, args []string) error {
 // engagement-id for downstream correlation.
 func buildLootEnvelope(target, kind, engagementID string, res *action.LootResult) *ingest.IngestData {
 	scanID := uuid.New().String()
-	env := &ingest.IngestData{
-		Meta: ingest.IngestMeta{
-			Version:          1,
-			Type:             "agenthound-ingest",
-			Collector:        "scan",
-			CollectorVersion: "0.2.0-dev",
-			Timestamp:        time.Now().UTC().Format(time.RFC3339),
-			ScanID:           scanID,
-			Extra: map[string]any{
-				"loot_type":      kind,
-				"loot_target":    target,
-				"engagement_id":  engagementID,
-				"partial_errors": res.PartialErrors,
-			},
-		},
+	env := common.NewIngestData("scan", scanID)
+	env.Meta.CollectorVersion = "0.2.0-dev"
+	env.Meta.Extra = map[string]any{
+		"loot_type":      kind,
+		"loot_target":    target,
+		"engagement_id":  engagementID,
+		"partial_errors": res.PartialErrors,
+	}
+	state := ingest.OutcomeComplete
+	if len(res.PartialErrors) > 0 {
+		state = ingest.OutcomePartial
+	}
+	coverageKey := ingest.CanonicalCoverageKey(
+		"scan",
+		"loot",
+		kind+"\x00"+ingest.CanonicalURLScope(target),
+	)
+	env.Meta.Collection = &ingest.CollectionReport{
+		State:        state,
+		CoverageKeys: []string{coverageKey},
+		Outcomes: []ingest.CollectionOutcome{{
+			Collector:   "scan",
+			CoverageKey: coverageKey,
+			Target:      target,
+			Method:      "loot:" + kind,
+			State:       state,
+			Items:       res.Summary.CredentialsFound,
+			Error:       strings.Join(res.PartialErrors, "; "),
+		}},
 	}
 	if res.IngestData != nil {
 		env.Graph.Nodes = res.IngestData.Graph.Nodes
 		env.Graph.Edges = res.IngestData.Graph.Edges
 	}
+	if env.Graph.Nodes == nil {
+		env.Graph.Nodes = []ingest.Node{}
+	}
+	if env.Graph.Edges == nil {
+		env.Graph.Edges = []ingest.Edge{}
+	}
+	ingest.TagObservationDomain(&env.Graph, coverageKey)
 	return env
 }
 

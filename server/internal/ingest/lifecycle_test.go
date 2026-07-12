@@ -1,20 +1,23 @@
 package ingest
 
 import (
+	"strings"
 	"testing"
 
 	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
 func TestComparisonKeyRequiresCompleteKnownInputs(t *testing.T) {
+	mcpScope := sdkingest.CanonicalCoverageKey("mcp", "target", "https://mcp.example")
+	configScope := sdkingest.CanonicalCoverageKey("config", "path", "/tmp/config.json")
 	data := &sdkingest.IngestData{
 		Meta: sdkingest.IngestMeta{
 			Collection: &sdkingest.CollectionReport{
 				State:        sdkingest.OutcomeComplete,
-				CoverageKeys: []string{"mcp", "config"},
+				CoverageKeys: []string{mcpScope, configScope},
 				Outcomes: []sdkingest.CollectionOutcome{
-					{Collector: "mcp", State: sdkingest.OutcomeComplete},
-					{Collector: "config", State: sdkingest.OutcomeComplete},
+					{Collector: "mcp", CoverageKey: mcpScope, State: sdkingest.OutcomeComplete},
+					{Collector: "config", CoverageKey: configScope, State: sdkingest.OutcomeComplete},
 				},
 			},
 			Ruleset: &sdkingest.RulesetManifest{
@@ -47,13 +50,14 @@ func TestComparisonKeyIncludesCanonicalTargetAndConfigScope(t *testing.T) {
 	scopeA := sdkingest.CanonicalCoverageKey("a2a", "target", "https://a.example")
 	scopeB := sdkingest.CanonicalCoverageKey("a2a", "target", "https://b.example")
 	makeData := func(scope string) *sdkingest.IngestData {
+		collector := strings.SplitN(scope, ":", 2)[0]
 		return &sdkingest.IngestData{
 			Meta: sdkingest.IngestMeta{
 				Collection: &sdkingest.CollectionReport{
 					State:        sdkingest.OutcomeComplete,
 					CoverageKeys: []string{scope},
 					Outcomes: []sdkingest.CollectionOutcome{{
-						Collector:   "a2a",
+						Collector:   collector,
 						CoverageKey: scope,
 						State:       sdkingest.OutcomeComplete,
 					}},
@@ -96,19 +100,21 @@ func TestComparisonKeyIncludesCanonicalTargetAndConfigScope(t *testing.T) {
 }
 
 func TestCoalesceObservationGraphPreservesAllCurrentOwners(t *testing.T) {
+	mcpScope := sdkingest.CanonicalCoverageKey("mcp", "target", "https://mcp.example")
+	configScope := sdkingest.CanonicalCoverageKey("config", "path", "/tmp/config.json")
 	graph := coalesceObservationGraph(sdkingest.GraphData{
 		Nodes: []sdkingest.Node{
 			{
 				ID:                 "shared",
 				Kinds:              []string{"MCPServer"},
 				Properties:         map[string]any{"mcp_only": true},
-				ObservationDomains: []string{"mcp:target:sha256:a"},
+				ObservationDomains: []string{mcpScope},
 			},
 			{
 				ID:                 "shared",
-				Kinds:              []string{"MCPServer", "AIService"},
+				Kinds:              []string{"MCPServer"},
 				Properties:         map[string]any{"config_only": true},
-				ObservationDomains: []string{"config:path:sha256:b"},
+				ObservationDomains: []string{configScope},
 			},
 		},
 		Edges: []sdkingest.Edge{
@@ -117,14 +123,15 @@ func TestCoalesceObservationGraphPreservesAllCurrentOwners(t *testing.T) {
 				Target:             "host",
 				Kind:               "RUNS_ON",
 				Properties:         map[string]any{"first": true},
-				ObservationDomains: []string{"mcp:target:sha256:a"},
+				ObservationDomains: []string{mcpScope},
 			},
 			{
-				Source:             "shared",
-				Target:             "host",
-				Kind:               "RUNS_ON",
-				Properties:         map[string]any{"second": true},
-				ObservationDomains: []string{"config:path:sha256:b"},
+				Source:               "shared",
+				Target:               "host",
+				Kind:                 "RUNS_ON",
+				Properties:           map[string]any{"second": true},
+				ObservationDomains:   []string{configScope},
+				ObservationSemantics: sdkingest.ObservationSemanticsAllDependencies,
 			},
 		},
 	})
@@ -134,12 +141,13 @@ func TestCoalesceObservationGraphPreservesAllCurrentOwners(t *testing.T) {
 	}
 	node := graph.Nodes[0]
 	if node.Properties["mcp_only"] != true || node.Properties["config_only"] != true ||
-		len(node.ObservationDomains) != 2 || len(node.Kinds) != 2 {
+		len(node.ObservationDomains) != 2 || len(node.Kinds) != 1 {
 		t.Fatalf("coalesced node lost provenance: %+v", node)
 	}
 	edge := graph.Edges[0]
 	if edge.Properties["first"] != true || edge.Properties["second"] != true ||
-		len(edge.ObservationDomains) != 2 {
+		len(edge.ObservationDomains) != 2 ||
+		edge.ObservationSemantics != sdkingest.ObservationSemanticsAllDependencies {
 		t.Fatalf("coalesced edge lost provenance: %+v", edge)
 	}
 }
@@ -173,17 +181,5 @@ func TestPrepareObservationDomainsRejectsScopeOutsideCoverage(t *testing.T) {
 	}
 	if prepareObservationDomains(data) {
 		t.Fatal("fact scope outside declared coverage was accepted")
-	}
-}
-
-func TestCoverageCollectorsMapsScopedKeysForCompositeCleanup(t *testing.T) {
-	keys := []string{
-		sdkingest.CanonicalCoverageKey("mcp", "target", "server"),
-		sdkingest.CanonicalCoverageKey("config", "path", "/config"),
-		sdkingest.CanonicalCoverageKey("mcp", "target", "other-server"),
-	}
-	got := coverageCollectors(keys)
-	if len(got) != 2 || got[0] != "config" || got[1] != "mcp" {
-		t.Fatalf("coverage collectors = %v, want [config mcp]", got)
 	}
 }

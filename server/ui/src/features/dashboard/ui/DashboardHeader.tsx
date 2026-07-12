@@ -12,6 +12,7 @@ import {
   useScans,
 } from "@entities/scan";
 import { useFindings, severityCounts } from "@entities/finding";
+import { useGraphStats } from "@entities/graph-stats";
 import { useNodes, isUnauth } from "@entities/node";
 import { useHealth } from "@entities/health";
 import { useProjectionState } from "@entities/posture";
@@ -31,6 +32,7 @@ import {
   CHART_THEME,
   FEEDBACK,
 } from "@shared/theme/tokens";
+import { sameDashboardProjection } from "../model/projection";
 
 function greeting(): string {
   const h = new Date().getHours();
@@ -100,6 +102,7 @@ export function DashboardHeader() {
   const latestCompletedQuery = useLatestCompletedScan(scanActive);
   const latestPublishedQuery = useLatestPublishedScan(scanActive);
   const findingsQuery = useFindings();
+  const statsQuery = useGraphStats();
   const nodesQuery = useNodes();
   const postureQuery = useProjectionState();
   const health = healthQuery.data;
@@ -170,14 +173,39 @@ export function DashboardHeader() {
     unauthServers,
   });
   const threatLabel = THREAT_LABELS[exposureBand(exposure)];
+  const matchingProjection = sameDashboardProjection(
+    findingsQuery.snapshot?.scanId && findingsQuery.snapshot.revision != null
+      ? {
+          scanId: findingsQuery.snapshot.scanId,
+          revision: findingsQuery.snapshot.revision,
+        }
+      : null,
+    statsQuery.data?.projection,
+    nodesQuery.snapshot,
+    publishedScan?.published_revision != null
+      ? {
+          scanId: publishedScan.id,
+          revision: publishedScan.published_revision,
+        }
+      : null,
+    posture?.published_scan_id && posture.published_revision != null
+      ? {
+          scanId: posture.published_scan_id,
+          revision: posture.published_revision,
+        }
+      : null,
+  );
   const verdictAvailable =
     findings !== undefined &&
+    statsQuery.data !== undefined &&
     nodes !== undefined &&
     !findingsQuery.isError &&
+    !statsQuery.isError &&
     !nodesQuery.isError &&
     posture?.status === "complete" &&
     posture.published_scan_id != null &&
-    publishedStagesComplete;
+    publishedStagesComplete &&
+    matchingProjection;
   const scanObservedAt = lastCompleted?.completed_at;
   const snapshotValue = postureQuery.isError
     ? posture

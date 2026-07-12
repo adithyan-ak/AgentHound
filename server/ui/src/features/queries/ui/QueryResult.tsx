@@ -1,8 +1,12 @@
-import type { PreBuiltQuery } from "@entities/prebuilt/api";
+import type {
+  PreBuiltQuery,
+  TraversalMetadata,
+} from "@entities/prebuilt/api";
 
 interface QueryResultProps {
   rows: Record<string, unknown>[];
   query: PreBuiltQuery;
+  metadata?: TraversalMetadata;
 }
 
 function isStructuredValue(value: unknown): value is object {
@@ -19,12 +23,31 @@ function formatStructured(value: object): string {
   return JSON.stringify(value, null, 2) ?? "\u2014";
 }
 
-export function QueryResult({ rows, query }: QueryResultProps) {
+export function QueryResult({ rows, query, metadata }: QueryResultProps) {
+  const incomplete =
+    metadata !== undefined && (!metadata.complete || metadata.truncated);
+  const warning = incomplete ? (
+    <div
+      role="alert"
+      className="mb-2 rounded-[3px] border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-200"
+    >
+      Traversal result is incomplete
+      {metadata.incompleteReason ? `: ${metadata.incompleteReason}` : "."}{" "}
+      {rows.length} row{rows.length !== 1 ? "s were" : " was"} returned, but
+      absence and count claims are not authoritative.
+    </div>
+  ) : null;
+
   if (rows.length === 0) {
     return (
-      <div className="py-4 text-center font-mono text-xs uppercase tracking-[0.1em] text-muted-foreground">
-        No results for "{query.name}"
-      </div>
+      <>
+        {warning}
+        <div className="py-4 text-center font-mono text-xs uppercase tracking-[0.1em] text-muted-foreground">
+          {incomplete
+            ? `Result unavailable for "${query.name}" because traversal did not complete`
+            : `No results for "${query.name}"`}
+        </div>
+      </>
     );
   }
 
@@ -32,6 +55,7 @@ export function QueryResult({ rows, query }: QueryResultProps) {
 
   return (
     <div>
+      {warning}
       <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
         {rows.length} row{rows.length !== 1 ? "s" : ""}
       </div>

@@ -24,21 +24,27 @@ type IngestResult struct {
 	ScanID                string                 `json:"scan_id"`
 	Outcome               OutcomeState           `json:"outcome"`
 	ProjectionStatus      string                 `json:"projection_status"`
-	NodesWritten          int                    `json:"nodes_written"`
-	EdgesWritten          int                    `json:"edges_written"`
-	NodesSubmitted        int                    `json:"nodes_submitted"`
-	EdgesSubmitted        int                    `json:"edges_submitted"`
-	CountSemantics        string                 `json:"count_semantics"`
+	Submitted             FactCounts             `json:"submitted"`
+	WriteRows             FactCounts             `json:"write_rows"`
+	GraphTotals           FrozenGraphTotals      `json:"graph_totals"`
 	Warnings              []string               `json:"warnings,omitempty"`
 	NormalizationStatus   NormalizationStatus    `json:"normalization_status"`
 	NormalizationWarnings []NormalizationWarning `json:"normalization_warnings,omitempty"`
-	Collection            *CollectionReport      `json:"collection,omitempty"`
+	Collection            CollectionReport       `json:"collection"`
 	Stages                []StageResult          `json:"stages,omitempty"`
 	PostProcessingStats   []PostProcessingStat   `json:"post_processing_stats,omitempty"`
-	GraphBefore           *GraphTotals           `json:"graph_before,omitempty"`
-	GraphAfter            *GraphTotals           `json:"graph_after,omitempty"`
 	PublishedRevision     *int64                 `json:"published_revision,omitempty"`
 	Duration              time.Duration          `json:"duration"`
+}
+
+type FactCounts struct {
+	Nodes int `json:"nodes"`
+	Edges int `json:"edges"`
+}
+
+type FrozenGraphTotals struct {
+	Before *GraphTotals `json:"before"`
+	After  *GraphTotals `json:"after"`
 }
 
 type GraphTotals struct {

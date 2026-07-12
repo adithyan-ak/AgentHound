@@ -118,10 +118,10 @@ func TestServerRiskScore_Exposure(t *testing.T) {
 		row      map[string]any
 		expected float64
 	}{
-		{"public", map[string]any{"pub": true, "priv": false, "loc": false}, 100},
-		{"private", map[string]any{"pub": false, "priv": true, "loc": false}, 50},
-		{"local", map[string]any{"pub": false, "priv": false, "loc": true}, 20},
-		{"unknown", map[string]any{"pub": false, "priv": false, "loc": false}, 100},
+		{"public", map[string]any{"scope": "public"}, 100},
+		{"private", map[string]any{"scope": "private"}, 50},
+		{"local", map[string]any{"scope": "local"}, 20},
+		{"unknown", map[string]any{"scope": "unknown"}, 100},
 	}
 
 	for _, tt := range tests {
@@ -227,7 +227,7 @@ func TestServerRiskScoreIgnoresUnobservedCredentialMaterial(t *testing.T) {
 			case containsSubstring(cypher, "auth_method"):
 				return []map[string]any{{"am": "mtls"}}, nil
 			case containsSubstring(cypher, "RUNS_ON"):
-				return []map[string]any{{"scope": "local", "loc": true}}, nil
+				return []map[string]any{{"scope": "local"}}, nil
 			case containsSubstring(cypher, "HAS_ENV_VAR"):
 				return []map[string]any{{
 					"material_status": "masked",

@@ -8,9 +8,9 @@ import (
 	"github.com/adithyan-ak/agenthound/server/model"
 )
 
-func BuildRemediation(path *AttackPath, f *Finding) []RemediationStep {
+func BuildRemediation(path *AttackPath, f *model.Finding) []RemediationStep {
 	if path == nil || len(path.Edges) == 0 {
-		return buildFindingOnlyRemediation(f)
+		return normalizeRemediationSteps(buildFindingOnlyRemediation(f))
 	}
 
 	nodes := make(map[string]PathNode, len(path.Nodes))
@@ -38,16 +38,31 @@ func BuildRemediation(path *AttackPath, f *Finding) []RemediationStep {
 	}
 
 	if len(steps) == 0 {
-		return buildFindingOnlyRemediation(f)
+		return normalizeRemediationSteps(buildFindingOnlyRemediation(f))
 	}
 
 	for i := range steps {
 		steps[i].Step = i + 1
 	}
+	return normalizeRemediationSteps(steps)
+}
+
+func normalizeRemediationSteps(steps []RemediationStep) []RemediationStep {
+	if steps == nil {
+		return []RemediationStep{}
+	}
+	for i := range steps {
+		if steps[i].Channels == nil {
+			steps[i].Channels = []string{}
+		}
+		if steps[i].Commands == nil {
+			steps[i].Commands = []string{}
+		}
+	}
 	return steps
 }
 
-func buildFindingOnlyRemediation(f *Finding) []RemediationStep {
+func buildFindingOnlyRemediation(f *model.Finding) []RemediationStep {
 	if scoped := buildFindingScopedRemediation(f); len(scoped) > 0 {
 		scoped[0].Step = 1
 		return scoped
@@ -88,7 +103,7 @@ func buildFindingOnlyRemediation(f *Finding) []RemediationStep {
 	return []RemediationStep{step}
 }
 
-func buildFindingScopedRemediation(f *Finding) []RemediationStep {
+func buildFindingScopedRemediation(f *model.Finding) []RemediationStep {
 	source := actorFromFinding(f.SourceID, f.SourceName, f.SourceKind)
 	target := actorFromFinding(f.TargetID, f.TargetName, f.TargetKind)
 	step := RemediationStep{

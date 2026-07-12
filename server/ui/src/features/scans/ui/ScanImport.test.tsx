@@ -23,8 +23,33 @@ vi.mock("@entities/scan/api", () => ({
 }));
 
 import { IngestRequestError, uploadScan } from "@entities/scan/api";
+import type { IngestResult } from "@entities/scan/api";
 
 const mockedUploadScan = vi.mocked(uploadScan);
+
+function ingestCounts(
+  nodes: number,
+  edges: number,
+): Pick<IngestResult, "submitted" | "write_rows" | "graph_totals" | "collection"> {
+  return {
+    submitted: { nodes, edges },
+    write_rows: { nodes, edges },
+    graph_totals: { before: null, after: null },
+    collection: {
+      state: "complete",
+      coverage_keys: [configCoverageKey],
+      outcomes: [
+        {
+          collector: "config",
+          coverage_key: configCoverageKey,
+          target: "/tmp/test-config.json",
+          method: "filesystem",
+          state: "complete",
+        },
+      ],
+    },
+  };
+}
 
 // ScanImport now uploads via the useUploadScan mutation hook, so it needs a
 // QueryClient in context.
@@ -55,14 +80,45 @@ function makeOversizeFile(name: string): File {
   return f;
 }
 
+const configCoverageKey = `config:target:sha256:${"a".repeat(64)}`;
 const validScanJSON = JSON.stringify({
   meta: {
-    version: 1,
+    version: 2,
     type: "agenthound-ingest",
     collector: "config",
     collector_version: "0.1.0",
     timestamp: "2026-04-23T12:00:00Z",
     scan_id: "test-scan-1",
+    collection: {
+      state: "complete",
+      coverage_keys: [configCoverageKey],
+      outcomes: [
+        {
+          collector: "config",
+          coverage_key: configCoverageKey,
+          target: "/tmp/test-config.json",
+          method: "filesystem",
+          state: "complete",
+          items: 0,
+        },
+      ],
+    },
+    ruleset: {
+      digest:
+        "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e64a8f8bff093b2f5f2cf4e",
+      entries: [],
+      load_state: "complete",
+      errors: [],
+      authenticity: "unverified",
+    },
+    identity_schemes: [
+      {
+        entity_kind: "MCPServer",
+        transport: "stdio",
+        scheme: "mcp_stdio_v2_ordered",
+        version: 2,
+      },
+    ],
   },
   graph: { nodes: [], edges: [] },
 });
@@ -77,8 +133,7 @@ describe("ScanImport", () => {
       scan_id: "test-scan-1",
       outcome: "complete",
       projection_status: "complete",
-      nodes_written: 5,
-      edges_written: 3,
+      ...ingestCounts(5, 3),
       published_revision: 1,
       stages: [
         { name: "write_nodes", state: "complete", required: true, duration: 1 },
@@ -172,8 +227,7 @@ describe("ScanImport", () => {
         scan_id: "failed-partial",
         outcome: "failed",
         projection_status: "incomplete",
-        nodes_written: 1000,
-        edges_written: 0,
+        ...ingestCounts(1000, 0),
         stages: [
           {
             name: "write_nodes",
@@ -276,8 +330,9 @@ describe("ScanImport", () => {
   it("accepts files with empty MIME type (drag-drop from some OSes)", async () => {
     mockedUploadScan.mockResolvedValue({
       scan_id: "test-scan-2",
-      nodes_written: 1,
-      edges_written: 0,
+      outcome: "complete",
+      projection_status: "complete",
+      ...ingestCounts(1, 0),
     });
     render(<ScanImport open={true} onClose={() => {}} />, {
       wrapper: createWrapper(),
@@ -312,8 +367,7 @@ describe("ScanImport", () => {
       scan_id: "partial-scan",
       outcome: "partial",
       projection_status: "incomplete",
-      nodes_written: 4,
-      edges_written: 2,
+      ...ingestCounts(4, 2),
       warnings: ["normalization dropped one property"],
       stages: [
         { name: "write_nodes", state: "complete", required: true, duration: 1 },
@@ -370,15 +424,60 @@ describe("ScanImport", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("renders ruleset load errors and withholds publication actions", async () => {
+    mockedUploadScan.mockResolvedValue({
+      scan_id: "ruleset-failed",
+      outcome: "partial",
+      projection_status: "incomplete",
+      ...ingestCounts(4, 2),
+      stages: [
+        {
+          name: "ruleset",
+          state: "failed",
+          required: true,
+          duration: 1,
+          error: "ruleset load reported errors: custom rule parse failed",
+        },
+        { name: "write_nodes", state: "complete", required: true, duration: 1 },
+        { name: "write_edges", state: "complete", required: true, duration: 1 },
+        { name: "analysis", state: "complete", required: true, duration: 1 },
+        { name: "snapshot", state: "complete", required: true, duration: 1 },
+        {
+          name: "publication",
+          state: "not_applicable",
+          required: true,
+          duration: 1,
+          error: "publication withheld: ruleset load reported errors",
+        },
+      ],
+    });
+    render(<ScanImport open={true} onClose={() => {}} />, {
+      wrapper: createWrapper(),
+    });
+
+    fireEvent.drop(screen.getByTestId("dropzone"), {
+      dataTransfer: { files: [makeJSONFile("ruleset-failed.json", validScanJSON)] },
+    });
+
+    expect(
+      await screen.findByText(
+        (_, element) =>
+          element?.tagName === "LI" &&
+          /ruleset\s+— failed: ruleset load reported errors: custom rule parse failed/i.test(
+            element.textContent ?? "",
+          ),
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /view findings/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /open graph/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it("ignores an upload completion after the dialog closes", async () => {
-    let resolveUpload!: (value: {
-      scan_id: string;
-      outcome: "complete";
-      projection_status: string;
-      nodes_written: number;
-      edges_written: number;
-      stages: [];
-    }) => void;
+    let resolveUpload!: (value: IngestResult) => void;
     mockedUploadScan.mockReturnValue(
       new Promise((resolve) => {
         resolveUpload = resolve;
@@ -403,8 +502,7 @@ describe("ScanImport", () => {
         scan_id: "delayed",
         outcome: "complete",
         projection_status: "complete",
-        nodes_written: 1,
-        edges_written: 1,
+        ...ingestCounts(1, 1),
         stages: [],
       });
     });

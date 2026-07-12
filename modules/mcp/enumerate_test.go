@@ -24,11 +24,9 @@ func TestFinalizeServerResultRecordsMethodFailure(t *testing.T) {
 	serverID := "server-v2"
 	result := &ServerResult{
 		Nodes: []ingest.Node{{
-			ID:    serverID,
-			Kinds: []string{"MCPServer"},
-			Properties: map[string]any{
-				"legacy_objectid": "server-v1",
-			},
+			ID:         serverID,
+			Kinds:      []string{"MCPServer"},
+			Properties: map[string]any{},
 		}, {
 			ID:    "tool-v2",
 			Kinds: []string{"MCPTool"},
@@ -49,9 +47,8 @@ func TestFinalizeServerResultRecordsMethodFailure(t *testing.T) {
 	if result.Nodes[0].Properties["collection_state"] != "partial" {
 		t.Fatalf("server node lost collection state: %+v", result.Nodes[0].Properties)
 	}
-	wantLegacyTool := ingest.ComputeNodeID("MCPTool", "server-v1", "tool")
-	if result.Nodes[1].Properties["legacy_objectid"] != wantLegacyTool {
-		t.Fatalf("tool legacy ID = %v, want %s", result.Nodes[1].Properties["legacy_objectid"], wantLegacyTool)
+	if _, exists := result.Nodes[1].Properties["legacy_objectid"]; exists {
+		t.Fatalf("tool exposed removed legacy identity: %+v", result.Nodes[1].Properties)
 	}
 }
 

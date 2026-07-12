@@ -20,7 +20,7 @@ describe("authentication property chips", () => {
     ).toContain("auth-unknown");
   });
 
-  it("normalizes legacy stdio none evidence to local-process", () => {
+  it("renders canonical stdio local-process evidence", () => {
     const chips = getPropertyChips("MCPServer", {
       transport: "stdio",
       auth_method: "none",

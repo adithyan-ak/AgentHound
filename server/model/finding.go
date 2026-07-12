@@ -24,13 +24,11 @@ const (
 )
 
 // FindingEvidence records the detector facts used to classify a finding.
-// Legacy rows default to State=unknown rather than inheriting reassuring
-// semantics from a later live projection.
 type FindingEvidence struct {
 	State          FindingEvidenceState `json:"state"`
 	Detector       string               `json:"detector,omitempty"`
 	MatchType      string               `json:"match_type,omitempty"`
-	Channels       []string             `json:"channels,omitempty"`
+	Channels       []string             `json:"channels"`
 	MaterialStatus string               `json:"material_status,omitempty"`
 	ExposureStatus string               `json:"exposure_status,omitempty"`
 	Correlation    string               `json:"correlation,omitempty"`
@@ -82,8 +80,8 @@ type Finding struct {
 	Variant       FindingVariant        `json:"variant"`
 	Evidence      FindingEvidence       `json:"evidence"`
 	ExactEvidence *ExactFindingEvidence `json:"-"`
-	OWASPMap      []string              `json:"owasp_map,omitempty"`
-	ATLASMap      []string              `json:"atlas_map,omitempty"`
+	OWASPMap      []string              `json:"owasp_map"`
+	ATLASMap      []string              `json:"atlas_map"`
 	Triage        *TriageState          `json:"triage,omitempty"`
 }
 

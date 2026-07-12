@@ -243,11 +243,12 @@ export function RulesLibrary() {
             scansWithProvenance.length === 0 && (
               <DataStateNotice
                 tone="warning"
-                title="No scan-specific ruleset recorded"
+                title="Scan ruleset provenance unavailable"
                 className="mt-3"
               >
-                Legacy scans without manifest metadata cannot be attributed to
-                the server's current rules.
+                Scans without recorded manifest metadata have unavailable
+                ruleset provenance and cannot be attributed to the server's
+                current rules.
               </DataStateNotice>
             )}
           {selectedScan && provenance?.issue && (
@@ -339,7 +340,7 @@ export function RulesLibrary() {
                       ) : (
                         <p className="mt-1.5 border-t border-border/50 pt-1.5 text-muted-foreground">
                           Effective matcher definition unavailable in this
-                          legacy manifest.
+                          scan manifest.
                         </p>
                       )}
                     </li>

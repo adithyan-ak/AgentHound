@@ -2,71 +2,24 @@ package ingest
 
 import "testing"
 
-func TestResolveEdgeEndpoints_KnownKind(t *testing.T) {
-	src, tgt := ResolveEdgeEndpoints("PROVIDES_TOOL", "", "")
-	if src != "MCPServer" {
-		t.Errorf("source: got %q, want %q", src, "MCPServer")
-	}
-	if tgt != "MCPTool" {
-		t.Errorf("target: got %q, want %q", tgt, "MCPTool")
-	}
-}
-
-func TestResolveEdgeEndpoints_UnknownKind(t *testing.T) {
-	src, tgt := ResolveEdgeEndpoints("MADE_UP_KIND", "", "")
-	if src != "" {
-		t.Errorf("source: got %q, want empty", src)
-	}
-	if tgt != "" {
-		t.Errorf("target: got %q, want empty", tgt)
-	}
-}
-
-func TestResolveEdgeEndpoints_ExplicitOverride(t *testing.T) {
-	src, tgt := ResolveEdgeEndpoints("PROVIDES_TOOL", "CustomSource", "CustomTarget")
-	if src != "CustomSource" {
-		t.Errorf("source: got %q, want %q", src, "CustomSource")
-	}
-	if tgt != "CustomTarget" {
-		t.Errorf("target: got %q, want %q", tgt, "CustomTarget")
-	}
-}
-
-func TestResolveEdgeEndpoints_PartialOverrideSource(t *testing.T) {
-	src, tgt := ResolveEdgeEndpoints("PROVIDES_TOOL", "CustomSource", "")
-	if src != "CustomSource" {
-		t.Errorf("source: got %q, want %q", src, "CustomSource")
-	}
-	if tgt != "MCPTool" {
-		t.Errorf("target: got %q, want %q (registry fallback)", tgt, "MCPTool")
-	}
-}
-
-func TestResolveEdgeEndpoints_PartialOverrideTarget(t *testing.T) {
-	src, tgt := ResolveEdgeEndpoints("PROVIDES_TOOL", "", "CustomTarget")
-	if src != "MCPServer" {
-		t.Errorf("source: got %q, want %q (registry fallback)", src, "MCPServer")
-	}
-	if tgt != "CustomTarget" {
-		t.Errorf("target: got %q, want %q", tgt, "CustomTarget")
-	}
-}
-
-func TestResolveEdgeEndpoints_OnlyInfersUnambiguousKinds(t *testing.T) {
-	for kind, ep := range EdgeKindEndpoints {
-		src, tgt := ResolveEdgeEndpoints(kind, "", "")
-		if len(ep.SourceKinds) == 1 && src == "" {
-			t.Errorf("%s: unambiguous source resolved to empty (registry has %v)", kind, ep.SourceKinds)
-		}
-		if len(ep.SourceKinds) > 1 && src != "" {
-			t.Errorf("%s: ambiguous source resolved to %q (registry has %v)", kind, src, ep.SourceKinds)
-		}
-		if len(ep.TargetKinds) == 1 && tgt == "" {
-			t.Errorf("%s: unambiguous target resolved to empty (registry has %v)", kind, ep.TargetKinds)
-		}
-		if len(ep.TargetKinds) > 1 && tgt != "" {
-			t.Errorf("%s: ambiguous target resolved to %q (registry has %v)", kind, tgt, ep.TargetKinds)
-		}
+func TestConcreteNodeKindAcceptsOnlyDocumentedUmbrellaCompanions(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		kinds []string
+		want  string
+	}{
+		{"single concrete", []string{"MCPServer"}, "MCPServer"},
+		{"service umbrella", []string{"LiteLLMGateway", "AIService"}, "LiteLLMGateway"},
+		{"conflicting concrete kinds", []string{"MCPServer", "MCPTool"}, ""},
+		{"undocumented umbrella companion", []string{"MCPServer", "AIService"}, ""},
+		{"umbrella first", []string{"AIService", "LiteLLMGateway"}, ""},
+		{"umbrella only", []string{"AIService"}, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ConcreteNodeKind(test.kinds); got != test.want {
+				t.Fatalf("ConcreteNodeKind(%v) = %q, want %q", test.kinds, got, test.want)
+			}
+		})
 	}
 }
 
@@ -93,12 +46,12 @@ func TestProvidesResource_AcceptsMLflowAndQdrantSources(t *testing.T) {
 			t.Errorf("PROVIDES_RESOURCE source-kinds missing %q; got %v", k, ep.SourceKinds)
 		}
 	}
-	// Explicit-override paths for both new sources.
 	for _, src := range []string{"MLflowServer", "QdrantInstance"} {
-		gotSrc, gotTgt := ResolveEdgeEndpoints("PROVIDES_RESOURCE", src, "MCPResource")
-		if gotSrc != src || gotTgt != "MCPResource" {
-			t.Errorf("ResolveEdgeEndpoints(PROVIDES_RESOURCE, %q, MCPResource) = (%q, %q), want (%q, MCPResource)",
-				src, gotSrc, gotTgt, src)
+		if !SourceKindAllowed("PROVIDES_RESOURCE", src) {
+			t.Errorf("PROVIDES_RESOURCE must accept explicit source %q", src)
+		}
+		if !TargetKindAllowed("PROVIDES_RESOURCE", "MCPResource") {
+			t.Error("PROVIDES_RESOURCE must accept explicit MCPResource target")
 		}
 	}
 }

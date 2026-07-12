@@ -18,8 +18,8 @@ import (
 var suppressedStatuses = []string{"accepted-risk", "false-positive"}
 
 // FindingStore persists per-scan finding snapshots and cross-scan triage
-// state. The graph's stale-edge cleanup rewrites composite edges every
-// scan, so the Postgres snapshot is the only diffable record of "what was
+// state. Complete raw-domain promotion replaces the graph's global composite
+// epoch, so the Postgres snapshot is the only diffable record of "what was
 // found when".
 type FindingStore struct {
 	pool *pgxpool.Pool
@@ -41,34 +41,13 @@ type FindingsDiff struct {
 
 type FindingScope struct {
 	Mode             string     `json:"mode"`
-	ScanID           string     `json:"scan_id,omitempty"`
-	Revision         *int64     `json:"revision,omitempty"`
-	PublishedAt      *time.Time `json:"published_at,omitempty"`
+	ScanID           string     `json:"scan_id"`
+	Revision         *int64     `json:"revision"`
+	PublishedAt      *time.Time `json:"published_at"`
 	ProjectionStatus string     `json:"projection_status"`
 	SnapshotStatus   string     `json:"snapshot_status"`
 	Available        bool       `json:"available"`
 	Stale            bool       `json:"stale"`
-}
-
-// InsertFindings atomically replaces a scan's findings snapshot. An empty
-// slice is meaningful: a successful empty retry removes every prior row for
-// that scan instead of silently preserving stale findings.
-func (s *FindingStore) InsertFindings(ctx context.Context, scanID string, findings []model.Finding) error {
-	if scanID == "" {
-		return errors.New("insert findings: empty scan_id")
-	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("replace findings transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := replaceFindingsTx(ctx, tx, scanID, findings); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit findings replacement: %w", err)
-	}
-	return nil
 }
 
 func replaceFindingsTx(ctx context.Context, tx pgx.Tx, scanID string, findings []model.Finding) error {
@@ -136,40 +115,6 @@ func replaceFindingsTx(ctx context.Context, tx pgx.Tx, scanID string, findings [
 const findingSelectColumns = `f.scan_id, f.captured_at, f.fingerprint, f.severity, f.category, f.title, f.description, f.edge_kind,
 	f.source_id, f.source_name, f.source_kind, f.target_id, f.target_name, f.target_kind,
 	f.confidence, f.owasp_map, f.atlas_map, f.variant, f.evidence, f.exact_evidence, t.status, t.note, t.updated_at`
-
-// ListLatestPerFingerprint returns the most recent finding row per
-// fingerprint (across all scans), with triage state attached. severity
-// filters by exact level when non-empty. When includeSuppressed is false,
-// findings triaged as accepted-risk / false-positive are dropped.
-func (s *FindingStore) ListLatestPerFingerprint(ctx context.Context, severity string, includeSuppressed bool) ([]model.Finding, error) {
-	// The inner subquery joins findings + finding_triage (aliases f, t) and
-	// keeps the latest row per fingerprint. The outer query must read every
-	// column back from the `latest` subquery — including the triage columns
-	// (status/note/updated_at), which at the outer level live on `latest`,
-	// NOT on `t` (that alias is only in scope inside the subquery). Listing
-	// the outer columns explicitly keeps the projection order aligned with
-	// scanFindings' positional scan.
-	query := `
-SELECT latest.scan_id, latest.captured_at, latest.fingerprint, latest.severity, latest.category, latest.title, latest.description, latest.edge_kind,
-       latest.source_id, latest.source_name, latest.source_kind, latest.target_id, latest.target_name, latest.target_kind,
-       latest.confidence, latest.owasp_map, latest.atlas_map, latest.variant, latest.evidence, latest.exact_evidence, latest.status, latest.note, latest.updated_at
-FROM (
-    SELECT DISTINCT ON (f.fingerprint) ` + findingSelectColumns + `
-    FROM findings f
-    LEFT JOIN finding_triage t ON t.fingerprint = f.fingerprint
-    ORDER BY f.fingerprint, f.captured_at DESC, f.scan_id DESC
-) latest
-WHERE ($1 = '' OR latest.severity = $1)
-  AND ($2 OR latest.status IS NULL OR latest.status NOT IN ('accepted-risk','false-positive'))
-ORDER BY latest.confidence DESC`
-
-	rows, err := s.pool.Query(ctx, query, severity, includeSuppressed)
-	if err != nil {
-		return nil, fmt.Errorf("list findings: %w", err)
-	}
-	defer rows.Close()
-	return scanFindings(rows)
-}
 
 // PublishedFindingScope resolves the one immutable finding snapshot currently
 // advertised as posture. A partial Neo4j update does not move this pointer;
@@ -421,16 +366,13 @@ func scanFindings(rows pgx.Rows) ([]model.Finding, error) {
 			return nil, fmt.Errorf("scan finding row: %w", err)
 		}
 		f.ID = strings.TrimSpace(f.ID)
-		if f.Variant == "" {
-			f.Variant = model.FindingVariantUnknown
-		}
 		if len(evidenceJSON) > 0 {
 			if err := json.Unmarshal(evidenceJSON, &f.Evidence); err != nil {
 				return nil, fmt.Errorf("decode finding %s evidence: %w", f.ID, err)
 			}
 		}
-		if f.Evidence.State == "" {
-			f.Evidence.State = model.FindingEvidenceUnknown
+		if f.Evidence.Channels == nil {
+			f.Evidence.Channels = []string{}
 		}
 		if len(exactEvidenceJSON) > 0 {
 			var exact model.ExactFindingEvidence
@@ -439,9 +381,6 @@ func scanFindings(rows pgx.Rows) ([]model.Finding, error) {
 			}
 			normalizeExactFindingEvidence(&exact)
 			f.ExactEvidence = &exact
-		}
-		if f.Variant == model.FindingVariantUnknown && f.ExactEvidence == nil {
-			f.Description = safeLegacyFindingDescription(f)
 		}
 		if status != nil {
 			ts := &model.TriageState{Status: *status}
@@ -481,43 +420,6 @@ func normalizeExactFindingEvidence(exact *model.ExactFindingEvidence) {
 			exact.Edges[i].Properties = map[string]any{}
 		}
 	}
-}
-
-func safeLegacyFindingDescription(f model.Finding) string {
-	source := f.SourceName
-	if source == "" {
-		source = f.SourceID
-	}
-	if source == "" {
-		source = "unknown"
-	}
-	sourceKind := f.SourceKind
-	if sourceKind == "" {
-		sourceKind = "unknown kind"
-	}
-	target := f.TargetName
-	if target == "" {
-		target = f.TargetID
-	}
-	if target == "" {
-		target = "unknown"
-	}
-	targetKind := f.TargetKind
-	if targetKind == "" {
-		targetKind = "unknown kind"
-	}
-	edgeKind := f.EdgeKind
-	if edgeKind == "" {
-		edgeKind = "unknown"
-	}
-	return fmt.Sprintf(
-		"Legacy finding: source %s (%s) and target %s (%s) matched detector %s; predicate-specific witness evidence was not retained.",
-		source,
-		sourceKind,
-		target,
-		targetKind,
-		edgeKind,
-	)
 }
 
 func isSuppressed(ts *model.TriageState) bool {

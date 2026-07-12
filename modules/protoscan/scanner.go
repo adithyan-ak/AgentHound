@@ -418,7 +418,10 @@ func (s *Scanner) probeA2A(ctx context.Context, baseURL string) (string, bool) {
 // final ingest envelope through agenthound-server ingest, which writes
 // :MCPServer and :A2AAgent nodes deterministically.
 func EmitDiscoveryNodes(targets []action.Target) ingest.GraphData {
-	var out ingest.GraphData
+	out := ingest.GraphData{
+		Nodes: []ingest.Node{},
+		Edges: []ingest.Edge{},
+	}
 	for _, t := range targets {
 		switch t.Meta["protocol"] {
 		case "mcp":

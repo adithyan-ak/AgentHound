@@ -14,7 +14,6 @@ export interface ExplorerViewModel {
   data: ExplorerRawData | undefined;
   isLoading: boolean;
   error: Error | null;
-  dataUpdatedAt: number;
   blastError: Error | null;
   blastLoading: boolean;
   /** (1) Raw totals for the StatusStrip. */
@@ -33,7 +32,11 @@ export interface ExplorerViewModel {
  * canvas / info card / status strip.
  */
 export function useExplorerViewModel(): ExplorerViewModel {
-  const { data, isLoading, error, dataUpdatedAt } = useExplorerGraph();
+  const graphQuery = useExplorerGraph();
+  // React Query retains the previous successful payload when a refetch fails.
+  // Do not render that cached publication once its current-state verification
+  // has failed.
+  const data = graphQuery.error ? undefined : graphQuery.data;
 
   const activeLens = useExplorerStore((s) => s.activeLens);
   const subPresets = useExplorerStore((s) => s.subPresets[activeLens] ?? []);
@@ -109,9 +112,8 @@ export function useExplorerViewModel(): ExplorerViewModel {
 
   return {
     data,
-    isLoading,
-    error,
-    dataUpdatedAt,
+    isLoading: graphQuery.isLoading,
+    error: graphQuery.error,
     blastError,
     blastLoading,
     totals,

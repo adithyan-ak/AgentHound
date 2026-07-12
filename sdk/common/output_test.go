@@ -4,14 +4,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
 func TestNewIngestData(t *testing.T) {
 	t.Run("with explicit scan ID", func(t *testing.T) {
 		data := NewIngestData("mcp", "scan-mcp-123")
 
-		if data.Meta.Version != 1 {
-			t.Errorf("version = %d, want 1", data.Meta.Version)
+		if data.Meta.Version != ingest.CurrentVersion {
+			t.Errorf("version = %d, want %d", data.Meta.Version, ingest.CurrentVersion)
 		}
 		if data.Meta.Type != "agenthound-ingest" {
 			t.Errorf("type = %q, want %q", data.Meta.Type, "agenthound-ingest")

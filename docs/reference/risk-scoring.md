@@ -1,6 +1,6 @@
 # Risk Scoring
 
-AgentHound computes risk scores at two levels: per-edge weights (used by Dijkstra shortest-path) and per-node composite scores (0-100, used for prioritization in findings and the dashboard).
+AgentHound computes risk scores at two levels: per-edge weights (used by bounded weighted-path traversal) and per-node composite scores (0-100, used for prioritization in findings and the dashboard).
 
 ---
 
@@ -38,14 +38,14 @@ Each node type uses a weighted formula over sub-scores. Each sub-score normalize
 
 Every scored node also carries `risk_score_min`, `risk_score_max`,
 `risk_assessment_complete`, and `risk_unknown_factors`. `risk_score` remains a
-rankable conservative upper bound for compatibility. Unknown evidence therefore
+rankable conservative upper bound for prioritization. Unknown evidence therefore
 does not become a precise zero or a precise auth weakness; the UI must display
 the bound and missing factors.
 
 ### AgentInstance
 
 ```
-score = 0.30 * credential + 0.25 * blast_radius + 0.20 * auth_posture
+score = 0.30 * credential + 0.25 * blast_radius + 0.20 * auth_risk
       + 0.15 * tool_surface + 0.10 * poisoning
 ```
 
@@ -53,7 +53,7 @@ score = 0.30 * credential + 0.25 * blast_radius + 0.20 * auth_posture
 |-----------|-------------|
 | `credential` | 100 if any trusted server has high-entropy or hardcoded credentials; 60 if credentials exist but are vault-referenced; 0 otherwise |
 | `blast_radius` | `min(reachable_resource_count * 10, 100)` |
-| `auth_posture` | `(1 - avg_trust_edge_weight) * 100` (weak auth = high score) |
+| `auth_risk` | `(1 - avg_trust_edge_weight) * 100` (weak auth = high score) |
 | `tool_surface` | `min(trusted_tool_count * 5, 100)` |
 | `poisoning` | 100 if any loaded instruction file is suspicious; 0 otherwise |
 

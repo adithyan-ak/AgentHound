@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
+	"github.com/adithyan-ak/agenthound/server/internal/analysis/riskscore"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 )
 
@@ -78,6 +80,46 @@ func TestRiskScore_ProcessSuccess(t *testing.T) {
 	}
 }
 
+func TestRiskScore_ProcessPersistsBoundedAgentAuthAssessment(t *testing.T) {
+	mock := &graph.MockGraphDB{
+		ListNodesResult: []ingest.Node{
+			{ID: "agent-unknown-auth", Kinds: []string{"AgentInstance"}},
+		},
+		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
+			if strings.Contains(cypher, "auth_assessment_complete") {
+				return []map[string]any{{
+					"rw":                       0.5,
+					"auth_assessment_complete": false,
+				}}, nil
+			}
+			return nil, nil
+		},
+	}
+
+	if _, err := (&RiskScore{}).Process(context.Background(), mock, "scan-1"); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+
+	var agentAssessment map[string]any
+	for _, call := range mock.CallsTo("UpdateNodeProperties") {
+		properties, _ := call.Args[1].(map[string]any)
+		factors, _ := properties["risk_unknown_factors"].([]string)
+		if len(factors) == 1 && factors[0] == "agent_auth" {
+			agentAssessment = properties
+			break
+		}
+	}
+	if agentAssessment == nil {
+		t.Fatal("AgentInstance update omitted agent_auth uncertainty")
+	}
+	if agentAssessment["risk_score"] != float64(20) ||
+		agentAssessment["risk_score_min"] != float64(0) ||
+		agentAssessment["risk_score_max"] != float64(20) ||
+		agentAssessment["risk_assessment_complete"] != false {
+		t.Fatalf("AgentInstance assessment = %+v, want incomplete [0,20]", agentAssessment)
+	}
+}
+
 func TestRiskScore_ProcessIncludesA2AAgents(t *testing.T) {
 	mock := &graph.MockGraphDB{
 		ListNodesResult: []ingest.Node{{ID: "node-1", Kinds: []string{"A2AAgent"}}},
@@ -103,7 +145,7 @@ func TestRiskScore_ProcessIncludesA2AAgents(t *testing.T) {
 	}
 }
 
-func TestScoreNodesPagesPastLegacyTenThousandCap(t *testing.T) {
+func TestScoreNodesAssessmentPagesPastLegacyTenThousandCap(t *testing.T) {
 	const total = 10001
 	mock := &graph.MockGraphDB{}
 	mock.ListNodesPageFunc = func(_ context.Context, kind string, limit, offset int, revision string) ([]ingest.Node, graph.PageInfo, error) {
@@ -124,16 +166,16 @@ func TestScoreNodesPagesPastLegacyTenThousandCap(t *testing.T) {
 		}, nil
 	}
 
-	updated, err := scoreNodes(
+	updated, err := scoreNodesAssessment(
 		context.Background(),
 		mock,
 		"MCPTool",
-		func(_ context.Context, _ graph.GraphDB, _ string) (float64, error) {
-			return 0.5, nil
+		func(_ context.Context, _ graph.GraphDB, _ string) (riskscore.Assessment, error) {
+			return riskscore.ExactAssessment(0.5), nil
 		},
 	)
 	if err != nil {
-		t.Fatalf("scoreNodes() error = %v", err)
+		t.Fatalf("scoreNodesAssessment() error = %v", err)
 	}
 	if updated != total {
 		t.Fatalf("updated = %d, want %d", updated, total)
@@ -143,7 +185,7 @@ func TestScoreNodesPagesPastLegacyTenThousandCap(t *testing.T) {
 	}
 }
 
-func TestScoreNodesRejectsIncompleteCollectionBeforeUpdating(t *testing.T) {
+func TestScoreNodesAssessmentRejectsIncompleteCollectionBeforeUpdating(t *testing.T) {
 	tests := []struct {
 		name string
 		page graph.PageInfo
@@ -178,18 +220,18 @@ func TestScoreNodesRejectsIncompleteCollectionBeforeUpdating(t *testing.T) {
 			}
 			scoreCalls := 0
 
-			updated, err := scoreNodes(
+			updated, err := scoreNodesAssessment(
 				context.Background(),
 				mock,
 				"MCPTool",
-				func(_ context.Context, _ graph.GraphDB, _ string) (float64, error) {
+				func(_ context.Context, _ graph.GraphDB, _ string) (riskscore.Assessment, error) {
 					scoreCalls++
-					return 0.5, nil
+					return riskscore.ExactAssessment(0.5), nil
 				},
 			)
 
 			if err == nil {
-				t.Fatal("scoreNodes() error = nil, want incomplete collection error")
+				t.Fatal("scoreNodesAssessment() error = nil, want incomplete collection error")
 			}
 			if updated != 0 || scoreCalls != 0 ||
 				len(mock.CallsTo("UpdateNodeProperties")) != 0 {
@@ -243,11 +285,39 @@ func TestRiskScore_ProcessUpdateError(t *testing.T) {
 
 	p := &RiskScore{}
 	stats, err := p.Process(context.Background(), mock, "scan-1")
-	if err != nil {
-		t.Fatalf("Process() error = %v (update errors are logged, not propagated)", err)
+	if err == nil {
+		t.Fatal("Process() error = nil, want joined update failures")
 	}
 	// Nodes exist but updates fail — NodesUpdated stays 0
 	if stats.NodesUpdated != 0 {
 		t.Errorf("NodesUpdated = %d, want 0", stats.NodesUpdated)
+	}
+	if got := len(mock.CallsTo("UpdateNodeProperties")); got != 4 {
+		t.Fatalf("UpdateNodeProperties calls = %d, want all 4 node kinds attempted", got)
+	}
+	for _, kind := range []string{"AgentInstance", "A2AAgent", "MCPServer", "MCPTool"} {
+		if !strings.Contains(err.Error(), "update "+kind+" node-1") {
+			t.Errorf("joined error missing %s failure: %v", kind, err)
+		}
+	}
+}
+
+func TestRiskScore_ProcessComputationErrorsContinueAcrossKinds(t *testing.T) {
+	mock := &graph.MockGraphDB{
+		ListNodesResult: []ingest.Node{{ID: "node-1"}},
+		QueryError:      errors.New("score failed"),
+	}
+
+	stats, err := (&RiskScore{}).Process(context.Background(), mock, "scan-1")
+	if err == nil {
+		t.Fatal("Process() error = nil, want joined computation failures")
+	}
+	if stats.NodesUpdated != 0 {
+		t.Fatalf("NodesUpdated = %d, want 0", stats.NodesUpdated)
+	}
+	for _, kind := range []string{"AgentInstance", "A2AAgent", "MCPServer", "MCPTool"} {
+		if !strings.Contains(err.Error(), "scoring "+kind+" nodes") {
+			t.Errorf("joined error missing %s failure: %v", kind, err)
+		}
 	}
 }

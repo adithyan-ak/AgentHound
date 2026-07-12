@@ -8,31 +8,35 @@ import (
 )
 
 func TestTagObservationDomainPreservesSharedOwners(t *testing.T) {
+	configScope := CanonicalCoverageKey("config", "path", "/tmp/config.json")
+	mcpScope := CanonicalCoverageKey("mcp", "target", "https://mcp.example")
 	graph := GraphData{
-		Nodes: []Node{{ID: "shared", ObservationDomains: []string{"config"}}},
+		Nodes: []Node{{ID: "shared", ObservationDomains: []string{configScope}}},
 		Edges: []Edge{{Source: "a", Target: "b", Kind: "RUNS_ON"}},
 	}
 
-	TagObservationDomain(&graph, "mcp")
-	TagObservationDomain(&graph, "mcp")
+	TagObservationDomain(&graph, mcpScope)
+	TagObservationDomain(&graph, mcpScope)
 
-	if got, want := graph.Nodes[0].ObservationDomains, []string{"config", "mcp"}; !reflect.DeepEqual(got, want) {
+	if got, want := graph.Nodes[0].ObservationDomains, []string{configScope, mcpScope}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("node domains = %v, want %v", got, want)
 	}
-	if got, want := graph.Edges[0].ObservationDomains, []string{"mcp"}; !reflect.DeepEqual(got, want) {
+	if got, want := graph.Edges[0].ObservationDomains, []string{mcpScope}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("edge domains = %v, want %v", got, want)
 	}
 }
 
 func TestObservationDomainsRoundTripAdditively(t *testing.T) {
+	scope := CanonicalCoverageKey("mcp", "target", "https://mcp.example")
 	original := GraphData{
 		Nodes: []Node{{
 			ID: "node", Kinds: []string{"MCPServer"},
-			ObservationDomains: []string{"mcp"},
+			ObservationDomains: []string{scope},
 		}},
 		Edges: []Edge{{
 			Source: "node", Target: "tool", Kind: "PROVIDES_TOOL",
-			ObservationDomains: []string{"mcp"},
+			ObservationDomains:   []string{scope, CanonicalCoverageKey("config", "path", "/tmp/config.json")},
+			ObservationSemantics: ObservationSemanticsAllDependencies,
 		}},
 	}
 	encoded, err := json.Marshal(original)
@@ -49,24 +53,26 @@ func TestObservationDomainsRoundTripAdditively(t *testing.T) {
 }
 
 func TestCoverageStatesKeepsCompleteChildOfPartialScan(t *testing.T) {
+	configScope := CanonicalCoverageKey("config", "path", "/tmp/config.json")
+	mcpScope := CanonicalCoverageKey("mcp", "target", "https://mcp.example")
 	report := &CollectionReport{
 		State:        OutcomePartial,
-		CoverageKeys: []string{"config", "mcp"},
+		CoverageKeys: []string{configScope, mcpScope},
 		Outcomes: []CollectionOutcome{
-			{Collector: "config", State: OutcomeComplete},
-			{Collector: "mcp", State: OutcomeFailed},
+			{Collector: "config", CoverageKey: configScope, State: OutcomeComplete},
+			{Collector: "mcp", CoverageKey: mcpScope, State: OutcomeFailed},
 		},
 	}
 
 	states := CoverageStates(report)
-	if states["config"] != OutcomeComplete {
-		t.Fatalf("config state = %q, want complete", states["config"])
+	if states[configScope] != OutcomeComplete {
+		t.Fatalf("config state = %q, want complete", states[configScope])
 	}
-	if states["mcp"] != OutcomeFailed {
-		t.Fatalf("mcp state = %q, want failed", states["mcp"])
+	if states[mcpScope] != OutcomeFailed {
+		t.Fatalf("mcp state = %q, want failed", states[mcpScope])
 	}
-	if got := CompleteCoverageDomains(report); !reflect.DeepEqual(got, []string{"config"}) {
-		t.Fatalf("complete domains = %v, want [config]", got)
+	if got := CompleteCoverageDomains(report); !reflect.DeepEqual(got, []string{configScope}) {
+		t.Fatalf("complete domains = %v, want [%s]", got, configScope)
 	}
 	if CollectionCoverageComplete(report) {
 		t.Fatal("partial multi-domain report must not be globally complete")
@@ -75,8 +81,11 @@ func TestCoverageStatesKeepsCompleteChildOfPartialScan(t *testing.T) {
 
 func TestCoverageStatesDoesNotPromoteUnattributedMultiDomainReport(t *testing.T) {
 	report := &CollectionReport{
-		State:        OutcomeComplete,
-		CoverageKeys: []string{"config", "mcp"},
+		State: OutcomeComplete,
+		CoverageKeys: []string{
+			CanonicalCoverageKey("config", "path", "/tmp/config.json"),
+			CanonicalCoverageKey("mcp", "target", "https://mcp.example"),
+		},
 	}
 
 	if got := CompleteCoverageDomains(report); len(got) != 0 {

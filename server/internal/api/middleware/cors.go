@@ -16,26 +16,9 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 		allowedOrigins = []string{"http://localhost:8080"}
 	}
 	return cors.Handler(cors.Options{
-		AllowedOrigins: allowedOrigins,
-		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders: []string{"Accept", "Content-Type"},
-		ExposedHeaders: []string{
-			"Link",
-			"X-Total-Count",
-			"X-Has-More",
-			"X-Offset",
-			"X-Collection-Complete",
-			"X-Revision",
-			"X-Truncated",
-			"X-Finding-Scope",
-			"X-Projection-Status",
-			"X-Snapshot-Status",
-			"X-Snapshot-Available",
-			"X-Snapshot-Stale",
-			"X-Snapshot-Scan-ID",
-			"X-Published-Revision",
-			"X-Published-At",
-		},
+		AllowedOrigins:   allowedOrigins,
+		AllowedMethods:   []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Content-Type"},
 		AllowCredentials: false,
 		MaxAge:           300,
 	})

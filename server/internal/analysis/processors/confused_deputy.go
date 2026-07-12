@@ -28,8 +28,8 @@ func (p *ConfusedDeputy) Dependencies() []string {
 func (p *ConfusedDeputy) Process(ctx context.Context, db graph.GraphDB, scanID string) (graph.ProcessingStats, error) {
 	start := time.Now()
 
-	// source_collector='a2a': a real collector in AllowedCollectors, so the
-	// edge participates in stale-edge cleanup directly (no expand mapping).
+	// source_collector='a2a' records detector provenance; composite lifecycle is
+	// managed by the global derived epoch.
 	cypher := `
 MATCH (low:A2AAgent)-[delegation:DELEGATES_TO]->(high:A2AAgent)
 WHERE low.auth_assurance IN ['unauthenticated', 'weak']

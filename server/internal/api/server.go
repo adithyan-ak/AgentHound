@@ -62,11 +62,11 @@ func NewServer(deps ServerDeps) *Server {
 	r.Use(apimw.CORS(deps.CORSOrigins))
 
 	healthH := handlers.NewHealthHandler(deps.Reader, deps.PGPool)
-	graphH := handlers.NewGraphHandler(deps.Reader)
+	graphH := handlers.NewGraphHandler(deps.Reader, deps.FindingStore)
 	ingestH := handlers.NewIngestHandler(deps.Pipeline)
 	queryH := handlers.NewQueryHandler(deps.Reader)
 	analysisH := handlers.NewAnalysisHandler(deps.GraphDB, deps.FindingStore)
-	scanH := handlers.NewScanHandler(deps.ScanStore, deps.GraphDB)
+	scanH := handlers.NewScanHandler(deps.ScanStore)
 	postureH := handlers.NewPostureHandler(deps.FindingStore)
 	rulesH := handlers.NewRulesHandler(deps.RulesEngine)
 	triageH := handlers.NewTriageHandler(deps.FindingStore)
@@ -95,7 +95,7 @@ func NewServer(deps ServerDeps) *Server {
 		r.Get("/posture/export", postureH.HandleExport)
 
 		// Triage read is open (same posture as findings reads); the
-		// mutating PUT is gated below.
+		// mutating PATCH is gated below.
 		r.Get("/findings/triage/{fingerprint}", triageH.HandleGet)
 
 		r.Get("/scans", scanH.HandleList)
@@ -117,7 +117,10 @@ func NewServer(deps ServerDeps) *Server {
 			r.Post("/analysis/shortest-path", analysisH.HandleShortestPath)
 			r.Post("/analysis/all-paths", analysisH.HandleAllPaths)
 			r.Post("/analysis/weighted-path", analysisH.HandleWeightedPath)
-			r.Put("/findings/triage/{fingerprint}", triageH.HandleSet)
+			r.Post("/analysis/topology/shortest-path", analysisH.HandleTopologyShortestPath)
+			r.Post("/analysis/topology/all-paths", analysisH.HandleTopologyAllPaths)
+			r.Post("/analysis/topology/weighted-path", analysisH.HandleTopologyWeightedPath)
+			r.Patch("/findings/triage/{fingerprint}", triageH.HandleSet)
 		})
 	})
 

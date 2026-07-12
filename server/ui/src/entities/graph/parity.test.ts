@@ -54,8 +54,8 @@ describe("Go and TypeScript edge contract parity", () => {
 });
 
 describe("runtime edge decoding", () => {
-  it("normalizes nullish collections but rejects malformed non-arrays", () => {
-    expect(parseAPIEdges(null)).toEqual([]);
+  it("rejects nullish and malformed non-array collections", () => {
+    expect(() => parseAPIEdges(null)).toThrow(/must be an array/);
     expect(() => parseAPIEdges({})).toThrow(/must be an array/);
   });
 

@@ -14,8 +14,6 @@ import (
 	"github.com/adithyan-ak/agenthound/server/model"
 )
 
-const countSemanticsWriteRowsV1 = "neo4j_write_rows_v1"
-
 func coverageKeys(report *sdkingest.CollectionReport) []string {
 	if report == nil {
 		return []string{}
@@ -38,10 +36,7 @@ func collectionState(report *sdkingest.CollectionReport) sdkingest.OutcomeState 
 	if report == nil {
 		return sdkingest.OutcomeUnknown
 	}
-	if report.State != "" {
-		return report.State
-	}
-	return sdkingest.AggregateOutcomeState(report.Outcomes)
+	return report.State
 }
 
 func incompleteCoverageDomains(report *sdkingest.CollectionReport) []string {
@@ -91,26 +86,10 @@ func subtractCoverage(keys []string, replaced ...[]string) []string {
 	return remaining
 }
 
-func coverageCollectors(keys []string) []string {
-	collectors := make([]string, 0, len(keys))
-	for _, key := range keys {
-		collector := key
-		if separator := strings.IndexByte(key, ':'); separator >= 0 {
-			collector = key[:separator]
-		}
-		collectors = mergeCoverage(collectors, []string{collector})
-	}
-	return collectors
-}
-
-// prepareObservationDomains supplies the unambiguous single-domain fallback
-// for additive compatibility. Multi-domain artifacts must carry per-fact tags;
-// missing tags make reconciliation unsafe and therefore non-destructive.
+// prepareObservationDomains verifies the strict-v2 ownership contract after
+// validation. It never infers ownership from report-level coverage.
 func prepareObservationDomains(data *sdkingest.IngestData) bool {
 	keys := coverageKeys(data.Meta.Collection)
-	if len(keys) == 1 {
-		sdkingest.TagObservationDomain(&data.Graph, keys[0])
-	}
 	allowed := make(map[string]bool, len(keys))
 	for _, key := range keys {
 		allowed[key] = true
@@ -180,6 +159,9 @@ func coalesceObservationGraph(graph sdkingest.GraphData) sdkingest.GraphData {
 			}
 			if current.TargetKind == "" {
 				current.TargetKind = edge.TargetKind
+			}
+			if current.ObservationSemantics == "" {
+				current.ObservationSemantics = edge.ObservationSemantics
 			}
 			if current.Properties == nil {
 				current.Properties = make(map[string]any)
@@ -252,13 +234,8 @@ func modelObservationCompleteness(
 	completeness graph.ObservationCompleteness,
 ) model.PostureObservationCompleteness {
 	return model.PostureObservationCompleteness{
-		LegacyNodes:                     completeness.LegacyNodes,
-		LegacyRelationships:             completeness.LegacyRelationships,
-		UnscopedNodes:                   completeness.UnscopedNodes,
-		UnscopedRelationships:           completeness.UnscopedRelationships,
 		IncompletePropertyNodes:         completeness.IncompletePropertyNodes,
 		IncompletePropertyRelationships: completeness.IncompletePropertyRelationships,
-		IdentityQuarantinedNodes:        completeness.IdentityQuarantinedNodes,
 	}
 }
 
@@ -345,22 +322,23 @@ func buildScanMetadata(
 	observation graph.ObservationCompleteness,
 	completeDomains []string,
 ) map[string]any {
+	graphTotals := sdkingest.FrozenGraphTotals{
+		Before: sdkGraphTotals(graphBefore),
+		After:  sdkGraphTotals(graphAfter),
+	}
 	metadata := map[string]any{
 		"collection":               data.Meta.Collection,
 		"ruleset":                  data.Meta.Ruleset,
 		"identity_schemes":         data.Meta.IdentitySchemes,
-		"identity_aliases":         data.Meta.IdentityAliases,
 		"stages":                   result.Stages,
-		"count_semantics":          countSemanticsWriteRowsV1,
-		"nodes_submitted":          result.NodesSubmitted,
-		"edges_submitted":          result.EdgesSubmitted,
+		"submitted":                result.Submitted,
+		"write_rows":               result.WriteRows,
+		"graph_totals":             graphTotals,
 		"normalization_status":     result.NormalizationStatus,
 		"normalization_warnings":   result.NormalizationWarnings,
 		"complete_domains":         completeDomains,
 		"reconciliation":           reconciliation,
 		"observation_completeness": observation,
-		"graph_stats_before":       graphBefore,
-		"graph_stats_after":        graphAfter,
 		"collector_version":        data.Meta.CollectorVersion,
 		"artifact_extra":           data.Meta.Extra,
 	}

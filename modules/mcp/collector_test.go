@@ -106,7 +106,7 @@ func TestComputeServerID(t *testing.T) {
 		}
 	})
 
-	t.Run("arg_order_sensitive_v2_with_legacy_alias", func(t *testing.T) {
+	t.Run("arg_order_sensitive_v2", func(t *testing.T) {
 		spec1 := ServerSpec{Transport: "stdio", Command: "npx", Args: []string{"b", "a"}}
 		spec2 := ServerSpec{Transport: "stdio", Command: "npx", Args: []string{"a", "b"}}
 		if computeServerID(spec1) == computeServerID(spec2) {
@@ -114,8 +114,9 @@ func TestComputeServerID(t *testing.T) {
 		}
 		first := serverIdentityForSpec(spec1)
 		second := serverIdentityForSpec(spec2)
-		if first.LegacyObjectID == "" || first.LegacyObjectID != second.LegacyObjectID {
-			t.Fatalf("reordered definitions must expose their shared ambiguous v1 ID: %+v %+v", first, second)
+		if first.Scheme != ingest.MCPStdioIdentitySchemeV2 ||
+			second.Scheme != ingest.MCPStdioIdentitySchemeV2 {
+			t.Fatalf("reordered definitions must use ordered v2 identity: %+v %+v", first, second)
 		}
 	})
 }

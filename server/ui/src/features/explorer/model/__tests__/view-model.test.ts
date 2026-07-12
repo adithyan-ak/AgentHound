@@ -56,6 +56,7 @@ const FINDINGS: Finding[] = [
     variant: "default",
     evidence: { state: "inferred" },
     owasp_map: [],
+    atlas_map: [],
   },
 ];
 
@@ -63,6 +64,26 @@ const DATA: ExplorerRawData = {
   nodes: NODES,
   edges: EDGES,
   findings: FINDINGS,
+  publication: { scanId: "scan-1", revision: 1 },
+  findingScope: {
+    mode: "published",
+    scanId: "scan-1",
+    revision: 1,
+    publishedAt: "2026-07-11T00:00:00Z",
+    projectionStatus: "complete",
+    snapshotStatus: "complete",
+    available: true,
+    stale: false,
+  },
+  projectionState: {
+    status: "complete",
+    scan_id: "scan-1",
+    dirty_coverage: [],
+    updated_at: "2026-07-11T00:00:00Z",
+    published_scan_id: "scan-1",
+    published_revision: 1,
+    published_at: "2026-07-11T00:00:00Z",
+  },
   collection: {
     complete: true,
     revision: "rev-1",

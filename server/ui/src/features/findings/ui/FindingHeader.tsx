@@ -164,19 +164,19 @@ export function FindingHeader({ detail, prevId, nextId, onCopyReport }: FindingH
               <Chip>
                 <span className="tabular-nums">{Math.round(f.confidence * 100)}%</span> conf
               </Chip>
-              <Chip>{(f.variant ?? "unknown").replace(/_/g, " ")}</Chip>
-              <Chip>{(f.evidence?.state ?? "unknown").replace(/_/g, " ")}</Chip>
-              {detail.snapshot?.stale && (
+              <Chip>{f.variant.replace(/_/g, " ")}</Chip>
+              <Chip>{f.evidence.state.replace(/_/g, " ")}</Chip>
+              {detail.snapshot.stale && (
                 <Chip className="text-amber-400/90">
                   stale published snapshot
                 </Chip>
               )}
-              {f.owasp_map?.map((tag) => (
+              {f.owasp_map.map((tag) => (
                 <Chip key={tag} className="text-primary/80">
                   {tag}
                 </Chip>
               ))}
-              {f.atlas_map?.map((tag) => (
+              {f.atlas_map.map((tag) => (
                 <Chip key={tag} className="text-amber-400/90" title={ATLAS_TITLES[tag] ?? tag}>
                   {tag}
                 </Chip>

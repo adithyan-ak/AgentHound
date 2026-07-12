@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -24,7 +23,7 @@ func (h *IngestHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxIngestBodySize)
 
 	var data sdkingest.IngestData
-	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+	if err := sdkingest.DecodeStrict(r.Body, &data); err != nil {
 		WriteValidationError(w, "invalid JSON payload")
 		return
 	}
@@ -46,8 +45,8 @@ func (h *IngestHandler) Handle(w http.ResponseWriter, r *http.Request) {
 			slog.Error("ingest failed after graph mutation",
 				"error", err,
 				"scan_id", result.ScanID,
-				"nodes_written", result.NodesWritten,
-				"edges_written", result.EdgesWritten,
+				"node_write_rows", result.WriteRows.Nodes,
+				"edge_write_rows", result.WriteRows.Edges,
 			)
 			WriteJSON(w, http.StatusInternalServerError, ErrorResponse{
 				Error: ErrorDetail{

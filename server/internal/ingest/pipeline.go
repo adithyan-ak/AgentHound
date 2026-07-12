@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,13 +33,9 @@ type nodeEdgeWriter interface {
 	) (int, error)
 }
 
-// scanRecorder is the subset of *appdb.ScanStore that Pipeline needs.
-// *appdb.ScanStore satisfies it implicitly.
-type scanRecorder interface {
-	CreateScan(ctx context.Context, scan *model.Scan) error
-	UpdateScan(ctx context.Context, id, status string, nodeCount, edgeCount int, scanErr string) error
-}
-
+// scanLifecycleRecorder is the lifecycle subset of *appdb.ScanStore used by
+// Pipeline. It remains an interface so tests can substitute a recorder, but
+// every ingest requires both operations.
 type scanLifecycleRecorder interface {
 	BeginScan(ctx context.Context, scan *model.Scan, dirtyCoverage []string) ([]string, error)
 	RecordFailure(ctx context.Context, failure appdb.ScanFailure) error
@@ -46,36 +43,30 @@ type scanLifecycleRecorder interface {
 
 // postProcessFunc runs the analysis post-processors. Defaulted to
 // analysis.RunPostProcessors; replaceable in tests to assert behavior
-// without exercising every concrete processor.
-type postProcessFunc func(ctx context.Context, db graph.GraphDB, scanID string, collectors []string) ([]graph.ProcessingStats, error)
+// without exercising every concrete processor. Complete domains enable a
+// fresh global composite epoch; empty input preserves the current epoch.
+type postProcessFunc func(ctx context.Context, db graph.GraphDB, scanID string, completeDomains []string) ([]graph.ProcessingStats, error)
 
-// findingSnapshotter atomically replaces the per-scan findings snapshot.
-// Passing an empty slice must remove prior rows for that scan. *appdb.FindingStore
-// satisfies it implicitly; defined as an interface so tests can substitute a
-// recorder and so a nil store cleanly disables the snapshot stage.
-type findingSnapshotter interface {
-	InsertFindings(ctx context.Context, scanID string, findings []model.Finding) error
-}
-
+// findingPublisher is the atomic lifecycle/publication subset of
+// *appdb.FindingStore. The interface is a real test seam, not an optional
+// capability: every ingest finalizes through it.
 type findingPublisher interface {
 	FinalizeScan(ctx context.Context, params appdb.FinalizeScanParams) (*appdb.PublicationResult, error)
 }
 
-const legacyUnknownCoverageKey = "legacy:unknown"
-
 // Pipeline serializes ingests through a single mutex.
 //
-// Raw-observation promotion and post-success composite cleanup both mutate the
+// Raw-observation promotion and composite epoch replacement both mutate the
 // shared live projection. Serializing prevents two scans from retiring one
-// another's candidate ownership tokens or composite epochs.
+// another's candidate ownership tokens or derived epochs.
 type Pipeline struct {
 	mu           sync.Mutex
 	validator    *Validator
 	normalizer   *Normalizer
 	writer       nodeEdgeWriter
 	graphDB      graph.GraphDB
-	scanStore    scanRecorder
-	findingStore findingSnapshotter
+	scanStore    scanLifecycleRecorder
+	findingStore findingPublisher
 	runPP        postProcessFunc
 }
 
@@ -111,9 +102,8 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		return nil, fmt.Errorf("ingest data is nil")
 	}
 	result := &sdkingest.IngestResult{
-		ScanID:         data.Meta.ScanID,
-		Outcome:        sdkingest.OutcomeUnknown,
-		CountSemantics: countSemanticsWriteRowsV1,
+		ScanID:  data.Meta.ScanID,
+		Outcome: sdkingest.OutcomeUnknown,
 	}
 
 	// Stage 1: Validate
@@ -123,6 +113,11 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	}
 	appendStage(result, "validate", sdkingest.OutcomeComplete, true, stageStart, nil)
 	slog.Info("validation passed", "nodes", len(data.Graph.Nodes), "edges", len(data.Graph.Edges))
+
+	result.Collection = *data.Meta.Collection
+	stageStart = time.Now()
+	rulesetState, rulesetErr := rulesetPublicationState(data.Meta.Ruleset)
+	appendStage(result, "ruleset", rulesetState, true, stageStart, rulesetErr)
 
 	// Stage 2: Normalize
 	stageStart = time.Now()
@@ -141,9 +136,8 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 			result.NormalizationStatus = sdkingest.NormalizationStatusWarning
 		}
 	}
-	result.Collection = data.Meta.Collection
-	result.NodesSubmitted = len(data.Graph.Nodes)
-	result.EdgesSubmitted = len(data.Graph.Edges)
+	result.Submitted.Nodes = len(data.Graph.Nodes)
+	result.Submitted.Edges = len(data.Graph.Edges)
 	normalizationStageState := sdkingest.OutcomeComplete
 	if normalizationDegradedErr != nil {
 		normalizationStageState = sdkingest.OutcomePartial
@@ -203,17 +197,15 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	)
 
 	// Stage 3: Record scan start and projection attempt.
-	cumulativeDirtyCoverage := append([]string(nil), keys...)
-	if p.scanStore != nil {
-		if lifecycleStore, ok := p.scanStore.(scanLifecycleRecorder); ok {
-			var err error
-			cumulativeDirtyCoverage, err = lifecycleStore.BeginScan(ctx, initialScan, keys)
-			if err != nil {
-				return nil, fmt.Errorf("begin scan lifecycle: %w", err)
-			}
-		} else if err := p.scanStore.CreateScan(ctx, initialScan); err != nil {
-			slog.Warn("failed to create scan record", "error", err)
-		}
+	if p.scanStore == nil {
+		return nil, fmt.Errorf("begin scan lifecycle: lifecycle store unavailable")
+	}
+	if p.findingStore == nil {
+		return nil, fmt.Errorf("begin scan lifecycle: publication store unavailable")
+	}
+	cumulativeDirtyCoverage, err := p.scanStore.BeginScan(ctx, initialScan, keys)
+	if err != nil {
+		return nil, fmt.Errorf("begin scan lifecycle: %w", err)
 	}
 
 	// Stage 4: Freeze the public graph totals before mutation.
@@ -231,7 +223,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 			appendStage(result, "graph_stats_before", sdkingest.OutcomeFailed, true, stageStart, err)
 		} else {
 			graphBefore = modelGraphSnapshot(stats)
-			result.GraphBefore = sdkGraphTotals(graphBefore)
+			result.GraphTotals.Before = sdkGraphTotals(graphBefore)
 			appendStage(result, "graph_stats_before", sdkingest.OutcomeComplete, true, stageStart, nil)
 		}
 	}
@@ -244,7 +236,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		data.Meta.ScanID,
 		completeDomains,
 	)
-	result.NodesWritten = nodesWritten
+	result.WriteRows.Nodes = nodesWritten
 	if err != nil {
 		appendStage(result, "write_nodes", sdkingest.OutcomeFailed, true, stageStart, err)
 		appendStage(result, "write_edges", sdkingest.OutcomeNotApplicable, true, time.Now(), nil)
@@ -263,7 +255,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		data.Meta.ScanID,
 		completeDomains,
 	)
-	result.EdgesWritten = edgesWritten
+	result.WriteRows.Edges = edgesWritten
 	if err != nil {
 		appendStage(result, "write_edges", sdkingest.OutcomeFailed, true, stageStart, err)
 		p.finishWriteFailure(ctx, data, result, graphBefore, completeDomains, fmt.Errorf("write edges: %w", err))
@@ -273,81 +265,21 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	appendStage(result, "write_edges", sdkingest.OutcomeComplete, true, stageStart, nil)
 	slog.Info("edges written", "count", edgesWritten)
 
-	// Stage 7: Reconcile stdio-v1 aliases against candidates already resident
-	// in Neo4j. This updates compatibility properties only; it never copies or
-	// rewires relationships from a many-to-one legacy aggregate.
-	var identityCompatibilityErr error
-	stageStart = time.Now()
-	switch {
-	case len(data.Meta.IdentityAliases) == 0:
-		appendStage(
-			result,
-			"identity_compatibility",
-			sdkingest.OutcomeNotApplicable,
-			false,
-			stageStart,
-			nil,
-		)
-	case p.graphDB == nil:
-		identityCompatibilityErr = fmt.Errorf("graph database unavailable")
-		appendStage(
-			result,
-			"identity_compatibility",
-			sdkingest.OutcomeFailed,
-			true,
-			stageStart,
-			identityCompatibilityErr,
-		)
-	default:
-		var resolved []sdkingest.IdentityAlias
-		resolved, _, identityCompatibilityErr = graph.ReconcileMCPStdioIdentities(
-			ctx,
-			p.graphDB,
-			data.Meta.IdentityAliases,
-		)
-		if len(resolved) > 0 {
-			data.Meta.IdentityAliases = resolved
-		}
-		if identityCompatibilityErr != nil {
-			appendStage(
-				result,
-				"identity_compatibility",
-				sdkingest.OutcomeFailed,
-				true,
-				stageStart,
-				identityCompatibilityErr,
-			)
-		} else {
-			appendStage(
-				result,
-				"identity_compatibility",
-				sdkingest.OutcomeComplete,
-				true,
-				stageStart,
-				nil,
-			)
-		}
-	}
-
-	// Stage 8: Promote explicitly complete raw-observation domains. Unknown or
+	// Stage 7: Promote explicitly complete raw-observation domains. Unknown or
 	// partial coverage is retained without retirement.
 	var (
 		reconciliation graph.ReconciliationStats
 		reconcileErr   error
 	)
-	reconciliationDomains := completeDomains
-	if identityCompatibilityErr != nil {
-		reconciliationDomains = nil
-	}
 	stageStart = time.Now()
-	if len(reconciliationDomains) == 0 {
+	if len(completeDomains) == 0 {
 		appendStage(result, "reconcile_observations", sdkingest.OutcomeUnknown, true, stageStart, nil)
 	} else {
 		reconciliation, reconcileErr = graph.ReconcileObservations(
 			ctx,
 			p.graphDB,
 			data.Meta.ScanID,
-			reconciliationDomains,
+			completeDomains,
 		)
 		if reconcileErr != nil {
 			appendStage(result, "reconcile_observations", sdkingest.OutcomeFailed, true, stageStart, reconcileErr)
@@ -355,13 +287,13 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 			appendStage(result, "reconcile_observations", sdkingest.OutcomeComplete, true, stageStart, nil)
 		}
 	}
-	promotedDomains := reconciliationDomains
+	promotedDomains := completeDomains
 	if p.graphDB == nil || reconcileErr != nil {
 		promotedDomains = nil
 	}
 
-	// Stage 9: Post-processing. Cleanup inside RunPostProcessors occurs only
-	// after every processor successfully recomputes its output.
+	// Stage 8: Post-processing. Any promoted raw domain starts a fresh global
+	// composite epoch, rebuilt from the retained current raw projection.
 	var ppErr error
 	stageStart = time.Now()
 	if p.graphDB != nil && p.runPP != nil {
@@ -370,7 +302,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 			ctx,
 			p.graphDB,
 			data.Meta.ScanID,
-			coverageCollectors(promotedDomains),
+			promotedDomains,
 		)
 		if ppErr != nil {
 			slog.Error("post-processing failed", "error", ppErr)
@@ -393,7 +325,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		appendStage(result, "analysis", sdkingest.OutcomeNotApplicable, false, stageStart, nil)
 	}
 
-	// Stage 10: Remove ownerless nodes that were kept connected by the prior
+	// Stage 9: Remove ownerless nodes that were kept connected by the prior
 	// composite epoch during the first reconciliation pass.
 	var pruneErr error
 	stageStart = time.Now()
@@ -421,16 +353,12 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		finalizedDomains = nil
 	}
 
-	// Stage 11: Explicitly account for pre-lifecycle/unknown graph facts.
-	// They remain non-destructive, but the global projection cannot be
-	// complete until a complete observation migrates them into managed
-	// ownership (or an explicit migration does so).
+	// Stage 10: Verify property completeness for public managed raw facts.
 	var (
 		observationCompleteness  graph.ObservationCompleteness
 		observationQueryErr      error
 		observationIncompleteErr error
 		observationStatus        string
-		resolvedDirtyCoverage    []string
 	)
 	stageStart = time.Now()
 	if p.graphDB == nil {
@@ -461,14 +389,9 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		case !observationCompleteness.Complete():
 			observationStatus = model.LifecyclePartial
 			observationIncompleteErr = fmt.Errorf(
-				"legacy or unknown observations remain: %d legacy nodes, %d legacy relationships, %d unscoped nodes, %d unscoped relationships, %d property-incomplete nodes, %d property-incomplete relationships, %d identity-quarantined nodes",
-				observationCompleteness.LegacyNodes,
-				observationCompleteness.LegacyRelationships,
-				observationCompleteness.UnscopedNodes,
-				observationCompleteness.UnscopedRelationships,
+				"managed raw observations remain property-incomplete: %d nodes, %d relationships",
 				observationCompleteness.IncompletePropertyNodes,
 				observationCompleteness.IncompletePropertyRelationships,
-				observationCompleteness.IdentityQuarantinedNodes,
 			)
 			appendStage(
 				result,
@@ -480,7 +403,6 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 			)
 		default:
 			observationStatus = model.LifecycleComplete
-			resolvedDirtyCoverage = []string{legacyUnknownCoverageKey}
 			appendStage(
 				result,
 				"observation_completeness",
@@ -492,7 +414,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		}
 	}
 
-	// Stage 12: Freeze the complete post-analysis graph revision.
+	// Stage 11: Freeze the complete post-analysis graph revision.
 	var (
 		graphAfter    *model.GraphSnapshot
 		graphAfterErr error
@@ -507,12 +429,12 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 			appendStage(result, "graph_stats_after", sdkingest.OutcomeFailed, true, stageStart, err)
 		} else {
 			graphAfter = modelGraphSnapshot(stats)
-			result.GraphAfter = sdkGraphTotals(graphAfter)
+			result.GraphTotals.After = sdkGraphTotals(graphAfter)
 			appendStage(result, "graph_stats_after", sdkingest.OutcomeComplete, true, stageStart, nil)
 		}
 	}
 
-	// Stage 13: Materialize a candidate finding snapshot. Failed analysis
+	// Stage 12: Materialize a candidate finding snapshot. Failed analysis
 	// deliberately finalizes an unavailable/empty snapshot for this scan so a
 	// same-ID retry cannot leave stale rows behind.
 	var (
@@ -521,8 +443,6 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	)
 	stageStart = time.Now()
 	switch {
-	case p.findingStore == nil:
-		appendStage(result, "snapshot", sdkingest.OutcomeNotApplicable, false, stageStart, nil)
 	case p.graphDB == nil:
 		snapshotErr = fmt.Errorf("graph database unavailable")
 		appendStage(result, "snapshot", sdkingest.OutcomeFailed, true, stageStart, snapshotErr)
@@ -543,39 +463,41 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 			appendStage(result, "snapshot", sdkingest.OutcomeComplete, true, stageStart, nil)
 		}
 	}
+	if snapshot == nil {
+		snapshot = []model.Finding{}
+	}
 
+	publicationDomains := finalizedDomains
+	if observationQueryErr != nil || observationIncompleteErr != nil {
+		publicationDomains = nil
+	}
 	dirtyCoverage := append([]string(nil), cumulativeDirtyCoverage...)
 	if attributionComplete &&
+		rulesetErr == nil &&
 		artifactObservedAt != nil &&
 		timestampErr == nil &&
-		identityCompatibilityErr == nil &&
 		reconcileErr == nil &&
 		pruneErr == nil &&
 		ppErr == nil &&
 		graphBeforeErr == nil &&
 		graphAfterErr == nil &&
-		snapshotErr == nil {
+		snapshotErr == nil &&
+		observationQueryErr == nil &&
+		observationIncompleteErr == nil {
 		dirtyCoverage = subtractCoverage(
 			cumulativeDirtyCoverage,
-			finalizedDomains,
-			resolvedDirtyCoverage,
+			publicationDomains,
 		)
 		dirtyCoverage = mergeCoverage(
 			dirtyCoverage,
 			incompleteCoverageDomains(data.Meta.Collection),
 		)
 	}
-	if observationQueryErr != nil || observationIncompleteErr != nil {
-		dirtyCoverage = mergeCoverage(dirtyCoverage, []string{legacyUnknownCoverageKey})
-	} else {
-		dirtyCoverage = subtractCoverage(dirtyCoverage, resolvedDirtyCoverage)
-	}
 
-	_, publicationCapable := p.findingStore.(findingPublisher)
 	requiredComplete := coverageComplete &&
+		rulesetErr == nil &&
 		artifactObservedAt != nil &&
 		timestampErr == nil &&
-		identityCompatibilityErr == nil &&
 		reconcileErr == nil &&
 		pruneErr == nil &&
 		ppErr == nil &&
@@ -586,15 +508,16 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		observationIncompleteErr == nil &&
 		p.graphDB != nil &&
 		p.runPP != nil
-	publish := requiredComplete && publicationCapable && len(dirtyCoverage) == 0
+	publish := requiredComplete && len(dirtyCoverage) == 0
 
 	graphStatus := model.LifecyclePartial
 	if data.Meta.Collection == nil {
 		graphStatus = model.LifecycleUnknown
 	} else if coverageComplete &&
-		identityCompatibilityErr == nil &&
 		reconcileErr == nil &&
-		pruneErr == nil {
+		pruneErr == nil &&
+		observationQueryErr == nil &&
+		observationIncompleteErr == nil {
 		graphStatus = model.LifecycleComplete
 	}
 	analysisStatus := model.LifecycleComplete
@@ -606,8 +529,6 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	snapshotStatus := model.LifecycleComplete
 	if snapshotErr != nil {
 		snapshotStatus = model.LifecycleFailed
-	} else if p.findingStore == nil {
-		snapshotStatus = model.LifecycleNotApplicable
 	}
 
 	finalStatus := model.ScanStatusCompletedWithErrors
@@ -615,11 +536,6 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	if publish {
 		finalStatus = model.ScanStatusCompleted
 		projectionStatus = model.ProjectionComplete
-	} else if requiredComplete && !publicationCapable {
-		// Preserve compatibility for in-process/test deployments that
-		// intentionally omit PostgreSQL publication support.
-		finalStatus = model.ScanStatusCompleted
-		projectionStatus = model.ProjectionUnknown
 	}
 	var coverageErr error
 	if !coverageComplete {
@@ -635,9 +551,9 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	finalError := joinedStageErrors(
 		timestampErr,
 		normalizationDegradedErr,
+		rulesetErr,
 		coverageErr,
 		dirtyCoverageErr,
-		identityCompatibilityErr,
 		reconcileErr,
 		pruneErr,
 		ppErr,
@@ -653,7 +569,9 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		appendStage(result, "publication", sdkingest.OutcomeComplete, true, stageStart, nil)
 	} else {
 		publicationReason := fmt.Errorf("publication withheld: projection is not complete")
-		if dirtyCoverageErr != nil {
+		if rulesetErr != nil {
+			publicationReason = fmt.Errorf("publication withheld: %w", rulesetErr)
+		} else if dirtyCoverageErr != nil {
 			publicationReason = fmt.Errorf("publication withheld: %w", dirtyCoverageErr)
 		}
 		appendStage(result, "publication", sdkingest.OutcomeNotApplicable, true, stageStart, publicationReason)
@@ -667,8 +585,8 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		StartedAt:          initialScan.StartedAt,
 		CompletedAt:        &completedAt,
 		ArtifactObservedAt: artifactObservedAt,
-		NodeCount:          result.NodesWritten,
-		EdgeCount:          result.EdgesWritten,
+		NodeWriteRows:      result.WriteRows.Nodes,
+		EdgeWriteRows:      result.WriteRows.Edges,
 		Error:              finalError,
 		CollectionStatus:   string(collectionState(data.Meta.Collection)),
 		GraphStatus:        graphStatus,
@@ -685,106 +603,72 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		graphAfter,
 		reconciliation,
 		observationCompleteness,
-		finalizedDomains,
+		publicationDomains,
 	)
 
-	if publisher, ok := p.findingStore.(findingPublisher); ok {
-		publication, err := publisher.FinalizeScan(ctx, appdb.FinalizeScanParams{
-			Scan:                  finalScan,
-			Findings:              snapshot,
-			Stages:                result.Stages,
-			Collection:            data.Meta.Collection,
-			Ruleset:               data.Meta.Ruleset,
-			IdentitySchemes:       data.Meta.IdentitySchemes,
-			NormalizationStatus:   result.NormalizationStatus,
-			NormalizationWarnings: result.NormalizationWarnings,
-			ObservationStatus:     observationStatus,
-			ObservationDetails:    modelObservationCompleteness(observationCompleteness),
-			CoverageKeys:          keys,
-			CompleteDomains:       finalizedDomains,
-			ResolvedDirtyCoverage: resolvedDirtyCoverage,
-			DirtyCoverage:         dirtyCoverage,
-			GraphBefore:           graphBefore,
-			GraphAfter:            graphAfter,
-			Publish:               publish,
+	publication, err := p.findingStore.FinalizeScan(ctx, appdb.FinalizeScanParams{
+		Scan:                  finalScan,
+		Findings:              snapshot,
+		Stages:                result.Stages,
+		Collection:            data.Meta.Collection,
+		Ruleset:               data.Meta.Ruleset,
+		IdentitySchemes:       data.Meta.IdentitySchemes,
+		NormalizationStatus:   result.NormalizationStatus,
+		NormalizationWarnings: result.NormalizationWarnings,
+		ObservationStatus:     observationStatus,
+		ObservationDetails:    modelObservationCompleteness(observationCompleteness),
+		CoverageKeys:          keys,
+		CompleteDomains:       publicationDomains,
+		DirtyCoverage:         dirtyCoverage,
+		GraphBefore:           graphBefore,
+		GraphAfter:            graphAfter,
+		Publish:               publish,
+	})
+	if err != nil {
+		slog.Error("scan finalization failed", "error", err)
+		publicationErr := fmt.Errorf("publication: %w", err)
+		result.Stages[len(result.Stages)-1].State = sdkingest.OutcomeFailed
+		result.Stages[len(result.Stages)-1].Error = publicationErr.Error()
+		result.Outcome = sdkingest.OutcomePartial
+		result.ProjectionStatus = model.ProjectionIncomplete
+		result.Duration = time.Since(start)
+		p.recordFailure(ctx, appdb.ScanFailure{
+			ID:               data.Meta.ScanID,
+			Status:           model.ScanStatusCompletedWithErrors,
+			NodeWriteRows:    result.WriteRows.Nodes,
+			EdgeWriteRows:    result.WriteRows.Edges,
+			Error:            publicationErr.Error(),
+			CollectionStatus: finalScan.CollectionStatus,
+			GraphStatus:      finalScan.GraphStatus,
+			AnalysisStatus:   finalScan.AnalysisStatus,
+			SnapshotStatus:   model.LifecycleFailed,
+			ProjectionStatus: model.ProjectionIncomplete,
+			DirtyCoverage:    dirtyCoverage,
+			Metadata: buildScanMetadata(
+				data,
+				result,
+				graphBefore,
+				graphAfter,
+				reconciliation,
+				observationCompleteness,
+				publicationDomains,
+			),
 		})
-		if err != nil {
-			slog.Error("scan finalization failed", "error", err)
-			publicationErr := fmt.Errorf("publication: %w", err)
-			result.Stages[len(result.Stages)-1].State = sdkingest.OutcomeFailed
-			result.Stages[len(result.Stages)-1].Error = publicationErr.Error()
-			result.Outcome = sdkingest.OutcomePartial
-			result.ProjectionStatus = model.ProjectionIncomplete
-			result.Duration = time.Since(start)
-			p.recordFailure(ctx, appdb.ScanFailure{
-				ID:               data.Meta.ScanID,
-				Status:           model.ScanStatusCompletedWithErrors,
-				NodeCount:        result.NodesWritten,
-				EdgeCount:        result.EdgesWritten,
-				Error:            publicationErr.Error(),
-				CollectionStatus: finalScan.CollectionStatus,
-				GraphStatus:      finalScan.GraphStatus,
-				AnalysisStatus:   finalScan.AnalysisStatus,
-				SnapshotStatus:   model.LifecycleFailed,
-				ProjectionStatus: model.ProjectionIncomplete,
-				DirtyCoverage:    dirtyCoverage,
-				Metadata: buildScanMetadata(
-					data,
-					result,
-					graphBefore,
-					graphAfter,
-					reconciliation,
-					observationCompleteness,
-					finalizedDomains,
-				),
-			})
-			return result, nil
-		}
-		if publication != nil {
-			result.PublishedRevision = publication.Revision
-			if publish && !publication.Published {
-				publish = false
-				result.Stages[len(result.Stages)-1].State = sdkingest.OutcomeNotApplicable
-				result.Stages[len(result.Stages)-1].Error =
-					"publication withheld: inherited dirty coverage remains"
-			}
-		}
-	} else {
-		// Compatibility path for unit tests and callers that deliberately
-		// construct a pipeline without the lifecycle publication store.
-		if p.findingStore != nil {
-			compatibilitySnapshot := snapshot
-			if snapshotErr != nil {
-				// InsertFindings is replacement-based, so an explicit empty
-				// snapshot clears stale rows left by a same-ID prior attempt.
-				compatibilitySnapshot = []model.Finding{}
-			}
-			if err := p.findingStore.InsertFindings(ctx, data.Meta.ScanID, compatibilitySnapshot); err != nil {
-				slog.Warn("findings snapshot insert failed", "error", err)
-				finalStatus = model.ScanStatusCompletedWithErrors
-				finalError = err.Error()
-			}
-		}
-		if p.scanStore != nil {
-			if err := p.scanStore.UpdateScan(
-				ctx,
-				data.Meta.ScanID,
-				finalStatus,
-				result.NodesWritten,
-				result.EdgesWritten,
-				finalError,
-			); err != nil {
-				slog.Warn("failed to update scan record", "error", err)
-			}
+		return result, nil
+	}
+	if publication != nil {
+		result.PublishedRevision = publication.Revision
+		if publish && !publication.Published {
+			publish = false
+			result.Stages[len(result.Stages)-1].State = sdkingest.OutcomeNotApplicable
+			result.Stages[len(result.Stages)-1].Error =
+				"publication withheld: inherited dirty coverage remains"
 		}
 	}
 
 	if publish {
 		result.Outcome = sdkingest.OutcomeComplete
 		result.ProjectionStatus = model.ProjectionComplete
-	} else if requiredComplete && !publicationCapable {
-		result.Outcome = sdkingest.OutcomeComplete
-		result.ProjectionStatus = model.ProjectionUnknown
 	} else {
 		result.Outcome = sdkingest.OutcomePartial
 		result.ProjectionStatus = model.ProjectionIncomplete
@@ -792,13 +676,38 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	result.Duration = time.Since(start)
 	slog.Info("ingest complete",
 		"scan_id", data.Meta.ScanID,
-		"node_write_rows", result.NodesWritten,
-		"edge_write_rows", result.EdgesWritten,
+		"node_write_rows", result.WriteRows.Nodes,
+		"edge_write_rows", result.WriteRows.Edges,
 		"outcome", result.Outcome,
 		"projection_status", result.ProjectionStatus,
 		"duration", result.Duration,
 	)
 	return result, nil
+}
+
+func rulesetPublicationState(
+	ruleset *sdkingest.RulesetManifest,
+) (sdkingest.OutcomeState, error) {
+	if ruleset == nil {
+		return sdkingest.OutcomeUnknown, fmt.Errorf("ruleset manifest is unavailable")
+	}
+	if ruleset.LoadState == sdkingest.OutcomeComplete && len(ruleset.Errors) == 0 {
+		return sdkingest.OutcomeComplete, nil
+	}
+	if len(ruleset.Errors) > 0 {
+		state := ruleset.LoadState
+		if state == sdkingest.OutcomeComplete {
+			state = sdkingest.OutcomeFailed
+		}
+		return state, fmt.Errorf(
+			"ruleset load reported errors: %s",
+			strings.Join(ruleset.Errors, "; "),
+		)
+	}
+	return ruleset.LoadState, fmt.Errorf(
+		"ruleset load state is %s",
+		ruleset.LoadState,
+	)
 }
 
 func (p *Pipeline) finishWriteFailure(
@@ -810,7 +719,6 @@ func (p *Pipeline) finishWriteFailure(
 	writeErr error,
 ) {
 	now := time.Now()
-	appendStage(result, "identity_compatibility", sdkingest.OutcomeNotApplicable, false, now, nil)
 	appendStage(result, "reconcile_observations", sdkingest.OutcomeNotApplicable, true, now, nil)
 	appendStage(result, "analysis", sdkingest.OutcomeNotApplicable, true, now, nil)
 	appendStage(result, "prune_observations", sdkingest.OutcomeNotApplicable, true, now, nil)
@@ -823,7 +731,7 @@ func (p *Pipeline) finishWriteFailure(
 			appendStage(result, "graph_stats_after", sdkingest.OutcomeFailed, true, stageStart, err)
 		} else {
 			graphAfter = modelGraphSnapshot(stats)
-			result.GraphAfter = sdkGraphTotals(graphAfter)
+			result.GraphTotals.After = sdkGraphTotals(graphAfter)
 			appendStage(result, "graph_stats_after", sdkingest.OutcomeComplete, true, stageStart, nil)
 		}
 	} else {
@@ -838,8 +746,8 @@ func (p *Pipeline) finishWriteFailure(
 	p.recordFailure(ctx, appdb.ScanFailure{
 		ID:               data.Meta.ScanID,
 		Status:           model.ScanStatusFailed,
-		NodeCount:        result.NodesWritten,
-		EdgeCount:        result.EdgesWritten,
+		NodeWriteRows:    result.WriteRows.Nodes,
+		EdgeWriteRows:    result.WriteRows.Edges,
 		Error:            writeErr.Error(),
 		CollectionStatus: string(collectionState(data.Meta.Collection)),
 		GraphStatus:      model.LifecycleFailed,
@@ -860,23 +768,7 @@ func (p *Pipeline) finishWriteFailure(
 }
 
 func (p *Pipeline) recordFailure(ctx context.Context, failure appdb.ScanFailure) {
-	if p.scanStore == nil {
-		return
-	}
-	if lifecycleStore, ok := p.scanStore.(scanLifecycleRecorder); ok {
-		if err := lifecycleStore.RecordFailure(ctx, failure); err != nil {
-			slog.Warn("failed to record scan lifecycle failure", "error", err)
-		}
-		return
-	}
-	if err := p.scanStore.UpdateScan(
-		ctx,
-		failure.ID,
-		failure.Status,
-		failure.NodeCount,
-		failure.EdgeCount,
-		failure.Error,
-	); err != nil {
+	if err := p.scanStore.RecordFailure(ctx, failure); err != nil {
 		slog.Warn("failed to record scan failure", "error", err)
 	}
 }

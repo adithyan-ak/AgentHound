@@ -9,7 +9,7 @@ import { persist } from "zustand/middleware";
  * persisted slice remains in shared state.
  *
  * The persist key `agenthound-graph-marks` and the `partialize` shape are kept
- * byte-compatible with the legacy store so existing marks rehydrate unchanged.
+ * persisted directly so owned/high-value marks survive reloads.
  */
 interface MarksState {
   ownedNodeIds: string[];

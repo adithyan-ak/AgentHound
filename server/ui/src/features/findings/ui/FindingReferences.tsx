@@ -27,9 +27,9 @@ export function FindingReferences({ finding }: FindingReferencesProps) {
 
   return (
     <WidgetCard title="References" icon={BookMarked}>
-      {(finding.owasp_map?.length ?? 0) > 0 && (
+      {finding.owasp_map.length > 0 && (
         <div className="mb-4 space-y-1.5">
-          {finding.owasp_map?.map((tag) => (
+          {finding.owasp_map.map((tag) => (
             <div key={tag} className="flex items-baseline gap-2 text-xs">
               <span className="flex-shrink-0 rounded-[2px] border border-border bg-black/40 px-1.5 py-0.5 font-mono text-[11px] uppercase tracking-[0.06em] text-primary/80">
                 {tag}
@@ -40,9 +40,9 @@ export function FindingReferences({ finding }: FindingReferencesProps) {
         </div>
       )}
 
-      {(finding.atlas_map?.length ?? 0) > 0 && (
+      {finding.atlas_map.length > 0 && (
         <div className="mb-4 space-y-1.5">
-          {finding.atlas_map?.map((tag) => (
+          {finding.atlas_map.map((tag) => (
             <a
               key={tag}
               href={`https://atlas.mitre.org/techniques/${tag}`}

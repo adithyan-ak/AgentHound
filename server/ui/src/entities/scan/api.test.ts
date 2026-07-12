@@ -17,10 +17,163 @@ vi.mock("@shared/api/client", () => ({
   api: { delete: deleteMock, get: getMock, post: postMock },
 }));
 
+function scan(overrides: Record<string, unknown>) {
+  return {
+    id: "scan",
+    collector: "mcp",
+    status: "completed",
+    started_at: "2026-07-11T00:00:00Z",
+    submitted: { nodes: 1, edges: 1 },
+    write_rows: { nodes: 1, edges: 1 },
+    graph_totals: { before: null, after: null },
+    ...overrides,
+  };
+}
+
+function scanPage(scans: unknown[]) {
+  return {
+    scans,
+    page: {
+      offset: 0,
+      limit: 1,
+      total: scans.length,
+      has_more: false,
+      complete: true,
+      revision: "scan-rev",
+    },
+  };
+}
+
+function ingestCollection(suffix = "c") {
+  const coverageKey = `mcp:target:sha256:${suffix.repeat(64)}`;
+  return {
+    state: "complete",
+    coverage_keys: [coverageKey],
+    outcomes: [
+      {
+        collector: "mcp",
+        coverage_key: coverageKey,
+        target: "https://mcp.example",
+        method: "initialize",
+        state: "complete",
+      },
+    ],
+  };
+}
+
 describe("uploadScan", () => {
   beforeEach(() => {
     getMock.mockReset();
     postMock.mockReset();
+  });
+
+  it("decodes the server-emitted collection report", async () => {
+    const coverageKey = `mcp:target:sha256:${"a".repeat(64)}`;
+    postMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          scan_id: "complete",
+          outcome: "complete",
+          projection_status: "complete",
+          submitted: { nodes: 1, edges: 0 },
+          write_rows: { nodes: 1, edges: 0 },
+          graph_totals: { before: null, after: null },
+          collection: {
+            state: "complete",
+            coverage_keys: [coverageKey],
+            outcomes: [
+              {
+                collector: "mcp",
+                coverage_key: coverageKey,
+                target: "https://mcp.example",
+                method: "initialize",
+                state: "complete",
+                items: 1,
+              },
+            ],
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    const result = await uploadScan(
+      new File(["{}"], "scan.json", { type: "application/json" }),
+    );
+
+    expect(result.collection).toEqual({
+      state: "complete",
+      coverage_keys: [coverageKey],
+      outcomes: [
+        {
+          collector: "mcp",
+          coverage_key: coverageKey,
+          target: "https://mcp.example",
+          method: "initialize",
+          state: "complete",
+          items: 1,
+        },
+      ],
+    });
+  });
+
+  it("rejects unknown fields in a collection report", async () => {
+    const coverageKey = `mcp:target:sha256:${"b".repeat(64)}`;
+    postMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          scan_id: "invalid-collection",
+          outcome: "complete",
+          projection_status: "complete",
+          submitted: { nodes: 0, edges: 0 },
+          write_rows: { nodes: 0, edges: 0 },
+          graph_totals: { before: null, after: null },
+          collection: {
+            state: "complete",
+            coverage_keys: [coverageKey],
+            outcomes: [
+              {
+                collector: "mcp",
+                coverage_key: coverageKey,
+                target: "https://mcp.example",
+                method: "initialize",
+                state: "complete",
+              },
+            ],
+            legacy_scope: "mcp.example",
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    await expect(
+      uploadScan(
+        new File(["{}"], "scan.json", { type: "application/json" }),
+      ),
+    ).rejects.toThrow("ingest result.collection.legacy_scope is not allowed");
+  });
+
+  it("requires collection in a successful ingest result", async () => {
+    postMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          scan_id: "missing-collection",
+          outcome: "complete",
+          projection_status: "complete",
+          submitted: { nodes: 0, edges: 0 },
+          write_rows: { nodes: 0, edges: 0 },
+          graph_totals: { before: null, after: null },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    await expect(
+      uploadScan(
+        new File(["{}"], "scan.json", { type: "application/json" }),
+      ),
+    ).rejects.toThrow("ingest result.collection must be an object");
   });
 
   it("preserves failed-stage details from a partial ingest response", async () => {
@@ -34,8 +187,10 @@ describe("uploadScan", () => {
               scan_id: "partial",
               outcome: "failed",
               projection_status: "incomplete",
-              nodes_written: 1000,
-              edges_written: 0,
+              submitted: { nodes: 1000, edges: 0 },
+              write_rows: { nodes: 1000, edges: 0 },
+              graph_totals: { before: null, after: null },
+              collection: ingestCollection("d"),
               stages: [
                 {
                   name: "write_edges",
@@ -68,7 +223,7 @@ describe("uploadScan", () => {
     expect(thrown).toBeInstanceOf(IngestRequestError);
     expect((thrown as IngestRequestError).result).toMatchObject({
       scan_id: "partial",
-      nodes_written: 1000,
+      write_rows: { nodes: 1000, edges: 0 },
       stages: [
         {
           name: "write_edges",
@@ -77,6 +232,34 @@ describe("uploadScan", () => {
         },
       ],
     });
+  });
+
+  it("requires collection in ingest error details", async () => {
+    postMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "INGEST_FAILED",
+            message: "Ingest failed after partial graph mutation.",
+            details: {
+              scan_id: "partial-without-collection",
+              outcome: "failed",
+              projection_status: "incomplete",
+              submitted: { nodes: 1, edges: 0 },
+              write_rows: { nodes: 1, edges: 0 },
+              graph_totals: { before: null, after: null },
+            },
+          },
+        }),
+        { status: 500, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    await expect(
+      uploadScan(
+        new File(["{}"], "scan.json", { type: "application/json" }),
+      ),
+    ).rejects.toThrow("ingest error.details.collection must be an object");
   });
 });
 
@@ -128,14 +311,10 @@ describe("fetchScan", () => {
 
   it("fetches a selected scan directly by encoded ID", async () => {
     getMock.mockReturnValue({
-      json: vi.fn().mockResolvedValue({
+      json: vi.fn().mockResolvedValue(scan({
         id: "older/scan",
-        collector: "mcp",
-        status: "completed",
         started_at: "2026-07-10T00:00:00Z",
-        node_count: 1,
-        edge_count: 1,
-      }),
+      })),
     });
 
     await expect(fetchScan("older/scan")).resolves.toMatchObject({
@@ -153,17 +332,13 @@ describe("scan freshness queries", () => {
   it("requests the latest completion from the backend", async () => {
     getMock.mockResolvedValue(
       new Response(
-        JSON.stringify([
-          {
+        JSON.stringify(scanPage([
+          scan({
             id: "completed",
-            collector: "mcp",
-            status: "completed",
             started_at: "2026-07-11T00:00:00Z",
             completed_at: "2026-07-11T01:00:00Z",
-            node_count: 1,
-            edge_count: 1,
-          },
-        ]),
+          }),
+        ])),
       ),
     );
 
@@ -185,19 +360,15 @@ describe("scan freshness queries", () => {
   it("requests the latest publication from the backend", async () => {
     getMock.mockResolvedValue(
       new Response(
-        JSON.stringify([
-          {
+        JSON.stringify(scanPage([
+          scan({
             id: "published",
-            collector: "mcp",
-            status: "completed",
             started_at: "2026-07-11T00:00:00Z",
             completed_at: "2026-07-11T01:00:00Z",
             publication_status: "published",
             published_at: "2026-07-11T01:01:00Z",
-            node_count: 1,
-            edge_count: 1,
-          },
-        ]),
+          }),
+        ])),
       ),
     );
 

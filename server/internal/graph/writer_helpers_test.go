@@ -8,7 +8,7 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
-func TestGroupNodesByKind(t *testing.T) {
+func TestGroupNodesByKindTupleBasics(t *testing.T) {
 	t.Run("multiple kinds grouped correctly", func(t *testing.T) {
 		nodes := []ingest.Node{
 			{ID: "a1", Kinds: []string{"MCPServer"}},
@@ -17,52 +17,41 @@ func TestGroupNodesByKind(t *testing.T) {
 			{ID: "a4", Kinds: []string{"MCPTool"}},
 			{ID: "a5", Kinds: []string{"A2AAgent"}},
 		}
-		grouped := groupNodesByKind(nodes)
+		grouped := groupNodesByKindTuple(nodes)
 
 		if len(grouped) != 3 {
 			t.Fatalf("expected 3 groups, got %d", len(grouped))
 		}
-		if len(grouped["MCPServer"]) != 2 {
-			t.Errorf("MCPServer: expected 2 nodes, got %d", len(grouped["MCPServer"]))
+		if len(grouped["MCPServer"].Nodes) != 2 {
+			t.Errorf("MCPServer: expected 2 nodes, got %d", len(grouped["MCPServer"].Nodes))
 		}
-		if len(grouped["MCPTool"]) != 2 {
-			t.Errorf("MCPTool: expected 2 nodes, got %d", len(grouped["MCPTool"]))
+		if len(grouped["MCPTool"].Nodes) != 2 {
+			t.Errorf("MCPTool: expected 2 nodes, got %d", len(grouped["MCPTool"].Nodes))
 		}
-		if len(grouped["A2AAgent"]) != 1 {
-			t.Errorf("A2AAgent: expected 1 node, got %d", len(grouped["A2AAgent"]))
+		if len(grouped["A2AAgent"].Nodes) != 1 {
+			t.Errorf("A2AAgent: expected 1 node, got %d", len(grouped["A2AAgent"].Nodes))
 		}
 	})
 
 	t.Run("empty slice returns empty map", func(t *testing.T) {
-		grouped := groupNodesByKind(nil)
+		grouped := groupNodesByKindTuple(nil)
 		if len(grouped) != 0 {
 			t.Errorf("expected empty map, got %d entries", len(grouped))
 		}
 	})
 
-	t.Run("node with no kinds defaults to Node label", func(t *testing.T) {
-		nodes := []ingest.Node{
-			{ID: "x1", Kinds: nil},
-			{ID: "x2", Kinds: []string{}},
-		}
-		grouped := groupNodesByKind(nodes)
-
-		if len(grouped) != 1 {
-			t.Fatalf("expected 1 group, got %d", len(grouped))
-		}
-		if len(grouped["Node"]) != 2 {
-			t.Errorf("expected 2 nodes under 'Node', got %d", len(grouped["Node"]))
-		}
-	})
-
-	t.Run("uses first kind when node has multiple kinds", func(t *testing.T) {
+	t.Run("uses first kind as primary when node has multiple kinds", func(t *testing.T) {
 		nodes := []ingest.Node{
 			{ID: "m1", Kinds: []string{"MCPServer", "Host"}},
 		}
-		grouped := groupNodesByKind(nodes)
+		grouped := groupNodesByKindTuple(nodes)
 
-		if _, ok := grouped["MCPServer"]; !ok {
-			t.Fatal("expected node grouped under first kind 'MCPServer'")
+		group, ok := grouped["MCPServer+Host"]
+		if !ok {
+			t.Fatal("expected node grouped under 'MCPServer+Host'")
+		}
+		if group.PrimaryKind != "MCPServer" {
+			t.Errorf("expected primary kind 'MCPServer', got %q", group.PrimaryKind)
 		}
 		if _, ok := grouped["Host"]; ok {
 			t.Error("node should not appear under second kind 'Host'")
@@ -73,9 +62,9 @@ func TestGroupNodesByKind(t *testing.T) {
 		nodes := []ingest.Node{
 			{ID: "p1", Kinds: []string{"MCPServer"}, Properties: map[string]any{"name": "test"}},
 		}
-		grouped := groupNodesByKind(nodes)
+		grouped := groupNodesByKindTuple(nodes)
 
-		n := grouped["MCPServer"][0]
+		n := grouped["MCPServer"].Nodes[0]
 		if n.ID != "p1" {
 			t.Errorf("expected ID 'p1', got %q", n.ID)
 		}
@@ -94,11 +83,11 @@ func TestGroupNodesByKind(t *testing.T) {
 }
 
 func TestGroupEdgesByEndpoints(t *testing.T) {
-	t.Run("groups by kind and resolved endpoints", func(t *testing.T) {
+	t.Run("groups by kind and explicit endpoints", func(t *testing.T) {
 		edges := []ingest.Edge{
-			{Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL"},
-			{Source: "s2", Target: "t2", Kind: "PROVIDES_TOOL"},
-			{Source: "s3", Target: "t3", Kind: "TRUSTS_SERVER"},
+			{Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL", SourceKind: "MCPServer", TargetKind: "MCPTool"},
+			{Source: "s2", Target: "t2", Kind: "PROVIDES_TOOL", SourceKind: "MCPServer", TargetKind: "MCPTool"},
+			{Source: "s3", Target: "t3", Kind: "TRUSTS_SERVER", SourceKind: "AgentInstance", TargetKind: "MCPServer"},
 		}
 		grouped := groupEdgesByEndpoints(edges)
 
@@ -124,7 +113,7 @@ func TestGroupEdgesByEndpoints(t *testing.T) {
 		}
 	})
 
-	t.Run("explicit SourceKind and TargetKind override registry", func(t *testing.T) {
+	t.Run("uses explicit SourceKind and TargetKind", func(t *testing.T) {
 		edges := []ingest.Edge{
 			{Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL", SourceKind: "CustomSource", TargetKind: "CustomTarget"},
 		}
@@ -136,7 +125,7 @@ func TestGroupEdgesByEndpoints(t *testing.T) {
 		}
 	})
 
-	t.Run("unknown edge kind with no explicit kinds uses empty strings", func(t *testing.T) {
+	t.Run("missing explicit kinds remain empty without inference", func(t *testing.T) {
 		edges := []ingest.Edge{
 			{Source: "s1", Target: "t1", Kind: "UNKNOWN_EDGE"},
 		}
@@ -309,13 +298,6 @@ func TestGroupNodesByKindTuple(t *testing.T) {
 		}
 	})
 
-	t.Run("empty Kinds defaults to Node primary", func(t *testing.T) {
-		nodes := []ingest.Node{{ID: "x", Kinds: nil}}
-		grouped := groupNodesByKindTuple(nodes)
-		if g, ok := grouped["Node"]; !ok || g.PrimaryKind != "Node" {
-			t.Errorf("expected Node group, got %v", grouped)
-		}
-	})
 }
 
 func TestNodeCypherForKindTuple(t *testing.T) {
@@ -372,7 +354,11 @@ func TestWriteNodes_MultiLabel(t *testing.T) {
 		{ID: "sha256:llm1", Kinds: []string{"LiteLLMGateway", "AIService"},
 			Properties: map[string]any{"endpoint": "http://lab:4000"}},
 	}
-	written, err := w.WriteNodes(context.Background(), nodes, "scan-multilabel-test")
+	written, err := w.WriteNodes(
+		context.Background(),
+		managedTestNodes(nodes),
+		"scan-multilabel-test",
+	)
 	if err != nil {
 		t.Fatalf("WriteNodes: %v", err)
 	}
