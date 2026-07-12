@@ -171,6 +171,38 @@ func TestValidatorAcceptsDeclaredObservationDomains(t *testing.T) {
 	}
 }
 
+func TestValidatorAcceptsPropertyNeutralNodeReference(t *testing.T) {
+	data := validIngestData()
+	data.Graph.Nodes[0].Properties = map[string]any{}
+	data.Graph.Nodes[0].PropertySemantics = ingest.NodePropertySemanticsReferenceOnly
+
+	if err := NewValidator().Validate(data); err != nil {
+		t.Fatalf("property-neutral node reference rejected: %v", err)
+	}
+}
+
+func TestValidatorRejectsPropertiesOnNodeReference(t *testing.T) {
+	data := validIngestData()
+	data.Graph.Nodes[0].PropertySemantics = ingest.NodePropertySemanticsReferenceOnly
+
+	assertValidationError(
+		t,
+		NewValidator().Validate(data),
+		"graph.nodes[0].properties",
+	)
+}
+
+func TestValidatorRejectsUnknownNodePropertySemantics(t *testing.T) {
+	data := validIngestData()
+	data.Graph.Nodes[0].PropertySemantics = "compatibility"
+
+	assertValidationError(
+		t,
+		NewValidator().Validate(data),
+		"graph.nodes[0].property_semantics",
+	)
+}
+
 func TestValidatorAcceptsAuthoritativeRootActiveSet(t *testing.T) {
 	data := validIngestData()
 	child := data.Meta.Collection.CoverageKeys[0]

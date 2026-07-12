@@ -36,6 +36,30 @@ func TestNodeJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestReferenceOnlyNodeJSONRoundTrip(t *testing.T) {
+	node := Node{
+		ID:                "sha256:reference",
+		Kinds:             []string{"LiteLLMGateway", "AIService"},
+		Properties:        map[string]any{},
+		PropertySemantics: NodePropertySemanticsReferenceOnly,
+	}
+
+	data, err := json.Marshal(node)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got Node
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.PropertySemantics != NodePropertySemanticsReferenceOnly {
+		t.Errorf("PropertySemantics: got %q, want reference_only", got.PropertySemantics)
+	}
+	if got.Properties == nil || len(got.Properties) != 0 {
+		t.Errorf("Properties: got %+v, want empty object", got.Properties)
+	}
+}
+
 func TestEdgeJSONRoundTrip(t *testing.T) {
 	e := Edge{
 		Source: "sha256:aaa",

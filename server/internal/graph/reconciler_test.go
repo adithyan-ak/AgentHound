@@ -81,6 +81,26 @@ func TestReconcileObservationsRetiresOnlySelectedDomains(t *testing.T) {
 	if !strings.Contains(deleteQuery, "type(r) IN $raw_edge_kinds") {
 		t.Fatal("relationship retirement must remain limited to managed raw edges")
 	}
+	nodeRetireQuery, ok := calls[4].Args[0].(string)
+	if !ok {
+		t.Fatalf("node retire query type = %T", calls[4].Args[0])
+	}
+	for _, fragment := range []string{
+		"old_reference_tokens",
+		"remaining_authoritative_tokens",
+		"size(old_authoritative_tokens) > 0",
+		"size(remaining_authoritative_tokens) = 0",
+		"SET n = {",
+		"observation_properties_complete: true",
+	} {
+		if !strings.Contains(nodeRetireQuery, fragment) {
+			t.Fatalf(
+				"node retirement does not reduce stale authoritative properties on reference fallback; missing %q:\n%s",
+				fragment,
+				nodeRetireQuery,
+			)
+		}
+	}
 }
 
 func TestReconcileDependencyEdgeRetiresWhenEitherDomainChanges(t *testing.T) {

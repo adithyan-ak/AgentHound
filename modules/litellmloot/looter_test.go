@@ -255,19 +255,11 @@ func TestLoot_GatewayMatchesFingerprintWithoutOwningPosture(t *testing.T) {
 	if !reflect.DeepEqual(gateway.Kinds, []string{"LiteLLMGateway", "AIService"}) {
 		t.Fatalf("loot gateway kinds = %v", gateway.Kinds)
 	}
-	if len(gateway.Properties) != 4 {
-		t.Fatalf("loot gateway properties = %+v, want only canonical identity facts", gateway.Properties)
+	if len(gateway.Properties) != 0 {
+		t.Fatalf("loot gateway properties = %+v, want property-neutral reference", gateway.Properties)
 	}
-	for key, value := range gateway.Properties {
-		if fingerprintValue, ok := fingerprintGateway.Properties[key]; ok &&
-			!reflect.DeepEqual(value, fingerprintValue) {
-			t.Fatalf(
-				"shared gateway property %q conflicts: loot=%v fingerprint=%v",
-				key,
-				value,
-				fingerprintValue,
-			)
-		}
+	if gateway.PropertySemantics != ingest.NodePropertySemanticsReferenceOnly {
+		t.Fatalf("loot gateway property semantics = %q, want reference_only", gateway.PropertySemantics)
 	}
 	for _, fingerprintOwned := range []string{
 		"auth_method",

@@ -77,7 +77,10 @@ persist canonical effective matcher definitions and every non-fatal load
 failure. Digests identify semantics but do not attest authenticity.
 Every node and edge must carry one or more `observation_domains` drawn from the
 declared coverage keys. The server never infers fact ownership from a
-single-domain report. Edge endpoint kinds are likewise explicit in v2.
+single-domain report. A node may set `property_semantics: "reference_only"` to
+assert only its ID and kinds; that mode requires an empty `properties` object.
+Omitting `property_semantics` remains an authoritative property observation.
+Edge endpoint kinds are likewise explicit in v2.
 
 Dynamic exhaustive collectors also declare `authoritative_roots`, pairing the
 stable collector-root key with the complete current child-key set. After a
@@ -147,6 +150,9 @@ Implementation details:
   publication until a complete observation replaces every active owner.
 - New facts carry length-delimited observation owner tokens. Shared facts keep
   one token per active coverage domain.
+- Reference-only node observations add ownership without merging managed
+  properties or downgrading an existing complete authoritative observation.
+  Their owner tokens are tracked as an explicit subset of node owners.
 - On merge, preserves `previous_description_hash` for rug-pull detection: `ON MATCH SET n.previous_description_hash = n.description_hash`
 - Edge writes use per-kind Cypher strings selected from the explicitly
   validated `source_kind` and `target_kind` values
@@ -162,6 +168,9 @@ prior owner token. Reconciliation removes old owner tokens, deletes unowned raw
 relationships, then deletes unowned isolated nodes. Facts with another active
 owner survive. Partial, failed, truncated, and unknown coverage performs no
 retirement.
+When reconciliation retires a node's last authoritative property owner but a
+reference-only owner remains, managed properties are cleared to truthful
+reference identity instead of certifying stale rich properties.
 
 Coverage keys are target/config scoped opaque hashes (for example,
 `mcp:target:sha256:...`, `a2a:target:sha256:...`, and

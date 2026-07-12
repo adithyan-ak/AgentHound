@@ -62,7 +62,6 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		return nil, errors.New("litellm loot: --master-key (or --credential master_key=...) is required")
 	}
 
-	_, host, _ := action.EndpointParts(t, DefaultPort, "http")
 	baseURL := action.EndpointBaseURL(t, DefaultPort, "http")
 	gatewayObjectID := ingest.ComputeNodeID("LiteLLMGateway", baseURL)
 
@@ -81,21 +80,14 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		IngestData: &ingest.IngestData{},
 	}
 
-	// Emit the edge source in the loot artifact itself so the production CLI
-	// envelope is independently valid ingest v2. Keep this node deliberately
-	// sparse: endpoint identity is known here, while discovery and auth posture
-	// remain owned by the fingerprinter. When that richer node already exists,
-	// the shared object ID folds these identity-stable facts without replacing
-	// fingerprint-only properties.
+	// Emit a property-neutral edge-source reference so the production CLI
+	// envelope is independently valid ingest v2. The looter knows the canonical
+	// node identity and kinds, but does not own discovery or auth posture.
 	res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, ingest.Node{
-		ID:    gatewayObjectID,
-		Kinds: []string{"LiteLLMGateway", "AIService"},
-		Properties: map[string]any{
-			"objectid":     gatewayObjectID,
-			"name":         host,
-			"endpoint":     baseURL,
-			"service_kind": "litellm",
-		},
+		ID:                gatewayObjectID,
+		Kinds:             []string{"LiteLLMGateway", "AIService"},
+		Properties:        map[string]any{},
+		PropertySemantics: ingest.NodePropertySemanticsReferenceOnly,
 	})
 
 	// 1. The master-key Credential — emitted unconditionally.

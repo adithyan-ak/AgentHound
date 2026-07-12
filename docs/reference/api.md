@@ -263,6 +263,9 @@ domains → post-process → freeze post-analysis totals → snapshot → publis
 `meta.collection` is required on every ingest request, and `collection` is
 required on every successful ingest result. A missing collection report is a
 validation error, not an implicit complete scan.
+Nodes may set `property_semantics: "reference_only"` only with an empty
+`properties` object. This records ID/kind ownership without authoring or
+replacing managed properties; omitted `property_semantics` is authoritative.
 Completed dynamic exhaustive runs may include `authoritative_roots`, each with
 a stable root `coverage_key` and the complete `child_coverage_keys` active set.
 The server reconciles prior children omitted from that set as complete-empty.

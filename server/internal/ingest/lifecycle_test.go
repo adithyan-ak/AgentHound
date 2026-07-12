@@ -152,6 +152,50 @@ func TestCoalesceObservationGraphPreservesAllCurrentOwners(t *testing.T) {
 	}
 }
 
+func TestCoalesceObservationGraphKeepsReferenceOwnersPropertyNeutral(t *testing.T) {
+	authoritativeScope := sdkingest.CanonicalCoverageKey("scan", "network", "127.0.0.1")
+	referenceScope := sdkingest.CanonicalCoverageKey("scan", "loot", "litellm")
+	graph := coalesceObservationGraph(sdkingest.GraphData{
+		Nodes: []sdkingest.Node{
+			{
+				ID:                 "shared",
+				Kinds:              []string{"LiteLLMGateway", "AIService"},
+				Properties:         map[string]any{"endpoint": "http://127.0.0.1:4000"},
+				ObservationDomains: []string{authoritativeScope},
+			},
+			{
+				ID:                 "shared",
+				Kinds:              []string{"LiteLLMGateway", "AIService"},
+				Properties:         map[string]any{},
+				ObservationDomains: []string{referenceScope},
+				PropertySemantics:  sdkingest.NodePropertySemanticsReferenceOnly,
+			},
+		},
+	})
+
+	if len(graph.Nodes) != 2 {
+		t.Fatalf("coalesced mixed-semantics nodes = %+v, want two writer rows", graph.Nodes)
+	}
+	for _, node := range graph.Nodes {
+		switch node.PropertySemantics {
+		case "":
+			if len(node.ObservationDomains) != 1 ||
+				node.ObservationDomains[0] != authoritativeScope ||
+				node.Properties["endpoint"] == nil {
+				t.Fatalf("authoritative observation was changed: %+v", node)
+			}
+		case sdkingest.NodePropertySemanticsReferenceOnly:
+			if len(node.ObservationDomains) != 1 ||
+				node.ObservationDomains[0] != referenceScope ||
+				len(node.Properties) != 0 {
+				t.Fatalf("reference observation gained properties: %+v", node)
+			}
+		default:
+			t.Fatalf("unexpected property semantics %q", node.PropertySemantics)
+		}
+	}
+}
+
 func TestPrepareObservationDomainsRejectsScopeOutsideCoverage(t *testing.T) {
 	declared := sdkingest.CanonicalCoverageKey("mcp", "target", "declared")
 	unrelated := sdkingest.CanonicalCoverageKey("mcp", "target", "unrelated")

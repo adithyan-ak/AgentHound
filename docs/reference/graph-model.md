@@ -140,11 +140,14 @@ type Edge struct {
 }
 ```
 
-`Node` has the same required `observation_domains` field. In wire version 2,
-collector artifacts preserve the producing target/config scope per fact using
-opaque canonical keys such as
-`mcp:target:sha256:...`, `a2a:target:sha256:...`, and
-`config:path:sha256:...`. The server does not infer ownership.
+`Node` has the same required `observation_domains` field and an optional
+`property_semantics` field. Omitted `property_semantics` is an authoritative
+property observation. The only explicit alternative is `reference_only`,
+which asserts node ID and kinds while requiring an empty `properties` object.
+In wire version 2, collector artifacts preserve the producing target/config
+scope per fact using opaque canonical keys such as `mcp:target:sha256:...`,
+`a2a:target:sha256:...`, and `config:path:sha256:...`. The server does not
+infer ownership.
 
 ### Edge Properties (all edges carry these)
 
@@ -174,6 +177,12 @@ The writer derives internal `observation_tokens` from the validated
 retires only old tokens for that exact target/config key. A shared node or raw
 relationship remains while any owner token survives. Unknown, partial, failed,
 and truncated coverage is non-destructive.
+Node reference owners are tracked internally as a subset of
+`observation_tokens`. A `reference_only` write adds ownership without merging
+properties or lowering a complete authoritative observation. If the last
+authoritative owner retires while a reference owner remains, the writer removes
+the stale managed properties and retains only truthful node identity,
+ownership, and lifecycle metadata.
 `LOADS_INSTRUCTIONS` uses `all_dependencies`: completing either its config or
 instruction scope without re-observing the relationship retires it.
 

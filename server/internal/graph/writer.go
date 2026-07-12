@@ -112,6 +112,8 @@ func (w *Writer) writeNodesBatched(
 					"observation_tokens":          observationTokens(n.ObservationDomains, scanID),
 					"observation_domain_prefixes": observationDomainPrefixes(n.ObservationDomains),
 					"complete_domain_prefixes":    completePrefixes,
+					"reference_only": n.PropertySemantics ==
+						ingest.NodePropertySemanticsReferenceOnly,
 				}
 			}
 
@@ -144,23 +146,34 @@ WITH n, node,
      n.input_schema_hash AS old_input_schema_hash,
      n.instructions_hash AS old_instructions_hash,
      n.first_seen AS old_first_seen,
-     coalesce(n.observation_tokens, []) AS old_tokens
+     coalesce(n.observation_tokens, []) AS old_tokens,
+     coalesce(n.observation_reference_tokens, []) AS old_reference_tokens,
+     coalesce(n.observation_properties_complete, false) AS old_properties_complete
 WITH n, node, observation_created,
      old_description_hash, old_input_schema_hash, old_instructions_hash,
-     old_first_seen, old_tokens,
+     old_first_seen, old_tokens, old_reference_tokens, old_properties_complete,
+     [token IN old_tokens WHERE NOT token IN old_reference_tokens] AS old_authoritative_tokens,
      (size(node.observation_tokens) > 0
       AND all(token IN node.observation_tokens WHERE
           any(prefix IN node.complete_domain_prefixes WHERE token STARTS WITH prefix))) AS incoming_complete
 WITH n, node, observation_created,
      old_description_hash, old_input_schema_hash, old_instructions_hash,
-     old_first_seen, old_tokens, incoming_complete,
+     old_first_seen, old_tokens, old_reference_tokens, old_properties_complete,
+     old_authoritative_tokens, incoming_complete,
      (NOT observation_created
+      AND NOT node.reference_only
       AND incoming_complete
-      AND all(token IN old_tokens WHERE
+      AND all(token IN old_authoritative_tokens WHERE
           any(prefix IN node.observation_domain_prefixes WHERE token STARTS WITH prefix))) AS replace_properties
-FOREACH (_ IN CASE WHEN observation_created OR replace_properties THEN [1] ELSE [] END |
+FOREACH (_ IN CASE
+  WHEN (observation_created AND NOT node.reference_only) OR replace_properties
+  THEN [1] ELSE [] END |
   SET n = node.properties)
-FOREACH (_ IN CASE WHEN NOT observation_created AND NOT replace_properties THEN [1] ELSE [] END |
+FOREACH (_ IN CASE WHEN observation_created AND node.reference_only THEN [1] ELSE [] END |
+  SET n = {objectid: node.id})
+FOREACH (_ IN CASE
+  WHEN NOT observation_created AND NOT replace_properties AND NOT node.reference_only
+  THEN [1] ELSE [] END |
   SET n += node.properties)
 SET n.objectid = node.id,
     n.scan_id = $scan_id,
@@ -171,8 +184,20 @@ SET n.objectid = node.id,
     n.previous_instructions_hash = CASE WHEN observation_created THEN node.properties.instructions_hash ELSE old_instructions_hash END,
     n.observation_tokens = reduce(tokens = old_tokens, token IN node.observation_tokens |
       CASE WHEN token IN tokens THEN tokens ELSE tokens + token END),
+    n.observation_reference_tokens = CASE
+      WHEN node.reference_only THEN
+        reduce(tokens = old_reference_tokens, token IN node.observation_tokens |
+          CASE
+            WHEN token IN tokens OR token IN old_authoritative_tokens THEN tokens
+            ELSE tokens + token
+          END)
+      ELSE [token IN old_reference_tokens WHERE NOT token IN node.observation_tokens]
+    END,
     n.observation_properties_complete = CASE
       WHEN observation_created THEN incoming_complete
+      WHEN node.reference_only THEN
+        old_properties_complete OR
+        (incoming_complete AND size(old_authoritative_tokens) = 0)
       WHEN replace_properties THEN true
       ELSE false
     END`)
@@ -516,6 +541,7 @@ func factProperties(props map[string]any) map[string]any {
 	delete(out, "observation_dependency_tokens")
 	delete(out, "observation_semantics")
 	delete(out, "observation_properties_complete")
+	delete(out, "observation_reference_tokens")
 	delete(out, "__agenthound_observation_created")
 	return out
 }
@@ -548,6 +574,9 @@ func groupNodesByKindTuple(nodes []ingest.Node) map[string]*nodeKindTuple {
 		key := primary
 		if len(extras) > 0 {
 			key = primary + "+" + strings.Join(extras, ",")
+		}
+		if n.PropertySemantics != "" {
+			key += "\x00" + string(n.PropertySemantics)
 		}
 		group, ok := grouped[key]
 		if !ok {
@@ -588,6 +617,27 @@ func validateWriterNodes(nodes []ingest.Node) error {
 		}
 		if len(normalizedDomains(node.ObservationDomains)) == 0 {
 			return fmt.Errorf("node %d (%s) requires at least one observation domain", i, node.ID)
+		}
+		switch node.PropertySemantics {
+		case "":
+		case ingest.NodePropertySemanticsReferenceOnly:
+			for key := range node.Properties {
+				if key != "objectid" {
+					return fmt.Errorf(
+						"node %d (%s) reference-only observation cannot carry property %q",
+						i,
+						node.ID,
+						key,
+					)
+				}
+			}
+		default:
+			return fmt.Errorf(
+				"node %d (%s) has invalid property semantics %q",
+				i,
+				node.ID,
+				node.PropertySemantics,
+			)
 		}
 	}
 	return nil
