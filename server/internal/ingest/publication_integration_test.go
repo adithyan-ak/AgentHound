@@ -305,6 +305,80 @@ func TestIntegrationExhaustiveRootRemovesMissingChildAcrossGraphAndPublication(t
 	}
 }
 
+func TestIntegrationCompleteEmptyRootRecoversFailedUnheadedChildAfterRestart(t *testing.T) {
+	ctx, pipeline, db, writer, pool := freshPublicationIntegrationHarness(t)
+	root := sdkingest.CollectorRootCoverageKey("mcp")
+	failedChild := sdkingest.CanonicalCoverageKey(
+		"mcp",
+		"target",
+		sdkingest.CanonicalURLScope("http://127.0.0.1:18084/mcp"),
+	)
+
+	failed := common.NewIngestData("mcp", "failed-unheaded-child")
+	failed.Meta.Collection = &sdkingest.CollectionReport{
+		State:        sdkingest.OutcomeFailed,
+		CoverageKeys: []string{failedChild},
+		Outcomes: []sdkingest.CollectionOutcome{{
+			Collector:   "mcp",
+			CoverageKey: failedChild,
+			Target:      "http://127.0.0.1:18084/mcp",
+			Method:      "initialize",
+			State:       sdkingest.OutcomeFailed,
+			Error:       "connection failed",
+		}},
+	}
+	failedResult, err := pipeline.Ingest(ctx, failed)
+	if err != nil {
+		t.Fatalf("failed child ingest: %v", err)
+	}
+	if failedResult.Outcome != sdkingest.OutcomePartial ||
+		failedResult.PublishedRevision != nil {
+		t.Fatalf("failed child result = %+v, want unpublished partial", failedResult)
+	}
+	var failedHeadCount int
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT count(*) FROM coverage_heads WHERE coverage_key = $1`,
+		failedChild,
+	).Scan(&failedHeadCount); err != nil {
+		t.Fatalf("query failed child head: %v", err)
+	}
+	if failedHeadCount != 0 {
+		t.Fatalf("failed child head count = %d, want 0", failedHeadCount)
+	}
+	state, err := appdb.NewFindingStore(pool).GetProjectionState(ctx)
+	if err != nil {
+		t.Fatalf("get failed projection state: %v", err)
+	}
+	if len(state.DirtyCoverage) != 1 || state.DirtyCoverage[0] != failedChild {
+		t.Fatalf("failed projection dirty coverage = %v, want [%s]", state.DirtyCoverage, failedChild)
+	}
+
+	restarted := NewPipeline(
+		writer,
+		db,
+		appdb.NewScanStore(pool),
+		appdb.NewFindingStore(pool),
+	)
+	completeEmpty := common.NewIngestData("mcp", "complete-empty-after-restart")
+	completeEmpty.Meta.Collection = authoritativeMCPReport(root)
+	recovered, err := restarted.Ingest(ctx, completeEmpty)
+	if err != nil {
+		t.Fatalf("complete-empty ingest: %v", err)
+	}
+	if recovered.Outcome != sdkingest.OutcomeComplete ||
+		recovered.PublishedRevision == nil {
+		t.Fatalf("complete-empty recovery = %+v, want published complete", recovered)
+	}
+	state, err = appdb.NewFindingStore(pool).GetProjectionState(ctx)
+	if err != nil {
+		t.Fatalf("get recovered projection state: %v", err)
+	}
+	if state.Status != "complete" || len(state.DirtyCoverage) != 0 {
+		t.Fatalf("recovered projection state = %+v", state)
+	}
+}
+
 func TestIntegrationTokenlessAgentWithholdsPublication(t *testing.T) {
 	ctx, pipeline, db, writer, pool := freshPublicationIntegrationHarness(t)
 	configScope := sdkingest.CanonicalCoverageKey(

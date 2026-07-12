@@ -243,9 +243,10 @@ func (s *ScanStore) BeginScan(
 	return cumulativeDirty, nil
 }
 
-// ResolveRetiredCoverage returns prior child heads that are absent from a
-// completed exhaustive collector-root active set. It is read before graph
-// mutation so the pipeline can reconcile those scopes as complete-empty.
+// ResolveRetiredCoverage returns prior child heads and inherited dirty child
+// keys that are absent from a completed exhaustive collector-root active set.
+// It is read before graph mutation so the pipeline can reconcile those scopes
+// as complete-empty.
 func (s *ScanStore) ResolveRetiredCoverage(
 	ctx context.Context,
 	roots []sdkingest.CoverageRoot,
@@ -287,7 +288,17 @@ func (s *ScanStore) ResolveRetiredCoverage(
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read authoritative coverage children: %w", err)
 	}
-	return retiredCoverageKeys(roots, heads), nil
+
+	var inheritedJSON []byte
+	if err := s.pool.QueryRow(ctx, `SELECT dirty_coverage
+		FROM posture_state WHERE singleton = TRUE`).Scan(&inheritedJSON); err != nil {
+		return nil, fmt.Errorf("read inherited dirty coverage: %w", err)
+	}
+	var inheritedDirty []string
+	if err := json.Unmarshal(inheritedJSON, &inheritedDirty); err != nil {
+		return nil, fmt.Errorf("decode inherited dirty coverage: %w", err)
+	}
+	return retiredCoverageKeys(roots, heads, inheritedDirty), nil
 }
 
 func (s *ScanStore) RecordFailure(ctx context.Context, failure ScanFailure) error {

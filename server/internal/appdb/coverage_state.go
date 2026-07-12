@@ -63,6 +63,7 @@ func finalizedDirtyCoverage(
 func retiredCoverageKeys(
 	roots []sdkingest.CoverageRoot,
 	heads []coverageHead,
+	inheritedDirty []string,
 ) []string {
 	activeByRoot := make(map[string]map[string]bool, len(roots))
 	for _, root := range roots {
@@ -74,11 +75,18 @@ func retiredCoverageKeys(
 		}
 		activeByRoot[root.CoverageKey] = active
 	}
+	candidates := append([]coverageHead(nil), heads...)
+	for _, key := range normalizeCoverageKeys(inheritedDirty) {
+		candidates = append(candidates, coverageHead{
+			Key:  key,
+			Root: sdkingest.ParentCollectorRootKey(key),
+		})
+	}
 	var retired []string
-	for _, head := range heads {
-		active, authoritative := activeByRoot[head.Root]
-		if authoritative && !active[head.Key] {
-			retired = append(retired, head.Key)
+	for _, candidate := range candidates {
+		active, authoritative := activeByRoot[candidate.Root]
+		if authoritative && !active[candidate.Key] {
+			retired = append(retired, candidate.Key)
 		}
 	}
 	return normalizeCoverageKeys(retired)

@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/adithyan-ak/agenthound/modules/litellmfp"
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
@@ -54,6 +56,10 @@ func (s *stubLiteLLM) handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s.seenMethods = append(s.seenMethods, r.Method)
 		s.seenAuthHeader = append(s.seenAuthHeader, r.Header.Get("Authorization"))
+		if r.URL.Path == "/health/liveliness" {
+			_, _ = w.Write([]byte("I'm alive!"))
+			return
+		}
 		if s.requireBearer && !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 			w.WriteHeader(401)
 			return
@@ -133,8 +139,11 @@ func TestLoot_HappyPath(t *testing.T) {
 		t.Fatal("nil IngestData")
 	}
 
-	// Expect: 1 master + 3 upstream + 2 virtual = 6 Credential nodes,
-	// 6 EXPOSES_CREDENTIAL edges.
+	// Expect: 1 gateway + 1 master + 3 upstream + 2 virtual = 7 nodes,
+	// with 6 Credential nodes and 6 EXPOSES_CREDENTIAL edges.
+	if got := len(res.IngestData.Graph.Nodes); got != 7 {
+		t.Errorf("nodes = %d, want 7 (1 gateway + 6 credentials)", got)
+	}
 	credCount := 0
 	for _, n := range res.IngestData.Graph.Nodes {
 		if len(n.Kinds) > 0 && n.Kinds[0] == "Credential" {
@@ -193,6 +202,83 @@ func TestLoot_HappyPath(t *testing.T) {
 		ev, _ := e.Properties["evidence"].(map[string]any)
 		if ev["engagement_id"] != "TEST-ENGAGEMENT" {
 			t.Errorf("edge evidence.engagement_id = %v, want TEST-ENGAGEMENT", ev["engagement_id"])
+		}
+	}
+}
+
+func TestLoot_GatewayMatchesFingerprintWithoutOwningPosture(t *testing.T) {
+	s := newStub(t)
+	s.modelInfoBody = `{"data":[]}`
+	s.keyListBody = `{"keys":[],"total_count":0,"total_pages":0}`
+	srv := httptest.NewServer(s.handler())
+	defer srv.Close()
+
+	target := action.Target{
+		Kind:    "host",
+		Address: strings.TrimPrefix(srv.URL, "http://"),
+	}
+	fingerprinter, err := litellmfp.New()
+	if err != nil {
+		t.Fatalf("create fingerprinter: %v", err)
+	}
+	fingerprint, err := fingerprinter.Fingerprint(context.Background(), target)
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+	if !fingerprint.Matched || fingerprint.IngestData == nil ||
+		len(fingerprint.IngestData.Graph.Nodes) != 1 {
+		t.Fatalf("fingerprint result = %+v, want one matched gateway", fingerprint)
+	}
+
+	loot, err := (&Looter{}).Loot(context.Background(), target, action.LootOptions{
+		Credentials: map[string]string{"master_key": fakeMasterKey},
+	})
+	if err != nil {
+		t.Fatalf("loot: %v", err)
+	}
+	var gateway *ingest.Node
+	for i := range loot.IngestData.Graph.Nodes {
+		if len(loot.IngestData.Graph.Nodes[i].Kinds) > 0 &&
+			loot.IngestData.Graph.Nodes[i].Kinds[0] == "LiteLLMGateway" {
+			gateway = &loot.IngestData.Graph.Nodes[i]
+			break
+		}
+	}
+	if gateway == nil {
+		t.Fatal("loot gateway node missing")
+	}
+
+	fingerprintGateway := fingerprint.IngestData.Graph.Nodes[0]
+	if gateway.ID != fingerprintGateway.ID {
+		t.Fatalf("loot gateway ID = %q, fingerprint ID = %q", gateway.ID, fingerprintGateway.ID)
+	}
+	if !reflect.DeepEqual(gateway.Kinds, []string{"LiteLLMGateway", "AIService"}) {
+		t.Fatalf("loot gateway kinds = %v", gateway.Kinds)
+	}
+	if len(gateway.Properties) != 4 {
+		t.Fatalf("loot gateway properties = %+v, want only canonical identity facts", gateway.Properties)
+	}
+	for key, value := range gateway.Properties {
+		if fingerprintValue, ok := fingerprintGateway.Properties[key]; ok &&
+			!reflect.DeepEqual(value, fingerprintValue) {
+			t.Fatalf(
+				"shared gateway property %q conflicts: loot=%v fingerprint=%v",
+				key,
+				value,
+				fingerprintValue,
+			)
+		}
+	}
+	for _, fingerprintOwned := range []string{
+		"auth_method",
+		"auth_assurance",
+		"auth_evidence",
+		"discovered_via",
+		"is_anonymous_loot",
+		"version",
+	} {
+		if _, exists := gateway.Properties[fingerprintOwned]; exists {
+			t.Errorf("loot gateway claimed fingerprint-owned property %q", fingerprintOwned)
 		}
 	}
 }

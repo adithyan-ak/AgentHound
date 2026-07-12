@@ -14,6 +14,7 @@
 //   - GET /key/list       (master-key only; lists virtual keys + spend)
 //
 // Emits (per docs/plans/sprint3-offensive-primitives.md 4.5):
+//   - 1 :LiteLLMGateway:AIService source node
 //   - 1 :Credential master node (the master key the operator supplied,
 //     value_hash populated so the cross-collector chain can join)
 //   - N :Credential upstream nodes (one per provider in /model/info,
@@ -61,6 +62,7 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		return nil, errors.New("litellm loot: --master-key (or --credential master_key=...) is required")
 	}
 
+	_, host, _ := action.EndpointParts(t, DefaultPort, "http")
 	baseURL := action.EndpointBaseURL(t, DefaultPort, "http")
 	gatewayObjectID := ingest.ComputeNodeID("LiteLLMGateway", baseURL)
 
@@ -79,7 +81,24 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		IngestData: &ingest.IngestData{},
 	}
 
-	// 1. The master-key Credential — emitted FIRST and unconditionally.
+	// Emit the edge source in the loot artifact itself so the production CLI
+	// envelope is independently valid ingest v2. Keep this node deliberately
+	// sparse: endpoint identity is known here, while discovery and auth posture
+	// remain owned by the fingerprinter. When that richer node already exists,
+	// the shared object ID folds these identity-stable facts without replacing
+	// fingerprint-only properties.
+	res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, ingest.Node{
+		ID:    gatewayObjectID,
+		Kinds: []string{"LiteLLMGateway", "AIService"},
+		Properties: map[string]any{
+			"objectid":     gatewayObjectID,
+			"name":         host,
+			"endpoint":     baseURL,
+			"service_kind": "litellm",
+		},
+	})
+
+	// 1. The master-key Credential — emitted unconditionally.
 	//    value_hash is the cross-collector merge primitive; the Config
 	//    Collector emits a Credential with the same value_hash for the
 	//    same secret seen as an env var, and the

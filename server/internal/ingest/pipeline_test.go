@@ -661,6 +661,140 @@ func TestPipeline_ExhaustiveRootReconcilesRemovedChildAsCompleteEmpty(t *testing
 	}
 }
 
+func TestPipeline_CompleteEmptyRootClearsFailedUnheadedChild(t *testing.T) {
+	root := sdkingest.CollectorRootCoverageKey("mcp")
+	failedChild := sdkingest.CanonicalCoverageKey(
+		"mcp",
+		"target",
+		"https://failed-unheaded.example",
+	)
+	data := validIngestDataFor("scan-complete-empty-after-failure")
+	data.Graph = sdkingest.GraphData{
+		Nodes: []sdkingest.Node{},
+		Edges: []sdkingest.Edge{},
+	}
+	data.Meta.Collection = &sdkingest.CollectionReport{
+		State:        sdkingest.OutcomeComplete,
+		CoverageKeys: []string{root},
+		AuthoritativeRoots: []sdkingest.CoverageRoot{{
+			CoverageKey: root,
+		}},
+		Outcomes: []sdkingest.CollectionOutcome{{
+			Collector:   "mcp",
+			CoverageKey: root,
+			Target:      "mcp",
+			Method:      "collect",
+			State:       sdkingest.OutcomeComplete,
+		}},
+	}
+
+	store := &fakeScanStore{retired: []string{failedChild}}
+	lifecycle := &fakeLifecycleScanStore{
+		fakeScanStore: store,
+		dirtyCoverage: []string{failedChild},
+	}
+	publisher := &fakePublisher{lifecycle: lifecycle}
+	writer := &fakeWriter{}
+	p := newTestPipeline(
+		writer,
+		&graph.MockGraphDB{},
+		lifecycle,
+		noOpRunPP,
+	)
+	p.findingStore = publisher
+
+	result, err := p.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.Outcome != sdkingest.OutcomeComplete ||
+		result.ProjectionStatus != model.ProjectionComplete {
+		t.Fatalf("complete-empty recovery result = %+v", result)
+	}
+	wantReconciled := mergeCoverage([]string{root, failedChild})
+	if got := writer.nodeCalls[0].CompleteScopes; strings.Join(got, "\x00") !=
+		strings.Join(wantReconciled, "\x00") {
+		t.Fatalf("reconciled coverage = %v, want %v", got, wantReconciled)
+	}
+	if len(publisher.finalizations) != 1 ||
+		!publisher.finalizations[0].Publish ||
+		len(publisher.finalizations[0].ResolvedDirtyCoverage) != 1 ||
+		publisher.finalizations[0].ResolvedDirtyCoverage[0] != failedChild {
+		t.Fatalf("complete-empty finalization = %+v", publisher.finalizations)
+	}
+	if len(lifecycle.dirtyCoverage) != 0 {
+		t.Fatalf("dirty coverage after recovery = %v, want none", lifecycle.dirtyCoverage)
+	}
+}
+
+func TestPipeline_PartialCurrentChildPreventsRootRetirement(t *testing.T) {
+	currentChild := sdkingest.CanonicalCoverageKey(
+		"mcp",
+		"target",
+		"https://partial-current.example",
+	)
+	absentChild := sdkingest.CanonicalCoverageKey(
+		"mcp",
+		"target",
+		"https://absent.example",
+	)
+	root := sdkingest.CollectorRootCoverageKey("mcp")
+	data := validIngestDataFor("scan-partial-current-child")
+	for i := range data.Graph.Nodes {
+		data.Graph.Nodes[i].ObservationDomains = []string{currentChild}
+	}
+	for i := range data.Graph.Edges {
+		data.Graph.Edges[i].ObservationDomains = []string{currentChild}
+	}
+	data.Meta.Collection = &sdkingest.CollectionReport{
+		State:        sdkingest.OutcomePartial,
+		CoverageKeys: []string{root, currentChild},
+		AuthoritativeRoots: []sdkingest.CoverageRoot{{
+			CoverageKey:       root,
+			ChildCoverageKeys: []string{currentChild},
+		}},
+		Outcomes: []sdkingest.CollectionOutcome{
+			{
+				Collector:   "mcp",
+				CoverageKey: root,
+				Target:      "mcp",
+				Method:      "collect",
+				State:       sdkingest.OutcomePartial,
+			},
+			{
+				Collector:   "mcp",
+				CoverageKey: currentChild,
+				Target:      "https://partial-current.example",
+				Method:      "enumerate",
+				State:       sdkingest.OutcomePartial,
+			},
+		},
+	}
+
+	store := &fakeScanStore{retired: []string{absentChild}}
+	writer := &fakeWriter{}
+	p := newTestPipeline(
+		writer,
+		&graph.MockGraphDB{},
+		store,
+		noOpRunPP,
+	)
+
+	result, err := p.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.Outcome != sdkingest.OutcomePartial {
+		t.Fatalf("partial result = %+v", result)
+	}
+	if len(store.resolvedRoots) != 0 {
+		t.Fatalf("partial child resolved authoritative roots: %+v", store.resolvedRoots)
+	}
+	if got := writer.nodeCalls[0].CompleteScopes; len(got) != 0 {
+		t.Fatalf("partial child reconciled coverage: %v", got)
+	}
+}
+
 func TestPipeline_TargetedScanDoesNotResolveSiblingChildren(t *testing.T) {
 	store := &fakeScanStore{retired: []string{
 		sdkingest.CanonicalCoverageKey("mcp", "target", "sibling"),

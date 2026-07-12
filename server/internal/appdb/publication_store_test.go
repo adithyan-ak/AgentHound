@@ -315,11 +315,13 @@ func TestIntegrationAuthoritativeRootRetiresRemovedChildHeadAndDirtyKey(t *testi
 	firstID := prefix + "-first"
 	secondID := prefix + "-second"
 	targetedID := prefix + "-targeted"
+	failedID := prefix + "-failed-unheaded"
 	emptyID := prefix + "-empty"
 	root := sdkingest.CollectorRootCoverageKey("mcp")
 	childA := sdkingest.CanonicalCoverageKey("mcp", "target", prefix+"-a")
 	childB := sdkingest.CanonicalCoverageKey("mcp", "target", prefix+"-b")
 	childC := sdkingest.CanonicalCoverageKey("mcp", "target", prefix+"-c")
+	childD := sdkingest.CanonicalCoverageKey("mcp", "target", prefix+"-d")
 	cleanup := func() {
 		_, _ = pool.Exec(ctx, `UPDATE posture_state SET
 		    published_revision = NULL, published_scan_id = NULL, published_at = NULL,
@@ -328,7 +330,7 @@ func TestIntegrationAuthoritativeRootRetiresRemovedChildHeadAndDirtyKey(t *testi
 		_, _ = pool.Exec(
 			ctx,
 			`DELETE FROM coverage_heads WHERE coverage_key = ANY($1::text[])`,
-			[]string{root, childA, childB, childC},
+			[]string{root, childA, childB, childC, childD},
 		)
 		_, _ = pool.Exec(ctx, `DELETE FROM scans WHERE id LIKE $1`, prefix+"%")
 	}
@@ -481,6 +483,45 @@ func TestIntegrationAuthoritativeRootRetiresRemovedChildHeadAndDirtyKey(t *testi
 		t.Fatalf("targeted child root = %v, want stable MCP root", headRoot)
 	}
 
+	// A failed child has no promoted coverage head. Its inherited dirty key
+	// must still be retired by a later complete exhaustive active set, including
+	// when that later run is handled by a newly constructed store.
+	if _, err := scans.BeginScan(ctx, &model.Scan{
+		ID:                 failedID,
+		Collector:          "mcp",
+		Status:             model.ScanStatusRunning,
+		StartedAt:          now,
+		ArtifactObservedAt: &observed,
+		CollectionStatus:   model.LifecycleFailed,
+	}, []string{childD}); err != nil {
+		t.Fatalf("begin failed unheaded child: %v", err)
+	}
+	if err := scans.RecordFailure(ctx, ScanFailure{
+		ID:               failedID,
+		Status:           model.ScanStatusFailed,
+		Error:            "collector failed",
+		CollectionStatus: model.LifecycleFailed,
+		GraphStatus:      model.LifecycleFailed,
+		AnalysisStatus:   model.LifecycleNotApplicable,
+		SnapshotStatus:   model.LifecycleNotApplicable,
+		ProjectionStatus: model.ProjectionIncomplete,
+		DirtyCoverage:    []string{childD},
+	}); err != nil {
+		t.Fatalf("record failed unheaded child: %v", err)
+	}
+	var failedHeadCount int
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT count(*) FROM coverage_heads WHERE coverage_key = $1`,
+		childD,
+	).Scan(&failedHeadCount); err != nil {
+		t.Fatalf("query failed child head: %v", err)
+	}
+	if failedHeadCount != 0 {
+		t.Fatalf("failed child head count = %d, want 0", failedHeadCount)
+	}
+	scans = NewScanStore(pool)
+
 	emptyRoot := sdkingest.CollectorRootCoverageKey("mcp")
 	retired, err = scans.ResolveRetiredCoverage(ctx, []sdkingest.CoverageRoot{{
 		CoverageKey: emptyRoot,
@@ -488,8 +529,14 @@ func TestIntegrationAuthoritativeRootRetiresRemovedChildHeadAndDirtyKey(t *testi
 	if err != nil {
 		t.Fatalf("resolve complete-empty active set: %v", err)
 	}
-	if len(retired) != 2 {
-		t.Fatalf("complete-empty retired children = %v, want childB and childC", retired)
+	wantRetired := normalizeCoverageKeys([]string{childB, childC, childD})
+	if len(retired) != len(wantRetired) {
+		t.Fatalf("complete-empty retired children = %v, want %v", retired, wantRetired)
+	}
+	for i := range wantRetired {
+		if retired[i] != wantRetired[i] {
+			t.Fatalf("complete-empty retired children = %v, want %v", retired, wantRetired)
+		}
 	}
 	if _, err := scans.BeginScan(ctx, &model.Scan{
 		ID:                 emptyID,
@@ -523,7 +570,7 @@ func TestIntegrationAuthoritativeRootRetiresRemovedChildHeadAndDirtyKey(t *testi
 		ctx,
 		`SELECT count(*) FROM coverage_heads
 		 WHERE coverage_key = ANY($1::text[])`,
-		[]string{childA, childB, childC},
+		[]string{childA, childB, childC, childD},
 	).Scan(&survivingChildren); err != nil {
 		t.Fatalf("query complete-empty heads: %v", err)
 	}
