@@ -374,7 +374,7 @@ func loadEffectiveRules() (*rules.Engine, *ingest.RulesetManifest) {
 }
 
 func collectorRootCoverageKey(collectorName string) string {
-	return ingest.CanonicalCoverageKey(collectorName, "", "")
+	return ingest.CanonicalCoverageKey(collectorName, "root", "collect")
 }
 
 func rootedCollectionReport(

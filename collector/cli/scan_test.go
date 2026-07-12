@@ -92,9 +92,10 @@ func TestRootedCollectionReportStableAcrossScanIDs(t *testing.T) {
 	firstReport := rootedCollectionReport("mcp", first.Meta.Collection)
 	secondReport := rootedCollectionReport("mcp", second.Meta.Collection)
 	rootKey := collectorRootCoverageKey("mcp")
+	wantRootKey := ingest.CanonicalCoverageKey("mcp", "root", "collect")
 
-	if rootKey != "mcp" {
-		t.Fatalf("collector root key = %q, want mcp", rootKey)
+	if rootKey != wantRootKey {
+		t.Fatalf("collector root key = %q, want %q", rootKey, wantRootKey)
 	}
 	for scanID, report := range map[string]*ingest.CollectionReport{
 		first.Meta.ScanID:  firstReport,

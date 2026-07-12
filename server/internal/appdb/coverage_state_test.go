@@ -3,6 +3,8 @@ package appdb
 import (
 	"reflect"
 	"testing"
+
+	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
 func finalizeCoverageAttempt(
@@ -19,9 +21,9 @@ func TestDirtyCollectorRootClearedByLaterCompleteRoot(t *testing.T) {
 	const (
 		failedScanID   = "mcp-scan-failed"
 		completeScanID = "mcp-scan-complete"
-		mcpRoot        = "mcp"
-		mcpTarget      = "mcp:target:sha256:complete"
 	)
+	mcpRoot := sdkingest.CanonicalCoverageKey("mcp", "root", "collect")
+	mcpTarget := sdkingest.CanonicalCoverageKey("mcp", "target", "https://mcp.example")
 
 	dirty := finalizeCoverageAttempt(
 		nil,
@@ -53,10 +55,10 @@ func TestPartialCollectorRootRemainsDirty(t *testing.T) {
 	const (
 		failedScanID  = "mcp-scan-failed"
 		partialScanID = "mcp-scan-partial"
-		mcpRoot       = "mcp"
-		complete      = "mcp:target:sha256:complete"
-		failed        = "mcp:target:sha256:failed"
 	)
+	mcpRoot := sdkingest.CanonicalCoverageKey("mcp", "root", "collect")
+	complete := sdkingest.CanonicalCoverageKey("mcp", "target", "https://complete.example")
+	failed := sdkingest.CanonicalCoverageKey("mcp", "target", "https://failed.example")
 
 	dirty := finalizeCoverageAttempt(
 		nil,
@@ -86,10 +88,10 @@ func TestDirtyMCPRootSurvivesCompleteConfigScan(t *testing.T) {
 	const (
 		mcpScanID    = "mcp-scan-failed"
 		configScanID = "config-scan-complete"
-		mcpRoot      = "mcp"
-		configRoot   = "config"
-		configPath   = "config:path:sha256:complete"
 	)
+	mcpRoot := sdkingest.CanonicalCoverageKey("mcp", "root", "collect")
+	configRoot := sdkingest.CanonicalCoverageKey("config", "root", "collect")
+	configPath := sdkingest.CanonicalCoverageKey("config", "path", "/tmp/config.json")
 
 	dirty := finalizeCoverageAttempt(
 		nil,

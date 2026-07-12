@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 
+	collectorcli "github.com/adithyan-ak/agenthound/collector/cli"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
@@ -66,6 +69,71 @@ func TestValidatorAcceptsValid(t *testing.T) {
 	v := NewValidator()
 	if err := v.Validate(validIngestData()); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestValidatorAcceptsCollectorProducedRootCoverage(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	configPath := filepath.Join(dir, "config.json")
+	outputPath := filepath.Join(dir, "scan.json")
+	if err := os.WriteFile(
+		configPath,
+		[]byte(`{"mcpServers":{"local":{"command":"node","args":["server.js"]}}}`),
+		0o600,
+	); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	originalArgs := os.Args
+	os.Args = []string{
+		"agenthound",
+		"scan",
+		"--config",
+		"--path", configPath,
+		"--scan-output", outputPath,
+		"--quiet",
+	}
+	defer func() { os.Args = originalArgs }()
+
+	if err := collectorcli.Execute(); err != nil {
+		t.Fatalf("produce scan: %v", err)
+	}
+	raw, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read scan: %v", err)
+	}
+	var data ingest.IngestData
+	if err := json.Unmarshal(raw, &data); err != nil {
+		t.Fatalf("decode scan: %v", err)
+	}
+	if err := NewValidator().Validate(&data); err != nil {
+		t.Fatalf("collector-produced scan rejected: %v", err)
+	}
+
+	rootKey := ingest.CanonicalCoverageKey("config", "root", "collect")
+	pathKey := ingest.CanonicalCoverageKey("config", "path", configPath)
+	states := ingest.CoverageStates(data.Meta.Collection)
+	if states[rootKey] != ingest.OutcomeComplete ||
+		states[pathKey] != ingest.OutcomeComplete {
+		t.Fatalf("collector coverage states = %v, want complete root and path", states)
+	}
+	for _, node := range data.Graph.Nodes {
+		if len(node.ObservationDomains) != 1 || node.ObservationDomains[0] != pathKey {
+			t.Fatalf("node %q ownership = %v, want path scope %q", node.ID, node.ObservationDomains, pathKey)
+		}
+	}
+	for _, edge := range data.Graph.Edges {
+		if len(edge.ObservationDomains) != 1 || edge.ObservationDomains[0] != pathKey {
+			t.Fatalf(
+				"edge %s-%s->%s ownership = %v, want path scope %q",
+				edge.Source,
+				edge.Kind,
+				edge.Target,
+				edge.ObservationDomains,
+				pathKey,
+			)
+		}
 	}
 }
 
