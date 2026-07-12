@@ -4,42 +4,40 @@ package prebuilt
 
 // Critical Paths
 
-// CypherLitellmCredentialLeak surfaces the full v0.2 credential-chain
-// finding: an Agent instance whose Config Collector emission has the
-// same value_hash as a LiteLLM master-key Credential, and that
-// LiteLLM gateway exposes upstream provider keys with explicitly observed
-// usable material. Masked/hashed references remain visible through the
-// generic credential-chain variant but are not labeled leaks. The
-// cross_service_credential_chain post-processor pre-populates the
-// agent → upstream-key CAN_REACH edge; this query joins the path
-// for human-readable findings output.
+// CypherLitellmCredentialLeak reports the credential exposure that the
+// first-party LiteLLM looter can actually observe: an exposed master key.
+// Provider apiKey and virtual-key nodes are optional context only when their
+// evidence explicitly says the material is masked or hashed and not observed
+// as usable plaintext.
 const CypherLitellmCredentialLeak = `
-MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(s:MCPServer)-[:HAS_ENV_VAR]->(c1:Credential)
-WHERE c1.value_hash IS NOT NULL
-  AND c1.material_status = 'observed'
-  AND c1.exposure_status = 'exposed'
-  AND c1.merge_key = 'value_hash'
-MATCH (gw:LiteLLMGateway)-[:EXPOSES_CREDENTIAL]->(c1master:Credential)
-WHERE c1master.value_hash = c1.value_hash AND c1master.objectid <> c1.objectid
-  AND c1master.material_status = 'observed'
-  AND c1master.exposure_status = 'exposed'
-  AND c1master.merge_key = 'value_hash'
-MATCH (gw)-[:EXPOSES_CREDENTIAL]->(c2:Credential)
-WHERE c2.type IN ['apiKey', 'virtual_key']
-  AND c2.material_status = 'observed'
-  AND c2.exposure_status = 'exposed'
-  AND c2.merge_key = 'value_hash'
-RETURN a.name AS agent_name,
-       s.name AS via_server,
-       c1.name AS via_credential,
-       gw.name AS via_gateway,
+MATCH (gw:LiteLLMGateway)-[master_evidence:EXPOSES_CREDENTIAL]->(master:Credential)
+WHERE master.type = 'master_key'
+  AND master.material_status = 'observed'
+  AND master.exposure_status = 'exposed'
+  AND master.merge_key = 'value_hash'
+  AND master_evidence.exposure_status = 'exposed'
+  AND master_evidence.assertion_type = 'observed_credential_exposure'
+OPTIONAL MATCH (gw)-[reference_evidence:EXPOSES_CREDENTIAL]->(reference:Credential)
+WHERE ((reference.type = 'apiKey' AND reference.material_status = 'masked')
+    OR (reference.type = 'virtual_key' AND reference.material_status = 'hashed'))
+  AND reference.exposure_status = 'not_observed'
+  AND reference_evidence.exposure_status = 'not_observed'
+  AND reference_evidence.assertion_type = 'credential_reference'
+RETURN gw.name AS gateway_name,
        gw.endpoint AS gateway_endpoint,
-       c2.name AS upstream_credential,
-       coalesce(c2.provider, 'unknown') AS upstream_provider,
-       a.objectid AS agent_id,
+       master.name AS master_credential,
+       master.material_status AS master_material_status,
+       master.exposure_status AS master_exposure_status,
+       master_evidence.assertion_type AS master_evidence,
+       reference.name AS reference_credential,
+       reference.type AS reference_type,
+       reference.material_status AS reference_material_status,
+       reference.exposure_status AS reference_exposure_status,
+       false AS reference_contains_usable_material,
        gw.objectid AS gateway_id,
-       c2.objectid AS upstream_credential_id
-ORDER BY a.name, gw.name`
+       master.objectid AS master_credential_id,
+       reference.objectid AS reference_credential_id
+ORDER BY gw.name, reference.type, reference.name`
 
 const CypherAgentsShellAccess = `
 MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(s:MCPServer)-[:PROVIDES_TOOL]->(t:MCPTool)

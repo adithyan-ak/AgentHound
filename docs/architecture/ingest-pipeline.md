@@ -79,6 +79,13 @@ Every node and edge must carry one or more `observation_domains` drawn from the
 declared coverage keys. The server never infers fact ownership from a
 single-domain report. Edge endpoint kinds are likewise explicit in v2.
 
+Dynamic exhaustive collectors also declare `authoritative_roots`, pairing the
+stable collector-root key with the complete current child-key set. After a
+completed root run, previously headed children absent from that set are
+reconciled as complete-empty and their heads are retired. Targeted, partial,
+failed, and otherwise non-exhaustive runs do not declare authoritative roots
+and cannot retire sibling scopes.
+
 ## Stage 1: Validate
 
 `Validator.Validate()` rejects malformed payloads before any graph writes.

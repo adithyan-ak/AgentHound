@@ -185,6 +185,8 @@ func TestObservationCompletenessScopesToPublicManagedRawFacts(t *testing.T) {
 	db := &MockGraphDB{QueryResult: []map[string]any{{
 		"incomplete_property_nodes":         int64(5),
 		"incomplete_property_relationships": int64(6),
+		"tokenless_nodes":                   int64(7),
+		"tokenless_incident_relationships":  int64(8),
 	}}}
 	completeness, err := GetObservationCompleteness(context.Background(), db)
 	if err != nil {
@@ -192,7 +194,9 @@ func TestObservationCompletenessScopesToPublicManagedRawFacts(t *testing.T) {
 	}
 	if completeness.Complete() ||
 		completeness.IncompletePropertyNodes != 5 ||
-		completeness.IncompletePropertyRelationships != 6 {
+		completeness.IncompletePropertyRelationships != 6 ||
+		completeness.TokenlessNodes != 7 ||
+		completeness.TokenlessIncidentRelationships != 8 {
 		t.Fatalf("observation completeness = %+v", completeness)
 	}
 	calls := db.CallsTo("Query")
@@ -205,7 +209,9 @@ func TestObservationCompletenessScopesToPublicManagedRawFacts(t *testing.T) {
 	}
 	if !strings.Contains(query, "type(r) IN $raw_edge_kinds") ||
 		!strings.Contains(query, "size(coalesce(n.observation_tokens, [])) > 0") ||
-		!strings.Contains(query, "size(coalesce(r.observation_tokens, [])) > 0") {
+		!strings.Contains(query, "size(coalesce(r.observation_tokens, [])) > 0") ||
+		!strings.Contains(query, "size(coalesce(n.observation_tokens, [])) = 0") ||
+		!strings.Contains(query, "tokenless_incident_relationships") {
 		t.Fatalf("observation completeness is not scoped to managed raw facts:\n%s", query)
 	}
 	params, _ := calls[0].Args[1].(map[string]any)

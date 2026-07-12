@@ -152,7 +152,11 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 		data.Graph.Edges = append(data.Graph.Edges, e)
 	}
 
-	var agentIDs []string
+	type observedAgent struct {
+		id    string
+		scope string
+	}
+	var agents []observedAgent
 
 	for _, cfg := range configs {
 		absPath := canonicalConfigPath(cfg.Path)
@@ -178,7 +182,7 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 			"framework":   cfg.Client,
 			"config_path": absPath,
 		}), scopeKey)
-		agentIDs = append(agentIDs, agentID)
+		agents = append(agents, observedAgent{id: agentID, scope: scopeKey})
 
 		for _, srv := range cfg.Servers {
 			if srv.Disabled {
@@ -322,9 +326,23 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 		if inst.IsSuspicious {
 			riskWeight = 0.5
 		}
-		for _, agentID := range agentIDs {
-			addEdge(common.NewEdge(agentID, instrID, "LOADS_INSTRUCTIONS", "AgentInstance", "InstructionFile",
-				common.NewEdgeProps(scanID, 1.0, riskWeight)), scopeKey)
+		for _, agent := range agents {
+			edge := common.NewEdge(
+				agent.id,
+				instrID,
+				"LOADS_INSTRUCTIONS",
+				"AgentInstance",
+				"InstructionFile",
+				common.NewEdgeProps(scanID, 1.0, riskWeight),
+			)
+			edge.ObservationDomains = ingest.MergeObservationDomains(
+				[]string{agent.scope},
+				[]string{scopeKey},
+			)
+			if len(edge.ObservationDomains) > 1 {
+				edge.ObservationSemantics = ingest.ObservationSemanticsAllDependencies
+			}
+			addEdge(edge)
 		}
 	}
 

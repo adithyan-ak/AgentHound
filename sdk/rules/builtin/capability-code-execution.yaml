@@ -3,7 +3,7 @@ name: Code Execution Capability
 description: >
   Classifies tools with arbitrary code execution capability only from
   direct execution-specific phrases in tool metadata.
-version: 2
+version: 3
 enabled: true
 scope:
   collector: mcp
@@ -13,7 +13,7 @@ owasp: [MCP01]
 tags: [capability, code-execution]
 matcher:
   type: regex
-  pattern: '(?is)(?:\beval\b|\b(?:run|execute|exec|compile|interpret)[_ -]?(?:code|python|javascript|lambda|script)\b|\bshell[ _-]?command\b|\b(?:run|execute|exec|compile|interpret)(?:s|d|ing)?\b\s+(?:(?:a|an|the)\s+)?(?:(?:arbitrary|provided|supplied|user[- ]provided|source)\s+)?(?:code|python|javascript|lambda|script)\b)'
+  pattern: '(?is)(?:\beval\b|\b(?:run|runs|ran|running|execute|executes|executed|executing|exec|spawn|spawns|spawned|spawning|invoke|invokes|invoked|invoking|compile|compiles|compiled|compiling|interpret|interprets|interpreted|interpreting)[_ -]?(?:code|python|javascript|lambda|script)\b|\bshell[ _-]?command\b|\b(?:run|runs|ran|running|execute|executes|executed|executing|exec|spawn|spawns|spawned|spawning|invoke|invokes|invoked|invoking|compile|compiles|compiled|compiling|interpret|interprets|interpreted|interpreting)\b\s+(?:(?:a|an|the)\s+)?(?:(?:arbitrary|provided|supplied|user[- ]provided|source)\s+)?(?:code|python|javascript|lambda|script)\b)'
 emit:
   finding_type: capability_classification
   property_key: capability_surface

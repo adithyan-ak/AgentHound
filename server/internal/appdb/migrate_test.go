@@ -35,6 +35,7 @@ func TestMigrationsContainOnlyCurrentInitialSchema(t *testing.T) {
 		"exact_evidence",
 		"CREATE TABLE IF NOT EXISTS finding_triage",
 		"CREATE TABLE IF NOT EXISTS coverage_heads",
+		"root_key",
 		"CREATE TABLE IF NOT EXISTS posture_publications",
 		"CREATE TABLE IF NOT EXISTS posture_state",
 		"ON CONFLICT (singleton) DO NOTHING",

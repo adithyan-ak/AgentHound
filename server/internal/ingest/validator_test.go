@@ -118,6 +118,12 @@ func TestValidatorAcceptsCollectorProducedRootCoverage(t *testing.T) {
 		states[pathKey] != ingest.OutcomeComplete {
 		t.Fatalf("collector coverage states = %v, want complete root and path", states)
 	}
+	if len(data.Meta.Collection.AuthoritativeRoots) != 0 {
+		t.Fatalf(
+			"targeted collector scan became authoritative: %+v",
+			data.Meta.Collection.AuthoritativeRoots,
+		)
+	}
 	for _, node := range data.Graph.Nodes {
 		if len(node.ObservationDomains) != 1 || node.ObservationDomains[0] != pathKey {
 			t.Fatalf("node %q ownership = %v, want path scope %q", node.ID, node.ObservationDomains, pathKey)
@@ -163,6 +169,56 @@ func TestValidatorAcceptsDeclaredObservationDomains(t *testing.T) {
 	if err := v.Validate(data); err != nil {
 		t.Fatalf("declared observation domain rejected: %v", err)
 	}
+}
+
+func TestValidatorAcceptsAuthoritativeRootActiveSet(t *testing.T) {
+	data := validIngestData()
+	child := data.Meta.Collection.CoverageKeys[0]
+	root := ingest.CanonicalCoverageKey("mcp", "root", "collect")
+	data.Meta.Collection.CoverageKeys = append(data.Meta.Collection.CoverageKeys, root)
+	data.Meta.Collection.AuthoritativeRoots = []ingest.CoverageRoot{{
+		CoverageKey:       root,
+		ChildCoverageKeys: []string{child},
+	}}
+	data.Meta.Collection.Outcomes = append(
+		data.Meta.Collection.Outcomes,
+		ingest.CollectionOutcome{
+			Collector:   "mcp",
+			CoverageKey: root,
+			Target:      "mcp",
+			Method:      "collect",
+			State:       ingest.OutcomeComplete,
+		},
+	)
+
+	if err := NewValidator().Validate(data); err != nil {
+		t.Fatalf("authoritative root active set rejected: %v", err)
+	}
+}
+
+func TestValidatorRejectsAuthoritativeRootMissingDeclaredChild(t *testing.T) {
+	data := validIngestData()
+	root := ingest.CanonicalCoverageKey("mcp", "root", "collect")
+	data.Meta.Collection.CoverageKeys = append(data.Meta.Collection.CoverageKeys, root)
+	data.Meta.Collection.AuthoritativeRoots = []ingest.CoverageRoot{{
+		CoverageKey: root,
+	}}
+	data.Meta.Collection.Outcomes = append(
+		data.Meta.Collection.Outcomes,
+		ingest.CollectionOutcome{
+			Collector:   "mcp",
+			CoverageKey: root,
+			Target:      "mcp",
+			Method:      "collect",
+			State:       ingest.OutcomeComplete,
+		},
+	)
+
+	assertValidationError(
+		t,
+		NewValidator().Validate(data),
+		"meta.collection.authoritative_roots[0].child_coverage_keys",
+	)
 }
 
 func TestValidatorAcceptsAllDependencyEdge(t *testing.T) {

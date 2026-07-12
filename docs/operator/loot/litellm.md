@@ -82,10 +82,12 @@ The looter does NOT scrub master keys from slog output — it redacts to an 8-ch
 The graph after a successful `agenthound loot --type litellm` run contains:
 
 ```
-(:LiteLLMGateway:AIService) -[EXPOSES_CREDENTIAL]-> (:Credential type=master_key, value_hash=H1)
-(:LiteLLMGateway:AIService) -[EXPOSES_CREDENTIAL]-> (:Credential type=apiKey, provider=openai, value_hash=H2)
-(:LiteLLMGateway:AIService) -[EXPOSES_CREDENTIAL]-> (:Credential type=apiKey, provider=anthropic, value_hash=H3)
-(:LiteLLMGateway:AIService) -[EXPOSES_CREDENTIAL]-> (:Credential type=virtual_key, value_hash=H4)
+(:LiteLLMGateway:AIService) -[EXPOSES_CREDENTIAL {exposure_status: exposed}]->
+  (:Credential {type: master_key, material_status: observed, exposure_status: exposed, value_hash: H1})
+(:LiteLLMGateway:AIService) -[EXPOSES_CREDENTIAL {exposure_status: not_observed}]->
+  (:Credential {type: apiKey, material_status: masked, exposure_status: not_observed})
+(:LiteLLMGateway:AIService) -[EXPOSES_CREDENTIAL {exposure_status: not_observed}]->
+  (:Credential {type: virtual_key, material_status: hashed, exposure_status: not_observed, value_hash: H4})
 ```
 
 If you previously ran the Config Collector against an MCP client config that referenced the master key by env var (e.g. `LITELLM_MASTER_KEY` in `claude_desktop_config.json`), the Config Collector emitted:
@@ -96,14 +98,18 @@ If you previously ran the Config Collector against an MCP client config that ref
 
 The `cross_service_credential_chain` post-processor joins on `value_hash`, walks `(:AgentInstance)-[:TRUSTS_SERVER]->(:MCPServer)-[:HAS_ENV_VAR]->(c1)` and matches `c1.value_hash` to a master `:Credential` exposed by a `:LiteLLMGateway`, then emits `(:AgentInstance)-[:CAN_REACH]->(c2)` for every upstream provider Credential `c2` the gateway exposes.
 
-The pre-built `litellm-credential-leak` query surfaces this finding in the UI:
+The pre-built `litellm-credential-leak` query reports the observed master-key
+exposure. It returns provider and virtual-key nodes only as explicit
+masked/hashed, not-observed references:
 
 ```bash
-curl -s localhost:8080/api/v1/analysis/findings | \
-    jq '.[] | select(.processor=="cross_service_credential_chain")'
+curl -s localhost:8080/api/v1/analysis/prebuilt/litellm-credential-leak | \
+    jq '{projection, rows}'
 ```
 
-The result is a one-line agent → MCPServer → env-var-cred → LiteLLM master → upstream OpenAI/Anthropic/Bedrock provider key path that is otherwise invisible to single-collector tools.
+The result does not claim that an upstream OpenAI, Anthropic, Bedrock, or
+virtual key is available as usable plaintext. Cross-collector credential-chain
+findings remain separate analysis output.
 
 ---
 

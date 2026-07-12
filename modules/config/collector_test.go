@@ -616,6 +616,31 @@ func TestConfigCollector_InstructionFiles(t *testing.T) {
 	if edgesByKind["LOADS_INSTRUCTIONS"] < 1 {
 		t.Errorf("LOADS_INSTRUCTIONS edges = %d, want >= 1", edgesByKind["LOADS_INSTRUCTIONS"])
 	}
+	configScope := configCoverageKey(configPath)
+	instructionScope := configCoverageKey(claudeMD)
+	foundDependencyEdge := false
+	for _, edge := range result.Graph.Edges {
+		if edge.Kind != "LOADS_INSTRUCTIONS" {
+			continue
+		}
+		hasConfigScope := false
+		hasInstructionScope := false
+		for _, domain := range edge.ObservationDomains {
+			hasConfigScope = hasConfigScope || domain == configScope
+			hasInstructionScope = hasInstructionScope || domain == instructionScope
+		}
+		if hasConfigScope && hasInstructionScope &&
+			edge.ObservationSemantics == ingest.ObservationSemanticsAllDependencies {
+			foundDependencyEdge = true
+			break
+		}
+	}
+	if !foundDependencyEdge {
+		t.Fatalf(
+			"LOADS_INSTRUCTIONS missing config/instruction dependency scopes: %+v",
+			result.Graph.Edges,
+		)
+	}
 }
 
 func TestConfigCollector_AuthMethodDerivation(t *testing.T) {

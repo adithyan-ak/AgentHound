@@ -263,6 +263,10 @@ domains → post-process → freeze post-analysis totals → snapshot → publis
 `meta.collection` is required on every ingest request, and `collection` is
 required on every successful ingest result. A missing collection report is a
 validation error, not an implicit complete scan.
+Completed dynamic exhaustive runs may include `authoritative_roots`, each with
+a stable root `coverage_key` and the complete `child_coverage_keys` active set.
+The server reconciles prior children omitted from that set as complete-empty.
+Targeted and non-exhaustive runs omit this field and cannot retire siblings.
 
 `submitted` counts input facts, `write_rows` counts Neo4j write-result rows
 (including matches of existing facts), and `graph_totals` freezes public
@@ -484,7 +488,9 @@ comparison metadata, rules provenance, and all findings with the triage state
 observed at publication. `scope.dirty_coverage` is always an explicit empty
 array for a published revision; `scope.active_coverage_keys` lists all active
 coverage heads. `completeness.observation_details` reports property-incomplete
-public managed node and raw-relationship counts.
+public managed node/raw-relationship counts plus public tokenless-node and raw
+relationship-incident-to-tokenless-node counts. Any non-zero count withholds
+publication.
 `health.state` is
 `not_captured` because publication does not
 perform a timestamped dependency health probe. `limits.findings` declares

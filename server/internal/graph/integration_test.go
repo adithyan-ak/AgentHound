@@ -549,6 +549,103 @@ func TestIntegrationDependencyEdgeRetiresWhenEitherDomainChanges(t *testing.T) {
 	}
 }
 
+func TestIntegrationObservationCompletenessRejectsTokenlessAgentSequence(t *testing.T) {
+	ctx := testDriver(t)
+	driver, err := NewDriver(
+		os.Getenv("AGENTHOUND_NEO4J_URI"),
+		os.Getenv("AGENTHOUND_NEO4J_USER"),
+		os.Getenv("AGENTHOUND_NEO4J_PASSWORD"),
+	)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer driver.Close(ctx)
+
+	writer := NewWriter(driver)
+	db := NewDB(NewReader(driver), writer)
+	const (
+		agentID       = "tokenless-sequence-agent"
+		instructionID = "tokenless-sequence-instruction"
+	)
+	ids := []string{agentID, instructionID}
+	cleanup := func() {
+		_, _ = db.ExecuteWrite(
+			ctx,
+			"MATCH (n) WHERE n.objectid IN $ids DETACH DELETE n",
+			map[string]any{"ids": ids},
+		)
+	}
+	cleanup()
+	defer cleanup()
+	baseline, err := GetObservationCompleteness(ctx, db)
+	if err != nil {
+		t.Fatalf("get baseline observation completeness: %v", err)
+	}
+
+	configScope := "config:path:sha256:tokenless-config"
+	instructionScope := "config:path:sha256:tokenless-instruction"
+	if _, err := writer.WriteObservationNodes(
+		ctx,
+		[]ingest.Node{
+			{
+				ID:                 agentID,
+				Kinds:              []string{"AgentInstance"},
+				ObservationDomains: []string{configScope},
+				Properties:         map[string]any{"name": "agent"},
+			},
+			{
+				ID:                 instructionID,
+				Kinds:              []string{"InstructionFile"},
+				ObservationDomains: []string{instructionScope},
+				Properties:         map[string]any{"path": "/tmp/CLAUDE.md"},
+			},
+		},
+		"tokenless-old",
+		[]string{configScope, instructionScope},
+	); err != nil {
+		t.Fatalf("write observation nodes: %v", err)
+	}
+	if _, err := writer.WriteObservationEdges(
+		ctx,
+		[]ingest.Edge{{
+			Source:             agentID,
+			Target:             instructionID,
+			Kind:               "LOADS_INSTRUCTIONS",
+			SourceKind:         "AgentInstance",
+			TargetKind:         "InstructionFile",
+			Properties:         map[string]any{"risk_weight": 0.1},
+			ObservationDomains: []string{instructionScope},
+		}},
+		"tokenless-old",
+		[]string{configScope, instructionScope},
+	); err != nil {
+		t.Fatalf("write observation edge: %v", err)
+	}
+	if _, err := ReconcileObservations(
+		ctx,
+		db,
+		"tokenless-current",
+		[]string{configScope},
+	); err != nil {
+		t.Fatalf("retire config observation: %v", err)
+	}
+
+	completeness, err := GetObservationCompleteness(ctx, db)
+	if err != nil {
+		t.Fatalf("get observation completeness: %v", err)
+	}
+	if completeness.TokenlessNodes != baseline.TokenlessNodes+1 ||
+		completeness.TokenlessIncidentRelationships !=
+			baseline.TokenlessIncidentRelationships+1 ||
+		completeness.Complete() {
+		t.Fatalf(
+			"tokenless publication backstop = %+v, baseline %+v",
+			completeness,
+			baseline,
+		)
+	}
+}
+
 func TestIntegrationCompleteObservationReplacesStaleManagedProperties(t *testing.T) {
 	ctx := testDriver(t)
 	driver, err := NewDriver(

@@ -101,7 +101,7 @@ This enables queries like `MATCH (n:AIService)` to find all AI infrastructure re
 | `RUNS_ON` | MCPServer / A2AAgent | Host | Config / A2A / MCP | Entity runs on this host |
 | `CONFIGURED_IN` | MCPServer | ConfigFile | Config | Server defined in this config file |
 | `HAS_ENV_VAR` | MCPServer | Credential | Config | Server has access to this env var |
-| `LOADS_INSTRUCTIONS` | AgentInstance | InstructionFile | Config | Agent loads this instruction file |
+| `LOADS_INSTRUCTIONS` | AgentInstance | InstructionFile | Config | Agent loads this instruction file; validity depends on both the agent config scope and instruction-file scope |
 | `SAME_AUTH_DOMAIN` | A2AAgent | A2AAgent | A2A | Agents share an authentication domain |
 | `EXPOSES` | AIService | AIService | Fingerprinters / Looters | Service relationship. Open WebUI backend references carry `assertion_type=configured_reference` and `confidence_scope=configuration_presence`; they do not prove backend availability or authentication until a direct probe sets `probe_status=verified`. |
 | `EXPOSES_CREDENTIAL` | AIService | Credential | LiteLLM Looter, Open WebUI Looter | Credential evidence relationship. Inspect `exposure_status`/`assertion_type`: masked provider references and returned hashes remain reference edges but are not usable secret exposure. |
@@ -174,12 +174,17 @@ The writer derives internal `observation_tokens` from the validated
 retires only old tokens for that exact target/config key. A shared node or raw
 relationship remains while any owner token survives. Unknown, partial, failed,
 and truncated coverage is non-destructive.
+`LOADS_INSTRUCTIONS` uses `all_dependencies`: completing either its config or
+instruction scope without re-observing the relationship retires it.
 
 A complete exact re-observation replaces stale managed properties. Observation
 completeness considers only public collector-produced nodes and managed raw
 relationships, so internal graph state such as `SchemaVersion` and derived
 relationships cannot block publication. Internal ownership and completeness
 properties are reserved and stripped from imported `properties` maps.
+Public nodes with no observation token, and raw relationships incident to one,
+are publication-unsafe even when their managed properties are otherwise
+complete.
 When a complete narrow observation cannot safely replace properties because
 another active owner is not present, the writer remains additive and marks the
 fact property-incomplete; publication stays withheld until all active owners

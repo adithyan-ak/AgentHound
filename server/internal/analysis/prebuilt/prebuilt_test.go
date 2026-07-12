@@ -48,6 +48,13 @@ func TestLitellmCredentialLeak_Registered(t *testing.T) {
 	if q.Severity != "critical" {
 		t.Errorf("Severity = %q, want critical", q.Severity)
 	}
+	if q.Name != "Observed LiteLLM Master-Key Exposure" {
+		t.Errorf("Name = %q", q.Name)
+	}
+	if !strings.Contains(q.Description, "masked/hashed references only") ||
+		!strings.Contains(q.Description, "do not claim usable") {
+		t.Errorf("Description overstates upstream evidence: %q", q.Description)
+	}
 	if q.Cypher == "" {
 		t.Error("Cypher must not be empty")
 	}

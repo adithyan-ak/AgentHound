@@ -19,9 +19,18 @@ const (
 // CollectionReport distinguishes a successful empty observation from an
 // unattempted, failed, partial, or truncated collection.
 type CollectionReport struct {
-	State        OutcomeState        `json:"state"`
-	CoverageKeys []string            `json:"coverage_keys,omitempty"`
-	Outcomes     []CollectionOutcome `json:"outcomes,omitempty"`
+	State              OutcomeState        `json:"state"`
+	CoverageKeys       []string            `json:"coverage_keys,omitempty"`
+	AuthoritativeRoots []CoverageRoot      `json:"authoritative_roots,omitempty"`
+	Outcomes           []CollectionOutcome `json:"outcomes,omitempty"`
+}
+
+// CoverageRoot declares the complete active child set observed by one
+// exhaustive collector-root run. Targeted and otherwise non-exhaustive runs
+// must not emit this declaration.
+type CoverageRoot struct {
+	CoverageKey       string   `json:"coverage_key"`
+	ChildCoverageKeys []string `json:"child_coverage_keys"`
 }
 
 type CollectionOutcome struct {
@@ -81,6 +90,7 @@ func AggregateOutcomeState(outcomes []CollectionOutcome) OutcomeState {
 func MergeCollectionReports(reports ...*CollectionReport) *CollectionReport {
 	merged := &CollectionReport{}
 	coverage := make(map[string]bool)
+	roots := make(map[string]CoverageRoot)
 	var reportStates []CollectionOutcome
 	for _, report := range reports {
 		if report == nil {
@@ -96,12 +106,27 @@ func MergeCollectionReports(reports ...*CollectionReport) *CollectionReport {
 				coverage[key] = true
 			}
 		}
+		for _, root := range report.AuthoritativeRoots {
+			children := append([]string(nil), root.ChildCoverageKeys...)
+			sort.Strings(children)
+			roots[root.CoverageKey] = CoverageRoot{
+				CoverageKey:       root.CoverageKey,
+				ChildCoverageKeys: children,
+			}
+		}
 		merged.Outcomes = append(merged.Outcomes, report.Outcomes...)
 	}
 	for key := range coverage {
 		merged.CoverageKeys = append(merged.CoverageKeys, key)
 	}
 	sort.Strings(merged.CoverageKeys)
+	for _, root := range roots {
+		merged.AuthoritativeRoots = append(merged.AuthoritativeRoots, root)
+	}
+	sort.Slice(merged.AuthoritativeRoots, func(i, j int) bool {
+		return merged.AuthoritativeRoots[i].CoverageKey <
+			merged.AuthoritativeRoots[j].CoverageKey
+	})
 	// A report's state is authoritative even when it has no constituent
 	// outcomes. This preserves complete-empty coverage instead of turning it
 	// back into unknown while still keeping the original outcomes unchanged.

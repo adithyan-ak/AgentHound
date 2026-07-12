@@ -3,7 +3,7 @@ name: Shell Access Capability
 description: >
   Classifies tools with shell/command execution capability based on
   keywords in tool name, description, and input schema properties.
-version: 1
+version: 2
 enabled: true
 scope:
   collector: mcp
@@ -13,7 +13,7 @@ owasp: [MCP01]
 tags: [capability, shell-access]
 matcher:
   type: regex
-  pattern: '(?is)(?:\b(?:run[_-]?shell[_-]?command|run[_-]?command|execute[_-]?command|exec[_-]?command)\b|\bsh\s+-c\b|\bshell[ _-]?command\b|\b(?:run|execute|exec|spawn|invoke)\b.{0,64}\b(?:shell|bash|terminal|command|subprocess|powershell)\b|\b(?:shell|bash|terminal|command|subprocess|powershell)\b.{0,64}\b(?:run|execute|exec|spawn|invoke)\b)'
+  pattern: '(?is)(?:\b(?:run|runs|ran|running|execute|executes|executed|executing|exec|spawn|spawns|spawned|spawning|invoke|invokes|invoked|invoking)[ _-]?(?:shell[ _-]?command|command)\b|\bsh\s+-c\b|\bshell[ _-]?command\b|\b(?:run|runs|ran|running|execute|executes|executed|executing|exec|spawn|spawns|spawned|spawning|invoke|invokes|invoked|invoking)\b.{0,64}\b(?:shell|bash|terminal|command|subprocess|powershell)\b|\b(?:shell|bash|terminal|command|subprocess|powershell)\b.{0,64}\b(?:run|runs|ran|running|execute|executes|executed|executing|exec|spawn|spawns|spawned|spawning|invoke|invokes|invoked|invoking)\b)'
 emit:
   finding_type: capability_classification
   property_key: capability_surface

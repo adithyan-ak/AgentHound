@@ -54,7 +54,9 @@ function LensEdgeComponent(props: EdgeProps) {
   const opacity = d.dim ? 0.06 : active ? 1 : d.showFlowDot ? 1 : 0.75;
 
   const extra = d.bundledCount > 1 ? ` +${d.bundledCount - 1}` : "";
-  const labelText = (edgeLabel(d.kind) + extra).toUpperCase();
+  const labelText = (
+    edgeLabel(d.kind, { properties: d.properties }) + extra
+  ).toUpperCase();
   const labelWidth = labelText.length * 5.7 + 14;
 
   return (

@@ -68,8 +68,8 @@ func init() {
 		},
 		"litellm-credential-leak": {
 			ID:          "litellm-credential-leak",
-			Name:        "LiteLLM Credential Leak",
-			Description: "Finds upstream provider credentials reachable through a LiteLLM gateway whose master key was discovered in agent config (cross-collector value_hash join).",
+			Name:        "Observed LiteLLM Master-Key Exposure",
+			Description: "Finds LiteLLM gateways with observed, exposed master-key evidence. Upstream apiKey and virtual-key results are masked/hashed references only; they do not claim usable upstream secret material.",
 			Category:    "Critical Paths",
 			Severity:    "critical",
 			Cypher:      CypherLitellmCredentialLeak,

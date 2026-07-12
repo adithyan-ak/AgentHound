@@ -5,11 +5,14 @@ import (
 	"encoding/hex"
 	"sort"
 	"strings"
+
+	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
 type coverageHead struct {
 	Key    string
 	ScanID string
+	Root   string
 }
 
 func normalizeCoverageKeys(groups ...[]string) []string {
@@ -55,6 +58,30 @@ func finalizedDirtyCoverage(
 ) []string {
 	remaining := subtractCoverageKeys(inherited, complete, resolved)
 	return normalizeCoverageKeys(remaining, explicitlyDirty)
+}
+
+func retiredCoverageKeys(
+	roots []sdkingest.CoverageRoot,
+	heads []coverageHead,
+) []string {
+	activeByRoot := make(map[string]map[string]bool, len(roots))
+	for _, root := range roots {
+		active := make(map[string]bool, len(root.ChildCoverageKeys))
+		for _, child := range root.ChildCoverageKeys {
+			if child = strings.TrimSpace(child); child != "" {
+				active[child] = true
+			}
+		}
+		activeByRoot[root.CoverageKey] = active
+	}
+	var retired []string
+	for _, head := range heads {
+		active, authoritative := activeByRoot[head.Root]
+		if authoritative && !active[head.Key] {
+			retired = append(retired, head.Key)
+		}
+	}
+	return normalizeCoverageKeys(retired)
 }
 
 func comparisonKeyWithCoverageHeads(

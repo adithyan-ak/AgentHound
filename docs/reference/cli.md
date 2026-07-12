@@ -500,10 +500,10 @@ ssh target 'agenthound scan --output -' | agenthound-server ingest -
 Query the graph database. Five mutually exclusive modes.
 
 ```bash
-# Raw Cypher
+# Raw Cypher against the mutable live graph (admin/diagnostic use)
 agenthound-server query "MATCH (n:MCPServer) RETURN n.name, n.transport"
 
-# Pre-built query
+# Pre-built query against a stable complete published projection
 agenthound-server query --prebuilt agents-shell-access
 
 # Findings from the current published snapshot, with triage state
@@ -523,7 +523,7 @@ agenthound-server query --shortest-path --path-mode topology --from MCPResource:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--prebuilt` | | Pre-built query ID. |
+| `--prebuilt` | | Pre-built query ID. Runs only against a stable complete published projection. |
 | `--findings` | `false` | List the current immutable published snapshot (suppressed hidden by default). |
 | `--all-findings` | `false` | Include suppressed (`accepted-risk` / `false-positive`) findings in `--findings` / `--diff` output. |
 | `--diff` | | Diff two scans' findings: `scanA,scanB`. Reports added / removed / unchanged. |
@@ -534,6 +534,13 @@ agenthound-server query --shortest-path --path-mode topology --from MCPResource:
 | `--path-mode` | `security` | `security` uses the directed security relationship policy; `topology` explicitly selects the undirected graph view. |
 | `--format` | `table` | `table` or `json`. |
 | `--fail-on` | | Exit 1 if findings at or above severity (CI gate). Always ignores suppressed findings, even with `--all-findings`. |
+
+Positional raw Cypher is an explicit live/admin interface: it reads the mutable
+graph directly and is not guarded by published scan/revision identity. In
+contrast, `--prebuilt` fails closed when the published projection is absent,
+updating, incomplete, or changes during the read. JSON output includes a
+`projection` object with `scan_id` and `revision`; table output prints the same
+identity before the rows.
 
 #### Suppression semantics
 

@@ -204,22 +204,24 @@ type fakeWriter struct {
 }
 
 type writerNodeCall struct {
-	ScanID string
-	Nodes  []sdkingest.Node
-	At     time.Time
+	ScanID         string
+	Nodes          []sdkingest.Node
+	CompleteScopes []string
+	At             time.Time
 }
 
 type writerEdgeCall struct {
-	ScanID string
-	Edges  []sdkingest.Edge
-	At     time.Time
+	ScanID         string
+	Edges          []sdkingest.Edge
+	CompleteScopes []string
+	At             time.Time
 }
 
 func (f *fakeWriter) WriteObservationNodes(
 	_ context.Context,
 	nodes []sdkingest.Node,
 	scanID string,
-	_ []string,
+	completeScopes []string,
 ) (int, error) {
 	cur := f.inFlight.Add(1)
 	defer f.inFlight.Add(-1)
@@ -235,7 +237,12 @@ func (f *fakeWriter) WriteObservationNodes(
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.nodeCalls = append(f.nodeCalls, writerNodeCall{ScanID: scanID, Nodes: nodes, At: time.Now()})
+	f.nodeCalls = append(f.nodeCalls, writerNodeCall{
+		ScanID:         scanID,
+		Nodes:          nodes,
+		CompleteScopes: append([]string(nil), completeScopes...),
+		At:             time.Now(),
+	})
 	if f.nodesErr != nil {
 		return f.nodesWrittenOnErr, f.nodesErr
 	}
@@ -246,11 +253,16 @@ func (f *fakeWriter) WriteObservationEdges(
 	_ context.Context,
 	edges []sdkingest.Edge,
 	scanID string,
-	_ []string,
+	completeScopes []string,
 ) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.edgeCalls = append(f.edgeCalls, writerEdgeCall{ScanID: scanID, Edges: edges, At: time.Now()})
+	f.edgeCalls = append(f.edgeCalls, writerEdgeCall{
+		ScanID:         scanID,
+		Edges:          edges,
+		CompleteScopes: append([]string(nil), completeScopes...),
+		At:             time.Now(),
+	})
 	if f.edgesErr != nil {
 		return f.edgesWrittenOnErr, f.edgesErr
 	}
@@ -263,9 +275,12 @@ type fakeScanStore struct {
 	creates       []*model.Scan
 	updates       []scanUpdate
 	dirtyCoverage []string
+	retired       []string
+	resolvedRoots []sdkingest.CoverageRoot
 
-	createErr error
-	updateErr error
+	createErr  error
+	resolveErr error
+	updateErr  error
 }
 
 type fakeLifecycleScanStore struct {
@@ -333,6 +348,17 @@ func (s *fakeScanStore) BeginScan(
 	s.dirtyCoverage = append([]string(nil), merged...)
 	s.mu.Unlock()
 	return merged, s.CreateScan(ctx, scan)
+}
+
+func (s *fakeScanStore) ResolveRetiredCoverage(
+	_ context.Context,
+	roots []sdkingest.CoverageRoot,
+) ([]string, error) {
+	s.resolvedRoots = append([]sdkingest.CoverageRoot(nil), roots...)
+	if len(roots) == 0 {
+		return nil, s.resolveErr
+	}
+	return append([]string(nil), s.retired...), s.resolveErr
 }
 
 func (s *fakeScanStore) RecordFailure(
@@ -542,6 +568,122 @@ func TestPipeline_HappyPath(t *testing.T) {
 
 	if ppCalls != 1 {
 		t.Errorf("expected 1 post-processor invocation, got %d", ppCalls)
+	}
+}
+
+func TestPipeline_ExhaustiveRootReconcilesRemovedChildAsCompleteEmpty(t *testing.T) {
+	data := validIngestDataFor("scan-removed-child")
+	currentChild := data.Meta.Collection.CoverageKeys[0]
+	root := sdkingest.CanonicalCoverageKey("mcp", "root", "collect")
+	removedChild := sdkingest.CanonicalCoverageKey(
+		"mcp",
+		"target",
+		"https://removed.example",
+	)
+	data.Meta.Collection.CoverageKeys = append(
+		data.Meta.Collection.CoverageKeys,
+		root,
+	)
+	data.Meta.Collection.Outcomes = append(
+		data.Meta.Collection.Outcomes,
+		sdkingest.CollectionOutcome{
+			Collector:   "mcp",
+			CoverageKey: root,
+			Target:      "mcp",
+			Method:      "collect",
+			State:       sdkingest.OutcomeComplete,
+		},
+	)
+	data.Meta.Collection.AuthoritativeRoots = []sdkingest.CoverageRoot{{
+		CoverageKey:       root,
+		ChildCoverageKeys: []string{currentChild},
+	}}
+
+	writer := &fakeWriter{}
+	store := &fakeScanStore{retired: []string{removedChild}}
+	db := &graph.MockGraphDB{}
+	publisher := &fakePublisher{scanStore: store}
+	var postProcessDomains []string
+	p := newTestPipeline(
+		writer,
+		db,
+		store,
+		func(
+			_ context.Context,
+			_ graph.GraphDB,
+			_ string,
+			domains []string,
+		) ([]graph.ProcessingStats, error) {
+			postProcessDomains = append([]string(nil), domains...)
+			return nil, nil
+		},
+	)
+	p.findingStore = publisher
+
+	result, err := p.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.Outcome != sdkingest.OutcomeComplete {
+		t.Fatalf("result outcome = %q, want complete", result.Outcome)
+	}
+	wantReconciled := mergeCoverage([]string{currentChild, root, removedChild})
+	if got := writer.nodeCalls[0].CompleteScopes; strings.Join(got, "\x00") != strings.Join(wantReconciled, "\x00") {
+		t.Fatalf("writer complete scopes = %v, want %v", got, wantReconciled)
+	}
+	if strings.Join(postProcessDomains, "\x00") !=
+		strings.Join(wantReconciled, "\x00") {
+		t.Fatalf(
+			"post-process domains = %v, want %v",
+			postProcessDomains,
+			wantReconciled,
+		)
+	}
+	if len(publisher.finalizations) != 1 {
+		t.Fatalf("finalizations = %d, want 1", len(publisher.finalizations))
+	}
+	finalized := publisher.finalizations[0]
+	if got := finalized.CompleteDomains; strings.Join(got, "\x00") !=
+		strings.Join(mergeCoverage([]string{currentChild, root}), "\x00") {
+		t.Fatalf("promoted heads = %v, want current child and root", got)
+	}
+	if len(finalized.ResolvedDirtyCoverage) != 1 ||
+		finalized.ResolvedDirtyCoverage[0] != removedChild {
+		t.Fatalf(
+			"resolved removed coverage = %v, want [%s]",
+			finalized.ResolvedDirtyCoverage,
+			removedChild,
+		)
+	}
+	if len(finalized.AuthoritativeRoots) != 1 ||
+		finalized.AuthoritativeRoots[0].CoverageKey != root {
+		t.Fatalf("finalized authoritative roots = %+v", finalized.AuthoritativeRoots)
+	}
+}
+
+func TestPipeline_TargetedScanDoesNotResolveSiblingChildren(t *testing.T) {
+	store := &fakeScanStore{retired: []string{
+		sdkingest.CanonicalCoverageKey("mcp", "target", "sibling"),
+	}}
+	writer := &fakeWriter{}
+	p := newTestPipeline(
+		writer,
+		&graph.MockGraphDB{},
+		store,
+		noOpRunPP,
+	)
+
+	if _, err := p.Ingest(
+		context.Background(),
+		validIngestDataFor("scan-targeted"),
+	); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if len(store.resolvedRoots) != 0 {
+		t.Fatalf("targeted scan resolved authoritative roots: %+v", store.resolvedRoots)
+	}
+	if got := writer.nodeCalls[0].CompleteScopes; len(got) != 1 {
+		t.Fatalf("targeted scan reconciled sibling scopes: %v", got)
 	}
 }
 
@@ -1469,6 +1611,47 @@ func TestPipeline_PropertyIncompleteObservationWithholdsPublication(t *testing.T
 	scope := data.Meta.Collection.CoverageKeys[0]
 	if dirty := publisher.finalizations[0].DirtyCoverage; len(dirty) != 1 || dirty[0] != scope {
 		t.Fatalf("property-incomplete dirty coverage = %v", dirty)
+	}
+}
+
+func TestPipeline_TokenlessPublicObservationWithholdsPublication(t *testing.T) {
+	db := &graph.MockGraphDB{
+		QueryFunc: func(
+			_ context.Context,
+			cypher string,
+			_ map[string]any,
+		) ([]map[string]any, error) {
+			if strings.Contains(cypher, "incomplete_property_nodes") {
+				return []map[string]any{{
+					"incomplete_property_nodes":         int64(0),
+					"incomplete_property_relationships": int64(0),
+					"tokenless_nodes":                   int64(1),
+					"tokenless_incident_relationships":  int64(1),
+				}}, nil
+			}
+			return []map[string]any{}, nil
+		},
+	}
+	publisher := &fakePublisher{}
+	p := newTestPipeline(&fakeWriter{}, db, &fakeScanStore{}, noOpRunPP)
+	p.findingStore = publisher
+
+	result, err := p.Ingest(
+		context.Background(),
+		validIngestDataFor("scan-tokenless"),
+	)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.Outcome != sdkingest.OutcomePartial ||
+		result.ProjectionStatus != model.ProjectionIncomplete {
+		t.Fatalf("tokenless result = %+v, want withheld publication", result)
+	}
+	if len(publisher.finalizations) != 1 ||
+		publisher.finalizations[0].Publish ||
+		publisher.finalizations[0].ObservationDetails.TokenlessNodes != 1 ||
+		publisher.finalizations[0].ObservationDetails.TokenlessIncidentRelationships != 1 {
+		t.Fatalf("tokenless finalization = %+v", publisher.finalizations)
 	}
 }
 

@@ -75,11 +75,14 @@ CREATE TABLE IF NOT EXISTS finding_triage (
 CREATE TABLE IF NOT EXISTS coverage_heads (
     coverage_key TEXT PRIMARY KEY,
     scan_id      TEXT NOT NULL REFERENCES scans(id) ON DELETE RESTRICT,
+    root_key     TEXT,
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_coverage_heads_scan_id
     ON coverage_heads(scan_id);
+CREATE INDEX IF NOT EXISTS idx_coverage_heads_root_key
+    ON coverage_heads(root_key);
 
 CREATE TABLE IF NOT EXISTS posture_publications (
     revision       BIGSERIAL PRIMARY KEY,

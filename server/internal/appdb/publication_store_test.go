@@ -3,12 +3,15 @@ package appdb
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
 
 	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/server/model"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestIntegrationPublicationLifecycle(t *testing.T) {
@@ -270,6 +273,262 @@ func TestIntegrationPublicationLifecycle(t *testing.T) {
 	mustCreateScan(pendingID, model.ScanStatusPending)
 	if err := scans.DeleteScan(ctx, pendingID); err == nil {
 		t.Fatal("pending scan deletion succeeded")
+	}
+}
+
+func TestIntegrationAuthoritativeRootRetiresRemovedChildHeadAndDirtyKey(t *testing.T) {
+	skipIfNoPG(t)
+	ctx := context.Background()
+	pgURI := os.Getenv("AGENTHOUND_PG_URI")
+	admin, err := NewPool(pgURI)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer admin.Close()
+	schema := fmt.Sprintf("agenthound_authoritative_root_%d", time.Now().UnixNano())
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create isolated schema: %v", err)
+	}
+	defer func() {
+		if _, err := admin.Exec(ctx, "DROP SCHEMA "+quotedSchema+" CASCADE"); err != nil {
+			t.Errorf("drop isolated schema: %v", err)
+		}
+	}()
+	config, err := pgxpool.ParseConfig(pgURI)
+	if err != nil {
+		t.Fatalf("parse postgres config: %v", err)
+	}
+	config.ConnConfig.RuntimeParams["search_path"] = schema
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatalf("connect isolated schema: %v", err)
+	}
+	defer pool.Close()
+	if err := RunMigrations(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	scans := NewScanStore(pool)
+	findings := NewFindingStore(pool)
+	prefix := "authoritative-root-" + time.Now().Format("20060102150405.000000")
+	firstID := prefix + "-first"
+	secondID := prefix + "-second"
+	targetedID := prefix + "-targeted"
+	emptyID := prefix + "-empty"
+	root := sdkingest.CollectorRootCoverageKey("mcp")
+	childA := sdkingest.CanonicalCoverageKey("mcp", "target", prefix+"-a")
+	childB := sdkingest.CanonicalCoverageKey("mcp", "target", prefix+"-b")
+	childC := sdkingest.CanonicalCoverageKey("mcp", "target", prefix+"-c")
+	cleanup := func() {
+		_, _ = pool.Exec(ctx, `UPDATE posture_state SET
+		    published_revision = NULL, published_scan_id = NULL, published_at = NULL,
+		    dirty_coverage = '[]'::jsonb, projection_error = NULL
+		    WHERE singleton = TRUE`)
+		_, _ = pool.Exec(
+			ctx,
+			`DELETE FROM coverage_heads WHERE coverage_key = ANY($1::text[])`,
+			[]string{root, childA, childB, childC},
+		)
+		_, _ = pool.Exec(ctx, `DELETE FROM scans WHERE id LIKE $1`, prefix+"%")
+	}
+	cleanup()
+	defer cleanup()
+
+	now := time.Now().UTC()
+	observed := now.Add(-time.Second)
+	createRunning := func(id string) {
+		t.Helper()
+		if err := scans.CreateScan(ctx, &model.Scan{
+			ID:                 id,
+			Collector:          "mcp",
+			Status:             model.ScanStatusRunning,
+			StartedAt:          now,
+			ArtifactObservedAt: &observed,
+		}); err != nil {
+			t.Fatalf("create scan %s: %v", id, err)
+		}
+	}
+	finalScan := func(id string) model.Scan {
+		completed := now.Add(time.Second)
+		return model.Scan{
+			ID:                 id,
+			Collector:          "mcp",
+			Status:             model.ScanStatusCompleted,
+			StartedAt:          now,
+			CompletedAt:        &completed,
+			ArtifactObservedAt: &observed,
+			CollectionStatus:   model.LifecycleComplete,
+			GraphStatus:        model.LifecycleComplete,
+			AnalysisStatus:     model.LifecycleComplete,
+			SnapshotStatus:     model.LifecycleComplete,
+			ProjectionStatus:   model.ProjectionComplete,
+		}
+	}
+	graphAfter := &model.GraphSnapshot{
+		NodeCounts: map[string]int64{},
+		EdgeCounts: map[string]int64{},
+	}
+
+	createRunning(firstID)
+	if _, err := findings.FinalizeScan(ctx, FinalizeScanParams{
+		Scan:            finalScan(firstID),
+		CoverageKeys:    []string{root, childA, childB},
+		CompleteDomains: []string{root, childA, childB},
+		AuthoritativeRoots: []sdkingest.CoverageRoot{{
+			CoverageKey:       root,
+			ChildCoverageKeys: []string{childA, childB},
+		}},
+		GraphAfter: graphAfter,
+		Publish:    true,
+	}); err != nil {
+		t.Fatalf("finalize first active set: %v", err)
+	}
+
+	retired, err := scans.ResolveRetiredCoverage(ctx, []sdkingest.CoverageRoot{{
+		CoverageKey:       root,
+		ChildCoverageKeys: []string{childB},
+	}})
+	if err != nil {
+		t.Fatalf("resolve removed child: %v", err)
+	}
+	if len(retired) != 1 || retired[0] != childA {
+		t.Fatalf("retired children = %v, want [%s]", retired, childA)
+	}
+
+	if _, err := scans.BeginScan(ctx, &model.Scan{
+		ID:                 secondID,
+		Collector:          "mcp",
+		Status:             model.ScanStatusRunning,
+		StartedAt:          now,
+		ArtifactObservedAt: &observed,
+		CollectionStatus:   model.LifecycleComplete,
+	}, []string{root, childB, childA}); err != nil {
+		t.Fatalf("begin replacement scan: %v", err)
+	}
+	result, err := findings.FinalizeScan(ctx, FinalizeScanParams{
+		Scan:                  finalScan(secondID),
+		CoverageKeys:          []string{root, childB},
+		CompleteDomains:       []string{root, childB},
+		ResolvedDirtyCoverage: retired,
+		AuthoritativeRoots: []sdkingest.CoverageRoot{{
+			CoverageKey:       root,
+			ChildCoverageKeys: []string{childB},
+		}},
+		GraphAfter: graphAfter,
+		Publish:    true,
+	})
+	if err != nil {
+		t.Fatalf("finalize replacement active set: %v", err)
+	}
+	if !result.Published || len(result.DirtyCoverage) != 0 {
+		t.Fatalf("replacement publication = %+v, want clean published state", result)
+	}
+
+	var removedCount int
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT count(*) FROM coverage_heads WHERE coverage_key = $1`,
+		childA,
+	).Scan(&removedCount); err != nil {
+		t.Fatalf("query removed head: %v", err)
+	}
+	if removedCount != 0 {
+		t.Fatalf("removed child head count = %d, want 0", removedCount)
+	}
+	var (
+		headScanID string
+		headRoot   *string
+	)
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT scan_id, root_key FROM coverage_heads WHERE coverage_key = $1`,
+		childB,
+	).Scan(&headScanID, &headRoot); err != nil {
+		t.Fatalf("query retained child head: %v", err)
+	}
+	if headScanID != secondID || headRoot == nil || *headRoot != root {
+		t.Fatalf(
+			"retained child head = scan %q root %v, want scan %q root %q",
+			headScanID,
+			headRoot,
+			secondID,
+			root,
+		)
+	}
+
+	// A targeted run records child membership but is not itself
+	// authoritative. A later exhaustive complete-empty run can therefore
+	// retire both the previously exhaustive child and this targeted-only child.
+	createRunning(targetedID)
+	if _, err := findings.FinalizeScan(ctx, FinalizeScanParams{
+		Scan:            finalScan(targetedID),
+		CoverageKeys:    []string{childC},
+		CompleteDomains: []string{childC},
+		GraphAfter:      graphAfter,
+		Publish:         true,
+	}); err != nil {
+		t.Fatalf("finalize targeted child: %v", err)
+	}
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT root_key FROM coverage_heads WHERE coverage_key = $1`,
+		childC,
+	).Scan(&headRoot); err != nil {
+		t.Fatalf("query targeted child membership: %v", err)
+	}
+	if headRoot == nil || *headRoot != sdkingest.CollectorRootCoverageKey("mcp") {
+		t.Fatalf("targeted child root = %v, want stable MCP root", headRoot)
+	}
+
+	emptyRoot := sdkingest.CollectorRootCoverageKey("mcp")
+	retired, err = scans.ResolveRetiredCoverage(ctx, []sdkingest.CoverageRoot{{
+		CoverageKey: emptyRoot,
+	}})
+	if err != nil {
+		t.Fatalf("resolve complete-empty active set: %v", err)
+	}
+	if len(retired) != 2 {
+		t.Fatalf("complete-empty retired children = %v, want childB and childC", retired)
+	}
+	if _, err := scans.BeginScan(ctx, &model.Scan{
+		ID:                 emptyID,
+		Collector:          "mcp",
+		Status:             model.ScanStatusRunning,
+		StartedAt:          now,
+		ArtifactObservedAt: &observed,
+		CollectionStatus:   model.LifecycleComplete,
+	}, append([]string{emptyRoot}, retired...)); err != nil {
+		t.Fatalf("begin complete-empty scan: %v", err)
+	}
+	emptyResult, err := findings.FinalizeScan(ctx, FinalizeScanParams{
+		Scan:                  finalScan(emptyID),
+		CoverageKeys:          []string{emptyRoot},
+		CompleteDomains:       []string{emptyRoot},
+		ResolvedDirtyCoverage: retired,
+		AuthoritativeRoots: []sdkingest.CoverageRoot{{
+			CoverageKey: emptyRoot,
+		}},
+		GraphAfter: graphAfter,
+		Publish:    true,
+	})
+	if err != nil {
+		t.Fatalf("finalize complete-empty active set: %v", err)
+	}
+	if !emptyResult.Published || len(emptyResult.DirtyCoverage) != 0 {
+		t.Fatalf("complete-empty publication = %+v", emptyResult)
+	}
+	var survivingChildren int
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT count(*) FROM coverage_heads
+		 WHERE coverage_key = ANY($1::text[])`,
+		[]string{childA, childB, childC},
+	).Scan(&survivingChildren); err != nil {
+		t.Fatalf("query complete-empty heads: %v", err)
+	}
+	if survivingChildren != 0 {
+		t.Fatalf("complete-empty surviving child heads = %d, want 0", survivingChildren)
 	}
 }
 

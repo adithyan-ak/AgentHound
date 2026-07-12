@@ -131,6 +131,39 @@ func TestFinalizedDirtyCoverageClearsOnlyExactReplacement(t *testing.T) {
 	}
 }
 
+func TestRetiredCoverageKeysDiffsOnlyAuthoritativeRootChildren(t *testing.T) {
+	mcpRoot := sdkingest.CanonicalCoverageKey("mcp", "root", "collect")
+	configRoot := sdkingest.CanonicalCoverageKey("config", "root", "collect")
+	targetA := sdkingest.CanonicalCoverageKey("mcp", "target", "a")
+	targetB := sdkingest.CanonicalCoverageKey("mcp", "target", "b")
+	configPath := sdkingest.CanonicalCoverageKey("config", "path", "/tmp/config")
+
+	got := retiredCoverageKeys(
+		[]sdkingest.CoverageRoot{{
+			CoverageKey:       mcpRoot,
+			ChildCoverageKeys: []string{targetB},
+		}},
+		[]coverageHead{
+			{Key: targetA, Root: mcpRoot},
+			{Key: targetB, Root: mcpRoot},
+			{Key: configPath, Root: configRoot},
+		},
+	)
+	if want := []string{targetA}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("retired coverage = %v, want %v", got, want)
+	}
+}
+
+func TestRetiredCoverageKeysTargetedRunIsNonAuthoritative(t *testing.T) {
+	mcpRoot := sdkingest.CanonicalCoverageKey("mcp", "root", "collect")
+	targetA := sdkingest.CanonicalCoverageKey("mcp", "target", "a")
+	if got := retiredCoverageKeys(nil, []coverageHead{{
+		Key: targetA, Root: mcpRoot,
+	}}); len(got) != 0 {
+		t.Fatalf("targeted run retired sibling coverage: %v", got)
+	}
+}
+
 func TestComparisonKeyIncludesOtherCoverageHeadRevisions(t *testing.T) {
 	current := "config:path:sha256:current"
 	other := "mcp:target:sha256:other"

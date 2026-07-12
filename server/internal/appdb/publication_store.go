@@ -26,6 +26,7 @@ type FinalizeScanParams struct {
 	CoverageKeys          []string
 	CompleteDomains       []string
 	ResolvedDirtyCoverage []string
+	AuthoritativeRoots    []sdkingest.CoverageRoot
 	DirtyCoverage         []string
 	GraphBefore           *model.GraphSnapshot
 	GraphAfter            *model.GraphSnapshot
@@ -107,16 +108,35 @@ func (s *FindingStore) FinalizeScan(
 			return nil, err
 		}
 	}
+	if err := retireAbsentCoverageHeadsTx(
+		ctx,
+		tx,
+		params.AuthoritativeRoots,
+	); err != nil {
+		return nil, err
+	}
+	rootByChild := make(map[string]string)
+	for _, root := range params.AuthoritativeRoots {
+		for _, child := range root.ChildCoverageKeys {
+			rootByChild[child] = root.CoverageKey
+		}
+	}
 	for _, domain := range params.CompleteDomains {
 		if domain == "" {
 			continue
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO coverage_heads (coverage_key, scan_id, updated_at)
-			VALUES ($1, $2, NOW())
+		rootKey := rootByChild[domain]
+		if rootKey == "" {
+			rootKey = sdkingest.ParentCollectorRootKey(domain)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO coverage_heads
+			    (coverage_key, scan_id, root_key, updated_at)
+			VALUES ($1, $2, NULLIF($3, ''), NOW())
 			ON CONFLICT (coverage_key) DO UPDATE SET
 			    scan_id = EXCLUDED.scan_id,
+			    root_key = COALESCE(EXCLUDED.root_key, coverage_heads.root_key),
 			    updated_at = NOW()`,
-			domain, params.Scan.ID); err != nil {
+			domain, params.Scan.ID, rootKey); err != nil {
 			return nil, fmt.Errorf("promote coverage head %s: %w", domain, err)
 		}
 	}
@@ -218,6 +238,35 @@ func (s *FindingStore) FinalizeScan(
 		return nil, fmt.Errorf("commit scan finalization: %w", err)
 	}
 	return result, nil
+}
+
+func retireAbsentCoverageHeadsTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	roots []sdkingest.CoverageRoot,
+) error {
+	for _, root := range roots {
+		if root.CoverageKey == "" {
+			continue
+		}
+		activeChildren := normalizeCoverageKeys(root.ChildCoverageKeys)
+		if activeChildren == nil {
+			activeChildren = []string{}
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM coverage_heads
+			WHERE root_key = $1
+			  AND NOT (coverage_key = ANY($2::text[]))`,
+			root.CoverageKey,
+			activeChildren,
+		); err != nil {
+			return fmt.Errorf(
+				"retire absent coverage heads for %s: %w",
+				root.CoverageKey,
+				err,
+			)
+		}
+	}
+	return nil
 }
 
 func finalizeScanRow(

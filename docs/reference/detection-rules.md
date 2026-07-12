@@ -52,7 +52,7 @@ that the rule source was trusted.
 | Data exfiltration routes | critical | `exfiltration-routes` | MCP04, ASI08, ASI10 | AML.T0086 |
 | Cross-protocol host correlations | medium | `cross-protocol-paths` | MCP01, ASI01, ASI06 | — |
 | Credential chain paths | critical | `credential-chain` | MCP03, ASI04 | — |
-| LiteLLM credential leak | critical | `litellm-credential-leak` | MCP03, ASI04 | — |
+| Observed LiteLLM master-key exposure | critical | `litellm-credential-leak` | MCP03, ASI04 | — |
 | Unpinned packages | medium | `unpinned-packages` | MCP09, ASI09 | — |
 | Unsigned agent cards | medium | `unsigned-cards` | MCP09, ASI09 | — |
 | Unpinned packages + shell access | critical | `unpinned-shell` | MCP01, MCP09, ASI06, ASI09 | — |
@@ -244,13 +244,13 @@ same host. The correlation is represented as `CAN_REACH`, but carries
 
 **Risk:** Shared credentials between services create implicit trust relationships. Compromising one credential grants access to all services that share it.
 
-## LiteLLM credential leak (MCP03, ASI04)
+## Observed LiteLLM master-key exposure (MCP03, ASI04)
 
-**What:** LiteLLM gateways with explicitly observed, exposed upstream provider credential material reachable from agent-discovered configuration secrets.
+**What:** LiteLLM gateways where the first-party looter recorded an observed, exposed master key.
 
-**How detected:** The `litellm-credential-leak` pre-built query joins LiteLLM `EXPOSES_CREDENTIAL` edges with credentials discovered elsewhere by matching `value_hash`, and requires `material_status=observed`, `exposure_status=exposed`, and non-identity merge keys on the leak path. Masked, hashed, and identity-only references remain `credential_chain_reference` findings and are not labeled leaks.
+**How detected:** The `litellm-credential-leak` pre-built query requires the master-key `Credential` to have `material_status=observed`, `exposure_status=exposed`, and `merge_key=value_hash`, plus an `EXPOSES_CREDENTIAL` edge carrying `assertion_type=observed_credential_exposure`. Provider `apiKey` and virtual-key nodes are optional context and appear only when they are explicitly masked or hashed with `exposure_status=not_observed`; the output marks them as not containing usable material.
 
-**Risk:** A leaked LiteLLM master key can expose upstream provider credentials, expanding one config secret into access to multiple model providers.
+**Risk:** A LiteLLM master key is an administrative credential for the gateway. Its exposure can permit model, key, and spend-management operations, but masked or hashed upstream references do not prove that upstream provider secrets are usable.
 
 ## Unpinned packages (MCP09)
 

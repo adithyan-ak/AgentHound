@@ -79,6 +79,8 @@ func (m *MockGraphDB) Query(ctx context.Context, cypher string, params map[strin
 		return []map[string]any{{
 			"incomplete_property_nodes":         int64(0),
 			"incomplete_property_relationships": int64(0),
+			"tokenless_nodes":                   int64(0),
+			"tokenless_incident_relationships":  int64(0),
 		}}, m.QueryError
 	}
 	return m.QueryResult, m.QueryError

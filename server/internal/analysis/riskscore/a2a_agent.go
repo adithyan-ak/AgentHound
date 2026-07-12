@@ -43,7 +43,8 @@ func A2AAgentRiskAssessment(ctx context.Context, db graph.GraphDB, objectID stri
 }
 
 func a2aAuthAssessment(ctx context.Context, db graph.GraphDB, objectID string) (Assessment, error) {
-	cypher := `MATCH (a {objectid: $id}) RETURN a.auth_method AS am`
+	cypher := `MATCH (a {objectid: $id})
+RETURN a.auth_method AS am, a.auth_evidence AS auth_evidence`
 	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
 	if err != nil {
 		return Assessment{}, err
@@ -52,6 +53,11 @@ func a2aAuthAssessment(ctx context.Context, db graph.GraphDB, objectID string) (
 		return unknownAssessment("auth_method", 0, 100), nil
 	}
 	am, _ := rows[0]["am"].(string)
+	authEvidence, _ := rows[0]["auth_evidence"].(string)
+	if common.NormalizeAuthMethod(am) == common.AuthNone &&
+		!common.IsConfirmedAnonymousAccess(am, authEvidence) {
+		return unknownAssessment("auth_evidence", 0, 100), nil
+	}
 	auth := common.AssessAuth(am)
 	if auth.Weakness == nil {
 		return unknownAssessment("auth_method", 0, 100), nil

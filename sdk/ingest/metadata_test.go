@@ -65,3 +65,27 @@ func TestMergeCollectionReportsAggregatesReportStates(t *testing.T) {
 		t.Fatalf("merged outcomes = %d, want 2", len(merged.Outcomes))
 	}
 }
+
+func TestMergeCollectionReportsPreservesAuthoritativeActiveSet(t *testing.T) {
+	root := CanonicalCoverageKey("mcp", "root", "collect")
+	child := CanonicalCoverageKey("mcp", "target", "https://mcp.example")
+	merged := MergeCollectionReports(&CollectionReport{
+		State:        OutcomeComplete,
+		CoverageKeys: []string{root, child},
+		AuthoritativeRoots: []CoverageRoot{{
+			CoverageKey:       root,
+			ChildCoverageKeys: []string{child},
+		}},
+		Outcomes: []CollectionOutcome{
+			{CoverageKey: root, State: OutcomeComplete},
+			{CoverageKey: child, State: OutcomeComplete},
+		},
+	})
+
+	if len(merged.AuthoritativeRoots) != 1 ||
+		merged.AuthoritativeRoots[0].CoverageKey != root ||
+		len(merged.AuthoritativeRoots[0].ChildCoverageKeys) != 1 ||
+		merged.AuthoritativeRoots[0].ChildCoverageKeys[0] != child {
+		t.Fatalf("merged authoritative roots = %+v", merged.AuthoritativeRoots)
+	}
+}

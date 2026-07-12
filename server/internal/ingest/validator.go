@@ -68,6 +68,13 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 			}
 			declaredCoverage[key] = true
 		}
+		errs = append(
+			errs,
+			validateAuthoritativeRoots(
+				data.Meta.Collection.AuthoritativeRoots,
+				declaredCoverage,
+			)...,
+		)
 		if len(data.Meta.Collection.Outcomes) == 0 {
 			errs = append(errs, FieldError{
 				Path:    "meta.collection.outcomes",
@@ -398,6 +405,91 @@ func validateCoverageKey(key string) string {
 		return "must end with a 64-character SHA-256 digest"
 	}
 	return ""
+}
+
+func validateAuthoritativeRoots(
+	roots []ingest.CoverageRoot,
+	declaredCoverage map[string]bool,
+) []FieldError {
+	var errs []FieldError
+	seenRoots := make(map[string]bool, len(roots))
+	for i, root := range roots {
+		path := fmt.Sprintf("meta.collection.authoritative_roots[%d]", i)
+		if err := validateCoverageKey(root.CoverageKey); err != "" {
+			errs = append(errs, FieldError{
+				Path:    path + ".coverage_key",
+				Message: err,
+			})
+			continue
+		}
+		parts := strings.Split(root.CoverageKey, ":")
+		if parts[1] != "root" {
+			errs = append(errs, FieldError{
+				Path:    path + ".coverage_key",
+				Message: "must use the root scope kind",
+			})
+		}
+		if !declaredCoverage[root.CoverageKey] {
+			errs = append(errs, FieldError{
+				Path:    path + ".coverage_key",
+				Message: fmt.Sprintf("key %q is not declared in coverage_keys", root.CoverageKey),
+			})
+		}
+		if seenRoots[root.CoverageKey] {
+			errs = append(errs, FieldError{
+				Path:    path + ".coverage_key",
+				Message: fmt.Sprintf("duplicate authoritative root %q", root.CoverageKey),
+			})
+		}
+		seenRoots[root.CoverageKey] = true
+
+		children := make(map[string]bool, len(root.ChildCoverageKeys))
+		for j, child := range root.ChildCoverageKeys {
+			childPath := fmt.Sprintf("%s.child_coverage_keys[%d]", path, j)
+			if err := validateCoverageKey(child); err != "" {
+				errs = append(errs, FieldError{Path: childPath, Message: err})
+				continue
+			}
+			if strings.Split(child, ":")[0] != parts[0] {
+				errs = append(errs, FieldError{
+					Path:    childPath,
+					Message: "collector prefix must match authoritative root",
+				})
+			}
+			if child == root.CoverageKey {
+				errs = append(errs, FieldError{
+					Path:    childPath,
+					Message: "root cannot be its own child",
+				})
+			}
+			if !declaredCoverage[child] {
+				errs = append(errs, FieldError{
+					Path:    childPath,
+					Message: fmt.Sprintf("key %q is not declared in coverage_keys", child),
+				})
+			}
+			if children[child] {
+				errs = append(errs, FieldError{
+					Path:    childPath,
+					Message: fmt.Sprintf("duplicate child coverage key %q", child),
+				})
+			}
+			children[child] = true
+		}
+		for key := range declaredCoverage {
+			keyParts := strings.Split(key, ":")
+			if key != root.CoverageKey && keyParts[0] == parts[0] && !children[key] {
+				errs = append(errs, FieldError{
+					Path: path + ".child_coverage_keys",
+					Message: fmt.Sprintf(
+						"must include declared child coverage key %q",
+						key,
+					),
+				})
+			}
+		}
+	}
+	return errs
 }
 
 func validateObservationDomains(

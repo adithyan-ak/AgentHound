@@ -78,13 +78,17 @@ The `cross_service_credential_chain` processor joins on `value_hash` and emits:
 It also writes `blast_radius` on the joined credential nodes: the number of
 distinct agents correlated with the merged secret. The upstream target remains
 typed as `credential_chain_observed_material` or `credential_chain_reference`;
-only the observed/exposed variant is labeled a credential leak.
+masked/hashed references are not usable-secret evidence.
 
 ### Pre-built query
 
 ```bash
 agenthound-server query --prebuilt litellm-credential-leak
 ```
+
+This pre-built query is centered on observed, exposed LiteLLM master-key
+evidence. Any upstream `apiKey` or virtual-key nodes in its output are explicit
+masked/hashed, not-observed references and are not claimed as usable material.
 
 ## 3. Cross-Protocol Pivots (`CAN_REACH`)
 

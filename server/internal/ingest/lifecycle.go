@@ -236,6 +236,8 @@ func modelObservationCompleteness(
 	return model.PostureObservationCompleteness{
 		IncompletePropertyNodes:         completeness.IncompletePropertyNodes,
 		IncompletePropertyRelationships: completeness.IncompletePropertyRelationships,
+		TokenlessNodes:                  completeness.TokenlessNodes,
+		TokenlessIncidentRelationships:  completeness.TokenlessIncidentRelationships,
 	}
 }
 

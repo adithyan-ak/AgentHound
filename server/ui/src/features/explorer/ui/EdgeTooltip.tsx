@@ -54,7 +54,7 @@ export function EdgeTooltip() {
             className="font-mono text-[11px] font-bold uppercase tracking-[0.08em]"
             style={{ color }}
           >
-            {edgeLabel(d.kind)}
+            {edgeLabel(d.kind, { properties: props })}
           </span>
           <span className="ml-auto font-mono text-[9px] uppercase tracking-[0.1em] text-muted-foreground">
             {category}
@@ -64,7 +64,10 @@ export function EdgeTooltip() {
         <div className="mt-1.5 text-[11px] leading-snug text-foreground/85">
           {configuredReference
             ? "Configuration references this backend; service existence was not probed"
-            : edgeDescription(d.kind)}
+            : edgeDescription(d.kind, {
+                properties: props,
+                targetKind: d.targetKind,
+              })}
         </div>
         {configuredReference && (
           <div className="mt-1.5 rounded border border-amber-400/30 bg-amber-400/10 px-2 py-1 text-[10px] leading-snug text-amber-200">

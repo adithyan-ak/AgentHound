@@ -10,8 +10,10 @@ import (
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/server/internal/analysis"
+	"github.com/adithyan-ak/agenthound/server/internal/analysis/prebuilt"
 	"github.com/adithyan-ak/agenthound/server/internal/appdb"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
+	"github.com/adithyan-ak/agenthound/server/internal/projection"
 	"github.com/adithyan-ak/agenthound/server/model"
 	"github.com/spf13/cobra"
 )
@@ -351,6 +353,182 @@ func TestPrintPublishedFindingsJSONIncludesProjectionIdentity(t *testing.T) {
 		result.Scope.Revision == nil ||
 		*result.Scope.Revision != 7 {
 		t.Fatalf("scope = %+v", result.Scope)
+	}
+}
+
+type fakeCLIProjectionReader struct {
+	states []*model.ProjectionState
+	calls  int
+}
+
+func (f *fakeCLIProjectionReader) GetProjectionState(
+	_ context.Context,
+) (*model.ProjectionState, error) {
+	if len(f.states) == 0 {
+		return nil, nil
+	}
+	index := f.calls
+	if index >= len(f.states) {
+		index = len(f.states) - 1
+	}
+	f.calls++
+	return f.states[index], nil
+}
+
+func completeCLIProjection(scanID string, revision int64) *model.ProjectionState {
+	return &model.ProjectionState{
+		Status:            model.ProjectionComplete,
+		ScanID:            scanID,
+		PublishedScanID:   scanID,
+		PublishedRevision: &revision,
+		DirtyCoverage:     []string{},
+	}
+}
+
+func TestExecutePrebuiltQueryRejectsUnreadableProjectionBeforeGraphRead(t *testing.T) {
+	mismatched := completeCLIProjection("published", 7)
+	mismatched.ScanID = "updating"
+	dirty := completeCLIProjection("published", 7)
+	dirty.DirtyCoverage = []string{"mcp:root:sha256:dirty"}
+
+	for _, state := range []*model.ProjectionState{
+		nil,
+		{Status: model.ProjectionUpdating},
+		{Status: model.ProjectionIncomplete},
+		mismatched,
+		dirty,
+	} {
+		for _, id := range []string{"no-auth-servers", "shortest-to-database"} {
+			t.Run(id+"/"+projectionStateName(state), func(t *testing.T) {
+				query, ok := prebuilt.Get(id)
+				if !ok {
+					t.Fatalf("prebuilt query %q missing", id)
+				}
+				db := &graph.MockGraphDB{QueryResult: []map[string]any{{"row": "must-not-read"}}}
+				_, err := executePrebuiltQuery(
+					context.Background(),
+					id,
+					query,
+					db,
+					&fakeCLIProjectionReader{states: []*model.ProjectionState{state}},
+				)
+				if err == nil {
+					t.Fatal("expected fail-closed projection error")
+				}
+				if len(db.CallsTo("Query")) != 0 {
+					t.Fatal("graph read ran before projection was proven readable")
+				}
+			})
+		}
+	}
+}
+
+func TestExecutePrebuiltQueryRejectsUnavailableProjectionReader(t *testing.T) {
+	query, ok := prebuilt.Get("no-auth-servers")
+	if !ok {
+		t.Fatal("no-auth-servers query missing")
+	}
+	db := &graph.MockGraphDB{QueryResult: []map[string]any{{"row": "must-not-read"}}}
+	_, err := executePrebuiltQuery(
+		context.Background(),
+		query.ID,
+		query,
+		db,
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("error = %v, want unavailable projection failure", err)
+	}
+	if len(db.CallsTo("Query")) != 0 {
+		t.Fatal("graph read ran without a projection state reader")
+	}
+}
+
+func projectionStateName(state *model.ProjectionState) string {
+	if state == nil {
+		return "absent"
+	}
+	if len(state.DirtyCoverage) > 0 {
+		return "dirty"
+	}
+	if state.ScanID != state.PublishedScanID {
+		return "mismatched"
+	}
+	return state.Status
+}
+
+func TestExecutePrebuiltQueryRejectsProjectionChangeIncludingShortestDatabase(t *testing.T) {
+	for _, id := range []string{"no-auth-servers", "shortest-to-database"} {
+		t.Run(id, func(t *testing.T) {
+			query, ok := prebuilt.Get(id)
+			if !ok {
+				t.Fatalf("prebuilt query %q missing", id)
+			}
+			db := &graph.MockGraphDB{QueryResult: []map[string]any{}}
+			_, err := executePrebuiltQuery(
+				context.Background(),
+				id,
+				query,
+				db,
+				&fakeCLIProjectionReader{states: []*model.ProjectionState{
+					completeCLIProjection("scan-1", 7),
+					completeCLIProjection("scan-2", 8),
+				}},
+			)
+			if err == nil || !strings.Contains(err.Error(), "changed during read") {
+				t.Fatalf("error = %v, want projection-change failure", err)
+			}
+			if len(db.CallsTo("Query")) == 0 {
+				t.Fatal("test did not exercise a graph read between projection checks")
+			}
+		})
+	}
+}
+
+func TestExecutePrebuiltQueryAndOutputIncludeProjectionIdentity(t *testing.T) {
+	query, ok := prebuilt.Get("no-auth-servers")
+	if !ok {
+		t.Fatal("no-auth-servers query missing")
+	}
+	result, err := executePrebuiltQuery(
+		context.Background(),
+		query.ID,
+		query,
+		&graph.MockGraphDB{QueryResult: []map[string]any{{"server_name": "server"}}},
+		&fakeCLIProjectionReader{
+			states: []*model.ProjectionState{completeCLIProjection("scan-7", 7)},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Projection != (projection.Identity{ScanID: "scan-7", Revision: 7}) {
+		t.Fatalf("projection = %+v", result.Projection)
+	}
+
+	jsonOutput := captureStdout(t, func() {
+		if err := printPrebuiltResult(result, "json"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	var decoded prebuiltExecution
+	if err := json.Unmarshal([]byte(jsonOutput), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Projection != result.Projection || len(decoded.Rows) != 1 {
+		t.Fatalf("JSON output = %+v", decoded)
+	}
+
+	var tableStderr string
+	_ = captureStdout(t, func() {
+		tableStderr = captureStderr(t, func() {
+			if err := printPrebuiltResult(result, "table"); err != nil {
+				t.Fatal(err)
+			}
+		})
+	})
+	if !strings.Contains(tableStderr, "scan=scan-7 revision=7") {
+		t.Fatalf("table output missing projection identity: %q", tableStderr)
 	}
 }
 

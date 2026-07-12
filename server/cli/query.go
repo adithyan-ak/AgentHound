@@ -13,6 +13,7 @@ import (
 	"github.com/adithyan-ak/agenthound/server/internal/analysis/prebuilt"
 	"github.com/adithyan-ak/agenthound/server/internal/appdb"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
+	"github.com/adithyan-ak/agenthound/server/internal/projection"
 	"github.com/adithyan-ak/agenthound/server/model"
 	"github.com/spf13/cobra"
 )
@@ -23,9 +24,9 @@ var queryCmd = &cobra.Command{
 	Long: `Execute queries against the AgentHound graph database.
 
 Modes:
-  agenthound-server query "MATCH (n:MCPServer) RETURN n.name"   Raw Cypher
-  agenthound-server query --prebuilt agents-shell-access         Pre-built query
-  agenthound-server query --findings [--severity critical]       List findings
+  agenthound-server query "MATCH (n:MCPServer) RETURN n.name"   Raw live/admin Cypher
+  agenthound-server query --prebuilt agents-shell-access         Published pre-built query
+  agenthound-server query --findings [--severity critical]       Published findings
   agenthound-server query --shortest-path --from Kind:name --to Kind:name`,
 	RunE: runQuery,
 }
@@ -134,28 +135,89 @@ func runPrebuilt(ctx context.Context, id, format string) error {
 	}
 	defer cleanup()
 
-	if id == "shortest-to-database" {
-		result, err := analysis.FindShortestDatabasePaths(ctx, infra.GraphDB)
-		if err != nil {
-			return fmt.Errorf("query %s: %w", id, err)
-		}
+	result, err := executePrebuiltQuery(
+		ctx,
+		id,
+		q,
+		infra.GraphDB,
+		infra.FindingStore,
+	)
+	if err != nil {
+		return fmt.Errorf("query %s: %w", id, err)
+	}
+	return printPrebuiltResult(result, format)
+}
+
+type prebuiltExecution struct {
+	Query      prebuilt.PreBuiltQuery      `json:"query"`
+	Rows       []map[string]any            `json:"rows"`
+	Metadata   *analysis.TraversalMetadata `json:"metadata,omitempty"`
+	Projection projection.Identity         `json:"projection"`
+}
+
+func executePrebuiltQuery(
+	ctx context.Context,
+	id string,
+	query prebuilt.PreBuiltQuery,
+	db graph.GraphDB,
+	projectionReader projection.StateReader,
+) (prebuiltExecution, error) {
+	result, identity, err := projection.GuardedRead(
+		ctx,
+		projectionReader,
+		func() (prebuiltExecution, error) {
+			execution := prebuiltExecution{Query: query}
+			if id == "shortest-to-database" {
+				pathResult, err := analysis.FindShortestDatabasePaths(ctx, db)
+				if err != nil {
+					return prebuiltExecution{}, err
+				}
+				execution.Rows = analysis.DatabasePathRows(pathResult)
+				execution.Metadata = &pathResult.Metadata
+				return execution, nil
+			}
+
+			rows, err := db.Query(ctx, query.Cypher, nil)
+			if err != nil {
+				return prebuiltExecution{}, err
+			}
+			execution.Rows = rows
+			return execution, nil
+		},
+	)
+	if err != nil {
+		return prebuiltExecution{}, err
+	}
+	if result.Rows == nil {
+		result.Rows = []map[string]any{}
+	}
+	result.Projection = identity
+	return result, nil
+}
+
+func printPrebuiltResult(result prebuiltExecution, format string) error {
+	if format == "json" {
+		return printJSON(result)
+	}
+
+	_, _ = fmt.Fprintf(
+		os.Stderr,
+		"Published projection: scan=%s revision=%d\n",
+		result.Projection.ScanID,
+		result.Projection.Revision,
+	)
+	if result.Metadata != nil {
 		_, _ = fmt.Fprintf(
 			os.Stderr,
-			"[path] scope=%s direction=%s algorithm=%s complete=%t\n\n",
+			"[path] scope=%s direction=%s algorithm=%s complete=%t\n",
 			result.Metadata.Scope,
 			result.Metadata.Direction,
 			result.Metadata.Algorithm,
 			result.Metadata.Complete,
 		)
-		return printRows(analysis.DatabasePathRows(result), format)
 	}
-
-	rows, err := infra.GraphDB.Query(ctx, q.Cypher, nil)
-	if err != nil {
-		return fmt.Errorf("query %s: %w", id, err)
-	}
-
-	return printRows(rows, format)
+	_, _ = fmt.Fprintln(os.Stderr)
+	return printRows(result.Rows, format)
 }
 
 func runFindings(ctx context.Context, severity, format, failOn string, includeSuppressed bool) error {

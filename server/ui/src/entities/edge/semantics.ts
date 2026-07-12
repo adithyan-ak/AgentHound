@@ -126,7 +126,7 @@ export const EDGE_DESCRIPTION = {
   LOADS_INSTRUCTIONS: "Loads instruction file",
   SAME_AUTH_DOMAIN: "Shares auth domain",
   EXPOSES: "Exposes AI service",
-  EXPOSES_CREDENTIAL: "Reports credential reference",
+  EXPOSES_CREDENTIAL: "AI service has credential evidence",
   PROVIDES_MODEL: "Serves model artifact",
   EXTRACTED_FROM: "Extracted from model",
   INGESTS_UNTRUSTED: "Tool ingests untrusted resource",
@@ -135,7 +135,7 @@ export const EDGE_DESCRIPTION = {
   SHADOWS: "Tool shadows another tool",
   POISONED_DESCRIPTION: "Poisoned tool description",
   POISONED_INSTRUCTIONS: "Poisoned instruction file",
-  CAN_REACH: "Agent can reach resource",
+  CAN_REACH: "Agent can reach target",
   CAN_EXFILTRATE_VIA: "Agent can exfiltrate via tool",
   CAN_IMPERSONATE: "Agent can impersonate agent",
   CONFUSED_DEPUTY: "Agent can misuse delegated authority",
@@ -144,13 +144,82 @@ export const EDGE_DESCRIPTION = {
   POISONS_CONTEXT: "Tool can poison another tool's context",
 } satisfies Record<EdgeKind, string>;
 
+type CredentialEvidenceState = "observed" | "reference" | "unknown";
+
+function credentialEvidenceState(
+  properties: Record<string, unknown>,
+): CredentialEvidenceState {
+  const assertionType = properties["assertion_type"];
+  const exposureStatus = properties["exposure_status"];
+
+  if (
+    assertionType === "observed_credential_exposure" ||
+    exposureStatus === "exposed"
+  ) {
+    return "observed";
+  }
+  if (
+    assertionType === "credential_reference" ||
+    exposureStatus === "not_observed"
+  ) {
+    return "reference";
+  }
+  return "unknown";
+}
+
 /** Human-readable label for an edge kind (e.g. "CAN REACH"). */
-export function edgeLabel(kind: string): string {
+export function edgeLabel(
+  kind: string,
+  context: EdgeDescriptionContext = {},
+): string {
+  if (kind === "EXPOSES_CREDENTIAL") {
+    switch (credentialEvidenceState(context.properties ?? {})) {
+      case "observed":
+        return "OBSERVED CREDENTIAL EXPOSURE";
+      case "reference":
+        return "CREDENTIAL REFERENCE";
+      default:
+        return "CREDENTIAL EVIDENCE";
+    }
+  }
   return kind.replace(/_/g, " ");
 }
 
 /** Short relationship phrase, falling back to the humanized kind. */
-export function edgeDescription(kind: string): string {
+export interface EdgeDescriptionContext {
+  properties?: Record<string, unknown>;
+  targetKind?: string;
+}
+
+function exposesCredentialDescription(
+  properties: Record<string, unknown>,
+): string {
+  switch (credentialEvidenceState(properties)) {
+    case "observed":
+      return "AI service exposes observed credential material";
+    case "reference":
+      return "AI service reports a credential reference; usable material was not observed";
+    default:
+      return EDGE_DESCRIPTION.EXPOSES_CREDENTIAL;
+  }
+}
+
+function canReachDescription(targetKind: string | undefined): string {
+  if (targetKind === "Credential") return "Agent can reach credential";
+  if (targetKind === "MCPResource") return "Agent can reach resource";
+  return EDGE_DESCRIPTION.CAN_REACH;
+}
+
+export function edgeDescription(
+  kind: string,
+  context: EdgeDescriptionContext = {},
+): string {
+  if (kind === "EXPOSES_CREDENTIAL") {
+    return exposesCredentialDescription(context.properties ?? {});
+  }
+  if (kind === "CAN_REACH") {
+    return canReachDescription(context.targetKind);
+  }
   return EDGE_DESCRIPTION[kind as EdgeKind] ?? edgeLabel(kind);
 }
 

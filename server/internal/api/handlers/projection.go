@@ -3,108 +3,24 @@ package handlers
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 
-	"github.com/adithyan-ak/agenthound/server/model"
+	"github.com/adithyan-ak/agenthound/server/internal/projection"
 )
 
-type projectionStateReader interface {
-	GetProjectionState(ctx context.Context) (*model.ProjectionState, error)
-}
-
-type projectionIdentity struct {
-	ScanID   string `json:"scan_id"`
-	Revision int64  `json:"revision"`
-}
-
-type projectionConflictError struct {
-	Reason string
-	State  *model.ProjectionState
-	Before *projectionIdentity
-	After  *projectionIdentity
-}
-
-func (e *projectionConflictError) Error() string {
-	if e.Reason == "changed" {
-		return fmt.Sprintf("projection changed during read: before=%+v after=%+v", e.Before, e.After)
-	}
-	return "projection is not readable: " + e.Reason
-}
+type projectionStateReader = projection.StateReader
+type projectionIdentity = projection.Identity
 
 func guardedProjectionRead[T any](
 	ctx context.Context,
 	reader projectionStateReader,
 	read func() (T, error),
 ) (T, projectionIdentity, error) {
-	var zero T
-	if reader == nil {
-		return zero, projectionIdentity{}, errors.New("projection state reader is unavailable")
-	}
-
-	beforeState, err := reader.GetProjectionState(ctx)
-	if err != nil {
-		return zero, projectionIdentity{}, fmt.Errorf("read projection state before graph read: %w", err)
-	}
-	before, err := readableProjection(beforeState)
-	if err != nil {
-		return zero, projectionIdentity{}, err
-	}
-
-	value, err := read()
-	if err != nil {
-		return zero, projectionIdentity{}, err
-	}
-
-	afterState, err := reader.GetProjectionState(ctx)
-	if err != nil {
-		return zero, projectionIdentity{}, fmt.Errorf("read projection state after graph read: %w", err)
-	}
-	after, err := readableProjection(afterState)
-	if err != nil {
-		return zero, projectionIdentity{}, err
-	}
-	if before != after {
-		return zero, projectionIdentity{}, &projectionConflictError{
-			Reason: "changed",
-			Before: &before,
-			After:  &after,
-		}
-	}
-	return value, before, nil
-}
-
-func readableProjection(state *model.ProjectionState) (projectionIdentity, error) {
-	if state == nil {
-		return projectionIdentity{}, &projectionConflictError{Reason: "absent"}
-	}
-	if state.Status != model.ProjectionComplete {
-		reason := state.Status
-		if reason != model.ProjectionUpdating && reason != model.ProjectionIncomplete {
-			reason = "absent"
-		}
-		return projectionIdentity{}, &projectionConflictError{Reason: reason, State: state}
-	}
-	if state.ScanID == "" ||
-		state.PublishedScanID == "" ||
-		state.PublishedRevision == nil ||
-		*state.PublishedRevision < 1 {
-		return projectionIdentity{}, &projectionConflictError{Reason: "absent", State: state}
-	}
-	if state.ScanID != state.PublishedScanID {
-		return projectionIdentity{}, &projectionConflictError{Reason: "incomplete", State: state}
-	}
-	if len(state.DirtyCoverage) != 0 {
-		return projectionIdentity{}, &projectionConflictError{Reason: "incomplete", State: state}
-	}
-	return projectionIdentity{
-		ScanID:   state.PublishedScanID,
-		Revision: *state.PublishedRevision,
-	}, nil
+	return projection.GuardedRead(ctx, reader, read)
 }
 
 func writeProjectionConflict(w http.ResponseWriter, err error) bool {
-	var conflict *projectionConflictError
+	var conflict *projection.ConflictError
 	if !errors.As(err, &conflict) {
 		return false
 	}

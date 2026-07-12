@@ -296,8 +296,8 @@ export const LENS_LIST: LensDefinition[] = [
       },
       {
         id: "EXPOSES_CREDENTIAL",
-        label: "Exposes credential",
-        description: "AI service → credential material",
+        label: "Credential evidence",
+        description: "AI service → credential evidence",
         defaultEnabled: true,
       },
     ],

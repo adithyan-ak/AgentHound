@@ -19,11 +19,15 @@ type ReconciliationStats struct {
 type ObservationCompleteness struct {
 	IncompletePropertyNodes         int64 `json:"incomplete_property_nodes"`
 	IncompletePropertyRelationships int64 `json:"incomplete_property_relationships"`
+	TokenlessNodes                  int64 `json:"tokenless_nodes"`
+	TokenlessIncidentRelationships  int64 `json:"tokenless_incident_relationships"`
 }
 
 func (c ObservationCompleteness) Complete() bool {
 	return c.IncompletePropertyNodes == 0 &&
-		c.IncompletePropertyRelationships == 0
+		c.IncompletePropertyRelationships == 0 &&
+		c.TokenlessNodes == 0 &&
+		c.TokenlessIncidentRelationships == 0
 }
 
 const observationCompletenessCypher = `
@@ -48,7 +52,26 @@ CALL {
            THEN 1
          END) AS incomplete_property_relationships
 }
-RETURN incomplete_property_nodes, incomplete_property_relationships`
+CALL {
+  MATCH (n)
+  WHERE any(label IN labels(n) WHERE label IN $public_kinds)
+    AND size(coalesce(n.observation_tokens, [])) = 0
+  RETURN count(n) AS tokenless_nodes
+}
+CALL {
+  MATCH (source)-[r]->(target)
+  WHERE type(r) IN $raw_edge_kinds
+    AND (
+      (any(label IN labels(source) WHERE label IN $public_kinds)
+       AND size(coalesce(source.observation_tokens, [])) = 0)
+      OR
+      (any(label IN labels(target) WHERE label IN $public_kinds)
+       AND size(coalesce(target.observation_tokens, [])) = 0)
+    )
+  RETURN count(r) AS tokenless_incident_relationships
+}
+RETURN incomplete_property_nodes, incomplete_property_relationships,
+       tokenless_nodes, tokenless_incident_relationships`
 
 const deleteMissingDependencyRelationshipsCypher = `
 MATCH ()-[r]->()
@@ -226,6 +249,10 @@ func GetObservationCompleteness(
 	completeness.IncompletePropertyNodes = int64Value(rows[0]["incomplete_property_nodes"])
 	completeness.IncompletePropertyRelationships = int64Value(
 		rows[0]["incomplete_property_relationships"],
+	)
+	completeness.TokenlessNodes = int64Value(rows[0]["tokenless_nodes"])
+	completeness.TokenlessIncidentRelationships = int64Value(
+		rows[0]["tokenless_incident_relationships"],
 	)
 	return completeness, nil
 }

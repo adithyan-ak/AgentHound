@@ -236,6 +236,79 @@ func TestToolSignals_ExecutionKeywordsRequireBoundariesAndContext(t *testing.T) 
 	}
 }
 
+func TestToolSignals_ExecutionVerbInflections(t *testing.T) {
+	engine := testEngine(t)
+	verbs := []string{
+		"run", "runs", "ran", "running",
+		"execute", "executes", "executed", "executing",
+		"exec",
+		"spawn", "spawns", "spawned", "spawning",
+		"invoke", "invokes", "invoked", "invoking",
+	}
+
+	for _, verb := range verbs {
+		t.Run("shell/"+verb, func(t *testing.T) {
+			signals := computeToolSignals(
+				&mcpsdk.Tool{
+					Name:        "shell_runner",
+					Description: verb + " a shell command supplied by the caller",
+				},
+				nil,
+				engine,
+			)
+			if !hasCapability(signals.CapabilitySurface, "shell_access") {
+				t.Fatalf("%q capabilities = %v, want shell_access", verb, signals.CapabilitySurface)
+			}
+		})
+
+		t.Run("code/"+verb, func(t *testing.T) {
+			signals := computeToolSignals(
+				&mcpsdk.Tool{
+					Name:        "code_runner",
+					Description: verb + " supplied Python code",
+				},
+				nil,
+				engine,
+			)
+			if !hasCapability(signals.CapabilitySurface, "code_execution") {
+				t.Fatalf("%q capabilities = %v, want code_execution", verb, signals.CapabilitySurface)
+			}
+		})
+	}
+}
+
+func TestToolSignals_InvalidGeneratedGerundsDoNotMatchExecution(t *testing.T) {
+	engine := testEngine(t)
+	for _, invalid := range []string{
+		"run" + "ing Python code",
+		"execute" + "ing Python code",
+		"spa" + "wing Python code",
+		"invoke" + "ing Python code",
+		"compile" + "ing source code",
+	} {
+		t.Run(invalid, func(t *testing.T) {
+			signals := computeToolSignals(
+				&mcpsdk.Tool{Name: "documentation_tool", Description: invalid},
+				nil,
+				engine,
+			)
+			if hasCapability(signals.CapabilitySurface, "shell_access") ||
+				hasCapability(signals.CapabilitySurface, "code_execution") {
+				t.Fatalf("%q classified as execution: %v", invalid, signals.CapabilitySurface)
+			}
+		})
+	}
+}
+
+func hasCapability(capabilities []string, want string) bool {
+	for _, capability := range capabilities {
+		if capability == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestResourceSignals_RulesEngine(t *testing.T) {
 	tests := []struct {
 		uri             string

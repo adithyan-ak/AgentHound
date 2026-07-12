@@ -58,3 +58,69 @@ describe("EdgeTooltip configured backend evidence", () => {
     ).toBeInTheDocument();
   });
 });
+
+describe("EdgeTooltip relationship semantics", () => {
+  beforeEach(() => {
+    useExplorerStore.setState({
+      selectedEdge: null,
+      hoveredEdge: null,
+    });
+  });
+
+  it("presents observed credential exposure as observed, not reference-only", () => {
+    const observedCredential: LensEdgeData = {
+      ...configuredReference,
+      kind: "EXPOSES_CREDENTIAL",
+      targetKind: "Credential",
+      bundledKinds: ["EXPOSES_CREDENTIAL"],
+      properties: {
+        assertion_type: "credential_reference",
+        exposure_status: "exposed",
+      },
+    };
+    useExplorerStore.setState({
+      hoveredEdge: {
+        id: "service|credential|EXPOSES_CREDENTIAL",
+        source: "service",
+        target: "credential",
+        data: observedCredential,
+        x: 10,
+        y: 10,
+      },
+    });
+
+    render(<EdgeTooltip />);
+
+    expect(screen.getByText("OBSERVED CREDENTIAL EXPOSURE")).toBeInTheDocument();
+    expect(
+      screen.getByText("AI service exposes observed credential material"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/reports credential reference/i)).not.toBeInTheDocument();
+  });
+
+  it("calls a reachable Credential a credential, not a resource", () => {
+    const credentialReach: LensEdgeData = {
+      ...configuredReference,
+      kind: "CAN_REACH",
+      targetKind: "Credential",
+      isComposite: true,
+      bundledKinds: ["CAN_REACH"],
+      properties: { confidence: 0.8 },
+    };
+    useExplorerStore.setState({
+      hoveredEdge: {
+        id: "agent|credential|CAN_REACH",
+        source: "agent",
+        target: "credential",
+        data: credentialReach,
+        x: 10,
+        y: 10,
+      },
+    });
+
+    render(<EdgeTooltip />);
+
+    expect(screen.getByText("Agent can reach credential")).toBeInTheDocument();
+    expect(screen.queryByText("Agent can reach resource")).not.toBeInTheDocument();
+  });
+});

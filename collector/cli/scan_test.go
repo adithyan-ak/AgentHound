@@ -89,8 +89,8 @@ func TestRootedCollectionReportStableAcrossScanIDs(t *testing.T) {
 
 	first := newScan("scan-one")
 	second := newScan("scan-two")
-	firstReport := rootedCollectionReport("mcp", first.Meta.Collection)
-	secondReport := rootedCollectionReport("mcp", second.Meta.Collection)
+	firstReport := rootedCollectionReport("mcp", first.Meta.Collection, true)
+	secondReport := rootedCollectionReport("mcp", second.Meta.Collection, true)
 	rootKey := collectorRootCoverageKey("mcp")
 	wantRootKey := ingest.CanonicalCoverageKey("mcp", "root", "collect")
 
@@ -116,6 +116,12 @@ func TestRootedCollectionReportStableAcrossScanIDs(t *testing.T) {
 			secondReport.CoverageKeys,
 		)
 	}
+	if len(firstReport.AuthoritativeRoots) != 1 ||
+		firstReport.AuthoritativeRoots[0].CoverageKey != rootKey ||
+		len(firstReport.AuthoritativeRoots[0].ChildCoverageKeys) != 1 ||
+		firstReport.AuthoritativeRoots[0].ChildCoverageKeys[0] != targetKey {
+		t.Fatalf("authoritative root = %+v, want root with target child", firstReport.AuthoritativeRoots)
+	}
 	for _, data := range []*ingest.IngestData{first, second} {
 		if got := data.Graph.Nodes[0].ObservationDomains; len(got) != 1 || got[0] != targetKey {
 			t.Fatalf("scan %s fact ownership = %v, want [%s]", data.Meta.ScanID, got, targetKey)
@@ -133,11 +139,31 @@ func TestRootedCollectionReportPreservesPartialAttempt(t *testing.T) {
 			CoverageKey: targetKey,
 			State:       ingest.OutcomeFailed,
 		}},
-	})
+	}, true)
 
 	states := ingest.CoverageStates(report)
 	if states[collectorRootCoverageKey("mcp")] != ingest.OutcomePartial {
 		t.Fatalf("root states = %v, want partial MCP root", states)
+	}
+	if roots := ingest.CompleteAuthoritativeRoots(report); len(roots) != 0 {
+		t.Fatalf("partial run became authoritative: %+v", roots)
+	}
+}
+
+func TestRootedCollectionReportTargetedRunIsNotAuthoritative(t *testing.T) {
+	targetKey := ingest.CanonicalCoverageKey("mcp", "target", "https://mcp.example")
+	report := rootedCollectionReport("mcp", &ingest.CollectionReport{
+		State:        ingest.OutcomeComplete,
+		CoverageKeys: []string{targetKey},
+		Outcomes: []ingest.CollectionOutcome{{
+			Collector:   "mcp",
+			CoverageKey: targetKey,
+			State:       ingest.OutcomeComplete,
+		}},
+	}, false)
+
+	if len(report.AuthoritativeRoots) != 0 {
+		t.Fatalf("targeted run declared authoritative roots: %+v", report.AuthoritativeRoots)
 	}
 }
 

@@ -30,6 +30,23 @@ func CanonicalCoverageKey(collector, scopeKind, canonicalScope string) string {
 	return collector + ":" + scopeKind + ":sha256:" + hex.EncodeToString(sum[:])
 }
 
+// CollectorRootCoverageKey returns the stable root key shared by exhaustive
+// and targeted attempts for one collector.
+func CollectorRootCoverageKey(collector string) string {
+	return CanonicalCoverageKey(collector, "root", "collect")
+}
+
+// ParentCollectorRootKey returns the stable collector root that can track a
+// scoped child head. Recording this membership is non-authoritative; only a
+// completed CoverageRoot declaration may diff the active child set.
+func ParentCollectorRootKey(coverageKey string) string {
+	parts := strings.Split(coverageKey, ":")
+	if len(parts) != 4 || parts[1] == "root" || !AllowedCollectors[parts[0]] {
+		return ""
+	}
+	return CollectorRootCoverageKey(parts[0])
+}
+
 // CanonicalURLScope normalizes URL spelling for coverage identity without
 // changing the actual collector target. Credentials and fragments are not part
 // of scope identity; query parameters are sorted deterministically.
@@ -163,6 +180,41 @@ func CompleteCoverageDomains(report *CollectionReport) []string {
 	}
 	sort.Strings(domains)
 	return domains
+}
+
+// CompleteAuthoritativeRoots returns only exhaustive root declarations whose
+// root and complete active child set were all observed successfully.
+func CompleteAuthoritativeRoots(report *CollectionReport) []CoverageRoot {
+	if report == nil {
+		return nil
+	}
+	states := CoverageStates(report)
+	var roots []CoverageRoot
+	for _, root := range report.AuthoritativeRoots {
+		if states[root.CoverageKey] != OutcomeComplete {
+			continue
+		}
+		children := append([]string(nil), root.ChildCoverageKeys...)
+		complete := true
+		for _, child := range children {
+			if states[child] != OutcomeComplete {
+				complete = false
+				break
+			}
+		}
+		if !complete {
+			continue
+		}
+		sort.Strings(children)
+		roots = append(roots, CoverageRoot{
+			CoverageKey:       root.CoverageKey,
+			ChildCoverageKeys: children,
+		})
+	}
+	sort.Slice(roots, func(i, j int) bool {
+		return roots[i].CoverageKey < roots[j].CoverageKey
+	})
+	return roots
 }
 
 func CollectionCoverageComplete(report *CollectionReport) bool {

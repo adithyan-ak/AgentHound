@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -295,7 +296,11 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 		} else {
 			merged.Graph.Nodes = append(merged.Graph.Nodes, data.Graph.Nodes...)
 			merged.Graph.Edges = append(merged.Graph.Edges, data.Graph.Edges...)
-			reports = append(reports, rootedCollectionReport("config", data.Meta.Collection))
+			reports = append(reports, rootedCollectionReport(
+				"config",
+				data.Meta.Collection,
+				path == "" && len(paths) == 0,
+			))
 		}
 	}
 
@@ -309,7 +314,11 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 		} else {
 			merged.Graph.Nodes = append(merged.Graph.Nodes, data.Graph.Nodes...)
 			merged.Graph.Edges = append(merged.Graph.Edges, data.Graph.Edges...)
-			reports = append(reports, rootedCollectionReport("mcp", data.Meta.Collection))
+			reports = append(reports, rootedCollectionReport(
+				"mcp",
+				data.Meta.Collection,
+				url == "",
+			))
 		}
 	}
 
@@ -323,7 +332,11 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 		} else {
 			merged.Graph.Nodes = append(merged.Graph.Nodes, data.Graph.Nodes...)
 			merged.Graph.Edges = append(merged.Graph.Edges, data.Graph.Edges...)
-			reports = append(reports, rootedCollectionReport("a2a", data.Meta.Collection))
+			reports = append(reports, rootedCollectionReport(
+				"a2a",
+				data.Meta.Collection,
+				false,
+			))
 		}
 	}
 	merged.Meta.Collection = ingest.MergeCollectionReports(reports...)
@@ -374,12 +387,13 @@ func loadEffectiveRules() (*rules.Engine, *ingest.RulesetManifest) {
 }
 
 func collectorRootCoverageKey(collectorName string) string {
-	return ingest.CanonicalCoverageKey(collectorName, "root", "collect")
+	return ingest.CollectorRootCoverageKey(collectorName)
 }
 
 func rootedCollectionReport(
 	collectorName string,
 	report *ingest.CollectionReport,
+	authoritative bool,
 ) *ingest.CollectionReport {
 	state := ingest.OutcomeUnknown
 	if report != nil {
@@ -399,6 +413,19 @@ func rootedCollectionReport(
 			Method:      "collect",
 			State:       state,
 		}},
+	}
+	if authoritative && report != nil {
+		children := make([]string, 0, len(report.CoverageKeys))
+		for _, key := range report.CoverageKeys {
+			if key != "" && key != rootKey {
+				children = append(children, key)
+			}
+		}
+		sort.Strings(children)
+		root.AuthoritativeRoots = []ingest.CoverageRoot{{
+			CoverageKey:       rootKey,
+			ChildCoverageKeys: children,
+		}}
 	}
 	return ingest.MergeCollectionReports(report, root)
 }

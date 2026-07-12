@@ -39,7 +39,7 @@ export function TopFindings() {
             </span>
           )}
           <Link
-            to="/findings"
+            to="/findings?sev=critical,high"
             className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.1em] text-primary transition-colors hover:text-primary/80"
           >
             View all <ArrowRight className="h-3 w-3" />

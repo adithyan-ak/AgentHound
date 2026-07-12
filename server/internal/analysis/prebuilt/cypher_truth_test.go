@@ -56,17 +56,23 @@ func TestHighEntropyQueryRequiresObservedMaterial(t *testing.T) {
 	}
 }
 
-func TestLiteLLMLeakQueryRequiresObservedUsableMaterial(t *testing.T) {
+func TestLiteLLMMasterExposureQueryKeepsReferencesNonUsable(t *testing.T) {
 	for _, clause := range []string{
-		"c1.material_status = 'observed'",
-		"c1master.material_status = 'observed'",
-		"c2.material_status = 'observed'",
-		"c2.exposure_status = 'exposed'",
-		"c2.merge_key = 'value_hash'",
+		"master.material_status = 'observed'",
+		"master.exposure_status = 'exposed'",
+		"master_evidence.assertion_type = 'observed_credential_exposure'",
+		"reference.material_status = 'masked'",
+		"reference.material_status = 'hashed'",
+		"reference.exposure_status = 'not_observed'",
+		"false AS reference_contains_usable_material",
 	} {
 		if !strings.Contains(CypherLitellmCredentialLeak, clause) {
-			t.Errorf("LiteLLM leak query missing observed-material gate %q", clause)
+			t.Errorf("LiteLLM exposure query missing evidence gate %q", clause)
 		}
+	}
+	if strings.Contains(CypherLitellmCredentialLeak, "reference.material_status = 'observed'") ||
+		strings.Contains(CypherLitellmCredentialLeak, "reference.exposure_status = 'exposed'") {
+		t.Fatal("LiteLLM exposure query promotes masked/hashed references to usable material")
 	}
 }
 

@@ -38,6 +38,10 @@ type nodeEdgeWriter interface {
 // every ingest requires both operations.
 type scanLifecycleRecorder interface {
 	BeginScan(ctx context.Context, scan *model.Scan, dirtyCoverage []string) ([]string, error)
+	ResolveRetiredCoverage(
+		ctx context.Context,
+		roots []sdkingest.CoverageRoot,
+	) ([]string, error)
 	RecordFailure(ctx context.Context, failure appdb.ScanFailure) error
 }
 
@@ -161,8 +165,10 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	attributionComplete := prepareObservationDomains(data)
 	keys := coverageKeys(data.Meta.Collection)
 	completeDomains := sdkingest.CompleteCoverageDomains(data.Meta.Collection)
+	authoritativeRoots := sdkingest.CompleteAuthoritativeRoots(data.Meta.Collection)
 	if !attributionComplete || normalizationDegradedErr != nil {
 		completeDomains = nil
+		authoritativeRoots = nil
 	}
 	coverageComplete := sdkingest.CollectionCoverageComplete(data.Meta.Collection) &&
 		attributionComplete &&
@@ -203,7 +209,16 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	if p.findingStore == nil {
 		return nil, fmt.Errorf("begin scan lifecycle: publication store unavailable")
 	}
-	cumulativeDirtyCoverage, err := p.scanStore.BeginScan(ctx, initialScan, keys)
+	retiredDomains, err := p.scanStore.ResolveRetiredCoverage(ctx, authoritativeRoots)
+	if err != nil {
+		return nil, fmt.Errorf("resolve authoritative coverage: %w", err)
+	}
+	reconciliationDomains := mergeCoverage(completeDomains, retiredDomains)
+	cumulativeDirtyCoverage, err := p.scanStore.BeginScan(
+		ctx,
+		initialScan,
+		mergeCoverage(keys, retiredDomains),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("begin scan lifecycle: %w", err)
 	}
@@ -234,13 +249,13 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		ctx,
 		writeGraph.Nodes,
 		data.Meta.ScanID,
-		completeDomains,
+		reconciliationDomains,
 	)
 	result.WriteRows.Nodes = nodesWritten
 	if err != nil {
 		appendStage(result, "write_nodes", sdkingest.OutcomeFailed, true, stageStart, err)
 		appendStage(result, "write_edges", sdkingest.OutcomeNotApplicable, true, time.Now(), nil)
-		p.finishWriteFailure(ctx, data, result, graphBefore, completeDomains, fmt.Errorf("write nodes: %w", err))
+		p.finishWriteFailure(ctx, data, result, graphBefore, reconciliationDomains, fmt.Errorf("write nodes: %w", err))
 		result.Duration = time.Since(start)
 		return result, fmt.Errorf("write nodes: %w", err)
 	}
@@ -253,12 +268,12 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		ctx,
 		writeGraph.Edges,
 		data.Meta.ScanID,
-		completeDomains,
+		reconciliationDomains,
 	)
 	result.WriteRows.Edges = edgesWritten
 	if err != nil {
 		appendStage(result, "write_edges", sdkingest.OutcomeFailed, true, stageStart, err)
-		p.finishWriteFailure(ctx, data, result, graphBefore, completeDomains, fmt.Errorf("write edges: %w", err))
+		p.finishWriteFailure(ctx, data, result, graphBefore, reconciliationDomains, fmt.Errorf("write edges: %w", err))
 		result.Duration = time.Since(start)
 		return result, fmt.Errorf("write edges: %w", err)
 	}
@@ -272,14 +287,14 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		reconcileErr   error
 	)
 	stageStart = time.Now()
-	if len(completeDomains) == 0 {
+	if len(reconciliationDomains) == 0 {
 		appendStage(result, "reconcile_observations", sdkingest.OutcomeUnknown, true, stageStart, nil)
 	} else {
 		reconciliation, reconcileErr = graph.ReconcileObservations(
 			ctx,
 			p.graphDB,
 			data.Meta.ScanID,
-			completeDomains,
+			reconciliationDomains,
 		)
 		if reconcileErr != nil {
 			appendStage(result, "reconcile_observations", sdkingest.OutcomeFailed, true, stageStart, reconcileErr)
@@ -287,7 +302,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 			appendStage(result, "reconcile_observations", sdkingest.OutcomeComplete, true, stageStart, nil)
 		}
 	}
-	promotedDomains := completeDomains
+	promotedDomains := reconciliationDomains
 	if p.graphDB == nil || reconcileErr != nil {
 		promotedDomains = nil
 	}
@@ -389,9 +404,13 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		case !observationCompleteness.Complete():
 			observationStatus = model.LifecyclePartial
 			observationIncompleteErr = fmt.Errorf(
-				"managed raw observations remain property-incomplete: %d nodes, %d relationships",
+				"managed raw observations are publication-unsafe: "+
+					"%d property-incomplete nodes, %d property-incomplete relationships, "+
+					"%d tokenless nodes, %d raw relationships incident to tokenless nodes",
 				observationCompleteness.IncompletePropertyNodes,
 				observationCompleteness.IncompletePropertyRelationships,
+				observationCompleteness.TokenlessNodes,
+				observationCompleteness.TokenlessIncidentRelationships,
 			)
 			appendStage(
 				result,
@@ -470,6 +489,14 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	publicationDomains := finalizedDomains
 	if observationQueryErr != nil || observationIncompleteErr != nil {
 		publicationDomains = nil
+	}
+	publicationCompleteDomains := completeDomains
+	publicationRetiredDomains := retiredDomains
+	publicationAuthoritativeRoots := authoritativeRoots
+	if publicationDomains == nil {
+		publicationCompleteDomains = nil
+		publicationRetiredDomains = nil
+		publicationAuthoritativeRoots = nil
 	}
 	dirtyCoverage := append([]string(nil), cumulativeDirtyCoverage...)
 	if attributionComplete &&
@@ -618,7 +645,9 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		ObservationStatus:     observationStatus,
 		ObservationDetails:    modelObservationCompleteness(observationCompleteness),
 		CoverageKeys:          keys,
-		CompleteDomains:       publicationDomains,
+		CompleteDomains:       publicationCompleteDomains,
+		ResolvedDirtyCoverage: publicationRetiredDomains,
+		AuthoritativeRoots:    publicationAuthoritativeRoots,
 		DirtyCoverage:         dirtyCoverage,
 		GraphBefore:           graphBefore,
 		GraphAfter:            graphAfter,

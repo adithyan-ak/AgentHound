@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/server/model"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -240,6 +241,53 @@ func (s *ScanStore) BeginScan(
 		return nil, fmt.Errorf("commit scan lifecycle: %w", err)
 	}
 	return cumulativeDirty, nil
+}
+
+// ResolveRetiredCoverage returns prior child heads that are absent from a
+// completed exhaustive collector-root active set. It is read before graph
+// mutation so the pipeline can reconcile those scopes as complete-empty.
+func (s *ScanStore) ResolveRetiredCoverage(
+	ctx context.Context,
+	roots []sdkingest.CoverageRoot,
+) ([]string, error) {
+	if len(roots) == 0 {
+		return nil, nil
+	}
+	rootKeys := make([]string, 0, len(roots))
+	for _, root := range roots {
+		if root.CoverageKey == "" {
+			continue
+		}
+		rootKeys = append(rootKeys, root.CoverageKey)
+	}
+	rootKeys = normalizeCoverageKeys(rootKeys)
+	if len(rootKeys) == 0 {
+		return nil, nil
+	}
+
+	rows, err := s.pool.Query(ctx, `SELECT coverage_key, root_key
+		FROM coverage_heads
+		WHERE root_key = ANY($1::text[])
+		ORDER BY root_key, coverage_key`,
+		rootKeys,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("read authoritative coverage children: %w", err)
+	}
+	defer rows.Close()
+
+	var heads []coverageHead
+	for rows.Next() {
+		var head coverageHead
+		if err := rows.Scan(&head.Key, &head.Root); err != nil {
+			return nil, fmt.Errorf("scan authoritative coverage child: %w", err)
+		}
+		heads = append(heads, head)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read authoritative coverage children: %w", err)
+	}
+	return retiredCoverageKeys(roots, heads), nil
 }
 
 func (s *ScanStore) RecordFailure(ctx context.Context, failure ScanFailure) error {

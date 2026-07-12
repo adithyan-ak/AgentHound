@@ -44,7 +44,13 @@ function Endpoint({ id, name, kind }: { id: string; name: string; kind: string }
   );
 }
 
-function RelationshipCard({ edge }: { edge: BundledEdge }) {
+function RelationshipCard({
+  edge,
+  targetKind,
+}: {
+  edge: BundledEdge;
+  targetKind: string;
+}) {
   const category = getEdgeCategory(edge.kind);
   const color = EDGE_COLORS[category];
   const exploit = edgeExploit(edge.kind);
@@ -67,10 +73,13 @@ function RelationshipCard({ edge }: { edge: BundledEdge }) {
           className="rounded-[2px] border px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-[0.06em]"
           style={{ color, borderColor: `${color}55`, background: `${color}14` }}
         >
-          {edgeLabel(edge.kind)}
+          {edgeLabel(edge.kind, { properties: props })}
         </span>
         <span className="font-mono text-[10px] text-muted-foreground">
-          {edgeDescription(edge.kind)}
+          {edgeDescription(edge.kind, {
+            properties: props,
+            targetKind,
+          })}
         </span>
       </div>
       {props["assertion_type"] === "configured_reference" && (
@@ -176,7 +185,7 @@ export function EdgeDetailDrawer() {
               className="rounded-[2px] border px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-[0.06em]"
               style={{ color, borderColor: `${color}55`, background: `${color}14` }}
             >
-              {edgeLabel(d.kind)}
+              {edgeLabel(d.kind, { properties: d.properties })}
             </span>
             <ArrowRight className="mt-1 h-3.5 w-3.5" style={{ color }} />
           </div>
@@ -210,7 +219,11 @@ export function EdgeDetailDrawer() {
           </div>
           <div className="space-y-2">
             {d.bundledEdges.map((be, i) => (
-              <RelationshipCard key={`${be.kind}-${i}`} edge={be} />
+              <RelationshipCard
+                key={`${be.kind}-${i}`}
+                edge={be}
+                targetKind={d.targetKind}
+              />
             ))}
           </div>
 

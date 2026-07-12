@@ -117,6 +117,34 @@ func TestCoverageStatesUsesTargetScopedOutcomeKey(t *testing.T) {
 	}
 }
 
+func TestCompleteAuthoritativeRootsRequiresCompleteRootAndChildren(t *testing.T) {
+	root := CanonicalCoverageKey("mcp", "root", "collect")
+	child := CanonicalCoverageKey("mcp", "target", "server-a")
+	report := &CollectionReport{
+		State:        OutcomeComplete,
+		CoverageKeys: []string{root, child},
+		AuthoritativeRoots: []CoverageRoot{{
+			CoverageKey:       root,
+			ChildCoverageKeys: []string{child},
+		}},
+		Outcomes: []CollectionOutcome{
+			{CoverageKey: root, State: OutcomeComplete},
+			{CoverageKey: child, State: OutcomeComplete},
+		},
+	}
+	if got := CompleteAuthoritativeRoots(report); !reflect.DeepEqual(
+		got,
+		report.AuthoritativeRoots,
+	) {
+		t.Fatalf("complete authoritative roots = %+v, want %+v", got, report.AuthoritativeRoots)
+	}
+
+	report.Outcomes[1].State = OutcomeFailed
+	if got := CompleteAuthoritativeRoots(report); len(got) != 0 {
+		t.Fatalf("failed child produced authoritative root: %+v", got)
+	}
+}
+
 func TestCanonicalCoverageKeySeparatesScopesWithoutLeakingTarget(t *testing.T) {
 	first := CanonicalCoverageKey("a2a", "target", "https://one.example/agent")
 	second := CanonicalCoverageKey("a2a", "target", "https://two.example/agent")
@@ -128,6 +156,12 @@ func TestCanonicalCoverageKeySeparatesScopesWithoutLeakingTarget(t *testing.T) {
 	}
 	if strings.Contains(first, "one.example") {
 		t.Fatalf("coverage key leaks target material: %q", first)
+	}
+	if got, want := ParentCollectorRootKey(first), CollectorRootCoverageKey("a2a"); got != want {
+		t.Fatalf("parent collector root = %q, want %q", got, want)
+	}
+	if got := ParentCollectorRootKey(CollectorRootCoverageKey("a2a")); got != "" {
+		t.Fatalf("collector root has parent %q, want none", got)
 	}
 }
 

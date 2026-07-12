@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Finding } from "@entities/finding/model";
 
 const mocks = vi.hoisted(() => ({
   useFindings: vi.fn(),
@@ -29,17 +30,40 @@ const currentScope = {
   stale: false,
 };
 
-function renderPage() {
+function renderPage(initialEntry = "/findings") {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <FindingsListPage />
     </MemoryRouter>,
   );
 }
 
+function finding(id: string, severity: string): Finding {
+  return {
+    id,
+    severity,
+    category: "Test",
+    title: `${severity} finding`,
+    description: `${severity} test finding`,
+    edge_kind: "CAN_REACH",
+    source_id: `source-${id}`,
+    source_name: `Source ${id}`,
+    source_kind: "AgentInstance",
+    target_id: `target-${id}`,
+    target_name: `Target ${id}`,
+    target_kind: "MCPResource",
+    confidence: 0.9,
+    variant: "default",
+    evidence: { state: "inferred" },
+    owasp_map: [],
+    atlas_map: [],
+  };
+}
+
 describe("FindingsListPage request and snapshot states", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Element.prototype.scrollIntoView = vi.fn();
   });
 
   it("withholds the empty verdict after a cold request failure", () => {
@@ -82,5 +106,25 @@ describe("FindingsListPage request and snapshot states", () => {
     expect(screen.getByText("Showing cached findings")).toBeInTheDocument();
     expect(screen.getByText(/current status is unavailable/i)).toBeInTheDocument();
     expect(screen.queryByText(/No findings detected in the current/i)).not.toBeInTheDocument();
+  });
+
+  it("applies the critical and high severity route filter", () => {
+    mocks.useFindings.mockReturnValue({
+      data: [
+        finding("critical", "critical"),
+        finding("high", "high"),
+        finding("medium", "medium"),
+      ],
+      snapshot: currentScope,
+      isLoading: false,
+      isError: false,
+      dataUpdatedAt: Date.now(),
+    });
+
+    renderPage("/findings?sev=critical,high");
+
+    expect(screen.getByText("critical finding")).toBeInTheDocument();
+    expect(screen.getByText("high finding")).toBeInTheDocument();
+    expect(screen.queryByText("medium finding")).not.toBeInTheDocument();
   });
 });

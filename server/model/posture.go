@@ -44,6 +44,8 @@ type PostureCompleteness struct {
 type PostureObservationCompleteness struct {
 	IncompletePropertyNodes         int64 `json:"incomplete_property_nodes"`
 	IncompletePropertyRelationships int64 `json:"incomplete_property_relationships"`
+	TokenlessNodes                  int64 `json:"tokenless_nodes"`
+	TokenlessIncidentRelationships  int64 `json:"tokenless_incident_relationships"`
 }
 
 type PostureObservationTimes struct {

@@ -71,6 +71,11 @@ score = 0.30 * auth_strength + 0.30 * blast_radius + 0.25 * delegation_surface
 | `delegation_surface` | `min(delegated_a2a_agent_count * 20, 100)` |
 | `impersonation` | `min(can_impersonate_peer_count * 25, 100)` |
 
+For A2A imports, `auth_method=none` without
+`auth_evidence=anonymous_probe_succeeded` contributes an incomplete 0–100 auth
+bound (`auth_evidence` is listed as unknown) instead of an exact
+unauthenticated weakness score.
+
 ### MCPServer
 
 ```
