@@ -1,5 +1,59 @@
 # Changelog
 
+## v0.9.0
+
+Evidence-backed security posture milestone. Reworks the collection → analysis → API → UI pipeline so AgentHound only ever publishes a *complete* posture revision and never silently presents a partial scan as authoritative: every collection now carries explicit coverage, stage, lifecycle, and provenance contracts, and unknown / partial / failed / truncated states are preserved and disclosed end-to-end instead of being flattened into "clean". Also fixes a graph-reconciliation defect where re-publishing a LiteLLM gateway from the Looter clobbered the fingerprinter's authoritative properties.
+
+### Evidence-backed posture: complete-revision publication + preserved partial states (#78)
+
+Publishes only complete posture revisions and preserves unknown, partial, and error states across collection, analysis, the REST API, and the UI. Removes the pre-launch compatibility paths that let an incomplete scan masquerade as a full one.
+
+**Collection contracts (new `sdk/ingest` primitives)**
+
+- **`OutcomeState` vocabulary** (`sdk/ingest/metadata.go`): every collection outcome is one of `unknown`, `not_applicable`, `complete`, `partial`, `failed`, or `truncated` — distinguishing a *successfully empty* observation from an unattempted, failed, partial, or truncated one. `CollectionReport` / `CollectionOutcome` / `AggregateOutcomeState` roll per-target outcomes up to a single scan-level state; a `not_applicable` optional method never drags the enclosing collection out of `complete`.
+- **Coverage ownership keys** (`sdk/ingest/observation.go`): `CanonicalCoverageKey(collector, scopeKind, scope)` hashes the scope identity (`collector:scopeKind:sha256:…`) so target URLs, command lines, and local config paths stay out of Neo4j ownership tokens and exported metadata. `CollectorRootCoverageKey` / `ParentCollectorRootKey` give exhaustive and targeted runs a stable shared root, and `CoverageRoot` lets an exhaustive run declare the complete active child set it observed (targeted runs must not).
+- **Normalization + stage results** (`sdk/ingest/result.go`): `NormalizationStatus` and per-`StageResult` reporting make ingest's own processing completeness a first-class, inspectable fact.
+
+**Ruleset provenance**
+
+- **`RulesetManifest`** (`sdk/rules/manifest.go`): each scan records the exact effective text- and fingerprint-rule semantics as content digests, with `Authenticity: "unverified"` unless a separate trusted-signature workflow attests the artifact. Surfaced in the UI (`features/rules/model/provenance.ts`).
+
+**Ingest, publication, and analysis**
+
+- **Strict-v2 ingest**: canonical collector-root coverage keys are accepted from collector scans, and a later complete invocation can repair matching *dirty* coverage left by an earlier partial run rather than leaving the graph half-updated.
+- **Publication store** (`server/internal/appdb/publication_store.go`): scan finalization (`FinalizeScanParams` → `PublicationResult`) publishes a new posture *revision* only when the run is complete, records observation completeness and resolved / dirty coverage, and produces a revision-scoped posture export. Findings, analysis paths, exports, and risk calculations are now current-snapshot and completeness-aware.
+- **Evidence graph** (`server/internal/analysis/evidence_graph.go`): attack-path evidence is finalized into a self-consistent node/edge graph, flagging edges whose endpoints are missing from the path so a finding can't cite a broken chain.
+
+**Schema (endpoint widening — no new node/edge kinds)**
+
+- `CAN_REACH` target set widened `{MCPResource}` → `{MCPResource, Credential}`; `EXPOSES` widened to source `{AIService, OpenWebUIInstance}` and target `{AIService, OllamaInstance}`.
+- Edge endpoint validation reworked from the old defaulting `ResolveEdgeEndpoints` to fail-closed membership checks (`SourceKindAllowed` / `TargetKindAllowed`) — an edge whose kind is absent from the registry is now rejected rather than silently defaulted.
+- New label helpers: `PublicNodeLabels` (inventory ordering — concrete kinds before the `AIService` umbrella), `UmbrellaCompanions` (the only valid multi-label tuples), and `ConcreteNodeKind` (the sole identity-owning kind in a tuple). Kind counts are unchanged (23 node kinds; 18 raw + 12 composite = 30 edge kinds).
+
+**UI**
+
+- Discloses partial / error states and renders complete-evidence semantics: a new `posture` entity + API, an Evidence tab and remediation surface in the explorer drawer, rules-provenance rendering, dashboard auth-evidence, and a shared `DataStateNotice` for degraded states.
+- Removed the misleading / disconnected `inspector` feature (`EntityInspector`, `RiskBreakdown`, `NodeConnections`, `NodeFindings`, `NodeProperties`, `EdgeEvidence`, and its graph-store) — its data is now sourced from the evidence-complete surfaces.
+
+### LiteLLM gateway: preserve fingerprint properties across loot publication (#80)
+
+Fixes a reconciliation defect where running the LiteLLM Looter after the fingerprinter overwrote the gateway node's authoritative properties (and could retire them prematurely).
+
+- **Reference-only ownership** (`sdk/ingest/node.go`): new `NodePropertySemantics` with a `reference_only` value plus a `property_semantics` node field. A reference-only observation asserts only the node's ID and kinds; it does not author or replace the node's managed properties.
+- **Reconciler** (`server/internal/graph/reconciler.go`, `writer.go`): observation bookkeeping now separates authoritative tokens from `observation_reference_tokens`. A node's managed properties are retired only when its last *authoritative* author disappears — a Looter that merely references the gateway no longer clobbers or prematurely retires the fingerprinter's facts, and when only references remain the node collapses safely to identity-only (`observation_properties_complete`). Ingest lifecycle / validator and the OpenAPI spec track the new field.
+
+### Documentation
+
+- Refreshed across the posture rework (shipped in tree with #78 / #80): `docs/reference/{api,graph-model,configuration,cli,risk-scoring,detection-rules,rule-syntax}.md`, `docs/reference/edges/can-reach.md`, `docs/architecture/{ingest-pipeline,post-processors,system-design}.md`, and `docs/operator/{attack-paths,discover,deployment,security,loot/litellm}.md`.
+
+### CI
+
+- `ci.yml` gains a Neo4j 4.4 / 5 version-matrix schema check plus dedicated, serialized steps (`-p 1`, gated behind `AGENTHOUND_FRESH_DB_INTEGRATION`) for the destructive fresh-database integrations — the LiteLLM fingerprint-then-loot publication flow, the first-party producer master-exposure query, and the fresh-schema complete-ingest publication — so they never race the parallel DB-touching packages.
+
+### Dependencies
+
+- No dependency bumps since v0.8.0; the Go toolchain stays at 1.25.12.
+
 ## v0.8.0
 
 Collector-hardening and read-only loot-expansion milestone. Brings the A2A, MCP, and agent-config collectors into line with the real protocol specs and vendor config formats — most notably spec-compliant JWS `jku` signature verification behind an SSRF-hardened key fetcher — expands the read-only Looter surface with 22 verified findings and new resource-sampling flags, retires the Docker demo lab and the out-of-spec Ollama weight flags, and clears a large batch of documentation drift.
