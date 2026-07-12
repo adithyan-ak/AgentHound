@@ -66,8 +66,11 @@ func TestShadows_ProcessSuccess(t *testing.T) {
 		"AgentInstance",
 		"TRUSTS_SERVER",
 		"PROVIDES_TOOL",
-		"WITH a, src",
-		"collect(DISTINCT snk)[..20]",
+		"WITH a, source_server",
+		"head(collect({",
+		"collect({",
+		"})[..20] AS sinks",
+		"e.evidence_relationship_ids",
 	} {
 		if !contains(poisonsCypher, want) {
 			t.Errorf("POISONS_CONTEXT pass missing %q (agent-scope/cap regression), got:\n%s", want, poisonsCypher)

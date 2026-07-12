@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { TrendingUp } from "lucide-react";
-import { useScans, isUsableScan } from "@entities/scan";
+import { comparablePublishedScans, useScans } from "@entities/scan";
 import { Skeleton } from "@shared/ui/primitives/skeleton";
 import { AsyncBoundary } from "@shared/ui/feedback";
 import { WidgetCard, AreaTrend } from "@shared/ui/widgets";
@@ -9,7 +9,7 @@ import { ACCENT, INSTRUMENT } from "@shared/theme/tokens";
 import { shortDate } from "@shared/lib/format";
 
 const INFO =
-  "Nodes and edges discovered per scan over time, drawn from the scan history — your attack surface's growth.";
+  "Frozen public graph totals from published revisions with the same coverage, rules, and identity comparison key.";
 
 const SERIES: TrendSeries[] = [
   { key: "nodes", label: "Nodes", color: ACCENT },
@@ -20,22 +20,21 @@ export function InventoryTrend() {
   const { data: scans, isLoading } = useScans(20);
 
   const data = useMemo(() => {
-    // Include completed_with_errors: the graph was populated, so the
-    // node/edge counts are real and part of the surface growth trend.
-    const usable = (scans ?? []).filter(isUsableScan);
-    return usable
+    return comparablePublishedScans(scans ?? [])
       .slice()
       .reverse()
       .map((s) => ({
-        t: shortDate(s.started_at),
-        nodes: s.node_count,
-        edges: s.edge_count,
+        t: shortDate(
+          s.artifact_observed_at ?? s.published_at ?? s.completed_at ?? s.started_at,
+        ),
+        nodes: s.graph_totals.after.total_nodes,
+        edges: s.graph_totals.after.total_edges,
       }));
   }, [scans]);
 
   return (
     <WidgetCard
-      title="Surface Growth"
+      title="Published Inventory"
       info={INFO}
       icon={TrendingUp}
       accent={ACCENT}
@@ -59,7 +58,7 @@ export function InventoryTrend() {
         loading={<Skeleton className="h-44 w-full" />}
         empty={
           <div className="flex h-44 items-center justify-center font-mono text-xs uppercase tracking-wider text-muted-foreground">
-            No completed scans yet
+            No comparable published snapshots yet
           </div>
         }
       >

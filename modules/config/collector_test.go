@@ -68,8 +68,8 @@ func TestConfigCollector_CollectSingleConfig(t *testing.T) {
 	if result.Meta.ScanID != "test-scan-001" {
 		t.Errorf("meta.scan_id = %q, want %q", result.Meta.ScanID, "test-scan-001")
 	}
-	if result.Meta.Version != 1 {
-		t.Errorf("meta.version = %d, want 1", result.Meta.Version)
+	if result.Meta.Version != ingest.CurrentVersion {
+		t.Errorf("meta.version = %d, want %d", result.Meta.Version, ingest.CurrentVersion)
 	}
 	if result.Meta.Type != "agenthound-ingest" {
 		t.Errorf("meta.type = %q", result.Meta.Type)
@@ -98,6 +98,58 @@ func TestConfigCollector_CollectSingleConfig(t *testing.T) {
 	}
 	if edgesByKind["RUNS_ON"] != 2 {
 		t.Errorf("RUNS_ON edges = %d, want 2", edgesByKind["RUNS_ON"])
+	}
+}
+
+func TestConfigCollectorScopesTwoTargetedFilesIndependently(t *testing.T) {
+	tmp := t.TempDir()
+	firstPath := filepath.Join(tmp, "first.json")
+	secondPath := filepath.Join(tmp, "second.json")
+	writeJSON(t, firstPath, `{
+		"mcpServers": {
+			"first": {"command": "node", "args": ["first.js"]}
+		}
+	}`)
+	writeJSON(t, secondPath, `{
+		"mcpServers": {
+			"second": {"command": "node", "args": ["second.js"]}
+		}
+	}`)
+
+	result, err := NewConfigCollector().Collect(
+		context.Background(),
+		collector.CollectOptions{
+			ConfigPaths: []string{firstPath, secondPath},
+			ScanID:      "two-config-targets",
+		},
+	)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	firstScope := configCoverageKey(firstPath)
+	secondScope := configCoverageKey(secondPath)
+	if firstScope == secondScope {
+		t.Fatal("two config files received the same coverage key")
+	}
+	coverage := make(map[string]bool)
+	for _, key := range result.Meta.Collection.CoverageKeys {
+		coverage[key] = true
+	}
+	if !coverage[firstScope] || !coverage[secondScope] {
+		t.Fatalf("target coverage keys = %v", result.Meta.Collection.CoverageKeys)
+	}
+	for _, node := range result.Graph.Nodes {
+		path, _ := node.Properties["path"].(string)
+		switch path {
+		case canonicalConfigPath(firstPath):
+			if len(node.ObservationDomains) != 1 || node.ObservationDomains[0] != firstScope {
+				t.Fatalf("first config domains = %v", node.ObservationDomains)
+			}
+		case canonicalConfigPath(secondPath):
+			if len(node.ObservationDomains) != 1 || node.ObservationDomains[0] != secondScope {
+				t.Fatalf("second config domains = %v", node.ObservationDomains)
+			}
+		}
 	}
 }
 
@@ -185,8 +237,11 @@ func TestConfigCollector_CredentialExtraction(t *testing.T) {
 	if credNode.Properties["value"] == "sk-ant-secret123456789" {
 		t.Error("credential value should be hashed by default, got raw value")
 	}
-	if credNode.Properties["is_exposed"] != true {
-		t.Error("hardcoded credential should be is_exposed=true")
+	if credNode.Properties["exposure_status"] != "exposed" {
+		t.Error("hardcoded credential should have exposure_status=exposed")
+	}
+	if _, legacy := credNode.Properties["is_exposed"]; legacy {
+		t.Error("hardcoded credential emitted legacy is_exposed alias")
 	}
 
 	edgesByKind := countEdgesByKind(result)
@@ -375,8 +430,8 @@ func TestConfigCollector_HTTPServerHostExtraction(t *testing.T) {
 	if hostname != "mcp.example.com" {
 		t.Errorf("hostname = %q, want %q", hostname, "mcp.example.com")
 	}
-	if hostNode.Properties["is_public"] != true {
-		t.Errorf("is_public = %v, want true", hostNode.Properties["is_public"])
+	if hostNode.Properties["scope"] != common.HostScopeUnknown {
+		t.Errorf("hostname scope = %v, want unknown", hostNode.Properties["scope"])
 	}
 }
 
@@ -405,8 +460,8 @@ func TestConfigCollector_StdioServerLocalhostHost(t *testing.T) {
 	if hostNode == nil {
 		t.Fatal("Host node not found")
 	}
-	if hostNode.Properties["is_local"] != true {
-		t.Errorf("is_local = %v, want true", hostNode.Properties["is_local"])
+	if hostNode.Properties["scope"] != common.HostScopeLocal {
+		t.Errorf("scope = %v, want local", hostNode.Properties["scope"])
 	}
 }
 
@@ -561,49 +616,154 @@ func TestConfigCollector_InstructionFiles(t *testing.T) {
 	if edgesByKind["LOADS_INSTRUCTIONS"] < 1 {
 		t.Errorf("LOADS_INSTRUCTIONS edges = %d, want >= 1", edgesByKind["LOADS_INSTRUCTIONS"])
 	}
+	configScope := configCoverageKey(configPath)
+	instructionScope := configCoverageKey(claudeMD)
+	foundDependencyEdge := false
+	for _, edge := range result.Graph.Edges {
+		if edge.Kind != "LOADS_INSTRUCTIONS" {
+			continue
+		}
+		hasConfigScope := false
+		hasInstructionScope := false
+		for _, domain := range edge.ObservationDomains {
+			hasConfigScope = hasConfigScope || domain == configScope
+			hasInstructionScope = hasInstructionScope || domain == instructionScope
+		}
+		if hasConfigScope && hasInstructionScope &&
+			edge.ObservationSemantics == ingest.ObservationSemanticsAllDependencies {
+			foundDependencyEdge = true
+			break
+		}
+	}
+	if !foundDependencyEdge {
+		t.Fatalf(
+			"LOADS_INSTRUCTIONS missing config/instruction dependency scopes: %+v",
+			result.Graph.Edges,
+		)
+	}
 }
 
 func TestConfigCollector_AuthMethodDerivation(t *testing.T) {
 	tests := []struct {
-		name    string
-		env     map[string]string
-		headers map[string]string
-		want    string
+		name      string
+		transport string
+		creds     []CredentialInfo
+		want      string
 	}{
 		{
-			name: "bearer from header",
-			headers: map[string]string{
-				"Authorization": "Bearer tok123",
-			},
-			want: "bearer",
+			name:  "bearer from header evidence",
+			creds: []CredentialInfo{{AuthMethod: common.AuthBearer}},
+			want:  "bearer",
 		},
 		{
-			name: "apiKey from env",
-			env: map[string]string{
-				"API_KEY": "some-value",
-			},
-			want: "apiKey",
+			name:  "apiKey from env evidence",
+			creds: []CredentialInfo{{AuthMethod: common.AuthAPIKey}},
+			want:  "apiKey",
 		},
 		{
-			name: "oauth from env",
-			env: map[string]string{
-				"OAUTH_CLIENT_ID": "cid",
-			},
-			want: "oauth",
+			name:  "oauth from env evidence",
+			creds: []CredentialInfo{{AuthMethod: common.AuthOAuth}},
+			want:  "oauth",
 		},
 		{
-			name: "none when empty",
-			want: "none",
+			name:      "stdio without credentials remains unknown",
+			transport: "stdio",
+			want:      "unknown",
+		},
+		{
+			name:      "http without credential evidence is unknown",
+			transport: "http",
+			want:      "unknown",
+		},
+		{
+			name:  "basic evidence",
+			creds: []CredentialInfo{{AuthMethod: common.AuthBasic}},
+			want:  "basic",
+		},
+		{
+			name:  "custom scheme remains authenticated custom",
+			creds: []CredentialInfo{{AuthMethod: common.AuthCustom}},
+			want:  "custom",
+		},
+		{
+			name: "strongest evidence wins",
+			creds: []CredentialInfo{
+				{AuthMethod: common.AuthAPIKey},
+				{AuthMethod: common.AuthOIDC},
+			},
+			want: "oidc",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := deriveAuthMethod(tt.env, tt.headers)
-			if got != tt.want {
+			got := deriveAuthMethod(tt.transport, tt.creds)
+			if string(got) != tt.want {
 				t.Errorf("deriveAuthMethod() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestConfigCollector_StdioWithoutCredentialUsesLocalProcessEvidence(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	writeJSON(t, configPath, `{
+		"mcpServers": {
+			"local": {"command": "node", "args": ["server.js"]}
+		}
+	}`)
+	result, err := NewConfigCollector().Collect(context.Background(), collector.CollectOptions{
+		ConfigPath: configPath,
+		ScanID:     "auth-evidence",
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	server := findNodeByKind(result, "MCPServer")
+	if server == nil {
+		t.Fatal("MCPServer not found")
+	}
+	if got := server.Properties["auth_method"]; got != string(common.AuthUnknown) {
+		t.Fatalf("auth_method = %v, want unknown", got)
+	}
+	if got := server.Properties["auth_evidence"]; got != common.AuthEvidenceLocalProcess {
+		t.Fatalf("auth_evidence = %v, want local_process", got)
+	}
+	if got := server.Properties["auth_assurance"]; got != string(common.AuthAssuranceUnknown) {
+		t.Fatalf("auth_assurance = %v, want unknown", got)
+	}
+}
+
+func TestConfigCollector_PreservesOrderedStdioIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	writeJSON(t, path, `{
+		"mcpServers": {
+			"first":  {"command": "node", "args": ["a.js", "b.js"]},
+			"second": {"command": "node", "args": ["b.js", "a.js"]}
+		}
+	}`)
+
+	result, err := NewConfigCollector().Collect(context.Background(), collector.CollectOptions{
+		ConfigPath: path,
+		ScanID:     "identity-test",
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	var serverIDs []string
+	for _, node := range findNodesByKind(result, "MCPServer") {
+		serverIDs = append(serverIDs, node.ID)
+	}
+	if len(serverIDs) != 2 || serverIDs[0] == serverIDs[1] {
+		t.Fatalf("ordered stdio definitions collapsed: %v", serverIDs)
+	}
+	for _, node := range findNodesByKind(result, "MCPServer") {
+		if node.Properties["id_scheme"] != ingest.MCPStdioIdentitySchemeV2 {
+			t.Fatalf("stdio identity scheme = %v, want v2", node.Properties["id_scheme"])
+		}
+		if _, exists := node.Properties["legacy_objectid"]; exists {
+			t.Fatalf("stdio server exposed removed legacy identity: %+v", node.Properties)
+		}
 	}
 }
 
@@ -648,8 +808,8 @@ func TestConfigCollector_EdgeProperties(t *testing.T) {
 		t.Fatal("TRUSTS_SERVER edge not found")
 	}
 	rw, _ := trustEdge.Properties["risk_weight"].(float64)
-	if rw != 0.1 {
-		t.Errorf("TRUSTS_SERVER risk_weight = %v, want 0.1 (none auth)", rw)
+	if rw != 0.5 {
+		t.Errorf("TRUSTS_SERVER risk_weight = %v, want 0.5 (unknown auth)", rw)
 	}
 
 	configuredIn := findEdgeByKind(result, "CONFIGURED_IN")

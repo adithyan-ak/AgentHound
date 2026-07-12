@@ -1,6 +1,6 @@
 import type { APIEdge, APINode } from "@entities/graph/dto";
-import { AlertTriangle, Shield } from "lucide-react";
-import { SEVERITY, SIGNAL_OK } from "@shared/theme/tokens";
+import { AlertTriangle, FileQuestion } from "lucide-react";
+import { SEVERITY } from "@shared/theme/tokens";
 import { deriveRemediations, type RemediationItem } from "@entities/security";
 
 export function RemediationTab({
@@ -17,17 +17,17 @@ export function RemediationTab({
     return (
       <div
         className="flex max-w-md flex-col items-start gap-2 rounded-[3px] border border-border bg-black/30 p-4"
-        style={{ boxShadow: `inset 2px 0 0 0 ${SIGNAL_OK}` }}
       >
-        <div className="flex items-center gap-2" style={{ color: SIGNAL_OK }}>
-          <Shield className="h-4 w-4" strokeWidth={2.25} />
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <FileQuestion className="h-4 w-4" strokeWidth={2.25} />
           <span className="font-mono text-sm font-semibold uppercase tracking-[0.06em]">
-            No action required
+            No generated recommendation
           </span>
         </div>
         <p className="text-xs text-muted-foreground">
-          No active remediation items detected for this node. It does not currently participate in
-          any composite attack path.
+          This drawer has no supported recommendation for the loaded node and
+          relationships. That is not evidence that the node is clean or that no
+          finding applies.
         </p>
       </div>
     );

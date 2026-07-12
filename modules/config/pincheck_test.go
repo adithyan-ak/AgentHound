@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/adithyan-ak/agenthound/sdk/common"
+)
 
 func TestIsUnpinned(t *testing.T) {
 	tests := []struct {
@@ -105,6 +109,18 @@ func TestIsUnpinned(t *testing.T) {
 			args:    []string{"--verbose"},
 			want:    false,
 		},
+		{
+			name:    "path-qualified npx",
+			command: "/usr/local/bin/npx",
+			args:    []string{"-y", "some-tool"},
+			want:    true,
+		},
+		{
+			name:    "windows path-qualified uvx",
+			command: `C:\Users\agent\.local\bin\uvx.exe`,
+			args:    []string{"some-pkg==1.0.0"},
+			want:    false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -114,5 +130,28 @@ func TestIsUnpinned(t *testing.T) {
 				t.Errorf("IsUnpinned(%q, %v) = %v, want %v", tt.command, tt.args, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestAssessPinningPreservesUnknown(t *testing.T) {
+	tests := []struct {
+		command string
+		args    []string
+		want    common.PinningStatus
+	}{
+		{"npx", nil, common.PinningUnknown},
+		{"npx", []string{"-y", "pkg"}, common.PinningUnpinned},
+		{"npx", []string{"-y", "pkg@1.2.3"}, common.PinningPinned},
+		{"uvx", []string{"--verbose"}, common.PinningUnknown},
+		{"node", []string{"server.js"}, common.PinningUnknown},
+		{"/opt/homebrew/bin/npx", []string{"pkg"}, common.PinningUnpinned},
+		{`C:\tools\npx`, []string{"pkg@1.2.3"}, common.PinningPinned},
+		{`C:\tools\uvx.exe`, []string{"pkg==1.2.3"}, common.PinningPinned},
+		{"custom-launcher", []string{"pkg@1.2.3"}, common.PinningUnknown},
+	}
+	for _, tt := range tests {
+		if got := AssessPinning(tt.command, tt.args); got != tt.want {
+			t.Errorf("AssessPinning(%q, %v) = %q, want %q", tt.command, tt.args, got, tt.want)
+		}
 	}
 }

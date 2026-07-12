@@ -27,6 +27,7 @@ type MatcherSpec struct {
 	Keywords        []string      `yaml:"keywords,omitempty"`
 	Prefixes        []string      `yaml:"prefixes,omitempty"`
 	CaseInsensitive bool          `yaml:"case_insensitive,omitempty"`
+	WordBoundary    bool          `yaml:"word_boundary,omitempty"`
 	MatchMode       string        `yaml:"match_mode,omitempty"`
 	Operator        string        `yaml:"operator,omitempty"`
 	Matchers        []MatcherSpec `yaml:"matchers,omitempty"`

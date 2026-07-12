@@ -31,9 +31,23 @@ var AllowedNodeKinds = map[string]bool{
 	"ExtractedTrainingSignal": true,
 }
 
-// AllNodeLabels includes all 25 node labels (23 collector + 2 synthetic) for
-// Neo4j schema operations. Schema-init logic skips labels in UmbrellaLabels
-// when creating uniqueness constraints — see UmbrellaLabels for the why.
+// PublicNodeLabels is the ordered set of node labels exposed by inventory
+// endpoints. Concrete AI-service labels precede the AIService umbrella so a
+// multi-label node is counted under its concrete kind. Internal labels such as
+// SchemaVersion are intentionally absent.
+var PublicNodeLabels = []string{
+	"MCPServer", "MCPTool", "MCPResource", "MCPPrompt",
+	"A2AAgent", "A2ASkill", "AgentInstance",
+	"Identity", "Credential", "Host",
+	"ConfigFile", "InstructionFile",
+	"OllamaInstance", "VLLMInstance", "QdrantInstance", "MLflowServer",
+	"LiteLLMGateway", "JupyterServer", "LangServeApp", "OpenWebUIInstance",
+	"AIModel", "ExtractedTrainingSignal", "AIService",
+}
+
+// AllNodeLabels includes all collector-produced node labels for Neo4j schema
+// operations. Schema initialization skips labels in UmbrellaLabels when
+// creating uniqueness constraints.
 var AllNodeLabels = []string{
 	"MCPServer", "MCPTool", "MCPResource", "MCPPrompt",
 	"A2AAgent", "A2ASkill", "AgentInstance",
@@ -42,7 +56,6 @@ var AllNodeLabels = []string{
 	"OllamaInstance", "VLLMInstance", "QdrantInstance", "MLflowServer",
 	"LiteLLMGateway", "JupyterServer", "LangServeApp", "OpenWebUIInstance",
 	"AIService", "AIModel", "ExtractedTrainingSignal",
-	"ResourceGroup", "TrustZone",
 }
 
 // UmbrellaLabels are labels that nodes carry as a multi-label *companion* to a
@@ -54,6 +67,52 @@ var AllNodeLabels = []string{
 // across different per-kind hash inputs.
 var UmbrellaLabels = map[string]bool{
 	"AIService": true,
+}
+
+// UmbrellaCompanions enumerates the only valid public multi-label tuples.
+// Every key is a concrete kind that owns object identity; values are optional
+// query-convenience labels that may accompany it.
+var UmbrellaCompanions = map[string]map[string]bool{
+	"OllamaInstance":    {"AIService": true},
+	"VLLMInstance":      {"AIService": true},
+	"QdrantInstance":    {"AIService": true},
+	"MLflowServer":      {"AIService": true},
+	"LiteLLMGateway":    {"AIService": true},
+	"JupyterServer":     {"AIService": true},
+	"LangServeApp":      {"AIService": true},
+	"OpenWebUIInstance": {"AIService": true},
+}
+
+// ConcreteNodeKind returns the sole identity-owning kind in a valid node-kind
+// tuple. Invalid tuples return the empty string.
+func ConcreteNodeKind(kinds []string) string {
+	if len(kinds) == 0 {
+		return ""
+	}
+	seen := make(map[string]bool, len(kinds))
+	concrete := ""
+	for _, kind := range kinds {
+		if !AllowedNodeKinds[kind] || seen[kind] {
+			return ""
+		}
+		seen[kind] = true
+		if UmbrellaLabels[kind] {
+			continue
+		}
+		if concrete != "" {
+			return ""
+		}
+		concrete = kind
+	}
+	if concrete == "" || kinds[0] != concrete {
+		return ""
+	}
+	for _, kind := range kinds[1:] {
+		if !UmbrellaCompanions[concrete][kind] {
+			return ""
+		}
+	}
+	return concrete
 }
 
 // RawEdgeKinds are the 18 collector-produced edge kinds accepted in ingest
@@ -150,13 +209,13 @@ var EdgeKindEndpoints = map[string]EdgeEndpoints{
 	"SAME_AUTH_DOMAIN":      {SourceKinds: []string{"A2AAgent"}, TargetKinds: []string{"A2AAgent"}},
 	"HAS_ACCESS_TO":         {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPResource"}},
 	"CAN_EXECUTE":           {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"Host"}},
-	"CAN_REACH":             {SourceKinds: []string{"AgentInstance", "A2AAgent"}, TargetKinds: []string{"MCPResource"}},
+	"CAN_REACH":             {SourceKinds: []string{"AgentInstance", "A2AAgent"}, TargetKinds: []string{"MCPResource", "Credential"}},
 	"CAN_EXFILTRATE_VIA":    {SourceKinds: []string{"AgentInstance"}, TargetKinds: []string{"MCPTool"}},
 	"SHADOWS":               {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
 	"POISONED_DESCRIPTION":  {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
 	"CAN_IMPERSONATE":       {SourceKinds: []string{"A2AAgent"}, TargetKinds: []string{"A2AAgent"}},
 	"POISONED_INSTRUCTIONS": {SourceKinds: []string{"InstructionFile"}, TargetKinds: []string{"InstructionFile"}},
-	"EXPOSES":               {SourceKinds: []string{"AIService"}, TargetKinds: []string{"AIService"}},
+	"EXPOSES":               {SourceKinds: []string{"AIService", "OpenWebUIInstance"}, TargetKinds: []string{"AIService", "OllamaInstance"}},
 	"EXPOSES_CREDENTIAL":    {SourceKinds: []string{"AIService"}, TargetKinds: []string{"Credential"}},
 	"PROVIDES_MODEL":        {SourceKinds: []string{"OllamaInstance"}, TargetKinds: []string{"AIModel"}},
 	"EXTRACTED_FROM":        {SourceKinds: []string{"AIModel"}, TargetKinds: []string{"ExtractedTrainingSignal"}},
@@ -167,21 +226,34 @@ var EdgeKindEndpoints = map[string]EdgeEndpoints{
 	"POISONS_CONTEXT":       {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
 }
 
-// ResolveEdgeEndpoints returns the source and target node kinds for an edge,
-// using explicit values when set, falling back to the EdgeKindEndpoints registry.
-func ResolveEdgeEndpoints(kind, sourceKind, targetKind string) (string, string) {
-	if sourceKind != "" && targetKind != "" {
-		return sourceKind, targetKind
+// endpointKindAllowed reports whether kind is a member of allowed.
+func endpointKindAllowed(allowed []string, kind string) bool {
+	for _, k := range allowed {
+		if k == kind {
+			return true
+		}
 	}
-	ep, ok := EdgeKindEndpoints[kind]
+	return false
+}
+
+// SourceKindAllowed reports whether sourceKind is a semantically valid source
+// label for edgeKind per the EdgeKindEndpoints registry. Missing registry
+// entries fail closed because ingest accepts only the exhaustive raw-edge
+// registry. Callers should only pass a non-empty sourceKind.
+func SourceKindAllowed(edgeKind, sourceKind string) bool {
+	ep, ok := EdgeKindEndpoints[edgeKind]
 	if !ok {
-		return sourceKind, targetKind
+		return false
 	}
-	if sourceKind == "" && len(ep.SourceKinds) > 0 {
-		sourceKind = ep.SourceKinds[0]
+	return endpointKindAllowed(ep.SourceKinds, sourceKind)
+}
+
+// TargetKindAllowed reports whether targetKind is a semantically valid target
+// label for edgeKind per the EdgeKindEndpoints registry. See SourceKindAllowed.
+func TargetKindAllowed(edgeKind, targetKind string) bool {
+	ep, ok := EdgeKindEndpoints[edgeKind]
+	if !ok {
+		return false
 	}
-	if targetKind == "" && len(ep.TargetKinds) > 0 {
-		targetKind = ep.TargetKinds[0]
-	}
-	return sourceKind, targetKind
+	return endpointKindAllowed(ep.TargetKinds, targetKind)
 }

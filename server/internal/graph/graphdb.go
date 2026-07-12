@@ -28,11 +28,13 @@ type ProcessingStats struct {
 // GraphDB abstracts graph read/write operations for post-processors.
 type GraphDB interface {
 	Query(ctx context.Context, cypher string, params map[string]any) ([]map[string]any, error)
-	WriteEdges(ctx context.Context, edges []ingest.Edge, scanID string) (int, error)
+	WriteCompositeEdges(ctx context.Context, edges []ingest.Edge, scanID string) (int, error)
 	UpdateNodeProperties(ctx context.Context, objectID string, props map[string]any) error
 	ExecuteWrite(ctx context.Context, cypher string, params map[string]any) (int, error)
 	GetNode(ctx context.Context, objectID string) (*ingest.Node, []ingest.Edge, error)
 	ListNodes(ctx context.Context, kind string, limit int) ([]ingest.Node, error)
+	ListNodesPage(ctx context.Context, kind string, limit, offset int, revision string) ([]ingest.Node, PageInfo, error)
+	GetStats(ctx context.Context) (*GraphStats, error)
 	HasAPOC(ctx context.Context) bool
 }
 
@@ -50,8 +52,8 @@ func (db *DB) Query(ctx context.Context, cypher string, params map[string]any) (
 	return db.reader.Query(ctx, cypher, params)
 }
 
-func (db *DB) WriteEdges(ctx context.Context, edges []ingest.Edge, scanID string) (int, error) {
-	return db.writer.WriteEdges(ctx, edges, scanID)
+func (db *DB) WriteCompositeEdges(ctx context.Context, edges []ingest.Edge, scanID string) (int, error) {
+	return db.writer.WriteCompositeEdges(ctx, edges, scanID)
 }
 
 func (db *DB) GetNode(ctx context.Context, objectID string) (*ingest.Node, []ingest.Edge, error) {
@@ -60,6 +62,19 @@ func (db *DB) GetNode(ctx context.Context, objectID string) (*ingest.Node, []ing
 
 func (db *DB) ListNodes(ctx context.Context, kind string, limit int) ([]ingest.Node, error) {
 	return db.reader.ListNodes(ctx, kind, limit)
+}
+
+func (db *DB) ListNodesPage(
+	ctx context.Context,
+	kind string,
+	limit, offset int,
+	revision string,
+) ([]ingest.Node, PageInfo, error) {
+	return db.reader.ListNodesPage(ctx, kind, limit, offset, revision)
+}
+
+func (db *DB) GetStats(ctx context.Context) (*GraphStats, error) {
+	return db.reader.GetStats(ctx)
 }
 
 func (db *DB) HasAPOC(ctx context.Context) bool {
@@ -96,7 +111,8 @@ func (db *DB) UpdateNodeProperties(ctx context.Context, objectID string, props m
 	defer session.Close(ctx)
 
 	_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
-		_, err := tx.Run(ctx, "MATCH (n {objectid: $id}) SET n += $props", map[string]any{
+		_, err := tx.Run(ctx, `MATCH (n {objectid: $id})
+SET n += $props, n.graph_updated_at = datetime()`, map[string]any{
 			"id":    objectID,
 			"props": props,
 		})

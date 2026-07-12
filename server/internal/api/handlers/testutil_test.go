@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
+	"github.com/adithyan-ak/agenthound/server/internal/graph"
+	"github.com/adithyan-ak/agenthound/server/model"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -22,7 +24,7 @@ func (m *mockGraphDB) Query(_ context.Context, _ string, _ map[string]any) ([]ma
 	return m.queryResult, m.queryErr
 }
 
-func (m *mockGraphDB) WriteEdges(_ context.Context, _ []ingest.Edge, _ string) (int, error) {
+func (m *mockGraphDB) WriteCompositeEdges(_ context.Context, _ []ingest.Edge, _ string) (int, error) {
 	return m.writeCount, m.writeErr
 }
 
@@ -42,8 +44,61 @@ func (m *mockGraphDB) ListNodes(_ context.Context, _ string, _ int) ([]ingest.No
 	return nil, nil
 }
 
+func (m *mockGraphDB) ListNodesPage(_ context.Context, _ string, _, _ int, _ string) ([]ingest.Node, graph.PageInfo, error) {
+	return nil, graph.PageInfo{Complete: true}, nil
+}
+
+func (m *mockGraphDB) GetStats(_ context.Context) (*graph.GraphStats, error) {
+	return &graph.GraphStats{
+		NodeCounts: map[string]int64{},
+		EdgeCounts: map[string]int64{},
+	}, nil
+}
+
 func (m *mockGraphDB) HasAPOC(_ context.Context) bool {
 	return m.hasAPOCVal
+}
+
+type fakeProjectionStateReader struct {
+	states []*model.ProjectionState
+	err    error
+	calls  int
+}
+
+func (f *fakeProjectionStateReader) GetProjectionState(
+	_ context.Context,
+) (*model.ProjectionState, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.states) == 0 {
+		return nil, nil
+	}
+	index := f.calls
+	if index >= len(f.states) {
+		index = len(f.states) - 1
+	}
+	f.calls++
+	return f.states[index], nil
+}
+
+func completeProjectionState(scanID string, revision int64) *model.ProjectionState {
+	return &model.ProjectionState{
+		Status:            model.ProjectionComplete,
+		ScanID:            scanID,
+		PublishedScanID:   scanID,
+		PublishedRevision: &revision,
+		DirtyCoverage:     []string{},
+	}
+}
+
+func newStableAnalysisHandler(db graph.GraphDB) *AnalysisHandler {
+	return &AnalysisHandler{
+		graphDB: db,
+		projectionReader: &fakeProjectionStateReader{
+			states: []*model.ProjectionState{completeProjectionState("scan-1", 1)},
+		},
+	}
 }
 
 func newTestRequest(method, path string, body []byte) *http.Request {

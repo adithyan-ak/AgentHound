@@ -4,10 +4,77 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestRunFingerprintUsesPostInitBundleOverride(t *testing.T) {
+	SetBundleOverridePath("")
+	builtin, err := LoadFingerprints()
+	if err != nil {
+		t.Fatalf("load builtins: %v", err)
+	}
+	var stale FingerprintRule
+	for _, rule := range builtin {
+		if rule.ID == "ollama" {
+			stale = rule
+			break
+		}
+	}
+	if stale.ID == "" {
+		t.Fatal("builtin ollama rule missing")
+	}
+
+	dir := t.TempDir()
+	override := `id: ollama
+name: Override
+version: 3
+service_kind: ollama
+probes:
+  - method: GET
+    path: /override
+    matchers:
+      - type: http_status
+        status_code: 200
+emit:
+  node_kinds: [OllamaInstance, AIService]
+  properties:
+    service_kind: ollama
+`
+	if err := os.WriteFile(filepath.Join(dir, "ollama.yaml"), []byte(override), 0o600); err != nil {
+		t.Fatalf("write override: %v", err)
+	}
+	SetBundleOverridePath(dir)
+	defer SetBundleOverridePath("")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/override" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	result, err := RunFingerprint(context.Background(), srv.Client(), srv.URL, stale)
+	if err != nil {
+		t.Fatalf("RunFingerprint: %v", err)
+	}
+	if !result.Matched {
+		t.Fatal("stale init-time rule was used instead of post-init bundle override")
+	}
+	effective, err := LoadFingerprints()
+	if err != nil {
+		t.Fatalf("load effective fingerprints: %v", err)
+	}
+	manifest := BuildManifest(nil, effective)
+	if len(manifest.Entries) == 0 {
+		t.Fatal("effective fingerprint manifest is empty")
+	}
+}
 
 func TestRunFingerprint_OllamaHappyPath(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

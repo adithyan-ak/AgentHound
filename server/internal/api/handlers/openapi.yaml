@@ -67,6 +67,9 @@ components:
 
     GraphStats:
       type: object
+      additionalProperties: false
+      required:
+        [node_counts, edge_counts, total_nodes, total_edges, projection]
       properties:
         node_counts:
           type: object
@@ -80,6 +83,21 @@ components:
           type: integer
         total_edges:
           type: integer
+        projection:
+          $ref: "#/components/schemas/ProjectionIdentity"
+
+    ProjectionIdentity:
+      type: object
+      additionalProperties: false
+      required: [scan_id, revision]
+      properties:
+        scan_id:
+          type: string
+          minLength: 1
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
 
     Node:
       type: object
@@ -110,6 +128,249 @@ components:
         properties:
           type: object
           additionalProperties: true
+
+    PageMetadata:
+      type: object
+      additionalProperties: false
+      required: [offset, limit, total, has_more, complete, revision, projection]
+      properties:
+        offset: { type: integer, minimum: 0 }
+        limit: { type: integer, minimum: 1 }
+        total: { type: integer, format: int64, minimum: 0 }
+        has_more: { type: boolean }
+        complete: { type: boolean }
+        revision: { type: string, minLength: 1 }
+        projection:
+          $ref: "#/components/schemas/ProjectionIdentity"
+
+    NodeListResponse:
+      type: object
+      additionalProperties: false
+      required: [nodes, page]
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/Node"
+        page:
+          $ref: "#/components/schemas/PageMetadata"
+
+    EdgeListResponse:
+      type: object
+      additionalProperties: false
+      required: [edges, page]
+      properties:
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/Edge"
+        page:
+          $ref: "#/components/schemas/PageMetadata"
+
+    IngestV2:
+      type: object
+      additionalProperties: false
+      required: [meta, graph]
+      properties:
+        meta:
+          $ref: "#/components/schemas/IngestMetaV2"
+        graph:
+          type: object
+          additionalProperties: false
+          required: [nodes, edges]
+          properties:
+            nodes:
+              type: array
+              items:
+                $ref: "#/components/schemas/IngestNodeV2"
+            edges:
+              type: array
+              items:
+                $ref: "#/components/schemas/IngestEdgeV2"
+
+    IngestMetaV2:
+      type: object
+      additionalProperties: false
+      required:
+        - version
+        - type
+        - collector
+        - collector_version
+        - timestamp
+        - scan_id
+        - collection
+        - ruleset
+        - identity_schemes
+      properties:
+        version:
+          type: integer
+          enum: [2]
+        type:
+          type: string
+          enum: [agenthound-ingest]
+        collector:
+          type: string
+          enum: [mcp, a2a, config, scan]
+        collector_version:
+          type: string
+          minLength: 1
+        timestamp:
+          type: string
+          format: date-time
+        scan_id:
+          type: string
+          minLength: 1
+        collection:
+          $ref: "#/components/schemas/IngestCollectionV2"
+        ruleset:
+          $ref: "#/components/schemas/IngestRulesetV2"
+        identity_schemes:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/IngestIdentitySchemeV2"
+        extra:
+          type: object
+          additionalProperties: true
+
+    IngestCollectionV2:
+      type: object
+      additionalProperties: false
+      required: [state, coverage_keys, outcomes]
+      properties:
+        state:
+          type: string
+          enum: [unknown, not_applicable, complete, partial, failed, truncated]
+        coverage_keys:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            pattern: "^(mcp|a2a|config|scan):[^:]+:sha256:[0-9a-f]{64}$"
+        authoritative_roots:
+          type: array
+          uniqueItems: true
+          items:
+            type: object
+            additionalProperties: false
+            required: [coverage_key, child_coverage_keys]
+            properties:
+              coverage_key:
+                type: string
+                pattern: "^(mcp|a2a|config|scan):root:sha256:[0-9a-f]{64}$"
+              child_coverage_keys:
+                type: array
+                uniqueItems: true
+                items:
+                  type: string
+                  pattern: "^(mcp|a2a|config|scan):[^:]+:sha256:[0-9a-f]{64}$"
+        outcomes:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [collector, coverage_key, target, method, state]
+            properties:
+              collector:
+                type: string
+                enum: [mcp, a2a, config, scan]
+              coverage_key: { type: string }
+              target: { type: string, minLength: 1 }
+              method: { type: string, minLength: 1 }
+              state:
+                type: string
+                enum: [unknown, not_applicable, complete, partial, failed, truncated]
+              items: { type: integer, minimum: 0 }
+              error: { type: string }
+
+    IngestRulesetV2:
+      type: object
+      additionalProperties: false
+      required: [digest, load_state, authenticity]
+      properties:
+        digest: { type: string, minLength: 1 }
+        entries:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [type, id, version, semantic_sha256, source]
+            properties:
+              type: { type: string }
+              id: { type: string }
+              version: { type: integer, minimum: 1 }
+              semantic_sha256: { type: string }
+              source: { type: string }
+              effective_matcher:
+                type: object
+                additionalProperties: true
+        load_state:
+          type: string
+          enum: [unknown, not_applicable, complete, partial, failed, truncated]
+        errors:
+          type: array
+          items: { type: string }
+        authenticity: { type: string, minLength: 1 }
+
+    IngestIdentitySchemeV2:
+      type: object
+      additionalProperties: false
+      required: [entity_kind, scheme, version]
+      properties:
+        entity_kind: { type: string }
+        transport: { type: string }
+        scheme: { type: string, minLength: 1 }
+        version: { type: integer, minimum: 1 }
+
+    IngestNodeV2:
+      type: object
+      additionalProperties: false
+      required: [id, kinds, properties, observation_domains]
+      properties:
+        id: { type: string, minLength: 1 }
+        kinds:
+          type: array
+          minItems: 1
+          items: { type: string }
+        properties:
+          type: object
+          additionalProperties: true
+        observation_domains:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string }
+
+    IngestEdgeV2:
+      type: object
+      additionalProperties: false
+      required:
+        - source
+        - target
+        - kind
+        - source_kind
+        - target_kind
+        - properties
+        - observation_domains
+      properties:
+        source: { type: string, minLength: 1 }
+        target: { type: string, minLength: 1 }
+        kind: { type: string, minLength: 1 }
+        source_kind: { type: string, minLength: 1 }
+        target_kind: { type: string, minLength: 1 }
+        properties:
+          type: object
+          additionalProperties: true
+        observation_domains:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string }
+        observation_semantics:
+          type: string
+          enum: [any_owner, all_dependencies]
 
     NodeDetail:
       type: object
@@ -168,6 +429,7 @@ components:
 
     PathRequest:
       type: object
+      additionalProperties: false
       required: [source, source_kind]
       properties:
         source:
@@ -200,6 +462,9 @@ components:
           type: array
           items:
             type: string
+        properties:
+          type: object
+          additionalProperties: true
 
     PathEdge:
       type: object
@@ -231,20 +496,61 @@ components:
 
     PathResponse:
       type: object
+      additionalProperties: false
+      required: [paths, metadata, projection]
       properties:
         paths:
           type: array
           items:
             $ref: "#/components/schemas/PathResult"
+        metadata:
+          $ref: "#/components/schemas/TraversalMetadata"
+        projection:
+          $ref: "#/components/schemas/ProjectionIdentity"
+
+    TraversalMetadata:
+      type: object
+      required:
+        [scope, direction, relationship_kinds, max_hops, algorithm, complete]
+      properties:
+        scope:
+          type: string
+          enum: [topology, security]
+        direction:
+          type: string
+          enum: [out, both]
+        relationship_kinds:
+          type: array
+          items:
+            type: string
+        max_hops:
+          type: integer
         algorithm:
           type: string
-          description: Only present for weighted-path responses
+          enum: [bounded-min-weight, bounded-enumeration]
+        complete:
+          type: boolean
+        truncated:
+          type: boolean
+        expansion_limit:
+          type: integer
+        expansions:
+          type: integer
+        incomplete_reason:
+          type: string
 
     Finding:
       type: object
+      required:
+        [id, severity, category, title, description, edge_kind, source_id, source_name, source_kind, target_id, target_name, target_kind, confidence, variant, evidence, owasp_map, atlas_map]
       properties:
         id:
           type: string
+        scan_id:
+          type: string
+        captured_at:
+          type: string
+          format: date-time
         severity:
           type: string
           enum: [critical, high, medium, low]
@@ -270,6 +576,17 @@ components:
           type: string
         confidence:
           type: number
+        variant:
+          type: string
+          enum:
+            - unknown
+            - default
+            - credential_chain_observed_material
+            - credential_chain_reference
+            - credential_node_reference
+            - cross_protocol_host_correlation
+        evidence:
+          $ref: "#/components/schemas/FindingEvidence"
         owasp_map:
           type: array
           items:
@@ -287,6 +604,28 @@ components:
             has been recorded). Lets the register render the triage control
             without a per-row round-trip.
 
+    FindingEvidence:
+      type: object
+      required: [state, channels]
+      properties:
+        state:
+          type: string
+          enum: [unknown, observed_signal, inferred, hypothesis, reference_only]
+        detector:
+          type: string
+        match_type:
+          type: string
+        channels:
+          type: array
+          items:
+            type: string
+        material_status:
+          type: string
+        exposure_status:
+          type: string
+        correlation:
+          type: string
+
     TriageState:
       type: object
       properties:
@@ -301,6 +640,7 @@ components:
 
     TriageUpdateRequest:
       type: object
+      additionalProperties: false
       required: [status]
       properties:
         status:
@@ -309,14 +649,282 @@ components:
         note:
           type: string
 
+    FindingScope:
+      type: object
+      additionalProperties: false
+      required:
+        [mode, scan_id, revision, published_at, projection_status, snapshot_status, available, stale]
+      properties:
+        mode:
+          type: string
+          enum: [published]
+        scan_id:
+          type: string
+        revision:
+          type: integer
+          format: int64
+          nullable: true
+        published_at:
+          type: string
+          format: date-time
+          nullable: true
+        projection_status:
+          type: string
+        snapshot_status:
+          type: string
+        available:
+          type: boolean
+        stale:
+          type: boolean
+
+    FindingsResponse:
+      type: object
+      additionalProperties: false
+      required: [findings, scope]
+      properties:
+        findings:
+          type: array
+          items:
+            $ref: "#/components/schemas/Finding"
+        scope:
+          $ref: "#/components/schemas/FindingScope"
+
     FindingDetail:
       type: object
+      additionalProperties: false
+      required: [finding, attack_path, remediation, impact, snapshot]
       properties:
         finding:
           $ref: "#/components/schemas/Finding"
-        evidence:
+        attack_path:
+          allOf:
+            - $ref: "#/components/schemas/AttackPath"
+          nullable: true
+        remediation:
+          type: array
+          items:
+            $ref: "#/components/schemas/RemediationStep"
+        impact:
+          allOf:
+            - $ref: "#/components/schemas/FindingImpact"
+          nullable: true
+        snapshot:
+          type: object
+          additionalProperties: false
+          required:
+            [scope, scan_id, revision, published_at, projection_status, snapshot_status, available, stale, evidence_state]
+          properties:
+            scope:
+              type: string
+            scan_id:
+              type: string
+            revision:
+              type: integer
+              format: int64
+              nullable: true
+            published_at:
+              type: string
+              format: date-time
+              nullable: true
+            projection_status:
+              type: string
+            snapshot_status:
+              type: string
+            available:
+              type: boolean
+            stale:
+              type: boolean
+            evidence_state:
+              type: string
+              enum:
+                - unavailable
+                - persisted_exact_evidence
+
+    AttackPath:
+      type: object
+      required:
+        - nodes
+        - edges
+        - shape
+        - continuity
+        - direction
+        - completeness
+        - cost
+        - total_risk_weight
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttackPathNode"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttackPathEdge"
+        shape:
+          type: string
+          enum: [linear, branched, disconnected, cyclic, nodes_only]
+        continuity:
+          $ref: "#/components/schemas/EvidenceContinuity"
+        direction:
+          type: string
+          enum: [forward, reverse, mixed, non_linear, not_applicable]
+        completeness:
+          $ref: "#/components/schemas/EvidenceCompleteness"
+        linearization:
+          $ref: "#/components/schemas/EvidenceLinearization"
+        cost:
+          $ref: "#/components/schemas/AttackCost"
+        total_risk_weight:
+          type: number
+          nullable: true
+
+    AttackPathNode:
+      type: object
+      required: [id, kinds, properties]
+      properties:
+        id:
+          type: string
+        kinds:
+          type: array
+          items:
+            type: string
+        properties:
           type: object
           additionalProperties: true
+
+    AttackPathEdge:
+      type: object
+      required: [source, target, kind, properties, synthetic]
+      properties:
+        source:
+          type: string
+        target:
+          type: string
+        kind:
+          type: string
+        properties:
+          type: object
+          additionalProperties: true
+        synthetic:
+          type: boolean
+        provenance:
+          $ref: "#/components/schemas/EdgeProvenance"
+
+    EdgeProvenance:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+        basis:
+          type: string
+        source_collector:
+          type: string
+
+    EvidenceContinuity:
+      type: object
+      required: [state, component_count, missing_node_ids]
+      properties:
+        state:
+          type: string
+          enum: [continuous, discontinuous, not_applicable]
+        component_count:
+          type: integer
+        missing_node_ids:
+          type: array
+          items:
+            type: string
+
+    EvidenceCompleteness:
+      type: object
+      required: [state, reasons]
+      properties:
+        state:
+          type: string
+          enum: [complete, incomplete, not_applicable]
+        reasons:
+          type: array
+          items:
+            type: string
+
+    EvidenceLinearization:
+      type: object
+      required: [node_ids, edge_indexes]
+      properties:
+        node_ids:
+          type: array
+          items:
+            type: string
+        edge_indexes:
+          type: array
+          items:
+            type: integer
+
+    AttackCost:
+      type: object
+      required: [state, value, reasons, missing_weight_edge_indexes]
+      properties:
+        state:
+          type: string
+          enum: [complete, incomplete, not_applicable]
+        value:
+          type: number
+          nullable: true
+        reasons:
+          type: array
+          items:
+            type: string
+        missing_weight_edge_indexes:
+          type: array
+          items:
+            type: integer
+
+    RemediationActor:
+      type: object
+      required: [id, name, kind]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        kind:
+          type: string
+
+    RemediationStep:
+      type: object
+      required: [step, title, description, edge_kind, source, target]
+      properties:
+        step:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        edge_kind:
+          type: string
+        source:
+          $ref: "#/components/schemas/RemediationActor"
+        target:
+          $ref: "#/components/schemas/RemediationActor"
+        channels:
+          type: array
+          items:
+            type: string
+        commands:
+          type: array
+          items:
+            type: string
+
+    FindingImpact:
+      type: object
+      required: [summary, blast_radius]
+      properties:
+        summary:
+          type: string
+        blast_radius:
+          type: string
+        data_sensitivity:
+          type: string
 
     PreBuiltQuery:
       type: object
@@ -342,6 +950,8 @@ components:
 
     PreBuiltResult:
       type: object
+      additionalProperties: false
+      required: [query, rows, projection]
       properties:
         query:
           $ref: "#/components/schemas/PreBuiltQuery"
@@ -350,6 +960,10 @@ components:
           items:
             type: object
             additionalProperties: true
+        projection:
+          $ref: "#/components/schemas/ProjectionIdentity"
+        metadata:
+          $ref: "#/components/schemas/TraversalMetadata"
 
     Rule:
       type: object
@@ -386,19 +1000,91 @@ components:
         source:
           type: string
 
+    NormalizationWarning:
+      type: object
+      required: [code, status, message, publication_unsafe]
+      properties:
+        code:
+          type: string
+        status:
+          type: string
+          enum: [warning, degraded]
+        message:
+          type: string
+        context:
+          type: string
+        property:
+          type: string
+        publication_unsafe:
+          type: boolean
+
+    FactCounts:
+      type: object
+      additionalProperties: false
+      required: [nodes, edges]
+      properties:
+        nodes: { type: integer, minimum: 0 }
+        edges: { type: integer, minimum: 0 }
+
+    InventoryTotals:
+      type: object
+      additionalProperties: false
+      required: [node_counts, edge_counts, total_nodes, total_edges]
+      properties:
+        node_counts:
+          type: object
+          additionalProperties: { type: integer, format: int64 }
+        edge_counts:
+          type: object
+          additionalProperties: { type: integer, format: int64 }
+        total_nodes: { type: integer, format: int64, minimum: 0 }
+        total_edges: { type: integer, format: int64, minimum: 0 }
+
+    FrozenGraphTotals:
+      type: object
+      additionalProperties: false
+      required: [before, after]
+      properties:
+        before:
+          allOf:
+            - $ref: "#/components/schemas/InventoryTotals"
+          nullable: true
+        after:
+          allOf:
+            - $ref: "#/components/schemas/InventoryTotals"
+          nullable: true
+
     IngestResult:
       type: object
+      additionalProperties: false
+      required: [scan_id, outcome, projection_status, submitted, write_rows, graph_totals, normalization_status, collection, duration]
       properties:
         scan_id:
           type: string
-        nodes_written:
-          type: integer
-        edges_written:
-          type: integer
+        outcome:
+          type: string
+          enum: [unknown, complete, partial, failed]
+        projection_status:
+          type: string
+        submitted:
+          $ref: "#/components/schemas/FactCounts"
+        write_rows:
+          $ref: "#/components/schemas/FactCounts"
+        graph_totals:
+          $ref: "#/components/schemas/FrozenGraphTotals"
         warnings:
           type: array
           items:
             type: string
+        normalization_status:
+          type: string
+          enum: [complete, warning, degraded]
+        normalization_warnings:
+          type: array
+          items:
+            $ref: "#/components/schemas/NormalizationWarning"
+        collection:
+          $ref: "#/components/schemas/IngestCollectionV2"
         post_processing_stats:
           type: array
           items:
@@ -406,12 +1092,31 @@ components:
             properties:
               processor_name:
                 type: string
+        stages:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              state:
+                type: string
+              required:
+                type: boolean
+              duration:
+                type: integer
+              error:
+                type: string
+        published_revision:
+          type: integer
+          format: int64
         duration:
           type: integer
           description: Duration in nanoseconds
 
     Scan:
       type: object
+      required: [id, collector, status, started_at, submitted, write_rows, graph_totals]
       properties:
         id:
           type: string
@@ -426,15 +1131,168 @@ components:
         completed_at:
           type: string
           format: date-time
-        node_count:
-          type: integer
-        edge_count:
-          type: integer
+        artifact_observed_at:
+          type: string
+          format: date-time
+        submitted:
+          $ref: "#/components/schemas/FactCounts"
+        write_rows:
+          $ref: "#/components/schemas/FactCounts"
+        graph_totals:
+          type: object
+          additionalProperties: false
+          required: [before, after]
+          properties:
+            before:
+              allOf:
+                - $ref: "#/components/schemas/ScanGraphTotal"
+              nullable: true
+            after:
+              allOf:
+                - $ref: "#/components/schemas/ScanGraphTotal"
+              nullable: true
         error:
           type: string
+        collection_status:
+          type: string
+        graph_status:
+          type: string
+        analysis_status:
+          type: string
+        snapshot_status:
+          type: string
+        projection_status:
+          type: string
+        publication_status:
+          type: string
+        comparison_key:
+          type: string
+        comparable_to_scan_id:
+          type: string
+        published_revision:
+          type: integer
+          format: int64
+        published_at:
+          type: string
+          format: date-time
         metadata:
           type: object
           additionalProperties: true
+
+    ScanGraphTotal:
+      type: object
+      additionalProperties: false
+      required: [total_nodes, total_edges]
+      properties:
+        total_nodes: { type: integer, format: int64, minimum: 0 }
+        total_edges: { type: integer, format: int64, minimum: 0 }
+
+    ScanPageMetadata:
+      type: object
+      additionalProperties: false
+      required: [offset, limit, total, has_more, complete, revision]
+      properties:
+        offset: { type: integer, minimum: 0 }
+        limit: { type: integer, minimum: 1 }
+        total: { type: integer, format: int64, minimum: 0 }
+        has_more: { type: boolean }
+        complete: { type: boolean }
+        revision: { type: string, minLength: 1 }
+
+    ScanListResponse:
+      type: object
+      additionalProperties: false
+      required: [scans, page]
+      properties:
+        scans:
+          type: array
+          items:
+            $ref: "#/components/schemas/Scan"
+        page:
+          $ref: "#/components/schemas/ScanPageMetadata"
+
+    ProjectionState:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [unknown, updating, incomplete, complete]
+        scan_id:
+          type: string
+        error:
+          type: string
+        dirty_coverage:
+          type: array
+          items:
+            type: string
+        updated_at:
+          type: string
+          format: date-time
+        published_scan_id:
+          type: string
+        published_revision:
+          type: integer
+          format: int64
+        published_at:
+          type: string
+          format: date-time
+
+    PostureExport:
+      type: object
+      description: Immutable persisted export of one published posture revision.
+      properties:
+        schema_version:
+          type: integer
+        scope:
+          type: object
+          additionalProperties: true
+        completeness:
+          type: object
+          additionalProperties: true
+        observations:
+          type: object
+          additionalProperties: true
+        health:
+          type: object
+          required: [state, captured]
+          properties:
+            state:
+              type: string
+              enum: [not_captured, ok, degraded]
+            captured:
+              type: boolean
+            observed_at:
+              type: string
+              format: date-time
+        limits:
+          type: object
+          properties:
+            findings:
+              type: object
+              required: [returned, total, complete]
+              properties:
+                returned:
+                  type: integer
+                total:
+                  type: integer
+                complete:
+                  type: boolean
+        suppression:
+          type: object
+          additionalProperties: true
+        graph_before:
+          type: object
+          additionalProperties: true
+        graph_after:
+          type: object
+          additionalProperties: true
+        comparison:
+          type: object
+          additionalProperties: true
+        findings:
+          type: array
+          items:
+            $ref: "#/components/schemas/Finding"
 
     CreateScanRequest:
       type: object
@@ -481,6 +1339,12 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
     Forbidden:
       description: Origin not in allowlist
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ProjectionConflict:
+      description: Stable complete published graph projection unavailable or changed during the read
       content:
         application/json:
           schema:
@@ -534,6 +1398,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GraphStats"
+        "409":
+          $ref: "#/components/responses/ProjectionConflict"
 
   /graph/search:
     get:
@@ -551,9 +1417,9 @@ paths:
           in: query
           schema:
             type: integer
-            default: 100
+            default: 20
             minimum: 1
-            maximum: 10000
+            maximum: 100
       responses:
         "200":
           description: Search results
@@ -563,6 +1429,8 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/SearchResultItem"
+        "409":
+          $ref: "#/components/responses/ProjectionConflict"
 
   /graph/nodes:
     get:
@@ -583,15 +1451,30 @@ paths:
             default: 100
             minimum: 1
             maximum: 10000
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: revision
+          in: query
+          schema:
+            type: string
+          description: Opaque page.revision value from the first page.
       responses:
         "200":
           description: Nodes list
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Node"
+                $ref: "#/components/schemas/NodeListResponse"
+        "409":
+          description: Graph revision changed, or the stable complete published projection is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /graph/nodes/{id}:
     get:
@@ -614,6 +1497,8 @@ paths:
                 $ref: "#/components/schemas/NodeDetail"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/ProjectionConflict"
 
   /graph/nodes/{id}/neighborhood:
     get:
@@ -634,11 +1519,6 @@ paths:
             default: 1
             minimum: 1
             maximum: 3
-        - name: limit
-          in: query
-          schema:
-            type: integer
-            default: 200
       responses:
         "200":
           description: Neighborhood subgraph
@@ -648,6 +1528,8 @@ paths:
                 $ref: "#/components/schemas/NeighborhoodResponse"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/ProjectionConflict"
 
   /graph/nodes/{id}/blast-radius:
     get:
@@ -673,7 +1555,7 @@ paths:
           in: query
           schema:
             type: integer
-            default: 3
+            default: 6
             minimum: 1
             maximum: 10
       responses:
@@ -685,6 +1567,8 @@ paths:
                 $ref: "#/components/schemas/BlastRadiusResponse"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/ProjectionConflict"
 
   /graph/edges:
     get:
@@ -714,24 +1598,41 @@ paths:
             type: integer
             default: 100
             minimum: 1
-            maximum: 10000
+            maximum: 100000
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: revision
+          in: query
+          schema:
+            type: string
+          description: Opaque page.revision value from the first page.
       responses:
         "200":
           description: Edges list
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Edge"
+                $ref: "#/components/schemas/EdgeListResponse"
+        "409":
+          description: Graph revision changed, or the stable complete published projection is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /ingest:
     post:
       summary: Ingest collector output
       description: >-
-        Upload collector JSON. Runs the full pipeline: validate, normalize,
-        deduplicate, write to Neo4j, post-process composite edges.
-        Max body 100 MB.
+        Upload strict ingest-v2 collector JSON. V1, unknown structural fields,
+        unscoped facts, legacy property aliases, and incomplete canonical
+        evidence metadata are rejected before writes. Runs the full pipeline:
+        validate, normalize, deduplicate, write to Neo4j, and post-process
+        composite edges. Max body 100 MB.
       operationId: ingest
       tags: [Ingest]
       requestBody:
@@ -739,8 +1640,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              description: Collector JSON output (see graph model docs)
+              $ref: "#/components/schemas/IngestV2"
       responses:
         "200":
           description: Ingest successful
@@ -756,7 +1656,9 @@ paths:
   /analysis/shortest-path:
     post:
       summary: Shortest path
-      description: Find the shortest path between two nodes in the graph.
+      description: >-
+        Find a hop-shortest bounded path using the directed security
+        relationship policy.
       operationId: shortestPath
       tags: [Analysis]
       requestBody:
@@ -776,11 +1678,15 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/ProjectionConflict"
 
   /analysis/all-paths:
     post:
       summary: All paths
-      description: Enumerate all paths between two nodes (bounded by max_hops and limit).
+      description: >-
+        Enumerate directed security paths, bounded by max_hops, limit, and the
+        server expansion cap.
       operationId: allPaths
       tags: [Analysis]
       requestBody:
@@ -800,13 +1706,16 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/ProjectionConflict"
 
   /analysis/weighted-path:
     post:
       summary: Weighted (lowest-risk) path
       description: >-
-        Find the lowest-risk-weight path using Dijkstra (APOC) or
-        shortestPath+reduce fallback. Response includes the algorithm used.
+        Find the bounded minimum-risk-weight path with one deployment-independent
+        directed security algorithm. Every traversed edge must have an explicit
+        non-negative finite risk_weight.
       operationId: weightedPath
       tags: [Analysis]
       requestBody:
@@ -826,15 +1735,97 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/ProjectionConflict"
+
+  /analysis/topology/shortest-path:
+    post:
+      summary: Topology shortest path
+      description: Find a hop-shortest path over explicit undirected topology traversal.
+      operationId: topologyShortestPath
+      tags: [Analysis]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PathRequest"
+      responses:
+        "200":
+          description: Topology paths found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PathResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/ProjectionConflict"
+
+  /analysis/topology/all-paths:
+    post:
+      summary: All topology paths
+      description: Enumerate bounded undirected topology paths.
+      operationId: topologyAllPaths
+      tags: [Analysis]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PathRequest"
+      responses:
+        "200":
+          description: Topology paths found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PathResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/ProjectionConflict"
+
+  /analysis/topology/weighted-path:
+    post:
+      summary: Weighted topology path
+      description: >-
+        Find a bounded minimum-risk-weight path over undirected topology.
+        Every traversed edge must have an explicit non-negative finite
+        risk_weight.
+      operationId: topologyWeightedPath
+      tags: [Analysis]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PathRequest"
+      responses:
+        "200":
+          description: Weighted topology path found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PathResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/ProjectionConflict"
 
   /analysis/findings:
     get:
       summary: Security findings
       description: >-
-        List findings from the latest persisted snapshot (one row per
-        fingerprint), each with inline triage state. Findings triaged as
-        `accepted-risk` or `false-positive` are hidden unless
-        `include_suppressed=true`.
+        Returns exactly the immutable currently published scan snapshot with
+        publication/completeness metadata in the response body. Each row
+        includes inline triage.
       operationId: getFindings
       tags: [Analysis]
       parameters:
@@ -855,9 +1846,7 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Finding"
+                $ref: "#/components/schemas/FindingsResponse"
 
   /findings/triage/{fingerprint}:
     get:
@@ -884,10 +1873,11 @@ paths:
                 $ref: "#/components/schemas/TriageState"
         "400":
           $ref: "#/components/responses/ValidationError"
-    put:
-      summary: Set finding triage state
+    patch:
+      summary: Patch finding triage state
       description: >-
-        Records (or updates) the triage decision for a finding fingerprint.
+        Updates the triage decision for a finding fingerprint. Omitting note
+        preserves the current analyst note; an explicit empty note clears it.
         Triage state has no foreign key to findings, so it survives scan
         deletion and re-detection.
       operationId: setTriage
@@ -920,7 +1910,10 @@ paths:
   /analysis/findings/{id}:
     get:
       summary: Finding detail
-      description: Returns evidence and context for a single finding.
+      description: >-
+        Returns a typed detector witness and context for a finding in the
+        immutable currently published snapshot. Mutable Neo4j is never used as
+        a detail fallback.
       operationId: getFindingDetail
       tags: [Analysis]
       parameters:
@@ -976,6 +1969,42 @@ paths:
                 $ref: "#/components/schemas/PreBuiltResult"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/ProjectionConflict"
+
+  /posture:
+    get:
+      summary: Projection and publication state
+      description: >-
+        Separates the mutable projection attempt from the latest persisted
+        published posture revision.
+      operationId: getPostureState
+      tags: [Analysis]
+      responses:
+        "200":
+          description: Current projection/publication state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectionState"
+
+  /posture/export:
+    get:
+      summary: Export the published posture
+      description: >-
+        Returns one immutable export persisted at publication time. The server
+        does not combine current graph, finding, or scan-history reads.
+      operationId: exportPublishedPosture
+      tags: [Analysis]
+      responses:
+        "200":
+          description: Persisted published posture export
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostureExport"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /scans:
     get:
@@ -994,15 +2023,32 @@ paths:
           schema:
             type: integer
             default: 0
+            minimum: 0
+        - name: revision
+          in: query
+          schema:
+            type: string
+          description: Opaque page.revision value from the first page.
+        - name: order
+          in: query
+          schema:
+            type: string
+            enum: [started, completed, published]
+            default: started
+          description: Stable start order, latest usable completion, or current/latest publication order.
       responses:
         "200":
           description: Scan list
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Scan"
+                $ref: "#/components/schemas/ScanListResponse"
+        "409":
+          description: Scan history revision changed; restart pagination at offset 0.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
     post:
       summary: Create scan
       description: Register a new scan.
@@ -1050,8 +2096,9 @@ paths:
     delete:
       summary: Delete scan
       description: >-
-        Delete a scan from the scan history and remove all graph
-        nodes and edges that were exclusively owned by this scan.
+        Delete only PostgreSQL scan history. Never mutates Neo4j. Pending,
+        running, active coverage-head, and currently published scans are
+        rejected.
       operationId: deleteScan
       tags: [Scans]
       parameters:
@@ -1067,6 +2114,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          description: Scan is active, owns a coverage head, or is currently published.
 
   /rules:
     get:

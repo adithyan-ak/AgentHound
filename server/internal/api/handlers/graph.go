@@ -1,46 +1,123 @@
 package handlers
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
 
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
+	"github.com/adithyan-ak/agenthound/server/internal/appdb"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 	"github.com/go-chi/chi/v5"
 )
 
 type GraphHandler struct {
-	reader *graph.Reader
+	reader           graphReader
+	projectionReader projectionStateReader
 }
 
-func NewGraphHandler(reader *graph.Reader) *GraphHandler {
-	return &GraphHandler{reader: reader}
+type graphReader interface {
+	GetStats(ctx context.Context) (*graph.GraphStats, error)
+	ListNodesPage(ctx context.Context, kind string, limit, offset int, revision string) ([]ingest.Node, graph.PageInfo, error)
+	GetNode(ctx context.Context, objectID string) (*ingest.Node, []ingest.Edge, error)
+	ListEdgesPage(ctx context.Context, kind, sourceID, targetID string, limit, offset int, revision string) ([]ingest.Edge, graph.PageInfo, error)
+	SearchNodes(ctx context.Context, query string, limit int) ([]graph.SearchResult, error)
+	GetNeighborhood(ctx context.Context, objectID string, depth int) ([]ingest.Node, []ingest.Edge, error)
+	GetBlastRadius(ctx context.Context, objectID, direction string, maxHops int) (*graph.BlastRadiusResult, error)
+}
+
+type pageMetadata struct {
+	Offset     int                 `json:"offset"`
+	Limit      int                 `json:"limit"`
+	Total      int64               `json:"total"`
+	HasMore    bool                `json:"has_more"`
+	Complete   bool                `json:"complete"`
+	Revision   string              `json:"revision"`
+	Projection *projectionIdentity `json:"projection,omitempty"`
+}
+
+type nodeListResponse struct {
+	Nodes []ingest.Node `json:"nodes"`
+	Page  pageMetadata  `json:"page"`
+}
+
+type edgeListResponse struct {
+	Edges []ingest.Edge `json:"edges"`
+	Page  pageMetadata  `json:"page"`
+}
+
+func NewGraphHandler(reader *graph.Reader, store *appdb.FindingStore) *GraphHandler {
+	handler := &GraphHandler{reader: reader}
+	if store != nil {
+		handler.projectionReader = store
+	}
+	return handler
 }
 
 func (h *GraphHandler) HandleStats(w http.ResponseWriter, r *http.Request) {
-	stats, err := h.reader.GetStats(r.Context())
+	stats, projection, err := guardedProjectionRead(
+		r.Context(),
+		h.projectionReader,
+		func() (*graph.GraphStats, error) {
+			return h.reader.GetStats(r.Context())
+		},
+	)
 	if err != nil {
+		if writeProjectionConflict(w, err) {
+			return
+		}
 		WriteInternalError(w, r, err)
 		return
 	}
-	WriteJSON(w, http.StatusOK, stats)
+	WriteJSON(w, http.StatusOK, struct {
+		*graph.GraphStats
+		Projection projectionIdentity `json:"projection"`
+	}{
+		GraphStats: stats,
+		Projection: projection,
+	})
 }
 
 func (h *GraphHandler) HandleListNodes(w http.ResponseWriter, r *http.Request) {
 	kind := r.URL.Query().Get("kind")
 	limit := parseIntParam(r, "limit", 100)
+	offset := parseOffsetParam(r, "offset")
+	revision := r.URL.Query().Get("revision")
 
-	nodes, err := h.reader.ListNodes(r.Context(), kind, limit)
+	type nodePageRead struct {
+		nodes []ingest.Node
+		page  graph.PageInfo
+	}
+	result, projection, err := guardedProjectionRead(
+		r.Context(),
+		h.projectionReader,
+		func() (nodePageRead, error) {
+			nodes, page, err := h.reader.ListNodesPage(
+				r.Context(), kind, limit, offset, revision,
+			)
+			return nodePageRead{nodes: nodes, page: page}, err
+		},
+	)
 	if err != nil {
+		if writeProjectionConflict(w, err) {
+			return
+		}
+		if writeRevisionConflict(w, err) {
+			return
+		}
 		WriteInternalError(w, r, fmt.Errorf("list nodes: %w", err))
 		return
 	}
-	if nodes == nil {
-		nodes = []ingest.Node{}
+	if result.nodes == nil {
+		result.nodes = []ingest.Node{}
 	}
-	WriteJSON(w, http.StatusOK, nodes)
+	WriteJSON(w, http.StatusOK, nodeListResponse{
+		Nodes: result.nodes,
+		Page:  graphPageMetadata(result.page, projection),
+	})
 }
 
 func (h *GraphHandler) HandleGetNode(w http.ResponseWriter, r *http.Request) {
@@ -50,18 +127,35 @@ func (h *GraphHandler) HandleGetNode(w http.ResponseWriter, r *http.Request) {
 		WriteValidationError(w, "invalid node id")
 		return
 	}
-	node, edges, err := h.reader.GetNode(r.Context(), id)
+	type nodeRead struct {
+		node  *ingest.Node
+		edges []ingest.Edge
+	}
+	result, _, err := guardedProjectionRead(
+		r.Context(),
+		h.projectionReader,
+		func() (nodeRead, error) {
+			node, edges, err := h.reader.GetNode(r.Context(), id)
+			return nodeRead{node: node, edges: edges}, err
+		},
+	)
 	if err != nil {
+		if writeProjectionConflict(w, err) {
+			return
+		}
 		WriteInternalError(w, r, err)
 		return
 	}
-	if node == nil {
+	if result.node == nil {
 		WriteNotFound(w, "node not found")
 		return
 	}
+	if result.edges == nil {
+		result.edges = []ingest.Edge{}
+	}
 	WriteJSON(w, http.StatusOK, map[string]any{
-		"node":  node,
-		"edges": edges,
+		"node":  result.node,
+		"edges": result.edges,
 	})
 }
 
@@ -70,19 +164,40 @@ func (h *GraphHandler) HandleListEdges(w http.ResponseWriter, r *http.Request) {
 	source := r.URL.Query().Get("source")
 	target := r.URL.Query().Get("target")
 	limit := parseIntParamWithMax(r, "limit", 100, maxEdgeQueryLimit)
+	offset := parseOffsetParam(r, "offset")
+	revision := r.URL.Query().Get("revision")
 
-	edges, err := h.reader.ListEdges(r.Context(), kind, source, target, limit)
+	type edgePageRead struct {
+		edges []ingest.Edge
+		page  graph.PageInfo
+	}
+	result, projection, err := guardedProjectionRead(
+		r.Context(),
+		h.projectionReader,
+		func() (edgePageRead, error) {
+			edges, page, err := h.reader.ListEdgesPage(
+				r.Context(), kind, source, target, limit, offset, revision,
+			)
+			return edgePageRead{edges: edges, page: page}, err
+		},
+	)
 	if err != nil {
+		if writeProjectionConflict(w, err) {
+			return
+		}
+		if writeRevisionConflict(w, err) {
+			return
+		}
 		WriteInternalError(w, r, fmt.Errorf("list edges: %w", err))
 		return
 	}
-	if edges == nil {
-		edges = []ingest.Edge{}
+	if result.edges == nil {
+		result.edges = []ingest.Edge{}
 	}
-	if len(edges) >= limit {
-		w.Header().Set("X-Truncated", "true")
-	}
-	WriteJSON(w, http.StatusOK, edges)
+	WriteJSON(w, http.StatusOK, edgeListResponse{
+		Edges: result.edges,
+		Page:  graphPageMetadata(result.page, projection),
+	})
 }
 
 func (h *GraphHandler) HandleSearch(w http.ResponseWriter, r *http.Request) {
@@ -91,10 +206,19 @@ func (h *GraphHandler) HandleSearch(w http.ResponseWriter, r *http.Request) {
 		WriteValidationError(w, "q must be at least 2 characters")
 		return
 	}
-	limit := parseIntParamWithMax(r, "limit", 20, 100)
+	limit := parseIntParamWithMax(r, "limit", defaultGraphSearchLimit, maxGraphSearchLimit)
 
-	results, err := h.reader.SearchNodes(r.Context(), q, limit)
+	results, _, err := guardedProjectionRead(
+		r.Context(),
+		h.projectionReader,
+		func() ([]graph.SearchResult, error) {
+			return h.reader.SearchNodes(r.Context(), q, limit)
+		},
+	)
 	if err != nil {
+		if writeProjectionConflict(w, err) {
+			return
+		}
 		WriteInternalError(w, r, fmt.Errorf("search nodes: %w", err))
 		return
 	}
@@ -113,18 +237,35 @@ func (h *GraphHandler) HandleNeighborhood(w http.ResponseWriter, r *http.Request
 	}
 	depth := parseIntParamWithMax(r, "depth", 1, 3)
 
-	nodes, edges, err := h.reader.GetNeighborhood(r.Context(), id, depth)
+	type neighborhoodRead struct {
+		nodes []ingest.Node
+		edges []ingest.Edge
+	}
+	result, _, err := guardedProjectionRead(
+		r.Context(),
+		h.projectionReader,
+		func() (neighborhoodRead, error) {
+			nodes, edges, err := h.reader.GetNeighborhood(r.Context(), id, depth)
+			return neighborhoodRead{nodes: nodes, edges: edges}, err
+		},
+	)
 	if err != nil {
+		if writeProjectionConflict(w, err) {
+			return
+		}
 		WriteInternalError(w, r, fmt.Errorf("get neighborhood: %w", err))
 		return
 	}
-	if nodes == nil {
+	if result.nodes == nil {
 		WriteNotFound(w, "node not found")
 		return
 	}
+	if result.edges == nil {
+		result.edges = []ingest.Edge{}
+	}
 	WriteJSON(w, http.StatusOK, map[string]any{
-		"nodes": nodes,
-		"edges": edges,
+		"nodes": result.nodes,
+		"edges": result.edges,
 	})
 }
 
@@ -147,10 +288,19 @@ func (h *GraphHandler) HandleBlastRadius(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	maxHops := parseIntParamWithMax(r, "max_hops", 6, 10)
+	maxHops := parseIntParamWithMax(r, "max_hops", defaultBlastRadiusMaxHops, maxBlastRadiusMaxHops)
 
-	result, err := h.reader.GetBlastRadius(r.Context(), id, direction, maxHops)
+	result, _, err := guardedProjectionRead(
+		r.Context(),
+		h.projectionReader,
+		func() (*graph.BlastRadiusResult, error) {
+			return h.reader.GetBlastRadius(r.Context(), id, direction, maxHops)
+		},
+	)
 	if err != nil {
+		if writeProjectionConflict(w, err) {
+			return
+		}
 		WriteInternalError(w, r, fmt.Errorf("get blast radius: %w", err))
 		return
 	}
@@ -169,9 +319,43 @@ func (h *GraphHandler) HandleBlastRadius(w http.ResponseWriter, r *http.Request)
 }
 
 const (
-	maxQueryLimit     = 10000
-	maxEdgeQueryLimit = 100000
+	maxQueryLimit             = 10000
+	maxEdgeQueryLimit         = 100000
+	defaultGraphSearchLimit   = 20
+	maxGraphSearchLimit       = 100
+	defaultBlastRadiusMaxHops = 6
+	maxBlastRadiusMaxHops     = 10
 )
+
+func graphPageMetadata(page graph.PageInfo, projection projectionIdentity) pageMetadata {
+	return pageMetadata{
+		Offset:     page.Offset,
+		Limit:      page.Limit,
+		Total:      page.Total,
+		HasMore:    page.HasMore,
+		Complete:   page.Complete,
+		Revision:   page.Revision,
+		Projection: &projection,
+	}
+}
+
+func writeRevisionConflict(w http.ResponseWriter, err error) bool {
+	var mismatch *graph.RevisionMismatchError
+	if !errors.As(err, &mismatch) {
+		return false
+	}
+	WriteJSON(w, http.StatusConflict, ErrorResponse{
+		Error: ErrorDetail{
+			Code:    "REVISION_CONFLICT",
+			Message: "collection changed during pagination; restart from offset 0",
+			Details: revisionConflictDetails{
+				ExpectedRevision: mismatch.Expected,
+				ActualRevision:   mismatch.Actual,
+			},
+		},
+	})
+	return true
+}
 
 func parseIntParam(r *http.Request, key string, defaultVal int) int {
 	return parseIntParamWithMax(r, key, defaultVal, maxQueryLimit)
@@ -188,6 +372,18 @@ func parseIntParamWithMax(r *http.Request, key string, defaultVal, maxVal int) i
 	}
 	if v > maxVal {
 		return maxVal
+	}
+	return v
+}
+
+func parseOffsetParam(r *http.Request, key string) int {
+	s := r.URL.Query().Get(key)
+	if s == "" {
+		return 0
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil || v < 0 {
+		return 0
 	}
 	return v
 }

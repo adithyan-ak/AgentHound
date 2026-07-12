@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { History } from "lucide-react";
-import { useScans, isUsableScan } from "@entities/scan";
+import { comparablePublishedScans, useScans } from "@entities/scan";
 import { Skeleton } from "@shared/ui/primitives/skeleton";
 import {
   Table,
@@ -16,7 +16,7 @@ import type { PillTone } from "@shared/ui/widgets";
 import { timeAgo, scanStatusLabel } from "@shared/lib/format";
 
 const INFO =
-  "The most recent scan runs: collector, status, and how many nodes and edges each discovered. Run 'agenthound scan' to trigger a new scan.";
+  "Recent ingest attempts. Node/edge columns are Neo4j write rows, not unique discoveries; the sparkline uses comparable published node totals.";
 
 const STATUS_TONE: Record<string, PillTone> = {
   completed: "success",
@@ -31,14 +31,12 @@ export function RecentScans() {
 
   const recent = (scans ?? []).slice(0, 6);
   const sparkValues = useMemo(
-    () =>
-      (scans ?? [])
-        // completed_with_errors still populated the graph, so its node
-        // count is real and belongs in the inventory trend.
-        .filter(isUsableScan)
+    () => {
+      return comparablePublishedScans(scans ?? [])
         .slice(0, 12)
         .reverse()
-        .map((s) => s.node_count),
+        .map((scan) => scan.graph_totals.after.total_nodes);
+    },
     [scans],
   );
 
@@ -47,7 +45,16 @@ export function RecentScans() {
       title="Recent Scans"
       info={INFO}
       icon={History}
-      action={<Sparkline values={sparkValues} />}
+      action={
+        <div className="flex items-center gap-3">
+          {(scans?.length ?? 0) > recent.length && (
+            <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
+              Newest {recent.length} of {scans?.length} loaded
+            </span>
+          )}
+          <Sparkline values={sparkValues} />
+        </div>
+      }
       flush
     >
       <div className="px-3.5 pb-3.5">
@@ -66,8 +73,8 @@ export function RecentScans() {
               <TableRow className="border-border/70 hover:bg-transparent">
                 <TableHead className="h-8 px-3 font-mono text-[10px] uppercase tracking-[0.12em]">Collector</TableHead>
                 <TableHead className="h-8 px-3 font-mono text-[10px] uppercase tracking-[0.12em]">Status</TableHead>
-                <TableHead className="h-8 px-3 text-right font-mono text-[10px] uppercase tracking-[0.12em]">Nodes</TableHead>
-                <TableHead className="h-8 px-3 text-right font-mono text-[10px] uppercase tracking-[0.12em]">Edges</TableHead>
+                <TableHead className="h-8 px-3 text-right font-mono text-[10px] uppercase tracking-[0.12em]">Node rows</TableHead>
+                <TableHead className="h-8 px-3 text-right font-mono text-[10px] uppercase tracking-[0.12em]">Edge rows</TableHead>
                 <TableHead className="h-8 px-3 text-right font-mono text-[10px] uppercase tracking-[0.12em]">When</TableHead>
               </TableRow>
             </TableHeader>
@@ -86,13 +93,13 @@ export function RecentScans() {
                     </StatusPill>
                   </TableCell>
                   <TableCell className="px-3 py-2 text-right font-mono text-[12px] tabular-nums text-foreground/80">
-                    {scan.node_count.toLocaleString()}
+                    {scan.write_rows.nodes.toLocaleString()}
                   </TableCell>
                   <TableCell className="px-3 py-2 text-right font-mono text-[12px] tabular-nums text-foreground/80">
-                    {scan.edge_count.toLocaleString()}
+                    {scan.write_rows.edges.toLocaleString()}
                   </TableCell>
                   <TableCell className="px-3 py-2 text-right font-mono text-[11px] text-muted-foreground">
-                    {timeAgo(scan.started_at)}
+                    {timeAgo(scan.completed_at ?? scan.started_at)}
                   </TableCell>
                 </TableRow>
               ))}

@@ -14,6 +14,8 @@ import (
 
 const defaultBatchSize = 1000
 
+const observationTokenSeparator = "\x1f"
+
 // execFunc executes a single cypher batch. Real driver-backed instances use
 // driverExecBatch; tests inject an in-memory recorder to assert batching,
 // APOC routing, and error propagation without a live Neo4j.
@@ -67,15 +69,33 @@ func detectAPOCWithQuery(ctx context.Context, tx neo4j.ManagedTransaction, cyphe
 }
 
 func (w *Writer) WriteNodes(ctx context.Context, nodes []ingest.Node, scanID string) (int, error) {
+	return w.WriteObservationNodes(ctx, nodes, scanID, nil)
+}
+
+func (w *Writer) WriteObservationNodes(
+	ctx context.Context,
+	nodes []ingest.Node,
+	scanID string,
+	completeDomains []string,
+) (int, error) {
 	if len(nodes) == 0 {
 		return 0, nil
 	}
-	return w.writeNodesBatched(ctx, nodes, scanID)
+	if err := validateWriterNodes(nodes); err != nil {
+		return 0, err
+	}
+	return w.writeNodesBatched(ctx, nodes, scanID, completeDomains)
 }
 
-func (w *Writer) writeNodesBatched(ctx context.Context, nodes []ingest.Node, scanID string) (int, error) {
+func (w *Writer) writeNodesBatched(
+	ctx context.Context,
+	nodes []ingest.Node,
+	scanID string,
+	completeDomains []string,
+) (int, error) {
 	grouped := groupNodesByKindTuple(nodes)
 	total := 0
+	completePrefixes := observationDomainPrefixes(completeDomains)
 
 	for tupleKey, group := range grouped {
 		cypher := nodeCypherForKindTuple(group.PrimaryKind, group.ExtraLabels)
@@ -87,8 +107,11 @@ func (w *Writer) writeNodesBatched(ctx context.Context, nodes []ingest.Node, sca
 			params := make([]map[string]any, len(batch))
 			for j, n := range batch {
 				params[j] = map[string]any{
-					"id":         n.ID,
-					"properties": n.Properties,
+					"id":                          n.ID,
+					"properties":                  factProperties(n.Properties),
+					"observation_tokens":          observationTokens(n.ObservationDomains, scanID),
+					"observation_domain_prefixes": observationDomainPrefixes(n.ObservationDomains),
+					"complete_domain_prefixes":    completePrefixes,
 				}
 			}
 
@@ -114,15 +137,61 @@ func nodeCypherForKindTuple(primaryKind string, extraLabels []string) string {
 	var sb strings.Builder
 	sb.WriteString("UNWIND $nodes AS node\n")
 	fmt.Fprintf(&sb, "MERGE (n:%s {objectid: node.id})\n", primaryKind)
-	// ON CREATE: seed the previous-hash trio from the incoming hashes so the
-	// rug-pull predicates (which gate on previous_*_hash IS NOT NULL) do not
-	// fire spuriously on a tool's/server's first scan. Reading from
-	// node.properties.* is unambiguous regardless of SET-item ordering.
-	sb.WriteString("ON CREATE SET n = node.properties, n.objectid = node.id, n.scan_id = $scan_id, n.first_seen = datetime(), n.last_seen = datetime(), n.previous_description_hash = node.properties.description_hash, n.previous_input_schema_hash = node.properties.input_schema_hash, n.previous_instructions_hash = node.properties.instructions_hash\n")
-	// ON MATCH: pivot previous_*_hash = current hash BEFORE n += node.properties
-	// overwrites the current values. SET items apply left-to-right, so the
-	// three pivots capture the prior scan's hashes (rug-pull change detection).
-	sb.WriteString("ON MATCH SET n.previous_description_hash = n.description_hash, n.previous_input_schema_hash = n.input_schema_hash, n.previous_instructions_hash = n.instructions_hash, n += node.properties, n.scan_id = $scan_id, n.last_seen = datetime()")
+	sb.WriteString(`ON CREATE SET n.__agenthound_observation_created = true
+WITH n, node,
+     coalesce(n.__agenthound_observation_created, false) AS observation_created,
+     n.description_hash AS old_description_hash,
+     n.input_schema_hash AS old_input_schema_hash,
+     n.instructions_hash AS old_instructions_hash,
+     n.first_seen AS old_first_seen,
+     coalesce(n.observation_tokens, []) AS old_tokens
+WITH n, node, observation_created,
+     old_description_hash, old_input_schema_hash, old_instructions_hash,
+     old_first_seen, old_tokens,
+     (size(node.observation_tokens) > 0
+      AND all(token IN node.observation_tokens WHERE
+          any(prefix IN node.complete_domain_prefixes WHERE token STARTS WITH prefix))) AS incoming_complete
+WITH n, node, observation_created,
+     old_description_hash, old_input_schema_hash, old_instructions_hash,
+     old_first_seen, old_tokens, incoming_complete,
+     (NOT observation_created
+      AND incoming_complete
+      AND all(token IN old_tokens WHERE
+          any(prefix IN node.observation_domain_prefixes WHERE token STARTS WITH prefix))) AS replace_properties
+FOREACH (_ IN CASE WHEN observation_created OR replace_properties THEN [1] ELSE [] END |
+  SET n = node.properties)
+FOREACH (_ IN CASE WHEN NOT observation_created AND NOT replace_properties THEN [1] ELSE [] END |
+  SET n += node.properties)
+SET n.objectid = node.id,
+    n.scan_id = $scan_id,
+    n.first_seen = CASE WHEN observation_created THEN datetime() ELSE coalesce(old_first_seen, datetime()) END,
+    n.last_seen = datetime(),
+    n.previous_description_hash = CASE WHEN observation_created THEN node.properties.description_hash ELSE old_description_hash END,
+    n.previous_input_schema_hash = CASE WHEN observation_created THEN node.properties.input_schema_hash ELSE old_input_schema_hash END,
+    n.previous_instructions_hash = CASE WHEN observation_created THEN node.properties.instructions_hash ELSE old_instructions_hash END,
+    n.observation_tokens = reduce(tokens = old_tokens, token IN node.observation_tokens |
+      CASE WHEN token IN tokens THEN tokens ELSE tokens + token END),
+    n.observation_properties_complete = CASE
+      WHEN observation_created THEN incoming_complete
+      WHEN replace_properties THEN true
+      ELSE false
+    END`)
+	incomingLabels := make(map[string]bool, len(extraLabels)+1)
+	incomingLabels[primaryKind] = true
+	for _, label := range extraLabels {
+		incomingLabels[label] = true
+	}
+	for _, label := range ingest.PublicNodeLabels {
+		if incomingLabels[label] {
+			continue
+		}
+		fmt.Fprintf(
+			&sb,
+			"\nFOREACH (_ IN CASE WHEN replace_properties THEN [1] ELSE [] END | REMOVE n:%s)",
+			label,
+		)
+	}
+	sb.WriteString("\nREMOVE n.__agenthound_observation_created")
 	for _, lbl := range extraLabels {
 		fmt.Fprintf(&sb, "\nSET n:%s", lbl)
 	}
@@ -131,21 +200,64 @@ func nodeCypherForKindTuple(primaryKind string, extraLabels []string) string {
 }
 
 func (w *Writer) WriteEdges(ctx context.Context, edges []ingest.Edge, scanID string) (int, error) {
+	return w.WriteObservationEdges(ctx, edges, scanID, nil)
+}
+
+func (w *Writer) WriteObservationEdges(
+	ctx context.Context,
+	edges []ingest.Edge,
+	scanID string,
+	completeDomains []string,
+) (int, error) {
 	if len(edges) == 0 {
 		return 0, nil
 	}
+	if err := validateRawWriterEdges(edges); err != nil {
+		return 0, err
+	}
+	return w.writeEdges(ctx, edges, scanID, completeDomains)
+}
 
+// WriteCompositeEdges is the postprocessor-only edge path. Composite facts do
+// not carry raw observation ownership; they are retired and rebuilt as one
+// explicit composite epoch by the ingest lifecycle.
+func (w *Writer) WriteCompositeEdges(
+	ctx context.Context,
+	edges []ingest.Edge,
+	scanID string,
+) (int, error) {
+	if len(edges) == 0 {
+		return 0, nil
+	}
+	if err := validateCompositeWriterEdges(edges); err != nil {
+		return 0, err
+	}
+	return w.writeEdges(ctx, edges, scanID, nil)
+}
+
+func (w *Writer) writeEdges(
+	ctx context.Context,
+	edges []ingest.Edge,
+	scanID string,
+	completeDomains []string,
+) (int, error) {
 	w.detectAPOC(ctx)
 
 	if w.hasAPOC {
-		return w.writeEdgesAPOC(ctx, edges, scanID)
+		return w.writeEdgesAPOC(ctx, edges, scanID, completeDomains)
 	}
-	return w.writeEdgesFallback(ctx, edges, scanID)
+	return w.writeEdgesFallback(ctx, edges, scanID, completeDomains)
 }
 
-func (w *Writer) writeEdgesAPOC(ctx context.Context, edges []ingest.Edge, scanID string) (int, error) {
+func (w *Writer) writeEdgesAPOC(
+	ctx context.Context,
+	edges []ingest.Edge,
+	scanID string,
+	completeDomains []string,
+) (int, error) {
 	grouped := groupEdgesByEndpoints(edges)
 	total := 0
+	completePrefixes := observationDomainPrefixes(completeDomains)
 
 	for key, kindEdges := range grouped {
 		sourceMatch := matchClause("a", key.SourceKind, "source")
@@ -154,8 +266,40 @@ func (w *Writer) writeEdgesAPOC(ctx context.Context, edges []ingest.Edge, scanID
 		cypher := fmt.Sprintf(`UNWIND $edges AS edge
 %s
 %s
-CALL apoc.merge.relationship(a, $kind, {}, edge.properties, b) YIELD rel
-SET rel.scan_id = $scan_id, rel.last_seen = datetime()
+CALL apoc.merge.relationship(a, $kind, {}, edge.create_properties, b, {}) YIELD rel
+WITH rel, edge, coalesce(rel.__agenthound_observation_created, false) AS observation_created
+WITH rel, edge, observation_created,
+     coalesce(rel.observation_tokens, []) AS old_tokens,
+     coalesce(rel.observation_dependency_tokens, []) AS old_dependency_tokens
+WITH rel, edge, observation_created, old_tokens, old_dependency_tokens,
+     CASE WHEN edge.observation_semantics = 'all_dependencies'
+          THEN old_dependency_tokens ELSE old_tokens END AS old_ownership_tokens
+WITH rel, edge, observation_created, old_tokens, old_dependency_tokens, old_ownership_tokens,
+     (size(edge.ownership_tokens) > 0
+      AND all(token IN edge.ownership_tokens WHERE
+          any(prefix IN edge.complete_domain_prefixes WHERE token STARTS WITH prefix))) AS incoming_complete
+WITH rel, edge, observation_created, old_tokens, old_dependency_tokens, old_ownership_tokens, incoming_complete,
+     (NOT observation_created
+      AND incoming_complete
+      AND all(token IN old_ownership_tokens WHERE
+          any(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix))) AS replace_properties
+FOREACH (_ IN CASE WHEN NOT observation_created AND replace_properties THEN [1] ELSE [] END |
+  SET rel = edge.properties)
+FOREACH (_ IN CASE WHEN NOT observation_created AND NOT replace_properties THEN [1] ELSE [] END |
+  SET rel += edge.properties)
+SET rel.observation_properties_complete = CASE
+      WHEN observation_created THEN incoming_complete
+      WHEN replace_properties THEN true
+      ELSE false
+    END,
+    rel.observation_tokens = reduce(tokens = old_tokens, token IN edge.observation_tokens |
+      CASE WHEN token IN tokens THEN tokens ELSE tokens + token END),
+    rel.observation_dependency_tokens = reduce(tokens = old_dependency_tokens, token IN edge.observation_dependency_tokens |
+      CASE WHEN token IN tokens THEN tokens ELSE tokens + token END),
+    rel.observation_semantics = edge.observation_semantics,
+    rel.scan_id = $scan_id,
+    rel.last_seen = datetime()
+REMOVE rel.__agenthound_observation_created
 RETURN count(*) AS written`, sourceMatch, targetMatch)
 
 		for i := 0; i < len(kindEdges); i += w.batchSize {
@@ -164,14 +308,24 @@ RETURN count(*) AS written`, sourceMatch, targetMatch)
 
 			params := make([]map[string]any, len(batch))
 			for j, e := range batch {
-				props := e.Properties
-				if props == nil {
-					props = map[string]any{}
-				}
+				props := factProperties(e.Properties)
+				createProps := cloneProperties(props)
+				createProps["__agenthound_observation_created"] = true
+				tokens, dependencyTokens := edgeObservationTokens(e, scanID)
+				createProps["observation_tokens"] = tokens
+				createProps["observation_dependency_tokens"] = dependencyTokens
+				createProps["observation_semantics"] = string(e.ObservationSemantics)
 				params[j] = map[string]any{
-					"source":     e.Source,
-					"target":     e.Target,
-					"properties": props,
+					"source":                        e.Source,
+					"target":                        e.Target,
+					"properties":                    props,
+					"create_properties":             createProps,
+					"observation_tokens":            tokens,
+					"observation_dependency_tokens": dependencyTokens,
+					"observation_semantics":         string(e.ObservationSemantics),
+					"ownership_tokens":              ownershipTokens(tokens, dependencyTokens),
+					"observation_domain_prefixes":   observationDomainPrefixes(e.ObservationDomains),
+					"complete_domain_prefixes":      completePrefixes,
 				}
 			}
 
@@ -189,9 +343,15 @@ RETURN count(*) AS written`, sourceMatch, targetMatch)
 	return total, nil
 }
 
-func (w *Writer) writeEdgesFallback(ctx context.Context, edges []ingest.Edge, scanID string) (int, error) {
+func (w *Writer) writeEdgesFallback(
+	ctx context.Context,
+	edges []ingest.Edge,
+	scanID string,
+	completeDomains []string,
+) (int, error) {
 	grouped := groupEdgesByEndpoints(edges)
 	total := 0
+	completePrefixes := observationDomainPrefixes(completeDomains)
 
 	for key, kindEdges := range grouped {
 		cypher := edgeCypherForKinds(key.Kind, key.SourceKind, key.TargetKind)
@@ -202,14 +362,18 @@ func (w *Writer) writeEdgesFallback(ctx context.Context, edges []ingest.Edge, sc
 
 			params := make([]map[string]any, len(batch))
 			for j, e := range batch {
-				props := e.Properties
-				if props == nil {
-					props = map[string]any{}
-				}
+				props := factProperties(e.Properties)
+				tokens, dependencyTokens := edgeObservationTokens(e, scanID)
 				params[j] = map[string]any{
-					"source":     e.Source,
-					"target":     e.Target,
-					"properties": props,
+					"source":                        e.Source,
+					"target":                        e.Target,
+					"properties":                    props,
+					"observation_tokens":            tokens,
+					"observation_dependency_tokens": dependencyTokens,
+					"observation_semantics":         string(e.ObservationSemantics),
+					"ownership_tokens":              ownershipTokens(tokens, dependencyTokens),
+					"observation_domain_prefixes":   observationDomainPrefixes(e.ObservationDomains),
+					"complete_domain_prefixes":      completePrefixes,
 				}
 			}
 
@@ -239,7 +403,40 @@ func edgeCypherForKinds(edgeKind, sourceKind, targetKind string) string {
 %s
 %s
 MERGE (a)-[r:%s]->(b)
-SET r += edge.properties, r.scan_id = $scan_id, r.last_seen = datetime()
+ON CREATE SET r.__agenthound_observation_created = true
+WITH r, edge,
+     coalesce(r.__agenthound_observation_created, false) AS observation_created,
+     coalesce(r.observation_tokens, []) AS old_tokens,
+     coalesce(r.observation_dependency_tokens, []) AS old_dependency_tokens
+WITH r, edge, observation_created, old_tokens, old_dependency_tokens,
+     CASE WHEN edge.observation_semantics = 'all_dependencies'
+          THEN old_dependency_tokens ELSE old_tokens END AS old_ownership_tokens
+WITH r, edge, observation_created, old_tokens, old_dependency_tokens, old_ownership_tokens,
+     (size(edge.ownership_tokens) > 0
+      AND all(token IN edge.ownership_tokens WHERE
+          any(prefix IN edge.complete_domain_prefixes WHERE token STARTS WITH prefix))) AS incoming_complete
+WITH r, edge, observation_created, old_tokens, old_dependency_tokens, old_ownership_tokens, incoming_complete,
+     (NOT observation_created
+      AND incoming_complete
+      AND all(token IN old_ownership_tokens WHERE
+          any(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix))) AS replace_properties
+FOREACH (_ IN CASE WHEN observation_created OR replace_properties THEN [1] ELSE [] END |
+  SET r = edge.properties)
+FOREACH (_ IN CASE WHEN NOT observation_created AND NOT replace_properties THEN [1] ELSE [] END |
+  SET r += edge.properties)
+SET r.scan_id = $scan_id,
+    r.last_seen = datetime(),
+    r.observation_tokens = reduce(tokens = old_tokens, token IN edge.observation_tokens |
+      CASE WHEN token IN tokens THEN tokens ELSE tokens + token END),
+    r.observation_dependency_tokens = reduce(tokens = old_dependency_tokens, token IN edge.observation_dependency_tokens |
+      CASE WHEN token IN tokens THEN tokens ELSE tokens + token END),
+    r.observation_semantics = edge.observation_semantics,
+    r.observation_properties_complete = CASE
+      WHEN observation_created THEN incoming_complete
+      WHEN replace_properties THEN true
+      ELSE false
+    END
+REMOVE r.__agenthound_observation_created
 RETURN count(*) AS written`, matchClause("a", sourceKind, "source"), matchClause("b", targetKind, "target"), edgeKind)
 }
 
@@ -270,6 +467,59 @@ func (w *Writer) driverExecBatch(ctx context.Context, cypher string, params map[
 	return written, nil
 }
 
+func observationDomainPrefix(domain string) string {
+	return domain + observationTokenSeparator
+}
+
+func observationToken(domain, scanID string) string {
+	return observationDomainPrefix(domain) + scanID
+}
+
+func observationTokens(domains []string, scanID string) []string {
+	if len(domains) == 0 {
+		return []string{}
+	}
+	seen := make(map[string]bool, len(domains))
+	tokens := make([]string, 0, len(domains))
+	for _, domain := range domains {
+		domain = strings.TrimSpace(domain)
+		if domain == "" || seen[domain] {
+			continue
+		}
+		seen[domain] = true
+		tokens = append(tokens, observationToken(domain, scanID))
+	}
+	sort.Strings(tokens)
+	return tokens
+}
+
+func observationDomainPrefixes(domains []string) []string {
+	domains = normalizedDomains(domains)
+	prefixes := make([]string, len(domains))
+	for i, domain := range domains {
+		prefixes[i] = observationDomainPrefix(domain)
+	}
+	return prefixes
+}
+
+func cloneProperties(props map[string]any) map[string]any {
+	out := make(map[string]any, len(props))
+	for key, value := range props {
+		out[key] = value
+	}
+	return out
+}
+
+func factProperties(props map[string]any) map[string]any {
+	out := cloneProperties(props)
+	delete(out, "observation_tokens")
+	delete(out, "observation_dependency_tokens")
+	delete(out, "observation_semantics")
+	delete(out, "observation_properties_complete")
+	delete(out, "__agenthound_observation_created")
+	return out
+}
+
 // nodeKindTuple captures a node's MERGE shape: the primary label that owns the
 // uniqueness constraint plus the extra umbrella labels that get applied via
 // SET. Nodes that share a tuple share a Cypher template and a write batch.
@@ -288,15 +538,12 @@ type nodeKindTuple struct {
 func groupNodesByKindTuple(nodes []ingest.Node) map[string]*nodeKindTuple {
 	grouped := make(map[string]*nodeKindTuple)
 	for _, n := range nodes {
-		primary := "Node"
+		primary := n.Kinds[0]
 		var extras []string
-		if len(n.Kinds) > 0 {
-			primary = n.Kinds[0]
-			if len(n.Kinds) > 1 {
-				extras = make([]string, len(n.Kinds)-1)
-				copy(extras, n.Kinds[1:])
-				sort.Strings(extras)
-			}
+		if len(n.Kinds) > 1 {
+			extras = make([]string, len(n.Kinds)-1)
+			copy(extras, n.Kinds[1:])
+			sort.Strings(extras)
 		}
 		key := primary
 		if len(extras) > 0 {
@@ -315,21 +562,6 @@ func groupNodesByKindTuple(nodes []ingest.Node) map[string]*nodeKindTuple {
 	return grouped
 }
 
-// groupNodesByKind is kept for backwards compatibility with existing tests
-// that assert grouping by primary kind only. New code should use
-// groupNodesByKindTuple.
-func groupNodesByKind(nodes []ingest.Node) map[string][]ingest.Node {
-	grouped := make(map[string][]ingest.Node)
-	for _, n := range nodes {
-		kind := "Node"
-		if len(n.Kinds) > 0 {
-			kind = n.Kinds[0]
-		}
-		grouped[kind] = append(grouped[kind], n)
-	}
-	return grouped
-}
-
 type edgeGroupKey struct {
 	Kind       string
 	SourceKind string
@@ -339,9 +571,126 @@ type edgeGroupKey struct {
 func groupEdgesByEndpoints(edges []ingest.Edge) map[edgeGroupKey][]ingest.Edge {
 	grouped := make(map[edgeGroupKey][]ingest.Edge)
 	for _, e := range edges {
-		sk, tk := ingest.ResolveEdgeEndpoints(e.Kind, e.SourceKind, e.TargetKind)
-		key := edgeGroupKey{Kind: e.Kind, SourceKind: sk, TargetKind: tk}
+		key := edgeGroupKey{
+			Kind:       e.Kind,
+			SourceKind: e.SourceKind,
+			TargetKind: e.TargetKind,
+		}
 		grouped[key] = append(grouped[key], e)
 	}
 	return grouped
+}
+
+func validateWriterNodes(nodes []ingest.Node) error {
+	for i, node := range nodes {
+		if ingest.ConcreteNodeKind(node.Kinds) == "" {
+			return fmt.Errorf("node %d (%s) requires a valid concrete kind", i, node.ID)
+		}
+		if len(normalizedDomains(node.ObservationDomains)) == 0 {
+			return fmt.Errorf("node %d (%s) requires at least one observation domain", i, node.ID)
+		}
+	}
+	return nil
+}
+
+func validateRawWriterEdges(edges []ingest.Edge) error {
+	for i, edge := range edges {
+		if err := validateWriterEdgeEndpoints(i, edge); err != nil {
+			return err
+		}
+		if !ingest.RawEdgeKinds[edge.Kind] {
+			return fmt.Errorf("edge %d (%s) is not a raw edge kind", i, edge.Kind)
+		}
+		if !ingest.SourceKindAllowed(edge.Kind, edge.SourceKind) ||
+			!ingest.TargetKindAllowed(edge.Kind, edge.TargetKind) {
+			return fmt.Errorf(
+				"edge %d (%s) has invalid explicit endpoint kinds %s -> %s",
+				i,
+				edge.Kind,
+				edge.SourceKind,
+				edge.TargetKind,
+			)
+		}
+		if isComposite, _ := edge.Properties["is_composite"].(bool); isComposite {
+			return fmt.Errorf(
+				"edge %d (%s) is raw and cannot declare is_composite=true",
+				i,
+				edge.Kind,
+			)
+		}
+		domains := normalizedDomains(edge.ObservationDomains)
+		if len(domains) == 0 {
+			return fmt.Errorf(
+				"edge %d (%s) requires at least one observation domain",
+				i,
+				edge.Kind,
+			)
+		}
+		switch edge.ObservationSemantics {
+		case "", ingest.ObservationSemanticsAnyOwner:
+		case ingest.ObservationSemanticsAllDependencies:
+			if len(domains) < 2 {
+				return fmt.Errorf(
+					"edge %d (%s) all_dependencies requires at least two observation domains",
+					i,
+					edge.Kind,
+				)
+			}
+		default:
+			return fmt.Errorf(
+				"edge %d (%s) has invalid observation semantics %q",
+				i,
+				edge.Kind,
+				edge.ObservationSemantics,
+			)
+		}
+	}
+	return nil
+}
+
+func validateCompositeWriterEdges(edges []ingest.Edge) error {
+	for i, edge := range edges {
+		if err := validateWriterEdgeEndpoints(i, edge); err != nil {
+			return err
+		}
+		if !ingest.AllowedEdgeKinds[edge.Kind] || ingest.RawEdgeKinds[edge.Kind] {
+			return fmt.Errorf("edge %d (%s) is not a composite edge kind", i, edge.Kind)
+		}
+		isComposite, _ := edge.Properties["is_composite"].(bool)
+		if !isComposite {
+			return fmt.Errorf("edge %d (%s) must declare is_composite=true", i, edge.Kind)
+		}
+		if len(normalizedDomains(edge.ObservationDomains)) != 0 ||
+			edge.ObservationSemantics != "" {
+			return fmt.Errorf("edge %d (%s) must not carry raw observation ownership", i, edge.Kind)
+		}
+	}
+	return nil
+}
+
+func validateWriterEdgeEndpoints(index int, edge ingest.Edge) error {
+	if strings.TrimSpace(edge.SourceKind) == "" ||
+		strings.TrimSpace(edge.TargetKind) == "" {
+		return fmt.Errorf(
+			"edge %d (%s) requires explicit source_kind and target_kind",
+			index,
+			edge.Kind,
+		)
+	}
+	return nil
+}
+
+func edgeObservationTokens(edge ingest.Edge, scanID string) ([]string, []string) {
+	tokens := observationTokens(edge.ObservationDomains, scanID)
+	if edge.ObservationSemantics == ingest.ObservationSemanticsAllDependencies {
+		return []string{}, tokens
+	}
+	return tokens, []string{}
+}
+
+func ownershipTokens(tokens, dependencyTokens []string) []string {
+	if len(dependencyTokens) > 0 {
+		return dependencyTokens
+	}
+	return tokens
 }

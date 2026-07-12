@@ -51,7 +51,7 @@ const NODE_KEY_BY_LENS: Record<string, NodeKeyItem[]> = {
   ],
   chokepoints: [
     { color: NODE_KIND_COLORS.AgentInstance, label: "High centrality" },
-    { color: NODE_KIND_COLORS.ResourceGroup, label: "Medium" },
+    { color: NODE_KIND_COLORS.Host, label: "Medium" },
     { color: DIMMED.mid, label: "Low" },
   ],
 };
@@ -59,8 +59,9 @@ const NODE_KEY_BY_LENS: Record<string, NodeKeyItem[]> = {
 // Special lenses without sub-presets get a one-line edge explanation.
 const SPECIAL_EDGE_NOTE: Record<string, string> = {
   critical: "Only edges in critical findings — colored by severity.",
-  "blast-radius": "Edges reachable from the source node.",
-  chokepoints: "All structural edges (degree sizes the nodes).",
+  "blast-radius": "Loaded edges returned for the selected direction and hop cap.",
+  chokepoints:
+    "All loaded raw and composite edges contribute to degree-based sizing.",
 };
 
 const MAX_EDGE_ROWS = 7;
@@ -87,12 +88,8 @@ export function Legend() {
   const lens = getLens(activeLens);
 
   const hasSub = lens.subPresets.length > 0;
-  // Reflect what's actually visible: enabled sub-presets, else the lens default.
-  const edgeKinds = hasSub
-    ? enabledPresets.length > 0
-      ? enabledPresets
-      : lens.edgeKinds
-    : lens.edgeKinds;
+  // Reflect what's actually visible. An empty checkbox set means no edges.
+  const edgeKinds = hasSub ? enabledPresets : lens.edgeKinds;
 
   const nodeItems = NODE_KEY_BY_LENS[activeLens] ?? [];
   const severityColored = lens.colorEdgesBySeverity;
@@ -146,6 +143,11 @@ export function Legend() {
 
       {note && (
         <p className="mb-2 text-[10px] leading-snug text-muted-foreground">{note}</p>
+      )}
+      {hasSub && edgeKinds.length === 0 && (
+        <p className="mb-2 text-[10px] leading-snug text-amber-200">
+          No relationship types selected.
+        </p>
       )}
 
       {!severityColored && shownEdges.length > 0 && (

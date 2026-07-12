@@ -58,13 +58,18 @@ func TestConfusedDeputy_ProcessSuccess(t *testing.T) {
 	}
 
 	cypher, _ := calls[0].Args[0].(string)
-	// The auth-strength gradient literals are the boundary the detector
-	// fires on: low (weak) >= 80, high (strong) <= 30. Assert the exact
-	// predicate so a future threshold drift is caught.
-	for _, want := range []string{"CONFUSED_DEPUTY", "low.auth_strength >= 80", "high.auth_strength <= 30", "source_collector = 'a2a'"} {
+	for _, want := range []string{
+		"CONFUSED_DEPUTY",
+		"low.auth_assurance IN ['unauthenticated', 'weak']",
+		"high.auth_assurance = 'strong'",
+		"source_collector = 'a2a'",
+	} {
 		if !contains(cypher, want) {
 			t.Errorf("Cypher missing load-bearing predicate %q; query:\n%s", want, cypher)
 		}
+	}
+	if contains(cypher, "auth_strength >=") || contains(cypher, "auth_strength <=") {
+		t.Errorf("detector still uses numeric fallbacks that classify unknown auth: query:\n%s", cypher)
 	}
 }
 

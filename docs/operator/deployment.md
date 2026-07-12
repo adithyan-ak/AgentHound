@@ -83,13 +83,16 @@ NEO4J_dbms_memory_heap_max__size: 2G
 NEO4J_dbms_memory_pagecache_size: 1G
 ```
 
-APOC plugin is required for Dijkstra weighted-path queries. Enabled by default in the compose file via `NEO4J_PLUGINS: '["apoc"]'`.
+Path queries use the built-in bounded traversal engine and do not require APOC.
 
 ---
 
 ## PostgreSQL
 
-Postgres stores only the `scans` table (scan metadata, status, timestamps). Storage is negligible even at thousands of scans. No special tuning needed. The default `postgres:16-alpine` image is sufficient.
+Postgres stores scan lifecycle, immutable finding snapshots, analyst triage,
+coverage heads, and published posture revisions. No special tuning is needed
+for normal single-user deployments. The default `postgres:16-alpine` image is
+sufficient.
 
 ---
 
@@ -108,21 +111,28 @@ docker compose -f docker/docker-compose.yml cp graph-db:/tmp/neo4j.dump ./backup
 docker compose -f docker/docker-compose.yml exec app-db pg_dump -U agenthound agenthound > ./backups/pg.sql
 ```
 
-Schedule both via cron. The graph is the high-value artifact; Postgres is trivially recreatable from re-ingestion.
+Schedule both via cron. Neo4j contains the mutable graph projection; Postgres
+contains publication history and analyst triage that re-ingestion does not
+reconstruct.
 
 ---
 
 ## Upgrades
 
-`agenthound-server` handles schema migrations on startup (both Neo4j constraint creation and Postgres table migrations). Upgrade process:
+`agenthound-server` initializes Neo4j constraints and the PostgreSQL schema on
+startup. The pre-launch PostgreSQL history was replaced by one current
+single-user `001_initial.sql`; prior development schemas are intentionally not
+upgradeable. After checking out this baseline, recreate both development
+databases:
 
-1. Pull new image or binary.
-2. Stop the server container.
-3. Back up Neo4j and Postgres (above).
-4. Start the new version — migrations run automatically.
-5. Verify via `GET /api/v1/health` (checks both DB connections).
+```bash
+docker compose -f docker/docker-compose.yml down --volumes
+docker compose -f docker/docker-compose.yml up -d
+```
 
-No manual migration scripts required. The server detects Neo4j version (4.4 vs 5.x) and applies the correct constraint syntax automatically.
+This permanently deletes the development Neo4j and PostgreSQL volumes. The
+fresh baseline is idempotent after creation. The server still detects Neo4j
+4.4 versus 5.x and applies the appropriate constraint syntax.
 
 ---
 

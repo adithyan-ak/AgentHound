@@ -10,9 +10,15 @@ interface PathEdgeArrowProps {
   index?: number;
   active?: boolean;
   onClick?: () => void;
+  focusLabel?: "hop" | "relationship";
 }
 
-function PathEdgeArrowComponent({ kind, active, onClick }: PathEdgeArrowProps) {
+function PathEdgeArrowComponent({
+  kind,
+  active,
+  onClick,
+  focusLabel = "relationship",
+}: PathEdgeArrowProps) {
   const category = getEdgeCategory(kind);
   const color = EDGE_COLORS[category as keyof typeof EDGE_COLORS] ?? EDGE_COLORS.structure;
 
@@ -53,7 +59,7 @@ function PathEdgeArrowComponent({ kind, active, onClick }: PathEdgeArrowProps) {
     <button
       type="button"
       onClick={onClick}
-      title={`Focus hop · ${kind.replace(/_/g, " ")}`}
+      title={`Focus ${focusLabel} · ${kind.replace(/_/g, " ")}`}
       className={cn(
         "flex min-w-[64px] flex-shrink-0 flex-col items-center justify-center rounded-[3px] px-1 py-1 outline-none transition-colors",
         "hover:bg-white/[0.04] focus-visible:bg-white/[0.06]",

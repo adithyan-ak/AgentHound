@@ -16,7 +16,12 @@ import {
   SlidersHorizontal,
   X,
 } from "lucide-react";
-import { useFindings, useSetTriage, SEVERITY_RANK } from "@entities/finding";
+import {
+  isCurrentPublishedFindingScope,
+  useFindings,
+  useSetTriage,
+  SEVERITY_RANK,
+} from "@entities/finding";
 import type { Finding } from "@entities/finding/model";
 import { edgeLabel } from "@entities/edge";
 import {
@@ -25,8 +30,15 @@ import {
   type TriageStatus,
 } from "@shared/model/triage";
 import { buildFindingsTableMarkdown } from "../lib/copy-report";
+import {
+  canonicalFindingGroup,
+  canonicalizeFindingGroupParams,
+  isFindingGroup,
+  type GroupBy,
+} from "../model/grouping";
 import { isEditableTarget } from "@shared/lib";
 import { Skeleton } from "@shared/ui/primitives/skeleton";
+import { DataStateNotice } from "@shared/ui/feedback";
 import { MiniHexIcon } from "./MiniHexIcon";
 import { WidgetCard } from "@shared/ui/widgets";
 import { Sidebar } from "@shared/ui/layout";
@@ -40,16 +52,6 @@ import {
 } from "@shared/theme/tokens";
 
 const SEVERITY_LEVELS = ["critical", "high", "medium", "low"] as const;
-
-type GroupBy =
-  | "none"
-  | "severity"
-  | "target"
-  | "source"
-  | "category"
-  | "owasp"
-  | "edge_kind"
-  | "triage";
 
 type SortKey = "severity" | "confidence" | "category" | "title";
 type SortDir = "asc" | "desc";
@@ -93,7 +95,13 @@ export function FindingsListPage() {
   const [params, setParams] = useSearchParams();
 
   const showSuppressed = params.get("suppressed") === "1";
-  const { data: findings, isLoading } = useFindings(showSuppressed);
+  const {
+    data: findings,
+    snapshot,
+    isLoading,
+    isError,
+    dataUpdatedAt,
+  } = useFindings(showSuppressed);
   const setTriage = useSetTriage();
 
   // Triage status now arrives inline on each finding (server-backed). Derive
@@ -120,7 +128,8 @@ export function FindingsListPage() {
     () => new Set((params.get("triage") ?? "").split(",").filter(Boolean)),
     [params],
   );
-  const groupBy = (params.get("group") as GroupBy) ?? "none";
+  const rawGroup = params.get("group");
+  const groupBy = canonicalFindingGroup(rawGroup);
   const xproto = params.get("xproto") === "1";
   const minConf = Number(params.get("conf") ?? 0);
 
@@ -142,6 +151,11 @@ export function FindingsListPage() {
     }
     setParams(next, { replace: true });
   }
+
+  useEffect(() => {
+    if (rawGroup == null || isFindingGroup(rawGroup)) return;
+    setParams(canonicalizeFindingGroupParams(params), { replace: true });
+  }, [params, rawGroup, setParams]);
 
   function toggleCsv(key: string, current: Set<string>, value: string) {
     const next = new Set(current);
@@ -244,7 +258,7 @@ export function FindingsListPage() {
               : groupBy === "category"
                 ? f.category || "—"
                 : groupBy === "owasp"
-                  ? f.owasp_map?.[0] ?? "—"
+                  ? f.owasp_map[0] ?? "—"
                   : groupBy === "edge_kind"
                     ? f.edge_kind
                     : statusOf(f.id);
@@ -268,6 +282,19 @@ export function FindingsListPage() {
   }, [sorted, groupBy, triageMap]);
 
   const total = findings?.length ?? 0;
+  const hasCachedFindings = findings !== undefined;
+  const coldError = isError && !hasCachedFindings;
+  const cachedRefreshError = isError && hasCachedFindings;
+  const scopeUnavailable =
+    hasCachedFindings && snapshot?.available !== true;
+  const scopeStale =
+    hasCachedFindings &&
+    snapshot?.available === true &&
+    !isCurrentPublishedFindingScope(snapshot);
+  const canClaimCurrent =
+    !isError && isCurrentPublishedFindingScope(snapshot);
+  const canShowSnapshotCounts =
+    hasCachedFindings && snapshot?.available === true;
 
   // Number of *secondary* filters active (everything that lives in the rail).
   const activeFacetCount =
@@ -392,7 +419,23 @@ export function FindingsListPage() {
   }
 
   // ---------- Main register (loading / empty / table) ----------
-  const mainContent = isLoading ? (
+  const emptyLabel =
+    total > 0
+      ? "No findings match the current filters"
+      : canClaimCurrent
+        ? "No findings detected in the current published snapshot"
+        : scopeUnavailable
+          ? "No published finding snapshot is available"
+          : "Current finding status is unavailable";
+
+  const registerContent = coldError ? (
+    <WidgetCard title="Threat Register" icon={ShieldAlert}>
+      <DataStateNotice tone="error" title="Findings unavailable">
+        The findings request failed before any snapshot was loaded. No conclusion
+        about the current security posture can be drawn.
+      </DataStateNotice>
+    </WidgetCard>
+  ) : isLoading ? (
     <WidgetCard title="Threat Register" icon={ShieldAlert} flush>
       <div className="space-y-px p-2">
         {Array.from({ length: 8 }).map((_, i) => (
@@ -407,9 +450,9 @@ export function FindingsListPage() {
           <ShieldAlert className="h-6 w-6 text-primary" />
         </span>
         <p className="font-mono text-xs uppercase tracking-[0.12em] text-muted-foreground">
-          {total > 0 ? "No findings match the current filters" : "No findings detected"}
+          {emptyLabel}
         </p>
-        {total === 0 && (
+        {total === 0 && canClaimCurrent && (
           <button
             onClick={() => navigate("/scans")}
             className="font-mono text-xs uppercase tracking-[0.08em] text-primary transition-colors hover:text-primary/80"
@@ -467,6 +510,34 @@ export function FindingsListPage() {
     </WidgetCard>
   );
 
+  const mainContent = (
+    <div className="space-y-2">
+      {cachedRefreshError && (
+        <DataStateNotice tone="warning" title="Showing cached findings">
+          The latest refresh failed. Values below are cached
+          {dataUpdatedAt > 0
+            ? ` from ${new Date(dataUpdatedAt).toLocaleString()}`
+            : ""}
+          ; current status is unavailable.
+        </DataStateNotice>
+      )}
+      {!cachedRefreshError && scopeUnavailable && (
+        <DataStateNotice tone="error" title="Published snapshot unavailable">
+          The server did not provide an available published findings snapshot.
+          Empty results cannot be interpreted as an all-clear.
+        </DataStateNotice>
+      )}
+      {!cachedRefreshError && !scopeUnavailable && scopeStale && (
+        <DataStateNotice tone="warning" title="Published snapshot is stale">
+          Showing snapshot {snapshot?.scanId ?? "with unknown scan ID"}. The live
+          projection is not aligned with this revision, so these findings are not
+          a current-state verdict.
+        </DataStateNotice>
+      )}
+      {registerContent}
+    </div>
+  );
+
   return (
     <div className="dashboard-bg min-h-full p-3 sm:p-4 lg:p-5">
       <div className="mx-auto max-w-[1600px] space-y-3">
@@ -482,7 +553,7 @@ export function FindingsListPage() {
             <span className="text-primary">▸</span>
             Findings
             <span className="font-mono text-base font-semibold tabular-nums text-muted-foreground">
-              {pad2(total)}
+              {canShowSnapshotCounts ? pad2(total) : "--"}
             </span>
             <span className="blink-caret text-primary" aria-hidden>
               _
@@ -500,7 +571,7 @@ export function FindingsListPage() {
             <span aria-hidden className="absolute left-0 top-0 z-10 h-px w-14 bg-primary/80" />
             <SevStat
               label="Total"
-              count={pad2(total)}
+              count={canShowSnapshotCounts ? pad2(total) : "--"}
               color={ACCENT}
               active={activeSeverities.size === 0 && !xproto}
               onClick={() => patch({ sev: null, xproto: null })}
@@ -512,10 +583,10 @@ export function FindingsListPage() {
                 <SevStat
                   key={lvl}
                   label={SEVERITY[lvl].label}
-                  count={pad2(n)}
+                  count={canShowSnapshotCounts ? pad2(n) : "--"}
                   color={severityColor(lvl)}
                   active={activeSeverities.has(lvl)}
-                  dim={n === 0}
+                  dim={canShowSnapshotCounts && n === 0}
                   onClick={() => toggleCsv("sev", activeSeverities, lvl)}
                   title={`Filter to ${SEVERITY[lvl].label} severity`}
                 />
@@ -523,11 +594,11 @@ export function FindingsListPage() {
             })}
             <SevStat
               label="X-Proto"
-              count={pad2(counts.xproto)}
+              count={canShowSnapshotCounts ? pad2(counts.xproto) : "--"}
               color={XPROTO_ACCENT}
               icon={GitBranchPlus}
               active={xproto}
-              dim={counts.xproto === 0}
+              dim={canShowSnapshotCounts && counts.xproto === 0}
               onClick={() => patch({ xproto: xproto ? null : "1" })}
               title="Show only cross-protocol findings (A2A ↔ MCP)"
             />
@@ -1241,7 +1312,7 @@ function FindingRow({
       </td>
       <td className="px-2 py-3 align-middle">
         <p className="truncate text-[12px] text-foreground/80">{f.category}</p>
-        {(f.owasp_map?.length ?? 0) > 0 && (
+        {f.owasp_map.length > 0 && (
           <div className="mt-1 flex flex-wrap gap-1">
             {(f.owasp_map ?? []).map((tag) => (
               <span

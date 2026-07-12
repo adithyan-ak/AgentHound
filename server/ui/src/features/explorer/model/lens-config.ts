@@ -10,12 +10,13 @@ import {
   Waypoints,
 } from "lucide-react";
 import type { LensId } from "./store";
+import type { EdgeKind } from "@entities/graph/dto";
 import { NODE_KIND_COLORS, LENS_ACCENT } from "@shared/theme/tokens";
 
 export type SeverityLevel = "critical" | "high" | "medium" | "low" | "info";
 
 export interface SubPresetDefinition {
-  id: string;
+  id: EdgeKind;
   label: string;
   description: string;
   defaultEnabled: boolean;
@@ -34,7 +35,7 @@ export interface LensDefinition {
    * (Critical, Cross-Protocol, Blast Radius, Chokepoints) whose edge
    * selection is driven by findings or runtime state.
    */
-  edgeKinds: string[];
+  edgeKinds: EdgeKind[];
   /**
    * If true, nodes and edges that are not in the lens scope are
    * rendered at very low opacity rather than hidden entirely.
@@ -175,6 +176,9 @@ export const LENS_LIST: LensDefinition[] = [
       "CAN_REACH",
       "CAN_EXFILTRATE_VIA",
       "CAN_IMPERSONATE",
+      "INGESTS_UNTRUSTED",
+      "CONFUSED_DEPUTY",
+      "IFC_VIOLATION",
     ],
     dimOthers: false,
     subPresets: [
@@ -208,6 +212,24 @@ export const LENS_LIST: LensDefinition[] = [
         description: "A2A agent → similar A2A agent",
         defaultEnabled: true,
       },
+      {
+        id: "INGESTS_UNTRUSTED",
+        label: "Ingests Untrusted",
+        description: "Tool → untrusted input resource",
+        defaultEnabled: true,
+      },
+      {
+        id: "CONFUSED_DEPUTY",
+        label: "Confused Deputy",
+        description: "Agent → delegated authority mismatch",
+        defaultEnabled: true,
+      },
+      {
+        id: "IFC_VIOLATION",
+        label: "IFC Violation",
+        description: "Tool → information-flow policy violation",
+        defaultEnabled: true,
+      },
     ],
     showSeverityHalos: true,
     colorEdgesBySeverity: true,
@@ -235,7 +257,7 @@ export const LENS_LIST: LensDefinition[] = [
     activeTint: NODE_KIND_COLORS.A2AAgent,
     accentClass: "bg-purple-500 text-white",
     description:
-      "Only paths that cross the A2A ↔ MCP protocol boundary. The differentiator view.",
+      "50%-confidence A2A/MCP shared-host correlations. These are hypotheses, not proven cross-protocol invocation paths.",
     edgeKinds: [],
     dimOthers: true,
     subPresets: [],
@@ -274,8 +296,8 @@ export const LENS_LIST: LensDefinition[] = [
       },
       {
         id: "EXPOSES_CREDENTIAL",
-        label: "Exposes credential",
-        description: "AI service → credential material",
+        label: "Credential evidence",
+        description: "AI service → credential evidence",
         defaultEnabled: true,
       },
     ],
@@ -291,7 +313,13 @@ export const LENS_LIST: LensDefinition[] = [
     accentClass: "bg-yellow-500 text-slate-900",
     description:
       "Prompt-injection patterns in tool descriptions, shadowing, and instruction-file attacks.",
-    edgeKinds: ["SHADOWS", "POISONED_DESCRIPTION", "POISONED_INSTRUCTIONS"],
+    edgeKinds: [
+      "SHADOWS",
+      "POISONED_DESCRIPTION",
+      "POISONED_INSTRUCTIONS",
+      "TAINTS",
+      "POISONS_CONTEXT",
+    ],
     dimOthers: false,
     subPresets: [
       {
@@ -312,6 +340,18 @@ export const LENS_LIST: LensDefinition[] = [
         description: "CLAUDE.md / .cursorrules imperative overrides",
         defaultEnabled: true,
       },
+      {
+        id: "TAINTS",
+        label: "Cross-tool taint",
+        description: "Untrusted content flows between tools",
+        defaultEnabled: true,
+      },
+      {
+        id: "POISONS_CONTEXT",
+        label: "Poisons context",
+        description: "Tool content enters another tool's context",
+        defaultEnabled: true,
+      },
     ],
     showSeverityHalos: true,
     colorEdgesBySeverity: true,
@@ -324,7 +364,7 @@ export const LENS_LIST: LensDefinition[] = [
     activeTint: NODE_KIND_COLORS.MCPServer,
     accentClass: "bg-emerald-500 text-white",
     description:
-      "Pick a node. See everything reachable from it, grouped by hop distance.",
+      "Pick a node to inspect bounded reachability in the selected direction and hop cap over the loaded graph.",
     edgeKinds: [],
     dimOthers: true,
     subPresets: [],
@@ -339,7 +379,7 @@ export const LENS_LIST: LensDefinition[] = [
     activeTint: NODE_KIND_COLORS.AgentInstance,
     accentClass: "bg-cyan-500 text-white",
     description:
-      "Nodes ranked by combined in/out degree. Single points of failure sized proportionally.",
+      "Nodes ranked by combined in/out degree across all loaded raw and composite edges. Degree is not proof of a single point of failure.",
     edgeKinds: [],
     dimOthers: false,
     subPresets: [],
@@ -367,24 +407,45 @@ export function getLens(id: LensId): LensDefinition {
  * other composite/attack edges use Attack Surface; structural edges fall back
  * to Topology.
  */
+type OrdinaryLensId =
+  | "topology"
+  | "attack-surface"
+  | "credentials"
+  | "poisoning";
+
+export const EDGE_PRIMARY_LENS = {
+  TRUSTS_SERVER: "topology",
+  PROVIDES_TOOL: "topology",
+  PROVIDES_RESOURCE: "topology",
+  PROVIDES_PROMPT: "topology",
+  ADVERTISES_SKILL: "topology",
+  DELEGATES_TO: "topology",
+  AUTHENTICATES_WITH: "credentials",
+  USES_CREDENTIAL: "credentials",
+  RUNS_ON: "topology",
+  CONFIGURED_IN: "topology",
+  HAS_ENV_VAR: "credentials",
+  LOADS_INSTRUCTIONS: "topology",
+  SAME_AUTH_DOMAIN: "topology",
+  EXPOSES: "topology",
+  EXPOSES_CREDENTIAL: "credentials",
+  PROVIDES_MODEL: "topology",
+  EXTRACTED_FROM: "topology",
+  INGESTS_UNTRUSTED: "attack-surface",
+  HAS_ACCESS_TO: "attack-surface",
+  CAN_EXECUTE: "attack-surface",
+  CAN_REACH: "attack-surface",
+  CAN_EXFILTRATE_VIA: "attack-surface",
+  SHADOWS: "poisoning",
+  POISONED_DESCRIPTION: "poisoning",
+  CAN_IMPERSONATE: "attack-surface",
+  POISONED_INSTRUCTIONS: "poisoning",
+  CONFUSED_DEPUTY: "attack-surface",
+  TAINTS: "poisoning",
+  IFC_VIOLATION: "attack-surface",
+  POISONS_CONTEXT: "poisoning",
+} satisfies Record<EdgeKind, OrdinaryLensId>;
+
 export function lensForEdgeKind(kind: string): LensId {
-  switch (kind) {
-    case "AUTHENTICATES_WITH":
-    case "USES_CREDENTIAL":
-    case "HAS_ENV_VAR":
-    case "EXPOSES_CREDENTIAL":
-      return "credentials";
-    case "SHADOWS":
-    case "POISONED_DESCRIPTION":
-    case "POISONED_INSTRUCTIONS":
-      return "poisoning";
-    case "HAS_ACCESS_TO":
-    case "CAN_EXECUTE":
-    case "CAN_REACH":
-    case "CAN_EXFILTRATE_VIA":
-    case "CAN_IMPERSONATE":
-      return "attack-surface";
-    default:
-      return "topology";
-  }
+  return EDGE_PRIMARY_LENS[kind as EdgeKind] ?? "topology";
 }

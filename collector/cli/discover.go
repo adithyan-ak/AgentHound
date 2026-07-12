@@ -15,7 +15,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -23,6 +22,7 @@ import (
 	"github.com/adithyan-ak/agenthound/modules/networkscan"
 	"github.com/adithyan-ak/agenthound/modules/protoscan"
 	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
@@ -173,25 +173,31 @@ func runDiscover(cmd *cobra.Command, args []string) error {
 
 func buildDiscoverEnvelope(spec string, targets []action.Target, authzFile, authzHash string, allowPublic bool) *ingest.IngestData {
 	scanID := uuid.New().String()
-	env := &ingest.IngestData{
-		Meta: ingest.IngestMeta{
-			Version:          1,
-			Type:             "agenthound-ingest",
-			Collector:        "scan",
-			CollectorVersion: "0.3.0-dev",
-			Timestamp:        time.Now().UTC().Format(time.RFC3339),
-			ScanID:           scanID,
-			Extra: map[string]any{
-				"discover_spec":        spec,
-				"discover_targets":     len(targets),
-				"allow_public_targets": allowPublic,
-			},
-		},
+	env := common.NewIngestData("scan", scanID)
+	env.Meta.CollectorVersion = "0.3.0-dev"
+	env.Meta.Extra = map[string]any{
+		"discover_spec":        spec,
+		"discover_targets":     len(targets),
+		"allow_public_targets": allowPublic,
+	}
+	coverageKey := ingest.CanonicalCoverageKey("scan", "discover", spec)
+	env.Meta.Collection = &ingest.CollectionReport{
+		State:        ingest.OutcomeComplete,
+		CoverageKeys: []string{coverageKey},
+		Outcomes: []ingest.CollectionOutcome{{
+			Collector:   "scan",
+			CoverageKey: coverageKey,
+			Target:      spec,
+			Method:      "protocol_discovery",
+			State:       ingest.OutcomeComplete,
+			Items:       len(targets),
+		}},
 	}
 	if authzFile != "" {
 		env.Meta.Extra["authorization_file_path"] = authzFile
 		env.Meta.Extra["authorization_file_sha256"] = authzHash
 	}
 	env.Graph = protoscan.EmitDiscoveryNodes(targets)
+	ingest.TagObservationDomain(&env.Graph, coverageKey)
 	return env
 }

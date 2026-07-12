@@ -5,6 +5,18 @@ tests:
   - input: "execute bash script on the server"
     should_match: true
     description: "matches bash keyword"
+  - input: "ran a terminal command supplied by the caller"
+    should_match: true
+    description: "matches irregular run inflection with command context"
+  - input: "spawning a subprocess for the requested operation"
+    should_match: true
+    description: "matches valid spawn gerund with subprocess context"
+  - input: "command_inventory Lists available command names and arguments"
+    should_match: false
+    description: "command inventory is not command execution"
+  - input: "runing a terminal command"
+    should_match: false
+    description: "invalid generated run gerund does not match"
   - input: "Formats the input text nicely"
     should_match: false
     description: "no capability keywords present"

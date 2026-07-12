@@ -2,7 +2,7 @@
 
 Post-processors compute composite edges and risk scores from raw graph state after the batch write phase. They run in `server/internal/analysis/processors/` and are orchestrated by `analysis.RunPostProcessors()`.
 
-All composite edges carry: `scan_id`, `last_seen`, `confidence` (0.0-1.0), `risk_weight`, `is_composite=true`, `source_collector`.
+All composite edges carry: `scan_id`, `last_seen`, `confidence` (0.0-1.0), `risk_weight`, `is_composite=true`, `source_collector`. `source_collector` is detector provenance, not lifecycle ownership.
 
 ## Dependency DAG
 
@@ -59,9 +59,15 @@ type PostProcessor interface {
 
 ## auth_strength (pre-pass)
 
-**Computes:** `auth_strength` numeric property on every node with an `auth_method` (`MCPServer`, `A2AAgent`).
+**Computes:** canonical `auth_assurance` on every assessed node and numeric `auth_strength` only for known methods (`MCPServer`, `A2AAgent`).
 
-A pre-pass with no dependencies that materializes the runtime weakness score map (`riskscore.AuthStrengthScores`: none=100, apiKey=70, bearer=50, oauth=25, mtls=10) onto nodes as a Cypher `CASE`, so downstream processors (notably `confused_deputy`) can compare auth gradients directly in Cypher. It writes only node properties — no composite edges — so it needs no `source_collector` and is untouched by stale-edge cleanup.
+A pre-pass with no dependencies that materializes the shared SDK auth policy:
+none=100/unauthenticated, basic=85/weak, apiKey=70/weak,
+bearer=50/moderate, oauth=25/strong, oidc=20/strong, and mtls=10/strong.
+Unknown/custom methods receive `auth_assurance=unknown` and a null numeric
+property, removing any stale score. It writes only node properties — no
+composite edges — so it needs no `source_collector` and is untouched by
+composite epoch retirement.
 
 ---
 
@@ -76,13 +82,18 @@ Three Cypher passes:
 - **Capability-File:** Tool has `file_read` or `file_write` AND resource URI scheme is `file`. Confidence: 0.7.
 - **Description match:** Tool description contains the resource name (case-insensitive substring). Confidence: 0.9.
 
-All edges: `risk_weight=0.2`, `match_type` recorded for evidence.
+All edges: `risk_weight=0.2`, `match_type` recorded for evidence. Confidence,
+match type, weight, collector, and scan metadata are refreshed on MERGE so a
+prior inference cannot retain stale evidence.
 
 ## 2. can_execute
 
 **Computes:** `MCPTool -[CAN_EXECUTE]-> Host`
 
-Links tools to their server's host when the tool has `shell_access` or `code_execution` in `capability_surface`.
+Links tools to their server's host when the tool has `shell_access` or
+`code_execution` in `capability_surface`. The YAML classifiers require
+execution-specific terms; database-only names such as `execute_query` do not
+produce either capability.
 
 Pattern:
 ```cypher
@@ -91,7 +102,8 @@ WHERE ANY(cap IN t.capability_surface WHERE cap IN ['shell_access', 'code_execut
 MERGE (t)-[e:CAN_EXECUTE]->(h)
 ```
 
-Confidence: 1.0, risk_weight: 0.1.
+Confidence: 0.8, risk_weight: 0.1. Both values refresh on MERGE. This is a
+metadata-derived execution candidate, not observed command execution.
 
 ## 3. shadows
 
@@ -131,7 +143,7 @@ Emits a `TAINTS` edge when a tool that ingests untrusted input (it has an `INGES
 
 **Computes:** `AgentInstance -[CAN_REACH]-> MCPResource`
 
-The critical transitive-access edge. Two passes:
+The inferred transitive-access summary edge. Two passes:
 
 **Direct path (3 hops):**
 ```
@@ -144,11 +156,13 @@ Confidence scales inversely with trust edge risk_weight (no-auth trust = 1.0, st
 AgentInstance -> MCPServer(s1) -> MCPTool(file_read|credential_access)
 MCPServer(s2) -[HAS_ENV_VAR]-> Credential -> Identity -> MCPServer(s2) -> MCPTool -> MCPResource
 ```
-Requires s1 has no/weak auth so creds are accessible. Confidence: 0.6.
+Requires explicit unauthenticated/weak evidence for s1; missing auth evidence
+does not match. Confidence: 0.6.
 
 ## 7. cross_service_credential_chain
 
-**Computes:** `AgentInstance -[CAN_REACH]-> Credential` (upstream provider keys)
+**Computes:** `AgentInstance -[CAN_REACH]-> Credential` (upstream provider
+credential material or references)
 
 Joins Config Collector and LiteLLM Looter emissions on `Credential.value_hash`:
 
@@ -159,7 +173,11 @@ LiteLLMGateway -[EXPOSES_CREDENTIAL]-> Credential(c1master)
 LiteLLMGateway -[EXPOSES_CREDENTIAL]-> Credential(c2, type IN [apiKey, virtual_key])
 ```
 
-Emits: `(AgentInstance)-[:CAN_REACH]->(c2)` with evidence including `merge_value_hash`, `via_gateway`, `upstream_provider`. Confidence: 0.95, hops: 5.
+Emits: `(AgentInstance)-[:CAN_REACH]->(c2)` with evidence including
+`merge_value_hash`, `via_gateway`, `upstream_provider`. The resulting finding
+variant is `credential_chain_observed_material` only when c2 explicitly carries
+observed, exposed, non-identity material; masked/hashed targets are
+`credential_chain_reference`. Confidence: 0.95, hops metadata: 5.
 
 The same single query also computes **credential blast radius**: `count(DISTINCT agent)` reaching the merged secret, written as `blast_radius` on both `c1` (the env-var credential) and `c1master` (its value_hash twin). The agents are collected for the count and re-UNWOUND so the CAN_REACH MERGE stays one edge per (agent, upstream-credential). `blast_radius` then amplifies the server credential-handling risk term (see risk-scoring.md).
 
@@ -171,7 +189,10 @@ The `value_hash` is the cross-collector merge primitive -- same secret value reg
 
 Emits an information-flow-control violation edge when an untrusted-input tool (`INGESTS_UNTRUSTED -> MCPResource`) shares a resource within **3 `HAS_ACCESS_TO` hops** with a sink tool carrying a high-impact capability (`credential_access`, `file_write`, `email_send`). The 1..3 hop cap is the false-positive / performance guard. Depends on `has_access_to`. Confidence: 0.6, risk_weight: 0.3, `source_collector='mcp'`.
 
-> **Cleanup semantics:** `IFC_VIOLATION` carries `source_collector='mcp'`, so it is only swept by stale-edge cleanup when the `mcp` collector re-runs. If an operator runs only `a2a` / `config` scans afterward, IFC edges from a prior `mcp` scan persist (the underlying tools were not re-enumerated). This is acceptable.
+`IFC_VIOLATION` carries `source_collector='mcp'` as detector provenance.
+Its lifecycle is nevertheless part of the global composite epoch: any promoted
+complete domain causes all detectors, including IFC, to rebuild from the
+retained current raw projection.
 
 ## 8. can_exfiltrate
 
@@ -181,7 +202,11 @@ Requires both conditions:
 1. Agent CAN_REACH a resource with sensitivity `critical` or `high`
 2. Agent trusts a server with a tool having an outbound capability: `email_send`, `network_outbound`, `file_write`, `auto_fetch_render`, or `allowlisted_proxy`
 
-Pattern ensures the agent has both the data access AND an outbound channel. The `auto_fetch_render` / `allowlisted_proxy` classes broaden the set of covert exfiltration channels (see detection-rules.md for the `auto_fetch_render` host-side caveat). Confidence: 0.8.
+Pattern correlates inferred data access with a matched output-channel
+capability. It does not observe data transfer or prove runtime invocability.
+The `auto_fetch_render` / `allowlisted_proxy` classes broaden the set of
+candidate channels (see detection-rules.md for the `auto_fetch_render`
+host-side caveat). Confidence: 0.8.
 
 ## 9. can_impersonate
 
@@ -201,28 +226,48 @@ Agents from the same provider are excluded (impersonation assumes cross-provider
 
 **Computes:** `A2AAgent -[CAN_REACH]-> MCPResource`
 
-The cross-protocol attack path that single-protocol scanners cannot detect:
+The cross-protocol shared-host correlation that single-protocol scanners
+cannot express:
 
 ```cypher
 MATCH (ext:A2AAgent)-[:DELEGATES_TO*1..3]->(int:A2AAgent)
 MATCH (int)-[:RUNS_ON]->(h:Host)<-[:RUNS_ON]-(s:MCPServer)
 MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(s)-[:PROVIDES_TOOL]->(t:MCPTool)-[:HAS_ACCESS_TO]->(r:MCPResource)
-WHERE ext.auth_method IS NULL OR ext.auth_method = 'none'
+WHERE ext.auth_assurance = 'unauthenticated'
+  AND ext.auth_evidence = 'anonymous_probe_succeeded'
 ```
 
-Requires the external A2A agent has no authentication. The pivot point is host co-location: an A2A agent that delegates to another agent running on the same host as an MCP server. Edge properties include `cross_protocol=true`. Confidence: 0.5.
+Requires explicit unauthenticated evidence for the external A2A agent; missing
+auth is unknown and does not match. The pivot is host co-location: an A2A
+agent delegates to another agent recorded on the same host as an MCP server.
+The edge carries `cross_protocol=true` and confidence 0.5. Finding and pre-built
+query output label it a `shared_host` hypothesis, not proven A2A-to-MCP
+invocation.
 
 ## confused_deputy
 
 **Computes:** `A2AAgent -[CONFUSED_DEPUTY]-> A2AAgent`
 
-Flags a confused-deputy escalation: a weakly-authenticated agent (`auth_strength >= 80`, i.e. none/apiKey-class) that `DELEGATES_TO` a strongly-authenticated one (`auth_strength <= 30`, i.e. oauth/mtls-class). The low-trust caller effectively borrows the callee's privileges. Depends on the `auth_strength` pre-pass and `can_reach` (ordering). `source_collector='a2a'` — a real collector, so it participates in stale-edge cleanup directly. Confidence: 0.8, risk_weight: 0.3.
+Flags a confused-deputy escalation when an unauthenticated/weak A2A agent
+`DELEGATES_TO` a strong one. Unknown/custom methods are excluded. The low-trust
+caller effectively borrows the callee's privileges. Depends on the
+`auth_strength` pre-pass and `can_reach` (ordering).
+`source_collector='a2a'`; confidence 0.8, risk weight 0.3.
 
 ## 11. risk_score
 
-**Computes:** `risk_score` property on AgentInstance, A2AAgent, MCPServer, MCPTool nodes (0-100)
+**Computes:** `risk_score`, `risk_score_min`, `risk_score_max`,
+`risk_assessment_complete`, and `risk_unknown_factors` on AgentInstance,
+A2AAgent, MCPServer, and MCPTool nodes.
 
-Depends on ALL prior processors (uses their edges for scoring). Iterates all nodes of each scored kind and invokes per-kind scoring functions from `analysis/riskscore/`.
+Depends on ALL prior processors (uses their edges for scoring). It reads every
+page of each scored kind under one graph revision before writing any scores;
+an incomplete page, revision/total change, or count mismatch aborts the
+processor rather than publishing scores for a partial node set. Per-node
+calculation and update failures are aggregated while best-effort scoring
+continues across every node kind; the joined error fails the processor and
+withholds publication. Per-kind scoring functions live in
+`analysis/riskscore/`.
 
 **Agent score (0-100):**
 - 0.30 x credential exposure
@@ -251,31 +296,81 @@ Depends on ALL prior processors (uses their edges for scoring). Iterates all nod
 
 ---
 
-## Stale-Edge Cleanup
+## Composite epoch replacement
 
-Before processors run, `cleanStaleCompositeEdges()` deletes composite edges from previous scans scoped by the current scan's collector(s). Collector names are expanded to include processor-owned derived sources when needed, such as `cross_service_credential_chain` for config or network-scan inputs:
+When at least one explicit complete raw domain is promoted,
+`beginCompositeEpoch()` atomically removes every `is_composite=true` edge and
+clears processor-owned `Credential.blast_radius`. All registered processors
+then rebuild the global derived graph from the retained current raw projection
+in dependency order.
 
 ```cypher
-MATCH ()-[r]->()
-WHERE r.is_composite = true
-  AND r.scan_id <> $current_scan_id
-  AND r.source_collector IN $collectors
-DELETE r
+CALL {
+  MATCH ()-[r]->()
+  WHERE r.is_composite = true
+  WITH r
+  DELETE r
+  RETURN count(r) AS deleted
+}
+CALL {
+  MATCH (c:Credential)
+  WHERE c.blast_radius IS NOT NULL
+  REMOVE c.blast_radius
+  RETURN count(c) AS cleared
+}
+RETURN deleted
 ```
 
-This prevents stale findings from accumulating while preserving composite edges from other collectors. An MCP-only re-scan deletes old MCP composite edges but leaves A2A and credential-chain edges untouched; a config or network re-scan also cleans credential-chain edges because those findings depend on the refreshed credential inputs.
+The epoch is global because a narrow MCP, config, or A2A replacement can
+invalidate a composite whose `source_collector` names another domain. Examples
+include cross-protocol host pivots, transitive reachability, exfiltration, and
+cross-service credential chains. Keeping the prior epoch available while
+recomputing would also let downstream processors consume stale `HAS_ACCESS_TO`
+or `CAN_REACH` inputs and incorrectly refresh them into the new epoch.
+
+When no domain is promotably complete (unknown, partial, failed, or
+publication-unsafe coverage), derived processing is skipped and the current
+composite epoch is left untouched. If epoch retirement or any processor fails
+after a complete promotion, analysis is incomplete and publication is
+withheld. The mutable projection may contain an incomplete new epoch, but the
+previously published PostgreSQL revision and its frozen evidence remain
+unchanged. A later complete attempt starts from another empty derived epoch and
+rebuilds it.
+
+This invariant requires every composite edge to be produced by the registered
+processor set and every processor to rebuild solely from retained raw facts or
+outputs of earlier processors in the declared order. New processors must obey
+that contract; manually persisted `is_composite=true` relationships are not
+preserved across complete replacements.
 
 ### INGESTS_UNTRUSTED raw-edge accumulation
 
-`INGESTS_UNTRUSTED` is a **raw** edge (`is_composite=false`), so it is *not* swept by `cleanStaleCompositeEdges` (which gates on `is_composite=true`). It is MERGE-keyed on (source, target), so re-scans rewrite `scan_id` for tools that stay around. The trade-off: a renamed or removed tool whose `INGESTS_UNTRUSTED` edge was emitted in a prior scan will linger, because the old (tool, resource) key is never re-MERGEd. Mitigation is to gate emission on stable, rule-derived `source_trust` (which does not flap for the same tool). A dedicated raw-edge sweeper is intentionally out of scope; if false-positive linger becomes load-bearing, the fix is a separate processor that DELETEs `INGESTS_UNTRUSTED` edges whose source tool no longer carries `source_trust`.
+`INGESTS_UNTRUSTED` is a **raw** edge (`is_composite=false`), so composite
+cleanup never touches it. It participates in the same observation-owner
+reconciliation as every other new raw edge: a complete MCP domain removes the
+prior MCP token, while partial/unknown coverage retains it.
 
 ---
 
 ## Findings Snapshot Stage (pipeline)
 
-After post-processing completes and before the scan-completion record is written, the ingest pipeline persists a **findings snapshot** to Postgres (`appdb.FindingStore.InsertFindings`). Sequencing matters: `cleanStaleCompositeEdges` runs first, so the Neo4j graph already reflects only the current scan's composite-edge set when the snapshot is taken.
+After post-processing and graph-total capture, the ingest pipeline materializes
+a candidate **findings snapshot**. PostgreSQL finalization deletes and replaces
+all rows for that scan in one transaction, including an empty retry.
 
-This snapshot is the diffable record of "what was found when". The Neo4j graph itself is **not** diffable across scans — the stale-edge cleanup deletes prior-scan composite edges — so every triage (`/findings/triage`) and diff (`query --diff`) read comes from the Postgres snapshot, which is invariant under the next scan's cleanup. The snapshot write is non-fatal: a Postgres hiccup logs a warning but does not fail the ingest.
+Every finding-producing processor records the exact witness node object IDs and
+Neo4j relationship IDs selected by its detector on the composite edge. During
+the same ingest, `QueryFindings` dereferences those IDs once and atomic
+finalization stores the resulting node/edge snapshots as JSONB with the finding
+row. Finding detail serves that frozen witness graph; it does not re-run
+detector-like `LIMIT 1` queries against the mutable projection.
+
+When all required stages and complete coverage succeed, the same transaction
+inserts an immutable `posture_publications` revision, persists its export, and
+advances `posture_state`. Otherwise the snapshot can remain historical but the
+published pointer does not move. A degraded retry using the currently
+published scan ID preserves the prior published rows and export until a new
+complete revision commits.
 
 ## Integration-test isolation
 

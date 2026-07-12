@@ -85,6 +85,12 @@ func (p *CanImpersonate) Process(ctx context.Context, db graph.GraphDB, scanID s
 					"source_collector": "a2a",
 					"confidence":       sim,
 					"risk_weight":      0.6,
+					"evidence_version": 1,
+					"evidence_node_ids": []string{
+						agents[i].id,
+						agents[j].id,
+					},
+					"evidence_relationship_ids": []string{},
 				},
 			})
 
@@ -101,6 +107,12 @@ func (p *CanImpersonate) Process(ctx context.Context, db graph.GraphDB, scanID s
 					"source_collector": "a2a",
 					"confidence":       sim,
 					"risk_weight":      0.6,
+					"evidence_version": 1,
+					"evidence_node_ids": []string{
+						agents[j].id,
+						agents[i].id,
+					},
+					"evidence_relationship_ids": []string{},
 				},
 			})
 		}
@@ -113,7 +125,7 @@ func (p *CanImpersonate) Process(ctx context.Context, db graph.GraphDB, scanID s
 		}, nil
 	}
 
-	written, err := db.WriteEdges(ctx, edges, scanID)
+	written, err := db.WriteCompositeEdges(ctx, edges, scanID)
 	if err != nil {
 		return graph.ProcessingStats{
 			ProcessorName: p.Name(),

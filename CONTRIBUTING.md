@@ -34,7 +34,8 @@ CI additionally runs `golangci-lint`, `govulncheck`, `go-licenses`, `scripts/dep
 - **TypeScript:** Prettier + ESLint (`cd server/ui && npm run lint`).
 - **No manual alignment padding** — `golangci-lint` enforces this.
 - **Intentionally discarded errors** use `_, _ =` (e.g., `_, _ = fmt.Fprintf(os.Stderr, ...)`).
-- **Property keys** in Neo4j are always `snake_case`. Collectors may emit camelCase JSON; the ingest normalizer converts on the server side.
+- **Property keys** in collector JSON and Neo4j are canonical `snake_case`.
+  Non-canonical keys are rejected before normalization.
 
 ## How to add a new module (collector / fingerprinter / looter)
 

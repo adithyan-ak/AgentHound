@@ -3,12 +3,20 @@ package a2a
 import (
 	"net/url"
 	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/adithyan-ak/agenthound/sdk/common"
 )
 
 type DelegationEdge struct {
 	SourceAgentID string
 	TargetAgentID string
 	Confidence    float64
+	EvidenceState string
+	MatchType     string
+	MatchField    string
+	MatchedRef    string
 }
 
 type AuthDomainEdge struct {
@@ -16,35 +24,23 @@ type AuthDomainEdge struct {
 	AgentID2 string
 }
 
-var authScores = map[string]int{
-	"mutualTLS":     10,
-	"openIdConnect": 20,
-	"oauth2":        25,
-	"http":          50,
-	"apiKey":        70,
-}
-
 func AuthPostureScore(schemes []SecurityScheme) int {
-	if len(schemes) == 0 {
-		return 100
+	assessment := AuthAssessmentForSchemes(schemes, nil)
+	if assessment.Weakness == nil {
+		return -1
 	}
-
-	best := 100
-	for _, s := range schemes {
-		score, ok := authScores[s.Type]
-		if !ok {
-			continue
-		}
-		if score < best {
-			best = score
-		}
-	}
-	return best
+	return int(*assessment.Weakness)
 }
 
 func DeriveAuthMethod(schemes []SecurityScheme, securityRefs []any) string {
+	return string(AuthAssessmentForSchemes(schemes, securityRefs).Method)
+}
+
+func AuthAssessmentForSchemes(schemes []SecurityScheme, securityRefs []any) common.AuthAssessment {
 	if len(schemes) == 0 {
-		return "none"
+		// A missing securitySchemes object is absence of assessment evidence,
+		// not a declaration that the runtime accepts anonymous requests.
+		return common.AssessAuth(string(common.AuthUnknown))
 	}
 
 	activeSchemes := schemes
@@ -55,26 +51,44 @@ func DeriveAuthMethod(schemes []SecurityScheme, securityRefs []any) string {
 		activeSchemes = schemes
 	}
 
-	priority := []struct {
-		schemeType string
-		method     string
-	}{
-		{"mutualTLS", "mtls"},
-		{"openIdConnect", "oidc"},
-		{"oauth2", "oauth"},
-		{"http", "bearer"},
-		{"apiKey", "apiKey"},
-	}
-
-	for _, p := range priority {
-		for _, s := range activeSchemes {
-			if s.Type == p.schemeType {
-				return p.method
-			}
+	var best *common.AuthAssessment
+	for _, scheme := range activeSchemes {
+		assessment := common.AssessAuth(string(authMethodForScheme(scheme)))
+		if assessment.Weakness == nil {
+			continue
+		}
+		if best == nil || *assessment.Weakness < *best.Weakness {
+			copy := assessment
+			best = &copy
 		}
 	}
+	if best != nil {
+		return *best
+	}
+	return common.AssessAuth(string(common.AuthUnknown))
+}
 
-	return "none"
+func authMethodForScheme(scheme SecurityScheme) common.AuthMethod {
+	switch strings.ToLower(strings.TrimSpace(scheme.Type)) {
+	case "mutualtls":
+		return common.AuthMTLS
+	case "openidconnect":
+		return common.AuthOIDC
+	case "oauth2":
+		return common.AuthOAuth
+	case "apikey":
+		return common.AuthAPIKey
+	case "http":
+		if method, ok := common.RecognizeAuthMethod(scheme.Scheme); ok {
+			switch method {
+			case common.AuthBasic, common.AuthBearer:
+				return method
+			}
+		}
+		return common.AuthUnknown
+	default:
+		return common.AuthUnknown
+	}
 }
 
 func resolveActiveSchemes(schemes []SecurityScheme, securityRefs []any) []SecurityScheme {
@@ -117,20 +131,20 @@ func DetectDelegation(cards []*AgentCardData) []DelegationEdge {
 
 	var edges []DelegationEdge
 	for i, src := range cards {
-		searchText := strings.ToLower(src.Description)
-		for _, sk := range src.Skills {
-			searchText += " " + strings.ToLower(sk.Description)
-		}
-
 		for j, tgt := range refs {
 			if i == j {
 				continue
 			}
-			if mentionsAgent(searchText, tgt.name, tgt.url) {
+			matchType, matchField, matchedRef, ok := delegationEvidence(src, tgt.name, tgt.url)
+			if ok {
 				edges = append(edges, DelegationEdge{
 					SourceAgentID: refs[i].id,
 					TargetAgentID: tgt.id,
-					Confidence:    0.7,
+					Confidence:    0.5,
+					EvidenceState: "hypothesis",
+					MatchType:     matchType,
+					MatchField:    matchField,
+					MatchedRef:    matchedRef,
 				})
 			}
 		}
@@ -138,14 +152,119 @@ func DetectDelegation(cards []*AgentCardData) []DelegationEdge {
 	return edges
 }
 
-func mentionsAgent(text, name, agentURL string) bool {
-	if name != "" && len(name) > 3 && strings.Contains(text, name) {
-		return true
+func delegationEvidence(
+	card *AgentCardData,
+	name, agentURL string,
+) (matchType, matchField, matchedRef string, ok bool) {
+	fields := []struct {
+		name string
+		text string
+	}{{name: "agent.description", text: card.Description}}
+	for _, skill := range card.Skills {
+		fields = append(fields, struct {
+			name string
+			text string
+		}{
+			name: "skill.description:" + skill.ID,
+			text: skill.Description,
+		})
 	}
-	if agentURL != "" && strings.Contains(text, agentURL) {
-		return true
+	for _, field := range fields {
+		text := strings.ToLower(field.text)
+		if name != "" && len([]rune(name)) > 3 {
+			if index := boundedReferenceIndex(text, name); index >= 0 &&
+				hasDelegationCue(referenceSentence(text, index, len(name))) {
+				return "lexical_name", field.name, name, true
+			}
+		}
+		if agentURL != "" {
+			if index := strings.Index(text, agentURL); index >= 0 &&
+				hasDelegationCue(referenceSentence(text, index, len(agentURL))) {
+				return "lexical_url", field.name, agentURL, true
+			}
+		}
+	}
+	return "", "", "", false
+}
+
+func boundedReferenceIndex(text, reference string) int {
+	from := 0
+	for from <= len(text) {
+		relative := strings.Index(text[from:], reference)
+		if relative < 0 {
+			return -1
+		}
+		index := from + relative
+		if hasTokenBoundaries(text, index, index+len(reference)) {
+			return index
+		}
+		_, size := utf8.DecodeRuneInString(text[index:])
+		if size == 0 {
+			return -1
+		}
+		from = index + size
+	}
+	return -1
+}
+
+func referenceSentence(text string, index, length int) string {
+	start := 0
+	if boundary := strings.LastIndexAny(text[:index], ".!?\n;"); boundary >= 0 {
+		start = boundary + 1
+	}
+	end := len(text)
+	if boundary := strings.IndexAny(text[index+length:], ".!?\n;"); boundary >= 0 {
+		end = index + length + boundary
+	}
+	return text[start:end]
+}
+
+var delegationCues = []string{
+	"delegate", "delegates", "delegating",
+	"route", "routes", "routing",
+	"forward", "forwards", "forwarding",
+	"hand off", "handoff",
+	"invoke", "invokes", "invoking",
+	"call", "calls", "calling",
+	"send", "sends", "sending",
+}
+
+func hasDelegationCue(text string) bool {
+	for _, cue := range delegationCues {
+		index := boundedReferenceIndex(text, cue)
+		if index < 0 {
+			continue
+		}
+		prefixStart := max(0, index-24)
+		prefix := text[prefixStart:index]
+		negated := false
+		for _, negation := range []string{"not", "never", "without", "cannot", "can't", "doesn't", "does not"} {
+			if boundedReferenceIndex(prefix, negation) >= 0 {
+				negated = true
+				break
+			}
+		}
+		if !negated {
+			return true
+		}
 	}
 	return false
+}
+
+func hasTokenBoundaries(text string, start, end int) bool {
+	if start > 0 {
+		before, _ := utf8.DecodeLastRuneInString(text[:start])
+		if before == '_' || unicode.IsLetter(before) || unicode.IsNumber(before) {
+			return false
+		}
+	}
+	if end < len(text) {
+		after, _ := utf8.DecodeRuneInString(text[end:])
+		if after == '_' || unicode.IsLetter(after) || unicode.IsNumber(after) {
+			return false
+		}
+	}
+	return true
 }
 
 func DetectSameAuthDomain(cards []*AgentCardData) []AuthDomainEdge {

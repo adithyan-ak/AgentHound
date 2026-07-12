@@ -113,6 +113,7 @@ func TestToolRiskScore_AccessSensitivity(t *testing.T) {
 		{"medium", "medium", 50},
 		{"low", "low", 25},
 		{"none", "none", 0},
+		{"unknown uses conservative bound", "unknown", 100},
 	}
 
 	for _, tt := range tests {
@@ -138,6 +139,29 @@ func TestToolRiskScore_AccessSensitivity(t *testing.T) {
 				t.Errorf("score = %f, want %f", score, want)
 			}
 		})
+	}
+}
+
+func TestToolRiskAssessmentUnknownSensitivity(t *testing.T) {
+	mock := &graph.MockGraphDB{
+		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
+			if containsSubstring(cypher, "HAS_ACCESS_TO") {
+				return []map[string]any{{"sensitivity": "unknown"}}, nil
+			}
+			if containsSubstring(cypher, "input_schema") {
+				return []map[string]any{{"schema": `{"type":"object"}`}}, nil
+			}
+			return nil, nil
+		},
+	}
+	assessment, err := ToolRiskAssessment(context.Background(), mock, "tool-1")
+	if err != nil {
+		t.Fatalf("ToolRiskAssessment: %v", err)
+	}
+	if assessment.Complete || assessment.Min != 0 || assessment.Max != 25 ||
+		len(assessment.UnknownFactors) != 1 ||
+		assessment.UnknownFactors[0] != "resource_sensitivity" {
+		t.Fatalf("unknown sensitivity assessment = %+v", assessment)
 	}
 }
 

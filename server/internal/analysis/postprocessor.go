@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 )
@@ -12,17 +13,31 @@ import (
 type PostProcessor = graph.PostProcessor
 type ProcessingStats = graph.ProcessingStats
 
-func RunPostProcessors(ctx context.Context, db graph.GraphDB, scanID string, collectors []string) ([]ProcessingStats, error) {
+func RunPostProcessors(
+	ctx context.Context,
+	db graph.GraphDB,
+	scanID string,
+	completeDomains []string,
+) ([]ProcessingStats, error) {
 	processors := allProcessors()
 	if err := validateDependencyOrder(processors); err != nil {
 		return nil, fmt.Errorf("invalid processor ordering: %w", err)
 	}
 
-	deleted, err := cleanStaleCompositeEdges(ctx, db, scanID, collectors)
+	if !hasCompleteDomain(completeDomains) {
+		return []ProcessingStats{}, nil
+	}
+
+	// A promoted raw domain may invalidate a composite whose provenance names
+	// another collector (cross-protocol and credential-chain edges are the
+	// canonical examples). Retire the whole derived epoch before rebuilding so
+	// no processor can consume stale composite input from the prior epoch.
+	deleted, err := beginCompositeEpoch(ctx, db)
 	if err != nil {
-		slog.Warn("stale edge cleanup failed", "error", err)
-	} else if deleted > 0 {
-		slog.Info("cleaned stale composite edges", "deleted", deleted)
+		return nil, fmt.Errorf("begin composite epoch: %w", err)
+	}
+	if deleted > 0 {
+		slog.Info("retired composite epoch", "deleted", deleted)
 	}
 
 	var allStats []ProcessingStats
@@ -55,40 +70,34 @@ func validateDependencyOrder(processors []PostProcessor) error {
 	return nil
 }
 
-func cleanStaleCompositeEdges(ctx context.Context, db graph.GraphDB, scanID string, collectors []string) (int, error) {
-	if len(collectors) == 0 {
-		return 0, nil
+func hasCompleteDomain(domains []string) bool {
+	for _, domain := range domains {
+		if strings.TrimSpace(domain) != "" {
+			return true
+		}
 	}
-	collectors = expandCompositeCollectors(collectors)
-	cypher := `MATCH ()-[r]->()
-WHERE r.is_composite = true
-  AND r.scan_id <> $current_scan_id
-  AND r.source_collector IN $collectors
-DELETE r
-RETURN count(r) AS deleted`
-
-	return db.ExecuteWrite(ctx, cypher, map[string]any{
-		"current_scan_id": scanID,
-		"collectors":      collectors,
-	})
+	return false
 }
 
-func expandCompositeCollectors(collectors []string) []string {
-	seen := make(map[string]bool, len(collectors)+1)
-	out := make([]string, 0, len(collectors)+1)
-	add := func(collector string) {
-		if collector == "" || seen[collector] {
-			return
-		}
-		seen[collector] = true
-		out = append(out, collector)
-	}
-	for _, collector := range collectors {
-		add(collector)
-		switch collector {
-		case "config", "scan":
-			add("cross_service_credential_chain")
-		}
-	}
-	return out
+// beginCompositeEpoch atomically retires all derived edges and the one
+// processor-owned node materialization that is not overwritten on a negative
+// match. Every registered processor then rebuilds from the retained current raw
+// projection in dependency order.
+func beginCompositeEpoch(ctx context.Context, db graph.GraphDB) (int, error) {
+	const cypher = `
+CALL {
+  MATCH ()-[r]->()
+  WHERE r.is_composite = true
+  WITH r
+  DELETE r
+  RETURN count(r) AS deleted
+}
+CALL {
+  MATCH (c:Credential)
+  WHERE c.blast_radius IS NOT NULL
+  REMOVE c.blast_radius
+  RETURN count(c) AS cleared
+}
+RETURN deleted`
+	return db.ExecuteWrite(ctx, cypher, nil)
 }

@@ -22,9 +22,7 @@ export function protocolDomain(kind: string): "MCP" | "A2A" | "OTHER" {
 
 /**
  * Determine whether an edge crosses the A2A ↔ MCP protocol boundary.
- * Our own definition — does not rely on any legacy `cross_protocol` flag in
- * edge properties because that flag is set inconsistently on composite edges
- * in the existing codebase.
+ * Derives the boundary from endpoint kinds rather than a summary marker.
  */
 export function isCrossProtocolEdge(
   e: APIEdge,

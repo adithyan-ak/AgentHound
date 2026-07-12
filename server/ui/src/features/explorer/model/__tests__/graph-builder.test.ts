@@ -6,7 +6,7 @@ import {
   severityRank,
 } from "../graph";
 import { getLens } from "../lens-config";
-import type { APIEdge, APINode } from "@entities/graph/dto";
+import type { APIEdge, APINode, EdgeKind } from "@entities/graph/dto";
 import type { Finding } from "@entities/finding/model";
 
 function n(id: string, kind: string, extra: Record<string, unknown> = {}): APINode {
@@ -20,7 +20,7 @@ function n(id: string, kind: string, extra: Record<string, unknown> = {}): APINo
 function e(
   source: string,
   target: string,
-  kind: string,
+  kind: EdgeKind,
   props: Record<string, unknown> = {},
 ): APIEdge {
   return { source, target, kind, properties: props };
@@ -34,7 +34,12 @@ const FIXTURE_NODES: APINode[] = [
   n("a2a-1", "A2AAgent"),
   n("a2a-2", "A2AAgent"),
   n("host-1", "Host"),
-  n("cred-1", "Credential", { is_exposed: true }),
+  n("cred-1", "Credential", {
+    merge_key: "value_hash",
+    identity_basis: "value_hash",
+    material_status: "observed",
+    exposure_status: "exposed",
+  }),
   n("identity-1", "Identity"),
   n("litellm-1", "LiteLLMGateway"),
   n("ollama-1", "OllamaInstance"),
@@ -86,7 +91,10 @@ const FIXTURE_FINDINGS: Finding[] = [
     target_name: "resource-1",
     target_kind: "MCPResource",
     confidence: 0.95,
+    variant: "default",
+    evidence: { state: "inferred" },
     owasp_map: ["MCP04"],
+    atlas_map: [],
   },
   {
     id: "f2",
@@ -102,7 +110,10 @@ const FIXTURE_FINDINGS: Finding[] = [
     target_name: "tool-1",
     target_kind: "MCPTool",
     confidence: 0.8,
+    variant: "default",
+    evidence: { state: "inferred" },
     owasp_map: [],
+    atlas_map: [],
   },
   {
     id: "f3",
@@ -118,7 +129,10 @@ const FIXTURE_FINDINGS: Finding[] = [
     target_name: "tool-1",
     target_kind: "MCPTool",
     confidence: 1.0,
+    variant: "default",
+    evidence: { state: "observed_signal" },
     owasp_map: [],
+    atlas_map: [],
   },
 ];
 
@@ -186,7 +200,7 @@ describe("buildExplorerGraph", () => {
     );
     const kinds = new Set(
       result.edges.flatMap((e) => {
-        const data = e.data as { kind: string; bundledKinds?: string[] };
+        const data = e.data!;
         return data.bundledKinds ?? [data.kind];
       }),
     );
@@ -213,13 +227,38 @@ describe("buildExplorerGraph", () => {
         findings: FIXTURE_FINDINGS,
       },
     );
-    const kinds = new Set(result.edges.map((e) => (e.data as { kind: string }).kind));
+    const kinds = new Set(result.edges.map((e) => e.data!.kind));
     expect(kinds.has("HAS_ACCESS_TO")).toBe(true);
     expect(kinds.has("CAN_REACH")).toBe(true);
     expect(kinds.has("CAN_EXFILTRATE_VIA")).toBe(true);
     expect(kinds.has("CAN_IMPERSONATE")).toBe(true);
     expect(kinds.has("TRUSTS_SERVER")).toBe(false);
   });
+
+  for (const [kind, lensId, source, target] of [
+    ["INGESTS_UNTRUSTED", "attack-surface", "tool-1", "resource-1"],
+    ["CONFUSED_DEPUTY", "attack-surface", "a2a-1", "a2a-2"],
+    ["TAINTS", "poisoning", "tool-1", "tool-1"],
+    ["IFC_VIOLATION", "attack-surface", "tool-1", "tool-1"],
+    ["POISONS_CONTEXT", "poisoning", "tool-1", "tool-1"],
+  ] as const satisfies ReadonlyArray<
+    readonly [EdgeKind, "attack-surface" | "poisoning", string, string]
+  >) {
+    it(`${kind} renders in its ordinary ${lensId} lens`, () => {
+      const lens = getLens(lensId);
+      const result = buildExplorerGraph(
+        { nodes: FIXTURE_NODES, edges: [e(source, target, kind)] },
+        {
+          lens,
+          activeLensId: lensId,
+          subPresets: [kind],
+          findings: [],
+        },
+      );
+      expect(result.edges).toHaveLength(1);
+      expect(result.edges[0]?.data?.kind).toBe(kind);
+    });
+  }
 
   it("Critical lens only includes edges present in critical findings", () => {
     const lens = getLens("critical");
@@ -234,7 +273,7 @@ describe("buildExplorerGraph", () => {
     );
     // Only CAN_REACH (f1) and CAN_EXFILTRATE_VIA (f2) are critical; the
     // high-severity POISONED_DESCRIPTION (f3) should NOT appear.
-    const kinds = new Set(result.edges.map((e) => (e.data as { kind: string }).kind));
+    const kinds = new Set(result.edges.map((e) => e.data!.kind));
     expect(kinds.has("CAN_REACH")).toBe(true);
     expect(kinds.has("CAN_EXFILTRATE_VIA")).toBe(true);
     expect(kinds.has("POISONED_DESCRIPTION")).toBe(false);
@@ -252,7 +291,7 @@ describe("buildExplorerGraph", () => {
         findings: FIXTURE_FINDINGS,
       },
     );
-    const kinds = new Set(result.edges.map((e) => (e.data as { kind: string }).kind));
+    const kinds = new Set(result.edges.map((e) => e.data!.kind));
     expect(kinds.has("AUTHENTICATES_WITH")).toBe(true);
     expect(kinds.has("USES_CREDENTIAL")).toBe(true);
     expect(kinds.has("HAS_ENV_VAR")).toBe(true);
@@ -287,9 +326,104 @@ describe("buildExplorerGraph", () => {
         findings: FIXTURE_FINDINGS,
       },
     );
-    const kinds = new Set(result.edges.map((e) => (e.data as { kind: string }).kind));
+    const kinds = new Set(result.edges.map((e) => e.data!.kind));
     expect(kinds.has("TRUSTS_SERVER")).toBe(true);
     expect(kinds.has("PROVIDES_TOOL")).toBe(false);
+  });
+
+  it("treats an empty sub-preset selection as no visible edges", () => {
+    const lens = getLens("topology");
+    const result = buildExplorerGraph(
+      { nodes: FIXTURE_NODES, edges: FIXTURE_EDGES },
+      {
+        lens,
+        activeLensId: "topology",
+        subPresets: [],
+        findings: FIXTURE_FINDINGS,
+      },
+    );
+    expect(result.edges).toHaveLength(0);
+    expect(result.metrics.visibleEdgeCount).toBe(0);
+  });
+
+  it("highlights only exact directional relationship keys", () => {
+    const lens = getLens("topology");
+    const nodes = [n("a", "AgentInstance"), n("b", "MCPServer")];
+    const edges = [
+      e("a", "b", "TRUSTS_SERVER"),
+      e("a", "b", "RUNS_ON"),
+      e("b", "a", "TRUSTS_SERVER"),
+    ];
+    const result = buildExplorerGraph(
+      { nodes, edges },
+      {
+        lens,
+        activeLensId: "topology",
+        subPresets: ["TRUSTS_SERVER", "RUNS_ON"],
+        findings: [],
+        highlight: {
+          nodeIds: new Set(["a", "b"]),
+          edgeIds: new Set(["a|b|TRUSTS_SERVER"]),
+        },
+      },
+    );
+
+    const highlighted = result.edges.filter((edge) => !edge.data?.dim);
+    expect(highlighted).toHaveLength(1);
+    expect(highlighted[0]?.source).toBe("a");
+    expect(highlighted[0]?.target).toBe("b");
+    expect(highlighted[0]?.data?.bundledKinds).toEqual(["TRUSTS_SERVER"]);
+    expect(
+      result.edges.find(
+        (edge) =>
+          edge.source === "b" &&
+          edge.target === "a" &&
+          edge.data?.kind === "TRUSTS_SERVER",
+      )?.data?.dim,
+    ).toBe(true);
+    expect(
+      result.edges.find((edge) => edge.data?.kind === "RUNS_ON")?.data?.dim,
+    ).toBe(true);
+  });
+
+  it("overlays exact deep-link evidence without broadening the active lens", () => {
+    const lens = getLens("attack-surface");
+    const nodes = [
+      n("agent", "AgentInstance"),
+      n("server", "MCPServer"),
+      n("resource", "MCPResource"),
+      n("host", "Host"),
+    ];
+    const edges = [
+      e("agent", "resource", "CAN_REACH"),
+      e("agent", "server", "TRUSTS_SERVER"),
+      e("server", "host", "RUNS_ON"),
+    ];
+    const result = buildExplorerGraph(
+      { nodes, edges },
+      {
+        lens,
+        activeLensId: "attack-surface",
+        subPresets: ["CAN_REACH"],
+        findings: [],
+        highlight: {
+          nodeIds: new Set(["agent", "resource", "server"]),
+          edgeIds: new Set([
+            "agent|resource|CAN_REACH",
+            "agent|server|TRUSTS_SERVER",
+          ]),
+        },
+      },
+    );
+
+    expect(result.edges.map((edge) => edge.data?.kind)).toEqual([
+      "CAN_REACH",
+      "TRUSTS_SERVER",
+    ]);
+    expect(result.edges.every((edge) => edge.data?.dim === false)).toBe(true);
+    expect(result.edges.some((edge) => edge.data?.kind === "RUNS_ON")).toBe(
+      false,
+    );
   });
 
   it("bundles parallel edges and emits a bundledCount", () => {
@@ -432,5 +566,42 @@ describe("buildExplorerGraph", () => {
     expect(result.metrics.visibleEdgeCount).toBe(0);
     expect(result.metrics.orphanCount).toBe(0);
     expect(result.metrics.criticalCount).toBe(0);
+  });
+
+  it("marks configured backends unverified until direct probe evidence exists", () => {
+    const lens = getLens("topology");
+    const configured = n("ollama-configured", "OllamaInstance", {
+      configuration_observed: true,
+      configured_via: "openwebui",
+      probe_status: "configured_unverified",
+    });
+    const verified = n("ollama-verified", "OllamaInstance", {
+      configuration_observed: true,
+      probe_status: "verified",
+    });
+    const source = n("webui", "OpenWebUIInstance");
+    const result = buildExplorerGraph(
+      {
+        nodes: [source, configured, verified],
+        edges: [
+          e("webui", "ollama-configured", "EXPOSES"),
+          e("webui", "ollama-verified", "EXPOSES"),
+        ],
+      },
+      {
+        lens,
+        activeLensId: "topology",
+        subPresets: [...lens.edgeKinds],
+        findings: [],
+      },
+    );
+    const statusByID = new Map(
+      result.nodes.map((node) => [
+        node.id,
+        (node.data as { evidenceStatus?: string | null }).evidenceStatus,
+      ]),
+    );
+    expect(statusByID.get("ollama-configured")).toBe("configured-unverified");
+    expect(statusByID.get("ollama-verified")).toBe("verified");
   });
 });

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import { type NodeProps } from "@xyflow/react";
 import { Search, ChevronRight } from "lucide-react";
 import type { OrphanClusterData } from "@features/explorer/model/graph";
@@ -25,6 +25,7 @@ function OrphanClusterNodeComponent({ data }: NodeProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const closeTimerRef = useRef<number | null>(null);
+  const popoverId = useId();
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -61,6 +62,12 @@ function OrphanClusterNodeComponent({ data }: NodeProps) {
     setOpen(true);
   }
 
+  function handleBlur(event: React.FocusEvent<HTMLDivElement>) {
+    const next = event.relatedTarget;
+    if (next instanceof Node && event.currentTarget.contains(next)) return;
+    scheduleClose();
+  }
+
   const strokeColor = config.strokeColor;
 
   return (
@@ -69,11 +76,23 @@ function OrphanClusterNodeComponent({ data }: NodeProps) {
       style={{ width: HEX_NODE_WIDTH }}
       onMouseEnter={handleEnter}
       onMouseLeave={scheduleClose}
+      onFocus={handleEnter}
+      onBlur={handleBlur}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          setOpen(false);
+          setSearch("");
+        }
+      }}
     >
-      <div
-        className="relative cursor-pointer transition-transform duration-150 hover:scale-[1.08]"
+      <button
+        type="button"
+        className="relative cursor-pointer transition-transform duration-150 hover:scale-[1.08] focus-visible:scale-[1.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         style={{ width: HEX_NODE_WIDTH, height: HEX_NODE_HEIGHT }}
-        aria-label={`${d.count} unconnected ${d.kindTag}`}
+        aria-label={`${d.count} ${d.kindTag} nodes outside the ${d.lensLabel} lens relationship scope`}
+        aria-expanded={open}
+        aria-controls={open ? popoverId : undefined}
+        onClick={handleEnter}
       >
         <svg
           width={HEX_NODE_WIDTH}
@@ -124,7 +143,7 @@ function OrphanClusterNodeComponent({ data }: NodeProps) {
             {d.count}
           </div>
         </div>
-      </div>
+      </button>
 
       {open && (
         <>
@@ -135,6 +154,7 @@ function OrphanClusterNodeComponent({ data }: NodeProps) {
             onMouseLeave={scheduleClose}
           />
           <div
+            id={popoverId}
             className={cn(
               "absolute left-1/2 w-[300px] -translate-x-1/2 overflow-hidden rounded-md border border-border bg-card/95 backdrop-blur-md elev-3",
               "z-[60]",
@@ -157,7 +177,7 @@ function OrphanClusterNodeComponent({ data }: NodeProps) {
             />
             <div className="flex flex-col">
               <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                Unconnected
+                Outside {d.lensLabel} lens scope
               </div>
               <div className="text-sm font-semibold text-foreground">
                 {d.count} {d.kindTag.toLowerCase()}
@@ -169,7 +189,7 @@ function OrphanClusterNodeComponent({ data }: NodeProps) {
             <div className="flex items-center gap-2 border-b border-border bg-black/30 px-3 py-2">
               <Search className="h-3 w-3 text-muted-foreground" strokeWidth={2.5} />
               <input
-                autoFocus
+                aria-label={`Filter ${d.kindTag.toLowerCase()} nodes outside the ${d.lensLabel} lens scope`}
                 placeholder="filter…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -212,7 +232,7 @@ function OrphanClusterNodeComponent({ data }: NodeProps) {
           </div>
 
           <div className="border-t border-border bg-black/20 px-3 py-1.5 font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground/70">
-            Hover to browse · click a row to inspect
+            Hover or focus to browse · activate a row to inspect
           </div>
           </div>
         </>
@@ -226,7 +246,7 @@ function OrphanClusterNodeComponent({ data }: NodeProps) {
             textShadow: "0 1px 4px rgba(0,0,0,0.9)",
           }}
         >
-          {d.count} UNCONNECTED
+          {d.count} OUTSIDE LENS SCOPE
         </div>
         <div className="text-[8px] tracking-[0.12em] text-muted-foreground font-medium mt-0.5">
           {d.kindTag}

@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/sdk/module"
 	"github.com/google/uuid"
@@ -140,24 +141,40 @@ func runExtract(cmd *cobra.Command, args []string) error {
 
 func buildExtractEnvelope(sourceNodeID, kind, engagementID string, res *action.ExtractResult) *ingest.IngestData {
 	scanID := uuid.New().String()
-	env := &ingest.IngestData{
-		Meta: ingest.IngestMeta{
-			Version:          1,
-			Type:             "agenthound-ingest",
-			Collector:        "scan",
-			CollectorVersion: "0.5.0-dev",
-			Timestamp:        time.Now().UTC().Format(time.RFC3339),
-			ScanID:           scanID,
-			Extra: map[string]any{
-				"extract_type":   kind,
-				"source_node_id": sourceNodeID,
-				"engagement_id":  engagementID,
-			},
-		},
+	env := common.NewIngestData("scan", scanID)
+	env.Meta.CollectorVersion = "0.5.0-dev"
+	env.Meta.Extra = map[string]any{
+		"extract_type":   kind,
+		"source_node_id": sourceNodeID,
+		"engagement_id":  engagementID,
+	}
+	coverageKey := ingest.CanonicalCoverageKey(
+		"scan",
+		"extract",
+		kind+"\x00"+sourceNodeID,
+	)
+	env.Meta.Collection = &ingest.CollectionReport{
+		State:        ingest.OutcomeComplete,
+		CoverageKeys: []string{coverageKey},
+		Outcomes: []ingest.CollectionOutcome{{
+			Collector:   "scan",
+			CoverageKey: coverageKey,
+			Target:      sourceNodeID,
+			Method:      "extract:" + kind,
+			State:       ingest.OutcomeComplete,
+			Items:       res.Summary.ArtifactsProduced,
+		}},
 	}
 	if res.IngestData != nil {
 		env.Graph = res.IngestData.Graph
 	}
+	if env.Graph.Nodes == nil {
+		env.Graph.Nodes = []ingest.Node{}
+	}
+	if env.Graph.Edges == nil {
+		env.Graph.Edges = []ingest.Edge{}
+	}
+	ingest.TagObservationDomain(&env.Graph, coverageKey)
 	return env
 }
 

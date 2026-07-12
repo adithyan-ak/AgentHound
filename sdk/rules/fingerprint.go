@@ -129,22 +129,51 @@ type FingerprintResult struct {
 // over the embedded set with same-id rules from the bundle winning.
 // See sdk/rules/bundle.go for the merge primitives.
 func LoadFingerprints() ([]FingerprintRule, error) {
+	override := getBundleOverridePath()
+	fingerprintCacheMu.RLock()
+	if fingerprintCacheInitialized && fingerprintCachePath == override {
+		cached := append([]FingerprintRule(nil), fingerprintCacheRules...)
+		err := fingerprintCacheErr
+		fingerprintCacheMu.RUnlock()
+		return cached, err
+	}
+	fingerprintCacheMu.RUnlock()
+
+	loaded, failures, err := loadEffectiveFingerprints(override)
+	fingerprintCacheMu.Lock()
+	fingerprintCachePath = override
+	fingerprintCacheInitialized = true
+	fingerprintCacheRules = append([]FingerprintRule(nil), loaded...)
+	fingerprintCacheFailures = append([]string(nil), failures...)
+	fingerprintCacheErr = err
+	fingerprintCacheMu.Unlock()
+	return append([]FingerprintRule(nil), loaded...), err
+}
+
+func FingerprintLoadFailures() []string {
+	fingerprintCacheMu.RLock()
+	defer fingerprintCacheMu.RUnlock()
+	return append([]string(nil), fingerprintCacheFailures...)
+}
+
+func loadEffectiveFingerprints(
+	override string,
+) ([]FingerprintRule, []string, error) {
 	embedded, err := loadEmbeddedFingerprints()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	override := getBundleOverridePath()
 	if override == "" {
-		return embedded, nil
+		return embedded, nil, nil
 	}
-	bundle, err := LoadFingerprintBundle(override)
+	bundle, failures, err := loadFingerprintBundleWithFailures(override)
 	if err != nil {
 		// Bundle path was set but couldn't load — surface the error so
 		// the operator notices, rather than silently falling back to the
 		// embedded set (which would mask a bad bundle).
-		return nil, fmt.Errorf("load rules-bundle %q: %w", override, err)
+		return nil, failures, fmt.Errorf("load rules-bundle %q: %w", override, err)
 	}
-	return MergeFingerprintRules(embedded, bundle), nil
+	return MergeFingerprintRules(embedded, bundle), sortedUniqueStrings(failures), nil
 }
 
 // loadEmbeddedFingerprints reads the binary-shipped fingerprint rules.
@@ -285,6 +314,26 @@ func validateFingerprintMatcher(prefix string, m FingerprintMatch) []ValidationE
 func RunFingerprint(ctx context.Context, client *http.Client, baseURL string, rule FingerprintRule) (*FingerprintResult, error) {
 	if client == nil {
 		return nil, errors.New("RunFingerprint: nil http client")
+	}
+	// Fingerprinter modules are registered during package init, before Cobra's
+	// persistent pre-run resolves --rules-bundle. Resolve a same-ID override at
+	// execution time from the cached effective set so the rule manifest and the
+	// semantics actually run by the collector cannot drift.
+	if rule.Source == BundleSourceBuiltin && getBundleOverridePath() != "" {
+		effective, err := LoadFingerprints()
+		if err != nil {
+			return nil, err
+		}
+		for _, candidate := range effective {
+			if candidate.ID != rule.ID {
+				continue
+			}
+			if errs := ValidateFingerprint(candidate); len(errs) > 0 {
+				return nil, fmt.Errorf("effective fingerprint rule %s invalid: %v", candidate.ID, errs)
+			}
+			rule = candidate
+			break
+		}
 	}
 	res := &FingerprintResult{
 		RuleID:     rule.ID,

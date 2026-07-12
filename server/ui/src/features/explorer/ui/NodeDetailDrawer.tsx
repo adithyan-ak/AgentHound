@@ -26,9 +26,8 @@ export function NodeDetailDrawer() {
   const closeDrawer = useExplorerStore((s) => s.closeDrawer);
   const setDrawerTab = useExplorerStore((s) => s.setDrawerTab);
 
-  // Shares the unified ["node", id] cache with the inspector; passing null
-  // when the drawer is closed preserves the original "only fetch when open"
-  // gate.
+  // Passing null while closed keeps node-detail requests scoped to an open
+  // Explorer drawer.
   const { data, isLoading } = useNode(drawerOpen ? selectedNodeId : null);
 
   useEscapeKey(closeDrawer, { enabled: drawerOpen });

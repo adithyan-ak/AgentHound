@@ -2,7 +2,9 @@ package rules
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 )
 
@@ -12,9 +14,10 @@ const (
 )
 
 type Engine struct {
-	rules    []compiledRule
-	byScope  map[string][]compiledRule
-	disabled map[string]bool
+	rules        []compiledRule
+	byScope      map[string][]compiledRule
+	disabled     map[string]bool
+	loadFailures []string
 }
 
 type compiledRule struct {
@@ -29,7 +32,7 @@ type LoadOptions struct {
 }
 
 func NewEngine(opts LoadOptions) (*Engine, error) {
-	builtins, err := loadBuiltinRules()
+	builtins, loadFailures, err := loadBuiltinRulesWithFailures()
 	if err != nil {
 		return nil, err
 	}
@@ -40,10 +43,11 @@ func NewEngine(opts LoadOptions) (*Engine, error) {
 	}
 
 	if opts.CustomDir != "" {
-		custom, err := loadCustomRules(opts.CustomDir)
+		custom, customFailures, err := loadCustomRulesWithFailures(opts.CustomDir)
 		if err != nil {
 			return nil, err
 		}
+		loadFailures = append(loadFailures, customFailures...)
 		for _, r := range custom {
 			ruleMap[r.ID] = r
 		}
@@ -75,12 +79,20 @@ func NewEngine(opts LoadOptions) (*Engine, error) {
 
 		if errs := ValidateRule(r); len(errs) > 0 {
 			slog.Warn("skipping invalid rule", "id", r.ID, "errors", errs)
+			loadFailures = append(
+				loadFailures,
+				fmt.Sprintf("validate text rule %s: %v", r.ID, errs),
+			)
 			continue
 		}
 
 		m, err := compileMatcher(r.Matcher)
 		if err != nil {
 			slog.Warn("skipping rule with compile error", "id", r.ID, "error", err)
+			loadFailures = append(
+				loadFailures,
+				fmt.Sprintf("compile text rule %s: %v", r.ID, err),
+			)
 			continue
 		}
 
@@ -92,11 +104,16 @@ func NewEngine(opts LoadOptions) (*Engine, error) {
 			byScope[key] = append(byScope[key], cr)
 		}
 	}
+	loadFailures = sortedUniqueStrings(loadFailures)
+	for _, failure := range loadFailures {
+		slog.Warn("rule load failure", "error", failure)
+	}
 
 	return &Engine{
-		rules:    compiled,
-		byScope:  byScope,
-		disabled: disabled,
+		rules:        compiled,
+		byScope:      byScope,
+		disabled:     disabled,
+		loadFailures: loadFailures,
 	}, nil
 }
 
@@ -110,6 +127,15 @@ func (e *Engine) Rules() []Rule {
 
 func (e *Engine) RuleCount() int {
 	return len(e.rules)
+}
+
+func (e *Engine) LoadFailures() []string {
+	if e == nil {
+		return nil
+	}
+	failures := append([]string(nil), e.loadFailures...)
+	sort.Strings(failures)
+	return failures
 }
 
 func (e *Engine) Evaluate(collector, target, text string) []Match {

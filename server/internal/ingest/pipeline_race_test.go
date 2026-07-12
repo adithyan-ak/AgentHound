@@ -12,8 +12,8 @@ import (
 
 // TestPipeline_HasMutex is a structural regression: the Pipeline must
 // embed a sync.Mutex so concurrent Ingest() calls serialize. Without
-// it, the post-processor's stale-edge cleanup races between scans and
-// produces edge flapping. We verify the field exists and satisfies
+// it, post-processor epoch replacement races between scans and produces
+// edge flapping. We verify the field exists and satisfies
 // sync.Locker — if it is renamed or its type changes, this fails to
 // compile. The runtime invariant is enforced by
 // TestPipeline_MutexActuallySerializes below.
@@ -76,7 +76,12 @@ type probeWriter struct {
 	inner      nodeEdgeWriter
 }
 
-func (p *probeWriter) WriteNodes(ctx context.Context, nodes []ingest.Node, scanID string) (int, error) {
+func (p *probeWriter) WriteObservationNodes(
+	ctx context.Context,
+	nodes []ingest.Node,
+	scanID string,
+	completeDomains []string,
+) (int, error) {
 	cur := p.concurrent.Add(1)
 	defer p.concurrent.Add(-1)
 	for {
@@ -85,9 +90,14 @@ func (p *probeWriter) WriteNodes(ctx context.Context, nodes []ingest.Node, scanI
 			break
 		}
 	}
-	return p.inner.WriteNodes(ctx, nodes, scanID)
+	return p.inner.WriteObservationNodes(ctx, nodes, scanID, completeDomains)
 }
 
-func (p *probeWriter) WriteEdges(ctx context.Context, edges []ingest.Edge, scanID string) (int, error) {
-	return p.inner.WriteEdges(ctx, edges, scanID)
+func (p *probeWriter) WriteObservationEdges(
+	ctx context.Context,
+	edges []ingest.Edge,
+	scanID string,
+	completeDomains []string,
+) (int, error) {
+	return p.inner.WriteObservationEdges(ctx, edges, scanID, completeDomains)
 }

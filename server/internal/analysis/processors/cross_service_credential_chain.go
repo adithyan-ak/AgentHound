@@ -57,8 +57,12 @@ func (p *CrossServiceCredentialChain) Process(ctx context.Context, db graph.Grap
 	// agents that can reach the merged secret), which we materialize on
 	// both the env-var credential (c1) and its value_hash-merged master
 	// (c1master). Folding it here avoids re-MATCHing the join path. The
-	// agents are collected for the count, then re-UNWOUND so the CAN_REACH
-	// MERGE stays one edge per (agent, upstream-credential) as before.
+	// join is first reduced to the agent grain so blast radius counts
+	// DISTINCT agents rather than (agent, path) tuples — an agent with
+	// multiple reachable paths must not inflate the count. Each distinct
+	// agent's witness relationship IDs are preserved, then re-UNWOUND so the
+	// CAN_REACH MERGE stays one edge per (agent, upstream-credential) and each
+	// edge retains the exact relationship IDs for that agent's path.
 	// merge_key filter (U-MED-4): when a Looter cannot observe the raw
 	// credential value (e.g. LiteLLM masks upstream provider api_key
 	// server-side, so /model/info gives us no key material), it emits a
@@ -68,25 +72,45 @@ func (p *CrossServiceCredentialChain) Process(ctx context.Context, db graph.Grap
 	// there is no raw sk-... that hashes to sha256("openai:gpt-4"), so
 	// they can't false-positive today, but the explicit filter makes
 	// intent unambiguous and rules out a hypothetical collision-crafted
-	// synthetic ever matching a real credential. Any node with
-	// merge_key='value_hash' (or the historic missing merge_key from
-	// pre-U-MED-4 emissions) is eligible for the join.
+	// synthetic ever matching a real credential. Only canonical
+	// merge_key='value_hash' credentials are eligible.
 	cypher := `
-MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(s:MCPServer)
-      -[:HAS_ENV_VAR]->(c1:Credential)
+MATCH (a:AgentInstance)-[trust:TRUSTS_SERVER]->(s:MCPServer)
+      -[environment:HAS_ENV_VAR]->(c1:Credential)
 WHERE c1.value_hash IS NOT NULL AND c1.value_hash <> ''
-  AND (c1.merge_key IS NULL OR c1.merge_key = 'value_hash')
-MATCH (gw:LiteLLMGateway)-[:EXPOSES_CREDENTIAL]->(c1master:Credential)
+  AND c1.merge_key = 'value_hash'
+  AND c1.material_status = 'observed'
+  AND c1.exposure_status = 'exposed'
+MATCH (gw:LiteLLMGateway)-[exposes_master:EXPOSES_CREDENTIAL]->(c1master:Credential)
 WHERE c1master.value_hash = c1.value_hash
   AND c1master.objectid <> c1.objectid
-  AND (c1master.merge_key IS NULL OR c1master.merge_key = 'value_hash')
-MATCH (gw)-[:EXPOSES_CREDENTIAL]->(c2:Credential)
+  AND c1master.merge_key = 'value_hash'
+  AND c1master.material_status = 'observed'
+  AND c1master.exposure_status = 'exposed'
+MATCH (gw)-[exposes_upstream:EXPOSES_CREDENTIAL]->(c2:Credential)
 WHERE c2.type IN ['apiKey', 'virtual_key'] AND c2.objectid <> c1master.objectid
-WITH s, c1, c1master, c2, gw, collect(DISTINCT a) AS agents
-WITH s, c1, c1master, c2, gw, agents, size(agents) AS reachable_agents
+// Collapse each agent's (possibly multiple) traversal paths to the agent
+// grain first. An agent that reaches the merged secret via more than one
+// path (e.g. two TRUSTS_SERVER or HAS_ENV_VAR edges) would otherwise yield
+// several distinct witness tuples and inflate the blast radius. Grouping by
+// the agent node here makes one row per distinct agent while collect() keeps
+// that agent's witness relationship-ID tuples for the CAN_REACH evidence.
+WITH s, c1, c1master, c2, gw, a,
+     collect([
+       id(trust), id(environment), id(exposes_master), id(exposes_upstream)
+     ]) AS agent_paths
+WITH s, c1, c1master, c2, gw, collect({
+  agent: a,
+  relationship_ids: agent_paths[0]
+}) AS agent_witnesses
+WITH s, c1, c1master, c2, gw, agent_witnesses,
+     size(agent_witnesses) AS reachable_agents
 SET c1.blast_radius = reachable_agents, c1master.blast_radius = reachable_agents
-WITH s, c1, c1master, c2, gw, agents
-UNWIND agents AS a
+WITH s, c1, c1master, c2, gw, agent_witnesses
+UNWIND agent_witnesses AS witness
+WITH s, c1, c1master, c2, gw,
+     witness.agent AS a,
+     witness.relationship_ids AS witness_relationship_ids
 MERGE (a)-[e:CAN_REACH]->(c2)
 SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true,
     e.source_collector = 'cross_service_credential_chain',
@@ -97,7 +121,17 @@ SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true,
     e.upstream_provider = COALESCE(c2.provider, 'unknown'),
     e.hops = 5,
     e.confidence = 0.95,
-    e.risk_weight = 0.1
+    e.risk_weight = 0.1,
+    e.evidence_version = 1,
+    e.evidence_node_ids = [
+      a.objectid, s.objectid, c1.objectid, c1master.objectid,
+      gw.objectid, c2.objectid
+    ],
+    e.evidence_relationship_ids = witness_relationship_ids,
+    e.evidence_synthetic_edge = [
+      c1.objectid, c1master.objectid, 'VALUE_HASH_MATCH',
+      'identity_correlation', 'value_hash', 'cross_service_credential_chain'
+    ]
 RETURN count(e) AS written`
 
 	written, err := db.ExecuteWrite(ctx, cypher, map[string]any{"scan_id": scanID})

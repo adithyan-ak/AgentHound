@@ -46,6 +46,11 @@ func TestIntegrationMoatDetectorsE2E(t *testing.T) {
 	if len(data.Graph.Edges) != 8 {
 		t.Fatalf("fixture edges = %d, want 8", len(data.Graph.Edges))
 	}
+	for i, edge := range data.Graph.Edges {
+		if edge.Kind == "HAS_ACCESS_TO" {
+			t.Fatalf("fixture edge %d seeds composite HAS_ACCESS_TO through the raw writer", i)
+		}
+	}
 
 	scanID := data.Meta.ScanID
 
@@ -56,7 +61,8 @@ func TestIntegrationMoatDetectorsE2E(t *testing.T) {
 	}
 	defer driver.Close(ctx)
 
-	db := graph.NewDB(graph.NewReader(driver), graph.NewWriter(driver))
+	writer := graph.NewWriter(driver)
+	db := graph.NewDB(graph.NewReader(driver), writer)
 
 	cleanup := func() {
 		_, _ = db.ExecuteWrite(ctx,
@@ -66,18 +72,17 @@ func TestIntegrationMoatDetectorsE2E(t *testing.T) {
 	cleanup()
 	defer cleanup()
 
-	if _, err := graph.NewWriter(driver).WriteNodes(ctx, data.Graph.Nodes, scanID); err != nil {
+	if _, err := writer.WriteNodes(ctx, data.Graph.Nodes, scanID); err != nil {
 		t.Fatalf("write nodes: %v", err)
 	}
-	if _, err := db.WriteEdges(ctx, data.Graph.Edges, scanID); err != nil {
+	if _, err := writer.WriteEdges(ctx, data.Graph.Edges, scanID); err != nil {
 		t.Fatalf("write edges: %v", err)
 	}
 
-	// Pass every collector whose composite edges the fixture exercises so
-	// stale-edge cleanup is scoped correctly. INGESTS_UNTRUSTED is a raw
-	// (is_composite=false) edge, so cleanup never touches it regardless.
-	collectors := []string{"mcp", "a2a", "config", "scan"}
-	if _, err := RunPostProcessors(ctx, db, scanID, collectors); err != nil {
+	// A complete fixture domain starts a fresh global composite epoch.
+	// INGESTS_UNTRUSTED is raw, so epoch retirement never touches it.
+	completeDomains := sdkingest.CompleteCoverageDomains(data.Meta.Collection)
+	if _, err := RunPostProcessors(ctx, db, scanID, completeDomains); err != nil {
 		t.Fatalf("RunPostProcessors: %v", err)
 	}
 
@@ -97,9 +102,23 @@ func TestIntegrationMoatDetectorsE2E(t *testing.T) {
 		}
 	}
 
+	rows, err := db.Query(ctx, `
+MATCH (t:MCPTool {objectid: 'moat-sensitive'})
+      -[r:HAS_ACCESS_TO {is_composite: true}]->
+      (:MCPResource {objectid: 'moat-res'})
+WHERE r.scan_id = $sid
+RETURN count(r) AS n`,
+		map[string]any{"sid": scanID})
+	if err != nil {
+		t.Fatalf("count regenerated HAS_ACCESS_TO: %v", err)
+	}
+	if got := moatToInt(rows[0]["n"]); got != 1 {
+		t.Errorf("regenerated composite HAS_ACCESS_TO edges = %d, want 1", got)
+	}
+
 	// INGESTS_UNTRUSTED is seeded raw and must SURVIVE the scan's stale-edge
 	// cleanup — it is the substrate TAINTS and IFC_VIOLATION both depend on.
-	rows, err := db.Query(ctx,
+	rows, err = db.Query(ctx,
 		"MATCH ()-[r:INGESTS_UNTRUSTED]->() WHERE r.scan_id = $sid RETURN count(r) AS n",
 		map[string]any{"sid": scanID})
 	if err != nil {

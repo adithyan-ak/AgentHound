@@ -1,35 +1,55 @@
 package config
 
-import "strings"
+import (
+	"path"
+	"strings"
+
+	"github.com/adithyan-ak/agenthound/sdk/common"
+)
 
 func IsUnpinned(command string, args []string) bool {
-	switch command {
+	return AssessPinning(command, args) == common.PinningUnpinned
+}
+
+func AssessPinning(command string, args []string) common.PinningStatus {
+	switch executableBase(command) {
 	case "npx":
-		return isNpxUnpinned(args)
+		pkg := findPackageArg(args)
+		if pkg == "" {
+			return common.PinningUnknown
+		}
+		if hasVersionSuffix(pkg) {
+			return common.PinningPinned
+		}
+		return common.PinningUnpinned
 	case "uvx":
-		return isUvxUnpinned(args)
+		if len(args) == 0 {
+			return common.PinningUnknown
+		}
+		pkg := args[len(args)-1]
+		if strings.HasPrefix(pkg, "-") {
+			return common.PinningUnknown
+		}
+		if strings.Contains(pkg, "==") {
+			return common.PinningPinned
+		}
+		return common.PinningUnpinned
 	default:
-		return false
+		// A stdio launcher outside the package managers understood here has
+		// not been assessed. It is not evidence that pinning is inapplicable.
+		return common.PinningUnknown
 	}
 }
 
-func isNpxUnpinned(args []string) bool {
-	pkg := findPackageArg(args)
-	if pkg == "" {
-		return false
+func executableBase(command string) string {
+	// Configs may be generated on a different platform from the collector.
+	// Normalize both slash styles before taking the basename.
+	normalized := strings.ReplaceAll(strings.TrimSpace(command), `\`, "/")
+	base := strings.ToLower(path.Base(normalized))
+	for _, suffix := range []string{".exe", ".cmd", ".bat"} {
+		base = strings.TrimSuffix(base, suffix)
 	}
-	return !hasVersionSuffix(pkg)
-}
-
-func isUvxUnpinned(args []string) bool {
-	if len(args) == 0 {
-		return false
-	}
-	pkg := args[len(args)-1]
-	if strings.HasPrefix(pkg, "-") {
-		return false
-	}
-	return !strings.Contains(pkg, "==")
+	return base
 }
 
 func findPackageArg(args []string) string {

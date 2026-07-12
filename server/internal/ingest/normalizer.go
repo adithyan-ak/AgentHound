@@ -3,7 +3,7 @@ package ingest
 import (
 	"encoding/json"
 	"fmt"
-	"unicode"
+	"sort"
 
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
@@ -14,8 +14,15 @@ func NewNormalizer() *Normalizer {
 	return &Normalizer{}
 }
 
-func (n *Normalizer) Normalize(data *ingest.IngestData) []string {
-	var warnings []string
+func (n *Normalizer) Normalize(data *ingest.IngestData) []ingest.NormalizationWarning {
+	var warnings []ingest.NormalizationWarning
+
+	if data.Graph.Nodes == nil {
+		data.Graph.Nodes = []ingest.Node{}
+	}
+	if data.Graph.Edges == nil {
+		data.Graph.Edges = []ingest.Edge{}
+	}
 
 	for i := range data.Graph.Nodes {
 		node := &data.Graph.Nodes[i]
@@ -26,7 +33,8 @@ func (n *Normalizer) Normalize(data *ingest.IngestData) []string {
 		// Set objectid
 		node.Properties["objectid"] = node.ID
 
-		// Convert keys to snake_case and process values
+		// Property names are already canonical: validation runs before
+		// normalization and rejects non-snake-case keys.
 		node.Properties = n.normalizeProps(node.Properties, fmt.Sprintf("node %s", node.ID), &warnings)
 	}
 
@@ -41,81 +49,83 @@ func (n *Normalizer) Normalize(data *ingest.IngestData) []string {
 	return warnings
 }
 
-func (n *Normalizer) normalizeProps(props map[string]any, context string, warnings *[]string) map[string]any {
+func (n *Normalizer) normalizeProps(
+	props map[string]any,
+	context string,
+	warnings *[]ingest.NormalizationWarning,
+) map[string]any {
 	result := make(map[string]any, len(props))
+	keys := make([]string, 0, len(props))
+	for key := range props {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
 
-	for key, val := range props {
+	for _, key := range keys {
+		val := props[key]
 		// Strip nil values
 		if val == nil {
 			continue
 		}
-
-		// Convert key to snake_case
-		snakeKey := CamelToSnake(key)
 
 		// Serialize complex values to JSON strings
 		switch v := val.(type) {
 		case map[string]any:
 			data, err := json.Marshal(v)
 			if err == nil {
-				result[snakeKey] = string(data)
-				*warnings = append(*warnings, fmt.Sprintf("serialized complex property %q on %s to JSON string", snakeKey, context))
+				result[key] = string(data)
+				*warnings = append(*warnings, serializedPropertyWarning(key, context))
+			} else {
+				*warnings = append(*warnings, droppedPropertyWarning(key, context, err))
 			}
 		case []any:
 			if isHomogeneous(v) {
-				result[snakeKey] = v
+				result[key] = v
 			} else {
 				data, err := json.Marshal(v)
 				if err == nil {
-					result[snakeKey] = string(data)
-					*warnings = append(*warnings, fmt.Sprintf("serialized complex property %q on %s to JSON string", snakeKey, context))
+					result[key] = string(data)
+					*warnings = append(*warnings, serializedPropertyWarning(key, context))
+				} else {
+					*warnings = append(*warnings, droppedPropertyWarning(key, context, err))
 				}
 			}
 		case json.Number:
 			if i, err := v.Int64(); err == nil {
-				result[snakeKey] = i
+				result[key] = i
 			} else if f, err := v.Float64(); err == nil {
-				result[snakeKey] = f
+				result[key] = f
 			} else {
-				result[snakeKey] = v.String()
+				result[key] = v.String()
 			}
 		default:
-			result[snakeKey] = val
+			result[key] = val
 		}
 	}
 
 	return result
 }
 
-// CamelToSnake converts camelCase/PascalCase to snake_case.
-// Handles consecutive uppercase: HTTPServer -> http_server, scanID -> scan_id
-func CamelToSnake(s string) string {
-	if s == "" {
-		return s
+func serializedPropertyWarning(property, context string) ingest.NormalizationWarning {
+	return ingest.NormalizationWarning{
+		Code:              "complex_property_serialized",
+		Status:            ingest.NormalizationStatusWarning,
+		Message:           fmt.Sprintf("serialized complex property %q on %s to JSON string", property, context),
+		Context:           context,
+		Property:          property,
+		PublicationUnsafe: false,
 	}
+}
 
-	runes := []rune(s)
-	var result []rune
-
-	for i, r := range runes {
-		if unicode.IsUpper(r) {
-			if i > 0 {
-				prev := runes[i-1]
-				if unicode.IsLower(prev) || unicode.IsDigit(prev) {
-					// aB -> a_b
-					result = append(result, '_')
-				} else if unicode.IsUpper(prev) && i+1 < len(runes) && unicode.IsLower(runes[i+1]) {
-					// ABc -> a_bc (end of uppercase run before lowercase)
-					result = append(result, '_')
-				}
-			}
-			result = append(result, unicode.ToLower(r))
-		} else {
-			result = append(result, r)
-		}
+func droppedPropertyWarning(property, context string, err error) ingest.NormalizationWarning {
+	return ingest.NormalizationWarning{
+		Code:              "property_dropped",
+		Status:            ingest.NormalizationStatusDegraded,
+		Message:           fmt.Sprintf("dropped unsupported property %q on %s: %v", property, context, err),
+		Context:           context,
+		Property:          property,
+		PublicationUnsafe: true,
 	}
-
-	return string(result)
 }
 
 func isHomogeneous(arr []any) bool {

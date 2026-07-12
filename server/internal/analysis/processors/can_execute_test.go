@@ -3,6 +3,7 @@ package processors
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
@@ -47,6 +48,13 @@ func TestCanExecute_ProcessSuccess(t *testing.T) {
 	params, _ := calls[0].Args[1].(map[string]any)
 	if params["scan_id"] != "scan-1" {
 		t.Errorf("scan_id = %v, want scan-1", params["scan_id"])
+	}
+	cypher, _ := calls[0].Args[0].(string)
+	if !strings.Contains(cypher, "SET e.confidence = 0.8") ||
+		!strings.Contains(cypher, "e.evidence_version = 1") ||
+		!strings.Contains(cypher, "id(provides)") ||
+		!strings.Contains(cypher, "id(runs)") {
+		t.Fatalf("CAN_EXECUTE must refresh confidence and exact witness evidence on MERGE:\n%s", cypher)
 	}
 }
 

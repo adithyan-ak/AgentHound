@@ -24,9 +24,19 @@ ON CREATE SET e.confidence = 1.0,
               e.source_collector = 'mcp',
               e.scan_id = $scan_id,
               e.risk_weight = 0.8,
-              e.last_seen = datetime()
+              e.last_seen = datetime(),
+              e.evidence_version = 1,
+              e.evidence_node_ids = [t.objectid],
+              e.evidence_relationship_ids = []
 ON MATCH SET  e.scan_id = $scan_id,
-              e.last_seen = datetime()
+              e.last_seen = datetime(),
+              e.confidence = 1.0,
+              e.is_composite = true,
+              e.source_collector = 'mcp',
+              e.risk_weight = 0.8,
+              e.evidence_version = 1,
+              e.evidence_node_ids = [t.objectid],
+              e.evidence_relationship_ids = []
 RETURN count(*) AS written`
 
 	n, err := db.ExecuteWrite(ctx, cypher, map[string]any{"scan_id": scanID})

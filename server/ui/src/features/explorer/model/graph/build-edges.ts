@@ -117,26 +117,37 @@ export function buildLogicalEdges(
         include = blastRadius ? blastRadius.edgeKeys.has(edgeKey(e)) : false;
         break;
       case "chokepoints":
-        // Show all structural edges so the degree can be computed visually.
+        // Degree is intentionally computed over every loaded raw/composite
+        // relationship; the UI labels this scope explicitly.
         include = true;
         break;
       default:
         if (lens.edgeKinds.length === 0) {
           include = true;
-        } else if (enabledEdgeKinds.size === 0) {
-          include = lens.edgeKinds.includes(e.kind);
         } else {
           include = enabledEdgeKinds.has(e.kind);
         }
         break;
     }
+    // A finding deep-link is an exact evidence overlay on top of the selected
+    // lens. Include only the explicitly supplied directional relationship
+    // keys; do not broaden the ordinary lens to every structural edge.
+    if (highlight?.edgeIds.has(edgeKey(e))) include = true;
     if (include) selectedEdges.push(e);
   }
 
   // --- BUNDLING PHASE ---
   const bundles = new Map<string, APIEdge[]>();
   for (const e of selectedEdges) {
-    const k = bundleKey(e);
+    // Preserve exact relationship highlighting even when multiple kinds share
+    // the same endpoints. A highlighted constituent and a non-highlighted
+    // constituent must not collapse into one bright bundle.
+    const highlightBucket = highlight
+      ? highlight.edgeIds.has(edgeKey(e))
+        ? "highlight"
+        : "dim"
+      : "all";
+    const k = `${bundleKey(e)}|${highlightBucket}`;
     const list = bundles.get(k) ?? [];
     list.push(e);
     bundles.set(k, list);
@@ -197,9 +208,9 @@ export function buildLogicalEdges(
     // bright. Highlight takes priority over lens-level dimming.
     let showFlowDot = false;
     if (highlight) {
-      const inHighlight =
-        highlight.nodeIds.has(primary.source) &&
-        highlight.nodeIds.has(primary.target);
+      const inHighlight = group.some((edge) =>
+        highlight.edgeIds.has(edgeKey(edge)),
+      );
       dim = !inHighlight;
       showFlowDot = inHighlight;
     }

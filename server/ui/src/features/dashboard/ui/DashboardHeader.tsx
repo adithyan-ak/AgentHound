@@ -1,12 +1,21 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Download, RefreshCw, Radar } from "lucide-react";
+import { api } from "@shared/api/client";
 import { qk } from "@shared/api/query-keys";
-import { fetchScans, useScans, isUsableScan } from "@entities/scan";
-import { fetchGraphStats } from "@entities/graph-stats";
-import { fetchFindings, useFindings, severityCounts } from "@entities/finding";
+import {
+  hasActiveScan,
+  latestCompletedScan,
+  latestPublishedScan,
+  useLatestCompletedScan,
+  useLatestPublishedScan,
+  useScans,
+} from "@entities/scan";
+import { useFindings, severityCounts } from "@entities/finding";
+import { useGraphStats } from "@entities/graph-stats";
 import { useNodes, isUnauth } from "@entities/node";
 import { useHealth } from "@entities/health";
+import { useProjectionState } from "@entities/posture";
 import {
   exposureScore,
   exposureBand,
@@ -16,7 +25,14 @@ import {
 import { Button } from "@shared/ui/primitives/button";
 import { cn } from "@shared/lib/utils";
 import { timeAgo } from "@shared/lib/format";
-import { SEVERITY_ORDER, SEVERITY, SIGNAL_OK, ACCENT, CHART_THEME } from "@shared/theme/tokens";
+import {
+  SEVERITY,
+  SIGNAL_OK,
+  ACCENT,
+  CHART_THEME,
+  FEEDBACK,
+} from "@shared/theme/tokens";
+import { sameDashboardProjection } from "../model/projection";
 
 function greeting(): string {
   const h = new Date().getHours();
@@ -54,11 +70,12 @@ interface SegProps {
   value: string;
   color: string;
   pulse?: boolean;
+  title?: string;
 }
 
-function StripSeg({ label, value, color, pulse }: SegProps) {
+function StripSeg({ label, value, color, pulse, title }: SegProps) {
   return (
-    <div className="flex items-center gap-2 px-3 py-2">
+    <div className="flex items-center gap-2 px-3 py-2" title={title}>
       <span
         className={cn("h-2 w-2 shrink-0 rounded-[1px]", pulse && "animate-led-pulse")}
         style={{ backgroundColor: color, boxShadow: `0 0 6px -1px ${color}` }}
@@ -77,19 +94,74 @@ export function DashboardHeader() {
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
-  const { data: health } = useHealth();
+  const healthQuery = useHealth();
+  const scansQuery = useScans(20);
+  const scanActive = hasActiveScan(scansQuery.data);
+  const latestCompletedQuery = useLatestCompletedScan(scanActive);
+  const latestPublishedQuery = useLatestPublishedScan(scanActive);
+  const findingsQuery = useFindings();
+  const statsQuery = useGraphStats();
+  const nodesQuery = useNodes();
+  const postureQuery = useProjectionState();
+  const health = healthQuery.data;
+  const scans = scansQuery.data;
+  const findings = findingsQuery.data;
+  const nodes = nodesQuery.data;
+  const posture = postureQuery.data;
 
-  const { data: scans } = useScans(20);
-  const { data: findings } = useFindings();
-  const { data: nodes } = useNodes();
-
-  const neo4jOk = (health?.neo4j ?? "").toLowerCase() === "ok";
-  const postgresOk = (health?.postgres ?? "").toLowerCase() === "ok";
-  // completed_with_errors still populated the graph, so it counts as the
-  // latest run for "last scan" timing purposes.
-  const lastCompleted = (scans ?? []).find(isUsableScan);
+  const componentStatus = (
+    component: "neo4j" | "postgres",
+  ): { value: string; color: string; title: string; pulse: boolean } => {
+    if (healthQuery.isError) {
+      return {
+        value: health ? "stale" : "unknown",
+        color: FEEDBACK.warning.solid,
+        title: health
+          ? `Health refresh failed; last response was ${new Date(
+              healthQuery.dataUpdatedAt,
+            ).toLocaleString()}`
+          : "Health request failed",
+        pulse: false,
+      };
+    }
+    const value = health?.[component] ?? "unknown";
+    return {
+      value,
+      color:
+        value === "ok"
+          ? SIGNAL_OK
+          : value === "unavailable"
+            ? SEVERITY.critical.solid
+            : FEEDBACK.warning.solid,
+      title:
+        value === "unknown"
+          ? "Component health has not been observed"
+          : `Latest health response: ${value}`,
+      pulse: value === "ok",
+    };
+  };
+  const neo4j = componentStatus("neo4j");
+  const postgres = componentStatus("postgres");
+  // The history page is ordered by start time, which is not a freshness
+  // ordering when scans overlap. Merge its rows with the dedicated
+  // completion/publication queries and select by the relevant timestamp.
+  const freshnessCandidates = [
+    ...(scans ?? []),
+    ...(latestCompletedQuery.data ? [latestCompletedQuery.data] : []),
+    ...(latestPublishedQuery.data ? [latestPublishedQuery.data] : []),
+  ];
+  const lastCompleted = latestCompletedScan(freshnessCandidates);
   const running = (scans ?? []).some((s) => s.status === "running");
+  const publishedScan = latestPublishedScan(freshnessCandidates);
+  const publishedStagesComplete =
+    publishedScan?.id === posture?.published_scan_id &&
+    publishedScan?.collection_status === "complete" &&
+    publishedScan.graph_status === "complete" &&
+    publishedScan.analysis_status === "complete" &&
+    publishedScan.snapshot_status === "complete" &&
+    publishedScan.projection_status === "complete";
 
   const counts = severityCounts(findings ?? []);
   const unauthServers = (nodes ?? []).filter(
@@ -101,6 +173,55 @@ export function DashboardHeader() {
     unauthServers,
   });
   const threatLabel = THREAT_LABELS[exposureBand(exposure)];
+  const matchingProjection = sameDashboardProjection(
+    findingsQuery.snapshot?.scanId && findingsQuery.snapshot.revision != null
+      ? {
+          scanId: findingsQuery.snapshot.scanId,
+          revision: findingsQuery.snapshot.revision,
+        }
+      : null,
+    statsQuery.data?.projection,
+    nodesQuery.snapshot,
+    publishedScan?.published_revision != null
+      ? {
+          scanId: publishedScan.id,
+          revision: publishedScan.published_revision,
+        }
+      : null,
+    posture?.published_scan_id && posture.published_revision != null
+      ? {
+          scanId: posture.published_scan_id,
+          revision: posture.published_revision,
+        }
+      : null,
+  );
+  const verdictAvailable =
+    findings !== undefined &&
+    statsQuery.data !== undefined &&
+    nodes !== undefined &&
+    !findingsQuery.isError &&
+    !statsQuery.isError &&
+    !nodesQuery.isError &&
+    posture?.status === "complete" &&
+    posture.published_scan_id != null &&
+    publishedStagesComplete &&
+    matchingProjection;
+  const scanObservedAt = lastCompleted?.completed_at;
+  const snapshotValue = postureQuery.isError
+    ? posture
+      ? "stale"
+      : "unknown"
+    : posture?.status === "complete" && posture.published_at
+      ? timeAgo(posture.published_at)
+      : posture?.published_at
+        ? `stale ${timeAgo(posture.published_at)}`
+        : posture?.status ?? "none";
+  const snapshotColor =
+    postureQuery.isError || posture?.status === "incomplete"
+      ? FEEDBACK.warning.solid
+      : posture?.status === "complete" && posture.published_at
+        ? SIGNAL_OK
+        : CHART_THEME.axis;
 
   async function refresh() {
     setRefreshing(true);
@@ -113,6 +234,8 @@ export function DashboardHeader() {
         queryClient.invalidateQueries({ queryKey: qk.nodes(undefined, 10000) }),
         queryClient.invalidateQueries({ queryKey: qk.findings() }),
         queryClient.invalidateQueries({ queryKey: qk.scans(20) }),
+        queryClient.invalidateQueries({ queryKey: qk.latestScan("completed") }),
+        queryClient.invalidateQueries({ queryKey: qk.latestScan("published") }),
         queryClient.invalidateQueries({
           queryKey: qk.prebuiltResult("cross-protocol-paths"),
         }),
@@ -121,6 +244,7 @@ export function DashboardHeader() {
         }),
         queryClient.invalidateQueries({ queryKey: qk.graphStats() }),
         queryClient.invalidateQueries({ queryKey: qk.health() }),
+        queryClient.invalidateQueries({ queryKey: qk.posture() }),
       ]);
     } finally {
       setRefreshing(false);
@@ -129,27 +253,17 @@ export function DashboardHeader() {
 
   async function exportSnapshot() {
     setExporting(true);
+    setExportError(null);
     try {
-      const [stats, findingList, scanList] = await Promise.all([
-        fetchGraphStats(),
-        fetchFindings(),
-        fetchScans(20, 0),
-      ]);
-      const bySeverity: Record<string, number> = {};
-      for (const sev of SEVERITY_ORDER) bySeverity[sev] = 0;
-      for (const f of findingList) bySeverity[f.severity] = (bySeverity[f.severity] ?? 0) + 1;
-      downloadJSON(`agenthound-attack-surface-${new Date().toISOString().slice(0, 10)}.json`, {
-        generated_at: new Date().toISOString(),
-        totals: {
-          nodes: stats.total_nodes,
-          edges: stats.total_edges,
-          findings: findingList.length,
-        },
-        node_counts: stats.node_counts,
-        edge_counts: stats.edge_counts,
-        findings_by_severity: bySeverity,
-        recent_scans: scanList,
-      });
+      const snapshot = await api.get("posture/export").json<unknown>();
+      downloadJSON(
+        `agenthound-posture-${new Date().toISOString().slice(0, 10)}.json`,
+        snapshot,
+      );
+    } catch (error) {
+      setExportError(
+        error instanceof Error ? error.message : "Posture export failed",
+      );
     } finally {
       setExporting(false);
     }
@@ -176,8 +290,14 @@ export function DashboardHeader() {
             </span>
           </h1>
           <p className="mt-1.5 text-sm text-muted-foreground">
-            Live security posture across your agent, MCP, and A2A infrastructure.
+            Published security posture snapshot across your agent, MCP, and A2A
+            infrastructure.
           </p>
+          {exportError && (
+            <p role="alert" className="mt-1 text-xs text-destructive">
+              Export failed: {exportError}
+            </p>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -196,15 +316,45 @@ export function DashboardHeader() {
       <div className="card-elevated relative flex flex-wrap items-center overflow-hidden rounded-md">
         <span aria-hidden className="absolute left-0 top-0 h-px w-14 bg-primary/80" />
         <div className="flex flex-wrap items-center divide-x divide-border/70">
-          <StripSeg label="Neo4j" value={neo4jOk ? "ok" : "down"} color={neo4jOk ? SIGNAL_OK : SEVERITY.critical.solid} pulse={neo4jOk} />
-          <StripSeg label="Postgres" value={postgresOk ? "ok" : "down"} color={postgresOk ? SIGNAL_OK : SEVERITY.critical.solid} pulse={postgresOk} />
+          <StripSeg label="Neo4j" {...neo4j} />
+          <StripSeg label="Postgres" {...postgres} />
           <StripSeg
             label="Scan"
-            value={running ? "running" : lastCompleted ? timeAgo(lastCompleted.started_at) : "none"}
+            value={
+              running
+                ? "running"
+                : scanObservedAt
+                  ? timeAgo(scanObservedAt)
+                  : "none"
+            }
             color={running ? ACCENT : CHART_THEME.axis}
             pulse={running}
           />
-          <StripSeg label="Threat" value={threatLabel} color={exposureColor(exposure)} pulse={exposure >= 50} />
+          <StripSeg
+            label="Snapshot"
+            value={snapshotValue}
+            color={snapshotColor}
+            title={
+              posture?.published_at
+                ? `Published ${new Date(posture.published_at).toLocaleString()}`
+                : "No complete posture snapshot has been published"
+            }
+          />
+          <StripSeg
+            label="Threat"
+            value={verdictAvailable ? threatLabel : "withheld"}
+            color={
+              verdictAvailable
+                ? exposureColor(exposure)
+                : FEEDBACK.warning.solid
+            }
+            pulse={verdictAvailable && exposure >= 50}
+            title={
+              verdictAvailable
+                ? "Calculated from the complete published snapshot"
+                : "Unavailable until collection, projection, analysis, and publication are complete"
+            }
+          />
         </div>
 
         <div className="relative ml-auto flex items-center gap-2 self-stretch overflow-hidden border-l border-border/70 px-3.5 py-2">
@@ -212,10 +362,20 @@ export function DashboardHeader() {
             {running ? (
               <span className="text-primary">Scanning</span>
             ) : (
-              <span className="text-emerald-400/90">Monitoring</span>
+              <span className="text-foreground/80">
+                {posture?.published_at
+                  ? `Snapshot ${new Date(posture.published_at).toLocaleString()}`
+                  : "No published snapshot"}
+              </span>
             )}
           </span>
-          <span className="h-1.5 w-1.5 animate-led-pulse rounded-[1px] bg-emerald-500" />
+          <span
+            className={cn(
+              "h-1.5 w-1.5 rounded-[1px]",
+              running && "animate-led-pulse",
+            )}
+            style={{ backgroundColor: running ? ACCENT : snapshotColor }}
+          />
           {running && (
             <span
               aria-hidden

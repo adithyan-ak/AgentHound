@@ -1,5 +1,6 @@
 import type { Node, Edge } from "@xyflow/react";
 import type { Finding } from "@entities/finding/model";
+import type { EdgeKind } from "@entities/graph/dto";
 import type { LensDefinition, SeverityLevel } from "../lens-config";
 import type { LensId } from "../store";
 
@@ -9,7 +10,8 @@ export interface HexNodeData extends Record<string, unknown> {
   label: string;
   kindTag: string;
   severity: SeverityLevel | null;
-  riskScore: number;
+  riskScore: number | null;
+  evidenceStatus: "verified" | "configured-unverified" | null;
   properties: Record<string, unknown>;
   dim: boolean;
   emphasized: boolean;
@@ -21,6 +23,7 @@ export interface HexNodeData extends Record<string, unknown> {
 export interface OrphanClusterData extends Record<string, unknown> {
   kind: string;
   kindTag: string;
+  lensLabel: string;
   count: number;
   orphanNodes: Array<{
     id: string;
@@ -30,7 +33,7 @@ export interface OrphanClusterData extends Record<string, unknown> {
 }
 
 export interface LensEdgeData extends Record<string, unknown> {
-  kind: string;
+  kind: EdgeKind;
   sourceKind: string;
   targetKind: string;
   severity: SeverityLevel | null;
@@ -38,7 +41,7 @@ export interface LensEdgeData extends Record<string, unknown> {
   isComposite: boolean;
   isCrossProtocol: boolean;
   bundledCount: number;
-  bundledKinds: string[];
+  bundledKinds: EdgeKind[];
   bundledEdges: BundledEdge[];
   properties: Record<string, unknown>;
   dim: boolean;
@@ -55,7 +58,7 @@ export interface LensEdgeData extends Record<string, unknown> {
 }
 
 export interface BundledEdge {
-  kind: string;
+  kind: EdgeKind;
   confidence: number;
   severity: SeverityLevel | null;
   properties: Record<string, unknown>;

@@ -1,8 +1,8 @@
 package handlers
 
 import (
-	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
@@ -23,7 +23,7 @@ func (h *IngestHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxIngestBodySize)
 
 	var data sdkingest.IngestData
-	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+	if err := sdkingest.DecodeStrict(r.Body, &data); err != nil {
 		WriteValidationError(w, "invalid JSON payload")
 		return
 	}
@@ -37,6 +37,22 @@ func (h *IngestHandler) Handle(w http.ResponseWriter, r *http.Request) {
 					Code:    "VALIDATION_ERROR",
 					Message: "validation failed",
 					Details: ve.Errors,
+				},
+			})
+			return
+		}
+		if result != nil {
+			slog.Error("ingest failed after graph mutation",
+				"error", err,
+				"scan_id", result.ScanID,
+				"node_write_rows", result.WriteRows.Nodes,
+				"edge_write_rows", result.WriteRows.Edges,
+			)
+			WriteJSON(w, http.StatusInternalServerError, ErrorResponse{
+				Error: ErrorDetail{
+					Code:    "INGEST_FAILED",
+					Message: "Ingest failed after partial graph mutation.",
+					Details: result,
 				},
 			})
 			return

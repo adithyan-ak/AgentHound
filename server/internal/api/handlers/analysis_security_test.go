@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 )
 
@@ -64,13 +65,7 @@ func TestValidNodeKindRejectsArbitraryStrings(t *testing.T) {
 }
 
 func TestValidNodeKindAcceptsAllLabels(t *testing.T) {
-	for _, label := range []string{
-		"MCPServer", "MCPTool", "MCPResource", "MCPPrompt",
-		"A2AAgent", "A2ASkill", "AgentInstance",
-		"Identity", "Credential", "Host",
-		"ConfigFile", "InstructionFile",
-		"ResourceGroup", "TrustZone",
-	} {
+	for label := range ingest.AllowedNodeKinds {
 		if !validNodeKind(label) {
 			t.Errorf("validNodeKind(%q) = false, want true", label)
 		}

@@ -28,20 +28,20 @@ export function BlastRadiusRings() {
     const cy = (center.position.y ?? 0) + 48;
 
     // Use ring metadata from the API response, which groups nodes by hop.
-    const ringCounts: number[] = [];
+    const ringCounts: Array<{ hop: number; count: number }> = [];
     for (let hop = 1; hop <= maxHops; hop++) {
       const members = blast.rings[String(hop)] ?? [];
       if (members.length > 0) {
-        ringCounts.push(members.length);
+        ringCounts.push({ hop, count: members.length });
       }
     }
     if (ringCounts.length === 0) return null;
 
     const baseRadius = 180;
     const ringGap = 140;
-    return ringCounts.map((count, i) => ({
-      hop: i + 1,
-      radius: baseRadius + i * ringGap,
+    return ringCounts.map(({ hop, count }, index) => ({
+      hop,
+      radius: baseRadius + index * ringGap,
       count,
       cx,
       cy,
@@ -103,15 +103,19 @@ export function BlastRadiusRings() {
 }
 
 function NoSourceHint() {
+  const direction = useExplorerStore((s) => s.blastRadiusDirection);
+  const maxHops = useExplorerStore((s) => s.blastRadiusMaxHops);
   return (
     <div className="pointer-events-none absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-md border border-border bg-card/95 px-6 py-5 text-center backdrop-blur-md elev-2">
       <span aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-px bg-white/[0.05]" />
       <div className="mb-1 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
         Blast Radius
       </div>
-      <div className="text-sm text-foreground">Click any node to see what it can reach</div>
+      <div className="text-sm text-foreground">
+        Click any node to calculate bounded reachability
+      </div>
       <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
-        Concentric rings show hop distance from the source
+        {direction} traversal · up to {maxHops} hops · loaded graph
       </div>
     </div>
   );

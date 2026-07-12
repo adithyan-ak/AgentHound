@@ -1,11 +1,33 @@
 {
   "meta": {
-    "version": 1,
+    "version": 2,
     "type": "wrong",
     "collector": "config",
     "collector_version": "0.1.0",
     "timestamp": "2026-04-07T12:00:00Z",
-    "scan_id": "scan-invalid-001"
+    "scan_id": "scan-invalid-001",
+    "collection": {
+      "state": "complete",
+      "coverage_keys": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"],
+      "outcomes": [{
+        "collector": "config",
+        "coverage_key": "config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1",
+        "target": "/Users/dev/.config/claude/claude_desktop_config.json",
+        "method": "fixture",
+        "state": "complete"
+      }]
+    },
+    "ruleset": {
+      "digest": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e64a8f8bff093b2f5f2cf4e",
+      "load_state": "complete",
+      "authenticity": "unverified"
+    },
+    "identity_schemes": [{
+      "entity_kind": "MCPServer",
+      "transport": "stdio",
+      "scheme": "mcp_stdio_v2_ordered",
+      "version": 2
+    }]
   },
   "graph": {
     "nodes": [
@@ -14,8 +36,12 @@
         "kinds": ["MCPServer"],
         "properties": {
           "name": "empty-id-server",
+          "auth_method": "unknown",
+          "auth_assurance": "unknown",
+          "auth_evidence": "unknown",
           "objectid": ""
-        }
+        },
+        "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
         "id": "sha256:aabbccdd",
@@ -23,7 +49,8 @@
         "properties": {
           "name": "invalid-kind-node",
           "objectid": "sha256:aabbccdd"
-        }
+        },
+        "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       }
     ],
     "edges": [
@@ -31,23 +58,29 @@
         "source": "sha256:aabbccdd",
         "target": "sha256:eeff0011",
         "kind": "FAKE_EDGE",
+        "source_kind": "MCPServer",
+        "target_kind": "MCPTool",
         "properties": {
           "scan_id": "scan-invalid-001",
           "last_seen": "2026-04-07T12:00:00Z",
           "confidence": 1.0,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
         "source": "sha256:aabbccdd",
         "target": "",
         "kind": "PROVIDES_TOOL",
+        "source_kind": "MCPServer",
+        "target_kind": "MCPTool",
         "properties": {
           "scan_id": "scan-invalid-001",
           "last_seen": "2026-04-07T12:00:00Z",
           "confidence": 1.0,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       }
     ]
   }

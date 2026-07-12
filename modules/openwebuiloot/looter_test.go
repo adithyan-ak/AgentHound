@@ -106,9 +106,7 @@ func addrOf(srv *httptest.Server) string {
 }
 
 // TestLoot_OpenWebUI_AnonymousPosture — no api-key supplied, only the
-// posture props land. Instance node carries signup_enabled +
-// auth_required; no ollama_backend_url (that lived in the dead
-// $.ollama.base_url capture, now removed in v3).
+// posture props land. Instance node carries signup_enabled + auth_required.
 func TestLoot_OpenWebUI_AnonymousPosture(t *testing.T) {
 	srv := openwebuiStub(t, openwebuiStubOptions{})
 	defer srv.Close()
@@ -135,9 +133,6 @@ func TestLoot_OpenWebUI_AnonymousPosture(t *testing.T) {
 	}
 	if _, ok := node.Properties["default_user_role"]; ok {
 		t.Errorf("default_user_role should not be set (dead field removed)")
-	}
-	if _, ok := node.Properties["ollama_backend_url"]; ok {
-		t.Errorf("ollama_backend_url should not be set in anonymous mode (moved to /ollama/config)")
 	}
 	if res.Summary.CredentialsFound != 0 {
 		t.Errorf("CredentialsFound = %d, want 0 in anonymous mode", res.Summary.CredentialsFound)
@@ -314,7 +309,7 @@ func TestLoot_OpenWebUI_AuthRejected(t *testing.T) {
 // TestLoot_OpenWebUI_OllamaConfig_KeyField — the primary shape:
 // OLLAMA_API_CONFIGS keyed by string index, per-URL config uses `key`.
 // Asserts 1 Credential + 1 :OllamaInstance placeholder + 1 :EXPOSES
-// edge + canonicalized ollama_backend_url property.
+// edge + canonicalized backend URL list.
 func TestLoot_OpenWebUI_OllamaConfig_KeyField(t *testing.T) {
 	const key = "admin-jwt"
 	srv := openwebuiStub(t, openwebuiStubOptions{
@@ -340,8 +335,20 @@ func TestLoot_OpenWebUI_OllamaConfig_KeyField(t *testing.T) {
 			if vh, _ := n.Properties["value_hash"].(string); vh != common.HashCredentialValue("sk-ollama-idx") {
 				t.Errorf("value_hash mismatch: %v", vh)
 			}
+			if n.Properties["material_status"] != "observed" ||
+				n.Properties["exposure_status"] != "exposed" {
+				t.Errorf("observed OpenWebUI secret missing evidence state: %+v", n.Properties)
+			}
 		case "OllamaInstance":
 			ollamaCount++
+			if _, claimed := n.Properties["auth_method"]; claimed {
+				t.Errorf("configured backend claimed observed auth: %+v", n.Properties)
+			}
+			if n.Properties["configuration_observed"] != true ||
+				n.Properties["configured_auth_method"] != "apiKey" ||
+				n.Properties["probe_status"] != string(common.VerificationConfiguredUnverified) {
+				t.Errorf("configured backend evidence missing: %+v", n.Properties)
+			}
 		}
 	}
 	if credCount != 1 {
@@ -356,13 +363,18 @@ func TestLoot_OpenWebUI_OllamaConfig_KeyField(t *testing.T) {
 			if e.SourceKind != "OpenWebUIInstance" || e.TargetKind != "OllamaInstance" {
 				t.Errorf("EXPOSES edge kinds = %s -> %s", e.SourceKind, e.TargetKind)
 			}
+			if e.Properties["assertion_type"] != "configured_reference" ||
+				e.Properties["confidence_scope"] != "configuration_presence" {
+				t.Errorf("configured edge overclaimed verification: %+v", e.Properties)
+			}
 		}
 	}
 	if exposesCount != 1 {
 		t.Errorf("EXPOSES edge count = %d, want 1", exposesCount)
 	}
-	if bu, _ := res.IngestData.Graph.Nodes[0].Properties["ollama_backend_url"].(string); bu != "http://10.0.0.5:11434" {
-		t.Errorf("ollama_backend_url = %q, want http://10.0.0.5:11434", bu)
+	urls, _ := res.IngestData.Graph.Nodes[0].Properties["ollama_backend_urls"].([]string)
+	if len(urls) != 1 || urls[0] != "http://10.0.0.5:11434" {
+		t.Errorf("ollama_backend_urls = %v, want [http://10.0.0.5:11434]", urls)
 	}
 }
 

@@ -20,46 +20,45 @@ These are the node kinds accepted in ingest input (`sdk/ingest.AllowedNodeKinds`
 
 | Label | Source | Key Properties |
 |-------|--------|----------------|
-| `MCPServer` | Config + MCP | `name`, `endpoint`, `transport` (stdio/http), `auth_method`, `auth_strength` (numeric, post-processor), `protocol_version`, `instructions`, `instructions_hash` (SHA-256), `capabilities`, `is_pinned`, `has_tasks_capability` |
+| `MCPServer` | Config + MCP | `name`, `endpoint`, `transport` (stdio/http), `auth_method`, `auth_assurance`, `auth_strength` (numeric weakness only when known, post-processor), `auth_evidence`, `protocol_version`, `instructions`, `instructions_hash` (SHA-256), `capabilities`, `pinning_status`, `is_pinned` (only when known), `id_scheme`, `has_tasks_capability` |
 | `MCPTool` | MCP | `name`, `description`, `input_schema`, `output_schema`, `annotations`, `description_hash` (SHA-256), `input_schema_hash` (SHA-256), `schema_keys[]`, `capability_surface[]`, `source_trust` (untrusted_web/email/fileshare), `has_injection_patterns`, `has_cross_references` |
-| `MCPResource` | MCP | `uri`, `name`, `mime_type`, `size`, `uri_scheme`, `sensitivity` (auto-classified) |
+| `MCPResource` | MCP | `uri`, `name`, `mime_type`, `size`, `uri_scheme`, `sensitivity` (`critical`/`high`/`medium`/`low`/`none`/`unknown`), `sensitivity_rule_id`, `sensitivity_evidence` |
 | `MCPPrompt` | MCP | `name`, `description`, `arguments` |
-| `A2AAgent` | A2A | `name`, `description`, `url`, `provider`, `version`, `protocol_versions`, `capabilities`, `security_schemes`, `auth_method`, `auth_posture`, `auth_strength` (numeric, post-processor), `is_https`, `is_signed`, `signature_valid`, `signature_verification_status`, `card_hash` |
+| `A2AAgent` | A2A | `name`, `description`, `url`, `provider`, `version`, `protocol_versions`, `capabilities`, `security_schemes`, `auth_method`, `auth_assurance`, `auth_evidence`, `auth_strength` (numeric only when known), `is_https`, `is_signed`, `signature_verification_status`, `card_hash` |
 | `A2ASkill` | A2A | `id`, `name`, `description`, `input_modes`, `output_modes`, `description_hash`, `has_injection_patterns` |
 | `AgentInstance` | Config | `name`, `framework`, `config_path` |
 | `Identity` | Config + MCP | `type` (none/apiKey/oauth/bearer/mtls), `scope`, `is_static` |
-| `Credential` | Config + LiteLLM Looter | `type` (envVar/hardcoded/vaultRef/inputPrompt/master_key/apiKey/virtual_key), `name`, `source`, `is_exposed`, `high_entropy`, `format`, `value_hash` (SHA-256), `blast_radius` (distinct reachable agents, post-processor) |
-| `Host` | Config + A2A | `hostname`, `ip`, `is_local`, `is_private`, `is_public` |
+| `Credential` | Config + LiteLLM/Open WebUI Looters | `type`, `name`, `source`, required `merge_key` (`value_hash`/`identity`), `identity_basis` (`value_hash`/`provider_name`/`metadata`/`unknown`), `material_status` (`observed`/`masked`/`hashed`/`unobserved`/`unknown`), `exposure_status` (`exposed`/`not_observed`/`unknown`), `high_entropy`, `format`, `value_hash`, `blast_radius` |
+| `Host` | Config + A2A + MCP | `hostname`, `ip`, `scope` (`local`/`private`/`public`/`unknown`) |
 | `ConfigFile` | Config | `path`, `client`, `server_count` |
 | `InstructionFile` | Config | `path`, `type` (agents.md/claude.md/cursorrules/copilot-instructions/memory.md), `hash`, `is_suspicious` |
-| `OllamaInstance` | Network scan + Ollama fingerprinter | `endpoint`, `version`, `auth_method`, `is_anonymous_loot`, `discovered_via` |
+| `OllamaInstance` | Network scan + Ollama fingerprinter + Open WebUI config | `endpoint`, `version`, observed `auth_method`, `probe_status` (`configured_unverified`/`verified`/`failed`/`unknown`), `last_verified_at`, `configuration_observed`, `configured_via`, `configured_auth_method`, `is_anonymous_loot`, `discovered_via` |
 | `VLLMInstance` | Network scan + vLLM fingerprinter | `endpoint`, `version`, `auth_method`, `is_anonymous_loot` |
 | `QdrantInstance` | Network scan + Qdrant fingerprinter + Qdrant Looter | `endpoint`, `version`, `collection_count`, `collections` (sorted names), `total_points`, `anonymous_listing` (Looter-enriched) |
 | `MLflowServer` | Network scan + MLflow fingerprinter | `endpoint`, `version`, `experiment_count` |
 | `LiteLLMGateway` | Network scan + LiteLLM fingerprinter | `endpoint`, `auth_method`, `is_anonymous_loot`, `docs_enabled` |
 | `JupyterServer` | Network scan + Jupyter fingerprinter | `endpoint`, `version`, `token_required` |
 | `LangServeApp` | Network scan + LangServe fingerprinter | `endpoint`, `chains` |
-| `OpenWebUIInstance` | Network scan + Open WebUI fingerprinter + Open WebUI Looter | `endpoint`, `version`, `signup_enabled`, `auth_required`, `ollama_backend_url` (first canonicalized backend URL), `ollama_backend_urls` (full list, Looter-enriched from admin `/ollama/config`) |
+| `OpenWebUIInstance` | Network scan + Open WebUI fingerprinter + Open WebUI Looter | `endpoint`, `version`, `signup_enabled`, `auth_required`, `ollama_backend_urls` (canonicalized list, Looter-enriched from admin `/ollama/config`) |
 | `AIService` | Multi-label umbrella (see below) | _(no unique properties — carried as companion label)_ |
-| `AIModel` | Ollama Looter | `name`, `size_bytes`, `digest`, `family`, `parameter_size` (canonical), `parameters` (deprecated alias, one-release dual-emit), `is_finetune`, `modified_at`, `value_hash` (when modelfile present), `has_system_prompt`, `modelfile_size_bytes` |
+| `AIModel` | Ollama Looter | `name`, `size_bytes`, `digest`, `family`, `parameter_size`, `is_finetune`, `modified_at`, `value_hash` (when modelfile present), `has_system_prompt`, `modelfile_size_bytes` |
 | `ExtractedTrainingSignal` | Extractors | `kind`, `source_model`, `sample_count`, `confidence` |
 
-### Synthetic (2 kinds, post-processor created)
+Config collection normalizes stdio executable basenames (including
+path-qualified and Windows `.exe`/`.cmd`/`.bat` launchers) before assessing
+`npx`/`uvx` package pinning. Unrecognized launchers use
+`pinning_status=unknown`, not `not_applicable`; `is_pinned` is emitted only for
+explicit pinned/unpinned evidence.
 
-These labels exist in `AllNodeLabels` but NOT in `AllowedNodeKinds` — collectors cannot emit them.
+Neo4j's internal `SchemaVersion` node is excluded from every public inventory
+count and node collection.
 
-| Label | Source | Key Properties |
-|-------|--------|----------------|
-| `ResourceGroup` | Post-processor | `type`, `sensitivity` |
-| `TrustZone` | Post-processor | `name`, `level`, `node_count` |
+### A2AAgent Signature Verification (`is_signed`, `signature_verification_status`)
 
-### A2AAgent Signature Verification (`is_signed`, `signature_valid`, `signature_verification_status`)
-
-`A2AAgent` carries three signature properties:
+`A2AAgent` carries two signature properties:
 
 - **`is_signed`** — `true` when the agent card has a non-empty `signatures[]` array, regardless of cryptographic validity.
-- **`signature_valid`** — `true` when **at least one** signature cryptographically verifies against a resolvable key (any-valid semantics). Retained for backward compatibility.
-- **`signature_verification_status`** — the authoritative outcome, disambiguating the two cases `signature_valid=false` previously conflated:
+- **`signature_verification_status`** — the authoritative outcome:
   - `unsigned` — no `signatures[]`.
   - `verified` — every signature verified.
   - `partially_verified` — at least one, but not all, signatures verified.
@@ -96,16 +95,16 @@ This enables queries like `MATCH (n:AIService)` to find all AI infrastructure re
 | `PROVIDES_RESOURCE` | MCPServer / JupyterServer / MLflowServer / QdrantInstance | MCPResource | MCP / Jupyter Looter / MLflow Looter (Model Registry storage URIs) / Qdrant Looter (scrolled point payloads under `--include-points`) | Server exposes this resource. MLflow URIs are plain `storage_location or source` (s3://, gs://, dbfs:/, file:///), NOT presigned credentials. Qdrant point resources are per-collection payload samples. |
 | `PROVIDES_PROMPT` | MCPServer | MCPPrompt | MCP | Server exposes this prompt template |
 | `ADVERTISES_SKILL` | A2AAgent | A2ASkill | A2A | Agent advertises this skill |
-| `DELEGATES_TO` | A2AAgent | A2AAgent | A2A | Agent delegates tasks to another agent |
+| `DELEGATES_TO` | A2AAgent | A2AAgent | A2A | Lexical possible-delegation hypothesis. `match_type`, `match_field`, and `matched_reference` preserve the boundary/context witness; not proof of runtime delegation. |
 | `AUTHENTICATES_WITH` | MCPServer / A2AAgent | Identity | Config / A2A | Entity uses this auth identity |
 | `USES_CREDENTIAL` | Identity | Credential | Config | Identity backed by this credential material |
 | `RUNS_ON` | MCPServer / A2AAgent | Host | Config / A2A / MCP | Entity runs on this host |
 | `CONFIGURED_IN` | MCPServer | ConfigFile | Config | Server defined in this config file |
 | `HAS_ENV_VAR` | MCPServer | Credential | Config | Server has access to this env var |
-| `LOADS_INSTRUCTIONS` | AgentInstance | InstructionFile | Config | Agent loads this instruction file |
+| `LOADS_INSTRUCTIONS` | AgentInstance | InstructionFile | Config | Agent loads this instruction file; validity depends on both the agent config scope and instruction-file scope |
 | `SAME_AUTH_DOMAIN` | A2AAgent | A2AAgent | A2A | Agents share an authentication domain |
-| `EXPOSES` | AIService | AIService | Fingerprinters | Service exposes another service (e.g., Open WebUI → Ollama backend) |
-| `EXPOSES_CREDENTIAL` | AIService | Credential | LiteLLM Looter, Open WebUI Looter | Service exposes credential material (master keys, upstream provider keys, virtual keys). Open WebUI's authenticated mode (`--api-key`) emits one Credential per configured upstream provider key from `GET /openai/config`, with `value_hash` always populated and the raw value gated behind `--include-credential-values` |
+| `EXPOSES` | AIService | AIService | Fingerprinters / Looters | Service relationship. Open WebUI backend references carry `assertion_type=configured_reference` and `confidence_scope=configuration_presence`; they do not prove backend availability or authentication until a direct probe sets `probe_status=verified`. |
+| `EXPOSES_CREDENTIAL` | AIService | Credential | LiteLLM Looter, Open WebUI Looter | Credential evidence relationship. Inspect `exposure_status`/`assertion_type`: masked provider references and returned hashes remain reference edges but are not usable secret exposure. |
 | `PROVIDES_MODEL` | OllamaInstance | AIModel | Ollama Looter | Instance serves this model |
 | `EXTRACTED_FROM` | AIModel | ExtractedTrainingSignal | Extractors | Extracted signal was derived from this model |
 | `INGESTS_UNTRUSTED` | MCPTool | MCPResource | MCP | Tool with rule-derived `source_trust` (web/email/fileshare) ingests untrusted input that taints same-server resources. **Raw edge** — not swept by composite cleanup (see post-processors doc) |
@@ -115,13 +114,13 @@ This enables queries like `MATCH (n:AIService)` to find all AI infrastructure re
 | Edge | Source | Target | Depends On | Meaning |
 |------|--------|--------|------------|---------|
 | `HAS_ACCESS_TO` | MCPTool | MCPResource | Raw edges | Capability surface matches resource URI scheme |
-| `CAN_EXECUTE` | MCPTool | Host | Raw edges | Tool has shell_access or code_execution capability |
+| `CAN_EXECUTE` | MCPTool | Host | Raw edges | Tool metadata matched the narrow shell_access or code_execution classifier (80% confidence; confirm implementation) |
 | `SHADOWS` | MCPTool | MCPTool | Raw edges | Tool on another server references this tool's name/description |
 | `POISONED_DESCRIPTION` | MCPTool | MCPTool (self-edge) | Raw edges | Tool description contains injection patterns |
 | `POISONED_INSTRUCTIONS` | InstructionFile | InstructionFile (self-edge) | Raw edges | Suspicious patterns: imperative overrides, exfiltration commands, hidden Unicode |
 | `TAINTS` | MCPTool | MCPTool | INGESTS_UNTRUSTED + `schema_keys` | Untrusted-input tool shares ≥2 schema keys with a tool on another server, so attacker data can flow between them |
-| `CAN_REACH` | AgentInstance / A2AAgent | MCPResource | HAS_ACCESS_TO | Transitive access through trust chain (includes cross-protocol and credential chain variants up to 6 hops) |
-| `CAN_EXFILTRATE_VIA` | AgentInstance | MCPTool | CAN_REACH | Agent reaches sensitive data AND has outbound exfiltration channel (incl. `auto_fetch_render` / `allowlisted_proxy` channels) |
+| `CAN_REACH` | AgentInstance / A2AAgent | MCPResource / Credential | HAS_ACCESS_TO and correlation joins | Inferred transitive access. Credential variants distinguish observed material from references; cross-protocol shared-host variants are 50%-confidence hypotheses, not proven invocation paths. |
+| `CAN_EXFILTRATE_VIA` | AgentInstance | MCPTool | CAN_REACH | Inferred sensitive-data access plus a matched output-channel capability (incl. `auto_fetch_render` / `allowlisted_proxy`); not observed exfiltration |
 | `IFC_VIOLATION` | MCPTool | MCPTool | INGESTS_UNTRUSTED + HAS_ACCESS_TO (≤3 hops) | Untrusted source shares a resource with a high-impact sink (credential_access/file_write/email_send) |
 | `CAN_IMPERSONATE` | A2AAgent | A2AAgent | Raw edges | TF-IDF cosine similarity > 0.8 on skill descriptions |
 | `CONFUSED_DEPUTY` | A2AAgent | A2AAgent | auth_strength + can_reach | Weakly-authed agent (`auth_strength` ≥ 80) delegates to a strongly-authed one (≤ 30) |
@@ -131,27 +130,73 @@ This enables queries like `MATCH (n:AIService)` to find all AI infrastructure re
 
 ```go
 type Edge struct {
-    Source     string         `json:"source"`
-    Target     string         `json:"target"`
-    Kind       string         `json:"kind"`
-    SourceKind string         `json:"source_kind,omitempty"`
-    TargetKind string         `json:"target_kind,omitempty"`
-    Properties map[string]any `json:"properties"`
+    Source             string         `json:"source"`
+    Target             string         `json:"target"`
+    Kind               string         `json:"kind"`
+    SourceKind         string         `json:"source_kind,omitempty"`
+    TargetKind         string         `json:"target_kind,omitempty"`
+    Properties         map[string]any `json:"properties"`
+    ObservationDomains []string       `json:"observation_domains,omitempty"`
 }
 ```
+
+`Node` has the same required `observation_domains` field. In wire version 2,
+collector artifacts preserve the producing target/config scope per fact using
+opaque canonical keys such as
+`mcp:target:sha256:...`, `a2a:target:sha256:...`, and
+`config:path:sha256:...`. The server does not infer ownership.
 
 ### Edge Properties (all edges carry these)
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `scan_id` | string | Scan that created/updated this edge |
+| `scan_id` | string | Most recent scan that wrote this edge; not ownership |
 | `last_seen` | ISO 8601 | Timestamp of last observation |
 | `confidence` | float64 | 0.0–1.0 confidence score |
-| `risk_weight` | float64 | Lower = easier to exploit (used by Dijkstra) |
+| `risk_weight` | float64 | Lower = easier to exploit (used by weighted traversal) |
 | `is_composite` | bool | True for post-processed edges |
 | `evidence` | map[string]any | Structured evidence: `endpoint`, `source`, `engagement_id`, and edge-specific keys (e.g. `digest` for `PROVIDES_MODEL`, `backend_url` for `EXPOSES`, `model_name`/`model_version` for MLflow `PROVIDES_RESOURCE`, `collection`/`point_id` for Qdrant `PROVIDES_RESOURCE`) |
 
-Composite edges additionally carry `source_collector` (`mcp`, `a2a`, `config`, or a processor-owned source such as `cross_service_credential_chain`) for scoped stale-edge cleanup.
+Composite edges additionally carry `source_collector` (`mcp`, `a2a`, `config`,
+or a processor-owned source such as `cross_service_credential_chain`) as
+detector provenance. It is neither raw-fact nor composite lifecycle ownership.
+
+Finding-producing composite edges also carry transient
+`evidence_version`, `evidence_node_ids`, and `evidence_relationship_ids`
+references selected by the detector. The findings snapshot stage dereferences
+and persists those exact witnesses; detail does not reconstruct them later
+from a similar graph pattern.
+
+### Active observation ownership
+
+The writer derives internal `observation_tokens` from the validated
+`observation_domains` field and current scan ID. Complete-scope reconciliation
+retires only old tokens for that exact target/config key. A shared node or raw
+relationship remains while any owner token survives. Unknown, partial, failed,
+and truncated coverage is non-destructive.
+`LOADS_INSTRUCTIONS` uses `all_dependencies`: completing either its config or
+instruction scope without re-observing the relationship retires it.
+
+A complete exact re-observation replaces stale managed properties. Observation
+completeness considers only public collector-produced nodes and managed raw
+relationships, so internal graph state such as `SchemaVersion` and derived
+relationships cannot block publication. Internal ownership and completeness
+properties are reserved and stripped from imported `properties` maps.
+Public nodes with no observation token, and raw relationships incident to one,
+are publication-unsafe even when their managed properties are otherwise
+complete.
+When a complete narrow observation cannot safely replace properties because
+another active owner is not present, the writer remains additive and marks the
+fact property-incomplete; publication stays withheld until all active owners
+are re-observed together.
+
+Composite edges are epoch-recomputed separately. When at least one complete raw
+domain is promoted, the server retires the entire derived epoch and rebuilds
+all processors from retained current raw facts in dependency order. Global
+replacement prevents a narrow-domain change from preserving cross-domain
+evidence merely because its `source_collector` names another detector.
+Unknown, partial, and failed collection cannot publish. When no domain is
+promotably complete, derived processing is skipped and the epoch is untouched.
 
 ---
 
@@ -161,7 +206,8 @@ All node IDs are deterministic, content-based SHA-256 hashes. This ensures ident
 
 | Node Kind | ID Computation |
 |-----------|----------------|
-| `MCPServer` | `SHA-256("MCPServer:" + transport + ":" + endpoint + ":" + sorted_args)` |
+| `MCPServer` (HTTP) | `SHA-256("MCPServer:" + transport + ":" + endpoint)` |
+| `MCPServer` (stdio) | SHA-256 over domain-separated, length-framed command plus **order-preserving argv** (`mcp_stdio_v2_ordered`) |
 | `MCPTool` | `SHA-256("MCPTool:" + server_id + ":" + tool_name)` |
 | `MCPResource` | `SHA-256("MCPResource:" + server_id + ":" + resource_uri)` |
 | `MCPPrompt` | `SHA-256("MCPPrompt:" + server_id + ":" + prompt_name)` |
@@ -175,7 +221,10 @@ All node IDs are deterministic, content-based SHA-256 hashes. This ensures ident
 | `InstructionFile` | `SHA-256("InstructionFile:" + absolute_path)` |
 | `AIModel` | `SHA-256("AIModel:" + instance_id + ":" + model_name)` |
 
-**Critical invariant:** The MCPServer ID MUST match between Config Collector and MCP Collector outputs. This is the merge point connecting trust relationships (who trusts what) to capabilities (what a server exposes). `ComputeMCPServerID` trims surrounding whitespace from the endpoint and each arg before hashing, so `"npx "` and `"npx"` produce the same ID regardless of which collector parsed the config.
+**Critical invariant:** Config and MCP collectors use the same identity helper.
+Stdio identity preserves argv order and bytes because process behavior can
+depend on them. Artifacts and graph writes use only this ordered identity; no
+stdio alias or migration contract exists.
 
 ---
 
@@ -190,11 +239,11 @@ The `value_hash` property on `Credential` nodes is the cross-collector merge pri
 3. Both compute `value_hash = SHA-256(credential_value)` via `sdk/common.HashCredentialValue`
 4. Same secret value → same `value_hash` → nodes merge on `objectid` regardless of how each collector derives it
 
-This is what enables attack paths like: `AgentInstance → MCPServer → Credential ← LiteLLMGateway → upstream provider` — proving that a local agent's environment variable is the same key that a LiteLLM gateway uses to reach an upstream LLM provider.
+This enables evidence graphs like `AgentInstance → MCPServer → Credential ← LiteLLMGateway → upstream provider`. An observed `value_hash` match correlates the local and gateway credential records; the upstream target is classified separately as observed material or a reference.
 
 **Requirement:** Every collector or looter MUST populate `value_hash` on every emitted Credential node.
 
-**Exception:** when a Looter cannot observe the raw credential value (e.g. LiteLLM's `/model/info` strips upstream provider `api_key` via `remove_sensitive_info_from_deployment`), it may synthesize a stable identity via `SHA-256("provider:name")` and mark the node `merge_key: "identity"`. Such nodes still carry a non-empty `value_hash` (so the ingest validator continues to accept them unchanged), but the `cross_service_credential_chain` post-processor explicitly filters them out of value_hash joins on both sides — synthetic identities cannot collision-craft against real credentials. Non-identity Credential emissions set `merge_key: "value_hash"` (or omit the field for backward compatibility). See `CLAUDE.md`, `docs/operator/loot/index.md`, and `server/internal/analysis/processors/cross_service_credential_chain.go`.
+**Exception:** when a producer cannot observe raw material, it may retain a stable identity while setting explicit evidence states. LiteLLM `/model/info` references use `merge_key=identity`, `identity_basis=provider_name`, `material_status=masked`, and `exposure_status=not_observed`. Returned one-way virtual-key digests use `material_status=hashed`. These nodes are excluded from exposure, entropy, rotation, and observed-material joins.
 
 ---
 
@@ -226,7 +275,7 @@ Processors run in strict dependency order. A processor may only read edges produ
 
 ### Edge Risk Weights
 
-Lower weight = easier to exploit = higher risk. Used by Dijkstra weighted-path queries.
+Lower weight = easier to exploit = higher risk. Used by bounded weighted-path queries.
 
 | Edge | Weight | Condition |
 |------|--------|-----------|
@@ -245,7 +294,7 @@ Lower weight = easier to exploit = higher risk. Used by Dijkstra weighted-path q
 
 ### Node Risk Scores (0–100)
 
-**Agent:** `0.30 * credential + 0.25 * blast_radius + 0.20 * auth_posture + 0.15 * tool_surface + 0.10 * poisoning`
+**Agent:** `0.30 * credential + 0.25 * blast_radius + 0.20 * auth_risk + 0.15 * tool_surface + 0.10 * poisoning`
 
 **Server:** `0.35 * auth_strength + 0.25 * tool_risk + 0.20 * exposure + 0.20 * credential_handling`
 
@@ -274,9 +323,15 @@ Nodes merge by `objectid` using Cypher `MERGE`. When the same entity appears fro
 - The node MERGE pivots the previous-hash trio (`previous_description_hash`, `previous_input_schema_hash`, `previous_instructions_hash`) on both `ON CREATE` (seeded from the incoming hashes) and `ON MATCH` (set to the prior values before `n += node.properties` overwrites them) for rug-pull detection
 - Edges accumulate (different collectors contribute different edge types to the same node)
 
-### Stale Edge Cleanup
+### Composite Epoch Replacement
 
-On partial scans (e.g., only the MCP collector ran), only composite edges whose `source_collector` matches the current scan's collector or derived processor-owned source are deleted and recomputed. This prevents ping-pong deletion when collectors run independently on different schedules while still cleaning cross-collector findings when one of their source collectors changes.
+Any promoted complete MCP, config, or A2A scope starts a fresh global composite
+epoch. All `is_composite=true` relationships are retired before every
+registered processor recomputes from the retained raw projection. This covers
+transitive, cross-protocol, credential-chain, and other multi-domain evidence
+without relying on the single-valued `source_collector` provenance field.
+Attempts with no promotably complete domain perform no epoch retirement;
+partial and failed collection never publishes.
 
 ### Neo4j Version Compatibility
 
@@ -294,25 +349,57 @@ New modules emit nodes and edges via the `sdk/ingest` wire format:
 ```json
 {
   "meta": {
-    "version": 1,
+    "version": 2,
     "type": "agenthound-ingest",
     "collector": "mcp|a2a|config|scan",
     "collector_version": "0.1.0",
     "timestamp": "2025-01-15T10:30:00Z",
-    "scan_id": "scan-abc123"
+    "scan_id": "scan-abc123",
+    "collection": {
+      "state": "complete",
+      "coverage_keys": [
+        "config:path:sha256:...",
+        "mcp:target:sha256:..."
+      ],
+      "outcomes": [{
+        "collector": "mcp",
+        "coverage_key": "mcp:target:sha256:...",
+        "target": "https://mcp.example/api",
+        "method": "enumerate",
+        "state": "complete"
+      }]
+    },
+    "ruleset": {
+      "digest": "sha256:...",
+      "load_state": "complete",
+      "authenticity": "unverified",
+      "entries": []
+    },
+    "identity_schemes": [{
+      "entity_kind": "MCPServer",
+      "transport": "stdio",
+      "scheme": "mcp_stdio_v2_ordered",
+      "version": 2
+    }]
   },
   "graph": {
-    "nodes": [{"id": "sha256:...", "kinds": ["MCPServer"], "properties": {...}}],
-    "edges": [{"source": "sha256:...", "target": "sha256:...", "kind": "PROVIDES_TOOL", "properties": {...}}]
+    "nodes": [{"id": "sha256:...", "kinds": ["MCPServer"], "properties": {...}, "observation_domains": ["mcp:target:sha256:..."]}],
+    "edges": [{"source": "sha256:...", "target": "sha256:...", "kind": "PROVIDES_TOOL", "source_kind": "MCPServer", "target_kind": "MCPTool", "properties": {...}, "observation_domains": ["mcp:target:sha256:..."]}]
   }
 }
 ```
+
+Wire version `2` is strict: collection, ruleset, current identity metadata,
+explicit edge endpoint kinds, and per-fact observation domains are required.
+Ruleset digests identify effective text/fingerprint semantics but do not claim
+cryptographic authenticity.
 
 **Rules for module authors:**
 
 1. Only emit node kinds in `AllowedNodeKinds` and edge kinds in `RawEdgeKinds`
 2. Compute deterministic `id` values per the Node ID Strategy above
-3. Populate `value_hash` on all `Credential` nodes
-4. Set `source_kind` / `target_kind` on edges when the endpoint map has multiple valid sources/targets
-5. Use snake_case for all property keys (the normalizer converts camelCase, but emit clean data)
-6. Valid collectors: `mcp`, `a2a`, `config`, `scan`
+3. Populate `value_hash`, `merge_key`, `identity_basis`, `material_status`, and `exposure_status` on all `Credential` nodes
+4. Set `source_kind` / `target_kind` on every edge
+5. Tag every node and edge with one or more declared canonical `observation_domains`
+6. Use snake_case and canonical properties only; v1 aliases are rejected
+7. Valid collectors: `mcp`, `a2a`, `config`, `scan`

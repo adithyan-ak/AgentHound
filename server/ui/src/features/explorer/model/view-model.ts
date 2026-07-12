@@ -10,6 +10,10 @@ export interface ExplorerTotals {
   nodeCount: number;
   edgeCount: number;
   findingCount: number;
+  collectionComplete: boolean;
+  expectedNodeCount: number;
+  expectedEdgeCount: number;
+  incompleteReason?: string;
 }
 
 export interface RenderParams {
@@ -45,6 +49,10 @@ export function computeTotals(
     nodeCount: data?.nodes.length ?? 0,
     edgeCount: data?.edges.length ?? 0,
     findingCount: data?.findings.length ?? 0,
+    collectionComplete: data?.collection.complete ?? true,
+    expectedNodeCount: data?.collection.nodeTotal ?? data?.nodes.length ?? 0,
+    expectedEdgeCount: data?.collection.edgeTotal ?? data?.edges.length ?? 0,
+    incompleteReason: data?.collection.incompleteReason,
   };
 }
 
@@ -66,12 +74,13 @@ export function buildRenderGraph(
 
   const blastRadius =
     params.activeLens === "blast-radius" &&
-    params.blastData &&
     params.blastRadiusSourceId
       ? {
           sourceId: params.blastRadiusSourceId,
-          nodeIds: params.blastData.nodeIdSet,
-          edgeKeys: params.blastData.edgeKeySet,
+          nodeIds:
+            params.blastData?.nodeIdSet ??
+            new Set([params.blastRadiusSourceId]),
+          edgeKeys: params.blastData?.edgeKeySet ?? new Set<string>(),
         }
       : undefined;
 
@@ -107,12 +116,13 @@ export function buildLensMetrics(
 
   const blastRadius =
     params.activeLens === "blast-radius" &&
-    params.blastData &&
     params.blastRadiusSourceId
       ? {
           sourceId: params.blastRadiusSourceId,
-          nodeIds: params.blastData.nodeIdSet,
-          edgeKeys: params.blastData.edgeKeySet,
+          nodeIds:
+            params.blastData?.nodeIdSet ??
+            new Set([params.blastRadiusSourceId]),
+          edgeKeys: params.blastData?.edgeKeySet ?? new Set<string>(),
         }
       : undefined;
 

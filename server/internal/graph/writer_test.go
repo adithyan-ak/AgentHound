@@ -124,7 +124,7 @@ func TestWriteNodes_SingleNodeOneMerge(t *testing.T) {
 	nodes := []ingest.Node{
 		{ID: "abc", Kinds: []string{"MCPServer"}, Properties: map[string]any{"name": "s1"}},
 	}
-	n, err := w.WriteNodes(context.Background(), nodes, "scan-1")
+	n, err := w.WriteNodes(context.Background(), managedTestNodes(nodes), "scan-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestWriteNodes_BatchBoundary1500(t *testing.T) {
 		}
 	}
 
-	n, err := w.WriteNodes(context.Background(), nodes, "scan-1")
+	n, err := w.WriteNodes(context.Background(), managedTestNodes(nodes), "scan-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestWriteNodes_MixedKindsGroupedSeparately(t *testing.T) {
 		{ID: "a1", Kinds: []string{"A2AAgent"}},
 	}
 
-	if _, err := w.WriteNodes(context.Background(), nodes, "scan-1"); err != nil {
+	if _, err := w.WriteNodes(context.Background(), managedTestNodes(nodes), "scan-1"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -235,7 +235,7 @@ func TestWriteNodes_PropertiesPropagated(t *testing.T) {
 		},
 	}
 
-	if _, err := w.WriteNodes(context.Background(), nodes, "scan-1"); err != nil {
+	if _, err := w.WriteNodes(context.Background(), managedTestNodes(nodes), "scan-1"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -264,7 +264,7 @@ func TestWriteNodes_ErrorPropagatesNoPartialRecovery(t *testing.T) {
 	w := newTestWriter(rec.exec, false)
 
 	nodes := []ingest.Node{{ID: "x", Kinds: []string{"MCPServer"}}}
-	n, err := w.WriteNodes(context.Background(), nodes, "scan-1")
+	n, err := w.WriteNodes(context.Background(), managedTestNodes(nodes), "scan-1")
 
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -306,7 +306,7 @@ func TestWriteNodes_PartialBatchErrorReturnsCountSoFar(t *testing.T) {
 		}
 	}
 
-	n, err := w.WriteNodes(context.Background(), nodes, "scan-1")
+	n, err := w.WriteNodes(context.Background(), managedTestNodes(nodes), "scan-1")
 	if err == nil {
 		t.Fatal("expected error from second batch")
 	}
@@ -315,20 +315,31 @@ func TestWriteNodes_PartialBatchErrorReturnsCountSoFar(t *testing.T) {
 	}
 }
 
-func TestWriteNodes_NoKindsDefaultsToNodeLabel(t *testing.T) {
+func TestWriteNodes_RejectsMissingKinds(t *testing.T) {
 	rec := &recordedExec{}
 	w := newTestWriter(rec.exec, false)
 
 	nodes := []ingest.Node{
-		{ID: "x", Kinds: nil},
+		{ID: "x", Kinds: nil, ObservationDomains: []string{"test-domain"}},
 	}
-	if _, err := w.WriteNodes(context.Background(), nodes, "scan-1"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if _, err := w.WriteNodes(context.Background(), nodes, "scan-1"); err == nil {
+		t.Fatal("expected missing kind to be rejected")
 	}
+	if calls := rec.snapshot(); len(calls) != 0 {
+		t.Fatalf("invalid node reached graph execution: %+v", calls)
+	}
+}
 
-	calls := rec.snapshot()
-	if len(calls) != 1 || !strings.Contains(calls[0].Cypher, "MERGE (n:Node {") {
-		t.Fatalf("expected default Node label MERGE; got %s", calls[0].Cypher)
+func TestWriteNodes_RejectsMissingObservationDomain(t *testing.T) {
+	rec := &recordedExec{}
+	w := newTestWriter(rec.exec, false)
+
+	nodes := []ingest.Node{{ID: "x", Kinds: []string{"MCPServer"}}}
+	if _, err := w.WriteNodes(context.Background(), nodes, "scan-1"); err == nil {
+		t.Fatal("expected missing observation domain to be rejected")
+	}
+	if calls := rec.snapshot(); len(calls) != 0 {
+		t.Fatalf("unowned node reached graph execution: %+v", calls)
 	}
 }
 
@@ -355,9 +366,12 @@ func TestWriteEdges_SingleEdgeOneMerge_Fallback(t *testing.T) {
 	w := newTestWriter(rec.exec, false)
 
 	edges := []ingest.Edge{
-		{Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL"},
+		{
+			Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL",
+			SourceKind: "MCPServer", TargetKind: "MCPTool",
+		},
 	}
-	n, err := w.WriteEdges(context.Background(), edges, "scan-1")
+	n, err := w.WriteEdges(context.Background(), managedTestEdges(edges), "scan-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -372,9 +386,8 @@ func TestWriteEdges_SingleEdgeOneMerge_Fallback(t *testing.T) {
 	if !strings.Contains(calls[0].Cypher, "MERGE (a)-[r:PROVIDES_TOOL]->(b)") {
 		t.Errorf("expected fallback MERGE for PROVIDES_TOOL; got: %s", calls[0].Cypher)
 	}
-	// Endpoint resolution from registry: PROVIDES_TOOL is MCPServer -> MCPTool
 	if !strings.Contains(calls[0].Cypher, "MATCH (a:MCPServer {objectid: edge.source})") {
-		t.Errorf("expected MCPServer source label from registry; got: %s", calls[0].Cypher)
+		t.Errorf("expected explicit MCPServer source label; got: %s", calls[0].Cypher)
 	}
 }
 
@@ -383,9 +396,12 @@ func TestWriteEdges_SingleEdge_APOC(t *testing.T) {
 	w := newTestWriter(rec.exec, true)
 
 	edges := []ingest.Edge{
-		{Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL"},
+		{
+			Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL",
+			SourceKind: "MCPServer", TargetKind: "MCPTool",
+		},
 	}
-	if _, err := w.WriteEdges(context.Background(), edges, "scan-1"); err != nil {
+	if _, err := w.WriteEdges(context.Background(), managedTestEdges(edges), "scan-1"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -395,6 +411,12 @@ func TestWriteEdges_SingleEdge_APOC(t *testing.T) {
 	}
 	if !strings.Contains(calls[0].Cypher, "apoc.merge.relationship(a, $kind") {
 		t.Errorf("APOC mode should call apoc.merge.relationship; got: %s", calls[0].Cypher)
+	}
+	if strings.Contains(calls[0].Cypher, "b, edge.properties)") {
+		t.Fatal("APOC merge bypasses managed property-completeness checks")
+	}
+	if !strings.Contains(calls[0].Cypher, "rel.observation_properties_complete") {
+		t.Fatal("APOC merge does not track managed property completeness")
 	}
 	if calls[0].Params["kind"] != "PROVIDES_TOOL" {
 		t.Errorf("expected kind=PROVIDES_TOOL param, got %v", calls[0].Params["kind"])
@@ -408,13 +430,15 @@ func TestWriteEdges_BatchBoundary2500(t *testing.T) {
 	edges := make([]ingest.Edge, 2500)
 	for i := range edges {
 		edges[i] = ingest.Edge{
-			Source: "s-" + intToStr(i),
-			Target: "t-" + intToStr(i),
-			Kind:   "PROVIDES_TOOL",
+			Source:     "s-" + intToStr(i),
+			Target:     "t-" + intToStr(i),
+			Kind:       "PROVIDES_TOOL",
+			SourceKind: "MCPServer",
+			TargetKind: "MCPTool",
 		}
 	}
 
-	n, err := w.WriteEdges(context.Background(), edges, "scan-1")
+	n, err := w.WriteEdges(context.Background(), managedTestEdges(edges), "scan-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -441,19 +465,26 @@ func TestWriteEdges_APOCAndFallbackProduceSameWrites(t *testing.T) {
 	// Both paths group edges identically. The shape of the recorded
 	// calls (param keys, edges payload, scan_id) should match.
 	edges := []ingest.Edge{
-		{Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL", Properties: map[string]any{"k": "v"}},
-		{Source: "s2", Target: "t2", Kind: "PROVIDES_TOOL"},
+		{
+			Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL",
+			SourceKind: "MCPServer", TargetKind: "MCPTool",
+			Properties: map[string]any{"k": "v"},
+		},
+		{
+			Source: "s2", Target: "t2", Kind: "PROVIDES_TOOL",
+			SourceKind: "MCPServer", TargetKind: "MCPTool",
+		},
 	}
 
 	apocRec := &recordedExec{}
 	apocW := newTestWriter(apocRec.exec, true)
-	if _, err := apocW.WriteEdges(context.Background(), edges, "scan-1"); err != nil {
+	if _, err := apocW.WriteEdges(context.Background(), managedTestEdges(edges), "scan-1"); err != nil {
 		t.Fatalf("apoc: %v", err)
 	}
 
 	fbRec := &recordedExec{}
 	fbW := newTestWriter(fbRec.exec, false)
-	if _, err := fbW.WriteEdges(context.Background(), edges, "scan-1"); err != nil {
+	if _, err := fbW.WriteEdges(context.Background(), managedTestEdges(edges), "scan-1"); err != nil {
 		t.Fatalf("fallback: %v", err)
 	}
 
@@ -482,7 +513,7 @@ func TestWriteEdges_APOCAndFallbackProduceSameWrites(t *testing.T) {
 	}
 }
 
-func TestWriteEdges_ExplicitKindsOverrideRegistry(t *testing.T) {
+func TestWriteEdges_RejectsUnknownRawKind(t *testing.T) {
 	rec := &recordedExec{}
 	w := newTestWriter(rec.exec, false)
 
@@ -490,58 +521,124 @@ func TestWriteEdges_ExplicitKindsOverrideRegistry(t *testing.T) {
 		{Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL", SourceKind: "CustomSource", TargetKind: "CustomTarget"},
 	}
 
-	if _, err := w.WriteEdges(context.Background(), edges, "scan-1"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if _, err := w.WriteEdges(context.Background(), managedTestEdges(edges), "scan-1"); err == nil {
+		t.Fatal("expected unknown raw kind to be rejected")
 	}
-	calls := rec.snapshot()
-	if !strings.Contains(calls[0].Cypher, "MATCH (a:CustomSource") {
-		t.Errorf("explicit SourceKind should override registry; got: %s", calls[0].Cypher)
-	}
-	if !strings.Contains(calls[0].Cypher, "MATCH (b:CustomTarget") {
-		t.Errorf("explicit TargetKind should override registry; got: %s", calls[0].Cypher)
+	if calls := rec.snapshot(); len(calls) != 0 {
+		t.Fatalf("invalid edge reached graph execution: %+v", calls)
 	}
 }
 
-func TestWriteEdges_RegistryFallbackForMissingKinds(t *testing.T) {
-	// Edge with no explicit kinds; registry must supply PROVIDES_TOOL =
-	// MCPServer -> MCPTool.
+func TestWriterRejectsMissingExplicitEndpointKinds(t *testing.T) {
 	rec := &recordedExec{}
 	w := newTestWriter(rec.exec, false)
 
 	edges := []ingest.Edge{
 		{Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL"},
 	}
-	if _, err := w.WriteEdges(context.Background(), edges, "scan-1"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if _, err := w.WriteEdges(context.Background(), edges, "scan-1"); err == nil {
+		t.Fatal("expected missing endpoint kinds to be rejected")
 	}
-	calls := rec.snapshot()
-	if !strings.Contains(calls[0].Cypher, "MATCH (a:MCPServer") {
-		t.Errorf("registry should resolve source to MCPServer; got: %s", calls[0].Cypher)
-	}
-	if !strings.Contains(calls[0].Cypher, "MATCH (b:MCPTool") {
-		t.Errorf("registry should resolve target to MCPTool; got: %s", calls[0].Cypher)
+	if calls := rec.snapshot(); len(calls) != 0 {
+		t.Fatalf("invalid edge reached graph execution: %+v", calls)
 	}
 }
 
-func TestWriteEdges_UnknownKindNoLabels(t *testing.T) {
-	// Unknown edge kind without explicit kinds: no labels in MATCH, just
-	// objectid lookup. The Writer still emits the cypher — driver-side
-	// the MATCH may find nothing, but that is not the Writer's concern.
+func TestWriteEdges_RejectsUnownedRawEdge(t *testing.T) {
+	rec := &recordedExec{}
+	w := newTestWriter(rec.exec, false)
+
+	edges := []ingest.Edge{{
+		Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL",
+		SourceKind: "MCPServer", TargetKind: "MCPTool",
+	}}
+	if _, err := w.WriteEdges(context.Background(), edges, "scan-1"); err == nil {
+		t.Fatal("expected unowned raw edge to be rejected")
+	}
+	if calls := rec.snapshot(); len(calls) != 0 {
+		t.Fatalf("unowned edge reached graph execution: %+v", calls)
+	}
+}
+
+func TestWriteEdges_RejectsCompositeCompatibilityBypass(t *testing.T) {
+	rec := &recordedExec{}
+	w := newTestWriter(rec.exec, false)
+	edge := ingest.Edge{
+		Source: "agent", Target: "resource", Kind: "CAN_REACH",
+		SourceKind: "AgentInstance", TargetKind: "MCPResource",
+		Properties: map[string]any{"is_composite": true},
+	}
+
+	if _, err := w.WriteEdges(
+		context.Background(),
+		managedTestEdges([]ingest.Edge{edge}),
+		"scan-1",
+	); err == nil {
+		t.Fatal("generic WriteEdges accepted a composite edge")
+	}
+	if calls := rec.snapshot(); len(calls) != 0 {
+		t.Fatalf("composite bypass reached graph execution: %+v", calls)
+	}
+}
+
+func TestWriteEdges_RejectsRawKindMarkedComposite(t *testing.T) {
+	rec := &recordedExec{}
+	w := newTestWriter(rec.exec, false)
+	edge := ingest.Edge{
+		Source: "server", Target: "tool", Kind: "PROVIDES_TOOL",
+		SourceKind: "MCPServer", TargetKind: "MCPTool",
+		Properties: map[string]any{"is_composite": true},
+	}
+
+	if _, err := w.WriteEdges(
+		context.Background(),
+		managedTestEdges([]ingest.Edge{edge}),
+		"scan-1",
+	); err == nil {
+		t.Fatal("generic WriteEdges accepted a raw edge marked composite")
+	}
+	if calls := rec.snapshot(); len(calls) != 0 {
+		t.Fatalf("raw/composite bypass reached graph execution: %+v", calls)
+	}
+}
+
+func TestWriteCompositeEdges_UsesExplicitPostprocessorPath(t *testing.T) {
+	rec := &recordedExec{}
+	w := newTestWriter(rec.exec, false)
+	edge := ingest.Edge{
+		Source: "agent", Target: "resource", Kind: "CAN_REACH",
+		SourceKind: "AgentInstance", TargetKind: "MCPResource",
+		Properties: map[string]any{"is_composite": true},
+	}
+
+	written, err := w.WriteCompositeEdges(
+		context.Background(),
+		[]ingest.Edge{edge},
+		"scan-1",
+	)
+	if err != nil {
+		t.Fatalf("WriteCompositeEdges: %v", err)
+	}
+	if written != 1 {
+		t.Fatalf("written = %d, want 1", written)
+	}
+}
+
+func TestWriteEdges_UnknownKindCannotBypassManagedRawValidation(t *testing.T) {
 	rec := &recordedExec{}
 	w := newTestWriter(rec.exec, false)
 
 	edges := []ingest.Edge{
-		{Source: "s1", Target: "t1", Kind: "UNKNOWN_KIND"},
+		{
+			Source: "s1", Target: "t1", Kind: "UNKNOWN_KIND",
+			SourceKind: "MCPServer", TargetKind: "MCPTool",
+		},
 	}
-	if _, err := w.WriteEdges(context.Background(), edges, "scan-1"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if _, err := w.WriteEdges(context.Background(), managedTestEdges(edges), "scan-1"); err == nil {
+		t.Fatal("expected unknown edge kind to be rejected")
 	}
-	calls := rec.snapshot()
-	if !strings.Contains(calls[0].Cypher, "MATCH (a {objectid: edge.source})") {
-		t.Errorf("unknown kind: expected unlabeled source MATCH; got: %s", calls[0].Cypher)
-	}
-	if !strings.Contains(calls[0].Cypher, "MERGE (a)-[r:UNKNOWN_KIND]->(b)") {
-		t.Errorf("expected MERGE with UNKNOWN_KIND; got: %s", calls[0].Cypher)
+	if calls := rec.snapshot(); len(calls) != 0 {
+		t.Fatalf("invalid edge reached graph execution: %+v", calls)
 	}
 }
 
@@ -552,6 +649,7 @@ func TestWriteEdges_PropertiesPropagated(t *testing.T) {
 	edges := []ingest.Edge{
 		{
 			Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL",
+			SourceKind: "MCPServer", TargetKind: "MCPTool",
 			Properties: map[string]any{
 				"scan_id":     "scan-1",
 				"last_seen":   "2026-01-01T00:00:00Z",
@@ -560,7 +658,7 @@ func TestWriteEdges_PropertiesPropagated(t *testing.T) {
 			},
 		},
 	}
-	if _, err := w.WriteEdges(context.Background(), edges, "scan-1"); err != nil {
+	if _, err := w.WriteEdges(context.Background(), managedTestEdges(edges), "scan-1"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -583,9 +681,12 @@ func TestWriteEdges_NilPropertiesBecomeEmptyMap(t *testing.T) {
 	w := newTestWriter(rec.exec, false)
 
 	edges := []ingest.Edge{
-		{Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL", Properties: nil},
+		{
+			Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL",
+			SourceKind: "MCPServer", TargetKind: "MCPTool", Properties: nil,
+		},
 	}
-	if _, err := w.WriteEdges(context.Background(), edges, "scan-1"); err != nil {
+	if _, err := w.WriteEdges(context.Background(), managedTestEdges(edges), "scan-1"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -604,9 +705,12 @@ func TestWriteEdges_ErrorPropagation_Fallback(t *testing.T) {
 	w := newTestWriter(rec.exec, false)
 
 	edges := []ingest.Edge{
-		{Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL"},
+		{
+			Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL",
+			SourceKind: "MCPServer", TargetKind: "MCPTool",
+		},
 	}
-	_, err := w.WriteEdges(context.Background(), edges, "scan-1")
+	_, err := w.WriteEdges(context.Background(), managedTestEdges(edges), "scan-1")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -626,9 +730,12 @@ func TestWriteEdges_ErrorPropagation_APOC(t *testing.T) {
 	w := newTestWriter(rec.exec, true)
 
 	edges := []ingest.Edge{
-		{Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL"},
+		{
+			Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL",
+			SourceKind: "MCPServer", TargetKind: "MCPTool",
+		},
 	}
-	_, err := w.WriteEdges(context.Background(), edges, "scan-1")
+	_, err := w.WriteEdges(context.Background(), managedTestEdges(edges), "scan-1")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -647,17 +754,161 @@ func TestWriteEdges_DifferentKindsDifferentBatches(t *testing.T) {
 	w := newTestWriter(rec.exec, false)
 
 	edges := []ingest.Edge{
-		{Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL"},
+		{
+			Source: "s1", Target: "t1", Kind: "PROVIDES_TOOL",
+			SourceKind: "MCPServer", TargetKind: "MCPTool",
+		},
 		{Source: "s2", Target: "h1", Kind: "RUNS_ON", SourceKind: "MCPServer", TargetKind: "Host"},
 		{Source: "a1", Target: "h1", Kind: "RUNS_ON", SourceKind: "A2AAgent", TargetKind: "Host"},
 	}
-	if _, err := w.WriteEdges(context.Background(), edges, "scan-1"); err != nil {
+	if _, err := w.WriteEdges(context.Background(), managedTestEdges(edges), "scan-1"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	calls := rec.snapshot()
 	if len(calls) != 3 {
 		t.Fatalf("expected 3 calls (3 distinct groups), got %d", len(calls))
+	}
+}
+
+func TestWriterCarriesObservationOwnershipWithoutTrustingReservedProperties(t *testing.T) {
+	nodeRecorder := &recordedExec{}
+	writer := newTestWriter(nodeRecorder.exec, false)
+	node := ingest.Node{
+		ID:                 "shared",
+		Kinds:              []string{"MCPServer"},
+		ObservationDomains: []string{"mcp", "config"},
+		Properties: map[string]any{
+			"name":               "shared",
+			"observation_tokens": []string{"attacker-controlled"},
+		},
+	}
+	if _, err := writer.WriteNodes(context.Background(), []ingest.Node{node}, "scan-1"); err != nil {
+		t.Fatalf("WriteNodes: %v", err)
+	}
+	nodeRow := rowsAt(t, nodeRecorder.snapshot()[0].Params, "nodes")[0]
+	tokens, _ := nodeRow["observation_tokens"].([]string)
+	wantTokens := []string{"config\x1fscan-1", "mcp\x1fscan-1"}
+	if len(tokens) != len(wantTokens) || tokens[0] != wantTokens[0] || tokens[1] != wantTokens[1] {
+		t.Fatalf("node tokens = %q, want %q", tokens, wantTokens)
+	}
+	props := propsAt(t, nodeRow, "properties")
+	for _, reserved := range []string{
+		"observation_tokens",
+		"observation_properties_complete",
+	} {
+		if _, exists := props[reserved]; exists {
+			t.Fatalf("reserved property %q was accepted from artifact", reserved)
+		}
+	}
+	if strings.Contains(nodeRecorder.snapshot()[0].Cypher, "legacy_observation") ||
+		strings.Contains(nodeRecorder.snapshot()[0].Cypher, "observation_managed") {
+		t.Fatal("node merge retained removed unmanaged-observation state")
+	}
+
+	edgeRecorder := &recordedExec{}
+	writer = newTestWriter(edgeRecorder.exec, false)
+	edge := ingest.Edge{
+		Source:             "s",
+		Target:             "t",
+		Kind:               "PROVIDES_TOOL",
+		SourceKind:         "MCPServer",
+		TargetKind:         "MCPTool",
+		ObservationDomains: []string{"mcp"},
+	}
+	if _, err := writer.WriteEdges(context.Background(), []ingest.Edge{edge}, "scan-1"); err != nil {
+		t.Fatalf("WriteEdges: %v", err)
+	}
+	edgeRow := rowsAt(t, edgeRecorder.snapshot()[0].Params, "edges")[0]
+	edgeTokens, _ := edgeRow["observation_tokens"].([]string)
+	if len(edgeTokens) != 1 || edgeTokens[0] != "mcp\x1fscan-1" {
+		t.Fatalf("edge tokens = %q, want mcp ownership", edgeTokens)
+	}
+}
+
+func TestWriterStoresAllDependencyTokensSeparately(t *testing.T) {
+	recorder := &recordedExec{}
+	writer := newTestWriter(recorder.exec, false)
+	edge := ingest.Edge{
+		Source:               "a",
+		Target:               "b",
+		Kind:                 "DELEGATES_TO",
+		SourceKind:           "A2AAgent",
+		TargetKind:           "A2AAgent",
+		ObservationDomains:   []string{"a2a:target:a", "a2a:target:b"},
+		ObservationSemantics: ingest.ObservationSemanticsAllDependencies,
+	}
+	if _, err := writer.WriteEdges(
+		context.Background(),
+		[]ingest.Edge{edge},
+		"scan-1",
+	); err != nil {
+		t.Fatalf("WriteEdges: %v", err)
+	}
+
+	call := recorder.snapshot()[0]
+	row := rowsAt(t, call.Params, "edges")[0]
+	tokens, _ := row["observation_tokens"].([]string)
+	if len(tokens) != 0 {
+		t.Fatalf("ordinary owner tokens = %q, want none", tokens)
+	}
+	dependencies, _ := row["observation_dependency_tokens"].([]string)
+	want := []string{"a2a:target:a\x1fscan-1", "a2a:target:b\x1fscan-1"}
+	if len(dependencies) != len(want) ||
+		dependencies[0] != want[0] ||
+		dependencies[1] != want[1] {
+		t.Fatalf("dependency tokens = %q, want %q", dependencies, want)
+	}
+	if row["observation_semantics"] != string(ingest.ObservationSemanticsAllDependencies) {
+		t.Fatalf("observation semantics = %v", row["observation_semantics"])
+	}
+	for _, fragment := range []string{
+		"old_dependency_tokens",
+		"r.observation_dependency_tokens",
+	} {
+		if !strings.Contains(call.Cypher, fragment) {
+			t.Fatalf("dependency merge query missing %q:\n%s", fragment, call.Cypher)
+		}
+	}
+}
+
+func TestCompleteObservationReplacesManagedProperties(t *testing.T) {
+	scope := "mcp:target:sha256:server-a"
+	recorder := &recordedExec{}
+	writer := newTestWriter(recorder.exec, false)
+	node := ingest.Node{
+		ID:                 "server-a",
+		Kinds:              []string{"MCPServer"},
+		ObservationDomains: []string{scope},
+		Properties:         map[string]any{"name": "fresh"},
+	}
+
+	if _, err := writer.WriteObservationNodes(
+		context.Background(),
+		[]ingest.Node{node},
+		"scan-current",
+		[]string{scope},
+	); err != nil {
+		t.Fatalf("WriteObservationNodes: %v", err)
+	}
+	call := recorder.snapshot()[0]
+	row := rowsAt(t, call.Params, "nodes")[0]
+	prefixes, _ := row["complete_domain_prefixes"].([]string)
+	if want := scope + "\x1f"; len(prefixes) != 1 || prefixes[0] != want {
+		t.Fatalf("complete prefixes = %q, want [%q]", prefixes, want)
+	}
+	for _, fragment := range []string{
+		"SET n = node.properties",
+		"NOT observation_created AND NOT replace_properties",
+		"n.observation_properties_complete",
+		"CASE WHEN replace_properties THEN [1] ELSE [] END | REMOVE n:AIService",
+	} {
+		if !strings.Contains(call.Cypher, fragment) {
+			t.Fatalf("managed replacement query missing %q:\n%s", fragment, call.Cypher)
+		}
+	}
+	if strings.Contains(call.Cypher, "REMOVE n:SchemaVersion") {
+		t.Fatal("managed replacement removes internal labels")
 	}
 }
 
@@ -683,4 +934,24 @@ func intToStr(i int) string {
 		buf[pos] = '-'
 	}
 	return string(buf[pos:])
+}
+
+func managedTestNodes(nodes []ingest.Node) []ingest.Node {
+	result := append([]ingest.Node(nil), nodes...)
+	for i := range result {
+		if len(result[i].ObservationDomains) == 0 {
+			result[i].ObservationDomains = []string{"test-domain"}
+		}
+	}
+	return result
+}
+
+func managedTestEdges(edges []ingest.Edge) []ingest.Edge {
+	result := append([]ingest.Edge(nil), edges...)
+	for i := range result {
+		if len(result[i].ObservationDomains) == 0 {
+			result[i].ObservationDomains = []string{"test-domain"}
+		}
+	}
+	return result
 }

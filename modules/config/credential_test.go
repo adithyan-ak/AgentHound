@@ -73,6 +73,10 @@ func TestExtractCredentials_Headers(t *testing.T) {
 			if c.Value != "Bearer ghp_abc123def456" {
 				t.Error("expected raw value when includeValues=true")
 			}
+			if c.AuthMethod != common.AuthBearer || c.Location != "header" {
+				t.Errorf("authorization evidence = method %q location %q, want bearer/header",
+					c.AuthMethod, c.Location)
+			}
 		}
 	}
 	if !found {
@@ -182,6 +186,11 @@ func TestExtractCredentials_EnvRefNotExposed(t *testing.T) {
 	if creds[0].IsExposed {
 		t.Error("envVar ref should not be exposed")
 	}
+	if creds[0].MaterialStatus != common.CredentialMaterialUnobserved ||
+		creds[0].ExposureStatus != common.CredentialExposureNotObserved {
+		t.Errorf("env ref evidence = material %q exposure %q",
+			creds[0].MaterialStatus, creds[0].ExposureStatus)
+	}
 }
 
 func TestExtractCredentials_VaultRefNotExposed(t *testing.T) {
@@ -199,6 +208,32 @@ func TestExtractCredentials_VaultRefNotExposed(t *testing.T) {
 	}
 	if creds[0].IsExposed {
 		t.Error("vaultRef should not be exposed")
+	}
+}
+
+func TestExtractCredentials_AuthSchemes(t *testing.T) {
+	engine := testCredEngine(t)
+	tests := []struct {
+		name   string
+		env    map[string]string
+		head   map[string]string
+		method common.AuthMethod
+	}{
+		{"x api key", nil, map[string]string{"X-API-Key": "secret-value"}, common.AuthAPIKey},
+		{"basic", nil, map[string]string{"Authorization": "Basic dXNlcjpwYXNz"}, common.AuthBasic},
+		{"custom authorization", nil, map[string]string{"Authorization": "Token abcdefgh"}, common.AuthCustom},
+		{"oauth env", map[string]string{"OAUTH_CLIENT_ID": "client-id"}, nil, common.AuthOAuth},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			creds := ExtractCredentials(tt.env, tt.head, "test", false, engine)
+			if len(creds) != 1 {
+				t.Fatalf("credentials = %d, want 1: %+v", len(creds), creds)
+			}
+			if creds[0].AuthMethod != tt.method {
+				t.Fatalf("auth method = %q, want %q", creds[0].AuthMethod, tt.method)
+			}
+		})
 	}
 }
 

@@ -3,6 +3,7 @@ package rules
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -156,12 +157,15 @@ emit:
 		t.Fatal(err)
 	}
 
-	rules, err := loadCustomRules(dir)
+	rules, failures, err := loadCustomRulesWithFailures(dir)
 	if err != nil {
-		t.Fatalf("loadCustomRules: %v", err)
+		t.Fatalf("loadCustomRulesWithFailures: %v", err)
 	}
 	if len(rules) != 1 {
 		t.Errorf("expected 1 rule (bad yaml skipped), got %d", len(rules))
+	}
+	if len(failures) != 1 || !strings.Contains(failures[0], "bad.yaml") {
+		t.Fatalf("skipped-rule failures = %v", failures)
 	}
 }
 

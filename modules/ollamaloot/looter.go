@@ -126,6 +126,10 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 			"discovered_via":    "ollama_loot",
 			"service_kind":      "ollama",
 			"auth_method":       "none",
+			"auth_assurance":    string(common.AuthAssuranceUnauthenticated),
+			"auth_evidence":     common.AuthEvidenceAnonymousProbeSucceeded,
+			"probe_status":      string(common.VerificationVerified),
+			"last_verified_at":  time.Now().UTC().Format(time.RFC3339),
 			"is_anonymous_loot": "true",
 		},
 	})
@@ -170,14 +174,8 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 			"size_bytes":     tag.Size,
 			"family":         show.Family,
 			"parameter_size": show.Parameters, // canonical Ollama Details.ParameterSize
-			// TODO(v0.5): drop the "parameters" alias below; downstream
-			// graph consumers migrate to "parameter_size" per
-			// docs/reference/graph-model.md. Dual-emitted for one
-			// release cycle to avoid breaking external UI/query
-			// consumers.
-			"parameters":  show.Parameters,
-			"is_finetune": show.IsFinetune,
-			"modified_at": tag.ModifiedAt,
+			"is_finetune":    show.IsFinetune,
+			"modified_at":    tag.ModifiedAt,
 		}
 		if show.Modelfile != "" {
 			// value_hash is the cross-collector merge primitive. A leaked

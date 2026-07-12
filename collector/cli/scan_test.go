@@ -2,13 +2,16 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/collector/internal/clientcfg"
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
+	"github.com/adithyan-ak/agenthound/sdk/rules"
 	"github.com/spf13/cobra"
 )
 
@@ -57,6 +60,126 @@ func TestRunScan_A2ANoTarget(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "A2A requires") {
 		t.Errorf("error = %q, want 'A2A requires'", err.Error())
+	}
+}
+
+func TestRootedCollectionReportStableAcrossScanIDs(t *testing.T) {
+	targetKey := ingest.CanonicalCoverageKey("mcp", "target", "https://mcp.example")
+	newScan := func(scanID string) *ingest.IngestData {
+		data := common.NewIngestData("mcp", scanID)
+		data.Meta.Collection = &ingest.CollectionReport{
+			State:        ingest.OutcomeComplete,
+			CoverageKeys: []string{targetKey},
+			Outcomes: []ingest.CollectionOutcome{{
+				Collector:   "mcp",
+				CoverageKey: targetKey,
+				Target:      "https://mcp.example",
+				Method:      "enumerate",
+				State:       ingest.OutcomeComplete,
+				Items:       1,
+			}},
+		}
+		data.Graph.Nodes = []ingest.Node{{
+			ID:                 "mcp-server",
+			Kinds:              []string{"MCPServer"},
+			ObservationDomains: []string{targetKey},
+		}}
+		return data
+	}
+
+	first := newScan("scan-one")
+	second := newScan("scan-two")
+	firstReport := rootedCollectionReport("mcp", first.Meta.Collection, true)
+	secondReport := rootedCollectionReport("mcp", second.Meta.Collection, true)
+	rootKey := collectorRootCoverageKey("mcp")
+	wantRootKey := ingest.CanonicalCoverageKey("mcp", "root", "collect")
+
+	if rootKey != wantRootKey {
+		t.Fatalf("collector root key = %q, want %q", rootKey, wantRootKey)
+	}
+	for scanID, report := range map[string]*ingest.CollectionReport{
+		first.Meta.ScanID:  firstReport,
+		second.Meta.ScanID: secondReport,
+	} {
+		states := ingest.CoverageStates(report)
+		if states[rootKey] != ingest.OutcomeComplete {
+			t.Fatalf("scan %s root state = %q, want complete", scanID, states[rootKey])
+		}
+		if states[targetKey] != ingest.OutcomeComplete {
+			t.Fatalf("scan %s target state = %q, want complete", scanID, states[targetKey])
+		}
+	}
+	if firstReport.CoverageKeys[0] != secondReport.CoverageKeys[0] {
+		t.Fatalf(
+			"collector root changed across scan IDs: %v != %v",
+			firstReport.CoverageKeys,
+			secondReport.CoverageKeys,
+		)
+	}
+	if len(firstReport.AuthoritativeRoots) != 1 ||
+		firstReport.AuthoritativeRoots[0].CoverageKey != rootKey ||
+		len(firstReport.AuthoritativeRoots[0].ChildCoverageKeys) != 1 ||
+		firstReport.AuthoritativeRoots[0].ChildCoverageKeys[0] != targetKey {
+		t.Fatalf("authoritative root = %+v, want root with target child", firstReport.AuthoritativeRoots)
+	}
+	for _, data := range []*ingest.IngestData{first, second} {
+		if got := data.Graph.Nodes[0].ObservationDomains; len(got) != 1 || got[0] != targetKey {
+			t.Fatalf("scan %s fact ownership = %v, want [%s]", data.Meta.ScanID, got, targetKey)
+		}
+	}
+}
+
+func TestRootedCollectionReportPreservesPartialAttempt(t *testing.T) {
+	targetKey := ingest.CanonicalCoverageKey("mcp", "target", "https://mcp.example")
+	report := rootedCollectionReport("mcp", &ingest.CollectionReport{
+		State:        ingest.OutcomePartial,
+		CoverageKeys: []string{targetKey},
+		Outcomes: []ingest.CollectionOutcome{{
+			Collector:   "mcp",
+			CoverageKey: targetKey,
+			State:       ingest.OutcomeFailed,
+		}},
+	}, true)
+
+	states := ingest.CoverageStates(report)
+	if states[collectorRootCoverageKey("mcp")] != ingest.OutcomePartial {
+		t.Fatalf("root states = %v, want partial MCP root", states)
+	}
+	if roots := ingest.CompleteAuthoritativeRoots(report); len(roots) != 0 {
+		t.Fatalf("partial run became authoritative: %+v", roots)
+	}
+}
+
+func TestRootedCollectionReportTargetedRunIsNotAuthoritative(t *testing.T) {
+	targetKey := ingest.CanonicalCoverageKey("mcp", "target", "https://mcp.example")
+	report := rootedCollectionReport("mcp", &ingest.CollectionReport{
+		State:        ingest.OutcomeComplete,
+		CoverageKeys: []string{targetKey},
+		Outcomes: []ingest.CollectionOutcome{{
+			Collector:   "mcp",
+			CoverageKey: targetKey,
+			State:       ingest.OutcomeComplete,
+		}},
+	}, false)
+
+	if len(report.AuthoritativeRoots) != 0 {
+		t.Fatalf("targeted run declared authoritative roots: %+v", report.AuthoritativeRoots)
+	}
+}
+
+func TestFailedCollectionReportUsesCollectorRoot(t *testing.T) {
+	report := failedCollectionReport("mcp", errors.New("collector failed"))
+	rootKey := collectorRootCoverageKey("mcp")
+
+	if len(report.CoverageKeys) != 1 || report.CoverageKeys[0] != rootKey {
+		t.Fatalf("failed coverage keys = %v, want [%s]", report.CoverageKeys, rootKey)
+	}
+	states := ingest.CoverageStates(report)
+	if states[rootKey] != ingest.OutcomeFailed {
+		t.Fatalf("failed root states = %v, want failed MCP root", states)
+	}
+	if got := report.Outcomes[0].Error; got != "collector failed" {
+		t.Fatalf("failed root error = %q, want collector failed", got)
 	}
 }
 
@@ -120,6 +243,19 @@ func TestRunScan_DefaultOutputCWD(t *testing.T) {
 	if got.Meta.Collector != "scan" {
 		t.Errorf("meta.collector = %q, want scan", got.Meta.Collector)
 	}
+	if got.Meta.Version != ingest.CurrentVersion {
+		t.Errorf("meta.version = %d, want strict version %d", got.Meta.Version, ingest.CurrentVersion)
+	}
+	if got.Meta.Collection == nil || got.Meta.Collection.State != ingest.OutcomeComplete {
+		t.Errorf("complete-empty config coverage lost: %+v", got.Meta.Collection)
+	}
+	if got.Meta.Ruleset == nil || got.Meta.Ruleset.Digest == "" ||
+		len(got.Meta.Ruleset.Entries) == 0 {
+		t.Errorf("effective rules manifest missing: %+v", got.Meta.Ruleset)
+	}
+	if got.Graph.Nodes == nil || got.Graph.Edges == nil {
+		t.Fatalf("complete-empty graph serialized null collections: %+v", got.Graph)
+	}
 }
 
 // TestRunScan_HonoursAgentHoundOutputEnv verifies that runScan resolves
@@ -162,6 +298,65 @@ func TestRunScan_HonoursAgentHoundOutputEnv(t *testing.T) {
 	}
 	if got.Meta.Type != "agenthound-ingest" {
 		t.Errorf("meta.type = %q, want agenthound-ingest", got.Meta.Type)
+	}
+}
+
+func TestLoadEffectiveRulesPersistsMatchersAndLoadFailures(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AGENTHOUND_RULES_DIR", dir)
+	rules.SetBundleOverridePath("")
+	defer rules.SetBundleOverridePath("")
+	if err := os.WriteFile(
+		filepath.Join(dir, "broken.yaml"),
+		[]byte("{{not yaml"),
+		0o600,
+	); err != nil {
+		t.Fatalf("write broken rule: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(dir, "valid.yaml"),
+		[]byte(`
+id: collector-custom-rule
+name: Collector custom rule
+version: 4
+severity: medium
+scope:
+  collector: mcp
+  targets: [tool.description]
+matcher:
+  type: keyword
+  keywords: [collector-custom]
+emit:
+  finding_type: custom
+`),
+		0o600,
+	); err != nil {
+		t.Fatalf("write valid rule: %v", err)
+	}
+
+	engine, manifest := loadEffectiveRules()
+	if engine == nil {
+		t.Fatal("effective rules engine is nil")
+	}
+	if manifest.LoadState != ingest.OutcomePartial ||
+		manifest.Authenticity != "unverified" ||
+		len(manifest.Errors) == 0 ||
+		!strings.Contains(strings.Join(manifest.Errors, "\n"), "broken.yaml") {
+		t.Fatalf("effective rules manifest = %+v", manifest)
+	}
+	var found bool
+	for _, entry := range manifest.Entries {
+		if entry.ID != "collector-custom-rule" {
+			continue
+		}
+		found = entry.Version == 4 &&
+			strings.Contains(
+				string(entry.EffectiveMatcher),
+				`"keywords":["collector-custom"]`,
+			)
+	}
+	if !found {
+		t.Fatalf("custom effective matcher absent: %+v", manifest.Entries)
 	}
 }
 

@@ -1,11 +1,36 @@
 {
   "meta": {
-    "version": 1,
+    "version": 2,
     "type": "agenthound-ingest",
-    "collector": "config",
+    "collector": "scan",
     "collector_version": "0.1.0",
     "timestamp": "2026-04-07T12:00:00Z",
-    "scan_id": "scan-merged-001"
+    "scan_id": "scan-merged-001",
+    "collection": {
+      "state": "complete",
+      "coverage_keys": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"],
+      "outcomes": [{
+        "collector": "scan",
+        "coverage_key": "scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d",
+        "target": "merged-scan",
+        "method": "fixture",
+        "state": "complete",
+        "items": 16
+      }]
+    },
+    "ruleset": {
+      "digest": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e64a8f8bff093b2f5f2cf4e",
+      "entries": [],
+      "load_state": "complete",
+      "errors": [],
+      "authenticity": "unverified"
+    },
+    "identity_schemes": [{
+      "entity_kind": "MCPServer",
+      "transport": "stdio",
+      "scheme": "mcp_stdio_v2_ordered",
+      "version": 2
+    }]
   },
   "graph": {
     "nodes": [
@@ -17,7 +42,8 @@
           "client": "claude-desktop",
           "server_count": 2,
           "objectid": "sha256:55ded6ce9a6992962ab8989d228fccd4a1ba9d2c8bf241bec3c5f8e9523f5397"
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
         "id": "sha256:55555669cfdb8a62247a7d5b857df9dfbac760df7330fdf454b07e422ea384d4",
@@ -27,44 +53,58 @@
           "framework": "claude",
           "config_path": "/Users/dev/.config/claude/claude_desktop_config.json",
           "objectid": "sha256:55555669cfdb8a62247a7d5b857df9dfbac760df7330fdf454b07e422ea384d4"
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
-        "id": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "id": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
         "kinds": ["MCPServer"],
         "properties": {
           "name": "postgres-server",
           "endpoint": "npx",
           "transport": "stdio",
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-postgres"],
+          "id_scheme": "mcp_stdio_v2_ordered",
           "auth_method": "apiKey",
+          "auth_assurance": "weak",
+          "auth_evidence": "configured_credential",
           "protocol_version": "2025-03-26",
           "instructions": "PostgreSQL database access server",
           "capabilities": ["tools", "resources"],
           "is_pinned": false,
-          "objectid": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a"
-        }
+          "objectid": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6"
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
-        "id": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3",
+        "id": "sha256:564c3e9ef22e223e1530ecd9895e5f295dfa89ff080e7ad014d003dacbfb57dc",
         "kinds": ["MCPServer"],
         "properties": {
           "name": "slack-server",
           "endpoint": "npx",
           "transport": "stdio",
-          "auth_method": "none",
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-slack"],
+          "id_scheme": "mcp_stdio_v2_ordered",
+          "auth_method": "unknown",
+          "auth_assurance": "unknown",
+          "auth_evidence": "local_process",
           "is_pinned": false,
-          "objectid": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3"
-        }
+          "objectid": "sha256:564c3e9ef22e223e1530ecd9895e5f295dfa89ff080e7ad014d003dacbfb57dc"
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
-        "id": "sha256:54f40d14e157405da76434d4b84b46d25e0705309db224694439a463d1cb3867",
+        "id": "sha256:9c89f380dee67385c1a567e067f32a16db451bae2aa831957036955347773722",
         "kinds": ["Identity"],
         "properties": {
           "type": "apiKey",
           "scope": "postgres-access",
           "is_static": true,
-          "objectid": "sha256:54f40d14e157405da76434d4b84b46d25e0705309db224694439a463d1cb3867"
-        }
+          "objectid": "sha256:9c89f380dee67385c1a567e067f32a16db451bae2aa831957036955347773722"
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
         "id": "sha256:3911bb77e94767de23f943d45df97118c1ac33e0221194f6f433022d8dac22c7",
@@ -73,24 +113,28 @@
           "type": "envVar",
           "name": "POSTGRES_API_KEY",
           "source": "/Users/dev/.config/claude/claude_desktop_config.json",
-          "is_exposed": false,
           "high_entropy": true,
+          "value_hash": "sha256:3911bb77e94767de23f943d45df97118c1ac33e0221194f6f433022d8dac22c7",
+          "merge_key": "value_hash",
+          "identity_basis": "value_hash",
+          "material_status": "observed",
+          "exposure_status": "exposed",
           "objectid": "sha256:3911bb77e94767de23f943d45df97118c1ac33e0221194f6f433022d8dac22c7"
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
         "id": "sha256:e064ba278c66ee6985b52020aba0cd6fc426a8a1369191333fd6fdae688acd3a",
         "kinds": ["Host"],
         "properties": {
           "hostname": "localhost",
-          "is_local": true,
-          "is_private": true,
-          "is_public": false,
+          "scope": "local",
           "objectid": "sha256:e064ba278c66ee6985b52020aba0cd6fc426a8a1369191333fd6fdae688acd3a"
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
-        "id": "sha256:c7643babec3a0e4decac50b10f5ac55c447889fafa7111db7396ce9e84e798d1",
+        "id": "sha256:16b9d71dc29ae9b0a08dfce28111f94ac4822b9c332c1b098a69605a61280075",
         "kinds": ["MCPTool"],
         "properties": {
           "name": "execute_sql",
@@ -100,11 +144,12 @@
           "capability_surface": ["database_access"],
           "has_injection_patterns": false,
           "has_cross_references": false,
-          "objectid": "sha256:c7643babec3a0e4decac50b10f5ac55c447889fafa7111db7396ce9e84e798d1"
-        }
+          "objectid": "sha256:16b9d71dc29ae9b0a08dfce28111f94ac4822b9c332c1b098a69605a61280075"
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
-        "id": "sha256:c92f8070b897a5dfd92b63ccf36bf5a7354bf28f8f8a2fadcf58b3ebbe163838",
+        "id": "sha256:7fbf3d2d2ff3008740aa14503eee760b91bc7f970a3aa359db64b4c5e6b8d8ce",
         "kinds": ["MCPTool"],
         "properties": {
           "name": "list_tables",
@@ -114,11 +159,12 @@
           "capability_surface": ["database_access"],
           "has_injection_patterns": false,
           "has_cross_references": false,
-          "objectid": "sha256:c92f8070b897a5dfd92b63ccf36bf5a7354bf28f8f8a2fadcf58b3ebbe163838"
-        }
+          "objectid": "sha256:7fbf3d2d2ff3008740aa14503eee760b91bc7f970a3aa359db64b4c5e6b8d8ce"
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
-        "id": "sha256:7d2feed0e1c6dac8d78d92959042d1d2ebfc53f95c74dc7ea301c19eabc804f3",
+        "id": "sha256:b74d2e60ab7e435347f18e509af1912ec57a5f9c87e3dfad16b34e6955b19c09",
         "kinds": ["MCPTool"],
         "properties": {
           "name": "get_schema",
@@ -128,11 +174,12 @@
           "capability_surface": ["database_access"],
           "has_injection_patterns": false,
           "has_cross_references": false,
-          "objectid": "sha256:7d2feed0e1c6dac8d78d92959042d1d2ebfc53f95c74dc7ea301c19eabc804f3"
-        }
+          "objectid": "sha256:b74d2e60ab7e435347f18e509af1912ec57a5f9c87e3dfad16b34e6955b19c09"
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
-        "id": "sha256:c09c8a9fc626c6441d26f56147c073d644d38a12931bdd4cd524fe6ef647af55",
+        "id": "sha256:fa81d5d056e9c410b7d7a181192e7c554afeb3506cfb3d45c536f529eead9004",
         "kinds": ["MCPResource"],
         "properties": {
           "uri": "postgres://prod-db:5432/customers",
@@ -140,8 +187,9 @@
           "mime_type": "application/x-postgresql",
           "uri_scheme": "postgres",
           "sensitivity": "critical",
-          "objectid": "sha256:c09c8a9fc626c6441d26f56147c073d644d38a12931bdd4cd524fe6ef647af55"
-        }
+          "objectid": "sha256:fa81d5d056e9c410b7d7a181192e7c554afeb3506cfb3d45c536f529eead9004"
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
         "id": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1",
@@ -156,11 +204,14 @@
           "capabilities": ["streaming", "pushNotifications"],
           "security_schemes": ["apiKey"],
           "auth_method": "apiKey",
+          "auth_assurance": "weak",
+          "auth_evidence": "declared_security_scheme",
           "is_signed": true,
-          "signature_valid": true,
+          "signature_verification_status": "verified",
           "card_hash": "d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5",
           "objectid": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1"
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
         "id": "sha256:f29d41afd3993adb0740cf7f7c3f302033e31316c541d57c2b1d2254eb6fbc64",
@@ -175,11 +226,14 @@
           "capabilities": ["streaming"],
           "security_schemes": ["none"],
           "auth_method": "none",
+          "auth_assurance": "unauthenticated",
+          "auth_evidence": "anonymous_probe_succeeded",
           "is_signed": false,
-          "signature_valid": false,
+          "signature_verification_status": "unsigned",
           "card_hash": "e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6",
           "objectid": "sha256:f29d41afd3993adb0740cf7f7c3f302033e31316c541d57c2b1d2254eb6fbc64"
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
         "id": "sha256:71cb852609a93c46e4056ddcc5fa594a92973b1b40ef64acafb871bfb90cff44",
@@ -193,7 +247,8 @@
           "description_hash": "f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1",
           "has_injection_patterns": false,
           "objectid": "sha256:71cb852609a93c46e4056ddcc5fa594a92973b1b40ef64acafb871bfb90cff44"
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
         "id": "sha256:1ae605b1d92096ac3219d2d2fe89a4bc22c53f3afbf6c1f849e2b2a5ff4e1f01",
@@ -207,7 +262,8 @@
           "description_hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
           "has_injection_patterns": false,
           "objectid": "sha256:1ae605b1d92096ac3219d2d2fe89a4bc22c53f3afbf6c1f849e2b2a5ff4e1f01"
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
         "id": "sha256:bbbf6ea338f40203f99d7f2f980812a47d0b452e157dc2349e40e10a99383d8f",
@@ -221,201 +277,250 @@
           "description_hash": "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
           "has_injection_patterns": false,
           "objectid": "sha256:bbbf6ea338f40203f99d7f2f980812a47d0b452e157dc2349e40e10a99383d8f"
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       }
     ],
     "edges": [
       {
         "source": "sha256:55555669cfdb8a62247a7d5b857df9dfbac760df7330fdf454b07e422ea384d4",
-        "target": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "target": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
         "kind": "TRUSTS_SERVER",
+        "source_kind": "AgentInstance",
+        "target_kind": "MCPServer",
         "properties": {
           "scan_id": "scan-merged-001",
           "last_seen": "2026-04-07T12:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.3,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
         "source": "sha256:55555669cfdb8a62247a7d5b857df9dfbac760df7330fdf454b07e422ea384d4",
-        "target": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3",
+        "target": "sha256:564c3e9ef22e223e1530ecd9895e5f295dfa89ff080e7ad014d003dacbfb57dc",
         "kind": "TRUSTS_SERVER",
+        "source_kind": "AgentInstance",
+        "target_kind": "MCPServer",
         "properties": {
           "scan_id": "scan-merged-001",
           "last_seen": "2026-04-07T12:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.1,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
-        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "source": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
         "target": "sha256:55ded6ce9a6992962ab8989d228fccd4a1ba9d2c8bf241bec3c5f8e9523f5397",
         "kind": "CONFIGURED_IN",
+        "source_kind": "MCPServer",
+        "target_kind": "ConfigFile",
         "properties": {
           "scan_id": "scan-merged-001",
           "last_seen": "2026-04-07T12:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.0,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
-        "source": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3",
+        "source": "sha256:564c3e9ef22e223e1530ecd9895e5f295dfa89ff080e7ad014d003dacbfb57dc",
         "target": "sha256:55ded6ce9a6992962ab8989d228fccd4a1ba9d2c8bf241bec3c5f8e9523f5397",
         "kind": "CONFIGURED_IN",
+        "source_kind": "MCPServer",
+        "target_kind": "ConfigFile",
         "properties": {
           "scan_id": "scan-merged-001",
           "last_seen": "2026-04-07T12:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.0,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
-        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
-        "target": "sha256:54f40d14e157405da76434d4b84b46d25e0705309db224694439a463d1cb3867",
+        "source": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
+        "target": "sha256:9c89f380dee67385c1a567e067f32a16db451bae2aa831957036955347773722",
         "kind": "AUTHENTICATES_WITH",
+        "source_kind": "MCPServer",
+        "target_kind": "Identity",
         "properties": {
           "scan_id": "scan-merged-001",
           "last_seen": "2026-04-07T12:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.3,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
-        "source": "sha256:54f40d14e157405da76434d4b84b46d25e0705309db224694439a463d1cb3867",
+        "source": "sha256:9c89f380dee67385c1a567e067f32a16db451bae2aa831957036955347773722",
         "target": "sha256:3911bb77e94767de23f943d45df97118c1ac33e0221194f6f433022d8dac22c7",
         "kind": "USES_CREDENTIAL",
+        "source_kind": "Identity",
+        "target_kind": "Credential",
         "properties": {
           "scan_id": "scan-merged-001",
           "last_seen": "2026-04-07T12:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.5,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
-        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
+        "source": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
         "target": "sha256:e064ba278c66ee6985b52020aba0cd6fc426a8a1369191333fd6fdae688acd3a",
         "kind": "RUNS_ON",
+        "source_kind": "MCPServer",
+        "target_kind": "Host",
         "properties": {
           "scan_id": "scan-merged-001",
           "last_seen": "2026-04-07T12:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.0,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
-        "source": "sha256:b8002213e4c5bde2d71cef8f4e7b1222dfcc8b9c57461cfab3e7dd5b80692eb3",
+        "source": "sha256:564c3e9ef22e223e1530ecd9895e5f295dfa89ff080e7ad014d003dacbfb57dc",
         "target": "sha256:e064ba278c66ee6985b52020aba0cd6fc426a8a1369191333fd6fdae688acd3a",
         "kind": "RUNS_ON",
+        "source_kind": "MCPServer",
+        "target_kind": "Host",
         "properties": {
           "scan_id": "scan-merged-001",
           "last_seen": "2026-04-07T12:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.0,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
-        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
-        "target": "sha256:c7643babec3a0e4decac50b10f5ac55c447889fafa7111db7396ce9e84e798d1",
+        "source": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
+        "target": "sha256:16b9d71dc29ae9b0a08dfce28111f94ac4822b9c332c1b098a69605a61280075",
         "kind": "PROVIDES_TOOL",
+        "source_kind": "MCPServer",
+        "target_kind": "MCPTool",
         "properties": {
           "scan_id": "scan-merged-001",
           "last_seen": "2026-04-07T12:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.1,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
-        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
-        "target": "sha256:c92f8070b897a5dfd92b63ccf36bf5a7354bf28f8f8a2fadcf58b3ebbe163838",
+        "source": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
+        "target": "sha256:7fbf3d2d2ff3008740aa14503eee760b91bc7f970a3aa359db64b4c5e6b8d8ce",
         "kind": "PROVIDES_TOOL",
+        "source_kind": "MCPServer",
+        "target_kind": "MCPTool",
         "properties": {
           "scan_id": "scan-merged-001",
           "last_seen": "2026-04-07T12:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.1,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
-        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
-        "target": "sha256:7d2feed0e1c6dac8d78d92959042d1d2ebfc53f95c74dc7ea301c19eabc804f3",
+        "source": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
+        "target": "sha256:b74d2e60ab7e435347f18e509af1912ec57a5f9c87e3dfad16b34e6955b19c09",
         "kind": "PROVIDES_TOOL",
+        "source_kind": "MCPServer",
+        "target_kind": "MCPTool",
         "properties": {
           "scan_id": "scan-merged-001",
           "last_seen": "2026-04-07T12:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.1,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
-        "source": "sha256:b0e352f282eeb383a3c45015f78827ed9ba735f3636df9d24a5239e319aba46a",
-        "target": "sha256:c09c8a9fc626c6441d26f56147c073d644d38a12931bdd4cd524fe6ef647af55",
+        "source": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
+        "target": "sha256:fa81d5d056e9c410b7d7a181192e7c554afeb3506cfb3d45c536f529eead9004",
         "kind": "PROVIDES_RESOURCE",
+        "source_kind": "MCPServer",
+        "target_kind": "MCPResource",
         "properties": {
           "scan_id": "scan-merged-001",
           "last_seen": "2026-04-07T12:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.2,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
         "source": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1",
         "target": "sha256:71cb852609a93c46e4056ddcc5fa594a92973b1b40ef64acafb871bfb90cff44",
         "kind": "ADVERTISES_SKILL",
+        "source_kind": "A2AAgent",
+        "target_kind": "A2ASkill",
         "properties": {
           "scan_id": "scan-merged-001",
           "last_seen": "2026-04-07T12:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.1,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
         "source": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1",
         "target": "sha256:1ae605b1d92096ac3219d2d2fe89a4bc22c53f3afbf6c1f849e2b2a5ff4e1f01",
         "kind": "ADVERTISES_SKILL",
+        "source_kind": "A2AAgent",
+        "target_kind": "A2ASkill",
         "properties": {
           "scan_id": "scan-merged-001",
           "last_seen": "2026-04-07T12:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.1,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
         "source": "sha256:f29d41afd3993adb0740cf7f7c3f302033e31316c541d57c2b1d2254eb6fbc64",
         "target": "sha256:bbbf6ea338f40203f99d7f2f980812a47d0b452e157dc2349e40e10a99383d8f",
         "kind": "ADVERTISES_SKILL",
+        "source_kind": "A2AAgent",
+        "target_kind": "A2ASkill",
         "properties": {
           "scan_id": "scan-merged-001",
           "last_seen": "2026-04-07T12:00:00Z",
           "confidence": 1.0,
           "risk_weight": 0.1,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       },
       {
         "source": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1",
         "target": "sha256:f29d41afd3993adb0740cf7f7c3f302033e31316c541d57c2b1d2254eb6fbc64",
         "kind": "DELEGATES_TO",
+        "source_kind": "A2AAgent",
+        "target_kind": "A2AAgent",
         "properties": {
           "scan_id": "scan-merged-001",
           "last_seen": "2026-04-07T12:00:00Z",
           "confidence": 0.9,
           "risk_weight": 0.1,
           "is_composite": false
-        }
+        },
+        "observation_domains": ["scan:fixture:sha256:c675029b226fe833f03269aad6b9a4e115f931bfc0c10e7e6462c8603297730d"]
       }
     ]
   }

@@ -99,11 +99,20 @@ jobs:
 
   test-integration:
     if: github.event_name == 'pull_request'
+    name: Integration (Neo4j ${{ matrix.neo4j_major }})
     runs-on: ubuntu-latest
     needs: [test-unit]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - neo4j_image: neo4j:4.4-community
+            neo4j_major: "4"
+          - neo4j_image: neo4j:5-community
+            neo4j_major: "5"
     services:
       neo4j:
-        image: neo4j:4.4-community
+        image: ${{ matrix.neo4j_image }}
         env:
           NEO4J_AUTH: neo4j/testpassword
         ports:
@@ -130,6 +139,7 @@ jobs:
       AGENTHOUND_NEO4J_URI: bolt://localhost:7687
       AGENTHOUND_NEO4J_USER: neo4j
       AGENTHOUND_NEO4J_PASSWORD: testpassword
+      AGENTHOUND_EXPECTED_NEO4J_MAJOR: ${{ matrix.neo4j_major }}
       AGENTHOUND_PG_URI: postgres://test:test@localhost:5432/agenthound_test?sslmode=disable
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -138,6 +148,15 @@ jobs:
           go-version: "1.25.12"
       - name: Create UI embed stub
         run: mkdir -p server/internal/api/ui/dist && echo '<!DOCTYPE html><html><body></body></html>' > server/internal/api/ui/dist/index.html
+      - name: Verify Neo4j version matrix and schema
+        run: go test ./server/internal/graph -race -count=1 -run '^TestIntegrationNeo4jVersionMatrix$'
+      # The ordinary integration suite runs the whole module in parallel and
+      # MUST NOT execute the destructive fresh-schema reset
+      # (TestIntegrationFreshSchemaCompleteIngestPublishes). That test does a
+      # global `MATCH (n) DETACH DELETE n` + `TRUNCATE scans, posture_state`,
+      # which would race the other DB-touching packages sharing this Neo4j /
+      # Postgres. AGENTHOUND_FRESH_DB_INTEGRATION is intentionally left unset
+      # here so the test self-skips.
       - name: Run full test suite with DB
         run: go test ./... -race -coverprofile=coverage.out
       - name: Check coverage threshold
@@ -148,6 +167,17 @@ jobs:
             echo "::error::Coverage ${TOTAL}% is below 60% threshold"
             exit 1
           fi
+      # Dedicated, serialized step for the destructive fresh-schema integration.
+      # It runs AFTER the ordinary suite has finished (so nothing else is
+      # touching the shared DB), targets only that single test, and pins
+      # `-p 1` to forbid any parallel package execution. This is the only place
+      # the global reset opt-in is enabled.
+      - name: Run destructive fresh-schema integration (serialized)
+        env:
+          AGENTHOUND_FRESH_DB_INTEGRATION: "1"
+        run: |
+          go test ./server/internal/ingest -race -p 1 \
+            -run '^TestIntegrationFreshSchemaCompleteIngestPublishes$'
 
   govulncheck:
     if: github.event_name == 'pull_request'

@@ -88,7 +88,7 @@ func TestCanImpersonate_ProcessSimilarAgents(t *testing.T) {
 			}
 			return nil, nil
 		},
-		WriteEdgesResult: 2,
+		WriteCompositeEdgesResult: 2,
 	}
 
 	p := &CanImpersonate{}
@@ -102,9 +102,9 @@ func TestCanImpersonate_ProcessSimilarAgents(t *testing.T) {
 		t.Errorf("EdgesCreated = %d, want 2", stats.EdgesCreated)
 	}
 
-	calls := mock.CallsTo("WriteEdges")
+	calls := mock.CallsTo("WriteCompositeEdges")
 	if len(calls) != 1 {
-		t.Fatalf("WriteEdges called %d times, want 1", len(calls))
+		t.Fatalf("WriteCompositeEdges called %d times, want 1", len(calls))
 	}
 	edges, _ := calls[0].Args[0].([]ingest.Edge)
 	if len(edges) != 2 {
@@ -215,7 +215,7 @@ func TestCanImpersonate_ProcessWriteError(t *testing.T) {
 			}
 			return nil, nil
 		},
-		WriteEdgesError: errors.New("write failed"),
+		WriteCompositeEdgesError: errors.New("write failed"),
 	}
 
 	p := &CanImpersonate{}

@@ -11,6 +11,10 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/server/internal/analysis"
 	"github.com/adithyan-ak/agenthound/server/internal/analysis/prebuilt"
+	"github.com/adithyan-ak/agenthound/server/internal/appdb"
+	"github.com/adithyan-ak/agenthound/server/internal/graph"
+	"github.com/adithyan-ak/agenthound/server/internal/projection"
+	"github.com/adithyan-ak/agenthound/server/model"
 	"github.com/spf13/cobra"
 )
 
@@ -20,9 +24,9 @@ var queryCmd = &cobra.Command{
 	Long: `Execute queries against the AgentHound graph database.
 
 Modes:
-  agenthound-server query "MATCH (n:MCPServer) RETURN n.name"   Raw Cypher
-  agenthound-server query --prebuilt agents-shell-access         Pre-built query
-  agenthound-server query --findings [--severity critical]       List findings
+  agenthound-server query "MATCH (n:MCPServer) RETURN n.name"   Raw live/admin Cypher
+  agenthound-server query --prebuilt agents-shell-access         Published pre-built query
+  agenthound-server query --findings [--severity critical]       Published findings
   agenthound-server query --shortest-path --from Kind:name --to Kind:name`,
 	RunE: runQuery,
 }
@@ -34,6 +38,7 @@ func init() {
 	queryCmd.Flags().Bool("shortest-path", false, "Find shortest path between two nodes")
 	queryCmd.Flags().String("from", "", "Source node in Kind:name format (e.g. AgentInstance:my-agent)")
 	queryCmd.Flags().String("to", "", "Target node in Kind:name format (e.g. MCPResource:postgres://prod)")
+	queryCmd.Flags().String("path-mode", "security", "Path mode: security (directed policy) or topology (undirected graph)")
 	queryCmd.Flags().String("format", "table", "Output format: table or json")
 	queryCmd.Flags().String("fail-on", "", "Exit 1 if findings at or above severity: critical, high, medium, low")
 	queryCmd.Flags().Bool("all-findings", false, "Include suppressed findings (accepted-risk, false-positive); --fail-on always ignores suppressed")
@@ -48,6 +53,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	shortestPath, _ := cmd.Flags().GetBool("shortest-path")
 	fromNode, _ := cmd.Flags().GetString("from")
 	toNode, _ := cmd.Flags().GetString("to")
+	pathMode, _ := cmd.Flags().GetString("path-mode")
 	format, _ := cmd.Flags().GetString("format")
 
 	failOn, _ := cmd.Flags().GetString("fail-on")
@@ -91,7 +97,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	case prebuiltID != "":
 		return runPrebuilt(ctx, prebuiltID, format)
 	case shortestPath:
-		return runShortestPath(ctx, fromNode, toNode, format)
+		return runShortestPath(ctx, fromNode, toNode, pathMode, format)
 	default:
 		return runRawCypher(ctx, args[0], format)
 	}
@@ -129,12 +135,89 @@ func runPrebuilt(ctx context.Context, id, format string) error {
 	}
 	defer cleanup()
 
-	rows, err := infra.GraphDB.Query(ctx, q.Cypher, nil)
+	result, err := executePrebuiltQuery(
+		ctx,
+		id,
+		q,
+		infra.GraphDB,
+		infra.FindingStore,
+	)
 	if err != nil {
 		return fmt.Errorf("query %s: %w", id, err)
 	}
+	return printPrebuiltResult(result, format)
+}
 
-	return printRows(rows, format)
+type prebuiltExecution struct {
+	Query      prebuilt.PreBuiltQuery      `json:"query"`
+	Rows       []map[string]any            `json:"rows"`
+	Metadata   *analysis.TraversalMetadata `json:"metadata,omitempty"`
+	Projection projection.Identity         `json:"projection"`
+}
+
+func executePrebuiltQuery(
+	ctx context.Context,
+	id string,
+	query prebuilt.PreBuiltQuery,
+	db graph.GraphDB,
+	projectionReader projection.StateReader,
+) (prebuiltExecution, error) {
+	result, identity, err := projection.GuardedRead(
+		ctx,
+		projectionReader,
+		func() (prebuiltExecution, error) {
+			execution := prebuiltExecution{Query: query}
+			if id == "shortest-to-database" {
+				pathResult, err := analysis.FindShortestDatabasePaths(ctx, db)
+				if err != nil {
+					return prebuiltExecution{}, err
+				}
+				execution.Rows = analysis.DatabasePathRows(pathResult)
+				execution.Metadata = &pathResult.Metadata
+				return execution, nil
+			}
+
+			rows, err := db.Query(ctx, query.Cypher, nil)
+			if err != nil {
+				return prebuiltExecution{}, err
+			}
+			execution.Rows = rows
+			return execution, nil
+		},
+	)
+	if err != nil {
+		return prebuiltExecution{}, err
+	}
+	if result.Rows == nil {
+		result.Rows = []map[string]any{}
+	}
+	result.Projection = identity
+	return result, nil
+}
+
+func printPrebuiltResult(result prebuiltExecution, format string) error {
+	if format == "json" {
+		return printJSON(result)
+	}
+
+	_, _ = fmt.Fprintf(
+		os.Stderr,
+		"Published projection: scan=%s revision=%d\n",
+		result.Projection.ScanID,
+		result.Projection.Revision,
+	)
+	if result.Metadata != nil {
+		_, _ = fmt.Fprintf(
+			os.Stderr,
+			"[path] scope=%s direction=%s algorithm=%s complete=%t\n",
+			result.Metadata.Scope,
+			result.Metadata.Direction,
+			result.Metadata.Algorithm,
+			result.Metadata.Complete,
+		)
+	}
+	_, _ = fmt.Fprintln(os.Stderr)
+	return printRows(result.Rows, format)
 }
 
 func runFindings(ctx context.Context, severity, format, failOn string, includeSuppressed bool) error {
@@ -145,6 +228,14 @@ func runFindings(ctx context.Context, severity, format, failOn string, includeSu
 			return fmt.Errorf("invalid severity %q: must be critical, high, medium, or low", severity)
 		}
 	}
+	threshold := 0
+	if failOn != "" {
+		var ok bool
+		threshold, ok = severityRank[failOn]
+		if !ok {
+			return fmt.Errorf("invalid --fail-on value %q: must be critical, high, medium, or low", failOn)
+		}
+	}
 
 	infra, cleanup, err := Bootstrap(ctx)
 	if err != nil {
@@ -152,65 +243,135 @@ func runFindings(ctx context.Context, severity, format, failOn string, includeSu
 	}
 	defer cleanup()
 
-	// Reads come from the persisted Postgres snapshot, not live graph
-	// edges: the snapshot is invariant under the next scan's stale-edge
-	// cleanup, and it carries triage state for suppression.
-	findings, err := infra.FindingStore.ListLatestPerFingerprint(ctx, severity, includeSuppressed)
+	findings, scope, err := infra.FindingStore.ListPublished(ctx, severity, includeSuppressed)
 	if err != nil {
 		return fmt.Errorf("query findings: %w", err)
 	}
-
-	if len(findings) == 0 {
-		fmt.Println("No findings found.")
-	} else if format == "json" {
-		if err := printJSON(findings); err != nil {
-			return err
-		}
-	} else {
-		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		_, _ = fmt.Fprintln(w, "ID\tSEVERITY\tTRIAGE\tCATEGORY\tTITLE\tSOURCE\tTARGET")
-		for _, f := range findings {
-			srcLabel := f.SourceName
-			if srcLabel == "" {
-				srcLabel = f.SourceID
-			}
-			tgtLabel := f.TargetName
-			if tgtLabel == "" {
-				tgtLabel = f.TargetID
-			}
-			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				f.ID, f.Severity, triageStatus(f), f.Category, f.Title, srcLabel, tgtLabel)
-		}
-		_ = w.Flush()
-		_, _ = fmt.Fprintf(os.Stderr, "\n%d finding(s)\n", len(findings))
+	if err := validateCurrentFindingScope(scope); err != nil {
+		return err
 	}
 
+	failureCount := 0
 	if failOn != "" {
-		threshold, ok := severityRank[failOn]
-		if !ok {
-			return fmt.Errorf("invalid --fail-on value %q: must be critical, high, medium, or low", failOn)
-		}
 		// --fail-on ALWAYS evaluates against the non-suppressed set so an
 		// accepted-risk / false-positive never breaks CI, regardless of
 		// whether --all-findings was passed to widen the display.
 		gate := findings
 		if includeSuppressed {
-			gate, err = infra.FindingStore.ListLatestPerFingerprint(ctx, severity, false)
+			var gateScope appdb.FindingScope
+			gate, gateScope, err = infra.FindingStore.ListPublished(ctx, severity, false)
 			if err != nil {
 				return fmt.Errorf("query findings for fail-on: %w", err)
 			}
+			if err := validateCurrentFindingScope(gateScope); err != nil {
+				return fmt.Errorf("query findings for fail-on: %w", err)
+			}
+			if !sameFindingScope(scope, gateScope) {
+				return fmt.Errorf(
+					"published findings snapshot changed during query: scan=%s revision=%d became scan=%s revision=%d",
+					scope.ScanID,
+					*scope.Revision,
+					gateScope.ScanID,
+					*gateScope.Revision,
+				)
+			}
 		}
-		count := countAtOrAbove(gate, threshold)
-		if count > 0 {
-			_, _ = fmt.Fprintf(os.Stderr, "Failed: %d finding(s) at severity %q or above\n", count, failOn)
-			os.Exit(1)
-		}
+		failureCount = countAtOrAbove(gate, threshold)
+	}
+
+	if err := printPublishedFindings(findings, scope, format); err != nil {
+		return err
+	}
+	if failureCount > 0 {
+		_, _ = fmt.Fprintf(
+			os.Stderr,
+			"Failed: %d finding(s) at severity %q or above\n",
+			failureCount,
+			failOn,
+		)
+		return fmt.Errorf("%d finding(s) at severity %q or above", failureCount, failOn)
 	}
 
 	return nil
 }
 
-func runShortestPath(ctx context.Context, from, to, format string) error {
+func validateCurrentFindingScope(scope appdb.FindingScope) error {
+	if !scope.Available ||
+		scope.ScanID == "" ||
+		scope.Revision == nil ||
+		*scope.Revision < 1 {
+		return fmt.Errorf("no complete published findings snapshot is available")
+	}
+	if scope.Stale ||
+		scope.ProjectionStatus != model.ProjectionComplete ||
+		scope.SnapshotStatus != model.LifecycleComplete {
+		return fmt.Errorf(
+			"published findings snapshot is stale: scan=%s revision=%d projection=%s snapshot=%s",
+			scope.ScanID,
+			*scope.Revision,
+			scope.ProjectionStatus,
+			scope.SnapshotStatus,
+		)
+	}
+	return nil
+}
+
+func sameFindingScope(left, right appdb.FindingScope) bool {
+	return left.ScanID == right.ScanID &&
+		left.Revision != nil &&
+		right.Revision != nil &&
+		*left.Revision == *right.Revision
+}
+
+func printPublishedFindings(
+	findings []model.Finding,
+	scope appdb.FindingScope,
+	format string,
+) error {
+	if err := validateCurrentFindingScope(scope); err != nil {
+		return err
+	}
+	if format == "json" {
+		return printJSON(struct {
+			Findings []model.Finding    `json:"findings"`
+			Scope    appdb.FindingScope `json:"scope"`
+		}{
+			Findings: findings,
+			Scope:    scope,
+		})
+	}
+
+	_, _ = fmt.Fprintf(
+		os.Stderr,
+		"Published snapshot: scan=%s revision=%d\n",
+		scope.ScanID,
+		*scope.Revision,
+	)
+	if len(findings) == 0 {
+		fmt.Println("No findings found.")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	_, _ = fmt.Fprintln(w, "ID\tSEVERITY\tTRIAGE\tCATEGORY\tTITLE\tSOURCE\tTARGET")
+	for _, f := range findings {
+		srcLabel := f.SourceName
+		if srcLabel == "" {
+			srcLabel = f.SourceID
+		}
+		tgtLabel := f.TargetName
+		if tgtLabel == "" {
+			tgtLabel = f.TargetID
+		}
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			f.ID, f.Severity, triageStatus(f), f.Category, f.Title, srcLabel, tgtLabel)
+	}
+	_ = w.Flush()
+	_, _ = fmt.Fprintf(os.Stderr, "\n%d finding(s)\n", len(findings))
+	return nil
+}
+
+func runShortestPath(ctx context.Context, from, to, scopeValue, format string) error {
 	if from == "" || to == "" {
 		return fmt.Errorf("--shortest-path requires both --from and --to flags in Kind:name format")
 	}
@@ -224,18 +385,9 @@ func runShortestPath(ctx context.Context, from, to, format string) error {
 		return fmt.Errorf("--to: %w", err)
 	}
 
-	cypher := fmt.Sprintf(
-		`MATCH (src:%s {name: $from_name}), (tgt:%s {name: $to_name})
-MATCH p = shortestPath((src)-[*..15]-(tgt))
-RETURN [n IN nodes(p) | coalesce(n.name, n.objectid)] AS path_nodes,
-       [n IN nodes(p) | labels(n)[0]] AS path_kinds,
-       [rel IN relationships(p) | type(rel)] AS path_edges,
-       length(p) AS path_length`,
-		fromKind, toKind)
-
-	params := map[string]any{
-		"from_name": fromName,
-		"to_name":   toName,
+	scope, err := analysis.ParseTraversalScope(scopeValue)
+	if err != nil {
+		return fmt.Errorf("--path-mode: %w", err)
 	}
 
 	infra, cleanup, err := Bootstrap(ctx)
@@ -244,17 +396,87 @@ RETURN [n IN nodes(p) | coalesce(n.name, n.objectid)] AS path_nodes,
 	}
 	defer cleanup()
 
-	rows, err := infra.GraphDB.Query(ctx, cypher, params)
+	result, err := findShortestPath(
+		ctx,
+		infra.GraphDB,
+		fromKind,
+		fromName,
+		toKind,
+		toName,
+		scope,
+	)
 	if err != nil {
 		return fmt.Errorf("shortest path: %w", err)
 	}
 
-	if len(rows) == 0 {
+	if len(result.Paths) == 0 {
 		fmt.Printf("No path found from %s:%s to %s:%s\n", fromKind, fromName, toKind, toName)
 		return nil
 	}
+	if format == "json" {
+		return printJSON(result)
+	}
+	return printRows(traversalPathRows(result), format)
+}
 
-	return printRows(rows, format)
+func findShortestPath(
+	ctx context.Context,
+	db graph.GraphDB,
+	fromKind, fromName, toKind, toName string,
+	scope analysis.TraversalScope,
+) (analysis.TraversalResult, error) {
+	sources, err := analysis.ResolveTraversalNodes(ctx, db, analysis.TraversalSelector{
+		Kind: fromKind, Property: "name", Value: &fromName,
+	})
+	if err != nil {
+		return analysis.TraversalResult{}, err
+	}
+	targets, err := analysis.ResolveTraversalNodes(ctx, db, analysis.TraversalSelector{
+		Kind: toKind, Property: "name", Value: &toName,
+	})
+	if err != nil {
+		return analysis.TraversalResult{}, err
+	}
+	return analysis.FindBoundedTraversalPaths(
+		ctx,
+		db,
+		sources,
+		targets,
+		analysis.TraversalOptions{
+			Scope: scope, Cost: analysis.TraversalCostHops,
+			MaxHops: 15, Limit: 1, MaxExpansions: 100000,
+		},
+	)
+}
+
+func traversalPathRows(result analysis.TraversalResult) []map[string]any {
+	rows := make([]map[string]any, 0, len(result.Paths))
+	for _, path := range result.Paths {
+		nodeNames := make([]string, 0, len(path.Nodes))
+		nodeKinds := make([]string, 0, len(path.Nodes))
+		for _, node := range path.Nodes {
+			nodeNames = append(nodeNames, node.Name)
+			kind := ""
+			if len(node.Kinds) > 0 {
+				kind = node.Kinds[0]
+			}
+			nodeKinds = append(nodeKinds, kind)
+		}
+		edgeKinds := make([]string, 0, len(path.Edges))
+		for _, edge := range path.Edges {
+			edgeKinds = append(edgeKinds, edge.Kind)
+		}
+		rows = append(rows, map[string]any{
+			"path_nodes":  nodeNames,
+			"path_kinds":  nodeKinds,
+			"path_edges":  edgeKinds,
+			"path_length": path.Hops,
+			"scope":       result.Metadata.Scope,
+			"direction":   result.Metadata.Direction,
+			"algorithm":   result.Metadata.Algorithm,
+		})
+	}
+	return rows
 }
 
 func parseNodeRef(ref string) (kind, name string, err error) {
@@ -362,7 +584,7 @@ var severityRank = map[string]int{
 	"low":      3,
 }
 
-func countAtOrAbove(findings []analysis.Finding, threshold int) int {
+func countAtOrAbove(findings []model.Finding, threshold int) int {
 	count := 0
 	for _, f := range findings {
 		if rank, ok := severityRank[f.Severity]; ok && rank <= threshold {
@@ -372,7 +594,7 @@ func countAtOrAbove(findings []analysis.Finding, threshold int) int {
 	return count
 }
 
-func triageStatus(f analysis.Finding) string {
+func triageStatus(f model.Finding) string {
 	if f.Triage != nil && f.Triage.Status != "" {
 		return f.Triage.Status
 	}
@@ -413,7 +635,7 @@ func runDiff(ctx context.Context, diffArg, format string, includeSuppressed bool
 	return nil
 }
 
-func printDiffSection(label string, findings []analysis.Finding) {
+func printDiffSection(label string, findings []model.Finding) {
 	if len(findings) == 0 {
 		return
 	}

@@ -88,10 +88,9 @@ func TestClassifyHost(t *testing.T) {
 			wantPub: true,
 		},
 		{
-			name:     "public hostname",
+			name:     "hostname scope is unknown without resolution",
 			input:    "api.example.com",
 			wantHost: "api.example.com",
-			wantPub:  true,
 		},
 		{
 			name:      "url with localhost",
@@ -106,10 +105,9 @@ func TestClassifyHost(t *testing.T) {
 			wantPriv: true,
 		},
 		{
-			name:     "url with public host",
+			name:     "url hostname scope is unknown without resolution",
 			input:    "https://mcp.example.com/v1",
 			wantHost: "mcp.example.com",
-			wantPub:  true,
 		},
 		{
 			name:      "url with 127 ip",
@@ -124,9 +122,8 @@ func TestClassifyHost(t *testing.T) {
 			wantPriv: true,
 		},
 		{
-			name:    "empty string",
-			input:   "",
-			wantPub: true,
+			name:  "empty string",
+			input: "",
 		},
 	}
 	for _, tt := range tests {
@@ -159,9 +156,25 @@ func TestClassifyHost(t *testing.T) {
 			if got.IsPublic {
 				flagCount++
 			}
-			if flagCount != 1 {
-				t.Errorf("exactly one of IsLocal/IsPrivate/IsPublic should be true, got local=%v private=%v public=%v",
-					got.IsLocal, got.IsPrivate, got.IsPublic)
+			expectedFlags := 1
+			var expectedScope HostScope
+			switch {
+			case tt.wantLocal:
+				expectedScope = HostScopeLocal
+			case tt.wantPriv:
+				expectedScope = HostScopePrivate
+			case tt.wantPub:
+				expectedScope = HostScopePublic
+			default:
+				expectedFlags = 0
+				expectedScope = HostScopeUnknown
+			}
+			if flagCount != expectedFlags {
+				t.Errorf("scope flags = %d, want %d (local=%v private=%v public=%v)",
+					flagCount, expectedFlags, got.IsLocal, got.IsPrivate, got.IsPublic)
+			}
+			if got.Scope != expectedScope {
+				t.Errorf("Scope = %q, want %q", got.Scope, expectedScope)
 			}
 		})
 	}

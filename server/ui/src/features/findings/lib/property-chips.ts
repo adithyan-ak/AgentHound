@@ -1,3 +1,15 @@
+import {
+  authMethodFromProperties,
+  hasConfirmedAnonymousAccess,
+} from "@entities/node";
+
+function authChip(properties: Record<string, unknown>): string {
+  if (hasConfirmedAnonymousAccess(properties)) return "no-auth";
+  const method = authMethodFromProperties(properties);
+  if (method === "localProcess") return "local-process";
+  return method === "unknown" ? "auth-unknown" : method;
+}
+
 export function getPropertyChips(kind: string, properties: Record<string, unknown>): string[] {
   const chips: string[] = [];
 
@@ -10,8 +22,9 @@ export function getPropertyChips(kind: string, properties: Record<string, unknow
     case "MCPServer": {
       const transport = properties.transport;
       if (typeof transport === "string") chips.push(transport);
-      const auth = properties.auth_method;
-      if (typeof auth === "string") chips.push(auth === "none" ? "no-auth" : auth);
+      chips.push(authChip(properties));
+      const pinning = properties.pinning_status;
+      if (typeof pinning === "string") chips.push(`pinning:${pinning}`);
       break;
     }
     case "MCPTool": {
@@ -27,7 +40,7 @@ export function getPropertyChips(kind: string, properties: Record<string, unknow
       const scheme = properties.uri_scheme;
       if (typeof scheme === "string") chips.push(scheme + "://");
       const sensitivity = properties.sensitivity;
-      if (typeof sensitivity === "string") chips.push(sensitivity);
+      chips.push(typeof sensitivity === "string" ? sensitivity : "unknown");
       break;
     }
     case "Host": {
@@ -37,18 +50,28 @@ export function getPropertyChips(kind: string, properties: Record<string, unknow
         const ip = properties.ip;
         if (typeof ip === "string") chips.push(ip);
       }
+      const scope = properties.scope;
+      if (typeof scope === "string") chips.push(scope);
       break;
     }
     case "Credential": {
       const type = properties.type;
       if (typeof type === "string") chips.push(type);
-      if (properties.is_exposed === true) chips.push("exposed");
+      if (
+        properties.exposure_status === "exposed" &&
+        properties.material_status === "observed"
+      ) {
+        chips.push("exposed");
+      } else if (typeof properties.material_status === "string") {
+        chips.push(`material:${properties.material_status}`);
+      }
       break;
     }
     case "A2AAgent": {
-      const auth = properties.auth_method;
-      if (typeof auth === "string") chips.push(auth === "none" ? "no-auth" : auth);
-      if (properties.is_signed === true) chips.push("signed");
+      chips.push(authChip(properties));
+      const signature = properties.signature_verification_status;
+      if (typeof signature === "string") chips.push(`signature:${signature}`);
+      else chips.push("signature:unknown");
       break;
     }
     case "Identity": {

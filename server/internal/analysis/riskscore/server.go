@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 )
 
@@ -11,50 +12,63 @@ import (
 // score (higher = weaker). Exported so the auth_strength post-processor can
 // materialize the same scores onto :MCPServer / :A2AAgent nodes as a Cypher
 // CASE without the two definitions drifting.
-var AuthStrengthScores = map[string]float64{
-	"none":   100,
-	"apiKey": 70,
-	"bearer": 50,
-	"oauth":  25,
-	"mtls":   10,
-}
+var AuthStrengthScores = common.AuthWeaknessScores()
 
 func ServerRiskScore(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
-	auth, err := serverAuthStrength(ctx, db, objectID)
+	assessment, err := ServerRiskAssessment(ctx, db, objectID)
 	if err != nil {
 		return 0, err
+	}
+	return assessment.Score, nil
+}
+
+func ServerRiskAssessment(ctx context.Context, db graph.GraphDB, objectID string) (Assessment, error) {
+	auth, err := serverAuthAssessment(ctx, db, objectID)
+	if err != nil {
+		return Assessment{}, err
 	}
 	tool, err := serverToolRisk(ctx, db, objectID)
 	if err != nil {
-		return 0, err
+		return Assessment{}, err
 	}
-	exp, err := serverExposure(ctx, db, objectID)
+	exp, err := serverExposureAssessment(ctx, db, objectID)
 	if err != nil {
-		return 0, err
+		return Assessment{}, err
 	}
-	cred, err := serverCredentialHandling(ctx, db, objectID)
+	cred, err := serverCredentialHandlingAssessment(ctx, db, objectID)
 	if err != nil {
-		return 0, err
+		return Assessment{}, err
 	}
 
-	score := 0.35*auth + 0.25*tool + 0.20*exp + 0.20*cred
-	return math.Round(score*100) / 100, nil
+	return combineAssessments(
+		weightedAssessment{weight: 0.35, value: auth},
+		weightedAssessment{weight: 0.25, value: exactAssessment(tool)},
+		weightedAssessment{weight: 0.20, value: exp},
+		weightedAssessment{weight: 0.20, value: cred},
+	), nil
 }
 
-func serverAuthStrength(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
-	cypher := `MATCH (s {objectid: $id}) RETURN s.auth_method AS am`
+func serverAuthAssessment(ctx context.Context, db graph.GraphDB, objectID string) (Assessment, error) {
+	cypher := `MATCH (s {objectid: $id})
+RETURN s.auth_method AS am, s.auth_evidence AS auth_evidence`
 	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
 	if err != nil {
-		return 0, err
+		return Assessment{}, err
 	}
 	if len(rows) == 0 {
-		return 100, nil
+		return unknownAssessment("auth_method", 0, 100), nil
 	}
 	am, _ := rows[0]["am"].(string)
-	if s, ok := AuthStrengthScores[am]; ok {
-		return s, nil
+	authEvidence, _ := rows[0]["auth_evidence"].(string)
+	if common.NormalizeAuthMethod(am) == common.AuthNone &&
+		!common.IsConfirmedAnonymousAccess(am, authEvidence) {
+		return unknownAssessment("auth_evidence", 0, 100), nil
 	}
-	return 100, nil
+	auth := common.AssessAuth(am)
+	if auth.Weakness == nil {
+		return unknownAssessment("auth_method", 0, 100), nil
+	}
+	return exactAssessment(*auth.Weakness), nil
 }
 
 func serverToolRisk(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
@@ -83,54 +97,83 @@ RETURN t.capability_surface AS caps`
 	return maxRisk, nil
 }
 
-func serverExposure(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
+func serverExposureAssessment(ctx context.Context, db graph.GraphDB, objectID string) (Assessment, error) {
 	cypher := `
 MATCH (s {objectid: $id})-[:RUNS_ON]->(h:Host)
-RETURN h.is_public AS pub, h.is_private AS priv, h.is_local AS loc`
+RETURN h.scope AS scope`
 
 	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
 	if err != nil {
-		return 0, err
+		return Assessment{}, err
 	}
 	if len(rows) == 0 {
-		return 0, nil
+		return unknownAssessment("host_scope", 0, 100), nil
 	}
 
 	var maxExposure float64
+	hasUnknown := false
 	for _, row := range rows {
-		if pub, ok := row["pub"].(bool); ok && pub {
-			return 100, nil
+		scope, _ := row["scope"].(string)
+		switch scope {
+		case string(common.HostScopePublic):
+			return exactAssessment(100), nil
+		case string(common.HostScopePrivate):
+			if maxExposure < 50 {
+				maxExposure = 50
+			}
+			continue
+		case string(common.HostScopeLocal):
+			if maxExposure < 20 {
+				maxExposure = 20
+			}
+			continue
+		case string(common.HostScopeUnknown):
+			hasUnknown = true
+			continue
 		}
-		if priv, ok := row["priv"].(bool); ok && priv && maxExposure < 50 {
-			maxExposure = 50
-		}
-		if loc, ok := row["loc"].(bool); ok && loc && maxExposure < 20 {
-			maxExposure = 20
-		}
+		hasUnknown = true
 	}
-	return maxExposure, nil
+	if hasUnknown {
+		return unknownAssessment("host_scope", maxExposure, 100), nil
+	}
+	return exactAssessment(maxExposure), nil
 }
 
-func serverCredentialHandling(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
+func serverCredentialHandlingAssessment(ctx context.Context, db graph.GraphDB, objectID string) (Assessment, error) {
 	cypher := `
 MATCH (s {objectid: $id})-[:HAS_ENV_VAR]->(c:Credential)
-RETURN c.high_entropy AS high_entropy, c.type AS cred_type, c.blast_radius AS blast_radius`
+RETURN c.high_entropy AS high_entropy, c.type AS cred_type,
+       c.blast_radius AS blast_radius, c.material_status AS material_status,
+       c.exposure_status AS exposure_status, c.merge_key AS merge_key`
 
 	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
 	if err != nil {
-		return 0, err
+		return Assessment{}, err
 	}
 	if len(rows) == 0 {
-		return 0, nil
+		return exactAssessment(0), nil
 	}
 
 	// base captures intrinsic handling risk (high-entropy / hardcoded
 	// secrets max it out). blast amplifies it by how many distinct agents
 	// can reach the secret (materialized as Credential.blast_radius by the
 	// cross_service_credential_chain processor), mirroring a2aBlastRadius.
-	base := 50.0
+	base := 0.0
 	var blast float64
 	for _, row := range rows {
+		material, _ := row["material_status"].(string)
+		exposure, _ := row["exposure_status"].(string)
+		mergeKey, _ := row["merge_key"].(string)
+		if mergeKey != "value_hash" {
+			continue
+		}
+		if material != string(common.CredentialMaterialObserved) ||
+			exposure != string(common.CredentialExposureExposed) {
+			continue
+		}
+		if base < 50 {
+			base = 50
+		}
 		if he, ok := row["high_entropy"].(bool); ok && he {
 			base = 100
 		}
@@ -143,5 +186,5 @@ RETURN c.high_entropy AS high_entropy, c.type AS cred_type, c.blast_radius AS bl
 			}
 		}
 	}
-	return math.Max(base, blast), nil
+	return exactAssessment(math.Max(base, blast)), nil
 }

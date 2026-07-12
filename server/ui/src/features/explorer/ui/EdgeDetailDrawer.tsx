@@ -7,7 +7,7 @@ import {
   getEdgeCategory,
   edgeLabel,
   edgeDescription,
-  EDGE_EXPLOIT,
+  edgeExploit,
 } from "@entities/edge";
 import type { BundledEdge } from "@features/explorer/model/graph";
 import type { Finding } from "@entities/finding/model";
@@ -44,11 +44,21 @@ function Endpoint({ id, name, kind }: { id: string; name: string; kind: string }
   );
 }
 
-function RelationshipCard({ edge }: { edge: BundledEdge }) {
+function RelationshipCard({
+  edge,
+  targetKind,
+}: {
+  edge: BundledEdge;
+  targetKind: string;
+}) {
   const category = getEdgeCategory(edge.kind);
   const color = EDGE_COLORS[category];
-  const exploit = EDGE_EXPLOIT[edge.kind];
+  const exploit = edgeExploit(edge.kind);
   const props = edge.properties ?? {};
+  const exploitSeverity =
+    edge.kind === "CAN_REACH" && props["cross_protocol"] === true
+      ? SEVERITY.medium
+      : SEVERITY.critical;
   const entries = Object.entries(props).filter(
     ([k, v]) => !HIDDEN_PROPS.has(k) && v != null && v !== "",
   );
@@ -63,21 +73,30 @@ function RelationshipCard({ edge }: { edge: BundledEdge }) {
           className="rounded-[2px] border px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-[0.06em]"
           style={{ color, borderColor: `${color}55`, background: `${color}14` }}
         >
-          {edgeLabel(edge.kind)}
+          {edgeLabel(edge.kind, { properties: props })}
         </span>
         <span className="font-mono text-[10px] text-muted-foreground">
-          {edgeDescription(edge.kind)}
+          {edgeDescription(edge.kind, {
+            properties: props,
+            targetKind,
+          })}
         </span>
       </div>
+      {props["assertion_type"] === "configured_reference" && (
+        <div className="mt-2 rounded-[3px] border border-amber-400/30 bg-amber-400/10 px-2.5 py-2 text-[11px] leading-relaxed text-amber-100">
+          Configuration reference only. The target service and its
+          authentication were not directly verified.
+        </div>
+      )}
 
       {exploit && (
         <div
           className="mt-2 rounded-[3px] bg-black/30 p-2.5"
-          style={{ boxShadow: `inset 2px 0 0 0 ${SEVERITY.critical.solid}` }}
+          style={{ boxShadow: `inset 2px 0 0 0 ${exploitSeverity.solid}` }}
         >
           <div
             className="mb-1 flex items-center gap-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.08em]"
-            style={{ color: SEVERITY.critical.text }}
+            style={{ color: exploitSeverity.text }}
           >
             <AlertTriangle className="h-3 w-3" />
             {exploit.title}
@@ -125,7 +144,7 @@ export function EdgeDetailDrawer() {
 
   const relatedFindings = useMemo<Finding[]>(() => {
     if (!selectedEdge || !data) return [];
-    const kinds = new Set(selectedEdge.data.bundledKinds);
+    const kinds = new Set<string>(selectedEdge.data.bundledKinds);
     return data.findings.filter(
       (f) =>
         f.source_id === selectedEdge.source &&
@@ -166,7 +185,7 @@ export function EdgeDetailDrawer() {
               className="rounded-[2px] border px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-[0.06em]"
               style={{ color, borderColor: `${color}55`, background: `${color}14` }}
             >
-              {edgeLabel(d.kind)}
+              {edgeLabel(d.kind, { properties: d.properties })}
             </span>
             <ArrowRight className="mt-1 h-3.5 w-3.5" style={{ color }} />
           </div>
@@ -200,7 +219,11 @@ export function EdgeDetailDrawer() {
           </div>
           <div className="space-y-2">
             {d.bundledEdges.map((be, i) => (
-              <RelationshipCard key={`${be.kind}-${i}`} edge={be} />
+              <RelationshipCard
+                key={`${be.kind}-${i}`}
+                edge={be}
+                targetKind={d.targetKind}
+              />
             ))}
           </div>
 

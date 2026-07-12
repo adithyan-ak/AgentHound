@@ -17,7 +17,7 @@ const elk = new ELK({
  *   0: AgentInstance, A2AAgent
  *   1: MCPServer
  *   2: MCPTool, A2ASkill, MCPPrompt
- *   3: Host, Identity, Credential, TrustZone
+ *   3: Host, Identity, Credential
  *   4: MCPResource, ConfigFile, InstructionFile
  */
 const ELK_OPTIONS: Record<string, string> = {

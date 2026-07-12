@@ -1,4 +1,4 @@
-import type { APIEdge } from "@entities/graph/dto";
+import type { APIEdge, EdgeKind } from "@entities/graph/dto";
 import { EDGE_COLORS as TOKEN_EDGE_COLORS } from "@shared/theme/tokens";
 
 export type EdgeCategory = "attack" | "trust" | "structure";
@@ -9,7 +9,7 @@ export const EDGE_CATEGORY_COLORS: Record<EdgeCategory, string> = {
   structure: TOKEN_EDGE_COLORS.structure,
 };
 
-export const EDGE_CATEGORY_MAP: Record<string, EdgeCategory> = {
+export const EDGE_CATEGORY_MAP = {
   CAN_REACH: "attack",
   CAN_EXFILTRATE_VIA: "attack",
   CAN_EXECUTE: "attack",
@@ -38,28 +38,57 @@ export const EDGE_CATEGORY_MAP: Record<string, EdgeCategory> = {
   // USES_CREDENTIAL's visual continuity.
   EXPOSES: "structure",
   EXPOSES_CREDENTIAL: "structure",
-};
+  PROVIDES_MODEL: "structure",
+  EXTRACTED_FROM: "structure",
+  INGESTS_UNTRUSTED: "attack",
+  CONFUSED_DEPUTY: "attack",
+  TAINTS: "attack",
+  IFC_VIOLATION: "attack",
+  POISONS_CONTEXT: "attack",
+} satisfies Record<EdgeKind, EdgeCategory>;
 
-export const EDGE_COLORS: Record<string, string> = Object.fromEntries(
+export const EDGE_COLORS: Record<EdgeKind, string> = Object.fromEntries(
   Object.entries(EDGE_CATEGORY_MAP).map(([kind, cat]) => [
     kind,
     EDGE_CATEGORY_COLORS[cat],
   ]),
-);
+) as Record<EdgeKind, string>;
 
-const COMPOSITE_EDGES = new Set([
-  "HAS_ACCESS_TO",
-  "CAN_EXECUTE",
-  "SHADOWS",
-  "POISONED_DESCRIPTION",
-  "CAN_REACH",
-  "CAN_EXFILTRATE_VIA",
-  "CAN_IMPERSONATE",
-  "POISONED_INSTRUCTIONS",
-]);
+export const EDGE_COMPOSITE_MAP = {
+  TRUSTS_SERVER: false,
+  PROVIDES_TOOL: false,
+  PROVIDES_RESOURCE: false,
+  PROVIDES_PROMPT: false,
+  ADVERTISES_SKILL: false,
+  DELEGATES_TO: false,
+  AUTHENTICATES_WITH: false,
+  USES_CREDENTIAL: false,
+  RUNS_ON: false,
+  CONFIGURED_IN: false,
+  HAS_ENV_VAR: false,
+  LOADS_INSTRUCTIONS: false,
+  SAME_AUTH_DOMAIN: false,
+  EXPOSES: false,
+  EXPOSES_CREDENTIAL: false,
+  PROVIDES_MODEL: false,
+  EXTRACTED_FROM: false,
+  INGESTS_UNTRUSTED: false,
+  HAS_ACCESS_TO: true,
+  CAN_EXECUTE: true,
+  CAN_REACH: true,
+  CAN_EXFILTRATE_VIA: true,
+  SHADOWS: true,
+  POISONED_DESCRIPTION: true,
+  CAN_IMPERSONATE: true,
+  POISONED_INSTRUCTIONS: true,
+  CONFUSED_DEPUTY: true,
+  TAINTS: true,
+  IFC_VIOLATION: true,
+  POISONS_CONTEXT: true,
+} satisfies Record<EdgeKind, boolean>;
 
 export function getEdgeCategory(kind: string): EdgeCategory {
-  return EDGE_CATEGORY_MAP[kind] ?? "structure";
+  return EDGE_CATEGORY_MAP[kind as EdgeKind] ?? "structure";
 }
 
 export function getEdgeColor(kind: string): string {
@@ -75,7 +104,7 @@ export function getEdgeSize(edge: APIEdge): number {
 }
 
 export function isCompositeEdge(kind: string): boolean {
-  return COMPOSITE_EDGES.has(kind);
+  return EDGE_COMPOSITE_MAP[kind as EdgeKind] ?? false;
 }
 
 export function getEdgeType(kind: string): string {

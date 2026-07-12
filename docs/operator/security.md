@@ -85,7 +85,7 @@ For remote access use a VPN, an SSH tunnel
 
 ### Triage state retention
 
-Triage decisions written via `PUT /findings/triage/{fingerprint}` live
+Triage decisions written via `PATCH /findings/triage/{fingerprint}` live
 in the Postgres `finding_triage` table, keyed by the finding fingerprint.
 This table has **no foreign key** to the per-scan `findings` snapshot: an
 analyst's `accepted-risk` / `false-positive` decisions deliberately
@@ -93,6 +93,11 @@ survive scan deletion and re-detection, so deleting a scan (or re-running
 a collector) does not silently re-surface a finding that was already
 adjudicated. Operators who want a clean slate must clear `finding_triage`
 explicitly.
+
+Scan deletion is deliberately history-only. It never issues a Neo4j delete or
+interprets last-writer `scan_id` as ownership. The API rejects pending/running
+scans, scans referenced by active coverage heads, and the currently published
+posture revision with `409`.
 
 ## Collector network behaviour
 
@@ -127,6 +132,12 @@ behaviour:
 - `--include-credential-values` opts into raw values. Use this only
   for offline audit work. The output file (containing raw secrets)
   has no transport-layer protection — protect the file at rest.
+- Credential identity is not exposure. Nodes record `material_status` and
+  `exposure_status`; masked LiteLLM provider references and returned one-way
+  hashes are excluded from exposure counts, entropy, and rotation claims.
+- Missing auth, host scope, sensitivity, or pinning evidence remains
+  `unknown`. It must not be interpreted as anonymous, public, low sensitivity,
+  unpinned, or clean.
 
 ### `openwebui.loot` authenticated mode
 
@@ -149,6 +160,9 @@ it to enumerate the upstream provider keys an admin has configured
 - **Operator-key hygiene.** The supplied `--api-key` is never written to
   the scan output and appears only as an 8-char prefix in slog. The
   anonymous posture mode (no `--api-key`) emits no credentials at all.
+- Ollama URLs read from Open WebUI admin configuration are marked configured
+  references. They do not assert backend availability or anonymous auth until
+  a direct Ollama probe verifies the same endpoint ID.
 
 Output files are written via atomic `temp+rename` and chmod'd to
 `0o600` on POSIX. **NTFS does not honor POSIX permission bits.** On

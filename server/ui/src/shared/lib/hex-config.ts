@@ -12,8 +12,6 @@ import {
   KeyRound,
   FileCode2,
   FileText,
-  Layers,
-  ShieldCheck,
   Hexagon,
   Brain,
   Rocket,
@@ -24,6 +22,7 @@ import {
   Link2,
   MessageSquare,
   Boxes,
+  ScanSearch,
 } from "lucide-react";
 import {
   SEVERITY,
@@ -144,23 +143,6 @@ export const HEX_CONFIG: Record<string, HexKindConfig> = {
     column: 4,
     groupLabel: "Resources",
   },
-  ResourceGroup: {
-    strokeColor: NODE_KIND_COLORS.ResourceGroup,
-    fillColor: EXPLORER_HEX_FILL,
-    icon: Layers,
-    kindTag: "RESOURCE GROUP",
-    column: 4,
-    groupLabel: "Resources",
-  },
-  TrustZone: {
-    strokeColor: NODE_KIND_COLORS.TrustZone,
-    fillColor: EXPLORER_HEX_FILL,
-    icon: ShieldCheck,
-    kindTag: "TRUST ZONE",
-    column: 3,
-    groupLabel: "Infra",
-  },
-
   // v0.2 AI services. All sit in column 2 ("Tools & Skills") so they
   // place between :MCPServer and :MCPResource in the layered explorer
   // view — visually consistent with how a LiteLLM gateway sits between
@@ -256,6 +238,14 @@ export const HEX_CONFIG: Record<string, HexKindConfig> = {
     kindTag: "AI MODEL",
     column: 3,
     groupLabel: "AI Models",
+  },
+  ExtractedTrainingSignal: {
+    strokeColor: NODE_KIND_COLORS.ExtractedTrainingSignal,
+    fillColor: EXPLORER_HEX_FILL,
+    icon: ScanSearch,
+    kindTag: "TRAINING SIGNAL",
+    column: 4,
+    groupLabel: "Extracted Signals",
   },
 };
 

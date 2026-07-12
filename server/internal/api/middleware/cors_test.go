@@ -70,3 +70,20 @@ func TestCORSDoesNotAllowCredentials(t *testing.T) {
 		t.Errorf("Access-Control-Allow-Credentials = %q, must NOT be %q", got, "true")
 	}
 }
+
+func TestCORSDoesNotExposeRemovedPaginationHeaders(t *testing.T) {
+	r := chi.NewRouter()
+	r.Use(CORS([]string{"http://localhost:8080"}))
+	r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Origin", "http://localhost:8080")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if exposed := rec.Header().Get("Access-Control-Expose-Headers"); exposed != "" {
+		t.Errorf("Access-Control-Expose-Headers = %q, want empty; pagination metadata is in response bodies", exposed)
+	}
+}

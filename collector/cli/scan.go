@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/adithyan-ak/agenthound/modules/networkscan"
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	icollector "github.com/adithyan-ak/agenthound/sdk/collector"
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/sdk/module"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
@@ -181,11 +183,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := context.Background()
+	rulesEngine, ruleset := loadEffectiveRules()
 
 	merged, enabled, failed := collectAll(ctx, runConfig, runMCP, runA2A,
 		path, paths, projectDir, includeCredValues,
 		url, target, targets, targetsFile, authToken,
-		concurrency, timeout, insecure, noVerifyJWKS, a2aTrustedKeys)
+		concurrency, timeout, insecure, noVerifyJWKS, a2aTrustedKeys,
+		rulesEngine, ruleset)
 
 	// Default behavior: if no --output set, auto-name to scan-<scan_id>.json in CWD.
 	if output == "" {
@@ -273,69 +277,184 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 	path string, paths []string, projectDir string, includeCredValues bool,
 	url, target string, targets []string, targetsFile, authToken string,
 	concurrency int, timeout time.Duration, insecure bool,
-	noVerifyJWKS bool, a2aTrustedKeys string) (data *ingest.IngestData, enabled, failed int) {
+	noVerifyJWKS bool, a2aTrustedKeys string,
+	rulesEngine *rules.Engine, ruleset *ingest.RulesetManifest,
+) (data *ingest.IngestData, enabled, failed int) {
 
-	merged := &ingest.IngestData{
-		Meta: ingest.IngestMeta{
-			Version:          1,
-			Type:             "agenthound-ingest",
-			Collector:        "scan",
-			CollectorVersion: "0.1.0",
-			Timestamp:        time.Now().UTC().Format(time.RFC3339),
-			ScanID:           uuid.New().String(),
-		},
-	}
+	merged := common.NewIngestData("scan", uuid.New().String())
+	merged.Meta.CollectorVersion = "0.1.0"
+	merged.Meta.Ruleset = ruleset
+	var reports []*ingest.CollectionReport
 
 	if runConfig {
 		enabled++
-		data, err := collectConfig(ctx, path, paths, projectDir, includeCredValues)
+		data, err := collectConfig(ctx, path, paths, projectDir, includeCredValues, merged.Meta.ScanID, rulesEngine)
 		if err != nil {
 			failed++
 			slog.Error("config collector failed", "error", err)
+			reports = append(reports, failedCollectionReport("config", err))
 		} else {
 			merged.Graph.Nodes = append(merged.Graph.Nodes, data.Graph.Nodes...)
 			merged.Graph.Edges = append(merged.Graph.Edges, data.Graph.Edges...)
+			reports = append(reports, rootedCollectionReport(
+				"config",
+				data.Meta.Collection,
+				path == "" && len(paths) == 0,
+			))
 		}
 	}
 
 	if runMCP {
 		enabled++
-		data, err := collectMCP(ctx, url, concurrency, timeout, insecure)
+		data, err := collectMCP(ctx, url, concurrency, timeout, insecure, merged.Meta.ScanID, rulesEngine)
 		if err != nil {
 			failed++
 			slog.Error("mcp collector failed", "error", err)
+			reports = append(reports, failedCollectionReport("mcp", err))
 		} else {
 			merged.Graph.Nodes = append(merged.Graph.Nodes, data.Graph.Nodes...)
 			merged.Graph.Edges = append(merged.Graph.Edges, data.Graph.Edges...)
+			reports = append(reports, rootedCollectionReport(
+				"mcp",
+				data.Meta.Collection,
+				url == "",
+			))
 		}
 	}
 
 	if runA2A {
 		enabled++
-		data, err := collectA2A(ctx, target, targets, targetsFile, authToken, concurrency, timeout, insecure, noVerifyJWKS, a2aTrustedKeys)
+		data, err := collectA2A(ctx, target, targets, targetsFile, authToken, concurrency, timeout, insecure, noVerifyJWKS, a2aTrustedKeys, merged.Meta.ScanID, rulesEngine)
 		if err != nil {
 			failed++
 			slog.Error("a2a collector failed", "error", err)
+			reports = append(reports, failedCollectionReport("a2a", err))
 		} else {
 			merged.Graph.Nodes = append(merged.Graph.Nodes, data.Graph.Nodes...)
 			merged.Graph.Edges = append(merged.Graph.Edges, data.Graph.Edges...)
+			reports = append(reports, rootedCollectionReport(
+				"a2a",
+				data.Meta.Collection,
+				false,
+			))
 		}
 	}
+	merged.Meta.Collection = ingest.MergeCollectionReports(reports...)
 
 	return merged, enabled, failed
 }
 
-func loadRulesEngineOrNil() *rules.Engine {
+func loadEffectiveRules() (*rules.Engine, *ingest.RulesetManifest) {
+	var loadFailures []string
 	engine, err := buildRulesEngine()
 	if err != nil {
-		slog.Warn("failed to load rules engine, falling back to legacy patterns", "error", err)
-		return nil
+		slog.Warn("failed to load configured rules engine; falling back to built-ins", "error", err)
+		loadFailures = append(
+			loadFailures,
+			"load configured text rules: "+err.Error(),
+		)
+		engine, err = rules.NewEngine(rules.LoadOptions{})
+		if err != nil {
+			loadFailures = append(
+				loadFailures,
+				"load builtin text rules: "+err.Error(),
+			)
+			manifest := ingest.EmptyRulesetManifest()
+			manifest.LoadState = ingest.OutcomeFailed
+			manifest.Errors = loadFailures
+			return nil, manifest
+		}
 	}
-	slog.Info("rules engine loaded", "rules", engine.RuleCount())
-	return engine
+	loadFailures = append(loadFailures, engine.LoadFailures()...)
+	fingerprints, fingerprintErr := rules.LoadFingerprints()
+	loadFailures = append(loadFailures, rules.FingerprintLoadFailures()...)
+	if fingerprintErr != nil {
+		loadFailures = append(
+			loadFailures,
+			"load fingerprint rules: "+fingerprintErr.Error(),
+		)
+	}
+	manifest := rules.BuildManifest(
+		engine.Rules(),
+		fingerprints,
+		loadFailures...,
+	)
+	slog.Info("rules engine loaded",
+		"text_rules", engine.RuleCount(),
+		"fingerprint_rules", len(fingerprints),
+		"ruleset_digest", manifest.Digest)
+	return engine, &manifest
 }
 
-func collectConfig(ctx context.Context, path string, paths []string, projectDir string, includeCredValues bool) (*ingest.IngestData, error) {
+func collectorRootCoverageKey(collectorName string) string {
+	return ingest.CollectorRootCoverageKey(collectorName)
+}
+
+func rootedCollectionReport(
+	collectorName string,
+	report *ingest.CollectionReport,
+	authoritative bool,
+) *ingest.CollectionReport {
+	state := ingest.OutcomeUnknown
+	if report != nil {
+		state = report.State
+		if state == "" {
+			state = ingest.AggregateOutcomeState(report.Outcomes)
+		}
+	}
+	rootKey := collectorRootCoverageKey(collectorName)
+	root := &ingest.CollectionReport{
+		State:        state,
+		CoverageKeys: []string{rootKey},
+		Outcomes: []ingest.CollectionOutcome{{
+			Collector:   collectorName,
+			CoverageKey: rootKey,
+			Target:      collectorName,
+			Method:      "collect",
+			State:       state,
+		}},
+	}
+	if authoritative && report != nil {
+		children := make([]string, 0, len(report.CoverageKeys))
+		for _, key := range report.CoverageKeys {
+			if key != "" && key != rootKey {
+				children = append(children, key)
+			}
+		}
+		sort.Strings(children)
+		root.AuthoritativeRoots = []ingest.CoverageRoot{{
+			CoverageKey:       rootKey,
+			ChildCoverageKeys: children,
+		}}
+	}
+	return ingest.MergeCollectionReports(report, root)
+}
+
+func failedCollectionReport(collectorName string, err error) *ingest.CollectionReport {
+	coverageKey := collectorRootCoverageKey(collectorName)
+	return &ingest.CollectionReport{
+		State:        ingest.OutcomeFailed,
+		CoverageKeys: []string{coverageKey},
+		Outcomes: []ingest.CollectionOutcome{{
+			Collector:   collectorName,
+			CoverageKey: coverageKey,
+			Target:      collectorName,
+			Method:      "collect",
+			State:       ingest.OutcomeFailed,
+			Error:       err.Error(),
+		}},
+	}
+}
+
+func collectConfig(
+	ctx context.Context,
+	path string,
+	paths []string,
+	projectDir string,
+	includeCredValues bool,
+	scanID string,
+	engine *rules.Engine,
+) (*ingest.IngestData, error) {
 	c := configcollector.NewConfigCollector()
 	opts := icollector.CollectOptions{
 		Discover:                path == "" && len(paths) == 0,
@@ -343,13 +462,22 @@ func collectConfig(ctx context.Context, path string, paths []string, projectDir 
 		ConfigPaths:             paths,
 		ProjectDir:              projectDir,
 		IncludeCredentialValues: includeCredValues,
-		RulesEngine:             loadRulesEngineOrNil(),
+		ScanID:                  scanID,
+		RulesEngine:             engine,
 	}
 	slog.Info("running config collector", "discover", opts.Discover, "path", path)
 	return c.Collect(ctx, opts)
 }
 
-func collectMCP(ctx context.Context, url string, concurrency int, timeout time.Duration, insecure bool) (*ingest.IngestData, error) {
+func collectMCP(
+	ctx context.Context,
+	url string,
+	concurrency int,
+	timeout time.Duration,
+	insecure bool,
+	scanID string,
+	engine *rules.Engine,
+) (*ingest.IngestData, error) {
 	var mcpOpts []mcpcollector.Option
 	if concurrency > 0 {
 		mcpOpts = append(mcpOpts, mcpcollector.WithConcurrency(concurrency))
@@ -363,7 +491,8 @@ func collectMCP(ctx context.Context, url string, concurrency int, timeout time.D
 		Discover:    url == "",
 		TargetURL:   url,
 		Insecure:    insecure,
-		RulesEngine: loadRulesEngineOrNil(),
+		ScanID:      scanID,
+		RulesEngine: engine,
 	}
 	slog.Info("running mcp collector", "discover", opts.Discover, "url", url)
 	return c.Collect(ctx, opts)
@@ -371,7 +500,9 @@ func collectMCP(ctx context.Context, url string, concurrency int, timeout time.D
 
 func collectA2A(ctx context.Context, target string, targets []string, targetsFile, authToken string,
 	concurrency int, timeout time.Duration, insecure bool,
-	noVerifyJWKS bool, a2aTrustedKeys string) (*ingest.IngestData, error) {
+	noVerifyJWKS bool, a2aTrustedKeys, scanID string,
+	engine *rules.Engine,
+) (*ingest.IngestData, error) {
 	var a2aOpts []a2acollector.Option
 	if concurrency > 0 {
 		a2aOpts = append(a2aOpts, a2acollector.WithConcurrency(concurrency))
@@ -396,7 +527,8 @@ func collectA2A(ctx context.Context, target string, targets []string, targetsFil
 		TargetURLsFile: targetsFile,
 		AuthToken:      authToken,
 		Insecure:       insecure,
-		RulesEngine:    loadRulesEngineOrNil(),
+		ScanID:         scanID,
+		RulesEngine:    engine,
 	}
 	slog.Info("running a2a collector", "target", target, "targets", len(targets))
 	return c.Collect(ctx, opts)
@@ -525,6 +657,24 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 	// Jupyter, LangServe, OpenWebUI in v0.2 — fingerprinters land in
 	// v0.3/v0.4) emit no node; this is intentional per design F.
 	envelope := buildNetworkScanEnvelope(spec, targets, authzFile, authzHash, allowPublic)
+	_, ruleset := loadEffectiveRules()
+	envelope.Meta.Ruleset = ruleset
+	networkState := ingest.OutcomeComplete
+	if ctx.Err() != nil {
+		networkState = ingest.OutcomePartial
+	}
+	envelope.Meta.Collection = &ingest.CollectionReport{
+		State:        networkState,
+		CoverageKeys: []string{ingest.CanonicalCoverageKey("scan", "network", spec)},
+		Outcomes: []ingest.CollectionOutcome{{
+			Collector:   "scan",
+			CoverageKey: ingest.CanonicalCoverageKey("scan", "network", spec),
+			Target:      spec,
+			Method:      "port_scan",
+			State:       networkState,
+			Items:       len(targets),
+		}},
+	}
 	// On cancellation (Ctrl-C), every fingerprint probe would immediately fail
 	// against the dead context, so skip dispatch and write the partial
 	// port-sweep envelope instead of spinning through guaranteed-failing probes.
@@ -536,6 +686,7 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 	} else {
 		dispatchFingerprints(ctx, cmd.OutOrStderr(), targets, envelope, quiet)
 	}
+	ingest.TagObservationDomain(&envelope.Graph, envelope.Meta.Collection.CoverageKeys[0])
 
 	if output == "" {
 		output = fmt.Sprintf("scan-%s.json", envelope.Meta.ScanID)
@@ -553,15 +704,20 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 // to operate on watermark-less public-target scans.
 func buildNetworkScanEnvelope(spec string, targets []action.Target, authzFile, authzHash string, allowPublic bool) *ingest.IngestData {
 	scanID := uuid.New().String()
-	env := &ingest.IngestData{
-		Meta: ingest.IngestMeta{
-			Version:          1,
-			Type:             "agenthound-ingest",
-			Collector:        "scan",
-			CollectorVersion: "0.2.0-dev",
-			Timestamp:        time.Now().UTC().Format(time.RFC3339),
-			ScanID:           scanID,
-		},
+	env := common.NewIngestData("scan", scanID)
+	env.Meta.CollectorVersion = "0.2.0-dev"
+	coverageKey := ingest.CanonicalCoverageKey("scan", "network", spec)
+	env.Meta.Collection = &ingest.CollectionReport{
+		State:        ingest.OutcomeComplete,
+		CoverageKeys: []string{coverageKey},
+		Outcomes: []ingest.CollectionOutcome{{
+			Collector:   "scan",
+			CoverageKey: coverageKey,
+			Target:      spec,
+			Method:      "port_scan",
+			State:       ingest.OutcomeComplete,
+			Items:       len(targets),
+		}},
 	}
 	// Authorization watermark is recorded as a top-level Meta extension via
 	// a property on the envelope. Phase 2 fingerprinters append nodes/edges

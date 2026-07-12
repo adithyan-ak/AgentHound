@@ -2,6 +2,7 @@ package appdb
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,8 +18,8 @@ import (
 var suppressedStatuses = []string{"accepted-risk", "false-positive"}
 
 // FindingStore persists per-scan finding snapshots and cross-scan triage
-// state. The graph's stale-edge cleanup rewrites composite edges every
-// scan, so the Postgres snapshot is the only diffable record of "what was
+// state. Complete raw-domain promotion replaces the graph's global composite
+// epoch, so the Postgres snapshot is the only diffable record of "what was
 // found when".
 type FindingStore struct {
 	pool *pgxpool.Pool
@@ -38,11 +39,20 @@ type FindingsDiff struct {
 	Unchanged []model.Finding `json:"unchanged"`
 }
 
-// InsertFindings persists a scan's findings snapshot. Idempotent: a re-run
-// of the same scan_id overwrites the prior rows for that scan.
-func (s *FindingStore) InsertFindings(ctx context.Context, scanID string, findings []model.Finding) error {
-	if scanID == "" {
-		return errors.New("insert findings: empty scan_id")
+type FindingScope struct {
+	Mode             string     `json:"mode"`
+	ScanID           string     `json:"scan_id"`
+	Revision         *int64     `json:"revision"`
+	PublishedAt      *time.Time `json:"published_at"`
+	ProjectionStatus string     `json:"projection_status"`
+	SnapshotStatus   string     `json:"snapshot_status"`
+	Available        bool       `json:"available"`
+	Stale            bool       `json:"stale"`
+}
+
+func replaceFindingsTx(ctx context.Context, tx pgx.Tx, scanID string, findings []model.Finding) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM findings WHERE scan_id = $1`, scanID); err != nil {
+		return fmt.Errorf("delete prior findings snapshot: %w", err)
 	}
 	if len(findings) == 0 {
 		return nil
@@ -54,97 +64,187 @@ func (s *FindingStore) InsertFindings(ctx context.Context, scanID string, findin
 		if owasp == nil {
 			owasp = []string{}
 		}
+		atlas := f.ATLASMap
+		if atlas == nil {
+			atlas = []string{}
+		}
+		if f.Variant == "" {
+			f.Variant = model.FindingVariantUnknown
+		}
+		if f.Evidence.State == "" {
+			f.Evidence.State = model.FindingEvidenceUnknown
+		}
+		evidenceJSON, err := json.Marshal(f.Evidence)
+		if err != nil {
+			return fmt.Errorf("marshal finding evidence %s: %w", f.ID, err)
+		}
+		var exactEvidenceJSON any
+		if f.ExactEvidence != nil {
+			encoded, err := json.Marshal(f.ExactEvidence)
+			if err != nil {
+				return fmt.Errorf("marshal exact finding evidence %s: %w", f.ID, err)
+			}
+			exactEvidenceJSON = string(encoded)
+		}
 		batch.Queue(
 			`INSERT INTO findings
 			   (scan_id, fingerprint, severity, category, title, description, edge_kind,
 			    source_id, source_name, source_kind, target_id, target_name, target_kind,
-			    confidence, owasp_map, cross_protocol)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-			 ON CONFLICT (scan_id, fingerprint) DO UPDATE SET
-			    severity = EXCLUDED.severity,
-			    category = EXCLUDED.category,
-			    title = EXCLUDED.title,
-			    description = EXCLUDED.description,
-			    edge_kind = EXCLUDED.edge_kind,
-			    source_id = EXCLUDED.source_id,
-			    source_name = EXCLUDED.source_name,
-			    source_kind = EXCLUDED.source_kind,
-			    target_id = EXCLUDED.target_id,
-			    target_name = EXCLUDED.target_name,
-			    target_kind = EXCLUDED.target_kind,
-			    confidence = EXCLUDED.confidence,
-			    owasp_map = EXCLUDED.owasp_map,
-			    cross_protocol = EXCLUDED.cross_protocol`,
+			    confidence, owasp_map, atlas_map, variant, evidence, exact_evidence, cross_protocol)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,$19::jsonb,$20)`,
 			scanID, f.ID, f.Severity, f.Category, f.Title, f.Description, f.EdgeKind,
 			f.SourceID, f.SourceName, f.SourceKind, f.TargetID, f.TargetName, f.TargetKind,
-			f.Confidence, owasp, isCrossProtocol(f.SourceKind, f.TargetKind),
+			f.Confidence, owasp, atlas, f.Variant, string(evidenceJSON), exactEvidenceJSON,
+			isCrossProtocol(f.SourceKind, f.TargetKind),
 		)
 	}
 
-	br := s.pool.SendBatch(ctx, batch)
-	defer br.Close()
+	results := tx.SendBatch(ctx, batch)
 	for range findings {
-		if _, err := br.Exec(); err != nil {
+		if _, err := results.Exec(); err != nil {
+			_ = results.Close()
 			return fmt.Errorf("insert findings batch: %w", err)
 		}
+	}
+	if err := results.Close(); err != nil {
+		return fmt.Errorf("close findings batch: %w", err)
 	}
 	return nil
 }
 
-const findingSelectColumns = `f.fingerprint, f.severity, f.category, f.title, f.description, f.edge_kind,
+const findingSelectColumns = `f.scan_id, f.captured_at, f.fingerprint, f.severity, f.category, f.title, f.description, f.edge_kind,
 	f.source_id, f.source_name, f.source_kind, f.target_id, f.target_name, f.target_kind,
-	f.confidence, f.owasp_map, t.status, t.note, t.updated_at`
+	f.confidence, f.owasp_map, f.atlas_map, f.variant, f.evidence, f.exact_evidence, t.status, t.note, t.updated_at`
 
-// ListLatestPerFingerprint returns the most recent finding row per
-// fingerprint (across all scans), with triage state attached. severity
-// filters by exact level when non-empty. When includeSuppressed is false,
-// findings triaged as accepted-risk / false-positive are dropped.
-func (s *FindingStore) ListLatestPerFingerprint(ctx context.Context, severity string, includeSuppressed bool) ([]model.Finding, error) {
-	// The inner subquery joins findings + finding_triage (aliases f, t) and
-	// keeps the latest row per fingerprint. The outer query must read every
-	// column back from the `latest` subquery — including the triage columns
-	// (status/note/updated_at), which at the outer level live on `latest`,
-	// NOT on `t` (that alias is only in scope inside the subquery). Listing
-	// the outer columns explicitly keeps the projection order aligned with
-	// scanFindings' positional scan.
-	query := `
-SELECT latest.fingerprint, latest.severity, latest.category, latest.title, latest.description, latest.edge_kind,
-       latest.source_id, latest.source_name, latest.source_kind, latest.target_id, latest.target_name, latest.target_kind,
-       latest.confidence, latest.owasp_map, latest.status, latest.note, latest.updated_at
-FROM (
-    SELECT DISTINCT ON (f.fingerprint) ` + findingSelectColumns + `
-    FROM findings f
-    LEFT JOIN finding_triage t ON t.fingerprint = f.fingerprint
-    ORDER BY f.fingerprint, f.captured_at DESC
-) latest
-WHERE ($1 = '' OR latest.severity = $1)
-  AND ($2 OR latest.status IS NULL OR latest.status NOT IN ('accepted-risk','false-positive'))
-ORDER BY latest.confidence DESC`
-
-	rows, err := s.pool.Query(ctx, query, severity, includeSuppressed)
-	if err != nil {
-		return nil, fmt.Errorf("list findings: %w", err)
+// PublishedFindingScope resolves the one immutable finding snapshot currently
+// advertised as posture. A partial Neo4j update does not move this pointer;
+// callers can keep the prior rows while clearly marking them stale.
+func (s *FindingStore) PublishedFindingScope(ctx context.Context) (FindingScope, error) {
+	scope := FindingScope{
+		Mode:             "published",
+		ProjectionStatus: model.ProjectionUnknown,
+		SnapshotStatus:   model.LifecycleUnknown,
 	}
-	defer rows.Close()
-	return scanFindings(rows)
+	var (
+		scanID           *string
+		revision         *int64
+		publishedAt      *time.Time
+		projectionScanID *string
+	)
+	err := s.pool.QueryRow(ctx, `SELECT
+	    ps.published_scan_id,
+	    ps.published_revision,
+	    ps.published_at,
+	    ps.projection_status,
+	    ps.projection_scan_id,
+	    coalesce(sc.snapshot_status, 'unknown')
+	FROM posture_state ps
+	LEFT JOIN scans sc ON sc.id = ps.published_scan_id
+	WHERE ps.singleton = TRUE`).Scan(
+		&scanID,
+		&revision,
+		&publishedAt,
+		&scope.ProjectionStatus,
+		&projectionScanID,
+		&scope.SnapshotStatus,
+	)
+	if err != nil {
+		return FindingScope{}, fmt.Errorf("published finding scope: %w", err)
+	}
+	if scanID == nil || revision == nil {
+		return scope, nil
+	}
+	scope.ScanID = *scanID
+	scope.Revision = revision
+	scope.PublishedAt = publishedAt
+	scope.Available = true
+	scope.Stale = scope.ProjectionStatus != model.ProjectionComplete ||
+		projectionScanID == nil ||
+		*projectionScanID != scope.ScanID
+	return scope, nil
 }
 
-// findingsForScan returns every finding persisted for a single scan, with
-// triage state attached.
-func (s *FindingStore) findingsForScan(ctx context.Context, scanID string) ([]model.Finding, error) {
+func (s *FindingStore) ListPublished(
+	ctx context.Context,
+	severity string,
+	includeSuppressed bool,
+) ([]model.Finding, FindingScope, error) {
+	scope, err := s.PublishedFindingScope(ctx)
+	if err != nil {
+		return nil, FindingScope{}, err
+	}
+	if !scope.Available {
+		return []model.Finding{}, scope, nil
+	}
+	findings, err := s.ListForScan(ctx, scope.ScanID, severity, includeSuppressed)
+	return findings, scope, err
+}
+
+func (s *FindingStore) ListForScan(
+	ctx context.Context,
+	scanID, severity string,
+	includeSuppressed bool,
+) ([]model.Finding, error) {
 	query := `
 SELECT ` + findingSelectColumns + `
 FROM findings f
 LEFT JOIN finding_triage t ON t.fingerprint = f.fingerprint
 WHERE f.scan_id = $1
-ORDER BY f.confidence DESC`
+  AND ($2 = '' OR f.severity = $2)
+  AND ($3 OR t.status IS NULL OR t.status NOT IN ('accepted-risk','false-positive'))
+ORDER BY f.confidence DESC, f.fingerprint`
 
-	rows, err := s.pool.Query(ctx, query, scanID)
+	rows, err := s.pool.Query(ctx, query, scanID, severity, includeSuppressed)
 	if err != nil {
-		return nil, fmt.Errorf("findings for scan %s: %w", scanID, err)
+		return nil, fmt.Errorf("list findings for scan %s: %w", scanID, err)
 	}
 	defer rows.Close()
 	return scanFindings(rows)
+}
+
+func (s *FindingStore) GetForScan(
+	ctx context.Context,
+	scanID, fingerprint string,
+) (*model.Finding, error) {
+	query := `
+SELECT ` + findingSelectColumns + `
+FROM findings f
+LEFT JOIN finding_triage t ON t.fingerprint = f.fingerprint
+WHERE f.scan_id = $1 AND f.fingerprint = $2`
+	rows, err := s.pool.Query(ctx, query, scanID, fingerprint)
+	if err != nil {
+		return nil, fmt.Errorf("get finding %s for scan %s: %w", fingerprint, scanID, err)
+	}
+	defer rows.Close()
+	findings, err := scanFindings(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(findings) == 0 {
+		return nil, nil
+	}
+	return &findings[0], nil
+}
+
+func (s *FindingStore) GetPublished(
+	ctx context.Context,
+	fingerprint string,
+) (*model.Finding, FindingScope, error) {
+	scope, err := s.PublishedFindingScope(ctx)
+	if err != nil {
+		return nil, FindingScope{}, err
+	}
+	if !scope.Available {
+		return nil, scope, nil
+	}
+	finding, err := s.GetForScan(ctx, scope.ScanID, fingerprint)
+	return finding, scope, err
+}
+
+// findingsForScan returns every finding persisted for a single scan, with
+// triage state attached.
+func (s *FindingStore) findingsForScan(ctx context.Context, scanID string) ([]model.Finding, error) {
+	return s.ListForScan(ctx, scanID, "", true)
 }
 
 // Diff compares two scans' snapshots. added = present in scanB but not
@@ -205,7 +305,31 @@ func (s *FindingStore) GetTriage(ctx context.Context, fingerprint string) (*mode
 	return &ts, nil
 }
 
-// UpsertTriage records (or updates) the triage decision for a fingerprint.
+// UpdateTriageStatus records (or updates) only the status for a fingerprint,
+// preserving any existing analyst note. Used for status-only triage changes so
+// routine status updates cannot silently destroy an analyst's note (AH-UI-34).
+// On first insert the note defaults to empty; on conflict the note column is
+// deliberately left out of the SET so it survives.
+func (s *FindingStore) UpdateTriageStatus(ctx context.Context, fingerprint, status string) (*model.TriageState, error) {
+	var ts model.TriageState
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO finding_triage (fingerprint, status, note, updated_at)
+		 VALUES ($1, $2, '', NOW())
+		 ON CONFLICT (fingerprint) DO UPDATE SET
+		    status = EXCLUDED.status,
+		    updated_at = NOW()
+		 RETURNING status, note, updated_at`,
+		fingerprint, status).Scan(&ts.Status, &ts.Note, &ts.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("update triage status: %w", err)
+	}
+	return &ts, nil
+}
+
+// UpsertTriage records (or updates) the triage decision for a fingerprint,
+// including the note. Callers use this only when the note is explicitly
+// provided (which includes explicit clearing to ""); status-only changes go
+// through UpdateTriageStatus so the note is preserved.
 func (s *FindingStore) UpsertTriage(ctx context.Context, fingerprint, status, note string) (*model.TriageState, error) {
 	var ts model.TriageState
 	err := s.pool.QueryRow(ctx,
@@ -231,14 +355,33 @@ func scanFindings(rows pgx.Rows) ([]model.Finding, error) {
 		var f model.Finding
 		var status, note *string
 		var updatedAt *time.Time
+		var evidenceJSON, exactEvidenceJSON []byte
 		if err := rows.Scan(
+			&f.ScanID, &f.CapturedAt,
 			&f.ID, &f.Severity, &f.Category, &f.Title, &f.Description, &f.EdgeKind,
 			&f.SourceID, &f.SourceName, &f.SourceKind, &f.TargetID, &f.TargetName, &f.TargetKind,
-			&f.Confidence, &f.OWASPMap, &status, &note, &updatedAt,
+			&f.Confidence, &f.OWASPMap, &f.ATLASMap, &f.Variant, &evidenceJSON, &exactEvidenceJSON,
+			&status, &note, &updatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan finding row: %w", err)
 		}
 		f.ID = strings.TrimSpace(f.ID)
+		if len(evidenceJSON) > 0 {
+			if err := json.Unmarshal(evidenceJSON, &f.Evidence); err != nil {
+				return nil, fmt.Errorf("decode finding %s evidence: %w", f.ID, err)
+			}
+		}
+		if f.Evidence.Channels == nil {
+			f.Evidence.Channels = []string{}
+		}
+		if len(exactEvidenceJSON) > 0 {
+			var exact model.ExactFindingEvidence
+			if err := json.Unmarshal(exactEvidenceJSON, &exact); err != nil {
+				return nil, fmt.Errorf("decode finding %s exact evidence: %w", f.ID, err)
+			}
+			normalizeExactFindingEvidence(&exact)
+			f.ExactEvidence = &exact
+		}
 		if status != nil {
 			ts := &model.TriageState{Status: *status}
 			if note != nil {
@@ -252,6 +395,31 @@ func scanFindings(rows pgx.Rows) ([]model.Finding, error) {
 		out = append(out, f)
 	}
 	return out, rows.Err()
+}
+
+func normalizeExactFindingEvidence(exact *model.ExactFindingEvidence) {
+	if exact.Nodes == nil {
+		exact.Nodes = []model.ExactFindingEvidenceNode{}
+	}
+	if exact.Edges == nil {
+		exact.Edges = []model.ExactFindingEvidenceEdge{}
+	}
+	if exact.Reasons == nil {
+		exact.Reasons = []string{}
+	}
+	for i := range exact.Nodes {
+		if exact.Nodes[i].Kinds == nil {
+			exact.Nodes[i].Kinds = []string{}
+		}
+		if exact.Nodes[i].Properties == nil {
+			exact.Nodes[i].Properties = map[string]any{}
+		}
+	}
+	for i := range exact.Edges {
+		if exact.Edges[i].Properties == nil {
+			exact.Edges[i].Properties = map[string]any{}
+		}
+	}
 }
 
 func isSuppressed(ts *model.TriageState) bool {

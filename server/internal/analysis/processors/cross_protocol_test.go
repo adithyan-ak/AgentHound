@@ -3,6 +3,7 @@ package processors
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
@@ -45,6 +46,14 @@ func TestCrossProtocol_ProcessSuccess(t *testing.T) {
 	params, _ := calls[0].Args[1].(map[string]any)
 	if params["scan_id"] != "scan-1" {
 		t.Errorf("scan_id = %v", params["scan_id"])
+	}
+	cypher, _ := calls[0].Args[0].(string)
+	if strings.Contains(cypher, "ext.auth_method IS NULL)") ||
+		!strings.Contains(cypher, "ext.auth_assurance = 'unauthenticated'") {
+		t.Fatalf("unknown auth must not satisfy cross-protocol detection:\n%s", cypher)
+	}
+	if !strings.Contains(cypher, "e.confidence = 0.5") {
+		t.Fatalf("cross-protocol correlation must remain calibrated to 50%%:\n%s", cypher)
 	}
 }
 

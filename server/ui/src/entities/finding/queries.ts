@@ -13,10 +13,15 @@ import type { TriageStatus } from "@shared/model/triage";
 // addresses a distinct cache entry so the register's "show suppressed"
 // toggle does not disturb the default (hidden-suppressed) view.
 export function useFindings(includeSuppressed = false) {
-  return useQuery({
+  const query = useQuery({
     queryKey: qk.findings(includeSuppressed),
     queryFn: () => fetchFindings(undefined, includeSuppressed),
   });
+  return {
+    ...query,
+    data: query.data?.findings,
+    snapshot: query.data?.scope,
+  };
 }
 
 export function useFindingDetail(findingId: string | undefined) {
@@ -48,7 +53,7 @@ export function useSetTriage() {
       fingerprint: string;
       status: TriageStatus;
       note?: string;
-    }) => setTriage(vars.fingerprint, vars.status, vars.note ?? ""),
+    }) => setTriage(vars.fingerprint, vars.status, vars.note),
     onSuccess: (_data, vars) => {
       void qc.invalidateQueries({ queryKey: qk.findings() });
       void qc.invalidateQueries({ queryKey: qk.triage(vars.fingerprint) });

@@ -155,6 +155,21 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		// auth=false on Open WebUI's /api/config means the instance is
 		// wide-open (no login gate). auth_required is the inverse.
 		props["auth_required"] = cfg.AuthEnabled
+		props["probe_status"] = string(common.VerificationVerified)
+		props["last_verified_at"] = time.Now().UTC().Format(time.RFC3339)
+		if !cfg.AuthEnabled {
+			props["auth_method"] = string(common.AuthNone)
+			props["auth_assurance"] = string(common.AuthAssuranceUnauthenticated)
+			props["auth_evidence"] = common.AuthEvidenceAnonymousProbeSucceeded
+		} else if apiKey != "" {
+			props["auth_method"] = string(common.AuthCustom)
+			props["auth_assurance"] = string(common.AuthAssuranceUnknown)
+			props["auth_evidence"] = common.AuthEvidenceConfiguredCredential
+		} else {
+			props["auth_method"] = string(common.AuthUnknown)
+			props["auth_assurance"] = string(common.AuthAssuranceUnknown)
+			props["auth_evidence"] = common.AuthEvidenceUnknown
+		}
 	}
 
 	if apiKey == "" {
@@ -264,12 +279,17 @@ func emitUpstreamCredential(
 		"type":         "apiKey",
 		"name":         nameSlug,
 		"source":       "openwebui",
-		"is_exposed":   true,
 		"high_entropy": true,
 		"format":       format,
 		"value_hash":   common.HashCredentialValue(value),
 		"merge_key":    "value_hash",
 	}
+	common.ApplyCredentialEvidence(
+		cprops,
+		common.CredentialIdentityValueHash,
+		common.CredentialMaterialObserved,
+		common.CredentialExposureExposed,
+	)
 	if endpoint != "" {
 		cprops["provider_endpoint"] = endpoint
 	}
@@ -391,15 +411,19 @@ func runOllamaConfig(
 		// canonical URL so ollamafp / ollamaloot fold into the same
 		// node via MERGE-by-objectid.
 		ollamaID := ingest.ComputeNodeID("OllamaInstance", canon)
+		placeholderIndex := len(res.IngestData.Graph.Nodes)
 		res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, ingest.Node{
 			ID:    ollamaID,
 			Kinds: []string{"OllamaInstance", "AIService"},
 			Properties: map[string]any{
-				"objectid":       ollamaID,
-				"endpoint":       canon,
-				"discovered_via": "openwebui_ollama_config",
-				"service_kind":   "ollama",
-				"auth_method":    "none",
+				"objectid":               ollamaID,
+				"endpoint":               canon,
+				"discovered_via":         "openwebui_ollama_config",
+				"service_kind":           "ollama",
+				"configuration_observed": true,
+				"configured_via":         "openwebui",
+				"configured_auth_method": string(common.AuthUnknown),
+				"probe_status":           string(common.VerificationConfiguredUnverified),
 			},
 		})
 		res.IngestData.Graph.Edges = append(res.IngestData.Graph.Edges, ingest.Edge{
@@ -409,8 +433,10 @@ func runOllamaConfig(
 			SourceKind: "OpenWebUIInstance",
 			TargetKind: "OllamaInstance",
 			Properties: map[string]any{
-				"confidence":  1.0,
-				"risk_weight": 0.3,
+				"confidence":       1.0,
+				"risk_weight":      0.3,
+				"assertion_type":   "configured_reference",
+				"confidence_scope": "configuration_presence",
 				"evidence": map[string]any{
 					"endpoint":      baseURL,
 					"source":        "ollama_config",
@@ -451,17 +477,16 @@ func runOllamaConfig(
 		if key == "" || len(key) < walkerMinSecretLen {
 			continue
 		}
+		res.IngestData.Graph.Nodes[placeholderIndex].Properties["configured_auth_method"] =
+			string(common.AuthAPIKey)
 		emitUpstreamCredential(res, opts, openwebuiID, baseURL,
 			"upstream-ollama-"+strconv.Itoa(i), "upstream-ollama", key, canon, "ollama_config")
 		remaining--
 	}
 
-	// Promote the canonicalized base URLs onto the OpenWebUIInstance
-	// posture props (first URL is exposed as ollama_backend_url for
-	// backward-compat with the historic property name).
+	// Promote the canonicalized base URLs onto the OpenWebUIInstance posture.
 	if len(canonicalBaseURLs) > 0 {
 		props := res.IngestData.Graph.Nodes[0].Properties
-		props["ollama_backend_url"] = canonicalBaseURLs[0]
 		props["ollama_backend_urls"] = canonicalBaseURLs
 	}
 	return remaining

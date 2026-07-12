@@ -53,7 +53,7 @@ export interface PendingFocus {
   title?: string;
 }
 
-interface ExplorerState {
+export interface ExplorerState {
   activeLens: LensId;
   subPresets: Record<LensId, string[]>;
   selectedNodeId: string | null;
@@ -205,28 +205,10 @@ export const useExplorerStore = create<ExplorerState & ExplorerActions>()(
       // restores the user's lens + sub-preset choices without restoring a
       // stale selection.
       name: "agenthound-explorer-view",
-      version: 1,
       partialize: (state) => ({
         activeLens: state.activeLens,
         subPresets: state.subPresets,
       }),
-      // v0 persisted the absolute sub-preset arrays. When a lens' DEFAULTS
-      // later expanded (new edge kinds added to lens-config, e.g. the AI-service
-      // topology edges and CAN_IMPERSONATE), the stored arrays no longer matched
-      // the live defaults — so LensBar lit a spurious "filtered" dot for users
-      // who never actually filtered, and switching lenses couldn't clear it.
-      // Drop the stale selection on upgrade so each lens tracks its live default
-      // again; genuine filters are re-applied in-session and persist normally.
-      migrate: (persisted, version) => {
-        const prev = (persisted ?? {}) as Partial<ExplorerState>;
-        if (version < 1) {
-          return {
-            ...prev,
-            subPresets: DEFAULT_SUB_PRESETS,
-          } as ExplorerState & ExplorerActions;
-        }
-        return prev as ExplorerState & ExplorerActions;
-      },
     },
   ),
 );

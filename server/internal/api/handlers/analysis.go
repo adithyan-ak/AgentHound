@@ -2,9 +2,7 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 
@@ -17,33 +15,30 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// findingLister is the subset of *appdb.FindingStore that the findings
-// endpoint reads from. When nil (e.g. in unit tests without Postgres),
-// HandleFindings falls back to live composite edges in the graph.
-type findingLister interface {
-	ListLatestPerFingerprint(ctx context.Context, severity string, includeSuppressed bool) ([]model.Finding, error)
+type publishedFindingStore interface {
+	ListPublished(ctx context.Context, severity string, includeSuppressed bool) ([]model.Finding, appdb.FindingScope, error)
+	GetPublished(ctx context.Context, fingerprint string) (*model.Finding, appdb.FindingScope, error)
 }
 
 type AnalysisHandler struct {
-	graphDB      graph.GraphDB
-	findingStore findingLister
+	graphDB          graph.GraphDB
+	findingStore     publishedFindingStore
+	projectionReader projectionStateReader
 }
 
 func NewAnalysisHandler(db graph.GraphDB, findingStore *appdb.FindingStore) *AnalysisHandler {
 	h := &AnalysisHandler{graphDB: db}
-	// Avoid the typed-nil-into-interface trap: only populate the
-	// interface field when the concrete pointer is non-nil so the
-	// `h.findingStore != nil` fallback check stays correct.
 	if findingStore != nil {
 		h.findingStore = findingStore
+		h.projectionReader = findingStore
 	}
 	return h
 }
 
 var allowedNodeLabels = func() map[string]bool {
-	m := make(map[string]bool, len(ingest.AllNodeLabels))
-	for _, l := range ingest.AllNodeLabels {
-		m[l] = true
+	m := make(map[string]bool, len(ingest.AllowedNodeKinds))
+	for label := range ingest.AllowedNodeKinds {
+		m[label] = true
 	}
 	return m
 }()
@@ -62,8 +57,20 @@ type pathRequest struct {
 }
 
 func (h *AnalysisHandler) HandleShortestPath(w http.ResponseWriter, r *http.Request) {
+	h.handleShortestPath(w, r, analysis.TraversalScopeSecurity)
+}
+
+func (h *AnalysisHandler) HandleTopologyShortestPath(w http.ResponseWriter, r *http.Request) {
+	h.handleShortestPath(w, r, analysis.TraversalScopeTopology)
+}
+
+func (h *AnalysisHandler) handleShortestPath(
+	w http.ResponseWriter,
+	r *http.Request,
+	scope analysis.TraversalScope,
+) {
 	var req pathRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := DecodeStrictJSON(r.Body, &req); err != nil {
 		WriteValidationError(w, "invalid JSON: "+err.Error())
 		return
 	}
@@ -82,63 +89,54 @@ func (h *AnalysisHandler) HandleShortestPath(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	maxHops := clamp(req.MaxHops, 1, 20, 10)
-
-	srcProp := nodeMatchProp(req.Source)
-	var cypher string
-	params := map[string]any{
-		"source": req.Source,
-	}
-
-	const pathReturn = `RETURN [n IN nodes(p) | {id: n.objectid, name: n.name, kinds: labels(n)}] AS nodes, ` +
-		`[r IN relationships(p) | {kind: type(r), source: startNode(r).objectid, target: endNode(r).objectid}] AS edges, ` +
-		`length(p) AS hops ORDER BY hops ASC LIMIT 10`
-
-	if targetKind != "" && targetName != "" {
-		tgtProp := nodeMatchProp(targetName)
-		cypher = fmt.Sprintf(
-			`MATCH (src:%s {%s: $source}), (tgt:%s {%s: $target}), `+
-				`p = shortestPath((src)-[*1..%d]-(tgt)) WHERE src <> tgt `+
-				pathReturn,
-			req.SourceKind, srcProp, targetKind, tgtProp, maxHops,
-		)
-		params["target"] = targetName
-	} else if targetKind != "" && targetName == "" {
-		cypher = fmt.Sprintf(
-			`MATCH (src:%s {%s: $source}), (tgt:%s), `+
-				`p = shortestPath((src)-[*1..%d]-(tgt)) WHERE src <> tgt `+
-				pathReturn,
-			req.SourceKind, srcProp, targetKind, maxHops,
-		)
-	} else if targetName != "" {
-		tgtProp := nodeMatchProp(targetName)
-		cypher = fmt.Sprintf(
-			`MATCH (src:%s {%s: $source}), (tgt {%s: $target}), `+
-				`p = shortestPath((src)-[*1..%d]-(tgt)) WHERE src <> tgt `+
-				pathReturn,
-			req.SourceKind, srcProp, tgtProp, maxHops,
-		)
-		params["target"] = targetName
-	} else {
-		cypher = fmt.Sprintf(
-			`MATCH (src:%s {%s: $source}), (tgt), `+
-				`p = shortestPath((src)-[*1..%d]-(tgt)) WHERE src <> tgt `+
-				pathReturn,
-			req.SourceKind, srcProp, maxHops,
-		)
-	}
-
-	rows, err := h.graphDB.Query(r.Context(), cypher, params)
+	result, projection, err := guardedProjectionRead(
+		r.Context(),
+		h.projectionReader,
+		func() (analysis.TraversalResult, error) {
+			sources, targets, err := h.resolveTraversalEndpoints(
+				r.Context(), req, targetKind, targetName,
+			)
+			if err != nil {
+				return analysis.TraversalResult{}, fmt.Errorf("resolve shortest path endpoints: %w", err)
+			}
+			return analysis.FindBoundedTraversalPaths(
+				r.Context(),
+				h.graphDB,
+				sources,
+				targets,
+				analysis.TraversalOptions{
+					Scope: scope, Cost: analysis.TraversalCostHops,
+					MaxHops: clamp(req.MaxHops, 1, 20, 10),
+					Limit:   10, MaxExpansions: 100000,
+				},
+			)
+		},
+	)
 	if err != nil {
+		if writeProjectionConflict(w, err) {
+			return
+		}
 		WriteInternalError(w, r, fmt.Errorf("shortest path query: %w", err))
 		return
 	}
-	WriteJSON(w, http.StatusOK, map[string]any{"paths": rows})
+	writeTraversalResult(w, result, projection)
 }
 
 func (h *AnalysisHandler) HandleAllPaths(w http.ResponseWriter, r *http.Request) {
+	h.handleAllPaths(w, r, analysis.TraversalScopeSecurity)
+}
+
+func (h *AnalysisHandler) HandleTopologyAllPaths(w http.ResponseWriter, r *http.Request) {
+	h.handleAllPaths(w, r, analysis.TraversalScopeTopology)
+}
+
+func (h *AnalysisHandler) handleAllPaths(
+	w http.ResponseWriter,
+	r *http.Request,
+	scope analysis.TraversalScope,
+) {
 	var req pathRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := DecodeStrictJSON(r.Body, &req); err != nil {
 		WriteValidationError(w, "invalid JSON: "+err.Error())
 		return
 	}
@@ -157,67 +155,55 @@ func (h *AnalysisHandler) HandleAllPaths(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	maxHops := clamp(req.MaxHops, 1, 20, 10)
-	limit := clamp(req.Limit, 1, 100, 10)
-
-	srcProp := nodeMatchProp(req.Source)
-	var cypher string
-	params := map[string]any{
-		"source": req.Source,
-		"limit":  limit,
-	}
-
-	const allPathReturn = `RETURN [n IN nodes(p) | {id: n.objectid, name: n.name, kinds: labels(n)}] AS nodes, ` +
-		`[r IN relationships(p) | {kind: type(r), source: startNode(r).objectid, target: endNode(r).objectid}] AS edges, ` +
-		`length(p) AS hops ORDER BY hops ASC LIMIT $limit`
-
-	if targetKind != "" && targetName != "" {
-		tgtProp := nodeMatchProp(targetName)
-		cypher = fmt.Sprintf(
-			`MATCH (src:%s {%s: $source}), (tgt:%s {%s: $target}), `+
-				`p = (src)-[*1..%d]-(tgt) WHERE src <> tgt `+
-				allPathReturn,
-			req.SourceKind, srcProp, targetKind, tgtProp, maxHops,
-		)
-		params["target"] = targetName
-	} else if targetKind != "" && targetName == "" {
-		cypher = fmt.Sprintf(
-			`MATCH (src:%s {%s: $source}), (tgt:%s), `+
-				`p = (src)-[*1..%d]-(tgt) WHERE src <> tgt `+
-				allPathReturn,
-			req.SourceKind, srcProp, targetKind, maxHops,
-		)
-	} else if targetName != "" {
-		tgtProp := nodeMatchProp(targetName)
-		cypher = fmt.Sprintf(
-			`MATCH (src:%s {%s: $source}), (tgt {%s: $target}), `+
-				`p = (src)-[*1..%d]-(tgt) WHERE src <> tgt `+
-				allPathReturn,
-			req.SourceKind, srcProp, tgtProp, maxHops,
-		)
-		params["target"] = targetName
-	} else {
-		cypher = fmt.Sprintf(
-			`MATCH (src:%s {%s: $source}), (tgt), `+
-				`p = (src)-[*1..%d]-(tgt) WHERE src <> tgt `+
-				allPathReturn,
-			req.SourceKind, srcProp, maxHops,
-		)
-	}
-
-	rows, err := h.graphDB.Query(r.Context(), cypher, params)
+	result, projection, err := guardedProjectionRead(
+		r.Context(),
+		h.projectionReader,
+		func() (analysis.TraversalResult, error) {
+			sources, targets, err := h.resolveTraversalEndpoints(
+				r.Context(), req, targetKind, targetName,
+			)
+			if err != nil {
+				return analysis.TraversalResult{}, fmt.Errorf("resolve all path endpoints: %w", err)
+			}
+			return analysis.FindBoundedTraversalPaths(
+				r.Context(),
+				h.graphDB,
+				sources,
+				targets,
+				analysis.TraversalOptions{
+					Scope: scope, Cost: analysis.TraversalCostHops,
+					MaxHops:       clamp(req.MaxHops, 1, 20, 10),
+					Limit:         clamp(req.Limit, 1, 100, 10),
+					MaxExpansions: 100000, AllPaths: true,
+				},
+			)
+		},
+	)
 	if err != nil {
+		if writeProjectionConflict(w, err) {
+			return
+		}
 		WriteInternalError(w, r, fmt.Errorf("all paths query: %w", err))
 		return
 	}
-	WriteJSON(w, http.StatusOK, map[string]any{"paths": rows})
+	writeTraversalResult(w, result, projection)
 }
 
-const dijkstraRelTypes = "TRUSTS_SERVER|PROVIDES_TOOL|HAS_ACCESS_TO|CAN_EXECUTE|DELEGATES_TO|CAN_REACH"
-
 func (h *AnalysisHandler) HandleWeightedPath(w http.ResponseWriter, r *http.Request) {
+	h.handleWeightedPath(w, r, analysis.TraversalScopeSecurity)
+}
+
+func (h *AnalysisHandler) HandleTopologyWeightedPath(w http.ResponseWriter, r *http.Request) {
+	h.handleWeightedPath(w, r, analysis.TraversalScopeTopology)
+}
+
+func (h *AnalysisHandler) handleWeightedPath(
+	w http.ResponseWriter,
+	r *http.Request,
+	scope analysis.TraversalScope,
+) {
 	var req pathRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := DecodeStrictJSON(r.Body, &req); err != nil {
 		WriteValidationError(w, "invalid JSON: "+err.Error())
 		return
 	}
@@ -240,101 +226,114 @@ func (h *AnalysisHandler) HandleWeightedPath(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	maxHops := clamp(req.MaxHops, 1, 20, 10)
-	ctx := r.Context()
-
-	srcProp := nodeMatchProp(req.Source)
-	tgtProp := nodeMatchProp(targetName)
-
-	if h.graphDB.HasAPOC(ctx) {
-		var cypher string
-		params := map[string]any{
-			"source": req.Source,
-			"target": targetName,
-		}
-
-		if targetKind != "" {
-			cypher = fmt.Sprintf(
-				`MATCH (src:%s {%s: $source}), (tgt:%s {%s: $target}) `+
-					`CALL apoc.algo.dijkstra(src, tgt, '%s', 'risk_weight') YIELD path, weight `+
-					`RETURN [n IN nodes(path) | {id: n.objectid, name: n.name, kinds: labels(n)}] AS nodes, `+
-					`[r IN relationships(path) | {kind: type(r), source: startNode(r).objectid, target: endNode(r).objectid, risk_weight: r.risk_weight}] AS edges, `+
-					`weight LIMIT 10`,
-				req.SourceKind, srcProp, targetKind, tgtProp, dijkstraRelTypes,
+	result, projection, err := guardedProjectionRead(
+		r.Context(),
+		h.projectionReader,
+		func() (analysis.TraversalResult, error) {
+			sources, targets, err := h.resolveTraversalEndpoints(
+				r.Context(), req, targetKind, targetName,
 			)
-		} else {
-			cypher = fmt.Sprintf(
-				`MATCH (src:%s {%s: $source}), (tgt {%s: $target}) `+
-					`CALL apoc.algo.dijkstra(src, tgt, '%s', 'risk_weight') YIELD path, weight `+
-					`RETURN [n IN nodes(path) | {id: n.objectid, name: n.name, kinds: labels(n)}] AS nodes, `+
-					`[r IN relationships(path) | {kind: type(r), source: startNode(r).objectid, target: endNode(r).objectid, risk_weight: r.risk_weight}] AS edges, `+
-					`weight LIMIT 10`,
-				req.SourceKind, srcProp, tgtProp, dijkstraRelTypes,
+			if err != nil {
+				return analysis.TraversalResult{}, fmt.Errorf("resolve weighted path endpoints: %w", err)
+			}
+			return analysis.FindBoundedTraversalPaths(
+				r.Context(),
+				h.graphDB,
+				sources,
+				targets,
+				analysis.TraversalOptions{
+					Scope: scope, Cost: analysis.TraversalCostRisk,
+					MaxHops:       clamp(req.MaxHops, 1, 20, 10),
+					Limit:         clamp(req.Limit, 1, 100, 10),
+					MaxExpansions: 100000,
+				},
 			)
-		}
-
-		rows, err := h.graphDB.Query(ctx, cypher, params)
-		if err != nil {
-			WriteInternalError(w, r, fmt.Errorf("dijkstra query: %w", err))
+		},
+	)
+	if err != nil {
+		if writeProjectionConflict(w, err) {
 			return
 		}
-		WriteJSON(w, http.StatusOK, map[string]any{"paths": rows, "algorithm": "dijkstra"})
-		return
-	}
-
-	// Fallback: shortestPath + manual risk_weight sum
-	var cypher string
-	params := map[string]any{
-		"source": req.Source,
-		"target": targetName,
-	}
-
-	if targetKind != "" {
-		cypher = fmt.Sprintf(
-			`MATCH (src:%s {%s: $source}), (tgt:%s {%s: $target}), `+
-				`p = shortestPath((src)-[*1..%d]-(tgt)) WHERE src <> tgt `+
-				`RETURN [n IN nodes(p) | {id: n.objectid, name: n.name, kinds: labels(n)}] AS nodes, `+
-				`[r IN relationships(p) | {kind: type(r), source: startNode(r).objectid, target: endNode(r).objectid, risk_weight: r.risk_weight}] AS edges, `+
-				`reduce(w = 0.0, r IN relationships(p) | w + coalesce(r.risk_weight, 1.0)) AS weight, `+
-				`length(p) AS hops ORDER BY weight ASC LIMIT 10`,
-			req.SourceKind, srcProp, targetKind, tgtProp, maxHops,
-		)
-	} else {
-		cypher = fmt.Sprintf(
-			`MATCH (src:%s {%s: $source}), (tgt {%s: $target}), `+
-				`p = shortestPath((src)-[*1..%d]-(tgt)) WHERE src <> tgt `+
-				`RETURN [n IN nodes(p) | {id: n.objectid, name: n.name, kinds: labels(n)}] AS nodes, `+
-				`[r IN relationships(p) | {kind: type(r), source: startNode(r).objectid, target: endNode(r).objectid, risk_weight: r.risk_weight}] AS edges, `+
-				`reduce(w = 0.0, r IN relationships(p) | w + coalesce(r.risk_weight, 1.0)) AS weight, `+
-				`length(p) AS hops ORDER BY weight ASC LIMIT 10`,
-			req.SourceKind, srcProp, tgtProp, maxHops,
-		)
-	}
-
-	rows, err := h.graphDB.Query(ctx, cypher, params)
-	if err != nil {
 		WriteInternalError(w, r, fmt.Errorf("weighted path query: %w", err))
 		return
 	}
-	WriteJSON(w, http.StatusOK, map[string]any{"paths": rows, "algorithm": "shortestPath+reduce"})
+	writeTraversalResult(w, result, projection)
+}
+
+func (h *AnalysisHandler) resolveTraversalEndpoints(
+	ctx context.Context,
+	req pathRequest,
+	targetKind, targetName string,
+) ([]analysis.TraversalNode, []analysis.TraversalNode, error) {
+	sourceValue := req.Source
+	sources, err := analysis.ResolveTraversalNodes(ctx, h.graphDB, analysis.TraversalSelector{
+		Kind:     req.SourceKind,
+		Property: nodeMatchProp(req.Source),
+		Value:    &sourceValue,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	targetSelector := analysis.TraversalSelector{Kind: targetKind}
+	if targetName != "" {
+		targetValue := targetName
+		targetSelector.Property = nodeMatchProp(targetName)
+		targetSelector.Value = &targetValue
+	}
+	targets, err := analysis.ResolveTraversalNodes(ctx, h.graphDB, targetSelector)
+	if err != nil {
+		return nil, nil, err
+	}
+	return sources, targets, nil
+}
+
+func writeTraversalResult(
+	w http.ResponseWriter,
+	result analysis.TraversalResult,
+	projection projectionIdentity,
+) {
+	if result.Paths == nil {
+		result.Paths = []analysis.TraversalPath{}
+	}
+	WriteJSON(w, http.StatusOK, struct {
+		Paths      []analysis.TraversalPath   `json:"paths"`
+		Metadata   analysis.TraversalMetadata `json:"metadata"`
+		Projection projectionIdentity         `json:"projection"`
+	}{
+		Paths:      result.Paths,
+		Metadata:   result.Metadata,
+		Projection: projection,
+	})
 }
 
 func (h *AnalysisHandler) HandleFindings(w http.ResponseWriter, r *http.Request) {
 	severity := r.URL.Query().Get("severity")
-	includeSuppressed := r.URL.Query().Get("include_suppressed") == "true"
-
-	var findings []model.Finding
-	var err error
-	if h.findingStore != nil {
-		// Default data source: the persisted per-scan snapshot, with
-		// triage state joined in and suppressed findings hidden unless
-		// include_suppressed=true.
-		findings, err = h.findingStore.ListLatestPerFingerprint(r.Context(), severity, includeSuppressed)
-	} else {
-		// Fallback for setups without a Postgres snapshot (unit tests):
-		// read live composite edges directly from the graph.
-		findings, err = analysis.QueryFindings(r.Context(), h.graphDB, severity)
+	switch severity {
+	case "", "critical", "high", "medium", "low":
+	default:
+		WriteValidationError(w, "severity must be one of: critical, high, medium, low")
+		return
 	}
+	includeSuppressedValue := r.URL.Query().Get("include_suppressed")
+	if includeSuppressedValue != "" &&
+		includeSuppressedValue != "true" &&
+		includeSuppressedValue != "false" {
+		WriteValidationError(w, "include_suppressed must be true or false")
+		return
+	}
+	includeSuppressed := includeSuppressedValue == "true"
+	if r.URL.Query().Has("scope") {
+		WriteValidationError(w, "scope is not supported; findings are always read from the published snapshot")
+		return
+	}
+	if h.findingStore == nil {
+		WriteServiceError(w, "published finding store")
+		return
+	}
+	findings, scope, err := h.findingStore.ListPublished(
+		r.Context(), severity, includeSuppressed,
+	)
 	if err != nil {
 		WriteInternalError(w, r, fmt.Errorf("findings query: %w", err))
 		return
@@ -342,7 +341,13 @@ func (h *AnalysisHandler) HandleFindings(w http.ResponseWriter, r *http.Request)
 	if findings == nil {
 		findings = []model.Finding{}
 	}
-	WriteJSON(w, http.StatusOK, findings)
+	WriteJSON(w, http.StatusOK, struct {
+		Findings []model.Finding    `json:"findings"`
+		Scope    appdb.FindingScope `json:"scope"`
+	}{
+		Findings: findings,
+		Scope:    scope,
+	})
 }
 
 func (h *AnalysisHandler) HandleFindingDetail(w http.ResponseWriter, r *http.Request) {
@@ -358,35 +363,46 @@ func (h *AnalysisHandler) HandleFindingDetail(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	finding, err := analysis.GetFindingByID(r.Context(), h.graphDB, findingID)
+	if r.URL.Query().Has("scope") {
+		WriteValidationError(w, "scope is not supported; finding detail is always read from the published snapshot")
+		return
+	}
+	if h.findingStore == nil {
+		WriteServiceError(w, "published finding store")
+		return
+	}
+	finding, scope, err := h.findingStore.GetPublished(r.Context(), findingID)
 	if err != nil {
-		WriteInternalError(w, r, fmt.Errorf("get finding: %w", err))
+		WriteInternalError(w, r, fmt.Errorf("get published finding: %w", err))
 		return
 	}
 	if finding == nil {
-		WriteNotFound(w, "finding not found: "+findingID)
+		WriteNotFound(w, "finding not found in the published snapshot: "+findingID)
 		return
 	}
 
-	compositeProps, err := analysis.GetCompositeEdgeProps(r.Context(), h.graphDB, finding)
-	if err != nil {
-		slog.Warn("failed to get composite edge props", "error", err)
+	attackPath := analysis.AttackPathFromExactEvidence(finding)
+	evidenceState := analysis.FindingDetailEvidenceUnavailable
+	if finding.ExactEvidence != nil {
+		evidenceState = analysis.FindingDetailEvidencePersistedExact
 	}
-
-	attackPath, err := analysis.ReconstructAttackPath(r.Context(), h.graphDB, finding, compositeProps)
-	if err != nil {
-		slog.Warn("attack path reconstruction failed", "error", err)
-	}
-
-	remediation := analysis.BuildRemediation(attackPath, finding)
-	impact := analysis.BuildImpact(finding, attackPath, compositeProps)
 
 	WriteJSON(w, http.StatusOK, analysis.FindingDetail{
-		Finding:        *finding,
-		CompositeProps: compositeProps,
-		AttackPath:     attackPath,
-		Remediation:    remediation,
-		Impact:         impact,
+		Finding:     *finding,
+		AttackPath:  attackPath,
+		Remediation: analysis.BuildRemediation(attackPath, finding),
+		Impact:      analysis.BuildImpact(finding, attackPath),
+		Snapshot: &analysis.FindingSnapshot{
+			Scope:            "published",
+			ScanID:           scope.ScanID,
+			Revision:         scope.Revision,
+			PublishedAt:      scope.PublishedAt,
+			ProjectionStatus: scope.ProjectionStatus,
+			SnapshotStatus:   scope.SnapshotStatus,
+			Available:        scope.Available,
+			Stale:            scope.Stale,
+			EvidenceState:    evidenceState,
+		},
 	})
 }
 
@@ -401,15 +417,60 @@ func (h *AnalysisHandler) HandlePreBuilt(w http.ResponseWriter, r *http.Request)
 		WriteNotFound(w, "pre-built query not found: "+id)
 		return
 	}
+	if id == "shortest-to-database" {
+		h.handleShortestToDatabase(w, r, q)
+		return
+	}
 
-	rows, err := h.graphDB.Query(r.Context(), q.Cypher, nil)
+	rows, projection, err := guardedProjectionRead(
+		r.Context(),
+		h.projectionReader,
+		func() ([]map[string]any, error) {
+			return h.graphDB.Query(r.Context(), q.Cypher, nil)
+		},
+	)
 	if err != nil {
+		if writeProjectionConflict(w, err) {
+			return
+		}
 		WriteInternalError(w, r, fmt.Errorf("prebuilt query %s: %w", id, err))
 		return
 	}
+	if rows == nil {
+		rows = []map[string]any{}
+	}
 	WriteJSON(w, http.StatusOK, map[string]any{
-		"query": q,
-		"rows":  rows,
+		"query":      q,
+		"rows":       rows,
+		"projection": projection,
+	})
+}
+
+func (h *AnalysisHandler) handleShortestToDatabase(
+	w http.ResponseWriter,
+	r *http.Request,
+	query prebuilt.PreBuiltQuery,
+) {
+	result, projection, err := guardedProjectionRead(
+		r.Context(),
+		h.projectionReader,
+		func() (analysis.TraversalResult, error) {
+			return analysis.FindShortestDatabasePaths(r.Context(), h.graphDB)
+		},
+	)
+	if err != nil {
+		if writeProjectionConflict(w, err) {
+			return
+		}
+		WriteInternalError(w, r, fmt.Errorf("shortest database paths: %w", err))
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"query":      query,
+		"rows":       analysis.DatabasePathRows(result),
+		"metadata":   result.Metadata,
+		"projection": projection,
 	})
 }
 

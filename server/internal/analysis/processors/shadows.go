@@ -26,8 +26,8 @@ func (p *Shadows) Process(ctx context.Context, db graph.GraphDB, scanID string) 
 	// property (server/internal/analysis/riskscore/tool.go); it just no
 	// longer manufactures SHADOWS edges.
 	shadowsCypher := `
-MATCH (s1:MCPServer)-[:PROVIDES_TOOL]->(t1:MCPTool),
-      (s2:MCPServer)-[:PROVIDES_TOOL]->(t2:MCPTool)
+MATCH (s1:MCPServer)-[provides1:PROVIDES_TOOL]->(t1:MCPTool),
+      (s2:MCPServer)-[provides2:PROVIDES_TOOL]->(t2:MCPTool)
 WHERE s1 <> s2
   AND t1 <> t2
   AND t1.description IS NOT NULL
@@ -39,9 +39,19 @@ ON CREATE SET e.confidence = CASE WHEN t1.has_injection_patterns = true THEN 0.9
               e.source_collector = 'mcp',
               e.scan_id = $scan_id,
               e.risk_weight = 0.4,
-              e.last_seen = datetime()
+              e.last_seen = datetime(),
+              e.evidence_version = 1,
+              e.evidence_node_ids = [s1.objectid, t1.objectid, t2.objectid, s2.objectid],
+              e.evidence_relationship_ids = [id(provides1), id(provides2)]
 ON MATCH SET  e.scan_id = $scan_id,
-              e.last_seen = datetime()
+              e.last_seen = datetime(),
+              e.confidence = CASE WHEN t1.has_injection_patterns = true THEN 0.9 ELSE 0.6 END,
+              e.is_composite = true,
+              e.source_collector = 'mcp',
+              e.risk_weight = 0.4,
+              e.evidence_version = 1,
+              e.evidence_node_ids = [s1.objectid, t1.objectid, t2.objectid, s2.objectid],
+              e.evidence_relationship_ids = [id(provides1), id(provides2)]
 RETURN count(*) AS written`
 
 	shadowsN, err := db.ExecuteWrite(ctx, shadowsCypher, map[string]any{"scan_id": scanID})
@@ -81,18 +91,45 @@ RETURN count(*) AS written`
 	// [src, snk]) reports edges actually MERGEd (one source can be reached
 	// via multiple agents, so the raw row count would over-report).
 	poisonsCypher := `
-MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(:MCPServer)-[:PROVIDES_TOOL]->(src:MCPTool)
+MATCH (a:AgentInstance)-[source_trust:TRUSTS_SERVER]->(source_server:MCPServer)
+      -[source_provides:PROVIDES_TOOL]->(src:MCPTool)
 WHERE src.has_injection_patterns = true
-MATCH (a)-[:TRUSTS_SERVER]->(:MCPServer)-[:PROVIDES_TOOL]->(snk:MCPTool)
+MATCH (a)-[sink_trust:TRUSTS_SERVER]->(sink_server:MCPServer)
+      -[sink_provides:PROVIDES_TOOL]->(snk:MCPTool)
 WHERE src <> snk
   AND any(cap IN snk.capability_surface WHERE cap IN ['shell_access', 'code_execution', 'credential_access', 'email_send'])
-WITH a, src, snk
+WITH a, source_server, source_trust, source_provides,
+     src, sink_server, sink_trust, sink_provides, snk
+ORDER BY sink_server.objectid
+WITH a, source_server, source_trust, source_provides, src, snk,
+     head(collect({
+       server: sink_server,
+       trust: sink_trust,
+       provides: sink_provides
+     })) AS sink_evidence
 ORDER BY snk.objectid
-WITH a, src, collect(DISTINCT snk)[..20] AS sinks
-UNWIND sinks AS snk
+WITH a, source_server, source_trust, source_provides, src,
+     collect({
+       node: snk,
+       server: sink_evidence.server,
+       trust: sink_evidence.trust,
+       provides: sink_evidence.provides
+     })[..20] AS sinks
+UNWIND sinks AS sink
+WITH a, source_server, source_trust, source_provides, src,
+     sink.node AS snk, sink.server AS sink_server,
+     sink.trust AS sink_trust, sink.provides AS sink_provides
 MERGE (src)-[e:POISONS_CONTEXT]->(snk)
 SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true,
-    e.source_collector = 'mcp', e.confidence = 0.6, e.risk_weight = 0.4
+    e.source_collector = 'mcp', e.confidence = 0.6, e.risk_weight = 0.4,
+    e.evidence_version = 1,
+    e.evidence_node_ids = [
+      a.objectid, source_server.objectid, src.objectid,
+      sink_server.objectid, snk.objectid
+    ],
+    e.evidence_relationship_ids = [
+      id(source_trust), id(source_provides), id(sink_trust), id(sink_provides)
+    ]
 RETURN count(DISTINCT [src, snk]) AS written`
 
 	poisonsN, err := db.ExecuteWrite(ctx, poisonsCypher, map[string]any{"scan_id": scanID})

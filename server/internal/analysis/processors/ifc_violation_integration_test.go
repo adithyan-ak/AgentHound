@@ -82,7 +82,8 @@ func TestIntegrationIfcViolationHopAndCapabilityGuards(t *testing.T) {
 			"objectid": "ifc-hop3", "name": "hop3", "scan_id": scanID,
 		}},
 	}
-	if _, err := graph.NewWriter(driver).WriteNodes(ctx, nodes, scanID); err != nil {
+	writer := graph.NewWriter(driver)
+	if _, err := writer.WriteNodes(ctx, managedProcessorNodes(nodes), scanID); err != nil {
 		t.Fatalf("write nodes: %v", err)
 	}
 
@@ -99,8 +100,15 @@ func TestIntegrationIfcViolationHopAndCapabilityGuards(t *testing.T) {
 		{Source: "ifc-hop2", Target: "ifc-hop1", Kind: "HAS_ACCESS_TO", SourceKind: "MCPResource", TargetKind: "MCPResource"},
 		{Source: "ifc-hop1", Target: "ifc-res", Kind: "HAS_ACCESS_TO", SourceKind: "MCPResource", TargetKind: "MCPResource"},
 	}
-	if _, err := db.WriteEdges(ctx, edges, scanID); err != nil {
-		t.Fatalf("write edges: %v", err)
+	if _, err := writer.WriteEdges(ctx, managedProcessorEdges(edges[:1]), scanID); err != nil {
+		t.Fatalf("write raw edge: %v", err)
+	}
+	if _, err := writer.WriteCompositeEdges(
+		ctx,
+		compositeProcessorEdges(edges[1:]),
+		scanID,
+	); err != nil {
+		t.Fatalf("write composite edges: %v", err)
 	}
 
 	if _, err := (&IfcViolation{}).Process(ctx, db, scanID); err != nil {

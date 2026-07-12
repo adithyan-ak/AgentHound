@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -130,6 +131,41 @@ func TestLoadFingerprintBundle_EmptyPath(t *testing.T) {
 	_, err := LoadFingerprintBundle("")
 	if err == nil {
 		t.Fatal("expected error for empty path")
+	}
+}
+
+func TestLoadFingerprintsRecordsSkippedBundleFailures(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(dir, "valid.yaml"),
+		[]byte(newRuleYAML),
+		0o600,
+	); err != nil {
+		t.Fatalf("write valid bundle rule: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(dir, "broken.yaml"),
+		[]byte("{{not yaml"),
+		0o600,
+	); err != nil {
+		t.Fatalf("write broken bundle rule: %v", err)
+	}
+
+	SetBundleOverridePath(dir)
+	defer SetBundleOverridePath("")
+	effective, err := LoadFingerprints()
+	if err != nil {
+		t.Fatalf("LoadFingerprints: %v", err)
+	}
+	failures := FingerprintLoadFailures()
+	if len(failures) != 1 ||
+		!strings.Contains(failures[0], "broken.yaml") {
+		t.Fatalf("fingerprint load failures = %v", failures)
+	}
+	manifest := BuildManifest(nil, effective, failures...)
+	if manifest.LoadState != "partial" ||
+		len(manifest.Errors) != 1 {
+		t.Fatalf("partial fingerprint manifest = %+v", manifest)
 	}
 }
 

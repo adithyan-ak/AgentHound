@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/adithyan-ak/agenthound/sdk/common"
 )
@@ -70,6 +72,7 @@ func (m *regexMatcher) Match(text string) []MatchResult {
 type keywordMatcher struct {
 	keywords        []string
 	caseInsensitive bool
+	wordBoundary    bool
 	matchAll        bool
 }
 
@@ -85,6 +88,7 @@ func compileKeyword(spec MatcherSpec) (*keywordMatcher, error) {
 	return &keywordMatcher{
 		keywords:        kw,
 		caseInsensitive: spec.CaseInsensitive,
+		wordBoundary:    spec.WordBoundary,
 		matchAll:        spec.MatchMode == "all",
 	}, nil
 }
@@ -92,7 +96,7 @@ func compileKeyword(spec MatcherSpec) (*keywordMatcher, error) {
 func (m *keywordMatcher) Match(text string) []MatchResult {
 	var results []MatchResult
 	for _, kw := range m.keywords {
-		start, end, ok := findKeyword(text, kw, m.caseInsensitive)
+		start, end, ok := findKeyword(text, kw, m.caseInsensitive, m.wordBoundary)
 		if ok {
 			matched := text[start:end]
 			if len(matched) > 100 {
@@ -116,20 +120,56 @@ func (m *keywordMatcher) Match(text string) []MatchResult {
 // byte-length-preserving (expanding folds like 'Ⱥ'→'ⱥ' grow, shrinking folds
 // like 'İ'→'i' shrink), so slicing the original with lowered indices would
 // produce out-of-range panics or garbled evidence — the remapping avoids both.
-func findKeyword(text, kw string, caseInsensitive bool) (start, end int, ok bool) {
-	if !caseInsensitive {
-		idx := strings.Index(text, kw)
-		if idx < 0 {
+func findKeyword(text, kw string, caseInsensitive, wordBoundary bool) (start, end int, ok bool) {
+	searchText := text
+	if caseInsensitive {
+		searchText = strings.ToLower(text)
+	}
+	searchFrom := 0
+	for searchFrom <= len(searchText) {
+		relative := strings.Index(searchText[searchFrom:], kw)
+		if relative < 0 {
 			return 0, 0, false
 		}
-		return idx, idx + len(kw), true
+		matchStart := searchFrom + relative
+		matchEnd := matchStart + len(kw)
+		start, end = matchStart, matchEnd
+		if caseInsensitive {
+			start, end, ok = lowerSpanToOrig(text, matchStart, matchEnd)
+			if !ok {
+				return 0, 0, false
+			}
+		}
+		if !wordBoundary || hasWordBoundaries(text, start, end) {
+			return start, end, true
+		}
+		_, size := utf8.DecodeRuneInString(searchText[matchStart:])
+		if size == 0 {
+			return 0, 0, false
+		}
+		searchFrom = matchStart + size
 	}
-	lowerText := strings.ToLower(text)
-	li := strings.Index(lowerText, kw)
-	if li < 0 {
-		return 0, 0, false
+	return 0, 0, false
+}
+
+func hasWordBoundaries(text string, start, end int) bool {
+	if start > 0 {
+		before, _ := utf8.DecodeLastRuneInString(text[:start])
+		if isWordRune(before) {
+			return false
+		}
 	}
-	return lowerSpanToOrig(text, li, li+len(kw))
+	if end < len(text) {
+		after, _ := utf8.DecodeRuneInString(text[end:])
+		if isWordRune(after) {
+			return false
+		}
+	}
+	return true
+}
+
+func isWordRune(r rune) bool {
+	return r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r)
 }
 
 // lowerSpanToOrig maps a byte span [loStart, loEnd) in strings.ToLower(text)

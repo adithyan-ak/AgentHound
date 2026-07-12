@@ -20,7 +20,7 @@ interface CategoryRow {
 export function CategoryBreakdown() {
   const { data: findings, isLoading } = useFindings();
 
-  const rows = useMemo<CategoryRow[]>(() => {
+  const allRows = useMemo<CategoryRow[]>(() => {
     const map = new Map<string, CategoryRow>();
     for (const f of findings ?? []) {
       const row = map.get(f.category) ?? { name: f.category, total: 0, counts: {} };
@@ -29,9 +29,9 @@ export function CategoryBreakdown() {
       map.set(f.category, row);
     }
     return Array.from(map.values())
-      .sort((a, b) => b.total - a.total)
-      .slice(0, MAX_ROWS);
+      .sort((a, b) => b.total - a.total);
   }, [findings]);
+  const rows = allRows.slice(0, MAX_ROWS);
 
   const maxTotal = rows.reduce((m, r) => Math.max(m, r.total), 0);
 
@@ -42,6 +42,11 @@ export function CategoryBreakdown() {
       icon={Layers}
       action={
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {allRows.length > MAX_ROWS && (
+            <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
+              Top {MAX_ROWS} of {allRows.length} categories
+            </span>
+          )}
           {SEVERITY_ORDER.map((sev) => (
             <span
               key={sev}

@@ -3,7 +3,10 @@ import { useEffect, useState } from "react";
 import { Skeleton } from "@shared/ui/primitives/skeleton";
 import { Stack, Sidebar } from "@shared/ui/layout";
 import { isEditableTarget } from "@shared/lib";
-import { useFindingDetail } from "@entities/finding";
+import {
+  findingDetailErrorPresentation,
+  useFindingDetail,
+} from "@entities/finding";
 import { useFindingsNavigation } from "../model/useFindingsNavigation";
 import { buildMarkdownReport } from "../lib/copy-report";
 import { FindingHeader } from "./FindingHeader";
@@ -65,13 +68,14 @@ export function FindingDetailPage() {
   }
 
   if (error || !detail) {
+    const presentation = findingDetailErrorPresentation(error);
     return (
       <div className="dashboard-bg flex min-h-full flex-col items-center justify-center gap-4 p-6 text-center">
         <div className="font-mono text-sm font-semibold uppercase tracking-[0.12em] text-foreground">
-          Finding not found
+          {presentation.title}
         </div>
         <p className="max-w-md text-sm text-muted-foreground">
-          This finding may have been resolved in a recent scan, or the scan data may have been cleared.
+          {presentation.message}
         </p>
         <button
           onClick={() => navigate("/findings")}
@@ -86,7 +90,12 @@ export function FindingDetailPage() {
   const f = detail.finding;
 
   function handleCopyReport() {
-    const md = buildMarkdownReport(f, detail!.attack_path, detail!.remediation);
+    const md = buildMarkdownReport(
+      f,
+      detail!.attack_path,
+      detail!.remediation,
+      detail!.snapshot,
+    );
     navigator.clipboard.writeText(md);
   }
 

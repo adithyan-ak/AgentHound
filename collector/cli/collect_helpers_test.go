@@ -8,22 +8,12 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
 func TestWriteCollectorOutput_File(t *testing.T) {
-	data := &ingest.IngestData{
-		Meta: ingest.IngestMeta{
-			Version:   1,
-			Type:      "agenthound-ingest",
-			Collector: "test",
-		},
-		Graph: ingest.GraphData{
-			Nodes: []ingest.Node{
-				{ID: "n1", Kinds: []string{"MCPServer"}, Properties: map[string]any{"name": "srv"}},
-			},
-		},
-	}
+	data := testCollectorOutput()
 
 	dir := t.TempDir()
 	outPath := filepath.Join(dir, "out.json")
@@ -41,8 +31,8 @@ func TestWriteCollectorOutput_File(t *testing.T) {
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.Meta.Collector != "test" {
-		t.Errorf("collector = %q, want %q", got.Meta.Collector, "test")
+	if got.Meta.Collector != "mcp" {
+		t.Errorf("collector = %q, want %q", got.Meta.Collector, "mcp")
 	}
 	if len(got.Graph.Nodes) != 1 {
 		t.Errorf("nodes = %d, want 1", len(got.Graph.Nodes))
@@ -50,13 +40,8 @@ func TestWriteCollectorOutput_File(t *testing.T) {
 }
 
 func TestWriteCollectorOutput_Stdout(t *testing.T) {
-	data := &ingest.IngestData{
-		Meta: ingest.IngestMeta{
-			Version:   1,
-			Type:      "agenthound-ingest",
-			Collector: "stdout-test",
-		},
-	}
+	data := testCollectorOutput()
+	data.Graph.Nodes = []ingest.Node{}
 
 	out := captureStdout(t, func() {
 		if err := writeCollectorOutput(data, ""); err != nil {
@@ -68,9 +53,35 @@ func TestWriteCollectorOutput_Stdout(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("stdout is not valid JSON: %v\nraw: %q", err, out)
 	}
-	if got.Meta.Collector != "stdout-test" {
-		t.Errorf("collector = %q, want %q", got.Meta.Collector, "stdout-test")
+	if got.Meta.Collector != "mcp" {
+		t.Errorf("collector = %q, want %q", got.Meta.Collector, "mcp")
 	}
+}
+
+func testCollectorOutput() *ingest.IngestData {
+	scope := ingest.CanonicalCoverageKey("mcp", "target", "https://mcp.example")
+	data := common.NewIngestData("mcp", "scan-output-test")
+	data.Meta.Collection = &ingest.CollectionReport{
+		State:        ingest.OutcomeComplete,
+		CoverageKeys: []string{scope},
+		Outcomes: []ingest.CollectionOutcome{{
+			Collector:   "mcp",
+			CoverageKey: scope,
+			Target:      "https://mcp.example",
+			Method:      "enumerate",
+			State:       ingest.OutcomeComplete,
+			Items:       1,
+		}},
+	}
+	data.Graph.Nodes = []ingest.Node{{
+		ID: "n1", Kinds: []string{"MCPServer"},
+		Properties: map[string]any{
+			"name": "srv", "auth_method": "unknown",
+			"auth_assurance": "unknown", "auth_evidence": "unknown",
+		},
+		ObservationDomains: []string{scope},
+	}}
+	return data
 }
 
 func TestWriteOutputAtomic_PermsAndContent(t *testing.T) {

@@ -1,6 +1,13 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Upload, FileJson, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
+import {
+  Upload,
+  FileJson,
+  CheckCircle2,
+  AlertCircle,
+  AlertTriangle,
+  Loader2,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -9,8 +16,12 @@ import {
   DialogDescription,
 } from "@shared/ui/primitives/dialog";
 import { cn } from "@shared/lib/utils";
-import { useUploadScan, type IngestResult } from "@entities/scan";
-import { SIGNAL_OK } from "@shared/theme/tokens";
+import {
+  IngestRequestError,
+  useUploadScan,
+  type IngestResult,
+} from "@entities/scan";
+import { FEEDBACK, SEVERITY, SIGNAL_OK } from "@shared/theme/tokens";
 
 interface ScanImportProps {
   open: boolean;
@@ -53,6 +64,18 @@ type Status =
   | { kind: "success"; result: IngestResult; fileName: string }
   | { kind: "error"; message: string };
 
+function incompleteRequiredStages(result: IngestResult) {
+  return (result.stages ?? []).filter(
+    (stage) => stage.required && stage.state !== "complete",
+  );
+}
+
+function completedStage(result: IngestResult, name: string): boolean {
+  return result.stages?.some(
+    (stage) => stage.name === name && stage.state === "complete",
+  ) ?? false;
+}
+
 const ghostBtn =
   "inline-flex h-8 items-center rounded-[3px] border border-border bg-black/30 px-3 font-mono text-[11px] uppercase tracking-[0.08em] text-foreground/80 transition-colors hover:border-mauve-7 hover:text-foreground";
 const primaryBtn =
@@ -62,6 +85,8 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [dragActive, setDragActive] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const attemptRef = useRef(0);
+  const openRef = useRef(open);
   const { mutateAsync: uploadScan } = useUploadScan();
   const navigate = useNavigate();
 
@@ -71,9 +96,19 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
   }, []);
 
   const handleClose = useCallback(() => {
+    attemptRef.current += 1;
+    openRef.current = false;
     reset();
     onClose();
   }, [onClose, reset]);
+
+  useEffect(() => {
+    openRef.current = open;
+    if (!open) {
+      attemptRef.current += 1;
+      reset();
+    }
+  }, [open, reset]);
 
   const goTo = useCallback(
     (path: string) => {
@@ -85,52 +120,77 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
 
   const processFile = useCallback(
     async (file: File) => {
+      const attempt = ++attemptRef.current;
+      const isCurrent = () =>
+        openRef.current && attemptRef.current === attempt;
       const validationError = validateScanFile(file);
       if (validationError) {
-        setStatus({ kind: "error", message: validationError });
+        if (isCurrent()) {
+          setStatus({ kind: "error", message: validationError });
+        }
         return;
       }
 
+      if (!isCurrent()) return;
       setStatus({ kind: "uploading", fileName: file.name });
 
       let text: string;
       try {
         text = await readFileAsText(file);
       } catch (err) {
-        setStatus({
-          kind: "error",
-          message: err instanceof Error ? err.message : "failed to read file",
-        });
+        if (isCurrent()) {
+          setStatus({
+            kind: "error",
+            message: err instanceof Error ? err.message : "failed to read file",
+          });
+        }
         return;
       }
+      if (!isCurrent()) return;
 
       try {
         JSON.parse(text);
       } catch (err) {
-        setStatus({
-          kind: "error",
-          message:
-            err instanceof Error ? `not valid JSON: ${err.message}` : "not valid JSON",
-        });
+        if (isCurrent()) {
+          setStatus({
+            kind: "error",
+            message:
+              err instanceof Error
+                ? `not valid JSON: ${err.message}`
+                : "not valid JSON",
+          });
+        }
         return;
       }
 
       try {
         const result = await uploadScan(file);
+        if (!isCurrent()) return;
         setStatus({ kind: "success", result, fileName: file.name });
         onSuccess?.();
       } catch (err) {
-        setStatus({
-          kind: "error",
-          message: err instanceof Error ? err.message : "upload failed",
-        });
+        if (isCurrent()) {
+          if (err instanceof IngestRequestError && err.result) {
+            setStatus({
+              kind: "success",
+              result: err.result,
+              fileName: file.name,
+            });
+            onSuccess?.();
+          } else {
+            setStatus({
+              kind: "error",
+              message: err instanceof Error ? err.message : "upload failed",
+            });
+          }
+        }
       }
     },
     [onSuccess, uploadScan],
   );
 
   const handleDrop = useCallback(
-    (e: React.DragEvent<HTMLDivElement>) => {
+    (e: React.DragEvent<HTMLButtonElement>) => {
       e.preventDefault();
       e.stopPropagation();
       setDragActive(false);
@@ -142,13 +202,13 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
     [processFile],
   );
 
-  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+  const handleDragOver = useCallback((e: React.DragEvent<HTMLButtonElement>) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(true);
   }, []);
 
-  const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+  const handleDragLeave = useCallback((e: React.DragEvent<HTMLButtonElement>) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
@@ -163,6 +223,25 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
     },
     [processFile],
   );
+
+  const result = status.kind === "success" ? status.result : null;
+  const incompleteStages = result ? incompleteRequiredStages(result) : [];
+  const warnings = result?.warnings ?? [];
+  const failedOutcome = result?.outcome === "failed";
+  const completeOutcome =
+    result?.outcome === "complete" &&
+    result.projection_status === "complete" &&
+    incompleteStages.length === 0 &&
+    warnings.length === 0;
+  const canOpenGraph =
+    result?.projection_status === "complete" &&
+    completedStage(result, "write_nodes") &&
+    completedStage(result, "write_edges");
+  const canViewFindings =
+    result?.published_revision != null &&
+    completedStage(result, "analysis") &&
+    completedStage(result, "snapshot") &&
+    completedStage(result, "publication");
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && handleClose()}>
@@ -179,36 +258,42 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
         </DialogHeader>
 
         {status.kind === "idle" && (
-          <div
-            data-testid="dropzone"
-            onDrop={handleDrop}
-            onDragOver={handleDragOver}
-            onDragEnter={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onClick={() => inputRef.current?.click()}
-            className={cn(
-              "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-[3px] border-2 border-dashed p-8 transition-colors",
-              dragActive
-                ? "border-primary/70 bg-primary/5"
-                : "border-border bg-black/20 hover:border-primary/40 hover:bg-white/[0.02]",
-            )}
-          >
-            <FileJson className="h-8 w-8 text-muted-foreground" />
-            <p className="font-mono text-xs uppercase tracking-[0.08em] text-foreground">
-              Drop scan JSON here or click to browse
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Files produced by <code className="font-mono">agenthound scan</code>
-            </p>
+          <>
+            <button
+              type="button"
+              data-testid="dropzone"
+              onDrop={handleDrop}
+              onDragOver={handleDragOver}
+              onDragEnter={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onClick={() => inputRef.current?.click()}
+              className={cn(
+                "flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-[3px] border-2 border-dashed p-8 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                dragActive
+                  ? "border-primary/70 bg-primary/5"
+                  : "border-border bg-black/20 hover:border-primary/40 hover:bg-white/[0.02]",
+              )}
+            >
+              <FileJson className="h-8 w-8 text-muted-foreground" aria-hidden />
+              <span className="font-mono text-xs uppercase tracking-[0.08em] text-foreground">
+                Drop scan JSON here or choose a file
+              </span>
+              <span className="text-xs text-muted-foreground">
+                Files produced by{" "}
+                <code className="font-mono">agenthound scan</code>
+              </span>
+            </button>
             <input
               ref={inputRef}
               type="file"
               accept="application/json,.json"
-              className="hidden"
+              className="sr-only"
+              tabIndex={-1}
+              aria-label="Choose collector scan JSON"
               onChange={handleFileInput}
               data-testid="file-input"
             />
-          </div>
+          </>
         )}
 
         {status.kind === "uploading" && (
@@ -226,30 +311,111 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
         {status.kind === "success" && (
           <div className="flex flex-col gap-3">
             <div
-              className="flex items-start gap-2 rounded-[3px] border border-emerald-500/30 bg-emerald-500/10 p-3"
-              style={{ boxShadow: `inset 2px 0 0 0 ${SIGNAL_OK}` }}
+              role={completeOutcome ? "status" : "alert"}
+              className={cn(
+                "flex items-start gap-2 rounded-[3px] border p-3",
+                completeOutcome
+                  ? "border-emerald-500/30 bg-emerald-500/10"
+                  : failedOutcome
+                    ? "border-destructive/30 bg-destructive/10"
+                    : "border-amber-400/30 bg-amber-400/10",
+              )}
+              style={{
+                boxShadow: `inset 2px 0 0 0 ${
+                  completeOutcome
+                    ? SIGNAL_OK
+                    : failedOutcome
+                      ? SEVERITY.critical.solid
+                      : FEEDBACK.warning.solid
+                }`,
+              }}
             >
-              <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-400" />
+              {completeOutcome ? (
+                <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-400" />
+              ) : failedOutcome ? (
+                <AlertCircle className="mt-0.5 h-4 w-4 text-destructive" />
+              ) : (
+                <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-300" />
+              )}
               <div className="space-y-1">
                 <p className="text-sm font-medium text-foreground">
-                  Imported {status.fileName}
+                  {completeOutcome
+                    ? `Imported ${status.fileName}`
+                    : failedOutcome
+                      ? `Import failed after writing ${status.fileName}`
+                      : `Imported ${status.fileName} with incomplete results`}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {status.result.nodes_written} nodes, {status.result.edges_written} edges written.
-                  Scan ID: <code className="font-mono text-foreground/80">{status.result.scan_id}</code>
+                  {status.result.write_rows.nodes} node write rows,{" "}
+                  {status.result.write_rows.edges} edge write rows. Scan ID:{" "}
+                  <code className="font-mono text-foreground/80">
+                    {status.result.scan_id}
+                  </code>
                 </p>
+                {!completeOutcome && (
+                  <p className="text-xs text-muted-foreground">
+                    Outcome: {status.result.outcome ?? "unknown"} · projection:{" "}
+                    {status.result.projection_status ?? "unknown"}
+                  </p>
+                )}
               </div>
             </div>
+            {incompleteStages.length > 0 && (
+              <div className="rounded-[3px] border border-border bg-black/25 px-3 py-2">
+                <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-200">
+                  Required stages not complete
+                </p>
+                <ul className="mt-1 space-y-1 text-xs text-muted-foreground">
+                  {incompleteStages.map((stage) => (
+                    <li key={stage.name}>
+                      <span className="font-mono text-foreground/80">
+                        {stage.name}
+                      </span>{" "}
+                      — {stage.state}
+                      {stage.error ? `: ${stage.error}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {warnings.length > 0 && (
+              <div className="rounded-[3px] border border-amber-400/25 bg-amber-400/5 px-3 py-2">
+                <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-200">
+                  Import warnings
+                </p>
+                <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+                  {warnings.map((warning, index) => (
+                    <li key={`${warning}-${index}`}>{warning}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {!canOpenGraph && (
+              <p className="text-xs text-muted-foreground">
+                Explorer is withheld because the graph projection is not
+                complete.
+              </p>
+            )}
+            {!canViewFindings && (
+              <p className="text-xs text-muted-foreground">
+                Findings are withheld because analysis, snapshot, and
+                publication did not all complete.
+              </p>
+            )}
             <div className="flex flex-wrap justify-end gap-2">
               <button className={ghostBtn} onClick={reset}>
                 Import another
               </button>
-              <button className={ghostBtn} onClick={() => goTo("/findings")}>
-                View findings
-              </button>
-              <button className={primaryBtn} onClick={() => goTo("/explorer")}>
-                Open graph
-              </button>
+              {canViewFindings && (
+                <button className={ghostBtn} onClick={() => goTo("/findings")}>
+                  View findings
+                </button>
+              )}
+              {canOpenGraph && (
+                <button className={primaryBtn} onClick={() => goTo("/explorer")}>
+                  Open graph
+                </button>
+              )}
             </div>
           </div>
         )}

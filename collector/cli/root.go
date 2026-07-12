@@ -47,9 +47,9 @@ UI's Scan Manager → Import Scan dialog.`,
 		if bundle == "" {
 			bundle = os.Getenv("AGENTHOUND_RULES_BUNDLE")
 		}
-		if bundle != "" {
-			rules.SetBundleOverridePath(bundle)
-		}
+		// Set even when empty so repeated in-process command executions (tests,
+		// embeddings, SDK callers) cannot retain a stale prior override.
+		rules.SetBundleOverridePath(bundle)
 		return nil
 	},
 }

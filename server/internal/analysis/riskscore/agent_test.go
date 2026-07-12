@@ -23,7 +23,11 @@ func TestAgentRiskScore_HighEntropyCreds(t *testing.T) {
 		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
 			if containsSubstring(cypher, "HAS_ENV_VAR") {
 				return []map[string]any{
-					{"high_entropy": true, "cred_type": "envVar"},
+					{
+						"high_entropy": true, "cred_type": "envVar",
+						"merge_key": "value_hash", "material_status": "observed",
+						"exposure_status": "exposed",
+					},
 				}, nil
 			}
 			return nil, nil
@@ -45,7 +49,11 @@ func TestAgentRiskScore_HardcodedCreds(t *testing.T) {
 		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
 			if containsSubstring(cypher, "HAS_ENV_VAR") {
 				return []map[string]any{
-					{"high_entropy": false, "cred_type": "hardcoded"},
+					{
+						"high_entropy": false, "cred_type": "hardcoded",
+						"merge_key": "value_hash", "material_status": "observed",
+						"exposure_status": "exposed",
+					},
 				}, nil
 			}
 			return nil, nil
@@ -66,7 +74,11 @@ func TestAgentRiskScore_NormalCreds(t *testing.T) {
 		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
 			if containsSubstring(cypher, "HAS_ENV_VAR") {
 				return []map[string]any{
-					{"high_entropy": false, "cred_type": "envVar"},
+					{
+						"high_entropy": false, "cred_type": "envVar",
+						"merge_key": "value_hash", "material_status": "observed",
+						"exposure_status": "exposed",
+					},
 				}, nil
 			}
 			return nil, nil
@@ -127,19 +139,90 @@ func TestAgentRiskScore_AuthPosture(t *testing.T) {
 	mock := &graph.MockGraphDB{
 		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
 			if containsSubstring(cypher, "risk_weight") {
-				return []map[string]any{{"rw": 0.1}}, nil
+				return []map[string]any{{
+					"rw":                       0.1,
+					"auth_assessment_complete": true,
+				}}, nil
 			}
 			return nil, nil
 		},
 	}
 
-	score, err := AgentRiskScore(context.Background(), mock, "agent-1")
+	assessment, err := AgentRiskAssessment(context.Background(), mock, "agent-1")
 	if err != nil {
-		t.Fatalf("AgentRiskScore() error = %v", err)
+		t.Fatalf("AgentRiskAssessment() error = %v", err)
 	}
 	// auth = (1 - 0.1) * 100 = 90. score = 0.20*90 = 18
-	if score != 18 {
-		t.Errorf("score = %f, want 18", score)
+	if !assessment.Complete ||
+		assessment.Score != 18 ||
+		assessment.Min != 18 ||
+		assessment.Max != 18 ||
+		len(assessment.UnknownFactors) != 0 {
+		t.Errorf("assessment = %+v, want exact score 18", assessment)
+	}
+}
+
+func TestAgentRiskAssessment_UnknownAuthIsBounded(t *testing.T) {
+	mock := &graph.MockGraphDB{
+		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
+			if containsSubstring(cypher, "risk_weight") {
+				return []map[string]any{{
+					"rw":                       0.5,
+					"auth_assessment_complete": false,
+				}}, nil
+			}
+			return nil, nil
+		},
+	}
+
+	assessment, err := AgentRiskAssessment(context.Background(), mock, "agent-1")
+	if err != nil {
+		t.Fatalf("AgentRiskAssessment() error = %v", err)
+	}
+	if assessment.Complete ||
+		assessment.Score != 20 ||
+		assessment.Min != 0 ||
+		assessment.Max != 20 {
+		t.Fatalf("assessment = %+v, want conservative auth bound [0,20]", assessment)
+	}
+	if len(assessment.UnknownFactors) != 1 ||
+		assessment.UnknownFactors[0] != "agent_auth" {
+		t.Fatalf("unknown factors = %v, want [agent_auth]", assessment.UnknownFactors)
+	}
+}
+
+func TestAgentRiskAssessment_MixedAuthCompletenessBoundsOnlyUnknownEdges(t *testing.T) {
+	mock := &graph.MockGraphDB{
+		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
+			if containsSubstring(cypher, "risk_weight") {
+				return []map[string]any{
+					{
+						"rw":                       0.9,
+						"auth_assessment_complete": true,
+					},
+					{
+						"rw":                       0.5,
+						"auth_assessment_complete": false,
+					},
+				}, nil
+			}
+			return nil, nil
+		},
+	}
+
+	assessment, err := AgentRiskAssessment(context.Background(), mock, "agent-1")
+	if err != nil {
+		t.Fatalf("AgentRiskAssessment() error = %v", err)
+	}
+	if assessment.Complete ||
+		assessment.Score != 11 ||
+		assessment.Min != 1 ||
+		assessment.Max != 11 {
+		t.Fatalf("assessment = %+v, want mixed auth bound [1,11]", assessment)
+	}
+	if len(assessment.UnknownFactors) != 1 ||
+		assessment.UnknownFactors[0] != "agent_auth" {
+		t.Fatalf("unknown factors = %v, want [agent_auth]", assessment.UnknownFactors)
 	}
 }
 

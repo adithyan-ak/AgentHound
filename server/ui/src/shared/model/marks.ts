@@ -5,12 +5,11 @@ import { persist } from "zustand/middleware";
  * Attack-graph marks store (shared kernel).
  *
  * Owned = attacker-controlled (red target); High Value = crown overlay. These
- * annotations are consumed by BOTH the explorer (canvas + context menu) and the
- * inspector surface, so the slice lives in shared rather than in either feature
- * (features must not import one another).
+ * annotations are consumed across the Explorer canvas and context menu, so the
+ * persisted slice remains in shared state.
  *
  * The persist key `agenthound-graph-marks` and the `partialize` shape are kept
- * byte-compatible with the legacy store so existing marks rehydrate unchanged.
+ * persisted directly so owned/high-value marks survive reloads.
  */
 interface MarksState {
   ownedNodeIds: string[];

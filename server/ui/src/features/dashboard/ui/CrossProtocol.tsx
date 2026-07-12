@@ -6,10 +6,12 @@ import { WidgetCard, StatusPill, MiniSankey, type PivotPath } from "@shared/ui/w
 import { SEVERITY } from "@shared/theme/tokens";
 
 const INFO =
-  "Attack paths where an A2A agent can reach MCP resources by pivoting through a shared host — the cross-protocol boundary no single-protocol scanner detects.";
+  "Host-correlation hypotheses where A2A and MCP services share infrastructure. These are 50%-confidence leads, not proof that one protocol can invoke the other.";
+
+const MAX_PATHS = 7;
 
 function parsePivots(rows: Record<string, unknown>[]): PivotPath[] {
-  return rows.slice(0, 7).map((row) => ({
+  return rows.slice(0, MAX_PATHS).map((row) => ({
     agent: String(row["source_name"] ?? row["agent"] ?? row["source"] ?? "Unknown"),
     host: String(row["via_host"] ?? row["via_mcp_server"] ?? row["host"] ?? "shared"),
     resource: String(row["target_resource"] ?? row["resource"] ?? row["target"] ?? "Unknown"),
@@ -20,17 +22,18 @@ export function CrossProtocol() {
   const { data, isLoading, isError } = usePreBuiltResult("cross-protocol-paths");
 
   const pivots = parsePivots(data?.rows ?? []);
+  const total = data?.rows.length ?? 0;
 
   return (
     <WidgetCard
-      title="Cross-Protocol Pivots"
+      title="Cross-Protocol Hypotheses"
       info={INFO}
       icon={Spline}
-      accent={pivots.length > 0 ? SEVERITY.critical.solid : undefined}
+      accent={pivots.length > 0 ? SEVERITY.medium.solid : undefined}
       action={
         !isLoading && pivots.length > 0 ? (
-          <StatusPill tone="critical" dot={false}>
-            {pivots.length} paths
+          <StatusPill tone="medium" dot={false}>
+            Top {pivots.length} of {total} hypotheses
           </StatusPill>
         ) : undefined
       }
@@ -43,12 +46,12 @@ export function CrossProtocol() {
           <div className="flex h-56 flex-col items-center justify-center gap-2 text-center">
             <ShieldCheck className={isError ? "h-8 w-8 text-muted-foreground" : "h-8 w-8 text-emerald-500"} />
             <p className="font-mono text-sm font-medium text-foreground">
-              {isError ? "Unable to check" : "No cross-protocol pivots"}
+              {isError ? "Unable to check" : "No cross-protocol hypotheses"}
             </p>
             <p className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
               {isError
                 ? "Could not query cross-protocol paths"
-                : "No A2A-to-MCP attack paths via shared hosts"}
+                : "No A2A/MCP shared-host correlations in the loaded snapshot"}
             </p>
           </div>
         }

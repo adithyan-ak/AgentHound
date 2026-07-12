@@ -18,8 +18,6 @@ export const NODE_KIND_COLORS = {
   Credential: "#EC4899",      // pink-500
   ConfigFile: "#D97706",      // amber-600
   InstructionFile: "#EAB308", // yellow-500
-  ResourceGroup: "#64748B",   // slate-500
-  TrustZone: "#22D3EE",       // cyan-400
   // AI service kinds. Per-kind label is the dispatch key (per
   // node-styles.ts kinds[0] semantics); the umbrella :AIService stays
   // on the node as a multi-label companion so unified queries can match
@@ -43,6 +41,7 @@ export const NODE_KIND_COLORS = {
   // service. Plan suggested #F44336 red but it collides with MCPResource
   // #EF4444 — readers can't distinguish a sensitive resource from a model.
   AIModel: "#6A1B9A",            // deep purple — distinct from A2AAgent / AIService / QdrantInstance
+  ExtractedTrainingSignal: "#2DD4BF", // teal signal — extraction output, distinct from model/service nodes
 } as const satisfies Record<string, string>;
 
 export type NodeKind = keyof typeof NODE_KIND_COLORS;
@@ -226,9 +225,8 @@ export const LENS_ACCENT = {
 } as const;
 
 // Dimmed state palette — used by lenses that fade out-of-scope nodes/edges
-// against the explorer canvas. These sit BETWEEN the canvas (#050B18) and
-// Host/ResourceGroup (#475569 / #64748B), so dimmed elements visibly recede
-// without disappearing into the background.
+// against the explorer canvas. These sit between the canvas and Host so
+// dimmed elements visibly recede without disappearing into the background.
 export const DIMMED = {
   deep: "#1E293B",   // slate-800 — "out of scope" / deepest dim
   mid: "#334155",    // slate-700 — "low centrality" / mid dim

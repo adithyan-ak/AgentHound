@@ -8,3 +8,27 @@ tests:
   - input: "Reads a CSV file and returns rows"
     should_match: false
     description: "no code execution keywords present"
+  - input: "list_scripts List available Python scripts in the workspace to run later"
+    should_match: false
+    description: "script inventory is not execution"
+  - input: "pipeline_status Show whether the Python data pipeline is ready to execute"
+    should_match: false
+    description: "pipeline readiness is not execution"
+  - input: "run_python Execute Python code supplied by the caller"
+    should_match: true
+    description: "direct Python execution remains classified"
+  - input: "runner Running supplied JavaScript code"
+    should_match: true
+    description: "valid run gerund remains classified"
+  - input: "worker Invoked user-provided Python code"
+    should_match: true
+    description: "valid invoke past tense remains classified"
+  - input: "compile_source Compile source code supplied by the caller"
+    should_match: true
+    description: "direct source compilation remains classified"
+  - input: "execute_query Execute a SQL query against PostgreSQL"
+    should_match: false
+    description: "database-only execute_query is not code execution"
+  - input: "runner Executeing supplied Python code"
+    should_match: false
+    description: "invalid generated execute gerund does not match"

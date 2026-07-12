@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { BookOpen, Play, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { usePreBuiltQueries, useRunPreBuiltQuery } from "@entities/prebuilt";
-import type { PreBuiltQuery } from "@entities/prebuilt";
+import type { PreBuiltQuery, TraversalMetadata } from "@entities/prebuilt";
 import { Skeleton } from "@shared/ui/primitives/skeleton";
+import { DataStateNotice } from "@shared/ui/feedback";
 import { severityColor } from "@shared/theme/tokens";
 import { QueryResult } from "./QueryResult";
 
@@ -28,11 +29,19 @@ function SevChip({ severity }: { severity: string }) {
 }
 
 export function QueryLibrary() {
-  const { data: queries, isLoading } = usePreBuiltQueries();
+  const {
+    data: queries,
+    isLoading,
+    isError,
+    error,
+    dataUpdatedAt,
+  } = usePreBuiltQueries();
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [resultRows, setResultRows] = useState<Record<string, unknown>[]>([]);
   const [activeQuery, setActiveQuery] = useState<PreBuiltQuery | null>(null);
+  const [resultMetadata, setResultMetadata] =
+    useState<TraversalMetadata | null>(null);
 
   const runQuery = useRunPreBuiltQuery();
 
@@ -44,10 +53,12 @@ export function QueryLibrary() {
     setExpandedId(query.id);
     setResultRows([]);
     setActiveQuery(null);
+    setResultMetadata(null);
     runQuery.mutate(query.id, {
       onSuccess: (data) => {
         setResultRows(data.rows);
         setActiveQuery(data.query);
+        setResultMetadata(data.metadata ?? null);
       },
     });
   }
@@ -93,6 +104,13 @@ export function QueryLibrary() {
           </p>
         </header>
 
+        {isError && queries && (
+          <DataStateNotice tone="warning" title="Showing cached query catalog">
+            Refresh failed. This catalog was loaded{" "}
+            {new Date(dataUpdatedAt).toLocaleString()} and may be stale.
+          </DataStateNotice>
+        )}
+
         {isLoading ? (
           <div className="space-y-4">
             {Array.from({ length: 3 }).map((_, i) => (
@@ -103,6 +121,12 @@ export function QueryLibrary() {
               </div>
             ))}
           </div>
+        ) : isError && !queries ? (
+          <DataStateNotice tone="error" title="Query catalog unavailable">
+            {error instanceof Error
+              ? error.message
+              : "The query catalog request failed."}
+          </DataStateNotice>
         ) : (
           <div className="space-y-6">
             {sortedCategories.map((category) => (
@@ -194,7 +218,11 @@ export function QueryLibrary() {
                                     : "Query failed"}
                                 </div>
                               ) : activeQuery ? (
-                                <QueryResult rows={resultRows} query={activeQuery} />
+                                <QueryResult
+                                  rows={resultRows}
+                                  query={activeQuery}
+                                  metadata={resultMetadata ?? undefined}
+                                />
                               ) : null}
                             </div>
                           </>

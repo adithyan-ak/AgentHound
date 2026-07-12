@@ -2,8 +2,8 @@ package riskscore
 
 import (
 	"context"
-	"math"
 
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 )
 
@@ -16,25 +16,37 @@ var sensitivityScores = map[string]float64{
 }
 
 func ToolRiskScore(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
-	capClass, err := toolCapabilityClass(ctx, db, objectID)
+	assessment, err := ToolRiskAssessment(ctx, db, objectID)
 	if err != nil {
 		return 0, err
+	}
+	return assessment.Score, nil
+}
+
+func ToolRiskAssessment(ctx context.Context, db graph.GraphDB, objectID string) (Assessment, error) {
+	capClass, err := toolCapabilityClass(ctx, db, objectID)
+	if err != nil {
+		return Assessment{}, err
 	}
 	poison, err := toolPoisoning(ctx, db, objectID)
 	if err != nil {
-		return 0, err
+		return Assessment{}, err
 	}
-	sens, err := toolAccessSensitivity(ctx, db, objectID)
+	sens, err := toolAccessSensitivityAssessment(ctx, db, objectID)
 	if err != nil {
-		return 0, err
+		return Assessment{}, err
 	}
 	input, err := toolInputValidation(ctx, db, objectID)
 	if err != nil {
-		return 0, err
+		return Assessment{}, err
 	}
 
-	score := 0.30*capClass + 0.25*poison + 0.25*sens + 0.20*input
-	return math.Round(score*100) / 100, nil
+	return combineAssessments(
+		weightedAssessment{weight: 0.30, value: exactAssessment(capClass)},
+		weightedAssessment{weight: 0.25, value: exactAssessment(poison)},
+		weightedAssessment{weight: 0.25, value: sens},
+		weightedAssessment{weight: 0.20, value: exactAssessment(input)},
+	), nil
 }
 
 func toolCapabilityClass(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
@@ -79,27 +91,35 @@ RETURN t.has_injection_patterns AS injected, t.has_cross_references AS xref`
 	return 0, nil
 }
 
-func toolAccessSensitivity(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
+func toolAccessSensitivityAssessment(ctx context.Context, db graph.GraphDB, objectID string) (Assessment, error) {
 	cypher := `
 MATCH (t {objectid: $id})-[:HAS_ACCESS_TO]->(r:MCPResource)
 RETURN r.sensitivity AS sensitivity`
 
 	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
 	if err != nil {
-		return 0, err
+		return Assessment{}, err
 	}
 	if len(rows) == 0 {
-		return 0, nil
+		return exactAssessment(0), nil
 	}
 
 	var maxSens float64
+	hasUnknown := false
 	for _, row := range rows {
 		s, _ := row["sensitivity"].(string)
 		if v, ok := sensitivityScores[s]; ok && v > maxSens {
 			maxSens = v
+			continue
+		}
+		if s == "" || s == string(common.SensitivityUnknown) {
+			hasUnknown = true
 		}
 	}
-	return maxSens, nil
+	if hasUnknown {
+		return unknownAssessment("resource_sensitivity", maxSens, 100), nil
+	}
+	return exactAssessment(maxSens), nil
 }
 
 func toolInputValidation(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {

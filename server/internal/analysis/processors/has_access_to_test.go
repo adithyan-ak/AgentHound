@@ -2,6 +2,7 @@ package processors
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
@@ -47,6 +48,14 @@ func TestHasAccessTo_ProcessSuccess(t *testing.T) {
 		params, _ := c.Args[1].(map[string]any)
 		if params["scan_id"] != "scan-1" {
 			t.Errorf("scan_id = %v, want scan-1", params["scan_id"])
+		}
+		cypher, _ := c.Args[0].(string)
+		if !strings.Contains(cypher, "SET e.confidence =") ||
+			!strings.Contains(cypher, "e.match_type =") ||
+			!strings.Contains(cypher, "e.evidence_version = 1") ||
+			!strings.Contains(cypher, "id(provides_tool)") ||
+			!strings.Contains(cypher, "id(provides_resource)") {
+			t.Errorf("inferred access metadata is not refreshed on MERGE:\n%s", cypher)
 		}
 	}
 }

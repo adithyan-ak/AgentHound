@@ -78,7 +78,8 @@ func TestIntegrationShadowsNoCartesianFanout(t *testing.T) {
 			"description": "Sends stuff.", "scan_id": scanID,
 		}},
 	}
-	if _, err := graph.NewWriter(driver).WriteNodes(ctx, nodes, scanID); err != nil {
+	writer := graph.NewWriter(driver)
+	if _, err := writer.WriteNodes(ctx, managedProcessorNodes(nodes), scanID); err != nil {
 		t.Fatalf("write nodes: %v", err)
 	}
 
@@ -89,7 +90,7 @@ func TestIntegrationShadowsNoCartesianFanout(t *testing.T) {
 		{Source: "sf-srv-b", Target: "sf-list-things", Kind: "PROVIDES_TOOL", SourceKind: "MCPServer", TargetKind: "MCPTool"},
 		{Source: "sf-srv-b", Target: "sf-send-stuff", Kind: "PROVIDES_TOOL", SourceKind: "MCPServer", TargetKind: "MCPTool"},
 	}
-	if _, err := db.WriteEdges(ctx, edges, scanID); err != nil {
+	if _, err := writer.WriteEdges(ctx, managedProcessorEdges(edges), scanID); err != nil {
 		t.Fatalf("write edges: %v", err)
 	}
 

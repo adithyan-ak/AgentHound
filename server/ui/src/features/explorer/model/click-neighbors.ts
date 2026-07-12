@@ -1,45 +1,17 @@
 import type { APIEdge } from "@entities/graph/dto";
-import type { LensId, HighlightState } from "./store";
-import { protocolDomain } from "./graph/protocol";
+import type { HighlightState } from "./store";
 import {
   buildAdjacencyIndex,
   bfsFrom,
   type TraversalDirection,
 } from "@shared/lib/graph/traverse";
 
-/**
- * Edge kinds that each lens considers "connected" for the click-highlight.
- * Lenses not listed here use ALL edge kinds (same as Topology).
- */
-const LENS_EDGE_FILTER: Partial<Record<LensId, Set<string>>> = {
-  topology: undefined, // all edges
-  "attack-surface": new Set([
-    "HAS_ACCESS_TO",
-    "CAN_EXECUTE",
-    "CAN_REACH",
-    "CAN_EXFILTRATE_VIA",
-  ]),
-  critical: new Set([
-    "CAN_REACH",
-    "CAN_EXFILTRATE_VIA",
-    "POISONED_DESCRIPTION",
-    "SHADOWS",
-  ]),
-  "cross-protocol": undefined, // cross-protocol detection is runtime, not kind-based
-  credentials: new Set(["AUTHENTICATES_WITH", "USES_CREDENTIAL", "HAS_ENV_VAR"]),
-  poisoning: new Set(["SHADOWS", "POISONED_DESCRIPTION", "POISONED_INSTRUCTIONS"]),
-  "blast-radius": undefined,
-  chokepoints: undefined,
-};
-
-/**
- * Number of BFS hops per lens. Credentials uses 2 hops to trace the full
- * server → identity → credential chain. Everything else is 1-hop (direct
- * neighbors only).
- */
-const LENS_MAX_HOPS: Partial<Record<LensId, number>> = {
-  credentials: 2,
-};
+export interface ClickScope {
+  /** Exact directional `${source}|${target}|${kind}` keys rendered by the lens. */
+  edgeIds: ReadonlySet<string>;
+  maxHops?: number;
+  direction?: TraversalDirection;
+}
 
 /**
  * Compute the click-highlight scope for a node under the current lens.
@@ -47,47 +19,25 @@ const LENS_MAX_HOPS: Partial<Record<LensId, number>> = {
  * Returns the set of node IDs and edge keys that should stay bright when
  * the user clicks a node. Everything else is dimmed to ~8% opacity.
  *
- * The neighbor set is lens-aware:
- * - Topology: all direct raw edges
- * - Attack Surface: only composite edges (what can this node exploit?)
- * - Critical: only high-severity composite edges
- * - Cross-Protocol: only edges crossing protocol boundaries
- * - Credentials: 2-hop chain (server → identity → credential)
- * - Poisoning: only shadowing / poisoned edges
- * - Blast Radius: all outbound edges (reinforces the blast semantics)
- * - Chokepoints: all edges (shows the full congestion)
+ * Scope comes directly from the relationships rendered after lens and
+ * sub-preset filtering. This avoids a second hand-maintained allowlist that can
+ * silently omit supported kinds or highlight hidden relationships.
  */
 export function computeClickNeighbors(
   nodeId: string,
   edges: APIEdge[],
-  activeLens: LensId,
+  scope: ClickScope,
 ): HighlightState {
-  const maxHops = LENS_MAX_HOPS[activeLens] ?? 1;
-  const edgeFilter = LENS_EDGE_FILTER[activeLens];
-  // Blast radius follows outbound edges only; every other lens is bidirectional.
-  const direction: TraversalDirection =
-    activeLens === "blast-radius" ? "out" : "both";
+  const maxHops = scope.maxHops ?? 1;
+  const direction = scope.direction ?? "both";
 
   const index = buildAdjacencyIndex(edges);
   const { nodeIds, edgeKeys } = bfsFrom(nodeId, index, {
     maxHops,
     direction,
     edgeKey: (e) => `${e.source}|${e.target}|${e.kind}`,
-    includeEdge: (e) => {
-      if (edgeFilter && !edgeFilter.has(e.kind)) return false;
-      // Cross-protocol lens: only include edges crossing protocol domains.
-      if (activeLens === "cross-protocol") {
-        const srcDomain = protocolDomain(e.source_kind ?? "");
-        const tgtDomain = protocolDomain(e.target_kind ?? "");
-        const isCross =
-          e.properties?.cross_protocol === true ||
-          (srcDomain !== "OTHER" &&
-            tgtDomain !== "OTHER" &&
-            srcDomain !== tgtDomain);
-        if (!isCross) return false;
-      }
-      return true;
-    },
+    includeEdge: (e) =>
+      scope.edgeIds.has(`${e.source}|${e.target}|${e.kind}`),
   });
 
   return {
