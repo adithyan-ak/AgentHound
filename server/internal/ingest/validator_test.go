@@ -68,6 +68,44 @@ func TestValidatorRejectsEmptyScanID(t *testing.T) {
 	assertValidationError(t, err, "meta.scan_id")
 }
 
+func TestValidatorAcceptsCurrentIdentityVersion(t *testing.T) {
+	v := NewValidator()
+	data := validIngestData()
+	data.Meta.IdentityVersion = ingest.CurrentIdentityVersion
+	if err := v.Validate(data); err != nil {
+		t.Fatalf("expected current identity version to validate, got: %v", err)
+	}
+}
+
+func TestValidatorAcceptsUnsetIdentityVersion(t *testing.T) {
+	// Zero means "unset" (pre-contract fixtures); the server defers to the
+	// current scheme rather than rejecting.
+	v := NewValidator()
+	data := validIngestData()
+	data.Meta.IdentityVersion = 0
+	if err := v.Validate(data); err != nil {
+		t.Fatalf("expected unset identity version to validate, got: %v", err)
+	}
+}
+
+func TestValidatorRejectsStaleIdentityVersion(t *testing.T) {
+	// A v1 (sorted-argv) artifact computes non-matching MCPServer IDs and must
+	// not be merged into a v2 graph; the server rejects it outright.
+	v := NewValidator()
+	data := validIngestData()
+	data.Meta.IdentityVersion = ingest.CurrentIdentityVersion - 1
+	err := v.Validate(data)
+	assertValidationError(t, err, "meta.identity_version")
+}
+
+func TestValidatorRejectsFutureIdentityVersion(t *testing.T) {
+	v := NewValidator()
+	data := validIngestData()
+	data.Meta.IdentityVersion = ingest.CurrentIdentityVersion + 1
+	err := v.Validate(data)
+	assertValidationError(t, err, "meta.identity_version")
+}
+
 func TestValidatorRejectsEmptyNodeID(t *testing.T) {
 	v := NewValidator()
 	data := validIngestData()
@@ -164,6 +202,60 @@ func TestValidatorAcceptsValidExplicitEdgeKinds(t *testing.T) {
 	data.Graph.Edges[0].TargetKind = "MCPTool"
 	if err := v.Validate(data); err != nil {
 		t.Fatalf("expected explicit valid edge kinds to validate, got: %v", err)
+	}
+}
+
+func TestValidatorRejectsIncompatibleExplicitEndpointKind(t *testing.T) {
+	// PROVIDES_TOOL requires an MCPServer source; an explicit MCPTool source is
+	// structurally impossible even though MCPTool is itself a valid node kind.
+	v := NewValidator()
+	data := validIngestData()
+	data.Graph.Edges[0].SourceKind = "MCPTool"
+	data.Graph.Edges[0].TargetKind = "MCPTool"
+	err := v.Validate(data)
+	assertValidationError(t, err, "graph.edges[0].source_kind")
+}
+
+func TestValidatorRejectsIncompatibleEndpointKindFromPayload(t *testing.T) {
+	// No explicit kinds, but the payload nodes resolve to MCPTool -> MCPServer,
+	// which is backwards for PROVIDES_TOOL (MCPServer -> MCPTool).
+	v := NewValidator()
+	data := validIngestData()
+	data.Graph.Nodes[0].Kinds = []string{"MCPTool"}
+	data.Graph.Nodes[1].Kinds = []string{"MCPServer"}
+	err := v.Validate(data)
+	assertValidationError(t, err, "graph.edges[0].source_kind")
+}
+
+func TestValidatorDefersEndpointCheckForAlreadyStoredNodes(t *testing.T) {
+	// An edge whose endpoints are neither in this payload nor carry explicit
+	// kinds references already-stored nodes; the endpoint check is deferred, so
+	// this must validate.
+	v := NewValidator()
+	data := validIngestData()
+	data.Graph.Nodes = nil
+	data.Graph.Edges = []ingest.Edge{
+		{Source: "sha256:stored-a", Target: "sha256:stored-b", Kind: "PROVIDES_TOOL", Properties: map[string]any{}},
+	}
+	if err := v.Validate(data); err != nil {
+		t.Fatalf("expected deferred endpoint check to pass, got: %v", err)
+	}
+}
+
+func TestValidatorAcceptsUmbrellaEndpointKind(t *testing.T) {
+	// EXPOSES requires an :AIService source; a per-service node carrying the
+	// umbrella label satisfies it.
+	v := NewValidator()
+	data := validIngestData()
+	data.Graph.Nodes = []ingest.Node{
+		{ID: "svc-a", Kinds: []string{"LiteLLMGateway", "AIService"}, Properties: map[string]any{"name": "gw"}},
+		{ID: "svc-b", Kinds: []string{"OllamaInstance", "AIService"}, Properties: map[string]any{"name": "up"}},
+	}
+	data.Graph.Edges = []ingest.Edge{
+		{Source: "svc-a", Target: "svc-b", Kind: "EXPOSES", Properties: map[string]any{}},
+	}
+	if err := v.Validate(data); err != nil {
+		t.Fatalf("expected umbrella-label endpoint to validate, got: %v", err)
 	}
 }
 

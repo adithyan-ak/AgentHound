@@ -4,7 +4,7 @@ import { useNodes, riskScore } from "@entities/node";
 import { Skeleton } from "@shared/ui/primitives/skeleton";
 import { AsyncBoundary } from "@shared/ui/feedback";
 import { WidgetCard, MeterBar } from "@shared/ui/widgets";
-import { NODE_KIND_COLORS, NODE_KIND_COLORS_BY_KEY, riskColor } from "@shared/theme/tokens";
+import { NODE_KIND_COLORS_BY_KEY, NEUTRAL_NODE_COLOR, riskColor } from "@shared/theme/tokens";
 
 const INFO =
   "Entities with the highest computed risk scores. Risk reflects auth posture, blast radius, poisoning exposure, and credential handling.";
@@ -24,13 +24,15 @@ interface RiskyEntity {
   riskScore: number;
 }
 
-export function TopRiskyEntities() {
-  const { data: nodes, isLoading } = useNodes();
+const TOP_N = 6;
 
-  const top = useMemo<RiskyEntity[]>(() => {
-    if (!nodes) return [];
+export function TopRiskyEntities() {
+  const { data: nodes, isLoading, isError } = useNodes();
+
+  const { top, total } = useMemo<{ top: RiskyEntity[]; total: number }>(() => {
+    if (!nodes) return { top: [], total: 0 };
     const scored = new Set(Object.keys(KIND_LABEL));
-    return nodes
+    const ranked = nodes
       .filter((n) => n.kinds.some((k) => scored.has(k)))
       .map((n): RiskyEntity => ({
         id: n.id,
@@ -39,15 +41,35 @@ export function TopRiskyEntities() {
         riskScore: riskScore(n),
       }))
       .filter((e) => e.riskScore > 0)
-      .sort((a, b) => b.riskScore - a.riskScore)
-      .slice(0, 6);
+      .sort((a, b) => b.riskScore - a.riskScore);
+    return { top: ranked.slice(0, TOP_N), total: ranked.length };
   }, [nodes]);
 
   return (
-    <WidgetCard title="Top Risky Entities" info={INFO} icon={Crosshair}>
+    <WidgetCard
+      title="Top Risky Entities"
+      info={INFO}
+      icon={Crosshair}
+      action={
+        total > TOP_N ? (
+          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+            Top {TOP_N} <span className="text-muted-foreground/50">/</span> {total}
+          </span>
+        ) : undefined
+      }
+    >
       <AsyncBoundary
         isLoading={isLoading}
+        isError={isError}
         isEmpty={top.length === 0}
+        error={
+          <div
+            role="alert"
+            className="flex h-56 items-center justify-center font-mono text-xs uppercase tracking-wider text-muted-foreground"
+          >
+            Risk data unavailable
+          </div>
+        }
         loading={<Skeleton className="h-56 w-full" />}
         empty={
           <div className="flex h-56 items-center justify-center font-mono text-xs uppercase tracking-wider text-muted-foreground">
@@ -58,7 +80,7 @@ export function TopRiskyEntities() {
         <ol className="space-y-1.5">
           {top.map((entity, i) => {
             const color = riskColor(entity.riskScore);
-            const kindColor = NODE_KIND_COLORS_BY_KEY[entity.kind] ?? NODE_KIND_COLORS.ResourceGroup;
+            const kindColor = NODE_KIND_COLORS_BY_KEY[entity.kind] ?? NEUTRAL_NODE_COLOR;
             return (
               <li
                 key={entity.id}

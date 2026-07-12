@@ -16,11 +16,16 @@ type mockTriageStore struct {
 	getResult *model.TriageState
 	getErr    error
 	upsertErr error
+	patchErr  error
 
 	gotGetFP    string
 	gotUpsertFP string
 	gotStatus   string
 	gotNote     string
+
+	gotPatchFP     string
+	gotPatchStatus *string
+	gotPatchNote   *string
 }
 
 func (m *mockTriageStore) GetTriage(_ context.Context, fp string) (*model.TriageState, error) {
@@ -34,6 +39,21 @@ func (m *mockTriageStore) UpsertTriage(_ context.Context, fp, status, note strin
 		return nil, m.upsertErr
 	}
 	return &model.TriageState{Status: status, Note: note}, nil
+}
+
+func (m *mockTriageStore) PatchTriage(_ context.Context, fp string, status, note *string) (*model.TriageState, error) {
+	m.gotPatchFP, m.gotPatchStatus, m.gotPatchNote = fp, status, note
+	if m.patchErr != nil {
+		return nil, m.patchErr
+	}
+	ts := &model.TriageState{Status: "new"}
+	if status != nil {
+		ts.Status = *status
+	}
+	if note != nil {
+		ts.Note = *note
+	}
+	return ts, nil
 }
 
 const validFP = "aaaaaaaaaaaaaaaa"
@@ -174,5 +194,51 @@ func TestTriageHandler_Set_StoreError(t *testing.T) {
 	h.HandleSet(w, r)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d", w.Code)
+	}
+}
+
+func TestTriageHandler_Patch_OmittedFieldsPreserve(t *testing.T) {
+	store := &mockTriageStore{}
+	h := &TriageHandler{store: store}
+	w := httptest.NewRecorder()
+	// Only status provided; note omitted → note pointer must be nil (preserve).
+	r := withChiURLParam(newTestRequest(http.MethodPatch, "/x", []byte(`{"status":"confirmed"}`)), "fingerprint", validFP)
+	h.HandlePatch(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if store.gotPatchStatus == nil || *store.gotPatchStatus != "confirmed" {
+		t.Errorf("status pointer should be set to confirmed, got %v", store.gotPatchStatus)
+	}
+	if store.gotPatchNote != nil {
+		t.Error("omitted note must be a nil pointer (preserve), not an empty string")
+	}
+}
+
+func TestTriageHandler_Patch_ExplicitEmptyClears(t *testing.T) {
+	store := &mockTriageStore{}
+	h := &TriageHandler{store: store}
+	w := httptest.NewRecorder()
+	// Explicit empty note → non-nil pointer to "" (clear).
+	r := withChiURLParam(newTestRequest(http.MethodPatch, "/x", []byte(`{"note":""}`)), "fingerprint", validFP)
+	h.HandlePatch(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if store.gotPatchNote == nil || *store.gotPatchNote != "" {
+		t.Errorf("explicit empty note must be a non-nil empty pointer (clear), got %v", store.gotPatchNote)
+	}
+	if store.gotPatchStatus != nil {
+		t.Error("omitted status must be a nil pointer (preserve)")
+	}
+}
+
+func TestTriageHandler_Patch_InvalidStatus(t *testing.T) {
+	h := &TriageHandler{store: &mockTriageStore{}}
+	w := httptest.NewRecorder()
+	r := withChiURLParam(newTestRequest(http.MethodPatch, "/x", []byte(`{"status":"bogus"}`)), "fingerprint", validFP)
+	h.HandlePatch(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }

@@ -36,9 +36,10 @@ func AgentRiskScore(ctx context.Context, db graph.GraphDB, objectID string) (flo
 func agentCredentialRisk(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
 	cypher := `
 MATCH (a {objectid: $id})-[:TRUSTS_SERVER]->(s:MCPServer)-[:HAS_ENV_VAR]->(c:Credential)
+WHERE ($scan_id = '' OR a.scan_id = $scan_id)
 RETURN c.high_entropy AS high_entropy, c.type AS cred_type`
 
-	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
+	rows, err := db.Query(ctx, cypher, riskParams(ctx, objectID))
 	if err != nil {
 		return 0, err
 	}
@@ -60,9 +61,10 @@ RETURN c.high_entropy AS high_entropy, c.type AS cred_type`
 func agentBlastRadius(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
 	cypher := `
 MATCH (a {objectid: $id})-[:CAN_REACH]->(r:MCPResource)
+WHERE ($scan_id = '' OR a.scan_id = $scan_id)
 RETURN count(DISTINCT r) AS cnt`
 
-	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
+	rows, err := db.Query(ctx, cypher, riskParams(ctx, objectID))
 	if err != nil {
 		return 0, err
 	}
@@ -76,9 +78,10 @@ RETURN count(DISTINCT r) AS cnt`
 func agentAuthPosture(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
 	cypher := `
 MATCH (a {objectid: $id})-[t:TRUSTS_SERVER]->(s:MCPServer)
+WHERE ($scan_id = '' OR a.scan_id = $scan_id)
 RETURN t.risk_weight AS rw`
 
-	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
+	rows, err := db.Query(ctx, cypher, riskParams(ctx, objectID))
 	if err != nil {
 		return 0, err
 	}
@@ -97,9 +100,10 @@ RETURN t.risk_weight AS rw`
 func agentToolSurface(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
 	cypher := `
 MATCH (a {objectid: $id})-[:TRUSTS_SERVER]->(s:MCPServer)-[:PROVIDES_TOOL]->(t:MCPTool)
+WHERE ($scan_id = '' OR a.scan_id = $scan_id)
 RETURN count(DISTINCT t) AS cnt`
 
-	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
+	rows, err := db.Query(ctx, cypher, riskParams(ctx, objectID))
 	if err != nil {
 		return 0, err
 	}
@@ -113,10 +117,10 @@ RETURN count(DISTINCT t) AS cnt`
 func agentPoisoning(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
 	cypher := `
 MATCH (a {objectid: $id})-[:LOADS_INSTRUCTIONS]->(i:InstructionFile)
-WHERE i.is_suspicious = true
+WHERE ($scan_id = '' OR a.scan_id = $scan_id) AND i.is_suspicious = true
 RETURN count(i) AS cnt`
 
-	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
+	rows, err := db.Query(ctx, cypher, riskParams(ctx, objectID))
 	if err != nil {
 		return 0, err
 	}

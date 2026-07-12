@@ -10,6 +10,8 @@ export interface ExplorerTotals {
   nodeCount: number;
   edgeCount: number;
   findingCount: number;
+  /** The graph read hit its safety cap — these counts are a partial view. */
+  truncated: boolean;
 }
 
 export interface RenderParams {
@@ -45,6 +47,7 @@ export function computeTotals(
     nodeCount: data?.nodes.length ?? 0,
     edgeCount: data?.edges.length ?? 0,
     findingCount: data?.findings.length ?? 0,
+    truncated: data?.truncated ?? false,
   };
 }
 

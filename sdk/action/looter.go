@@ -2,6 +2,7 @@ package action
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
@@ -106,4 +107,68 @@ func (r *LootResult) ToIngest() *ingest.IngestData {
 		return &ingest.IngestData{}
 	}
 	return r.IngestData
+}
+
+// Coverage derives the collection-coverage manifest for this loot dispatch
+// from the OBSERVED probe outcomes (EndpointsProbed / PartialFailures /
+// PartialErrors), so the emitted ingest envelope carries a truthful
+// "absence is not evidence" status instead of a hand-authored or unknown one.
+// This is what makes an empty loot artifact clean ONLY when every probe
+// actually completed.
+//
+// Roll-up (collector contract):
+//
+//   - no endpoints probed        → StatusUnknown (nothing was assessed)
+//   - every probe succeeded       → StatusComplete (absence is real evidence)
+//   - every probe failed          → StatusFailed (no trustworthy observation)
+//   - some succeeded, some failed  → StatusPartial
+//
+// Each recorded PartialError becomes a failed MethodOutcome so a finding's
+// provenance can name exactly which probe was inconclusive. The successful
+// probes are not individually named (the Looter contract records only their
+// count), so they are reflected by the roll-up status, not per-method rows.
+// lootType (e.g. "litellm") names the constituent collector.
+func (r *LootResult) Coverage(lootType string) *ingest.CollectionCoverage {
+	if r == nil {
+		return &ingest.CollectionCoverage{Status: ingest.StatusUnknown}
+	}
+	cov := &ingest.CollectionCoverage{
+		Status: lootRollupStatus(r.Summary.EndpointsProbed, r.Summary.PartialFailures),
+	}
+	if lootType != "" {
+		cov.ConstituentCollectors = []string{"loot:" + lootType}
+	}
+	for _, pe := range r.PartialErrors {
+		method, msg := splitPartialError(pe)
+		cov.Methods = append(cov.Methods, ingest.MethodOutcome{
+			Method: method,
+			Status: ingest.StatusFailed,
+			Error:  msg,
+		})
+	}
+	return cov
+}
+
+// lootRollupStatus maps probe counters to a collection status. See Coverage.
+func lootRollupStatus(probed, failures int) ingest.CollectionStatus {
+	switch {
+	case probed <= 0:
+		return ingest.StatusUnknown
+	case failures <= 0:
+		return ingest.StatusComplete
+	case failures >= probed:
+		return ingest.StatusFailed
+	default:
+		return ingest.StatusPartial
+	}
+}
+
+// splitPartialError splits a Looter partial-error string of the conventional
+// "<method>: <error>" shape into its method and message. A string without the
+// separator is treated as a bare method name with no message.
+func splitPartialError(pe string) (method, msg string) {
+	if i := strings.Index(pe, ": "); i >= 0 {
+		return pe[:i], pe[i+2:]
+	}
+	return pe, ""
 }

@@ -2,11 +2,13 @@ package appdb
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/server/model"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -38,8 +40,12 @@ type FindingsDiff struct {
 	Unchanged []model.Finding `json:"unchanged"`
 }
 
-// InsertFindings persists a scan's findings snapshot. Idempotent: a re-run
-// of the same scan_id overwrites the prior rows for that scan.
+// InsertFindings persists a scan's finding occurrences. Idempotent: a re-run
+// of the same scan_id overwrites the prior rows for that scan. Every truth-
+// contract column (detection subtype/version, typed evidence DAG, confidence
+// basis, nullable attack cost with missing-weight count, lifecycle, rule
+// manifest, ATLAS map) is persisted so the list and detail endpoints read
+// identical, fully-populated occurrences from one source.
 func (s *FindingStore) InsertFindings(ctx context.Context, scanID string, findings []model.Finding) error {
 	if scanID == "" {
 		return errors.New("insert findings: empty scan_id")
@@ -54,12 +60,35 @@ func (s *FindingStore) InsertFindings(ctx context.Context, scanID string, findin
 		if owasp == nil {
 			owasp = []string{}
 		}
+		evidenceJSON, err := marshalJSONObject(f.EvidenceDAG)
+		if err != nil {
+			return fmt.Errorf("insert findings: marshal evidence_dag: %w", err)
+		}
+		compositeJSON, err := marshalJSONObject(f.CompositeProps)
+		if err != nil {
+			return fmt.Errorf("insert findings: marshal composite_props: %w", err)
+		}
+		ruleJSON, err := marshalJSONArray(f.RuleManifest)
+		if err != nil {
+			return fmt.Errorf("insert findings: marshal rule_manifest: %w", err)
+		}
+		atlasJSON, err := marshalStringArrayJSON(f.ATLASMap)
+		if err != nil {
+			return fmt.Errorf("insert findings: marshal atlas_map: %w", err)
+		}
+		lifecycle := f.Lifecycle
+		if lifecycle == "" {
+			lifecycle = "active"
+		}
 		batch.Queue(
 			`INSERT INTO findings
 			   (scan_id, fingerprint, severity, category, title, description, edge_kind,
 			    source_id, source_name, source_kind, target_id, target_name, target_kind,
-			    confidence, owasp_map, cross_protocol)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+			    confidence, owasp_map, cross_protocol, generation_id,
+			    detection_subtype, detection_version, evidence_dag, composite_props, confidence_basis,
+			    attack_cost, weight_total, weight_missing_count, lifecycle, rule_manifest, atlas_map)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+			         $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
 			 ON CONFLICT (scan_id, fingerprint) DO UPDATE SET
 			    severity = EXCLUDED.severity,
 			    category = EXCLUDED.category,
@@ -74,10 +103,24 @@ func (s *FindingStore) InsertFindings(ctx context.Context, scanID string, findin
 			    target_kind = EXCLUDED.target_kind,
 			    confidence = EXCLUDED.confidence,
 			    owasp_map = EXCLUDED.owasp_map,
-			    cross_protocol = EXCLUDED.cross_protocol`,
+			    cross_protocol = EXCLUDED.cross_protocol,
+			    generation_id = EXCLUDED.generation_id,
+			    detection_subtype = EXCLUDED.detection_subtype,
+			    detection_version = EXCLUDED.detection_version,
+			    evidence_dag = EXCLUDED.evidence_dag,
+			    composite_props = EXCLUDED.composite_props,
+			    confidence_basis = EXCLUDED.confidence_basis,
+			    attack_cost = EXCLUDED.attack_cost,
+			    weight_total = EXCLUDED.weight_total,
+			    weight_missing_count = EXCLUDED.weight_missing_count,
+			    lifecycle = EXCLUDED.lifecycle,
+			    rule_manifest = EXCLUDED.rule_manifest,
+			    atlas_map = EXCLUDED.atlas_map`,
 			scanID, f.ID, f.Severity, f.Category, f.Title, f.Description, f.EdgeKind,
 			f.SourceID, f.SourceName, f.SourceKind, f.TargetID, f.TargetName, f.TargetKind,
-			f.Confidence, owasp, isCrossProtocol(f.SourceKind, f.TargetKind),
+			f.Confidence, owasp, isCrossProtocol(f.SourceKind, f.TargetKind), f.GenerationID,
+			f.DetectionSubtype, f.DetectionVersion, evidenceJSON, compositeJSON, f.ConfidenceBasis,
+			f.AttackCost, f.WeightTotal, f.WeightMissingCount, lifecycle, ruleJSON, atlasJSON,
 		)
 	}
 
@@ -91,9 +134,34 @@ func (s *FindingStore) InsertFindings(ctx context.Context, scanID string, findin
 	return nil
 }
 
+// DeleteFindingsForScan removes a scan's persisted finding snapshot. Called
+// during coordinated scan deletion so a deleted generation leaves no orphan
+// findings behind. Absent rows are not an error (idempotent).
+func (s *FindingStore) DeleteFindingsForScan(ctx context.Context, scanID string) error {
+	if scanID == "" {
+		return errors.New("delete findings: empty scan_id")
+	}
+	if _, err := s.pool.Exec(ctx, `DELETE FROM findings WHERE scan_id = $1`, scanID); err != nil {
+		return fmt.Errorf("delete findings for scan %s: %w", scanID, err)
+	}
+	return nil
+}
+
 const findingSelectColumns = `f.fingerprint, f.severity, f.category, f.title, f.description, f.edge_kind,
 	f.source_id, f.source_name, f.source_kind, f.target_id, f.target_name, f.target_kind,
-	f.confidence, f.owasp_map, t.status, t.note, t.updated_at`
+	f.confidence, f.owasp_map, f.generation_id, f.detection_subtype, f.detection_version,
+	f.evidence_dag, f.composite_props, f.confidence_basis, f.attack_cost, f.weight_total, f.weight_missing_count,
+	f.lifecycle, f.rule_manifest, f.atlas_map, t.status, t.note, t.updated_at`
+
+// findingLatestColumns is the outer projection over the DISTINCT ON subquery.
+// It reads the same columns back from the `latest` alias (the LEFT JOIN triage
+// columns live on `latest` at the outer level, not `t`). Order MUST match
+// scanFindings' positional scan.
+const findingLatestColumns = `latest.fingerprint, latest.severity, latest.category, latest.title, latest.description, latest.edge_kind,
+	latest.source_id, latest.source_name, latest.source_kind, latest.target_id, latest.target_name, latest.target_kind,
+	latest.confidence, latest.owasp_map, latest.generation_id, latest.detection_subtype, latest.detection_version,
+	latest.evidence_dag, latest.composite_props, latest.confidence_basis, latest.attack_cost, latest.weight_total, latest.weight_missing_count,
+	latest.lifecycle, latest.rule_manifest, latest.atlas_map, latest.status, latest.note, latest.updated_at`
 
 // ListLatestPerFingerprint returns the most recent finding row per
 // fingerprint (across all scans), with triage state attached. severity
@@ -108,9 +176,7 @@ func (s *FindingStore) ListLatestPerFingerprint(ctx context.Context, severity st
 	// the outer columns explicitly keeps the projection order aligned with
 	// scanFindings' positional scan.
 	query := `
-SELECT latest.fingerprint, latest.severity, latest.category, latest.title, latest.description, latest.edge_kind,
-       latest.source_id, latest.source_name, latest.source_kind, latest.target_id, latest.target_name, latest.target_kind,
-       latest.confidence, latest.owasp_map, latest.status, latest.note, latest.updated_at
+SELECT ` + findingLatestColumns + `
 FROM (
     SELECT DISTINCT ON (f.fingerprint) ` + findingSelectColumns + `
     FROM findings f
@@ -127,6 +193,105 @@ ORDER BY latest.confidence DESC`
 	}
 	defer rows.Close()
 	return scanFindings(rows)
+}
+
+// FindingQuery bounds a generation-scoped, completeness-aware finding read.
+type FindingQuery struct {
+	// GenerationIDs restricts the read to the current (promoted) generations.
+	// An empty slice means "no current generation" and yields zero items —
+	// default reads never surface staged/non-current occurrences.
+	GenerationIDs     []string
+	Severity          string
+	IncludeSuppressed bool
+	Limit             int
+	Offset            int
+}
+
+// ListCurrentFindings returns the latest occurrence per fingerprint scoped to
+// the given (current) generations, plus the total matching count for
+// pagination. When GenerationIDs is empty the result is empty with total 0.
+func (s *FindingStore) ListCurrentFindings(ctx context.Context, q FindingQuery) (items []model.Finding, total int, err error) {
+	if len(q.GenerationIDs) == 0 {
+		return []model.Finding{}, 0, nil
+	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	offset := q.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	// The DISTINCT ON subquery keeps the newest occurrence per fingerprint
+	// within the current generations; the WHERE filters severity + suppression
+	// on that latest row. total is counted over the same filtered set.
+	base := `
+FROM (
+    SELECT DISTINCT ON (f.fingerprint) ` + findingSelectColumns + `
+    FROM findings f
+    LEFT JOIN finding_triage t ON t.fingerprint = f.fingerprint
+    WHERE f.generation_id = ANY($1)
+    ORDER BY f.fingerprint, f.captured_at DESC
+) latest
+WHERE ($2 = '' OR latest.severity = $2)
+  AND ($3 OR latest.status IS NULL OR latest.status NOT IN ('accepted-risk','false-positive'))`
+
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) `+base, q.GenerationIDs, q.Severity, q.IncludeSuppressed).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count current findings: %w", err)
+	}
+
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+findingLatestColumns+base+`
+ORDER BY latest.confidence DESC
+LIMIT $4 OFFSET $5`,
+		q.GenerationIDs, q.Severity, q.IncludeSuppressed, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list current findings: %w", err)
+	}
+	defer rows.Close()
+	items, err = scanFindings(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	if items == nil {
+		items = []model.Finding{}
+	}
+	return items, total, nil
+}
+
+// GetCurrentFinding returns a single finding occurrence by fingerprint scoped
+// to the current generations, with triage joined. Returns nil (no error) when
+// the fingerprint is absent from the current generations, so detail and list
+// read from the identical source and shape.
+func (s *FindingStore) GetCurrentFinding(ctx context.Context, generationIDs []string, fingerprint string) (*model.Finding, error) {
+	if len(generationIDs) == 0 {
+		return nil, nil
+	}
+	query := `
+SELECT ` + findingLatestColumns + `
+FROM (
+    SELECT DISTINCT ON (f.fingerprint) ` + findingSelectColumns + `
+    FROM findings f
+    LEFT JOIN finding_triage t ON t.fingerprint = f.fingerprint
+    WHERE f.generation_id = ANY($1) AND f.fingerprint = $2
+    ORDER BY f.fingerprint, f.captured_at DESC
+) latest
+LIMIT 1`
+	rows, err := s.pool.Query(ctx, query, generationIDs, fingerprint)
+	if err != nil {
+		return nil, fmt.Errorf("get current finding: %w", err)
+	}
+	defer rows.Close()
+	found, err := scanFindings(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(found) == 0 {
+		return nil, nil
+	}
+	return &found[0], nil
 }
 
 // findingsForScan returns every finding persisted for a single scan, with
@@ -223,6 +388,27 @@ func (s *FindingStore) UpsertTriage(ctx context.Context, fingerprint, status, no
 	return &ts, nil
 }
 
+// PatchTriage applies field-level triage updates with preserve-vs-clear
+// semantics: a nil pointer preserves the stored value, a non-nil pointer sets
+// it (an explicit empty string clears). On first write for a fingerprint an
+// omitted status defaults to "new" and an omitted note to empty.
+func (s *FindingStore) PatchTriage(ctx context.Context, fingerprint string, status, note *string) (*model.TriageState, error) {
+	var ts model.TriageState
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO finding_triage (fingerprint, status, note, updated_at)
+		 VALUES ($1, COALESCE($2, 'new'), COALESCE($3, ''), NOW())
+		 ON CONFLICT (fingerprint) DO UPDATE SET
+		    status = COALESCE($2, finding_triage.status),
+		    note = COALESCE($3, finding_triage.note),
+		    updated_at = NOW()
+		 RETURNING status, note, updated_at`,
+		fingerprint, status, note).Scan(&ts.Status, &ts.Note, &ts.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("patch triage: %w", err)
+	}
+	return &ts, nil
+}
+
 // scanFindings maps result rows (with the LEFT JOIN triage columns) into
 // model.Finding values. A NULL triage status yields a nil Triage pointer.
 func scanFindings(rows pgx.Rows) ([]model.Finding, error) {
@@ -231,14 +417,37 @@ func scanFindings(rows pgx.Rows) ([]model.Finding, error) {
 		var f model.Finding
 		var status, note *string
 		var updatedAt *time.Time
+		var evidenceJSON, compositeJSON, ruleJSON, atlasJSON []byte
 		if err := rows.Scan(
 			&f.ID, &f.Severity, &f.Category, &f.Title, &f.Description, &f.EdgeKind,
 			&f.SourceID, &f.SourceName, &f.SourceKind, &f.TargetID, &f.TargetName, &f.TargetKind,
-			&f.Confidence, &f.OWASPMap, &status, &note, &updatedAt,
+			&f.Confidence, &f.OWASPMap, &f.GenerationID, &f.DetectionSubtype, &f.DetectionVersion,
+			&evidenceJSON, &compositeJSON, &f.ConfidenceBasis, &f.AttackCost, &f.WeightTotal, &f.WeightMissingCount,
+			&f.Lifecycle, &ruleJSON, &atlasJSON, &status, &note, &updatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan finding row: %w", err)
 		}
 		f.ID = strings.TrimSpace(f.ID)
+		if dag, err := unmarshalJSONObject(evidenceJSON); err != nil {
+			return nil, fmt.Errorf("decode evidence_dag: %w", err)
+		} else {
+			f.EvidenceDAG = dag
+		}
+		if props, err := unmarshalJSONObject(compositeJSON); err != nil {
+			return nil, fmt.Errorf("decode composite_props: %w", err)
+		} else {
+			f.CompositeProps = props
+		}
+		if rm, err := unmarshalRuleManifest(ruleJSON); err != nil {
+			return nil, fmt.Errorf("decode rule_manifest: %w", err)
+		} else {
+			f.RuleManifest = rm
+		}
+		if am, err := unmarshalStringArrayJSON(atlasJSON); err != nil {
+			return nil, fmt.Errorf("decode atlas_map: %w", err)
+		} else {
+			f.ATLASMap = am
+		}
 		if status != nil {
 			ts := &model.TriageState{Status: *status}
 			if note != nil {
@@ -252,6 +461,62 @@ func scanFindings(rows pgx.Rows) ([]model.Finding, error) {
 		out = append(out, f)
 	}
 	return out, rows.Err()
+}
+
+// marshalJSONObject renders a JSONB object column value. A nil/empty map is
+// stored as "{}" so the NOT NULL DEFAULT '{}' contract holds.
+func marshalJSONObject(m map[string]any) ([]byte, error) {
+	if len(m) == 0 {
+		return []byte("{}"), nil
+	}
+	return json.Marshal(m)
+}
+
+func unmarshalJSONObject(data []byte) (map[string]any, error) {
+	if len(data) == 0 || string(data) == "{}" || string(data) == "null" {
+		return nil, nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func marshalJSONArray(entries []ingest.RuleManifestEntry) ([]byte, error) {
+	if len(entries) == 0 {
+		return []byte("[]"), nil
+	}
+	return json.Marshal(entries)
+}
+
+func unmarshalRuleManifest(data []byte) ([]ingest.RuleManifestEntry, error) {
+	if len(data) == 0 || string(data) == "[]" || string(data) == "null" {
+		return nil, nil
+	}
+	var m []ingest.RuleManifestEntry
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func marshalStringArrayJSON(vals []string) ([]byte, error) {
+	if len(vals) == 0 {
+		return []byte("[]"), nil
+	}
+	return json.Marshal(vals)
+}
+
+func unmarshalStringArrayJSON(data []byte) ([]string, error) {
+	if len(data) == 0 || string(data) == "[]" || string(data) == "null" {
+		return nil, nil
+	}
+	var m []string
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func isSuppressed(ts *model.TriageState) bool {

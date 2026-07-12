@@ -53,6 +53,33 @@ var remediationByEdgeKind = map[string][]remediationTemplate{
 		Title:       "Review host exposure",
 		Description: "Server/agent runs on host %s. Ensure the host is properly isolated.",
 	}},
+	"EXPOSES_CREDENTIAL": {{
+		Title:       "Rotate and scope the exposed key",
+		Description: "Gateway exposes credential %s. Rotate the key and scope it to the minimum set of upstream providers.",
+		Commands:    []string{"# Rotate the exposed provider key", "# Restrict the gateway's virtual-key mapping"},
+	}},
+	// Finding-level templates for the composite edge kinds, used when the
+	// finding is surfaced without a reconstructed path so remediation is never
+	// empty for a real finding.
+	"CAN_REACH_CREDENTIAL_CHAIN": {{
+		Title:       "Break the credential chain",
+		Description: "Agent %s can reach upstream credential %s through a shared master key. Rotate the upstream key and stop reusing the master key across services.",
+		Commands:    []string{"# Rotate the upstream provider key", "# Issue per-service virtual keys instead of sharing the master key"},
+	}},
+	"CAN_REACH_CROSS_PROTOCOL": {{
+		Title:       "Authenticate cross-protocol delegates",
+		Description: "External A2A agent %s can reach resource %s via a co-located delegate. Require authentication on the external agent and isolate the delegate host from MCP servers.",
+		Commands:    []string{"# Enforce auth on the external A2A agent", "# Move the MCP server off the shared delegate host"},
+	}},
+	"CAN_EXFILTRATE_VIA": {{
+		Title:       "Close the exfiltration channel",
+		Description: "Agent %s can exfiltrate sensitive data through tool %s. Remove the outbound capability or gate it behind egress controls.",
+		Commands:    []string{"# Remove outbound capability from the tool's capability_surface", "# Apply egress allowlisting to the server"},
+	}},
+	"CAN_REACH": {{
+		Title:       "Restrict transitive reach",
+		Description: "Agent %s has a transitive path to resource %s. Tighten server trust or tool/resource scoping to break the path.",
+	}},
 }
 
 func BuildRemediation(path *AttackPath, f *Finding) []RemediationStep {

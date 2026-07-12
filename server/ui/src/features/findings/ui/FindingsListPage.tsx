@@ -17,6 +17,9 @@ import {
   X,
 } from "lucide-react";
 import { useFindings, useSetTriage, SEVERITY_RANK } from "@entities/finding";
+import { useFreshness } from "@entities/graph-stats";
+import { isAuthoritative } from "@shared/api/page";
+import { IncompleteBanner } from "@shared/ui/feedback";
 import type { Finding } from "@entities/finding/model";
 import { edgeLabel } from "@entities/edge";
 import {
@@ -68,6 +71,16 @@ const GROUP_OPTIONS: Array<{ value: GroupBy; label: string }> = [
 
 const CONF_OPTIONS = [0, 50, 75, 90];
 
+// Valid values for the enum-typed query-string params. A hand-edited or stale
+// URL (?group=bogus, ?sev=purple) must not silently drive the UI into an
+// invalid state — invalid values are dropped rather than cast blindly.
+const VALID_GROUPS = new Set<GroupBy>(GROUP_OPTIONS.map((o) => o.value));
+const VALID_SEVERITIES = new Set<string>(SEVERITY_LEVELS);
+
+function parseGroupBy(raw: string | null): GroupBy {
+  return raw && VALID_GROUPS.has(raw as GroupBy) ? (raw as GroupBy) : "none";
+}
+
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
@@ -93,7 +106,10 @@ export function FindingsListPage() {
   const [params, setParams] = useSearchParams();
 
   const showSuppressed = params.get("suppressed") === "1";
-  const { data: findings, isLoading } = useFindings(showSuppressed);
+  const { data: findings, isLoading, isError } = useFindings(showSuppressed);
+  const { data: freshness } = useFreshness();
+  const completeness = freshness?.completeness;
+  const authoritative = isAuthoritative(completeness);
   const setTriage = useSetTriage();
 
   // Triage status now arrives inline on each finding (server-backed). Derive
@@ -112,15 +128,27 @@ export function FindingsListPage() {
 
   // --- filter state lives in the URL (shareable / bookmarkable) ---
   const search = params.get("q") ?? "";
+  // Only admit known severity keys from the URL; unknown tokens are ignored so
+  // a malformed ?sev= cannot filter everything out with no visible cause.
   const activeSeverities = useMemo(
-    () => new Set((params.get("sev") ?? "").split(",").filter(Boolean)),
+    () =>
+      new Set(
+        (params.get("sev") ?? "")
+          .split(",")
+          .filter((s) => VALID_SEVERITIES.has(s)),
+      ),
     [params],
   );
   const activeTriage = useMemo(
-    () => new Set((params.get("triage") ?? "").split(",").filter(Boolean)),
+    () =>
+      new Set(
+        (params.get("triage") ?? "")
+          .split(",")
+          .filter((s) => TRIAGE_ORDER.includes(s as TriageStatus)),
+      ),
     [params],
   );
-  const groupBy = (params.get("group") as GroupBy) ?? "none";
+  const groupBy = parseGroupBy(params.get("group"));
   const xproto = params.get("xproto") === "1";
   const minConf = Number(params.get("conf") ?? 0);
 
@@ -391,6 +419,16 @@ export function FindingsListPage() {
     );
   }
 
+  // A zero-finding register only means "no findings detected" (an all-clear
+  // claim) when the scoped read is authoritative. On a failed read, or a
+  // partial/stale/degraded scope, the honest message is "status unknown".
+  const emptyHeadline =
+    total > 0
+      ? "No findings match the current filters"
+      : isError || !authoritative
+        ? "Findings status unknown — not all-clear"
+        : "No findings detected";
+
   // ---------- Main register (loading / empty / table) ----------
   const mainContent = isLoading ? (
     <WidgetCard title="Threat Register" icon={ShieldAlert} flush>
@@ -402,14 +440,17 @@ export function FindingsListPage() {
     </WidgetCard>
   ) : ordered.length === 0 ? (
     <WidgetCard title="Threat Register" icon={ShieldAlert}>
-      <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+      <div
+        className="flex flex-col items-center justify-center gap-3 py-16 text-center"
+        role={isError ? "alert" : undefined}
+      >
         <span className="flex h-12 w-12 items-center justify-center rounded-[4px] bg-primary/10 ring-1 ring-inset ring-primary/20">
           <ShieldAlert className="h-6 w-6 text-primary" />
         </span>
         <p className="font-mono text-xs uppercase tracking-[0.12em] text-muted-foreground">
-          {total > 0 ? "No findings match the current filters" : "No findings detected"}
+          {emptyHeadline}
         </p>
-        {total === 0 && (
+        {total === 0 && !isError && authoritative && (
           <button
             onClick={() => navigate("/scans")}
             className="font-mono text-xs uppercase tracking-[0.08em] text-primary transition-colors hover:text-primary/80"
@@ -492,6 +533,15 @@ export function FindingsListPage() {
             Detected attack paths and exposures across your agent, MCP, and A2A infrastructure.
           </p>
         </header>
+
+        {!authoritative && (
+          <IncompleteBanner
+            completeness={completeness}
+            extraErrors={
+              isError ? ["Findings could not be loaded from the server."] : undefined
+            }
+          />
+        )}
 
         {/* ---------- Top bar: clickable severity strip + search ---------- */}
         <div className="flex flex-wrap items-center gap-2">

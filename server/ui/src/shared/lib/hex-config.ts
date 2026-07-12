@@ -12,8 +12,7 @@ import {
   KeyRound,
   FileCode2,
   FileText,
-  Layers,
-  ShieldCheck,
+  Fingerprint,
   Hexagon,
   Brain,
   Rocket,
@@ -144,22 +143,6 @@ export const HEX_CONFIG: Record<string, HexKindConfig> = {
     column: 4,
     groupLabel: "Resources",
   },
-  ResourceGroup: {
-    strokeColor: NODE_KIND_COLORS.ResourceGroup,
-    fillColor: EXPLORER_HEX_FILL,
-    icon: Layers,
-    kindTag: "RESOURCE GROUP",
-    column: 4,
-    groupLabel: "Resources",
-  },
-  TrustZone: {
-    strokeColor: NODE_KIND_COLORS.TrustZone,
-    fillColor: EXPLORER_HEX_FILL,
-    icon: ShieldCheck,
-    kindTag: "TRUST ZONE",
-    column: 3,
-    groupLabel: "Infra",
-  },
 
   // v0.2 AI services. All sit in column 2 ("Tools & Skills") so they
   // place between :MCPServer and :MCPResource in the layered explorer
@@ -255,6 +238,18 @@ export const HEX_CONFIG: Record<string, HexKindConfig> = {
     icon: Boxes,
     kindTag: "AI MODEL",
     column: 3,
+    groupLabel: "AI Models",
+  },
+  // v0.5 embedding-inversion output. Sits one column right of AIModel (col 3)
+  // so the EXTRACTED_FROM edge reads AIModel(col 3) -> ExtractedTrainingSignal
+  // (col 4): recovered training data lives "downstream" of the model it leaked
+  // from. Fingerprint icon signals recovered/leaked identity-bearing data.
+  ExtractedTrainingSignal: {
+    strokeColor: NODE_KIND_COLORS.ExtractedTrainingSignal,
+    fillColor: EXPLORER_HEX_FILL,
+    icon: Fingerprint,
+    kindTag: "TRAINING SIGNAL",
+    column: 4,
     groupLabel: "AI Models",
   },
 };

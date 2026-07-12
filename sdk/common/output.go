@@ -22,6 +22,8 @@ func NewIngestData(collector, scanID string) *ingest.IngestData {
 			CollectorVersion: CollectorVersion,
 			Timestamp:        time.Now().UTC().Format(time.RFC3339),
 			ScanID:           scanID,
+			SchemaVersion:    ingest.CurrentSchemaVersion,
+			IdentityVersion:  ingest.CurrentIdentityVersion,
 		},
 		Graph: ingest.GraphData{
 			Nodes: []ingest.Node{},

@@ -7,6 +7,9 @@
 
 export const qk = {
   graphStats: () => ["graph", "stats"] as const,
+  // Lightweight generation-freshness poll (Postgres-only). Distinct from
+  // graphStats so a stats refetch and a freshness poll do not collide.
+  freshness: () => ["graph", "generation"] as const,
 
   // Standalone node list (dashboard). The explorer pulls nodes inside its own
   // ["explorer","graph"] bundle, so this key has a single consumer.

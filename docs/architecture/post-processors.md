@@ -148,7 +148,7 @@ Requires s1 has no/weak auth so creds are accessible. Confidence: 0.6.
 
 ## 7. cross_service_credential_chain
 
-**Computes:** `AgentInstance -[CAN_REACH]-> Credential` (upstream provider keys)
+**Computes:** `AgentInstance -[CAN_REACH_CREDENTIAL_CHAIN]-> Credential` (upstream provider keys)
 
 Joins Config Collector and LiteLLM Looter emissions on `Credential.value_hash`:
 
@@ -159,9 +159,22 @@ LiteLLMGateway -[EXPOSES_CREDENTIAL]-> Credential(c1master)
 LiteLLMGateway -[EXPOSES_CREDENTIAL]-> Credential(c2, type IN [apiKey, virtual_key])
 ```
 
-Emits: `(AgentInstance)-[:CAN_REACH]->(c2)` with evidence including `merge_value_hash`, `via_gateway`, `upstream_provider`. Confidence: 0.95, hops: 5.
+Emits a **dedicated** `(AgentInstance)-[:CAN_REACH_CREDENTIAL_CHAIN]->(c2)` edge (not the proven `CAN_REACH`) with evidence including `merge_value_hash`, `via_gateway`, `upstream_provider`. The join that binds `c1` to `c1master` is synthetic (a `value_hash` equality, not a graph edge), so it uses a distinct edge kind rather than overloading proven transitive reach. Confidence: 0.95, hops: 5.
 
-The same single query also computes **credential blast radius**: `count(DISTINCT agent)` reaching the merged secret, written as `blast_radius` on both `c1` (the env-var credential) and `c1master` (its value_hash twin). The agents are collected for the count and re-UNWOUND so the CAN_REACH MERGE stays one edge per (agent, upstream-credential). `blast_radius` then amplifies the server credential-handling risk term (see risk-scoring.md).
+The edge also persists the **full evidence chain** so the finding's DAG/detail/impact are complete and self-contained: the per-endpoint generations (`source_generation`, `target_generation`) and every intermediate node's id + generation (`via_server_id`/`via_server_generation`, `via_credential_id`/`via_credential_generation`, `master_credential_id`/`master_credential_name`/`master_credential_generation`, `via_gateway_id`/`via_gateway_generation`). Because a cross-artifact chain spans generations, the finding detail reconstructs the six-node path (agent → server → env-var credential ==value_hash== master key → gateway → upstream credential) from these persisted properties rather than a single-generation re-traversal that would otherwise return nothing.
+
+**Cross-generation join.** The Config Collector and a Looter ship as **separate artifacts in different generations**, so the in-ingest, single-`scan_id` processor can never see both. The pipeline therefore also runs a cross-generation pass (`analysis.CrossGenerationCredentialChain`) after generation tagging, scoped by `generations`-set membership to an **owner-specific, immutable selection**: the current generations of *other* scopes that are eligible participants, plus the generation being ingested (the owner). Emitted edges are attributed to (and scoped by) the owner generation.
+
+- **Superseded same-scope exclusion.** The owner's own scope is excluded from the selection, so a superseded prior generation of the same scope is never mixed with the new owner generation.
+- **Participation gating.** Only eligible artifacts join: loot generations (`loot:<type>`) always, and config-bearing generations (the `config` collector or the merged `scan:local` bundle) only with **explicit** coverage (`complete`/`partial`). An unknown-coverage config artifact makes no positive claim and is excluded. Delete-lifecycle generations are already excluded by the current-generation read.
+- **Owner must contribute.** The join only emits (and attributes) an owner-generation edge when the owner generation actually observed one of the matched path nodes, so a generation is never credited with a chain it did not produce.
+- **Selection errors fail the stage.** If the current-generation selection cannot be read, the **post-processing** stage is degraded to `failed` (the chain would join against an unknown set), blocking promotion.
+- **Failures fail the stage.** A cross-generation-chain error degrades the **post-processing** stage to `failed`, which blocks promotion — a generation whose credential-chain findings are missing/incomplete never becomes current.
+- **Owner gating.** The artifact currently being ingested runs the chain only when it is itself an eligible anchor (config-bearing with explicit coverage, or a complete/partial loot), so an mcp/a2a/network re-ingest or a failed/unknown-coverage artifact never re-runs it.
+
+This makes a normal `config` + `loot` (e.g. LiteLLM) deployment produce the chain: `c1` (config generation) and `c1master`/`c2` (loot generation) both qualify by membership and join on `value_hash`. A loot artifact occupies its own scope (`loot:<type>`), so it never demotes the config generation while remaining membership-compatible with the join.
+
+The same single query also computes **credential blast radius**: `count(DISTINCT agent)` reaching the merged secret, written as `blast_radius` on the emitted `CAN_REACH_CREDENTIAL_CHAIN` composite edge (keyed to the env-var credential via `via_credential_id`) — **not** written back onto the raw `Credential` observations (`c1`/`c1master`), which are immutable prior-generation facts. The agents are collected for the count and re-UNWOUND so the MERGE stays one edge per (agent, upstream-credential). `blast_radius` then amplifies the server credential-handling risk term (see risk-scoring.md).
 
 The `value_hash` is the cross-collector merge primitive -- same secret value regardless of how each collector derives its objectid.
 

@@ -17,6 +17,9 @@ import (
 type triageStore interface {
 	GetTriage(ctx context.Context, fingerprint string) (*model.TriageState, error)
 	UpsertTriage(ctx context.Context, fingerprint, status, note string) (*model.TriageState, error)
+	// PatchTriage applies field-level updates: a nil pointer preserves the
+	// stored value, a non-nil pointer sets it (explicit empty clears).
+	PatchTriage(ctx context.Context, fingerprint string, status, note *string) (*model.TriageState, error)
 }
 
 type TriageHandler struct {
@@ -111,6 +114,51 @@ func (h *TriageHandler) HandleSet(w http.ResponseWriter, r *http.Request) {
 	ts, err := h.store.UpsertTriage(r.Context(), fp, req.Status, req.Note)
 	if err != nil {
 		WriteInternalError(w, r, fmt.Errorf("upsert triage: %w", err))
+		return
+	}
+	WriteJSON(w, http.StatusOK, ts)
+}
+
+// triagePatchRequest uses pointer fields so an omitted key is distinguishable
+// from an explicit empty string. Omitted preserves the stored value; explicit
+// empty clears it.
+type triagePatchRequest struct {
+	Status *string `json:"status"`
+	Note   *string `json:"note"`
+}
+
+// HandlePatch applies field-level triage updates with preserve-vs-clear
+// semantics. Gated by OriginGuard (mutating endpoint).
+func (h *TriageHandler) HandlePatch(w http.ResponseWriter, r *http.Request) {
+	fp := chi.URLParam(r, "fingerprint")
+	if !validFingerprint(fp) {
+		WriteValidationError(w, "fingerprint must be a 16-character hex string")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxTriageBodySize)
+	var req triagePatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteValidationError(w, "invalid JSON: "+err.Error())
+		return
+	}
+	// A provided (non-nil) status must be valid; a nil status preserves.
+	if req.Status != nil && !validTriageStatuses[*req.Status] {
+		WriteValidationError(w, "invalid status; must be one of: new, triaging, confirmed, accepted-risk, false-positive")
+		return
+	}
+	if req.Note != nil && len(*req.Note) > maxTriageNoteLen {
+		WriteValidationError(w, "note exceeds 4096 characters")
+		return
+	}
+	if h.store == nil {
+		WriteServiceError(w, "triage store")
+		return
+	}
+
+	ts, err := h.store.PatchTriage(r.Context(), fp, req.Status, req.Note)
+	if err != nil {
+		WriteInternalError(w, r, fmt.Errorf("patch triage: %w", err))
 		return
 	}
 	WriteJSON(w, http.StatusOK, ts)

@@ -18,8 +18,9 @@ func (p *CanExecute) Process(ctx context.Context, db graph.GraphDB, scanID strin
 	cypher := `
 MATCH (s:MCPServer)-[:PROVIDES_TOOL]->(t:MCPTool),
       (s)-[:RUNS_ON]->(h:Host)
-WHERE ANY(cap IN t.capability_surface WHERE cap = 'shell_access')
-   OR ANY(cap IN t.capability_surface WHERE cap = 'code_execution')
+WHERE s.scan_id = $scan_id AND t.scan_id = $scan_id AND h.scan_id = $scan_id
+  AND (ANY(cap IN t.capability_surface WHERE cap = 'shell_access')
+   OR ANY(cap IN t.capability_surface WHERE cap = 'code_execution'))
 MERGE (t)-[e:CAN_EXECUTE]->(h)
 ON CREATE SET e.confidence = 1.0,
               e.is_composite = true,

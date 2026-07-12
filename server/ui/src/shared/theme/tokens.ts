@@ -18,8 +18,6 @@ export const NODE_KIND_COLORS = {
   Credential: "#EC4899",      // pink-500
   ConfigFile: "#D97706",      // amber-600
   InstructionFile: "#EAB308", // yellow-500
-  ResourceGroup: "#64748B",   // slate-500
-  TrustZone: "#22D3EE",       // cyan-400
   // AI service kinds. Per-kind label is the dispatch key (per
   // node-styles.ts kinds[0] semantics); the umbrella :AIService stays
   // on the node as a multi-label companion so unified queries can match
@@ -43,9 +41,20 @@ export const NODE_KIND_COLORS = {
   // service. Plan suggested #F44336 red but it collides with MCPResource
   // #EF4444 — readers can't distinguish a sensitive resource from a model.
   AIModel: "#6A1B9A",            // deep purple — distinct from A2AAgent / AIService / QdrantInstance
+  // v0.5 embedding-inversion output — recovered training data leaked from a
+  // model artifact (AIModel -EXTRACTED_FROM-> ExtractedTrainingSignal). Bright
+  // fuchsia so the leaked-data artifact reads as an alarm distinct from the
+  // deep AIModel purple it derives from and the redder Credential/LiteLLM
+  // pinks (#EC4899 / #EC407A).
+  ExtractedTrainingSignal: "#E879F9", // fuchsia-400
 } as const satisfies Record<string, string>;
 
 export type NodeKind = keyof typeof NODE_KIND_COLORS;
+
+// Neutral gray for runtime kinds with no palette entry (unknown/fallback) and
+// for non-node chrome that just needs a mid-slate. Replaces the former reuse
+// of the removed ResourceGroup slate-500 as a generic fallback hue.
+export const NEUTRAL_NODE_COLOR = "#64748B"; // slate-500
 
 // Dynamic-key lookup alias: when callers receive a runtime kind string
 // (e.g. from API responses), index through this view. Returns `string |
@@ -226,9 +235,9 @@ export const LENS_ACCENT = {
 } as const;
 
 // Dimmed state palette — used by lenses that fade out-of-scope nodes/edges
-// against the explorer canvas. These sit BETWEEN the canvas (#050B18) and
-// Host/ResourceGroup (#475569 / #64748B), so dimmed elements visibly recede
-// without disappearing into the background.
+// against the explorer canvas. These sit BETWEEN the canvas (#050B18) and the
+// mid-slate node hues (Host #475569 / neutral #64748B), so dimmed elements
+// visibly recede without disappearing into the background.
 export const DIMMED = {
   deep: "#1E293B",   // slate-800 — "out of scope" / deepest dim
   mid: "#334155",    // slate-700 — "low centrality" / mid dim

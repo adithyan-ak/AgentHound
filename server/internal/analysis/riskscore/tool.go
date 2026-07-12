@@ -38,8 +38,8 @@ func ToolRiskScore(ctx context.Context, db graph.GraphDB, objectID string) (floa
 }
 
 func toolCapabilityClass(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
-	cypher := `MATCH (t {objectid: $id}) RETURN t.capability_surface AS caps`
-	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
+	cypher := `MATCH (t {objectid: $id}) WHERE ($scan_id = '' OR t.scan_id = $scan_id) RETURN t.capability_surface AS caps`
+	rows, err := db.Query(ctx, cypher, riskParams(ctx, objectID))
 	if err != nil {
 		return 0, err
 	}
@@ -61,9 +61,10 @@ func toolCapabilityClass(ctx context.Context, db graph.GraphDB, objectID string)
 func toolPoisoning(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
 	cypher := `
 MATCH (t {objectid: $id})
+WHERE ($scan_id = '' OR t.scan_id = $scan_id)
 RETURN t.has_injection_patterns AS injected, t.has_cross_references AS xref`
 
-	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
+	rows, err := db.Query(ctx, cypher, riskParams(ctx, objectID))
 	if err != nil {
 		return 0, err
 	}
@@ -82,9 +83,10 @@ RETURN t.has_injection_patterns AS injected, t.has_cross_references AS xref`
 func toolAccessSensitivity(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
 	cypher := `
 MATCH (t {objectid: $id})-[:HAS_ACCESS_TO]->(r:MCPResource)
+WHERE ($scan_id = '' OR t.scan_id = $scan_id)
 RETURN r.sensitivity AS sensitivity`
 
-	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
+	rows, err := db.Query(ctx, cypher, riskParams(ctx, objectID))
 	if err != nil {
 		return 0, err
 	}
@@ -103,8 +105,8 @@ RETURN r.sensitivity AS sensitivity`
 }
 
 func toolInputValidation(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
-	cypher := `MATCH (t {objectid: $id}) RETURN t.input_schema AS schema`
-	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
+	cypher := `MATCH (t {objectid: $id}) WHERE ($scan_id = '' OR t.scan_id = $scan_id) RETURN t.input_schema AS schema`
+	rows, err := db.Query(ctx, cypher, riskParams(ctx, objectID))
 	if err != nil {
 		return 0, err
 	}

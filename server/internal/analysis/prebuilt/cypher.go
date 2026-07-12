@@ -1,23 +1,42 @@
 package prebuilt
 
 // All Cypher queries are Neo4j 4.4 compatible (no quantified paths, no pattern comprehensions).
+//
+// Generation scoping: every query is scoped to the current logical generations
+// via the $gens parameter. Each MANDATORY node anchor carries a
+// `ANY(g IN coalesce(x.generations, []) WHERE g IN $gens)` guard so a prebuilt
+// analysis never surfaces a retained (demoted) generation's facts. OPTIONAL
+// matches used only for supplementary counts are left unguarded so they do not
+// become mandatory. The prebuilt handler always supplies $gens and returns an
+// empty result set when no generation is promoted, so an unscoped read can
+// never leak.
+
+// scopeGen builds the generation-membership predicate for a node OR
+// relationship variable. It degrades to unscoped when $gens IS NULL, which is
+// how a Postgres-less deployment (no scan store, no promoted generations) runs
+// prebuilt queries against the whole graph exactly as before. When $gens is a
+// non-empty list the variable must be observed by one of those generations.
+func scopeGen(v string) string {
+	return "($gens IS NULL OR ANY(g IN coalesce(" + v + ".generations, []) WHERE g IN $gens))"
+}
 
 // Critical Paths
 
-// CypherLitellmCredentialLeak surfaces the full v0.2 credential-chain
-// finding: an Agent instance whose Config Collector emission has the
-// same value_hash as a LiteLLM master-key Credential, and that
-// LiteLLM gateway exposes upstream provider keys. The
-// cross_service_credential_chain post-processor pre-populates the
-// agent → upstream-key CAN_REACH edge; this query joins the path
-// for human-readable findings output.
-const CypherLitellmCredentialLeak = `
+// CypherLitellmCredentialLeak surfaces the full credential-chain finding: an
+// Agent instance whose Config Collector emission shares a value_hash with a
+// LiteLLM master-key Credential, where that gateway exposes upstream provider
+// keys. The cross-generation credential chain pre-populates the agent →
+// upstream-key CAN_REACH_CREDENTIAL_CHAIN edge; this query joins the path for
+// human-readable output, scoped to the current generations.
+var CypherLitellmCredentialLeak = `
 MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(s:MCPServer)-[:HAS_ENV_VAR]->(c1:Credential)
 WHERE c1.value_hash IS NOT NULL
+  AND ` + scopeGen("a") + ` AND ` + scopeGen("s") + ` AND ` + scopeGen("c1") + `
 MATCH (gw:LiteLLMGateway)-[:EXPOSES_CREDENTIAL]->(c1master:Credential)
 WHERE c1master.value_hash = c1.value_hash AND c1master.objectid <> c1.objectid
+  AND ` + scopeGen("gw") + ` AND ` + scopeGen("c1master") + `
 MATCH (gw)-[:EXPOSES_CREDENTIAL]->(c2:Credential)
-WHERE c2.type IN ['apiKey', 'virtual_key']
+WHERE c2.type IN ['apiKey', 'virtual_key'] AND ` + scopeGen("c2") + `
 RETURN a.name AS agent_name,
        s.name AS via_server,
        c1.name AS via_credential,
@@ -30,10 +49,11 @@ RETURN a.name AS agent_name,
        c2.objectid AS upstream_credential_id
 ORDER BY a.name, gw.name`
 
-const CypherAgentsShellAccess = `
+var CypherAgentsShellAccess = `
 MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(s:MCPServer)-[:PROVIDES_TOOL]->(t:MCPTool)
-WHERE ANY(cap IN t.capability_surface WHERE cap = 'shell_access')
-   OR ANY(cap IN t.capability_surface WHERE cap = 'code_execution')
+WHERE (ANY(cap IN t.capability_surface WHERE cap = 'shell_access')
+   OR ANY(cap IN t.capability_surface WHERE cap = 'code_execution'))
+  AND ` + scopeGen("a") + ` AND ` + scopeGen("s") + ` AND ` + scopeGen("t") + `
 RETURN a.name AS agent_name,
        s.name AS server_name,
        t.name AS tool_name,
@@ -43,10 +63,13 @@ RETURN a.name AS agent_name,
        t.objectid AS tool_id
 ORDER BY a.name, s.name, t.name`
 
-const CypherShortestToDatabase = `
+var CypherShortestToDatabase = `
 MATCH (a:AgentInstance), (r:MCPResource)
 WHERE r.uri_scheme IN ['postgres', 'mysql', 'mongodb', 'redis']
+  AND ` + scopeGen("a") + ` AND ` + scopeGen("r") + `
 MATCH p = shortestPath((a)-[*..10]-(r))
+WHERE ALL(n IN nodes(p) WHERE ` + scopeGen("n") + `)
+  AND ALL(rel IN relationships(p) WHERE ` + scopeGen("rel") + `)
 RETURN a.name AS agent_name,
        r.uri AS resource_uri,
        r.sensitivity AS sensitivity,
@@ -56,9 +79,11 @@ RETURN a.name AS agent_name,
 ORDER BY path_length
 LIMIT 50`
 
-const CypherCrossProtocolPaths = `
+var CypherCrossProtocolPaths = `
 MATCH (src)-[r:CAN_REACH]->(tgt:MCPResource)
 WHERE r.cross_protocol = true
+  AND ` + scopeGen("src") + ` AND ` + scopeGen("tgt") + `
+  AND ` + scopeGen("r") + `
 RETURN src.name AS source_name,
        labels(src)[0] AS source_kind,
        tgt.uri AS target_resource,
@@ -71,8 +96,10 @@ RETURN src.name AS source_name,
        tgt.objectid AS target_id
 ORDER BY r.confidence DESC`
 
-const CypherExfiltrationRoutes = `
+var CypherExfiltrationRoutes = `
 MATCH (a:AgentInstance)-[exfil:CAN_EXFILTRATE_VIA]->(t:MCPTool)
+WHERE ` + scopeGen("a") + ` AND ` + scopeGen("t") + `
+  AND ` + scopeGen("exfil") + `
 OPTIONAL MATCH (a)-[reach:CAN_REACH]->(r:MCPResource)
 WHERE r.sensitivity IN ['critical', 'high']
 RETURN a.name AS agent_name,
@@ -83,9 +110,11 @@ RETURN a.name AS agent_name,
        t.objectid AS tool_id
 ORDER BY exfil.confidence DESC`
 
-const CypherCredentialChain = `
+var CypherCredentialChain = `
 MATCH (a)-[r:CAN_REACH]->(res:MCPResource)
 WHERE r.via_credential IS NOT NULL
+  AND ` + scopeGen("a") + ` AND ` + scopeGen("res") + `
+  AND ` + scopeGen("r") + `
 RETURN a.name AS agent_name,
        labels(a)[0] AS agent_kind,
        res.uri AS resource_uri,
@@ -99,9 +128,10 @@ ORDER BY r.hops DESC, r.confidence DESC`
 
 // Vulnerabilities
 
-const CypherPoisonedTools = `
+var CypherPoisonedTools = `
 MATCH (t:MCPTool)-[r:POISONED_DESCRIPTION]->(t)
 MATCH (s:MCPServer)-[:PROVIDES_TOOL]->(t)
+WHERE ` + scopeGen("t") + ` AND ` + scopeGen("s") + `
 RETURN t.name AS tool_name,
        s.name AS server_name,
        left(t.description, 200) AS description_preview,
@@ -111,11 +141,13 @@ RETURN t.name AS tool_name,
        s.objectid AS server_id
 ORDER BY r.confidence DESC`
 
-const CypherToolShadowing = `
+var CypherToolShadowing = `
 MATCH (t1:MCPTool)-[r:SHADOWS]->(t2:MCPTool)
 MATCH (s1:MCPServer)-[:PROVIDES_TOOL]->(t1)
 MATCH (s2:MCPServer)-[:PROVIDES_TOOL]->(t2)
 WHERE s1.objectid <> s2.objectid
+  AND ` + scopeGen("t1") + ` AND ` + scopeGen("t2") + `
+  AND ` + scopeGen("s1") + ` AND ` + scopeGen("s2") + `
 RETURN t1.name AS shadowing_tool,
        s1.name AS shadowing_server,
        t2.name AS shadowed_tool,
@@ -125,9 +157,10 @@ RETURN t1.name AS shadowing_tool,
        t2.objectid AS shadowed_tool_id
 ORDER BY r.confidence DESC`
 
-const CypherNoAuthServers = `
+var CypherNoAuthServers = `
 MATCH (s:MCPServer)
-WHERE s.auth_method = 'none' OR s.auth_method IS NULL
+WHERE (s.auth_method = 'none' OR s.auth_method IS NULL)
+  AND ` + scopeGen("s") + `
 OPTIONAL MATCH (s)-[:PROVIDES_TOOL]->(t:MCPTool)
 RETURN s.name AS server_name,
        s.endpoint AS endpoint,
@@ -136,9 +169,10 @@ RETURN s.name AS server_name,
        s.objectid AS server_id
 ORDER BY tool_count DESC`
 
-const CypherNoAuthA2A = `
+var CypherNoAuthA2A = `
 MATCH (a:A2AAgent)
-WHERE a.auth_method = 'none' OR a.auth_method IS NULL
+WHERE (a.auth_method = 'none' OR a.auth_method IS NULL)
+  AND ` + scopeGen("a") + `
 OPTIONAL MATCH (a)-[:ADVERTISES_SKILL]->(sk:A2ASkill)
 RETURN a.name AS agent_name,
        a.url AS url,
@@ -147,8 +181,9 @@ RETURN a.name AS agent_name,
        a.objectid AS agent_id
 ORDER BY skill_count DESC`
 
-const CypherRugPull = `
+var CypherRugPull = `
 MATCH (s:MCPServer)-[:PROVIDES_TOOL]->(t:MCPTool)
+WHERE ` + scopeGen("s") + ` AND ` + scopeGen("t") + `
 WITH s, t,
   [x IN [
     CASE WHEN t.previous_description_hash IS NOT NULL AND t.previous_description_hash <> t.description_hash THEN 'description' END,
@@ -167,9 +202,10 @@ ORDER BY s.name, t.name`
 
 // Supply Chain
 
-const CypherUnpinnedPackages = `
+var CypherUnpinnedPackages = `
 MATCH (s:MCPServer)
 WHERE s.is_pinned = false
+  AND ` + scopeGen("s") + `
 RETURN s.name AS server_name,
        s.endpoint AS endpoint,
        s.command AS command,
@@ -177,8 +213,9 @@ RETURN s.name AS server_name,
        s.objectid AS server_id
 ORDER BY s.name`
 
-const CypherInstructionPoisoning = `
+var CypherInstructionPoisoning = `
 MATCH (f:InstructionFile)-[r:POISONED_INSTRUCTIONS]->(f)
+WHERE ` + scopeGen("f") + `
 OPTIONAL MATCH (a:AgentInstance)-[:LOADS_INSTRUCTIONS]->(f)
 RETURN f.path AS file_path,
        f.type AS file_type,
@@ -188,9 +225,10 @@ RETURN f.path AS file_path,
        f.objectid AS file_id
 ORDER BY r.confidence DESC`
 
-const CypherUnsignedCards = `
+var CypherUnsignedCards = `
 MATCH (a:A2AAgent)
-WHERE a.is_signed = false OR a.is_signed IS NULL
+WHERE (a.is_signed = false OR a.is_signed IS NULL)
+  AND ` + scopeGen("a") + `
 RETURN a.name AS agent_name,
        a.url AS url,
        a.provider AS provider,
@@ -198,9 +236,10 @@ RETURN a.name AS agent_name,
        a.objectid AS agent_id
 ORDER BY a.name`
 
-const CypherHighEntropySecrets = `
+var CypherHighEntropySecrets = `
 MATCH (c:Credential)
 WHERE c.high_entropy = true
+  AND ` + scopeGen("c") + `
 OPTIONAL MATCH (s:MCPServer)-[:HAS_ENV_VAR]->(c)
 RETURN c.name AS credential_name,
        c.type AS credential_type,
@@ -212,8 +251,9 @@ ORDER BY c.name`
 
 // Chokepoints
 
-const CypherChokepointServers = `
+var CypherChokepointServers = `
 MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(s:MCPServer)
+WHERE ` + scopeGen("a") + ` AND ` + scopeGen("s") + `
 WITH s, count(a) AS agent_count
 WHERE agent_count >= 2
 OPTIONAL MATCH (s)-[:PROVIDES_TOOL]->(t:MCPTool)
@@ -225,11 +265,13 @@ RETURN s.name AS server_name,
        s.objectid AS server_id
 ORDER BY agent_count DESC, tool_count DESC`
 
-const CypherChokepointTools = `
+var CypherChokepointTools = `
 MATCH (t:MCPTool)-[:HAS_ACCESS_TO]->(r:MCPResource)
+WHERE ` + scopeGen("t") + ` AND ` + scopeGen("r") + `
 WITH t, count(r) AS resource_count
 WHERE resource_count >= 3
 MATCH (s:MCPServer)-[:PROVIDES_TOOL]->(t)
+WHERE ` + scopeGen("s") + `
 RETURN t.name AS tool_name,
        s.name AS server_name,
        resource_count,
@@ -240,11 +282,12 @@ ORDER BY resource_count DESC`
 
 // Combined
 
-const CypherUnpinnedShell = `
+var CypherUnpinnedShell = `
 MATCH (s:MCPServer)-[:PROVIDES_TOOL]->(t:MCPTool)
 WHERE s.is_pinned = false
   AND (ANY(cap IN t.capability_surface WHERE cap = 'shell_access')
        OR ANY(cap IN t.capability_surface WHERE cap = 'code_execution'))
+  AND ` + scopeGen("s") + ` AND ` + scopeGen("t") + `
 RETURN s.name AS server_name,
        t.name AS tool_name,
        s.command AS command,
@@ -259,7 +302,7 @@ ORDER BY s.name, t.name`
 // invoke the wrong one. Distinct objectids ensure we compare genuinely
 // different tools; s1.objectid < s2.objectid deduplicates the (a,b)/(b,a)
 // pairing and excludes same-server matches.
-const CypherToolNameCollision = `
+var CypherToolNameCollision = `
 MATCH (s1:MCPServer)-[:PROVIDES_TOOL]->(t1:MCPTool)
 MATCH (s2:MCPServer)-[:PROVIDES_TOOL]->(t2:MCPTool)
 WHERE s1.objectid < s2.objectid
@@ -267,6 +310,8 @@ WHERE s1.objectid < s2.objectid
   AND t2.name IS NOT NULL
   AND toLower(trim(t1.name)) = toLower(trim(t2.name))
   AND t1.objectid <> t2.objectid
+  AND ` + scopeGen("s1") + ` AND ` + scopeGen("s2") + `
+  AND ` + scopeGen("t1") + ` AND ` + scopeGen("t2") + `
 RETURN t1.name AS tool_name,
        s1.name AS server_a,
        s2.name AS server_b,

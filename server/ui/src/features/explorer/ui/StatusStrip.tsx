@@ -6,7 +6,7 @@ export function StatusStrip({ totals }: { totals: ExplorerTotals }) {
   const activeLens = useExplorerStore((s) => s.activeLens);
   const lens = getLens(activeLens);
 
-  const { nodeCount, edgeCount, findingCount } = totals;
+  const { nodeCount, edgeCount, findingCount, truncated } = totals;
 
   return (
     <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-10 flex h-7 items-center justify-between border-t border-border bg-card/90 px-4 font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground backdrop-blur-sm">
@@ -32,6 +32,17 @@ export function StatusStrip({ totals }: { totals: ExplorerTotals }) {
         <span>
           <span className="tabular-nums text-foreground/80">{findingCount}</span> findings
         </span>
+        {truncated && (
+          <>
+            <span className="text-border">|</span>
+            <span
+              className="font-semibold tracking-[0.14em] text-amber-400"
+              title="The graph read hit its safety cap; more nodes/edges exist beyond what is shown."
+            >
+              ⚠ partial graph
+            </span>
+          </>
+        )}
       </div>
       <div className="hidden items-center gap-2 sm:flex">
         <span className="text-primary/60">▸</span>

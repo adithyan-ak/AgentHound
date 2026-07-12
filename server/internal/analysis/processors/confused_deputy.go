@@ -34,7 +34,8 @@ func (p *ConfusedDeputy) Process(ctx context.Context, db graph.GraphDB, scanID s
 	// edge participates in stale-edge cleanup directly (no expand mapping).
 	cypher := `
 MATCH (low:A2AAgent)-[:DELEGATES_TO]->(high:A2AAgent)
-WHERE low.auth_strength >= 80 AND high.auth_strength <= 30
+WHERE low.scan_id = $scan_id AND high.scan_id = $scan_id
+  AND low.auth_strength >= 80 AND high.auth_strength <= 30
 MERGE (low)-[e:CONFUSED_DEPUTY]->(high)
 SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true,
     e.source_collector = 'a2a',

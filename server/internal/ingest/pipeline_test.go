@@ -211,7 +211,7 @@ type writerEdgeCall struct {
 	At     time.Time
 }
 
-func (f *fakeWriter) WriteNodes(_ context.Context, nodes []sdkingest.Node, scanID string) (int, error) {
+func (f *fakeWriter) WriteNodesForGeneration(_ context.Context, nodes []sdkingest.Node, scanID, _ string) (int, error) {
 	cur := f.inFlight.Add(1)
 	defer f.inFlight.Add(-1)
 	for {
@@ -233,7 +233,7 @@ func (f *fakeWriter) WriteNodes(_ context.Context, nodes []sdkingest.Node, scanI
 	return len(nodes), nil
 }
 
-func (f *fakeWriter) WriteEdges(_ context.Context, edges []sdkingest.Edge, scanID string) (int, error) {
+func (f *fakeWriter) WriteEdgesForGeneration(_ context.Context, edges []sdkingest.Edge, scanID, _ string) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.edgeCalls = append(f.edgeCalls, writerEdgeCall{ScanID: scanID, Edges: edges, At: time.Now()})
@@ -251,6 +251,15 @@ type fakeScanStore struct {
 
 	createErr error
 	updateErr error
+	// currentGensErr, when set, makes CurrentGenerations fail so tests can
+	// exercise the credential-chain selection-error propagation path.
+	currentGensErr error
+
+	// Generation-aware recording.
+	outcomes   []*model.Scan
+	promotions []scanPromotion
+	// current maps a collector scope to the scan CurrentScanForScope returns.
+	current map[string]*model.Scan
 }
 
 type scanUpdate struct {
@@ -259,6 +268,11 @@ type scanUpdate struct {
 	NodeCount int
 	EdgeCount int
 	Error     string
+}
+
+type scanPromotion struct {
+	ID        string
+	Collector string
 }
 
 func (s *fakeScanStore) CreateScan(_ context.Context, scan *model.Scan) error {
@@ -276,6 +290,45 @@ func (s *fakeScanStore) UpdateScan(_ context.Context, id, status string, nodeCou
 	return s.updateErr
 }
 
+func (s *fakeScanStore) RecordGenerationOutcome(_ context.Context, scan *model.Scan) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *scan
+	s.outcomes = append(s.outcomes, &cp)
+	return nil
+}
+
+func (s *fakeScanStore) CurrentScanForScope(_ context.Context, collector string) (*model.Scan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.current == nil {
+		return nil, nil
+	}
+	return s.current[collector], nil
+}
+
+func (s *fakeScanStore) PromoteGeneration(_ context.Context, id, collector string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.promotions = append(s.promotions, scanPromotion{ID: id, Collector: collector})
+	return nil
+}
+
+func (s *fakeScanStore) CurrentGenerations(_ context.Context) ([]model.Scan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.currentGensErr != nil {
+		return nil, s.currentGensErr
+	}
+	var out []model.Scan
+	for _, sc := range s.current {
+		if sc != nil {
+			out = append(out, *sc)
+		}
+	}
+	return out, nil
+}
+
 func (s *fakeScanStore) lastUpdate(id string) (scanUpdate, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -287,11 +340,33 @@ func (s *fakeScanStore) lastUpdate(id string) (scanUpdate, bool) {
 	return scanUpdate{}, false
 }
 
+func (s *fakeScanStore) lastOutcome(id string) (*model.Scan, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.outcomes) - 1; i >= 0; i-- {
+		if s.outcomes[i].ID == id {
+			return s.outcomes[i], true
+		}
+	}
+	return nil, false
+}
+
+func (s *fakeScanStore) promotedIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.promotions))
+	for _, p := range s.promotions {
+		out = append(out, p.ID)
+	}
+	return out
+}
+
 // newTestPipeline wires the unit-test mocks together. The production
 // NewPipeline takes concrete types, so test code constructs the struct
 // directly via this helper. The interface fields make this safe.
 func newTestPipeline(w nodeEdgeWriter, db graph.GraphDB, ss scanRecorder, runPP postProcessFunc) *Pipeline {
 	return &Pipeline{
+		coord:      NewCoordinator(),
 		validator:  NewValidator(),
 		normalizer: NewNormalizer(),
 		writer:     w,

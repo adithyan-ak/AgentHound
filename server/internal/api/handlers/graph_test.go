@@ -1,10 +1,39 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
+
+func TestHandleListNodes_NoCurrentGenerationEmptyIncomplete(t *testing.T) {
+	// With a store present but no promoted generation, the read must not
+	// surface staged facts: empty items, incomplete disclosure, no reader hit.
+	h := &GraphHandler{gens: &fakeGenScope{}}
+	w := httptest.NewRecorder()
+	r := newTestRequest(http.MethodGet, "/api/v1/graph/nodes", nil)
+	h.HandleListNodes(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var p Page[ingest.Node]
+	if err := json.NewDecoder(w.Body).Decode(&p); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Items) != 0 {
+		t.Errorf("expected empty items, got %d", len(p.Items))
+	}
+	if p.Completeness.Complete {
+		t.Error("no promoted generation must not be complete")
+	}
+	if p.Total != nil {
+		t.Error("total must be suppressed when incomplete")
+	}
+}
 
 func TestParseIntParam(t *testing.T) {
 	tests := []struct {

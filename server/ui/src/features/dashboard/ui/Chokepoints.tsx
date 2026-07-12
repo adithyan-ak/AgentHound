@@ -15,7 +15,9 @@ interface ServerRow {
   unauth: boolean;
 }
 
-function parse(rows: Record<string, unknown>[]): ServerRow[] {
+const TOP_N = 6;
+
+function parseAll(rows: Record<string, unknown>[]): ServerRow[] {
   return rows
     .map((r) => ({
       name: String(r["server_name"] ?? "unknown"),
@@ -23,18 +25,29 @@ function parse(rows: Record<string, unknown>[]): ServerRow[] {
       toolCount: Number(r["tool_count"] ?? 0),
       unauth: String(r["auth_method"] ?? "none") === "none",
     }))
-    .sort((a, b) => b.agentCount - a.agentCount)
-    .slice(0, 6);
+    .sort((a, b) => b.agentCount - a.agentCount);
 }
 
 export function Chokepoints() {
   const { data, isLoading, isError } = usePreBuiltResult("chokepoint-servers");
 
-  const rows = parse(data?.rows ?? []);
+  const all = parseAll(data?.rows ?? []);
+  const rows = all.slice(0, TOP_N);
   const maxAgents = rows.reduce((m, r) => Math.max(m, r.agentCount), 0);
 
   return (
-    <WidgetCard title="Blast Radius" info={INFO} icon={Share2}>
+    <WidgetCard
+      title="Blast Radius"
+      info={INFO}
+      icon={Share2}
+      action={
+        all.length > TOP_N ? (
+          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+            Top {TOP_N} <span className="text-muted-foreground/50">/</span> {all.length}
+          </span>
+        ) : undefined
+      }
+    >
       <AsyncBoundary
         isLoading={isLoading}
         isEmpty={isError || rows.length === 0}

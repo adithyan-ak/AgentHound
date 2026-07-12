@@ -123,9 +123,11 @@ export function buildLogicalEdges(
       default:
         if (lens.edgeKinds.length === 0) {
           include = true;
-        } else if (enabledEdgeKinds.size === 0) {
-          include = lens.edgeKinds.includes(e.kind);
         } else {
+          // Sub-presets initialize to the lens's full set on selection, so an
+          // empty set means the user explicitly deselected every sub-preset.
+          // Honor that literally — show NO edges — rather than silently
+          // falling back to "all", which would contradict the user's toggles.
           include = enabledEdgeKinds.has(e.kind);
         }
         break;

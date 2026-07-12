@@ -14,7 +14,7 @@ const SEVERITY_RANK: Record<string, number> = { critical: 4, high: 3, medium: 2,
 
 export function TopFindings() {
   const navigate = useNavigate();
-  const { data: findings, isLoading } = useFindings();
+  const { data: findings, isLoading, isError } = useFindings();
 
   const top = (findings ?? [])
     .filter((f) => f.severity === "critical" || f.severity === "high")
@@ -42,8 +42,20 @@ export function TopFindings() {
     >
       <AsyncBoundary
         isLoading={isLoading}
+        isError={isError}
         isEmpty={top.length === 0}
         loading={<Skeleton className="h-56 w-full" />}
+        error={
+          <div
+            role="alert"
+            className="flex h-56 flex-col items-center justify-center gap-1 text-center"
+          >
+            <p className="font-mono text-sm font-medium text-foreground">Findings unavailable</p>
+            <p className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
+              Could not load findings — status unknown, not all-clear
+            </p>
+          </div>
+        }
         empty={
           <div className="flex h-56 flex-col items-center justify-center gap-1 text-center">
             <p className="font-mono text-sm font-medium text-foreground">No critical alerts</p>

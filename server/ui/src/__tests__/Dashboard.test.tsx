@@ -7,6 +7,8 @@ import { StatCards } from "@features/dashboard/ui/StatCards";
 
 vi.mock("@entities/graph-stats/api", () => ({
   useGraphStats: vi.fn(),
+  useFreshness: vi.fn(() => ({ data: undefined })),
+  fetchDashboardExport: vi.fn().mockResolvedValue({}),
 }));
 
 vi.mock("@entities/finding/api", () => ({
@@ -130,5 +132,57 @@ describe("Dashboard", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("Dashboard unavailable");
     expect(screen.queryByText("No attack surface mapped")).not.toBeInTheDocument();
+  });
+
+  it("shows the all-clear empty state only for an authoritative, empty graph", () => {
+    mockedUseGraphStats.mockReturnValue({
+      data: {
+        node_counts: {},
+        edge_counts: {},
+        total_nodes: 0,
+        total_edges: 0,
+        completeness: {
+          complete: true,
+          coverage_status: "complete",
+          generation_ids: ["g1"],
+          truncated: false,
+        },
+      },
+      isLoading: false,
+      error: null,
+      isError: false,
+      isPending: false,
+    } as unknown as ReturnType<typeof useGraphStats>);
+
+    render(<Dashboard />, { wrapper: createWrapper() });
+    expect(screen.getByText("No attack surface mapped")).toBeInTheDocument();
+  });
+
+  it("does NOT show all-clear for a partial/incomplete empty read", () => {
+    mockedUseGraphStats.mockReturnValue({
+      data: {
+        node_counts: {},
+        edge_counts: {},
+        total_nodes: 0,
+        total_edges: 0,
+        completeness: {
+          complete: false,
+          coverage_status: "partial",
+          generation_ids: ["g1"],
+          truncated: false,
+          source_errors: ["mcp: connection refused"],
+        },
+      },
+      isLoading: false,
+      error: null,
+      isError: false,
+      isPending: false,
+    } as unknown as ReturnType<typeof useGraphStats>);
+
+    render(<Dashboard />, { wrapper: createWrapper() });
+    // A partial read with zero nodes must not masquerade as "all clear".
+    expect(screen.queryByText("No attack surface mapped")).not.toBeInTheDocument();
+    // Instead it discloses the incompleteness.
+    expect(screen.getByText(/not authoritative/i)).toBeInTheDocument();
   });
 });

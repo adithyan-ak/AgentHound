@@ -17,7 +17,7 @@ func (p *PoisonedInstructions) Process(ctx context.Context, db graph.GraphDB, sc
 
 	cypher := `
 MATCH (f:InstructionFile)
-WHERE f.is_suspicious = true
+WHERE f.scan_id = $scan_id AND f.is_suspicious = true
 MERGE (f)-[e:POISONED_INSTRUCTIONS]->(f)
 ON CREATE SET e.confidence = 1.0,
               e.is_composite = true,

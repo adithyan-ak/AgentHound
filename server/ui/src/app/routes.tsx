@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Link, useLocation } from "react-router-dom";
 import { AppLayout } from "./layout";
 import { Dashboard } from "@features/dashboard";
 import { ScanManager } from "@features/scans";
@@ -28,6 +28,33 @@ function ExplorerFallback() {
   return (
     <div className="flex h-full items-center justify-center">
       <p className="text-sm text-muted-foreground">Loading Explorer…</p>
+    </div>
+  );
+}
+
+// Catch-all for unknown client routes. Without it, a deep link / typo / stale
+// bookmark renders a blank layout with no feedback. Kept inside AppLayout so
+// the nav stays available and the user can recover.
+function NotFound() {
+  const location = useLocation();
+  return (
+    <div
+      role="alert"
+      className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center"
+    >
+      <p className="font-mono text-sm font-semibold uppercase tracking-[0.12em] text-foreground">
+        Page not found
+      </p>
+      <p className="max-w-md text-sm text-muted-foreground">
+        No view is mapped to{" "}
+        <code className="font-mono text-foreground/80">{location.pathname}</code>.
+      </p>
+      <Link
+        to="/"
+        className="font-mono text-xs uppercase tracking-[0.08em] text-primary transition-colors hover:text-primary/80"
+      >
+        ▸ Back to Dashboard
+      </Link>
     </div>
   );
 }
@@ -65,6 +92,8 @@ export function AppRoutes() {
         <Route path="/scans" element={<ScanManager />} />
         <Route path="/queries" element={<QueryLibrary />} />
         <Route path="/rules" element={<RulesLibrary />} />
+
+        <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>
   );

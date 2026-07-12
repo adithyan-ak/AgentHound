@@ -74,6 +74,7 @@ describe("explorer view-model — three distinct shapes", () => {
         nodeCount: 4,
         edgeCount: 4,
         findingCount: 1,
+        truncated: false,
       });
     });
 
@@ -82,6 +83,7 @@ describe("explorer view-model — three distinct shapes", () => {
         nodeCount: 0,
         edgeCount: 0,
         findingCount: 0,
+        truncated: false,
       });
     });
 
@@ -91,6 +93,7 @@ describe("explorer view-model — three distinct shapes", () => {
         nodeCount: 4,
         edgeCount: 4,
         findingCount: 1,
+        truncated: false,
       });
     });
   });

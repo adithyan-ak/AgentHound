@@ -1,7 +1,8 @@
 import { Link } from "react-router-dom";
 import { AlertCircle, ScanSearch, ArrowRight } from "lucide-react";
 import { useGraphStats } from "@entities/graph-stats";
-import { AsyncBoundary } from "@shared/ui/feedback";
+import { isAuthoritative } from "@shared/api/page";
+import { AsyncBoundary, IncompleteBanner } from "@shared/ui/feedback";
 import { DashboardHeader } from "./DashboardHeader";
 import { StatCards } from "./StatCards";
 import { ExposureGauge } from "./ExposureGauge";
@@ -76,7 +77,15 @@ const ROW = "animate-fade-up";
 
 export function Dashboard() {
   const { data: stats, isLoading, isError } = useGraphStats();
-  const isEmpty = !isLoading && (stats?.total_nodes ?? 0) === 0;
+  const completeness = stats?.completeness;
+  // "No attack surface mapped" is an all-clear verdict, so only show it when
+  // the read is authoritative (complete coverage, no source errors) AND the
+  // scoped graph is genuinely empty. A partial/stale/degraded read with zero
+  // nodes must NOT masquerade as a clean empty state — it renders the
+  // dashboard with an incompleteness disclosure instead.
+  const authoritative = isAuthoritative(completeness);
+  const isEmpty =
+    !isLoading && authoritative && (stats?.total_nodes ?? 0) === 0;
 
   return (
     <div className="dashboard-bg min-h-full p-3 sm:p-4 lg:p-5">
@@ -92,6 +101,12 @@ export function Dashboard() {
           empty={<EmptyState />}
         >
           <>
+            {!authoritative && (
+              <div className={ROW}>
+                <IncompleteBanner completeness={completeness} />
+              </div>
+            )}
+
             <div className={ROW} style={{ animationDelay: "30ms" }}>
               <StatCards />
             </div>

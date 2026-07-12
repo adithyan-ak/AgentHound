@@ -183,6 +183,29 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 			common.NewEdge(ad.AgentID1, ad.AgentID2, "SAME_AUTH_DOMAIN", "A2AAgent", "A2AAgent", props))
 	}
 
+	// Coverage manifest: preserve every requested target's outcome so a
+	// downstream reader can tell "no agents found" (StatusComplete, empty)
+	// apart from "we failed to reach the agents" (StatusFailed/Partial).
+	// Previously a failed fetch was only logged and silently dropped, which
+	// made an all-failed scan indistinguishable from a clean empty one.
+	targetOutcomes := make([]ingest.TargetOutcome, 0, len(results))
+	statuses := make([]ingest.CollectionStatus, 0, len(results))
+	for _, r := range results {
+		outcome := ingest.TargetOutcome{Target: r.url, Status: ingest.StatusComplete}
+		if r.err != nil {
+			outcome.Status = ingest.StatusFailed
+			outcome.Error = r.err.Error()
+		}
+		targetOutcomes = append(targetOutcomes, outcome)
+		statuses = append(statuses, outcome.Status)
+	}
+	data.Meta.Coverage = &ingest.CollectionCoverage{
+		Status:                ingest.RollupStatus(statuses...),
+		ConstituentCollectors: []string{c.Name()},
+		Targets:               targetOutcomes,
+		Rules:                 engine.Manifest(),
+	}
+
 	return data, nil
 }
 
@@ -258,6 +281,13 @@ func buildGraph(card *AgentCardData, scanID string) ([]ingest.Node, []ingest.Edg
 		"is_https":                      card.IsHTTPS,
 		"card_hash":                     card.CardHash,
 		"auth_posture":                  AuthPostureScore(card.SecuritySchemes),
+		// Canonical, evidence-derived auth scheme (shared vocabulary). The
+		// numeric auth_posture above is a heuristic ranking, NOT an assessed
+		// assurance level — auth_assurance_state records that OIDC/OAuth here
+		// were observed as declared schemes only, not independently verified.
+		"auth_scheme":          string(CanonicalAuthScheme(card.SecuritySchemes)),
+		"auth_scheme_source":   "agent_card_security_schemes",
+		"auth_assurance_state": string(common.AssessmentNotAssessed),
 	}
 
 	schemesData := make([]map[string]string, len(card.SecuritySchemes))
@@ -292,14 +322,7 @@ func buildGraph(card *AgentCardData, scanID string) ([]ingest.Node, []ingest.Edg
 	}
 	if hostname != "" {
 		hostID := common.HostNodeID(hostname)
-		hostProps := map[string]any{
-			"hostname":   hostInfo.Hostname,
-			"ip":         hostInfo.IP,
-			"is_local":   hostInfo.IsLocal,
-			"is_private": hostInfo.IsPrivate,
-			"is_public":  hostInfo.IsPublic,
-		}
-		nodes = append(nodes, common.NewNode(hostID, []string{"Host"}, hostProps))
+		nodes = append(nodes, common.NewNode(hostID, []string{"Host"}, common.HostNodeProps(hostInfo)))
 
 		edgeProps := common.NewEdgeProps(scanID, 1.0, 0.0)
 		edges = append(edges, common.NewEdge(agentID, hostID, "RUNS_ON", "A2AAgent", "Host", edgeProps))

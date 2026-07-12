@@ -2,9 +2,10 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Download, RefreshCw, Radar } from "lucide-react";
 import { qk } from "@shared/api/query-keys";
-import { fetchScans, useScans, isUsableScan } from "@entities/scan";
-import { fetchGraphStats } from "@entities/graph-stats";
-import { fetchFindings, useFindings, severityCounts } from "@entities/finding";
+import { isAuthoritative } from "@shared/api/page";
+import { useScans, isUsableScan } from "@entities/scan";
+import { useFreshness, fetchDashboardExport } from "@entities/graph-stats";
+import { useFindings, severityCounts } from "@entities/finding";
 import { useNodes, isUnauth } from "@entities/node";
 import { useHealth } from "@entities/health";
 import {
@@ -16,7 +17,7 @@ import {
 import { Button } from "@shared/ui/primitives/button";
 import { cn } from "@shared/lib/utils";
 import { timeAgo } from "@shared/lib/format";
-import { SEVERITY_ORDER, SEVERITY, SIGNAL_OK, ACCENT, CHART_THEME } from "@shared/theme/tokens";
+import { SEVERITY, SIGNAL_OK, ACCENT, CHART_THEME } from "@shared/theme/tokens";
 
 function greeting(): string {
   const h = new Date().getHours();
@@ -79,6 +80,7 @@ export function DashboardHeader() {
   const [exporting, setExporting] = useState(false);
 
   const { data: health } = useHealth();
+  const { data: freshness } = useFreshness();
 
   const { data: scans } = useScans(20);
   const { data: findings } = useFindings();
@@ -86,10 +88,33 @@ export function DashboardHeader() {
 
   const neo4jOk = (health?.neo4j ?? "").toLowerCase() === "ok";
   const postgresOk = (health?.postgres ?? "").toLowerCase() === "ok";
+  const healthDegraded = health != null && (!neo4jOk || !postgresOk);
   // completed_with_errors still populated the graph, so it counts as the
   // latest run for "last scan" timing purposes.
   const lastCompleted = (scans ?? []).find(isUsableScan);
   const running = (scans ?? []).some((s) => s.status === "running");
+
+  // Posture is derived from the polled generation-freshness contract instead
+  // of a hardcoded "Live/Monitoring" label: it only claims a current, fresh
+  // view when a promoted generation reports authoritative, complete coverage
+  // and no component is degraded.
+  const completeness = freshness?.completeness;
+  const hasGeneration = (completeness?.generation_ids?.length ?? 0) > 0;
+  const posture: {
+    label: string;
+    color: string;
+    pulse: boolean;
+    tone: "ok" | "warn" | "idle";
+  } = running
+    ? { label: "Scanning", color: ACCENT, pulse: true, tone: "warn" }
+    : healthDegraded
+      ? { label: "Degraded", color: SEVERITY.critical.solid, pulse: false, tone: "warn" }
+      : !hasGeneration
+        ? { label: "No data", color: CHART_THEME.axis, pulse: false, tone: "idle" }
+        : !isAuthoritative(completeness)
+          ? { label: "Partial", color: SEVERITY.medium.solid, pulse: false, tone: "warn" }
+          : { label: "Current", color: SIGNAL_OK, pulse: true, tone: "ok" };
+  const freshnessAt = completeness?.completed_at ?? completeness?.captured_at;
 
   const counts = severityCounts(findings ?? []);
   const unauthServers = (nodes ?? []).filter(
@@ -130,26 +155,14 @@ export function DashboardHeader() {
   async function exportSnapshot() {
     setExporting(true);
     try {
-      const [stats, findingList, scanList] = await Promise.all([
-        fetchGraphStats(),
-        fetchFindings(),
-        fetchScans(20, 0),
-      ]);
-      const bySeverity: Record<string, number> = {};
-      for (const sev of SEVERITY_ORDER) bySeverity[sev] = 0;
-      for (const f of findingList) bySeverity[f.severity] = (bySeverity[f.severity] ?? 0) + 1;
-      downloadJSON(`agenthound-attack-surface-${new Date().toISOString().slice(0, 10)}.json`, {
-        generated_at: new Date().toISOString(),
-        totals: {
-          nodes: stats.total_nodes,
-          edges: stats.total_edges,
-          findings: findingList.length,
-        },
-        node_counts: stats.node_counts,
-        edge_counts: stats.edge_counts,
-        findings_by_severity: bySeverity,
-        recent_scans: scanList,
-      });
+      // Server-side export from one promoted generation: the download carries
+      // its own scope, completeness, suppression policy, health, generated
+      // time, and full ATLAS metadata — no client-side re-stitching.
+      const snapshot = await fetchDashboardExport();
+      downloadJSON(
+        `agenthound-attack-surface-${new Date().toISOString().slice(0, 10)}.json`,
+        snapshot,
+      );
     } finally {
       setExporting(false);
     }
@@ -176,7 +189,7 @@ export function DashboardHeader() {
             </span>
           </h1>
           <p className="mt-1.5 text-sm text-muted-foreground">
-            Live security posture across your agent, MCP, and A2A infrastructure.
+            Security posture across your agent, MCP, and A2A infrastructure, from the last completed scan.
           </p>
         </div>
 
@@ -200,7 +213,13 @@ export function DashboardHeader() {
           <StripSeg label="Postgres" value={postgresOk ? "ok" : "down"} color={postgresOk ? SIGNAL_OK : SEVERITY.critical.solid} pulse={postgresOk} />
           <StripSeg
             label="Scan"
-            value={running ? "running" : lastCompleted ? timeAgo(lastCompleted.started_at) : "none"}
+            value={
+              running
+                ? "running"
+                : lastCompleted
+                  ? timeAgo(lastCompleted.completed_at ?? lastCompleted.started_at)
+                  : "none"
+            }
             color={running ? ACCENT : CHART_THEME.axis}
             pulse={running}
           />
@@ -208,14 +227,24 @@ export function DashboardHeader() {
         </div>
 
         <div className="relative ml-auto flex items-center gap-2 self-stretch overflow-hidden border-l border-border/70 px-3.5 py-2">
-          <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-            {running ? (
-              <span className="text-primary">Scanning</span>
-            ) : (
-              <span className="text-emerald-400/90">Monitoring</span>
-            )}
+          <span
+            className="font-mono text-[10px] uppercase tracking-[0.18em]"
+            style={{ color: posture.color }}
+            title={
+              posture.tone === "ok" && freshnessAt
+                ? `Current generation completed ${timeAgo(freshnessAt)}`
+                : (completeness?.source_errors ?? []).join("; ") || undefined
+            }
+          >
+            {posture.label}
           </span>
-          <span className="h-1.5 w-1.5 animate-led-pulse rounded-[1px] bg-emerald-500" />
+          <span
+            className={cn(
+              "h-1.5 w-1.5 rounded-[1px]",
+              posture.pulse && "animate-led-pulse",
+            )}
+            style={{ backgroundColor: posture.color }}
+          />
           {running && (
             <span
               aria-hidden

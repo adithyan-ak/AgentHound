@@ -97,6 +97,10 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		"format":       "litellm",
 		"value_hash":   masterValueHash,
 		"merge_key":    "value_hash",
+		// The master key is operator-supplied and observed directly, so its
+		// value is assessed (not identity-only).
+		"identity_only": false,
+		"value_state":   string(common.AssessmentAssessed),
 	}
 	if opts.IncludeCredentialValues {
 		masterProps["value"] = masterKey
@@ -144,6 +148,12 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 			// The cross_service_credential_chain post-processor filters
 			// these out via WHERE c1master.merge_key = 'value_hash'.
 			"merge_key": "identity",
+			// The raw secret was never observed (masked upstream), so this
+			// node asserts the existence of an upstream credential identity
+			// only — not its value. value_state records that the value was
+			// not assessed, so no consumer can treat it as an exposed secret.
+			"identity_only": true,
+			"value_state":   string(common.AssessmentNotAssessed),
 		}
 		res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, ingest.Node{
 			ID: credID, Kinds: []string{"Credential"}, Properties: props,
@@ -181,6 +191,17 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 			"merge_key":    vk.MergeKey,
 			"spend_usd":    vk.Spend,
 			"models":       vk.Models,
+		}
+		// A "value_hash" merge key means the token IS the stored SHA-256 of
+		// the raw key (observed via /key/list); an "identity" merge key is a
+		// synthesized identity for a key with no stable token — the value was
+		// never observed. value_state / identity_only encode that distinction.
+		if vk.MergeKey == "identity" {
+			props["identity_only"] = true
+			props["value_state"] = string(common.AssessmentNotAssessed)
+		} else {
+			props["identity_only"] = false
+			props["value_state"] = string(common.AssessmentAssessed)
 		}
 		if opts.IncludeCredentialValues && vk.Value != "" {
 			props["value"] = vk.Value

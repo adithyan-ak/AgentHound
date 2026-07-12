@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ScanSearch, Plus, Upload } from "lucide-react";
-import { useScans } from "@entities/scan";
+import { useScans, SCANS_LIST_LIMIT } from "@entities/scan";
 import { Skeleton } from "@shared/ui/primitives/skeleton";
 import { WidgetCard } from "@shared/ui/widgets";
 import { ScanHistory } from "./ScanHistory";
@@ -16,11 +16,16 @@ export function ScanManager() {
   const [showNewScan, setShowNewScan] = useState(false);
   const [showImport, setShowImport] = useState(false);
 
-  // Scan-manager list (page size 50). Upload/delete mutations invalidate this
-  // exact key, so the list refreshes automatically after a write.
-  const { data: scans, isLoading } = useScans();
+  // Scan-manager list. The page size grows on demand: a full page implies more
+  // rows may exist server-side (the list endpoint is offset/limit paginated),
+  // so "Load more" fetches a larger window. Upload/delete mutations invalidate
+  // the ["scans"] prefix, so the list refreshes automatically after a write.
+  const [limit, setLimit] = useState(SCANS_LIST_LIMIT);
+  const { data: scans, isLoading, isFetching } = useScans(limit);
 
   const total = scans?.length ?? 0;
+  // A page filled to the requested limit signals there may be more rows.
+  const canLoadMore = total === limit;
 
   return (
     <div className="dashboard-bg min-h-full p-3 sm:p-4 lg:p-5">
@@ -70,6 +75,18 @@ export function ScanManager() {
             <ScanHistory scans={scans ?? []} />
           )}
         </WidgetCard>
+
+        {canLoadMore && (
+          <div className="flex justify-center">
+            <button
+              className={ghostBtn}
+              disabled={isFetching}
+              onClick={() => setLimit((l) => l + SCANS_LIST_LIMIT)}
+            >
+              {isFetching ? "Loading…" : "Load more"}
+            </button>
+          </div>
+        )}
 
         <NewScan open={showNewScan} onClose={() => setShowNewScan(false)} />
         <ScanImport open={showImport} onClose={() => setShowImport(false)} />

@@ -1,4 +1,3 @@
-// app/layout barrel — AppLayout, NavBar, Sidebar (app shell).
+// app/layout barrel — AppLayout, NavBar (app shell).
 export { AppLayout } from "./AppLayout";
 export { NavBar } from "./NavBar";
-export { Sidebar } from "./Sidebar";

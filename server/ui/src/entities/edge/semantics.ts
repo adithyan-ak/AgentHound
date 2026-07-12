@@ -1,9 +1,10 @@
 // Edge semantics — the single source of truth for what an edge *means* and how
 // it is exploited. Previously this content was duplicated in
-// `features/findings/lib/edge-exploits.ts` and `features/inspector/ui/
-// EdgeEvidence.tsx`; both now re-import from here so the dossier (hop timeline),
-// the inspector, and the explorer (edge tooltip + edge drawer) all speak the
-// same language for every edge kind.
+// `features/findings/lib/edge-exploits.ts`; it now re-imports from here so the
+// dossier (hop timeline) and the explorer (edge tooltip + edge drawer) all
+// speak the same language for every edge kind.
+
+import { EDGE_KIND_META, type EdgeKind } from "@entities/graph/dto";
 
 export interface EdgeExploit {
   title: string;
@@ -62,6 +63,41 @@ export const EDGE_EXPLOIT: Record<string, EdgeExploit> = {
     detail:
       "This A2A agent delegates tasks to the target. Any capability the target has becomes transitively available to the source agent.",
   },
+  CAN_REACH_CROSS_PROTOCOL: {
+    title: "Cross-protocol reachability",
+    detail:
+      "This agent can reach the target resource along a chain that crosses the A2A↔MCP protocol boundary. The pivot is heuristic (protocol-bridging), so treat the reach as plausible rather than proven and confirm the intermediate hops.",
+  },
+  CAN_REACH_CREDENTIAL_CHAIN: {
+    title: "Upstream credential reach",
+    detail:
+      "This agent can reach an upstream credential through a chain of services that share or forward the secret. An attacker controlling the agent can pull the credential without touching the system that owns it.",
+  },
+  CONFUSED_DEPUTY: {
+    title: "Confused-deputy delegation",
+    detail:
+      "This A2A agent delegates to a target whose authority exceeds the caller's, letting a lower-privileged requester act through a higher-privileged deputy.",
+  },
+  INGESTS_UNTRUSTED: {
+    title: "Untrusted content ingestion",
+    detail:
+      "This tool ingests content from an untrusted resource. Attacker-controlled data entering the tool's context is the entry point for indirect prompt injection.",
+  },
+  TAINTS: {
+    title: "Taint propagation",
+    detail:
+      "Untrusted data reachable by this tool flows into a downstream tool, carrying the taint forward so an injection at the source can influence the sink.",
+  },
+  IFC_VIOLATION: {
+    title: "Information-flow-control violation",
+    detail:
+      "Data crosses a trust boundary in a direction the information-flow policy forbids — e.g. tainted input reaching a privileged sink without sanitization.",
+  },
+  POISONS_CONTEXT: {
+    title: "Context poisoning",
+    detail:
+      "This tool can inject content into the agent's context window, steering later model turns toward attacker-chosen behavior.",
+  },
 };
 
 /**
@@ -102,9 +138,19 @@ export function edgeLabel(kind: string): string {
   return kind.replace(/_/g, " ");
 }
 
-/** Short relationship phrase, falling back to the humanized kind. */
+/**
+ * Short relationship phrase for an edge kind. Falls back to the generated
+ * EDGE_KIND_META description (the Go source of truth covering all 32 kinds),
+ * then to the humanized kind — so a new edge always reads as an honest sentence
+ * on the canvas/legend instead of an anonymous stroke, even before this
+ * hand-tuned override map is updated.
+ */
 export function edgeDescription(kind: string): string {
-  return EDGE_DESCRIPTION[kind] ?? edgeLabel(kind);
+  return (
+    EDGE_DESCRIPTION[kind] ??
+    EDGE_KIND_META[kind as EdgeKind]?.description ??
+    edgeLabel(kind)
+  );
 }
 
 /** Exploit explanation for an edge kind, if one is defined. */

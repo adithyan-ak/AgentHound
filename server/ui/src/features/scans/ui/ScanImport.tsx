@@ -9,7 +9,7 @@ import {
   DialogDescription,
 } from "@shared/ui/primitives/dialog";
 import { cn } from "@shared/lib/utils";
-import { useUploadScan, type IngestResult } from "@entities/scan";
+import { useUploadScan, stageOk, type IngestResult } from "@entities/scan";
 import { SIGNAL_OK } from "@shared/theme/tokens";
 
 interface ScanImportProps {
@@ -54,9 +54,55 @@ type Status =
   | { kind: "error"; message: string };
 
 const ghostBtn =
-  "inline-flex h-8 items-center rounded-[3px] border border-border bg-black/30 px-3 font-mono text-[11px] uppercase tracking-[0.08em] text-foreground/80 transition-colors hover:border-mauve-7 hover:text-foreground";
+  "inline-flex h-8 items-center rounded-[3px] border border-border bg-black/30 px-3 font-mono text-[11px] uppercase tracking-[0.08em] text-foreground/80 transition-colors hover:border-mauve-7 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border disabled:hover:text-foreground/80";
 const primaryBtn =
-  "inline-flex h-8 items-center rounded-[3px] bg-primary px-3 font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-primary-foreground transition-colors hover:bg-primary/90";
+  "inline-flex h-8 items-center rounded-[3px] bg-primary px-3 font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-primary";
+
+// Human labels for the ingest stages surfaced in the import report.
+const STAGE_LABELS: Record<string, string> = {
+  write: "Graph write",
+  post_processing: "Analysis",
+  snapshot: "Findings snapshot",
+  promotion: "Promotion",
+};
+
+// StageReport discloses import stage warnings and any stage that did not fully
+// succeed, so a partial/failed post-processing or snapshot is visible instead
+// of being masked by a green node/edge count.
+function StageReport({ result }: { result: IngestResult }) {
+  const warnings = result.warnings ?? [];
+  const problemStages = (result.stages ?? []).filter(
+    (s) => s.state === "failed" || s.state === "partial" || s.state === "skipped",
+  );
+  if (warnings.length === 0 && problemStages.length === 0) return null;
+
+  return (
+    <div
+      role="status"
+      className="flex flex-col gap-1.5 rounded-[3px] border border-amber-500/30 bg-amber-500/10 p-3"
+    >
+      <div className="flex items-center gap-2">
+        <AlertCircle className="h-3.5 w-3.5 text-amber-400" />
+        <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-amber-200">
+          Import completed with warnings
+        </p>
+      </div>
+      <ul className="space-y-0.5 text-[11px] text-amber-100/80">
+        {problemStages.map((s) => (
+          <li key={s.name}>
+            {STAGE_LABELS[s.name] ?? s.name}: {s.state}
+            {s.error ? ` — ${s.error}` : ""}
+          </li>
+        ))}
+        {warnings.map((wmsg, i) => (
+          <li key={`w${i}`} className="break-words">
+            {wmsg}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
   const [status, setStatus] = useState<Status>({ kind: "idle" });
@@ -65,7 +111,15 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
   const { mutateAsync: uploadScan } = useUploadScan();
   const navigate = useNavigate();
 
+  // Each processFile call takes a token; an in-flight upload only commits its
+  // result if the token is still current. Closing the dialog (or starting a
+  // new upload) invalidates the token, so a slow upload that resolves after
+  // the user closed the dialog is ignored instead of resurrecting a stale
+  // success/error panel over a fresh session.
+  const uploadTokenRef = useRef(0);
+
   const reset = useCallback(() => {
+    uploadTokenRef.current += 1;
     setStatus({ kind: "idle" });
     setDragActive(false);
   }, []);
@@ -85,6 +139,9 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
 
   const processFile = useCallback(
     async (file: File) => {
+      const token = ++uploadTokenRef.current;
+      const isStale = () => uploadTokenRef.current !== token;
+
       const validationError = validateScanFile(file);
       if (validationError) {
         setStatus({ kind: "error", message: validationError });
@@ -97,6 +154,7 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
       try {
         text = await readFileAsText(file);
       } catch (err) {
+        if (isStale()) return;
         setStatus({
           kind: "error",
           message: err instanceof Error ? err.message : "failed to read file",
@@ -107,6 +165,7 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
       try {
         JSON.parse(text);
       } catch (err) {
+        if (isStale()) return;
         setStatus({
           kind: "error",
           message:
@@ -117,9 +176,12 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
 
       try {
         const result = await uploadScan(file);
+        // Ignore a resolved upload whose dialog session was closed/superseded.
+        if (isStale()) return;
         setStatus({ kind: "success", result, fileName: file.name });
         onSuccess?.();
       } catch (err) {
+        if (isStale()) return;
         setStatus({
           kind: "error",
           message: err instanceof Error ? err.message : "upload failed",
@@ -181,13 +243,23 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
         {status.kind === "idle" && (
           <div
             data-testid="dropzone"
+            role="button"
+            tabIndex={0}
+            aria-label="Import scan JSON: drop a file or activate to browse"
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             onDragEnter={handleDragOver}
             onDragLeave={handleDragLeave}
             onClick={() => inputRef.current?.click()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                inputRef.current?.click();
+              }
+            }}
             className={cn(
               "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-[3px] border-2 border-dashed p-8 transition-colors",
+              "focus-visible:border-primary/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50",
               dragActive
                 ? "border-primary/70 bg-primary/5"
                 : "border-border bg-black/20 hover:border-primary/40 hover:bg-white/[0.02]",
@@ -240,14 +312,35 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
                 </p>
               </div>
             </div>
+
+            <StageReport result={status.result} />
+
             <div className="flex flex-wrap justify-end gap-2">
               <button className={ghostBtn} onClick={reset}>
                 Import another
               </button>
-              <button className={ghostBtn} onClick={() => goTo("/findings")}>
+              <button
+                className={ghostBtn}
+                onClick={() => goTo("/findings")}
+                disabled={!stageOk(status.result, "snapshot")}
+                title={
+                  stageOk(status.result, "snapshot")
+                    ? undefined
+                    : "Findings snapshot did not complete for this import"
+                }
+              >
                 View findings
               </button>
-              <button className={primaryBtn} onClick={() => goTo("/explorer")}>
+              <button
+                className={primaryBtn}
+                onClick={() => goTo("/explorer")}
+                disabled={!stageOk(status.result, "write")}
+                title={
+                  stageOk(status.result, "write")
+                    ? undefined
+                    : "Graph write did not complete for this import"
+                }
+              >
                 Open graph
               </button>
             </div>

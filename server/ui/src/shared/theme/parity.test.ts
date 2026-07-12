@@ -15,7 +15,7 @@ import { ACCENT, ACCENT_BRIGHT, SIGNAL_OK, SEVERITY } from "./tokens";
 //   1. tokens.ts  <-> globals.css  (the signature accents).
 //   2. tokens.ts  <-> tailwind.config.ts (the severity palette). Tailwind
 //      needs literal hex to generate `bg-severity-*` classes (e.g.
-//      `bg-severity-medium` in EntityInspector), and tailwind.config.ts lives
+//      `bg-severity-medium` on finding severity chips), and tailwind.config.ts lives
 //      OUTSIDE src/ so slop-check never scans it — hence this guard.
 
 // vitest runs from the UI package root (server/ui), so resolve from cwd.

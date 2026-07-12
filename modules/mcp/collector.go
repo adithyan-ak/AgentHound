@@ -109,6 +109,11 @@ func (c *MCPCollector) Collect(ctx context.Context, opts collector.CollectOption
 	results := c.enumerateAll(ctx, specs, scanID)
 
 	seen := make(map[string]bool)
+	coverage := &ingest.CollectionCoverage{
+		ConstituentCollectors: []string{c.Name()},
+		Rules:                 c.engine.Manifest(),
+	}
+	var targetStatuses []ingest.CollectionStatus
 	for _, r := range results {
 		if r.Error != nil {
 			log.Printf("[mcp] server error: %v", r.Error)
@@ -120,7 +125,36 @@ func (c *MCPCollector) Collect(ctx context.Context, opts collector.CollectOption
 			}
 		}
 		data.Graph.Edges = append(data.Graph.Edges, r.Edges...)
+
+		// A server that never connected is a failed target; its methods
+		// were never reached. A reachable server rolls its per-method
+		// outcomes up into its target status (no methods → complete: the
+		// server was reached and advertised nothing enumerable).
+		target := ingest.TargetOutcome{Target: r.Target}
+		if r.Error != nil {
+			target.Status = ingest.StatusFailed
+			target.Error = r.Error.Error()
+		} else {
+			coverage.Methods = append(coverage.Methods, r.Methods...)
+			methodStatuses := make([]ingest.CollectionStatus, 0, len(r.Methods))
+			for _, m := range r.Methods {
+				methodStatuses = append(methodStatuses, m.Status)
+			}
+			if len(methodStatuses) == 0 {
+				target.Status = ingest.StatusComplete
+			} else {
+				target.Status = ingest.RollupStatus(methodStatuses...)
+			}
+		}
+		if r.Truncated {
+			coverage.Truncated = true
+			coverage.TruncationReason = "max-items safety valve"
+		}
+		coverage.Targets = append(coverage.Targets, target)
+		targetStatuses = append(targetStatuses, target.Status)
 	}
+	coverage.Status = ingest.RollupStatus(targetStatuses...)
+	data.Meta.Coverage = coverage
 
 	return data, nil
 }

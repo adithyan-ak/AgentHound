@@ -42,8 +42,20 @@ func (m *mockGraphDB) ListNodes(_ context.Context, _ string, _ int) ([]ingest.No
 	return nil, nil
 }
 
+func (m *mockGraphDB) ListNodesPage(_ context.Context, _ string, _, _ int) ([]ingest.Node, error) {
+	return nil, nil
+}
+
 func (m *mockGraphDB) HasAPOC(_ context.Context) bool {
 	return m.hasAPOCVal
+}
+
+func (m *mockGraphDB) DeleteGenerationTx(_ context.Context, _ string) error {
+	return m.writeErr
+}
+
+func (m *mockGraphDB) DeleteByScanIDTx(_ context.Context, _ string) error {
+	return m.writeErr
 }
 
 func newTestRequest(method, path string, body []byte) *http.Request {

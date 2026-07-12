@@ -28,7 +28,7 @@ These are the node kinds accepted in ingest input (`sdk/ingest.AllowedNodeKinds`
 | `A2ASkill` | A2A | `id`, `name`, `description`, `input_modes`, `output_modes`, `description_hash`, `has_injection_patterns` |
 | `AgentInstance` | Config | `name`, `framework`, `config_path` |
 | `Identity` | Config + MCP | `type` (none/apiKey/oauth/bearer/mtls), `scope`, `is_static` |
-| `Credential` | Config + LiteLLM Looter | `type` (envVar/hardcoded/vaultRef/inputPrompt/master_key/apiKey/virtual_key), `name`, `source`, `is_exposed`, `high_entropy`, `format`, `value_hash` (SHA-256), `blast_radius` (distinct reachable agents, post-processor) |
+| `Credential` | Config + LiteLLM Looter | `type` (envVar/hardcoded/vaultRef/inputPrompt/master_key/apiKey/virtual_key), `name`, `source`, `is_exposed`, `high_entropy`, `format`, `value_hash` (SHA-256) |
 | `Host` | Config + A2A | `hostname`, `ip`, `is_local`, `is_private`, `is_public` |
 | `ConfigFile` | Config | `path`, `client`, `server_count` |
 | `InstructionFile` | Config | `path`, `type` (agents.md/claude.md/cursorrules/copilot-instructions/memory.md), `hash`, `is_suspicious` |
@@ -43,15 +43,6 @@ These are the node kinds accepted in ingest input (`sdk/ingest.AllowedNodeKinds`
 | `AIService` | Multi-label umbrella (see below) | _(no unique properties — carried as companion label)_ |
 | `AIModel` | Ollama Looter | `name`, `size_bytes`, `digest`, `family`, `parameter_size` (canonical), `parameters` (deprecated alias, one-release dual-emit), `is_finetune`, `modified_at`, `value_hash` (when modelfile present), `has_system_prompt`, `modelfile_size_bytes` |
 | `ExtractedTrainingSignal` | Extractors | `kind`, `source_model`, `sample_count`, `confidence` |
-
-### Synthetic (2 kinds, post-processor created)
-
-These labels exist in `AllNodeLabels` but NOT in `AllowedNodeKinds` — collectors cannot emit them.
-
-| Label | Source | Key Properties |
-|-------|--------|----------------|
-| `ResourceGroup` | Post-processor | `type`, `sensitivity` |
-| `TrustZone` | Post-processor | `name`, `level`, `node_count` |
 
 ### A2AAgent Signature Verification (`is_signed`, `signature_valid`, `signature_verification_status`)
 
@@ -145,23 +136,29 @@ type Edge struct {
 | Property | Type | Description |
 |----------|------|-------------|
 | `scan_id` | string | Scan that created/updated this edge |
+| `generation_id` | string | Immutable observation generation that owns this edge |
+| `generations` | string[] | Generation membership used by scoped reads and deletion |
 | `last_seen` | ISO 8601 | Timestamp of last observation |
 | `confidence` | float64 | 0.0–1.0 confidence score |
 | `risk_weight` | float64 | Lower = easier to exploit (used by Dijkstra) |
 | `is_composite` | bool | True for post-processed edges |
 | `evidence` | map[string]any | Structured evidence: `endpoint`, `source`, `engagement_id`, and edge-specific keys (e.g. `digest` for `PROVIDES_MODEL`, `backend_url` for `EXPOSES`, `model_name`/`model_version` for MLflow `PROVIDES_RESOURCE`, `collection`/`point_id` for Qdrant `PROVIDES_RESOURCE`) |
 
-Composite edges additionally carry `source_collector` (`mcp`, `a2a`, `config`, or a processor-owned source such as `cross_service_credential_chain`) for scoped stale-edge cleanup.
+Composite edges additionally carry `source_collector` (`mcp`, `a2a`, `config`, or a processor-owned source such as `cross_service_credential_chain`). Composite observations are versioned per generation and retained with that generation; post-processing never deletes a prior generation's composite evidence.
 
 ---
 
 ## 4. Node ID Strategy
 
-All node IDs are deterministic, content-based SHA-256 hashes. This ensures identical entities from different collectors merge on the same Neo4j node.
+All logical node IDs are deterministic, content-based SHA-256 hashes. Neo4j stores one immutable physical observation per `(generation_id, objectid)`, keyed by `observation_id`. Thus two generations can retain different property values for the same logical `objectid`; current-generation reads materialize the promoted observation set, while deleting the current generation restores the prior observation without rewriting it.
+
+**Logical-current projection.** When several promoted generations of different scopes observe the same `objectid` (e.g. the Config Collector and the MCP Collector both describe one `MCPServer` — the merge point below), a scoped read would otherwise return one physical row per observation. Multi-scope API stats, list, detail, search, and edge reads therefore project to the **logical-current node keyed by `objectid`**: physical observations are collapsed into one node with the **union of properties**, resolving any conflicting key by a fixed, documented precedence — **collector authority, then capture time, then completion time, then `generation_id`** (a stable final tie-break). Collector authority prefers a live protocol probe (`mcp` > `a2a`) over declared `config`, over a merged bundle/loot; a later capture or completion time wins at equal authority. This replaces the earlier "greatest `generation_id` wins", which ordered on a random UUID and so carried no real precedence. To support this, every raw observation carries `source_collector` and `captured_at` provenance, and the edge representative for a duplicated logical triple is chosen by the same precedence. Stats count `DISTINCT objectid` (nodes) and `DISTINCT (source, kind, target)` triples (edges), and the edge inventory delta is computed as distinct logical triples against the prior current generation — so duplicate physical observations never leak while cross-collector `MCPServer` merging still holds.
+
+The node-identity derivation scheme is versioned (`ingest.CurrentIdentityVersion`, currently **2**) and stamped on every artifact as `meta.identity_version`. IDs computed under one scheme do not match another, so an artifact whose `identity_version` the server does not support is **rejected at ingest** rather than silently landing as duplicate, un-merged nodes (see the ingest validator and `docs/reference/api.md`). A zero/absent value defers to the current scheme.
 
 | Node Kind | ID Computation |
 |-----------|----------------|
-| `MCPServer` | `SHA-256("MCPServer:" + transport + ":" + endpoint + ":" + sorted_args)` |
+| `MCPServer` | `SHA-256("MCPServer:" + transport + ":" + endpoint + ":" + comma_joined_args)` — args are **order-preserving** (identity v2), never sorted |
 | `MCPTool` | `SHA-256("MCPTool:" + server_id + ":" + tool_name)` |
 | `MCPResource` | `SHA-256("MCPResource:" + server_id + ":" + resource_uri)` |
 | `MCPPrompt` | `SHA-256("MCPPrompt:" + server_id + ":" + prompt_name)` |
@@ -175,7 +172,7 @@ All node IDs are deterministic, content-based SHA-256 hashes. This ensures ident
 | `InstructionFile` | `SHA-256("InstructionFile:" + absolute_path)` |
 | `AIModel` | `SHA-256("AIModel:" + instance_id + ":" + model_name)` |
 
-**Critical invariant:** The MCPServer ID MUST match between Config Collector and MCP Collector outputs. This is the merge point connecting trust relationships (who trusts what) to capabilities (what a server exposes). `ComputeMCPServerID` trims surrounding whitespace from the endpoint and each arg before hashing, so `"npx "` and `"npx"` produce the same ID regardless of which collector parsed the config.
+**Critical invariant:** The MCPServer ID MUST match between Config Collector and MCP Collector outputs. This is the merge point connecting trust relationships (who trusts what) to capabilities (what a server exposes). `ComputeMCPServerID` trims surrounding whitespace from the endpoint and each arg before hashing, so `"npx "` and `"npx"` produce the same ID regardless of which collector parsed the config. Because args are order-preserving, both collectors MUST derive the launch argv in the **same order** (identity v2); the previous sorted-argv scheme (v1) both collapsed genuinely distinct servers onto one ID and destroyed flag/value adjacency, so mixing v1 and v2 artifacts in one graph is prevented by the ingest-time identity-version check.
 
 ---
 
@@ -212,7 +209,7 @@ Processors run in strict dependency order. A processor may only read edges produ
 | 6 | poisoned_instructions | `POISONED_INSTRUCTIONS` | Raw edges only |
 | 7 | taints | `TAINTS` | INGESTS_UNTRUSTED + `schema_keys` |
 | 8 | can_reach | `CAN_REACH` | 2 (HAS_ACCESS_TO) |
-| 9 | cross_service_credential_chain | `CAN_REACH` (credential variant) + `Credential.blast_radius` | 2, 8 (joins on `Credential.value_hash`) |
+| 9 | cross_service_credential_chain | `CAN_REACH_CREDENTIAL_CHAIN` + `CAN_REACH_CREDENTIAL_CHAIN.blast_radius` (on the composite edge, not the raw `Credential`) | 2, 8 (joins on `Credential.value_hash`) |
 | 10 | ifc_violation | `IFC_VIOLATION` | 2 (HAS_ACCESS_TO) + INGESTS_UNTRUSTED |
 | 11 | can_exfiltrate | `CAN_EXFILTRATE_VIA` | 8 (CAN_REACH) |
 | 12 | can_impersonate | `CAN_IMPERSONATE` | Raw edges only |

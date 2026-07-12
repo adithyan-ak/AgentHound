@@ -29,7 +29,9 @@ func (p *Taints) Process(ctx context.Context, db graph.GraphDB, scanID string) (
 	cypher := `
 MATCH (s1:MCPServer)-[:PROVIDES_TOOL]->(src:MCPTool)
 MATCH (s2:MCPServer)-[:PROVIDES_TOOL]->(snk:MCPTool)
-WHERE s1 <> s2
+WHERE s1.scan_id = $scan_id AND src.scan_id = $scan_id
+  AND s2.scan_id = $scan_id AND snk.scan_id = $scan_id
+  AND s1 <> s2
   AND src <> snk
   AND src.schema_keys IS NOT NULL
   AND snk.schema_keys IS NOT NULL

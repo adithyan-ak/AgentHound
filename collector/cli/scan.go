@@ -283,7 +283,43 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 			CollectorVersion: "0.1.0",
 			Timestamp:        time.Now().UTC().Format(time.RFC3339),
 			ScanID:           uuid.New().String(),
+			SchemaVersion:    ingest.CurrentSchemaVersion,
+			IdentityVersion:  ingest.CurrentIdentityVersion,
 		},
+	}
+
+	// Combined coverage rolls up each constituent collector's manifest so a
+	// merged scan can distinguish a genuinely empty result (every collector
+	// StatusComplete) from a partial/failed one. An empty artifact is clean
+	// only when the combined status is StatusComplete.
+	combined := &ingest.CollectionCoverage{}
+	var covStatuses []ingest.CollectionStatus
+	mergeCoverage := func(name string, data *ingest.IngestData, err error) {
+		combined.ConstituentCollectors = append(combined.ConstituentCollectors, name)
+		if err != nil {
+			combined.Targets = append(combined.Targets,
+				ingest.TargetOutcome{Target: name, Status: ingest.StatusFailed, Error: err.Error()})
+			covStatuses = append(covStatuses, ingest.StatusFailed)
+			return
+		}
+		cov := data.Meta.Coverage
+		if cov == nil {
+			// The collector completed but emitted no manifest (e.g. the
+			// config collector, which reads local files). A successful run
+			// with no manifest is a complete scope, not an unknown one.
+			covStatuses = append(covStatuses, ingest.StatusComplete)
+			return
+		}
+		combined.Targets = append(combined.Targets, cov.Targets...)
+		combined.Methods = append(combined.Methods, cov.Methods...)
+		combined.Rules = append(combined.Rules, cov.Rules...)
+		if cov.Truncated {
+			combined.Truncated = true
+			if combined.TruncationReason == "" {
+				combined.TruncationReason = cov.TruncationReason
+			}
+		}
+		covStatuses = append(covStatuses, cov.Status)
 	}
 
 	if runConfig {
@@ -296,6 +332,7 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 			merged.Graph.Nodes = append(merged.Graph.Nodes, data.Graph.Nodes...)
 			merged.Graph.Edges = append(merged.Graph.Edges, data.Graph.Edges...)
 		}
+		mergeCoverage("config", data, err)
 	}
 
 	if runMCP {
@@ -308,6 +345,7 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 			merged.Graph.Nodes = append(merged.Graph.Nodes, data.Graph.Nodes...)
 			merged.Graph.Edges = append(merged.Graph.Edges, data.Graph.Edges...)
 		}
+		mergeCoverage("mcp", data, err)
 	}
 
 	if runA2A {
@@ -320,7 +358,11 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 			merged.Graph.Nodes = append(merged.Graph.Nodes, data.Graph.Nodes...)
 			merged.Graph.Edges = append(merged.Graph.Edges, data.Graph.Edges...)
 		}
+		mergeCoverage("a2a", data, err)
 	}
+
+	combined.Status = ingest.RollupStatus(covStatuses...)
+	merged.Meta.Coverage = combined
 
 	return merged, enabled, failed
 }
@@ -561,6 +603,8 @@ func buildNetworkScanEnvelope(spec string, targets []action.Target, authzFile, a
 			CollectorVersion: "0.2.0-dev",
 			Timestamp:        time.Now().UTC().Format(time.RFC3339),
 			ScanID:           scanID,
+			SchemaVersion:    ingest.CurrentSchemaVersion,
+			IdentityVersion:  ingest.CurrentIdentityVersion,
 		},
 	}
 	// Authorization watermark is recorded as a top-level Meta extension via

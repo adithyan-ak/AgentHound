@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/adithyan-ak/agenthound/sdk/collector"
@@ -138,18 +137,32 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 			}
 
 			authMethod := deriveAuthMethod(srv.Env, srv.Headers)
-			isPinned := true
-			if srv.Transport == "stdio" {
-				isPinned = !IsUnpinned(srv.Command, srv.Args)
-			}
 
-			addNode(common.NewNode(serverID, []string{"MCPServer"}, map[string]any{
+			serverProps := map[string]any{
 				"name":        srv.Name,
 				"endpoint":    endpoint,
 				"transport":   srv.Transport,
 				"auth_method": authMethod,
-				"is_pinned":   isPinned,
-			}))
+				// Canonical, evidence-derived auth scheme. The config
+				// collector only observes credentials declared in the client
+				// config, so "no auth material found" is AuthUnknown, not a
+				// confirmed AuthNone — the server may still require auth we
+				// cannot see from the config alone.
+				"auth_scheme":        string(canonicalConfigAuthScheme(authMethod)),
+				"auth_scheme_source": "config_env_headers",
+			}
+			// Version pinning is only assessable for stdio servers (pinned to
+			// a package/version in argv). For http transport there is no argv
+			// to inspect, so pinning is not_assessed rather than a benign
+			// is_pinned=true.
+			if srv.Transport == "stdio" {
+				serverProps["is_pinned"] = !IsUnpinned(srv.Command, srv.Args)
+				serverProps["pinning_state"] = string(common.AssessmentAssessed)
+			} else {
+				serverProps["pinning_state"] = string(common.AssessmentNotAssessed)
+			}
+
+			addNode(common.NewNode(serverID, []string{"MCPServer"}, serverProps))
 
 			trustWeight := authRiskWeight(authMethod)
 			addEdge(common.NewEdge(agentID, serverID, "TRUSTS_SERVER", "AgentInstance", "MCPServer",
@@ -161,13 +174,7 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 			hostName := hostForServer(srv)
 			hostID := common.HostNodeID(hostName)
 			hostInfo := common.ClassifyHost(hostName)
-			addNode(common.NewNode(hostID, []string{"Host"}, map[string]any{
-				"hostname":   hostInfo.Hostname,
-				"ip":         hostInfo.IP,
-				"is_local":   hostInfo.IsLocal,
-				"is_private": hostInfo.IsPrivate,
-				"is_public":  hostInfo.IsPublic,
-			}))
+			addNode(common.NewNode(hostID, []string{"Host"}, common.HostNodeProps(hostInfo)))
 			addEdge(common.NewEdge(serverID, hostID, "RUNS_ON", "MCPServer", "Host",
 				common.DefaultEdgeProps(scanID)))
 
@@ -308,10 +315,9 @@ func computeServerID(srv ServerDef) string {
 	if srv.Transport == "http" {
 		return ingest.ComputeMCPServerID("http", srv.URL)
 	}
-	sorted := make([]string, len(srv.Args))
-	copy(sorted, srv.Args)
-	sort.Strings(sorted)
-	return ingest.ComputeMCPServerID("stdio", srv.Command, sorted...)
+	// Args in launch order (identity version 2). Must match the MCP
+	// collector's derivation for the same server so the two merge.
+	return ingest.ComputeMCPServerID("stdio", srv.Command, srv.Args...)
 }
 
 func hostForServer(srv ServerDef) string {
@@ -345,6 +351,23 @@ func deriveAuthMethod(env map[string]string, headers map[string]string) string {
 		}
 	}
 	return "none"
+}
+
+// canonicalConfigAuthScheme maps the config collector's derived auth method
+// onto the shared common.AuthScheme vocabulary. A derived "none" means no
+// auth material was found in the client config — which is NOT evidence the
+// server is open, so it maps to AuthUnknown rather than AuthNone.
+func canonicalConfigAuthScheme(method string) common.AuthScheme {
+	switch method {
+	case "oauth":
+		return common.AuthOAuth
+	case "bearer":
+		return common.AuthBearer
+	case "apiKey":
+		return common.AuthAPIKey
+	default:
+		return common.AuthUnknown
+	}
 }
 
 func authRiskWeight(method string) float64 {

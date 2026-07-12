@@ -54,8 +54,10 @@ export function NewScan({ open, onClose }: NewScanProps) {
             Trigger a Scan
           </DialogTitle>
           <DialogDescription>
-            Scans are triggered from the CLI. Run one of these commands to collect data and ingest
-            it into the graph.
+            Scanning is a two-step flow: the CLI <strong>collects</strong> an artifact from your
+            infrastructure, then the server <strong>ingests</strong> it into the graph. Run one of
+            these commands to collect, then import the produced JSON here (Import Scan) — or point
+            the CLI at a running server to ingest directly.
           </DialogDescription>
         </DialogHeader>
 

@@ -30,6 +30,19 @@ export interface Finding {
   owasp_map?: string[];
   atlas_map?: string[];
   triage?: TriageState | null;
+
+  // Truth-contract fields (server model migration 004). All optional so
+  // pre-contract fixtures stay valid.
+  generation_id?: string;
+  detection_subtype?: string;
+  detection_version?: string;
+  confidence_basis?: string;
+  lifecycle?: string;
+  // NULLABLE: null/absent means "unknown" (a required weight was missing),
+  // never a benign zero.
+  attack_cost?: number | null;
+  weight_total?: number | null;
+  weight_missing_count?: number;
 }
 
 export interface AttackPathNode {
@@ -48,7 +61,43 @@ export interface AttackPathEdge {
 export interface AttackPath {
   nodes: AttackPathNode[];
   edges: AttackPathEdge[];
-  total_risk_weight: number;
+  // NULLABLE: null means the total is unknown because at least one edge on the
+  // path carried no risk_weight. A benign 0 is never substituted for a missing
+  // weight. weight_missing_count records how many edges lacked a weight.
+  total_risk_weight: number | null;
+  weight_missing_count?: number;
+}
+
+// Typed evidence graph backing a finding (server analysis.EvidenceDAG). Records
+// how each pair of evidence nodes is joined — observed (real edge, stored
+// direction), reversed (real edge, against direction), or synthetic (a non-edge
+// join such as a value_hash equality). Absence of a complete evidence set is
+// explicit (complete=false), never coerced into a clean verdict.
+export type EvidenceJoinType = "observed" | "reversed" | "synthetic";
+
+export interface EvidenceNode {
+  id: string;
+  kinds: string[];
+  name?: string;
+  role?: string;
+}
+
+export interface EvidenceJoin {
+  source: string;
+  target: string;
+  kind: string;
+  join_type: EvidenceJoinType;
+  risk_weight?: number | null;
+}
+
+export interface EvidenceDAG {
+  nodes: EvidenceNode[];
+  joins: EvidenceJoin[];
+  connected_components: number;
+  confidence_basis: string;
+  weight_total: number | null;
+  weight_missing_count: number;
+  complete: boolean;
 }
 
 export interface RemediationStep {
@@ -69,6 +118,7 @@ export interface FindingDetail {
   finding: Finding;
   composite_props?: Record<string, unknown>;
   attack_path: AttackPath | null;
+  evidence_dag?: EvidenceDAG | null;
   remediation: RemediationStep[];
   impact: Impact | null;
 }

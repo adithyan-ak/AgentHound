@@ -49,6 +49,29 @@ func TestConstraintCypher(t *testing.T) {
 	})
 }
 
+func TestUseForRequireSyntax(t *testing.T) {
+	// Contract (CLAUDE.md): 4.4 emits ON...ASSERT, 5.x emits FOR...REQUIRE.
+	tests := []struct {
+		name         string
+		major, minor int
+		want         bool
+	}{
+		{"4.0 uses ASSERT", 4, 0, false},
+		{"4.3 uses ASSERT", 4, 3, false},
+		{"4.4 uses ASSERT", 4, 4, false},
+		{"5.0 uses REQUIRE", 5, 0, true},
+		{"5.15 uses REQUIRE", 5, 15, true},
+		{"6.0 uses REQUIRE", 6, 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := useForRequireSyntax(tt.major, tt.minor); got != tt.want {
+				t.Errorf("useForRequireSyntax(%d, %d) = %v, want %v", tt.major, tt.minor, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIndexCypher(t *testing.T) {
 	t.Run("ForRequire syntax", func(t *testing.T) {
 		cypher := indexCypher("MCPServer", "name", true)

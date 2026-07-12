@@ -17,7 +17,7 @@ func (p *PoisonedDescription) Process(ctx context.Context, db graph.GraphDB, sca
 
 	cypher := `
 MATCH (t:MCPTool)
-WHERE t.has_injection_patterns = true
+WHERE t.scan_id = $scan_id AND t.has_injection_patterns = true
 MERGE (t)-[e:POISONED_DESCRIPTION]->(t)
 ON CREATE SET e.confidence = 1.0,
               e.is_composite = true,

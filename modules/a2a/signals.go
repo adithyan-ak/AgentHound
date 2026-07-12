@@ -3,6 +3,8 @@ package a2a
 import (
 	"net/url"
 	"strings"
+
+	"github.com/adithyan-ak/agenthound/sdk/common"
 )
 
 type DelegationEdge struct {
@@ -22,6 +24,42 @@ var authScores = map[string]int{
 	"oauth2":        25,
 	"http":          50,
 	"apiKey":        70,
+}
+
+// CanonicalAuthScheme maps an agent card's declared security schemes onto the
+// shared common.AuthScheme vocabulary, derived strictly from the observed
+// scheme types. An empty scheme set is AuthNone only in the sense that the
+// card declared no scheme; callers that need "we could not determine the
+// posture" should treat an empty card as AuthUnknown themselves. When schemes
+// are present but none are recognized, the result is AuthCustom (a scheme was
+// declared, just not a standard one) rather than a false AuthNone.
+//
+// Note: this reports the OBSERVED mechanism only. It deliberately does not
+// attach an assurance grade — OIDC/OAuth do not imply a fixed assurance level
+// without independent evidence (see auth_assurance_state on the emitted node).
+func CanonicalAuthScheme(schemes []SecurityScheme) common.AuthScheme {
+	if len(schemes) == 0 {
+		return common.AuthNone
+	}
+	// Strongest / most specific evidence first, mirroring DeriveAuthMethod.
+	priority := []struct {
+		schemeType string
+		scheme     common.AuthScheme
+	}{
+		{"mutualTLS", common.AuthCustom},
+		{"openIdConnect", common.AuthOIDC},
+		{"oauth2", common.AuthOAuth},
+		{"http", common.AuthBearer},
+		{"apiKey", common.AuthAPIKey},
+	}
+	for _, p := range priority {
+		for _, s := range schemes {
+			if s.Type == p.schemeType {
+				return p.scheme
+			}
+		}
+	}
+	return common.AuthCustom
 }
 
 func AuthPostureScore(schemes []SecurityScheme) int {

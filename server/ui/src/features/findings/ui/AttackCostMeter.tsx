@@ -1,8 +1,16 @@
 import { MeterBar } from "@shared/ui/widgets";
-import { SEVERITY, FEEDBACK } from "@shared/theme/tokens";
+import { SEVERITY, FEEDBACK, CHART_THEME } from "@shared/theme/tokens";
 
 interface AttackCostMeterProps {
-  totalWeight: number;
+  /**
+   * Total path risk weight. NULL means unknown — at least one edge on the path
+   * carried no risk_weight, so the cost cannot be computed. A null must render
+   * as "UNKNOWN", never as a fabricated 0 (which would read as "trivial to
+   * exploit" — the opposite of missing evidence).
+   */
+  totalWeight: number | null;
+  /** How many edges lacked a weight (surfaced when the cost is unknown). */
+  missingCount?: number;
 }
 
 /**
@@ -10,7 +18,28 @@ interface AttackCostMeterProps {
  * a high cost (hard to exploit) reads green. Rendered as a flat segmented
  * instrument meter to match the SOC panel language.
  */
-export function AttackCostMeter({ totalWeight }: AttackCostMeterProps) {
+export function AttackCostMeter({ totalWeight, missingCount }: AttackCostMeterProps) {
+  if (totalWeight == null) {
+    return (
+      <div className="flex items-center gap-2.5">
+        <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+          Attack cost
+        </span>
+        <MeterBar value={0} max={100} color={CHART_THEME.axis} height={6} className="flex-1" />
+        <span
+          className="shrink-0 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-muted-foreground"
+          title={
+            missingCount
+              ? `${missingCount} edge${missingCount === 1 ? "" : "s"} on the path have no risk weight`
+              : "At least one edge on the path has no risk weight"
+          }
+        >
+          Unknown
+        </span>
+      </div>
+    );
+  }
+
   const level = totalWeight < 0.5 ? "LOW" : totalWeight < 1.5 ? "MEDIUM" : "HIGH";
   const color =
     level === "LOW"

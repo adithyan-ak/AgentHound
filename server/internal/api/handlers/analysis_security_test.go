@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 )
 
@@ -22,7 +23,7 @@ func TestCypherInjectionViaNodeKind(t *testing.T) {
 	}
 
 	mock := &graph.MockGraphDB{}
-	h := NewAnalysisHandler(mock, nil)
+	h := NewAnalysisHandler(mock, nil, nil)
 
 	for _, kind := range injections {
 		t.Run(kind, func(t *testing.T) {
@@ -64,22 +65,27 @@ func TestValidNodeKindRejectsArbitraryStrings(t *testing.T) {
 }
 
 func TestValidNodeKindAcceptsAllLabels(t *testing.T) {
-	for _, label := range []string{
-		"MCPServer", "MCPTool", "MCPResource", "MCPPrompt",
-		"A2AAgent", "A2ASkill", "AgentInstance",
-		"Identity", "Credential", "Host",
-		"ConfigFile", "InstructionFile",
-		"ResourceGroup", "TrustZone",
-	} {
+	for _, label := range ingest.AllNodeLabels {
 		if !validNodeKind(label) {
 			t.Errorf("validNodeKind(%q) = false, want true", label)
 		}
 	}
 }
 
+// TestValidNodeKindRejectsRemovedSyntheticKinds guards the cleanup: the
+// unproduced ResourceGroup/TrustZone kinds were removed from the canonical
+// registry, so they must no longer validate.
+func TestValidNodeKindRejectsRemovedSyntheticKinds(t *testing.T) {
+	for _, label := range []string{"ResourceGroup", "TrustZone"} {
+		if validNodeKind(label) {
+			t.Errorf("validNodeKind(%q) = true, want false (removed synthetic kind)", label)
+		}
+	}
+}
+
 func TestCypherInjectionViaTargetKind(t *testing.T) {
 	mock := &graph.MockGraphDB{}
-	h := NewAnalysisHandler(mock, nil)
+	h := NewAnalysisHandler(mock, nil, nil)
 
 	body := `{"source":"test","source_kind":"MCPServer","target":"x","target_kind":"MCPTool' OR 1=1--"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/analysis/shortest-path", strings.NewReader(body))

@@ -1,3 +1,2 @@
-// shared/api barrel — ky client + central QueryClient config.
-// Populated in later workstreams.
-export {};
+// shared/api barrel — ky client + central QueryClient config + wire envelopes.
+export * from "./page";

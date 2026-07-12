@@ -125,7 +125,7 @@ func TestIntegrationWriteAndRead(t *testing.T) {
 	}
 
 	// Read back
-	node, nodeEdges, err := reader.GetNode(ctx, "test-srv-001")
+	node, nodeEdges, err := reader.GetNode(ctx, "test-srv-001", nil)
 	if err != nil {
 		t.Fatalf("get node: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestIntegrationWriteAndRead(t *testing.T) {
 	}
 
 	// Verify merge
-	node, _, err = reader.GetNode(ctx, "test-srv-001")
+	node, _, err = reader.GetNode(ctx, "test-srv-001", nil)
 	if err != nil {
 		t.Fatalf("get merged node: %v", err)
 	}
@@ -582,7 +582,7 @@ func TestIntegrationReaderBlastRadius(t *testing.T) {
 	}
 
 	// Outbound blast radius from the agent should hit 3 more nodes at hops 1..3.
-	result, err := reader.GetBlastRadius(ctx, "blast-agent-001", "out", 5)
+	result, err := reader.GetBlastRadius(ctx, "blast-agent-001", "out", 5, nil)
 	if err != nil {
 		t.Fatalf("blast radius: %v", err)
 	}
@@ -621,7 +621,7 @@ func TestIntegrationReaderBlastRadius(t *testing.T) {
 	}
 
 	// Inbound direction from the resource should walk back up.
-	inResult, err := reader.GetBlastRadius(ctx, "blast-res-001", "in", 5)
+	inResult, err := reader.GetBlastRadius(ctx, "blast-res-001", "in", 5, nil)
 	if err != nil {
 		t.Fatalf("blast radius inbound: %v", err)
 	}
@@ -630,7 +630,7 @@ func TestIntegrationReaderBlastRadius(t *testing.T) {
 	}
 
 	// Nonexistent node returns nil.
-	missing, err := reader.GetBlastRadius(ctx, "blast-nonexistent-999", "out", 5)
+	missing, err := reader.GetBlastRadius(ctx, "blast-nonexistent-999", "out", 5, nil)
 	if err != nil {
 		t.Fatalf("blast radius nonexistent: %v", err)
 	}
@@ -639,17 +639,106 @@ func TestIntegrationReaderBlastRadius(t *testing.T) {
 	}
 
 	// maxHops clamping: request 99, should not error.
-	_, err = reader.GetBlastRadius(ctx, "blast-agent-001", "out", 99)
+	_, err = reader.GetBlastRadius(ctx, "blast-agent-001", "out", 99, nil)
 	if err != nil {
 		t.Fatalf("blast radius maxHops clamping: %v", err)
 	}
 
 	// Unknown direction is normalized to "out" (no error).
-	_, err = reader.GetBlastRadius(ctx, "blast-agent-001", "sideways", 5)
+	_, err = reader.GetBlastRadius(ctx, "blast-agent-001", "sideways", 5, nil)
 	if err != nil {
 		t.Fatalf("blast radius unknown direction: %v", err)
 	}
 
 	// Clean up
 	_, _ = reader.Query(ctx, "MATCH (n) WHERE n.scan_id = 'test-blast' DETACH DELETE n", nil)
+}
+
+// TestIntegrationGenerationScopedReadsDoNotLeakHistory is the F5 counterexample:
+// GetNode (detail), SearchNodes (search), GetNeighborhood, and GetBlastRadius
+// must all be scoped to the current generations, so a retained historical fact
+// (a node/edge observed only by a demoted generation) never leaks into a read.
+func TestIntegrationGenerationScopedReadsDoNotLeakHistory(t *testing.T) {
+	ctx := testDriver(t)
+
+	uri := os.Getenv("AGENTHOUND_NEO4J_URI")
+	user := os.Getenv("AGENTHOUND_NEO4J_USER")
+	pass := os.Getenv("AGENTHOUND_NEO4J_PASSWORD")
+
+	driver, err := NewDriver(uri, user, pass)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer driver.Close(ctx)
+	if err := InitSchema(ctx, driver); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+	reader := NewReader(driver)
+
+	const cur, old = "gen-cur", "gen-old"
+	// Seed: a current node linked to a current node, plus a HISTORICAL-only
+	// node linked off the current one. Only the current generation is scoped.
+	_, _ = reader.Query(ctx, `MATCH (n) WHERE n.scan_id = 'test-genscope' DETACH DELETE n`, nil)
+	if _, err := (&DB{writer: NewWriter(driver)}).ExecuteWrite(ctx, `
+CREATE (a:MCPServer {objectid:'gs-a', name:'a-current', scan_id:'test-genscope', generations:[$cur]})
+CREATE (b:MCPTool {objectid:'gs-b', name:'b-current', scan_id:'test-genscope', generations:[$cur]})
+CREATE (h:MCPTool {objectid:'gs-h', name:'h-historical', scan_id:'test-genscope', generations:[$old]})
+CREATE (a)-[:PROVIDES_TOOL {generations:[$cur]}]->(b)
+CREATE (a)-[:PROVIDES_TOOL {generations:[$old]}]->(h)
+`, map[string]any{"cur": cur, "old": old}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	defer func() { _, _ = reader.Query(ctx, `MATCH (n) WHERE n.scan_id = 'test-genscope' DETACH DELETE n`, nil) }()
+
+	gens := []string{cur}
+
+	// Detail: the historical node is not found under the current scope.
+	if n, _, err := reader.GetNode(ctx, "gs-h", gens); err != nil {
+		t.Fatalf("get historical node: %v", err)
+	} else if n != nil {
+		t.Error("historical node must not be visible in a current-scoped detail read")
+	}
+	// Detail: the current node's edges exclude the historical edge/neighbour.
+	if n, edges, err := reader.GetNode(ctx, "gs-a", gens); err != nil {
+		t.Fatalf("get current node: %v", err)
+	} else {
+		if n == nil {
+			t.Fatal("current node must be visible")
+		}
+		for _, e := range edges {
+			if e.Source == "gs-h" || e.Target == "gs-h" {
+				t.Error("historical edge leaked into current-scoped node detail")
+			}
+		}
+	}
+	// Search: the historical node must not appear.
+	if results, err := reader.SearchNodes(ctx, "historical", 20, gens); err != nil {
+		t.Fatalf("search: %v", err)
+	} else {
+		for _, r := range results {
+			if r.ID == "gs-h" {
+				t.Error("historical node leaked into current-scoped search")
+			}
+		}
+	}
+	// Neighborhood: the historical neighbour must not appear.
+	if nodes, _, err := reader.GetNeighborhood(ctx, "gs-a", 3, gens); err != nil {
+		t.Fatalf("neighborhood: %v", err)
+	} else {
+		for _, n := range nodes {
+			if n.ID == "gs-h" {
+				t.Error("historical node leaked into current-scoped neighborhood")
+			}
+		}
+	}
+	// Blast radius: the historical node must not be reachable.
+	if res, err := reader.GetBlastRadius(ctx, "gs-a", "out", 5, gens); err != nil {
+		t.Fatalf("blast radius: %v", err)
+	} else if res != nil {
+		for _, n := range res.Nodes {
+			if n.ID == "gs-h" {
+				t.Error("historical node leaked into current-scoped blast radius")
+			}
+		}
+	}
 }

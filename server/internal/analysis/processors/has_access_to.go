@@ -19,7 +19,8 @@ func (p *HasAccessTo) Process(ctx context.Context, db graph.GraphDB, scanID stri
 	capDBCypher := `
 MATCH (s:MCPServer)-[:PROVIDES_TOOL]->(t:MCPTool),
       (s)-[:PROVIDES_RESOURCE]->(r:MCPResource)
-WHERE ANY(cap IN t.capability_surface WHERE cap = 'database_access')
+WHERE s.scan_id = $scan_id AND t.scan_id = $scan_id AND r.scan_id = $scan_id
+  AND ANY(cap IN t.capability_surface WHERE cap = 'database_access')
   AND r.uri_scheme IN ['postgres', 'mysql', 'mongodb', 'redis']
 MERGE (t)-[e:HAS_ACCESS_TO]->(r)
 ON CREATE SET e.confidence = 0.7,
@@ -36,7 +37,8 @@ RETURN count(*) AS written`
 	capFileCypher := `
 MATCH (s:MCPServer)-[:PROVIDES_TOOL]->(t:MCPTool),
       (s)-[:PROVIDES_RESOURCE]->(r:MCPResource)
-WHERE (ANY(cap IN t.capability_surface WHERE cap = 'file_read')
+WHERE s.scan_id = $scan_id AND t.scan_id = $scan_id AND r.scan_id = $scan_id
+  AND (ANY(cap IN t.capability_surface WHERE cap = 'file_read')
        OR ANY(cap IN t.capability_surface WHERE cap = 'file_write'))
   AND r.uri_scheme = 'file'
 MERGE (t)-[e:HAS_ACCESS_TO]->(r)
@@ -54,7 +56,8 @@ RETURN count(*) AS written`
 	descCypher := `
 MATCH (s:MCPServer)-[:PROVIDES_TOOL]->(t:MCPTool),
       (s)-[:PROVIDES_RESOURCE]->(r:MCPResource)
-WHERE t.description IS NOT NULL
+WHERE s.scan_id = $scan_id AND t.scan_id = $scan_id AND r.scan_id = $scan_id
+  AND t.description IS NOT NULL
   AND r.name IS NOT NULL
   AND toLower(t.description) CONTAINS toLower(r.name)
 MERGE (t)-[e:HAS_ACCESS_TO]->(r)

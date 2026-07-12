@@ -73,6 +73,44 @@ func (w *Writer) WriteNodes(ctx context.Context, nodes []ingest.Node, scanID str
 	return w.writeNodesBatched(ctx, nodes, scanID)
 }
 
+// WriteNodesForGeneration writes immutable node observations for one
+// generation. objectid remains the stable logical identity exposed to callers;
+// observation_id is the physical merge key, so a later generation can observe
+// the same logical node with different properties without mutating an earlier
+// generation's observation.
+func (w *Writer) WriteNodesForGeneration(ctx context.Context, nodes []ingest.Node, scanID, generationID string) (int, error) {
+	if len(nodes) == 0 {
+		return 0, nil
+	}
+	grouped := groupNodesByKindTuple(nodes)
+	total := 0
+	for tupleKey, group := range grouped {
+		cypher := generationNodeCypherForKindTuple(group.PrimaryKind, group.ExtraLabels)
+		for i := 0; i < len(group.Nodes); i += w.batchSize {
+			end := min(i+w.batchSize, len(group.Nodes))
+			batch := group.Nodes[i:end]
+			params := make([]map[string]any, len(batch))
+			for j, n := range batch {
+				params[j] = map[string]any{
+					"id":             n.ID,
+					"observation_id": generationID + "\x1f" + n.ID,
+					"properties":     n.Properties,
+				}
+			}
+			written, err := w.execFn(ctx, cypher, map[string]any{
+				"nodes":         params,
+				"scan_id":       scanID,
+				"generation_id": generationID,
+			})
+			if err != nil {
+				return total, fmt.Errorf("generation node batch %s at offset %d: %w", tupleKey, i, err)
+			}
+			total += written
+		}
+	}
+	return total, nil
+}
+
 func (w *Writer) writeNodesBatched(ctx context.Context, nodes []ingest.Node, scanID string) (int, error) {
 	grouped := groupNodesByKindTuple(nodes)
 	total := 0
@@ -130,6 +168,21 @@ func nodeCypherForKindTuple(primaryKind string, extraLabels []string) string {
 	return sb.String()
 }
 
+func generationNodeCypherForKindTuple(primaryKind string, extraLabels []string) string {
+	var sb strings.Builder
+	sb.WriteString("UNWIND $nodes AS node\n")
+	fmt.Fprintf(&sb, "MERGE (n:%s {observation_id: node.observation_id})\n", primaryKind)
+	sb.WriteString("ON CREATE SET n = node.properties, n.objectid = node.id, n.scan_id = $scan_id, n.generation_id = $generation_id, n.generations = [$generation_id], n.first_seen = datetime(), n.last_seen = datetime(), n.previous_description_hash = node.properties.description_hash, n.previous_input_schema_hash = node.properties.input_schema_hash, n.previous_instructions_hash = node.properties.instructions_hash\n")
+	// Replays of the same scan/generation are idempotent. No other generation
+	// can match this observation_id, so this update never mutates history.
+	sb.WriteString("ON MATCH SET n += node.properties, n.objectid = node.id, n.scan_id = $scan_id, n.generation_id = $generation_id, n.generations = [$generation_id], n.last_seen = datetime()")
+	for _, lbl := range extraLabels {
+		fmt.Fprintf(&sb, "\nSET n:%s", lbl)
+	}
+	sb.WriteString("\nRETURN count(*) AS written")
+	return sb.String()
+}
+
 func (w *Writer) WriteEdges(ctx context.Context, edges []ingest.Edge, scanID string) (int, error) {
 	if len(edges) == 0 {
 		return 0, nil
@@ -141,6 +194,85 @@ func (w *Writer) WriteEdges(ctx context.Context, edges []ingest.Edge, scanID str
 		return w.writeEdgesAPOC(ctx, edges, scanID)
 	}
 	return w.writeEdgesFallback(ctx, edges, scanID)
+}
+
+// WriteEdgesForGeneration writes immutable relationship observations between
+// node observations in the same generation.
+func (w *Writer) WriteEdgesForGeneration(ctx context.Context, edges []ingest.Edge, scanID, generationID string) (int, error) {
+	if len(edges) == 0 {
+		return 0, nil
+	}
+	grouped := groupEdgesByEndpoints(edges)
+	total := 0
+	for key, kindEdges := range grouped {
+		cypher := generationEdgeCypherForKinds(key.Kind, key.SourceKind, key.TargetKind)
+		for i := 0; i < len(kindEdges); i += w.batchSize {
+			end := min(i+w.batchSize, len(kindEdges))
+			batch := kindEdges[i:end]
+			params := make([]map[string]any, len(batch))
+			for j, e := range batch {
+				props := e.Properties
+				if props == nil {
+					props = map[string]any{}
+				}
+				params[j] = map[string]any{
+					"source":     e.Source,
+					"target":     e.Target,
+					"properties": props,
+				}
+			}
+			written, err := w.execFn(ctx, cypher, map[string]any{
+				"edges":         params,
+				"scan_id":       scanID,
+				"generation_id": generationID,
+			})
+			if err != nil {
+				return total, fmt.Errorf("generation edge batch %s at offset %d: %w", key.Kind, i, err)
+			}
+			total += written
+		}
+	}
+	return total, nil
+}
+
+// WriteEdgesForScan writes processor-produced edges only between node
+// observations owned by scanID. Generation tagging runs after processors and
+// stamps these edges with the generation.
+func (w *Writer) WriteEdgesForScan(ctx context.Context, edges []ingest.Edge, scanID string) (int, error) {
+	if len(edges) == 0 {
+		return 0, nil
+	}
+	grouped := groupEdgesByEndpoints(edges)
+	total := 0
+	for key, kindEdges := range grouped {
+		sourceMatch := matchClause("a", key.SourceKind, "source")
+		targetMatch := matchClause("b", key.TargetKind, "target")
+		cypher := fmt.Sprintf(`UNWIND $edges AS edge
+%s
+%s
+WHERE a.scan_id = $scan_id AND b.scan_id = $scan_id
+MERGE (a)-[r:%s]->(b)
+SET r += edge.properties, r.scan_id = $scan_id, r.last_seen = datetime()
+RETURN count(*) AS written`, sourceMatch, targetMatch, key.Kind)
+		for i := 0; i < len(kindEdges); i += w.batchSize {
+			end := min(i+w.batchSize, len(kindEdges))
+			batch := kindEdges[i:end]
+			params := make([]map[string]any, len(batch))
+			for j, e := range batch {
+				props := e.Properties
+				if props == nil {
+					props = map[string]any{}
+				}
+				params[j] = map[string]any{"source": e.Source, "target": e.Target, "properties": props}
+			}
+			written, err := w.execFn(ctx, cypher, map[string]any{"edges": params, "scan_id": scanID})
+			if err != nil {
+				return total, fmt.Errorf("scan edge batch %s at offset %d: %w", key.Kind, i, err)
+			}
+			total += written
+		}
+	}
+	return total, nil
 }
 
 func (w *Writer) writeEdgesAPOC(ctx context.Context, edges []ingest.Edge, scanID string) (int, error) {
@@ -241,6 +373,19 @@ func edgeCypherForKinds(edgeKind, sourceKind, targetKind string) string {
 MERGE (a)-[r:%s]->(b)
 SET r += edge.properties, r.scan_id = $scan_id, r.last_seen = datetime()
 RETURN count(*) AS written`, matchClause("a", sourceKind, "source"), matchClause("b", targetKind, "target"), edgeKind)
+}
+
+func generationEdgeCypherForKinds(edgeKind, sourceKind, targetKind string) string {
+	sourceMatch := matchClause("a", sourceKind, "source")
+	targetMatch := matchClause("b", targetKind, "target")
+	return fmt.Sprintf(`UNWIND $edges AS edge
+%s
+%s
+WHERE a.generation_id = $generation_id AND b.generation_id = $generation_id
+MERGE (a)-[r:%s]->(b)
+SET r += edge.properties, r.scan_id = $scan_id, r.generation_id = $generation_id,
+    r.generations = [$generation_id], r.last_seen = datetime()
+RETURN count(*) AS written`, sourceMatch, targetMatch, edgeKind)
 }
 
 // driverExecBatch executes a cypher batch against the live Neo4j driver. It is

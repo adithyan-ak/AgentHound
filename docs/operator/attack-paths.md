@@ -71,7 +71,7 @@ The `cross_service_credential_chain` processor joins on `value_hash` and emits:
 }]->(:Credential)
 ```
 
-It also writes `blast_radius` on the joined credential nodes: the number of distinct agents that can reach the merged secret.
+It also records `blast_radius` on the emitted `CAN_REACH_CREDENTIAL_CHAIN` edge (not on the raw credential nodes, which are immutable prior observations): the number of distinct agents that can reach the merged secret.
 
 ### Pre-built query
 
@@ -283,7 +283,7 @@ Processors run in dependency order. A processor may only read edges or propertie
 | 6 | `poisoned_instructions` | `POISONED_INSTRUCTIONS` | Raw edges |
 | 7 | `taints` | `TAINTS` | `INGESTS_UNTRUSTED`, `schema_keys` |
 | 8 | `can_reach` | `CAN_REACH` | `HAS_ACCESS_TO` |
-| 9 | `cross_service_credential_chain` | `CAN_REACH` to upstream credentials, `Credential.blast_radius` | `HAS_ACCESS_TO`, `CAN_REACH`, `value_hash` |
+| 9 | `cross_service_credential_chain` | `CAN_REACH_CREDENTIAL_CHAIN` to upstream credentials, `CAN_REACH_CREDENTIAL_CHAIN.blast_radius` | `HAS_ACCESS_TO`, `CAN_REACH`, `value_hash` |
 | 10 | `ifc_violation` | `IFC_VIOLATION` | `HAS_ACCESS_TO`, `INGESTS_UNTRUSTED` |
 | 11 | `can_exfiltrate` | `CAN_EXFILTRATE_VIA` | `CAN_REACH` |
 | 12 | `can_impersonate` | `CAN_IMPERSONATE` | Raw edges |

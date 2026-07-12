@@ -5,7 +5,7 @@ import { useNodes, isUnauth, riskScore } from "@entities/node";
 import { Skeleton } from "@shared/ui/primitives/skeleton";
 import { AsyncBoundary } from "@shared/ui/feedback";
 import { StatTile } from "@shared/ui/widgets";
-import { NODE_KIND_COLORS, NODE_KIND_COLORS_BY_KEY } from "@shared/theme/tokens";
+import { NODE_KIND_COLORS_BY_KEY, NEUTRAL_NODE_COLOR } from "@shared/theme/tokens";
 
 const HIGH_RISK = 70;
 
@@ -24,7 +24,7 @@ interface TileDef {
 }
 
 export function StatCards() {
-  const { data: stats, isLoading } = useGraphStats();
+  const { data: stats, isLoading, isError } = useGraphStats();
   const { data: nodes } = useNodes();
 
   const nc = stats?.node_counts ?? {};
@@ -54,11 +54,20 @@ export function StatCards() {
   return (
     <AsyncBoundary
       isLoading={isLoading}
+      isError={isError}
       loading={
         <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
           {Array.from({ length: 5 }).map((_, i) => (
             <Skeleton key={i} className="h-[96px] w-full rounded-md" />
           ))}
+        </div>
+      }
+      error={
+        <div
+          role="alert"
+          className="flex h-[96px] items-center justify-center rounded-md border border-border/70 bg-black/20 font-mono text-xs uppercase tracking-wider text-muted-foreground"
+        >
+          Inventory unavailable
         </div>
       }
     >
@@ -69,7 +78,7 @@ export function StatCards() {
             icon={t.icon}
             label={t.label}
             value={nc[t.kind] ?? 0}
-            color={NODE_KIND_COLORS_BY_KEY[t.kind] ?? NODE_KIND_COLORS.ResourceGroup}
+            color={NODE_KIND_COLORS_BY_KEY[t.kind] ?? NEUTRAL_NODE_COLOR}
             sub={t.sub}
           />
         ))}

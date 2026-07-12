@@ -7,6 +7,7 @@ import { Legend } from "./ui/Legend";
 import { StatusStrip } from "./ui/StatusStrip";
 import { ChainRibbon } from "./ui/ChainRibbon";
 import { BlastRadiusRings } from "./ui/BlastRadiusRings";
+import { BlastControls } from "./ui/BlastControls";
 import { NodeDetailDrawer } from "./ui/NodeDetailDrawer";
 import { EdgeDetailDrawer } from "./ui/EdgeDetailDrawer";
 import { EdgeTooltip } from "./ui/EdgeTooltip";
@@ -41,7 +42,8 @@ function ExplorerWorkspace() {
       />
       <BlastRadiusRings />
       <LensBar />
-      <InfoCard metrics={vm.lensMetrics} />
+      <BlastControls />
+      <InfoCard metrics={vm.lensMetrics} totals={vm.totals} />
       <Legend />
       <ChainRibbon />
       <ExplorerDeepLink />

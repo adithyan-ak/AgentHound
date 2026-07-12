@@ -25,8 +25,12 @@ import (
 //	(gw)-[:EXPOSES_CREDENTIAL]->(:Credential C2)
 //	    where C2.type IN ["apiKey", "virtual_key"]
 //
-// We emit (:AgentInstance)-[:CAN_REACH]->(C2) with metadata that
-// records the merge endpoint (hash + LiteLLM gateway name).
+// We emit (:AgentInstance)-[:CAN_REACH_CREDENTIAL_CHAIN]->(C2) with
+// metadata that records the merge endpoint (hash + LiteLLM gateway name).
+// This is a DEDICATED edge kind, not the proven CAN_REACH: the join that
+// binds C1 to C1master is synthetic (a value_hash equality, not a graph
+// edge), so overloading CAN_REACH would let a heuristic credential-access
+// reach be read as a proven transitive resource path.
 //
 // Dependencies: ["has_access_to", "can_reach"] — has_access_to so the
 // graph has resource accessibility wired, can_reach so this processor
@@ -54,11 +58,13 @@ func (p *CrossServiceCredentialChain) Process(ctx context.Context, db graph.Grap
 	// because the Config Collector and Looter compute IDs differently).
 	// Single query (one ExecuteWrite): the same agent→server→credential
 	// join also yields the credential blast radius (count of distinct
-	// agents that can reach the merged secret), which we materialize on
-	// both the env-var credential (c1) and its value_hash-merged master
-	// (c1master). Folding it here avoids re-MATCHing the join path. The
-	// agents are collected for the count, then re-UNWOUND so the CAN_REACH
-	// MERGE stays one edge per (agent, upstream-credential) as before.
+	// agents that can reach the merged secret), which we materialize on the
+	// emitted composite edge (e.blast_radius) — NOT written back onto the raw
+	// Credential observations (c1/c1master). Those are immutable prior
+	// observations; the derivation belongs on this generation's own composite
+	// evidence. Folding it here avoids re-MATCHing the join path. The agents are
+	// collected for the count, then re-UNWOUND so the CAN_REACH MERGE stays one
+	// edge per (agent, upstream-credential) as before.
 	// merge_key filter (U-MED-4): when a Looter cannot observe the raw
 	// credential value (e.g. LiteLLM masks upstream provider api_key
 	// server-side, so /model/info gives us no key material), it emits a
@@ -74,22 +80,25 @@ func (p *CrossServiceCredentialChain) Process(ctx context.Context, db graph.Grap
 	cypher := `
 MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(s:MCPServer)
       -[:HAS_ENV_VAR]->(c1:Credential)
-WHERE c1.value_hash IS NOT NULL AND c1.value_hash <> ''
+WHERE a.scan_id = $scan_id AND s.scan_id = $scan_id AND c1.scan_id = $scan_id
+  AND c1.value_hash IS NOT NULL AND c1.value_hash <> ''
   AND (c1.merge_key IS NULL OR c1.merge_key = 'value_hash')
 MATCH (gw:LiteLLMGateway)-[:EXPOSES_CREDENTIAL]->(c1master:Credential)
-WHERE c1master.value_hash = c1.value_hash
+WHERE gw.scan_id = $scan_id AND c1master.scan_id = $scan_id
+  AND c1master.value_hash = c1.value_hash
   AND c1master.objectid <> c1.objectid
   AND (c1master.merge_key IS NULL OR c1master.merge_key = 'value_hash')
 MATCH (gw)-[:EXPOSES_CREDENTIAL]->(c2:Credential)
-WHERE c2.type IN ['apiKey', 'virtual_key'] AND c2.objectid <> c1master.objectid
+WHERE c2.scan_id = $scan_id
+  AND c2.type IN ['apiKey', 'virtual_key'] AND c2.objectid <> c1master.objectid
 WITH s, c1, c1master, c2, gw, collect(DISTINCT a) AS agents
 WITH s, c1, c1master, c2, gw, agents, size(agents) AS reachable_agents
-SET c1.blast_radius = reachable_agents, c1master.blast_radius = reachable_agents
-WITH s, c1, c1master, c2, gw, agents
 UNWIND agents AS a
-MERGE (a)-[e:CAN_REACH]->(c2)
+MERGE (a)-[e:CAN_REACH_CREDENTIAL_CHAIN]->(c2)
 SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true,
     e.source_collector = 'cross_service_credential_chain',
+    e.join_type = 'synthetic',
+    e.blast_radius = reachable_agents,
     e.via_server = s.name,
     e.via_credential = c1.name,
     e.via_gateway = gw.name,
@@ -97,7 +106,22 @@ SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true,
     e.upstream_provider = COALESCE(c2.provider, 'unknown'),
     e.hops = 5,
     e.confidence = 0.95,
-    e.risk_weight = 0.1
+    e.risk_weight = 0.1,
+    // Full evidence metadata + per-endpoint generation ids, mirroring the
+    // cross-generation processor, so the persisted finding's DAG/detail/impact
+    // reconstruct from self-contained edge properties rather than a
+    // generation-brittle re-traversal.
+    e.source_generation = a.generation_id,
+    e.target_generation = c2.generation_id,
+    e.via_server_id = s.objectid,
+    e.via_server_generation = s.generation_id,
+    e.via_credential_id = c1.objectid,
+    e.via_credential_generation = c1.generation_id,
+    e.master_credential_id = c1master.objectid,
+    e.master_credential_name = c1master.name,
+    e.master_credential_generation = c1master.generation_id,
+    e.via_gateway_id = gw.objectid,
+    e.via_gateway_generation = gw.generation_id
 RETURN count(e) AS written`
 
 	written, err := db.ExecuteWrite(ctx, cypher, map[string]any{"scan_id": scanID})

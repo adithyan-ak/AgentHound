@@ -42,8 +42,8 @@ func ServerRiskScore(ctx context.Context, db graph.GraphDB, objectID string) (fl
 }
 
 func serverAuthStrength(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
-	cypher := `MATCH (s {objectid: $id}) RETURN s.auth_method AS am`
-	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
+	cypher := `MATCH (s {objectid: $id}) WHERE ($scan_id = '' OR s.scan_id = $scan_id) RETURN s.auth_method AS am`
+	rows, err := db.Query(ctx, cypher, riskParams(ctx, objectID))
 	if err != nil {
 		return 0, err
 	}
@@ -60,9 +60,10 @@ func serverAuthStrength(ctx context.Context, db graph.GraphDB, objectID string) 
 func serverToolRisk(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
 	cypher := `
 MATCH (s {objectid: $id})-[:PROVIDES_TOOL]->(t:MCPTool)
+WHERE ($scan_id = '' OR s.scan_id = $scan_id)
 RETURN t.capability_surface AS caps`
 
-	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
+	rows, err := db.Query(ctx, cypher, riskParams(ctx, objectID))
 	if err != nil {
 		return 0, err
 	}
@@ -86,9 +87,10 @@ RETURN t.capability_surface AS caps`
 func serverExposure(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
 	cypher := `
 MATCH (s {objectid: $id})-[:RUNS_ON]->(h:Host)
+WHERE ($scan_id = '' OR s.scan_id = $scan_id)
 RETURN h.is_public AS pub, h.is_private AS priv, h.is_local AS loc`
 
-	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
+	rows, err := db.Query(ctx, cypher, riskParams(ctx, objectID))
 	if err != nil {
 		return 0, err
 	}
@@ -114,9 +116,12 @@ RETURN h.is_public AS pub, h.is_private AS priv, h.is_local AS loc`
 func serverCredentialHandling(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
 	cypher := `
 MATCH (s {objectid: $id})-[:HAS_ENV_VAR]->(c:Credential)
-RETURN c.high_entropy AS high_entropy, c.type AS cred_type, c.blast_radius AS blast_radius`
+WHERE ($scan_id = '' OR s.scan_id = $scan_id)
+OPTIONAL MATCH (:AgentInstance)-[e:CAN_REACH_CREDENTIAL_CHAIN]->(:Credential)
+  WHERE e.via_credential_id = c.objectid
+RETURN c.high_entropy AS high_entropy, c.type AS cred_type, e.blast_radius AS blast_radius`
 
-	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
+	rows, err := db.Query(ctx, cypher, riskParams(ctx, objectID))
 	if err != nil {
 		return 0, err
 	}
@@ -126,8 +131,11 @@ RETURN c.high_entropy AS high_entropy, c.type AS cred_type, c.blast_radius AS bl
 
 	// base captures intrinsic handling risk (high-entropy / hardcoded
 	// secrets max it out). blast amplifies it by how many distinct agents
-	// can reach the secret (materialized as Credential.blast_radius by the
-	// cross_service_credential_chain processor), mirroring a2aBlastRadius.
+	// can reach the secret. blast_radius is materialized by the
+	// cross_service_credential_chain processor on the composite
+	// CAN_REACH_CREDENTIAL_CHAIN edge (keyed to this env-var credential via
+	// via_credential_id), not on the raw Credential node, mirroring
+	// a2aBlastRadius.
 	base := 50.0
 	var blast float64
 	for _, row := range rows {

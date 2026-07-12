@@ -28,7 +28,9 @@ func (p *Shadows) Process(ctx context.Context, db graph.GraphDB, scanID string) 
 	shadowsCypher := `
 MATCH (s1:MCPServer)-[:PROVIDES_TOOL]->(t1:MCPTool),
       (s2:MCPServer)-[:PROVIDES_TOOL]->(t2:MCPTool)
-WHERE s1 <> s2
+WHERE s1.scan_id = $scan_id AND t1.scan_id = $scan_id
+  AND s2.scan_id = $scan_id AND t2.scan_id = $scan_id
+  AND s1 <> s2
   AND t1 <> t2
   AND t1.description IS NOT NULL
   AND t2.name IS NOT NULL
@@ -81,10 +83,12 @@ RETURN count(*) AS written`
 	// [src, snk]) reports edges actually MERGEd (one source can be reached
 	// via multiple agents, so the raw row count would over-report).
 	poisonsCypher := `
-MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(:MCPServer)-[:PROVIDES_TOOL]->(src:MCPTool)
-WHERE src.has_injection_patterns = true
-MATCH (a)-[:TRUSTS_SERVER]->(:MCPServer)-[:PROVIDES_TOOL]->(snk:MCPTool)
-WHERE src <> snk
+MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(srcServer:MCPServer)-[:PROVIDES_TOOL]->(src:MCPTool)
+WHERE a.scan_id = $scan_id AND srcServer.scan_id = $scan_id AND src.scan_id = $scan_id
+  AND src.has_injection_patterns = true
+MATCH (a)-[:TRUSTS_SERVER]->(snkServer:MCPServer)-[:PROVIDES_TOOL]->(snk:MCPTool)
+WHERE snkServer.scan_id = $scan_id AND snk.scan_id = $scan_id
+  AND src <> snk
   AND any(cap IN snk.capability_surface WHERE cap IN ['shell_access', 'code_execution', 'credential_access', 'email_send'])
 WITH a, src, snk
 ORDER BY snk.objectid

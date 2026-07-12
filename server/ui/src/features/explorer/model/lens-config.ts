@@ -10,6 +10,7 @@ import {
   Waypoints,
 } from "lucide-react";
 import type { LensId } from "./store";
+import { EDGE_KIND_META, type EdgeKind } from "@entities/graph/dto";
 import { NODE_KIND_COLORS, LENS_ACCENT } from "@shared/theme/tokens";
 
 export type SeverityLevel = "critical" | "high" | "medium" | "low" | "info";
@@ -173,8 +174,10 @@ export const LENS_LIST: LensDefinition[] = [
       "HAS_ACCESS_TO",
       "CAN_EXECUTE",
       "CAN_REACH",
+      "CAN_REACH_CROSS_PROTOCOL",
       "CAN_EXFILTRATE_VIA",
       "CAN_IMPERSONATE",
+      "CONFUSED_DEPUTY",
     ],
     dimOthers: false,
     subPresets: [
@@ -197,6 +200,12 @@ export const LENS_LIST: LensDefinition[] = [
         defaultEnabled: true,
       },
       {
+        id: "CAN_REACH_CROSS_PROTOCOL",
+        label: "Reach (X-Proto)",
+        description: "Agent → resource across A2A/MCP protocols",
+        defaultEnabled: true,
+      },
+      {
         id: "CAN_EXFILTRATE_VIA",
         label: "Can Exfiltrate",
         description: "Agent → outbound channel composite",
@@ -206,6 +215,12 @@ export const LENS_LIST: LensDefinition[] = [
         id: "CAN_IMPERSONATE",
         label: "Can Impersonate",
         description: "A2A agent → similar A2A agent",
+        defaultEnabled: true,
+      },
+      {
+        id: "CONFUSED_DEPUTY",
+        label: "Confused Deputy",
+        description: "A2A agent → agent confused-deputy delegation",
         defaultEnabled: true,
       },
     ],
@@ -251,7 +266,13 @@ export const LENS_LIST: LensDefinition[] = [
     accentClass: "bg-pink-500 text-white",
     description:
       "Identity and credential flow. Highlights exposed secrets and high-entropy values.",
-    edgeKinds: ["AUTHENTICATES_WITH", "USES_CREDENTIAL", "HAS_ENV_VAR", "EXPOSES_CREDENTIAL"],
+    edgeKinds: [
+      "AUTHENTICATES_WITH",
+      "USES_CREDENTIAL",
+      "HAS_ENV_VAR",
+      "EXPOSES_CREDENTIAL",
+      "CAN_REACH_CREDENTIAL_CHAIN",
+    ],
     dimOthers: false,
     subPresets: [
       {
@@ -278,6 +299,12 @@ export const LENS_LIST: LensDefinition[] = [
         description: "AI service → credential material",
         defaultEnabled: true,
       },
+      {
+        id: "CAN_REACH_CREDENTIAL_CHAIN",
+        label: "Credential chain",
+        description: "Agent → upstream credential reach",
+        defaultEnabled: true,
+      },
     ],
     showSeverityHalos: true,
     colorEdgesBySeverity: false,
@@ -291,7 +318,15 @@ export const LENS_LIST: LensDefinition[] = [
     accentClass: "bg-yellow-500 text-slate-900",
     description:
       "Prompt-injection patterns in tool descriptions, shadowing, and instruction-file attacks.",
-    edgeKinds: ["SHADOWS", "POISONED_DESCRIPTION", "POISONED_INSTRUCTIONS"],
+    edgeKinds: [
+      "SHADOWS",
+      "POISONED_DESCRIPTION",
+      "POISONED_INSTRUCTIONS",
+      "INGESTS_UNTRUSTED",
+      "TAINTS",
+      "IFC_VIOLATION",
+      "POISONS_CONTEXT",
+    ],
     dimOthers: false,
     subPresets: [
       {
@@ -310,6 +345,30 @@ export const LENS_LIST: LensDefinition[] = [
         id: "POISONED_INSTRUCTIONS",
         label: "Poisoned instructions",
         description: "CLAUDE.md / .cursorrules imperative overrides",
+        defaultEnabled: true,
+      },
+      {
+        id: "INGESTS_UNTRUSTED",
+        label: "Ingests untrusted",
+        description: "Tool → resource untrusted-content ingestion",
+        defaultEnabled: true,
+      },
+      {
+        id: "TAINTS",
+        label: "Taints",
+        description: "Tool → downstream tool taint propagation",
+        defaultEnabled: true,
+      },
+      {
+        id: "IFC_VIOLATION",
+        label: "IFC violation",
+        description: "Information-flow-control violation between tools",
+        defaultEnabled: true,
+      },
+      {
+        id: "POISONS_CONTEXT",
+        label: "Poisons context",
+        description: "Tool → agent context poisoning",
         defaultEnabled: true,
       },
     ],
@@ -363,27 +422,23 @@ export function getLens(id: LensId): LensDefinition {
 /**
  * Maps a finding's headline edge kind to the lens that best frames it, so a
  * "View in Explorer" deep-link lands on the right view rather than the default
- * topology. Credential and poisoning edges get their dedicated lenses; all
- * other composite/attack edges use Attack Surface; structural edges fall back
- * to Topology.
+ * topology. Derived from the generated EDGE_KIND_META lens category (the Go
+ * source of truth) so every one of the 32 edge kinds — including new ones —
+ * routes to the correct lens automatically instead of drifting against a
+ * hand-maintained switch. The four lens categories map 1:1 to explorer lens
+ * ids; anything unrecognized falls back to Topology.
  */
 export function lensForEdgeKind(kind: string): LensId {
-  switch (kind) {
-    case "AUTHENTICATES_WITH":
-    case "USES_CREDENTIAL":
-    case "HAS_ENV_VAR":
-    case "EXPOSES_CREDENTIAL":
+  const meta = EDGE_KIND_META[kind as EdgeKind];
+  switch (meta?.lens) {
+    case "credentials":
       return "credentials";
-    case "SHADOWS":
-    case "POISONED_DESCRIPTION":
-    case "POISONED_INSTRUCTIONS":
+    case "poisoning":
       return "poisoning";
-    case "HAS_ACCESS_TO":
-    case "CAN_EXECUTE":
-    case "CAN_REACH":
-    case "CAN_EXFILTRATE_VIA":
-    case "CAN_IMPERSONATE":
+    case "attack-surface":
       return "attack-surface";
+    case "topology":
+      return "topology";
     default:
       return "topology";
   }

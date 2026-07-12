@@ -280,6 +280,8 @@ func TestClassifySeverity(t *testing.T) {
 		want              string
 	}{
 		{"exfiltrate always critical", "CAN_EXFILTRATE_VIA", false, 0.5, "", "critical"},
+		{"dedicated cross-protocol critical", "CAN_REACH_CROSS_PROTOCOL", false, 0.5, "low", "critical"},
+		{"credential chain critical", "CAN_REACH_CREDENTIAL_CHAIN", false, 0.95, "", "critical"},
 		{"reach cross-protocol", "CAN_REACH", true, 0.5, "low", "critical"},
 		{"reach high-confidence critical resource", "CAN_REACH", false, 0.9, "critical", "critical"},
 		{"reach high resource", "CAN_REACH", false, 0.5, "high", "high"},

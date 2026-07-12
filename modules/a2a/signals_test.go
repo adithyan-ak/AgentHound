@@ -1,6 +1,38 @@
 package a2a
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/adithyan-ak/agenthound/sdk/common"
+)
+
+func TestCanonicalAuthScheme(t *testing.T) {
+	tests := []struct {
+		name    string
+		schemes []SecurityScheme
+		want    common.AuthScheme
+	}{
+		{"no schemes -> none", nil, common.AuthNone},
+		{"apiKey", []SecurityScheme{{Name: "ak", Type: "apiKey"}}, common.AuthAPIKey},
+		{"http -> bearer", []SecurityScheme{{Name: "b", Type: "http"}}, common.AuthBearer},
+		{"oauth2", []SecurityScheme{{Name: "o", Type: "oauth2"}}, common.AuthOAuth},
+		{"oidc", []SecurityScheme{{Name: "o", Type: "openIdConnect"}}, common.AuthOIDC},
+		{"mutualTLS -> custom", []SecurityScheme{{Name: "m", Type: "mutualTLS"}}, common.AuthCustom},
+		{"unrecognized -> custom", []SecurityScheme{{Name: "x", Type: "somethingNew"}}, common.AuthCustom},
+		{"strongest wins", []SecurityScheme{{Name: "a", Type: "apiKey"}, {Name: "o", Type: "openIdConnect"}}, common.AuthOIDC},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CanonicalAuthScheme(tt.schemes)
+			if got != tt.want {
+				t.Errorf("CanonicalAuthScheme() = %q, want %q", got, tt.want)
+			}
+			if !got.Valid() {
+				t.Errorf("CanonicalAuthScheme() returned invalid scheme %q", got)
+			}
+		})
+	}
+}
 
 func TestAuthPostureScore(t *testing.T) {
 	tests := []struct {

@@ -19,11 +19,36 @@ type ToolSignals struct {
 	HasCrossReferences bool
 	SourceTrust        string
 	Annotations        map[string]any
+	// CapabilityEvidence records, per classified capability, the rule that
+	// fired, the field it matched, the matched text, and a bounded
+	// confidence. Capability classification here is LEXICAL (keyword hints in
+	// tool name/description/schema text), so confidence is deliberately capped
+	// well below 1.0 — a lexical hint must not become a 100%-confidence host
+	// execution claim downstream. Consumers should use this confidence rather
+	// than treating capability_surface membership as certainty.
+	CapabilityEvidence []CapabilityEvidence
+}
+
+// CapabilityEvidence is the provenance + confidence basis for one capability
+// classification on a tool.
+type CapabilityEvidence struct {
+	Capability   string  `json:"capability"`
+	RuleID       string  `json:"rule_id"`
+	MatchedField string  `json:"matched_field"`
+	MatchedText  string  `json:"matched_text,omitempty"`
+	Confidence   float64 `json:"confidence"`
+	Basis        string  `json:"basis"`
 }
 
 type ResourceSignals struct {
-	URIScheme   string
+	URIScheme string
+	// Sensitivity is the highest-severity sensitivity classification a rule
+	// assigned to the resource, or "unknown" when no sensitivity rule matched.
+	// Absence of a match is NOT evidence the resource is low-sensitivity.
 	Sensitivity string
+	// SensitivityState records whether sensitivity was assessed (a rule
+	// matched) or not_assessed (no sensitivity signal).
+	SensitivityState common.AssessmentState
 }
 
 func computeToolSignals(tool *mcpsdk.Tool, allToolNames map[string]bool, engine *rules.Engine) ToolSignals {
@@ -41,28 +66,42 @@ func computeToolSignals(tool *mcpsdk.Tool, allToolNames map[string]bool, engine 
 			}
 		}
 	}
-	fields := map[string]string{
-		"tool.description": tool.Description,
-		"tool.name":        tool.Name,
-		"tool.combined":    combined,
+	// Evaluate each field independently (rather than EvaluateAll) so a
+	// capability match carries the field it matched — the boundary that
+	// determines its confidence basis. Ordered so processing is deterministic.
+	capFields := []struct{ name, text string }{
+		{"tool.description", tool.Description},
+		{"tool.name", tool.Name},
+		{"tool.combined", combined},
 	}
-	matches := engine.EvaluateAll("mcp", fields)
 
 	capSet := make(map[string]bool)
-	for _, m := range matches {
-		switch m.Emit.FindingType {
-		case "has_injection_patterns":
-			sig.HasInjection = true
-		case "capability_classification":
-			if v, ok := m.Emit.PropertyValue.(string); ok {
+	bestEvidence := make(map[string]CapabilityEvidence)
+	for _, f := range capFields {
+		if f.text == "" {
+			continue
+		}
+		for _, m := range engine.Evaluate("mcp", f.name, f.text) {
+			switch m.Emit.FindingType {
+			case "has_injection_patterns":
+				sig.HasInjection = true
+			case "capability_classification":
+				v, ok := m.Emit.PropertyValue.(string)
+				if !ok || v == "" {
+					continue
+				}
 				capSet[v] = true
-			}
-		case "source_trust_classification":
-			// First non-empty untrusted-source label wins; any value
-			// marks the tool as ingesting untrusted input. Edges are
-			// MERGE-keyed so the exact label choice is stable enough.
-			if v, ok := m.Emit.PropertyValue.(string); ok && v != "" && sig.SourceTrust == "" {
-				sig.SourceTrust = v
+				ev := capabilityEvidenceFor(v, f.name, m)
+				if cur, seen := bestEvidence[v]; !seen || ev.Confidence > cur.Confidence {
+					bestEvidence[v] = ev
+				}
+			case "source_trust_classification":
+				// First non-empty untrusted-source label wins; any value
+				// marks the tool as ingesting untrusted input. Edges are
+				// MERGE-keyed so the exact label choice is stable enough.
+				if v, ok := m.Emit.PropertyValue.(string); ok && v != "" && sig.SourceTrust == "" {
+					sig.SourceTrust = v
+				}
 			}
 		}
 	}
@@ -70,6 +109,9 @@ func computeToolSignals(tool *mcpsdk.Tool, allToolNames map[string]bool, engine 
 		sig.CapabilitySurface = append(sig.CapabilitySurface, cap)
 	}
 	sort.Strings(sig.CapabilitySurface)
+	for _, cap := range sig.CapabilitySurface {
+		sig.CapabilityEvidence = append(sig.CapabilityEvidence, bestEvidence[cap])
+	}
 
 	if tool.Description != "" {
 		descLower := strings.ToLower(tool.Description)
@@ -84,6 +126,27 @@ func computeToolSignals(tool *mcpsdk.Tool, allToolNames map[string]bool, engine 
 	sig.Annotations = flattenAnnotations(tool.Annotations)
 
 	return sig
+}
+
+// capabilityEvidenceFor builds the confidence basis for a lexically-derived
+// capability classification. All current capability rules are keyword matchers
+// over free text, so the basis is "lexical" and confidence is capped well
+// below certainty. A match against the tool's declared name is a marginally
+// stronger hint than one buried in free-text description, but it is still a
+// hint — never proof of a real capability boundary crossing.
+func capabilityEvidenceFor(capability, field string, m rules.Match) CapabilityEvidence {
+	confidence := 0.5
+	if field == "tool.name" {
+		confidence = 0.6
+	}
+	return CapabilityEvidence{
+		Capability:   capability,
+		RuleID:       m.RuleID,
+		MatchedField: field,
+		MatchedText:  m.Text,
+		Confidence:   confidence,
+		Basis:        "lexical",
+	}
 }
 
 func flattenAnnotations(ann *mcpsdk.ToolAnnotations) map[string]any {
@@ -131,9 +194,14 @@ func computeResourceSignals(uri string, engine *rules.Engine) ResourceSignals {
 		}
 	}
 	if bestSeverity == "" {
-		bestSeverity = "low"
+		// No sensitivity rule matched. This is an absence of signal, not
+		// evidence of low sensitivity — report it as unknown/not_assessed.
+		sig.Sensitivity = "unknown"
+		sig.SensitivityState = common.AssessmentNotAssessed
+	} else {
+		sig.Sensitivity = bestSeverity
+		sig.SensitivityState = common.AssessmentAssessed
 	}
-	sig.Sensitivity = bestSeverity
 
 	if u, err := url.Parse(uri); err == nil && u.Scheme != "" {
 		sig.URIScheme = u.Scheme

@@ -399,7 +399,13 @@ func runOllamaConfig(
 				"endpoint":       canon,
 				"discovered_via": "openwebui_ollama_config",
 				"service_kind":   "ollama",
-				"auth_method":    "none",
+				// This backend was read from Open WebUI's config, not probed
+				// directly, so its auth posture is unknown (not a confirmed
+				// "none") and its existence is configured-but-unverified until
+				// a dedicated Ollama probe reaches it.
+				"auth_method":           string(common.AuthUnknown),
+				"verification_state":    string(common.AssessmentNotAssessed),
+				"configured_unverified": true,
 			},
 		})
 		res.IngestData.Graph.Edges = append(res.IngestData.Graph.Edges, ingest.Edge{

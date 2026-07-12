@@ -6,6 +6,8 @@ import { ScanImport, validateScanFile } from "./ScanImport";
 
 vi.mock("@entities/scan/api", () => ({
   uploadScan: vi.fn(),
+  // ScanImport reads stageOk to gate the post-import CTAs; default to enabled.
+  stageOk: vi.fn().mockReturnValue(true),
 }));
 
 import { uploadScan } from "@entities/scan/api";

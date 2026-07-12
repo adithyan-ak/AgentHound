@@ -9,7 +9,7 @@ const INFO =
   "Open security findings grouped by severity. Each row shows that severity's count and its share of all findings.";
 
 export function SeverityRings() {
-  const { data: findings, isLoading } = useFindings();
+  const { data: findings, isLoading, isError } = useFindings();
 
   const counts: Record<string, number> = {};
   for (const sev of SEVERITY_ORDER) counts[sev] = 0;
@@ -29,11 +29,20 @@ export function SeverityRings() {
     >
       <AsyncBoundary
         isLoading={isLoading}
+        isError={isError}
         loading={
           <div className="space-y-3">
             {Array.from({ length: 4 }).map((_, i) => (
               <Skeleton key={i} className="h-10 w-full rounded-[3px]" />
             ))}
+          </div>
+        }
+        error={
+          <div
+            role="alert"
+            className="flex h-24 items-center justify-center font-mono text-xs uppercase tracking-wider text-muted-foreground"
+          >
+            Severity data unavailable
           </div>
         }
       >

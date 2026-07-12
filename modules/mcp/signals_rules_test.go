@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/adithyan-ak/agenthound/sdk/common"
 )
 
 func TestToolSignals_RulesEngineInjection(t *testing.T) {
@@ -156,7 +158,9 @@ func TestResourceSignals_RulesEngine(t *testing.T) {
 		{"file:///tmp/data.txt", "medium"},
 		{"https://api.example.com/data", "medium"},
 		{"s3://my-bucket/data", "medium"},
-		{"custom://some-resource", "low"},
+		// No sensitivity rule matches a bare custom scheme — that is an
+		// absence of signal, reported as unknown rather than a benign "low".
+		{"custom://some-resource", "unknown"},
 	}
 
 	engine := testEngine(t)
@@ -167,6 +171,13 @@ func TestResourceSignals_RulesEngine(t *testing.T) {
 
 			if signals.Sensitivity != tt.wantSensitivity {
 				t.Errorf("sensitivity = %q, want %q", signals.Sensitivity, tt.wantSensitivity)
+			}
+			wantState := common.AssessmentAssessed
+			if tt.wantSensitivity == "unknown" {
+				wantState = common.AssessmentNotAssessed
+			}
+			if signals.SensitivityState != wantState {
+				t.Errorf("sensitivity_state = %q, want %q", signals.SensitivityState, wantState)
 			}
 		})
 	}

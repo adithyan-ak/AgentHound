@@ -103,14 +103,22 @@ func TestAllowedNodeKindsComplete(t *testing.T) {
 }
 
 func TestAllNodeLabelsComplete(t *testing.T) {
-	if len(AllNodeLabels) != 25 {
-		t.Errorf("AllNodeLabels: got %d entries, want 25", len(AllNodeLabels))
+	// All 23 labels are collector-produced; the unproduced synthetic
+	// ResourceGroup/TrustZone kinds were removed in the cleanup phase, so
+	// AllNodeLabels now matches AllowedNodeKinds exactly.
+	if len(AllNodeLabels) != 23 {
+		t.Errorf("AllNodeLabels: got %d entries, want 23", len(AllNodeLabels))
+	}
+	for _, label := range AllNodeLabels {
+		if !AllowedNodeKinds[label] {
+			t.Errorf("AllNodeLabels contains non-collector-produced label %q", label)
+		}
 	}
 }
 
 func TestAllowedEdgeKindsComplete(t *testing.T) {
-	if len(AllowedEdgeKinds) != 30 {
-		t.Errorf("AllowedEdgeKinds: got %d entries, want 30", len(AllowedEdgeKinds))
+	if len(AllowedEdgeKinds) != 32 {
+		t.Errorf("AllowedEdgeKinds: got %d entries, want 32", len(AllowedEdgeKinds))
 	}
 }
 

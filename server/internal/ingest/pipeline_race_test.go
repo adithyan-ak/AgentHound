@@ -10,17 +10,21 @@ import (
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 )
 
-// TestPipeline_HasMutex is a structural regression: the Pipeline must
-// embed a sync.Mutex so concurrent Ingest() calls serialize. Without
-// it, the post-processor's stale-edge cleanup races between scans and
-// produces edge flapping. We verify the field exists and satisfies
-// sync.Locker — if it is renamed or its type changes, this fails to
+// TestPipeline_HasCoordinator is a structural regression: the Pipeline must
+// expose a shared Coordinator so concurrent Ingest() calls — and scan
+// deletion — serialize against one another. Without it, the post-processor's
+// stale-edge cleanup races between scans (edge flapping) and a delete's GC
+// races an ingest's untagged writes. We verify the coordinator exists and
+// satisfies sync.Locker — if it is renamed or its type changes, this fails to
 // compile. The runtime invariant is enforced by
 // TestPipeline_MutexActuallySerializes below.
-func TestPipeline_HasMutex(_ *testing.T) {
-	p := &Pipeline{}
-	// Compile-time assertion: &p.mu must satisfy sync.Locker.
-	var _ sync.Locker = &p.mu
+func TestPipeline_HasCoordinator(t *testing.T) {
+	p := NewPipeline(nil, nil, nil, nil)
+	if p.Coordinator() == nil {
+		t.Fatal("pipeline must expose a non-nil coordinator")
+	}
+	// Compile-time assertion: the Coordinator must satisfy sync.Locker.
+	var _ sync.Locker = p.Coordinator()
 }
 
 // TestPipeline_MutexActuallySerializes is the runtime regression that
@@ -76,7 +80,7 @@ type probeWriter struct {
 	inner      nodeEdgeWriter
 }
 
-func (p *probeWriter) WriteNodes(ctx context.Context, nodes []ingest.Node, scanID string) (int, error) {
+func (p *probeWriter) WriteNodesForGeneration(ctx context.Context, nodes []ingest.Node, scanID, generationID string) (int, error) {
 	cur := p.concurrent.Add(1)
 	defer p.concurrent.Add(-1)
 	for {
@@ -85,9 +89,9 @@ func (p *probeWriter) WriteNodes(ctx context.Context, nodes []ingest.Node, scanI
 			break
 		}
 	}
-	return p.inner.WriteNodes(ctx, nodes, scanID)
+	return p.inner.WriteNodesForGeneration(ctx, nodes, scanID, generationID)
 }
 
-func (p *probeWriter) WriteEdges(ctx context.Context, edges []ingest.Edge, scanID string) (int, error) {
-	return p.inner.WriteEdges(ctx, edges, scanID)
+func (p *probeWriter) WriteEdgesForGeneration(ctx context.Context, edges []ingest.Edge, scanID, generationID string) (int, error) {
+	return p.inner.WriteEdgesForGeneration(ctx, edges, scanID, generationID)
 }

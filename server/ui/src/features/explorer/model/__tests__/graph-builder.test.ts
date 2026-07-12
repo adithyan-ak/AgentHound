@@ -202,6 +202,22 @@ describe("buildExplorerGraph", () => {
     expect(kinds.has("HAS_ACCESS_TO")).toBe(false);
   });
 
+  it("shows NO edges when every sub-preset is deselected (empty ≠ all)", () => {
+    const lens = getLens("attack-surface");
+    const result = buildExplorerGraph(
+      { nodes: FIXTURE_NODES, edges: FIXTURE_EDGES },
+      {
+        lens,
+        activeLensId: "attack-surface",
+        // User toggled every sub-preset off — the canvas must honor that and
+        // render no edges of this lens, not silently fall back to all.
+        subPresets: [],
+        findings: FIXTURE_FINDINGS,
+      },
+    );
+    expect(result.edges).toHaveLength(0);
+  });
+
   it("Attack Surface lens renders only composite edges", () => {
     const lens = getLens("attack-surface");
     const result = buildExplorerGraph(

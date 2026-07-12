@@ -3,7 +3,10 @@ package rules
 import (
 	"context"
 	"log/slog"
+	"strconv"
 	"time"
+
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
 const (
@@ -110,6 +113,25 @@ func (e *Engine) Rules() []Rule {
 
 func (e *Engine) RuleCount() int {
 	return len(e.rules)
+}
+
+// Manifest returns the provenance manifest for every active rule: its ID,
+// version, and source file. Collectors attach this to their coverage
+// manifest so a finding's rule provenance can be reconstructed after the
+// scan, independent of which rule set a later server happens to load.
+func (e *Engine) Manifest() []ingest.RuleManifestEntry {
+	out := make([]ingest.RuleManifestEntry, 0, len(e.rules))
+	for _, cr := range e.rules {
+		entry := ingest.RuleManifestEntry{
+			RuleID: cr.rule.ID,
+			Source: cr.rule.Source,
+		}
+		if cr.rule.Version > 0 {
+			entry.Version = strconv.Itoa(cr.rule.Version)
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 func (e *Engine) Evaluate(collector, target, text string) []Match {

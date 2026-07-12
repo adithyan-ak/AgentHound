@@ -20,7 +20,10 @@ export function FindingImpact({ impact, path }: FindingImpactProps) {
 
       {path && (
         <div className="mt-3">
-          <AttackCostMeter totalWeight={path.total_risk_weight} />
+          <AttackCostMeter
+            totalWeight={path.total_risk_weight}
+            missingCount={path.weight_missing_count}
+          />
         </div>
       )}
 

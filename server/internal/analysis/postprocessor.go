@@ -18,12 +18,11 @@ func RunPostProcessors(ctx context.Context, db graph.GraphDB, scanID string, col
 		return nil, fmt.Errorf("invalid processor ordering: %w", err)
 	}
 
-	deleted, err := cleanStaleCompositeEdges(ctx, db, scanID, collectors)
-	if err != nil {
-		slog.Warn("stale edge cleanup failed", "error", err)
-	} else if deleted > 0 {
-		slog.Info("cleaned stale composite edges", "deleted", deleted)
-	}
+	// Composite edges are immutable generation observations. Do not delete
+	// prior-generation composites here: they are needed to restore a demoted
+	// generation after deleting the current one. The generation's physical
+	// node observations isolate processor MERGEs, and deleting a scan removes
+	// only that generation's subgraph.
 
 	var allStats []ProcessingStats
 	var processorErrs []error
@@ -86,7 +85,19 @@ func expandCompositeCollectors(collectors []string) []string {
 	for _, collector := range collectors {
 		add(collector)
 		switch collector {
-		case "config", "scan":
+		case "scan":
+			// A merged "scan" bundle is NOT itself a composite source_collector
+			// — its processors tag composite edges with the CONSTITUENT
+			// collectors (mcp/a2a/config) they derived from. Cleaning only a
+			// bare "scan" domain therefore misses every stale composite from a
+			// prior bundle. Expand to the constituent coverage domains the
+			// bundle covers so a re-ingested "scan" actually retires its own
+			// prior composites.
+			add("mcp")
+			add("a2a")
+			add("config")
+			add("cross_service_credential_chain")
+		case "config":
 			add("cross_service_credential_chain")
 		}
 	}

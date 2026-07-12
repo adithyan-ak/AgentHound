@@ -2,10 +2,17 @@ import { EyeOff, Eye } from "lucide-react";
 import { useExplorerStore } from "@features/explorer/model/store";
 import { getLens } from "@features/explorer/model/lens-config";
 import type { LensMetrics } from "@features/explorer/model/graph";
+import type { ExplorerTotals } from "@features/explorer/model/view-model";
 import { SEVERITY } from "@shared/theme/tokens";
 import { cn } from "@shared/lib/utils";
 
-export function InfoCard({ metrics }: { metrics: LensMetrics | null }) {
+export function InfoCard({
+  metrics,
+  totals,
+}: {
+  metrics: LensMetrics | null;
+  totals: ExplorerTotals;
+}) {
   const activeLens = useExplorerStore((s) => s.activeLens);
   const showOrphans = useExplorerStore((s) => s.showOrphans);
   const toggleShowOrphans = useExplorerStore((s) => s.toggleShowOrphans);
@@ -84,33 +91,50 @@ export function InfoCard({ metrics }: { metrics: LensMetrics | null }) {
       </div>
 
       {metrics.orphanCount > 0 && !lens.dimOthers && (
-        <button
-          onClick={toggleShowOrphans}
-          className={cn(
-            "mt-3 flex w-full items-center justify-between rounded-[3px] border px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.06em] transition-colors",
-            showOrphans
-              ? "border-primary/40 bg-primary/10 text-primary hover:bg-primary/15"
-              : "border-border bg-black/30 text-muted-foreground hover:border-mauve-7 hover:text-foreground",
-          )}
-          aria-label={
-            showOrphans
-              ? "Hide unconnected node clusters"
-              : "Show unconnected node clusters"
-          }
-        >
-          <span className="flex items-center gap-1.5">
-            {showOrphans ? (
-              <Eye className="h-3 w-3" strokeWidth={2.25} />
-            ) : (
-              <EyeOff className="h-3 w-3" strokeWidth={2.25} />
+        <>
+          <button
+            onClick={toggleShowOrphans}
+            className={cn(
+              "mt-3 flex w-full items-center justify-between rounded-[3px] border px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.06em] transition-colors",
+              showOrphans
+                ? "border-primary/40 bg-primary/10 text-primary hover:bg-primary/15"
+                : "border-border bg-black/30 text-muted-foreground hover:border-mauve-7 hover:text-foreground",
             )}
-            <span className="tabular-nums">{metrics.orphanCount}</span>
-            <span>unconnected</span>
-          </span>
-          <span className="font-semibold text-[9px] uppercase tracking-widest">
-            {showOrphans ? "hide" : "show clusters"}
-          </span>
-        </button>
+            aria-label={
+              showOrphans
+                ? `Hide nodes with no ${lens.shortLabel.toLowerCase()} edges in this lens`
+                : `Show nodes with no ${lens.shortLabel.toLowerCase()} edges in this lens`
+            }
+          >
+            <span className="flex items-center gap-1.5">
+              {showOrphans ? (
+                <Eye className="h-3 w-3" strokeWidth={2.25} />
+              ) : (
+                <EyeOff className="h-3 w-3" strokeWidth={2.25} />
+              )}
+              <span className="tabular-nums">{metrics.orphanCount}</span>
+              <span>unconnected</span>
+            </span>
+            <span className="font-semibold text-[9px] uppercase tracking-widest">
+              {showOrphans ? "hide" : "show clusters"}
+            </span>
+          </button>
+          {/* Isolation is lens-relative: a node with no edges in THIS lens may
+              still be connected under another lens or beyond a truncated read. */}
+          <p className="mt-1 text-[9px] leading-snug text-muted-foreground/80">
+            No edges in the {lens.label.toLowerCase()} lens — may connect under
+            another lens{totals.truncated ? " or beyond the truncated read" : ""}.
+          </p>
+        </>
+      )}
+
+      {activeLens === "chokepoints" && (
+        <p className="mt-3 text-[9px] leading-snug text-muted-foreground/80">
+          Ranked by total degree across all {totals.edgeCount} loaded edges
+          {totals.truncated
+            ? " — the read is truncated, so this ranking is partial."
+            : ", not just the visible lens."}
+        </p>
       )}
 
       <div className="mt-3 border-t border-border/70 pt-2 text-[10px] leading-relaxed text-muted-foreground">

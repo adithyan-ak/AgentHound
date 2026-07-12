@@ -124,6 +124,30 @@ func TestNormalizerSerializesComplexValues(t *testing.T) {
 	}
 }
 
+func TestNormalizerEnsuresNonNullArrays(t *testing.T) {
+	n := NewNormalizer()
+	data := &ingest.IngestData{
+		Graph: ingest.GraphData{Nodes: nil, Edges: nil},
+	}
+	n.Normalize(data)
+	if data.Graph.Nodes == nil {
+		t.Error("nodes slice should be non-nil after normalize")
+	}
+	if data.Graph.Edges == nil {
+		t.Error("edges slice should be non-nil after normalize")
+	}
+
+	data = &ingest.IngestData{
+		Graph: ingest.GraphData{
+			Nodes: []ingest.Node{{ID: "a", Kinds: nil, Properties: nil}},
+		},
+	}
+	n.Normalize(data)
+	if data.Graph.Nodes[0].Kinds == nil {
+		t.Error("node kinds should be non-nil after normalize")
+	}
+}
+
 func TestNormalizerInitializesNilProperties(t *testing.T) {
 	n := NewNormalizer()
 	data := &ingest.IngestData{

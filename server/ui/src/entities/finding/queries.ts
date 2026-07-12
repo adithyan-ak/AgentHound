@@ -4,6 +4,7 @@ import {
   fetchFindingDetail,
   fetchFindings,
   getTriage,
+  patchTriage,
   setTriage,
 } from "./api";
 import type { TriageStatus } from "@shared/model/triage";
@@ -38,17 +39,40 @@ export function useTriage(fingerprint: string | undefined) {
   });
 }
 
-// useSetTriage writes a triage decision. On success it invalidates the
-// whole findings namespace (so inline triage in every list variant
-// refreshes) plus the edited fingerprint's standalone triage query.
+// useSetTriage writes a triage decision with field-level PATCH semantics: a
+// status-only change PATCHes just the status and PRESERVES any existing note
+// (an omitted field is left untouched server-side), while an explicit note —
+// including an empty string to clear it — is sent as provided. This replaces
+// the old PUT-everything behavior that clobbered a stored note to "" on every
+// status change. On success it invalidates the whole findings namespace (so
+// inline triage in every list variant refreshes) plus the edited
+// fingerprint's standalone triage query.
 export function useSetTriage() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: {
       fingerprint: string;
-      status: TriageStatus;
+      status?: TriageStatus;
       note?: string;
-    }) => setTriage(vars.fingerprint, vars.status, vars.note ?? ""),
+    }) => patchTriage(vars.fingerprint, { status: vars.status, note: vars.note }),
+    onSuccess: (_data, vars) => {
+      void qc.invalidateQueries({ queryKey: qk.findings() });
+      void qc.invalidateQueries({ queryKey: qk.triage(vars.fingerprint) });
+    },
+  });
+}
+
+// useReplaceTriage does a full PUT (status + note together). Use only when a
+// caller genuinely intends to set both fields at once; prefer useSetTriage for
+// note-preserving status edits.
+export function useReplaceTriage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: {
+      fingerprint: string;
+      status: TriageStatus;
+      note: string;
+    }) => setTriage(vars.fingerprint, vars.status, vars.note),
     onSuccess: (_data, vars) => {
       void qc.invalidateQueries({ queryKey: qk.findings() });
       void qc.invalidateQueries({ queryKey: qk.triage(vars.fingerprint) });

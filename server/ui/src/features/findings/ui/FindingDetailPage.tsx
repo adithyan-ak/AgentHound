@@ -12,6 +12,7 @@ import { HopEvidenceTimeline } from "./HopEvidenceTimeline";
 import { FindingImpact } from "./FindingImpact";
 import { FindingRemediation } from "./FindingRemediation";
 import { FindingReferences } from "./FindingReferences";
+import { EvidenceDAGPanel } from "./EvidenceDAGPanel";
 
 export function FindingDetailPage() {
   const { findingId } = useParams<{ findingId: string }>();
@@ -121,6 +122,7 @@ export function FindingDetailPage() {
             side={
               <Stack gap="0.75rem">
                 <FindingImpact impact={detail.impact} path={detail.attack_path} />
+                <EvidenceDAGPanel dag={detail.evidence_dag} />
                 <FindingRemediation steps={detail.remediation} />
                 <FindingReferences finding={f} />
               </Stack>

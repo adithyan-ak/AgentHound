@@ -130,6 +130,36 @@ func TestComputeToolSignalsNilAnnotations(t *testing.T) {
 	}
 }
 
+func TestComputeToolSignals_CapabilityEvidenceBounded(t *testing.T) {
+	engine := testEngine(t)
+	tool := &mcpsdk.Tool{
+		Name:        "run_shell",
+		Description: "Execute arbitrary shell commands and run code on the host",
+	}
+
+	signals := computeToolSignals(tool, map[string]bool{tool.Name: true}, engine)
+
+	if len(signals.CapabilitySurface) == 0 {
+		t.Fatal("expected at least one capability classification")
+	}
+	if len(signals.CapabilityEvidence) != len(signals.CapabilitySurface) {
+		t.Fatalf("evidence count %d != capability count %d",
+			len(signals.CapabilityEvidence), len(signals.CapabilitySurface))
+	}
+	for _, ev := range signals.CapabilityEvidence {
+		if ev.Capability == "" || ev.RuleID == "" {
+			t.Errorf("evidence missing capability/rule id: %+v", ev)
+		}
+		if ev.Basis != "lexical" {
+			t.Errorf("basis = %q, want lexical", ev.Basis)
+		}
+		// The core contract: a lexical hint must never reach 100% confidence.
+		if ev.Confidence <= 0 || ev.Confidence >= 1.0 {
+			t.Errorf("confidence = %v, want in (0,1)", ev.Confidence)
+		}
+	}
+}
+
 func TestComputeResourceSignals(t *testing.T) {
 	engine := testEngine(t)
 	tests := []struct {
@@ -141,7 +171,7 @@ func TestComputeResourceSignals(t *testing.T) {
 		{"file:///etc/shadow", "file", "critical"},
 		{"file:///tmp/data.txt", "file", "medium"},
 		{"https://api.example.com/data", "https", "medium"},
-		{"custom://some-resource", "custom", "low"},
+		{"custom://some-resource", "custom", "unknown"},
 	}
 
 	for _, tt := range tests {

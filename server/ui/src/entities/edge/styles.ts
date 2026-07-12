@@ -1,4 +1,4 @@
-import type { APIEdge } from "@entities/graph/dto";
+import { EDGE_KIND_META, type APIEdge, type EdgeKind } from "@entities/graph/dto";
 import { EDGE_COLORS as TOKEN_EDGE_COLORS } from "@shared/theme/tokens";
 
 export type EdgeCategory = "attack" | "trust" | "structure";
@@ -38,6 +38,15 @@ export const EDGE_CATEGORY_MAP: Record<string, EdgeCategory> = {
   // USES_CREDENTIAL's visual continuity.
   EXPOSES: "structure",
   EXPOSES_CREDENTIAL: "structure",
+  // Truth-contract composite edges (typed variants split off from the
+  // overloaded CAN_REACH). All are inferred attack relationships.
+  CAN_REACH_CROSS_PROTOCOL: "attack",
+  CAN_REACH_CREDENTIAL_CHAIN: "attack",
+  CONFUSED_DEPUTY: "attack",
+  INGESTS_UNTRUSTED: "attack",
+  TAINTS: "attack",
+  IFC_VIOLATION: "attack",
+  POISONS_CONTEXT: "attack",
 };
 
 export const EDGE_COLORS: Record<string, string> = Object.fromEntries(
@@ -46,17 +55,6 @@ export const EDGE_COLORS: Record<string, string> = Object.fromEntries(
     EDGE_CATEGORY_COLORS[cat],
   ]),
 );
-
-const COMPOSITE_EDGES = new Set([
-  "HAS_ACCESS_TO",
-  "CAN_EXECUTE",
-  "SHADOWS",
-  "POISONED_DESCRIPTION",
-  "CAN_REACH",
-  "CAN_EXFILTRATE_VIA",
-  "CAN_IMPERSONATE",
-  "POISONED_INSTRUCTIONS",
-]);
 
 export function getEdgeCategory(kind: string): EdgeCategory {
   return EDGE_CATEGORY_MAP[kind] ?? "structure";
@@ -74,12 +72,33 @@ export function getEdgeSize(edge: APIEdge): number {
   return 0.8;
 }
 
+// Composite-ness is derived from the generated EDGE_KIND_META (the Go source of
+// truth) so every inferred/composite edge — including the truth-contract
+// additions — is recognized without maintaining a parallel hand-list.
 export function isCompositeEdge(kind: string): boolean {
-  return COMPOSITE_EDGES.has(kind);
+  return EDGE_KIND_META[kind as EdgeKind]?.composite ?? false;
 }
 
+// Reach/exfil-style inferred edges render dashed; shadowing/impersonation/
+// context-poisoning "look-alike" edges render dotted; everything else is a
+// solid arrow.
+const DASHED_EDGES = new Set([
+  "CAN_REACH",
+  "CAN_REACH_CROSS_PROTOCOL",
+  "CAN_REACH_CREDENTIAL_CHAIN",
+  "CAN_EXFILTRATE_VIA",
+  "TAINTS",
+  "IFC_VIOLATION",
+]);
+const DOTTED_EDGES = new Set([
+  "SHADOWS",
+  "CAN_IMPERSONATE",
+  "CONFUSED_DEPUTY",
+  "POISONS_CONTEXT",
+]);
+
 export function getEdgeType(kind: string): string {
-  if (kind === "CAN_REACH" || kind === "CAN_EXFILTRATE_VIA") return "dashed";
-  if (kind === "SHADOWS" || kind === "CAN_IMPERSONATE") return "dotted";
+  if (DASHED_EDGES.has(kind)) return "dashed";
+  if (DOTTED_EDGES.has(kind)) return "dotted";
   return "arrow";
 }

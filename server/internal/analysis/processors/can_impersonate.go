@@ -21,7 +21,7 @@ func (p *CanImpersonate) Dependencies() []string { return nil }
 func (p *CanImpersonate) Process(ctx context.Context, db graph.GraphDB, scanID string) (graph.ProcessingStats, error) {
 	start := time.Now()
 
-	agents, err := p.loadAgents(ctx, db)
+	agents, err := p.loadAgents(ctx, db, scanID)
 	if err != nil {
 		return graph.ProcessingStats{
 			ProcessorName: p.Name(),
@@ -36,7 +36,7 @@ func (p *CanImpersonate) Process(ctx context.Context, db graph.GraphDB, scanID s
 		}, nil
 	}
 
-	docs, err := p.buildDocuments(ctx, db, agents)
+	docs, err := p.buildDocuments(ctx, db, agents, scanID)
 	if err != nil {
 		return graph.ProcessingStats{
 			ProcessorName: p.Name(),
@@ -113,7 +113,22 @@ func (p *CanImpersonate) Process(ctx context.Context, db graph.GraphDB, scanID s
 		}, nil
 	}
 
-	written, err := db.WriteEdges(ctx, edges, scanID)
+	edgeParams := make([]map[string]any, len(edges))
+	for i, edge := range edges {
+		edgeParams[i] = map[string]any{
+			"source": edge.Source,
+			"target": edge.Target,
+			"props":  edge.Properties,
+		}
+	}
+	written, err := db.ExecuteWrite(ctx, `
+UNWIND $edges AS edge
+MATCH (a:A2AAgent {objectid: edge.source})
+MATCH (b:A2AAgent {objectid: edge.target})
+WHERE a.scan_id = $scan_id AND b.scan_id = $scan_id
+MERGE (a)-[r:CAN_IMPERSONATE]->(b)
+SET r += edge.props, r.scan_id = $scan_id, r.last_seen = datetime()
+RETURN count(r) AS written`, map[string]any{"edges": edgeParams, "scan_id": scanID})
 	if err != nil {
 		return graph.ProcessingStats{
 			ProcessorName: p.Name(),
@@ -133,10 +148,10 @@ type agentInfo struct {
 	provider string
 }
 
-func (p *CanImpersonate) loadAgents(ctx context.Context, db graph.GraphDB) ([]agentInfo, error) {
+func (p *CanImpersonate) loadAgents(ctx context.Context, db graph.GraphDB, scanID string) ([]agentInfo, error) {
 	rows, err := db.Query(ctx,
-		"MATCH (a:A2AAgent) RETURN a.objectid AS id, a.name AS name, a.provider AS provider",
-		nil,
+		"MATCH (a:A2AAgent) WHERE a.scan_id = $scan_id RETURN a.objectid AS id, a.name AS name, a.provider AS provider",
+		map[string]any{"scan_id": scanID},
 	)
 	if err != nil {
 		return nil, err
@@ -154,13 +169,13 @@ func (p *CanImpersonate) loadAgents(ctx context.Context, db graph.GraphDB) ([]ag
 	return agents, nil
 }
 
-func (p *CanImpersonate) buildDocuments(ctx context.Context, db graph.GraphDB, agents []agentInfo) (map[string]string, error) {
+func (p *CanImpersonate) buildDocuments(ctx context.Context, db graph.GraphDB, agents []agentInfo, scanID string) (map[string]string, error) {
 	docs := make(map[string]string, len(agents))
 
 	for _, a := range agents {
 		rows, err := db.Query(ctx,
-			"MATCH (a:A2AAgent {objectid: $id})-[:ADVERTISES_SKILL]->(s:A2ASkill) RETURN s.description AS description",
-			map[string]any{"id": a.id},
+			"MATCH (a:A2AAgent {objectid: $id})-[:ADVERTISES_SKILL]->(s:A2ASkill) WHERE a.scan_id = $scan_id AND s.scan_id = $scan_id RETURN s.description AS description",
+			map[string]any{"id": a.id, "scan_id": scanID},
 		)
 		if err != nil {
 			return nil, fmt.Errorf("skills for agent %s: %w", a.id, err)

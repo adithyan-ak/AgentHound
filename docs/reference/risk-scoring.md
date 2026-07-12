@@ -74,9 +74,9 @@ score = 0.35 * auth_strength + 0.25 * tool_risk + 0.20 * exposure
 | `auth_strength` | none=100, apiKey=70, bearer=50, oauth=25, mtls=10 |
 | `tool_risk` | max `capability_risk` across all provided tools |
 | `exposure` | public host=100, private network=50, localhost=20, unknown=0 |
-| `credential_handling` | `max(base, blast)` where `base` = 100 if high-entropy or hardcoded creds else 50 (when any env vars), and `blast` = `min(Credential.blast_radius * 10, 100)`; 0 if no env vars |
+| `credential_handling` | `max(base, blast)` where `base` = 100 if high-entropy or hardcoded creds else 50 (when any env vars), and `blast` = `min(blast_radius * 10, 100)`; 0 if no env vars |
 
-`Credential.blast_radius` (distinct agents that can reach a value_hash-merged secret) is materialized by the `cross_service_credential_chain` post-processor, so a widely-shared secret amplifies its server's credential-handling risk even when the secret itself is not high-entropy.
+`blast_radius` (distinct agents that can reach a value_hash-merged secret) is materialized by the `cross_service_credential_chain` post-processor on the `CAN_REACH_CREDENTIAL_CHAIN` composite edge (keyed to the env-var credential via `via_credential_id`), not on the raw `Credential` node, so a widely-shared secret amplifies its server's credential-handling risk even when the secret itself is not high-entropy.
 
 ### MCPTool
 

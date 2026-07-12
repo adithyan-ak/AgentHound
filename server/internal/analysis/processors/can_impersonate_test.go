@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 )
 
@@ -88,7 +87,9 @@ func TestCanImpersonate_ProcessSimilarAgents(t *testing.T) {
 			}
 			return nil, nil
 		},
-		WriteEdgesResult: 2,
+		// The processor now writes composite edges via a scan-scoped
+		// ExecuteWrite whose RETURN count(r) surfaces as EdgesCreated.
+		ExecuteWriteResult: 2,
 	}
 
 	p := &CanImpersonate{}
@@ -102,22 +103,31 @@ func TestCanImpersonate_ProcessSimilarAgents(t *testing.T) {
 		t.Errorf("EdgesCreated = %d, want 2", stats.EdgesCreated)
 	}
 
-	calls := mock.CallsTo("WriteEdges")
-	if len(calls) != 1 {
-		t.Fatalf("WriteEdges called %d times, want 1", len(calls))
+	// Exactly one scan-scoped ExecuteWrite carries the CAN_IMPERSONATE edges.
+	var writeCall *graph.MockCall
+	for _, c := range mock.CallsTo("ExecuteWrite") {
+		cypher, _ := c.Args[0].(string)
+		if strings.Contains(cypher, "CAN_IMPERSONATE") {
+			cc := c
+			writeCall = &cc
+		}
 	}
-	edges, _ := calls[0].Args[0].([]ingest.Edge)
+	if writeCall == nil {
+		t.Fatalf("expected an ExecuteWrite creating CAN_IMPERSONATE edges")
+	}
+	params, _ := writeCall.Args[1].(map[string]any)
+	if params["scan_id"] != "scan-1" {
+		t.Errorf("edge write not scan-scoped: params=%v", params)
+	}
+	edges, _ := params["edges"].([]map[string]any)
 	if len(edges) != 2 {
 		t.Fatalf("wrote %d edges, want 2", len(edges))
 	}
-	if edges[0].Kind != "CAN_IMPERSONATE" {
-		t.Errorf("edge kind = %q", edges[0].Kind)
+	if edges[0]["source"] != "agent-1" || edges[0]["target"] != "agent-2" {
+		t.Errorf("edge 0: %v -> %v", edges[0]["source"], edges[0]["target"])
 	}
-	if edges[0].Source != "agent-1" || edges[0].Target != "agent-2" {
-		t.Errorf("edge 0: %s -> %s", edges[0].Source, edges[0].Target)
-	}
-	if edges[1].Source != "agent-2" || edges[1].Target != "agent-1" {
-		t.Errorf("edge 1: %s -> %s", edges[1].Source, edges[1].Target)
+	if edges[1]["source"] != "agent-2" || edges[1]["target"] != "agent-1" {
+		t.Errorf("edge 1: %v -> %v", edges[1]["source"], edges[1]["target"])
 	}
 }
 
@@ -215,7 +225,7 @@ func TestCanImpersonate_ProcessWriteError(t *testing.T) {
 			}
 			return nil, nil
 		},
-		WriteEdgesError: errors.New("write failed"),
+		ExecuteWriteError: errors.New("write failed"),
 	}
 
 	p := &CanImpersonate{}

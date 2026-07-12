@@ -17,13 +17,16 @@ func (p *CanExfiltrate) Process(ctx context.Context, db graph.GraphDB, scanID st
 
 	cypher := `
 MATCH (a:AgentInstance)-[:CAN_REACH]->(r:MCPResource)
-WHERE r.sensitivity IN ['critical', 'high']
+WHERE a.scan_id = $scan_id AND r.scan_id = $scan_id
+  AND r.sensitivity IN ['critical', 'high']
 MATCH (a)-[:TRUSTS_SERVER]->(s:MCPServer)-[:PROVIDES_TOOL]->(outbound:MCPTool)
-WHERE ANY(cap IN outbound.capability_surface WHERE cap IN ['email_send', 'network_outbound', 'file_write', 'auto_fetch_render', 'allowlisted_proxy'])
+WHERE s.scan_id = $scan_id AND outbound.scan_id = $scan_id
+      AND ANY(cap IN outbound.capability_surface WHERE cap IN ['email_send', 'network_outbound', 'file_write', 'auto_fetch_render', 'allowlisted_proxy'])
       AND NOT EXISTS((a)-[:CAN_EXFILTRATE_VIA]->(outbound))
 MERGE (a)-[e:CAN_EXFILTRATE_VIA]->(outbound)
 SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true, e.source_collector = 'mcp',
     e.sensitive_resource = r.uri, e.resource_sensitivity = r.sensitivity,
+    e.exfil_channels = [cap IN outbound.capability_surface WHERE cap IN ['email_send', 'network_outbound', 'file_write', 'auto_fetch_render', 'allowlisted_proxy']],
     e.confidence = 0.8, e.risk_weight = 0.1
 RETURN count(*) AS written`
 

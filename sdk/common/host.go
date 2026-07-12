@@ -75,6 +75,50 @@ func HostNodeID(hostname string) string {
 	return ingest.ComputeNodeID("Host", hostname)
 }
 
+// Scope returns the coarse network scope of the host: "local", "private",
+// "public", or "unknown". A "public" verdict is only returned for an actual
+// resolved IP — a bare hostname is reported as "unknown" because its scope
+// depends on DNS resolution the collector did not perform (absence of a
+// private/local match is not evidence a hostname is public).
+func (h HostInfo) Scope() string {
+	switch {
+	case h.IsLocal:
+		return "local"
+	case h.IsPrivate:
+		return "private"
+	case h.IsPublic && h.IP != "":
+		return "public"
+	default:
+		return "unknown"
+	}
+}
+
+// ScopeState reports whether the host scope was actually assessed. A resolved
+// IP, or the definitively-local "localhost", is assessed; a bare unresolved
+// hostname is not_assessed.
+func (h HostInfo) ScopeState() AssessmentState {
+	if h.IsLocal || h.IsPrivate || h.IP != "" {
+		return AssessmentAssessed
+	}
+	return AssessmentNotAssessed
+}
+
+// HostNodeProps builds the canonical property map for a Host node from a
+// classified HostInfo. It carries the local/private/public booleans (kept for
+// existing consumers) plus the derived host_scope and host_scope_state so an
+// unassessed hostname is not silently read as public.
+func HostNodeProps(info HostInfo) map[string]any {
+	return map[string]any{
+		"hostname":         info.Hostname,
+		"ip":               info.IP,
+		"is_local":         info.IsLocal,
+		"is_private":       info.IsPrivate,
+		"is_public":        info.IsPublic,
+		"host_scope":       info.Scope(),
+		"host_scope_state": string(info.ScopeState()),
+	}
+}
+
 func isLocal(host string) bool {
 	lower := strings.ToLower(host)
 	if lower == "localhost" {

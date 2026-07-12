@@ -31,9 +31,9 @@ var AllowedNodeKinds = map[string]bool{
 	"ExtractedTrainingSignal": true,
 }
 
-// AllNodeLabels includes all 25 node labels (23 collector + 2 synthetic) for
-// Neo4j schema operations. Schema-init logic skips labels in UmbrellaLabels
-// when creating uniqueness constraints — see UmbrellaLabels for the why.
+// AllNodeLabels includes all 23 collector-produced node labels for Neo4j
+// schema operations. Schema-init logic skips labels in UmbrellaLabels when
+// creating uniqueness constraints — see UmbrellaLabels for the why.
 var AllNodeLabels = []string{
 	"MCPServer", "MCPTool", "MCPResource", "MCPPrompt",
 	"A2AAgent", "A2ASkill", "AgentInstance",
@@ -42,7 +42,6 @@ var AllNodeLabels = []string{
 	"OllamaInstance", "VLLMInstance", "QdrantInstance", "MLflowServer",
 	"LiteLLMGateway", "JupyterServer", "LangServeApp", "OpenWebUIInstance",
 	"AIService", "AIModel", "ExtractedTrainingSignal",
-	"ResourceGroup", "TrustZone",
 }
 
 // UmbrellaLabels are labels that nodes carry as a multi-label *companion* to a
@@ -83,7 +82,7 @@ var RawEdgeKinds = map[string]bool{
 	"INGESTS_UNTRUSTED":  true,
 }
 
-// AllowedEdgeKinds includes all 30 edge kinds (18 raw + 12 composite) for Neo4j writer dispatch.
+// AllowedEdgeKinds includes all 32 edge kinds (18 raw + 14 composite) for Neo4j writer dispatch.
 var AllowedEdgeKinds = map[string]bool{
 	// Raw (collector-produced)
 	"TRUSTS_SERVER":      true,
@@ -117,6 +116,14 @@ var AllowedEdgeKinds = map[string]bool{
 	"TAINTS":                true,
 	"IFC_VIOLATION":         true,
 	"POISONS_CONTEXT":       true,
+	// Dedicated CAN_REACH variants. These are split out of the proven
+	// CAN_REACH edge so heuristic pivots (low-confidence cross-protocol
+	// A2A→MCP reach) and credential-access reach (value_hash-joined
+	// upstream-provider key exposure) are never conflated with a proven
+	// transitive resource path. See server/internal/analysis/processors/
+	// cross_protocol.go and cross_service_credential_chain.go.
+	"CAN_REACH_CROSS_PROTOCOL":   true,
+	"CAN_REACH_CREDENTIAL_CHAIN": true,
 }
 
 // AllowedCollectors are the valid collector identifiers in ingest meta.
@@ -165,6 +172,12 @@ var EdgeKindEndpoints = map[string]EdgeEndpoints{
 	"TAINTS":                {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
 	"IFC_VIOLATION":         {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
 	"POISONS_CONTEXT":       {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
+	// Heuristic cross-protocol pivot: external A2A agent reaches an MCP
+	// resource via a delegated internal agent co-located on the MCP host.
+	"CAN_REACH_CROSS_PROTOCOL": {SourceKinds: []string{"A2AAgent"}, TargetKinds: []string{"MCPResource"}},
+	// Credential-access reach: agent reaches an upstream-provider Credential
+	// exposed by a LiteLLM gateway, joined on Credential.value_hash.
+	"CAN_REACH_CREDENTIAL_CHAIN": {SourceKinds: []string{"AgentInstance"}, TargetKinds: []string{"Credential"}},
 }
 
 // ResolveEdgeEndpoints returns the source and target node kinds for an edge,

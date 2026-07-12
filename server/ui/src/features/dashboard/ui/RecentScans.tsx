@@ -27,7 +27,7 @@ const STATUS_TONE: Record<string, PillTone> = {
 };
 
 export function RecentScans() {
-  const { data: scans, isLoading } = useScans(20);
+  const { data: scans, isLoading, isError } = useScans(20);
 
   const recent = (scans ?? []).slice(0, 6);
   const sparkValues = useMemo(
@@ -53,8 +53,17 @@ export function RecentScans() {
       <div className="px-3.5 pb-3.5">
         <AsyncBoundary
           isLoading={isLoading}
+          isError={isError}
           isEmpty={recent.length === 0}
           loading={<Skeleton className="h-48 w-full" />}
+          error={
+            <div
+              role="alert"
+              className="flex h-32 items-center justify-center font-mono text-xs uppercase tracking-wider text-muted-foreground"
+            >
+              Scan history unavailable
+            </div>
+          }
           empty={
             <div className="flex h-32 items-center justify-center font-mono text-xs uppercase tracking-wider text-muted-foreground">
               No scans yet
@@ -92,7 +101,7 @@ export function RecentScans() {
                     {scan.edge_count.toLocaleString()}
                   </TableCell>
                   <TableCell className="px-3 py-2 text-right font-mono text-[11px] text-muted-foreground">
-                    {timeAgo(scan.started_at)}
+                    {timeAgo(scan.completed_at ?? scan.started_at)}
                   </TableCell>
                 </TableRow>
               ))}

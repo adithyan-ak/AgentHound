@@ -24,14 +24,14 @@ type AuthStrength struct{}
 func (p *AuthStrength) Name() string           { return "auth_strength" }
 func (p *AuthStrength) Dependencies() []string { return nil }
 
-func (p *AuthStrength) Process(ctx context.Context, db graph.GraphDB, _ string) (graph.ProcessingStats, error) {
+func (p *AuthStrength) Process(ctx context.Context, db graph.GraphDB, scanID string) (graph.ProcessingStats, error) {
 	start := time.Now()
 
-	cypher := fmt.Sprintf(`MATCH (n) WHERE n.auth_method IS NOT NULL
+	cypher := fmt.Sprintf(`MATCH (n) WHERE n.scan_id = $scan_id AND n.auth_method IS NOT NULL
 SET n.auth_strength = %s
 RETURN count(n) AS updated`, authStrengthCase("n.auth_method"))
 
-	updated, err := db.ExecuteWrite(ctx, cypher, map[string]any{})
+	updated, err := db.ExecuteWrite(ctx, cypher, map[string]any{"scan_id": scanID})
 	if err != nil {
 		return graph.ProcessingStats{ProcessorName: p.Name(), Duration: time.Since(start)}, err
 	}

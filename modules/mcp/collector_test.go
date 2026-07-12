@@ -1,14 +1,45 @@
 package mcp
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 
+	"github.com/adithyan-ak/agenthound/sdk/collector"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
+
+func TestCollect_CoveragePreservesUnreachableServer(t *testing.T) {
+	c := NewMCPCollector(WithTimeout(2*time.Second), WithInitTimeout(1*time.Second))
+	// Unreachable HTTP server: connect fails (streamable + SSE retry), so the
+	// server is recorded as a failed target and the artifact is NOT clean —
+	// an empty graph here must not read as an all-clear.
+	data, err := c.Collect(context.Background(), collector.CollectOptions{
+		TargetURL: "http://127.0.0.1:1/mcp",
+	})
+	if err != nil {
+		t.Fatalf("Collect returned error: %v", err)
+	}
+	cov := data.Meta.Coverage
+	if cov == nil {
+		t.Fatal("expected coverage manifest, got nil")
+	}
+	if cov.Status == ingest.StatusComplete {
+		t.Errorf("coverage status = %q, want non-complete for an unreachable server", cov.Status)
+	}
+	failed := false
+	for _, tgt := range cov.Targets {
+		if tgt.Status == ingest.StatusFailed && tgt.Error != "" {
+			failed = true
+		}
+	}
+	if !failed {
+		t.Errorf("expected a failed target outcome, got %+v", cov.Targets)
+	}
+}
 
 func TestNewMCPCollectorDefaults(t *testing.T) {
 	c := NewMCPCollector()
@@ -106,11 +137,26 @@ func TestComputeServerID(t *testing.T) {
 		}
 	})
 
-	t.Run("arg_order_independent", func(t *testing.T) {
+	t.Run("arg_order_significant", func(t *testing.T) {
+		// Identity version 2: argv order is semantically meaningful, so a
+		// different order is a different server. Distinct args must not
+		// collapse onto one ID.
 		spec1 := ServerSpec{Transport: "stdio", Command: "npx", Args: []string{"b", "a"}}
 		spec2 := ServerSpec{Transport: "stdio", Command: "npx", Args: []string{"a", "b"}}
-		if computeServerID(spec1) != computeServerID(spec2) {
-			t.Error("server IDs should be equal regardless of arg order")
+		if computeServerID(spec1) == computeServerID(spec2) {
+			t.Error("server IDs must differ when arg order differs (identity v2)")
+		}
+	})
+
+	t.Run("config_mcp_merge_same_order", func(t *testing.T) {
+		// The config and MCP collectors derive args in the SAME (launch)
+		// order from the same config entry, so they still merge on a
+		// shared ID.
+		spec := ServerSpec{Transport: "stdio", Command: "npx", Args: []string{"-y", "pkg", "--port", "8080"}}
+		got := computeServerID(spec)
+		want := ingest.ComputeMCPServerID("stdio", "npx", "-y", "pkg", "--port", "8080")
+		if got != want {
+			t.Errorf("server ID mismatch:\n  got  %s\n  want %s", got, want)
 		}
 	})
 }

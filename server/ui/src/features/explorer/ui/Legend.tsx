@@ -1,7 +1,7 @@
 import { useExplorerStore } from "@features/explorer/model/store";
 import { getLens } from "@features/explorer/model/lens-config";
 import { cn } from "@shared/lib/utils";
-import { NODE_KIND_COLORS, SEVERITY, DIMMED } from "@shared/theme/tokens";
+import { NODE_KIND_COLORS, NEUTRAL_NODE_COLOR, SEVERITY, DIMMED } from "@shared/theme/tokens";
 import { getEdgeColor, edgeLabel, edgeDescription } from "@entities/edge";
 
 interface NodeKeyItem {
@@ -51,7 +51,7 @@ const NODE_KEY_BY_LENS: Record<string, NodeKeyItem[]> = {
   ],
   chokepoints: [
     { color: NODE_KIND_COLORS.AgentInstance, label: "High centrality" },
-    { color: NODE_KIND_COLORS.ResourceGroup, label: "Medium" },
+    { color: NEUTRAL_NODE_COLOR, label: "Medium" },
     { color: DIMMED.mid, label: "Low" },
   ],
 };

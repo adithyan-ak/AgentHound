@@ -30,8 +30,9 @@ func (p *IfcViolation) Process(ctx context.Context, db graph.GraphDB, scanID str
 	// stale-edge cleanup whenever the mcp collector re-runs. See
 	// docs/architecture/post-processors.md for the cleanup-only-on-mcp note.
 	cypher := `
-MATCH (untrusted:MCPTool)-[:INGESTS_UNTRUSTED]->(:MCPResource)<-[:HAS_ACCESS_TO*1..3]-(sensitive:MCPTool)
-WHERE untrusted <> sensitive
+MATCH (untrusted:MCPTool)-[:INGESTS_UNTRUSTED]->(resource:MCPResource)<-[:HAS_ACCESS_TO*1..3]-(sensitive:MCPTool)
+WHERE untrusted.scan_id = $scan_id AND resource.scan_id = $scan_id AND sensitive.scan_id = $scan_id
+  AND untrusted <> sensitive
   AND any(cap IN sensitive.capability_surface WHERE cap IN ['credential_access', 'file_write', 'email_send'])
 MERGE (untrusted)-[e:IFC_VIOLATION]->(sensitive)
 SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true,

@@ -173,9 +173,8 @@ func TestReconstructAttackPath_CrossProtocol(t *testing.T) {
 		},
 	}
 
-	f := &Finding{EdgeKind: "CAN_REACH", SourceID: "a2a-1", TargetID: "res-1"}
-	compositeProps := map[string]any{"cross_protocol": true}
-	path, err := ReconstructAttackPath(context.Background(), mock, f, compositeProps)
+	f := &Finding{EdgeKind: "CAN_REACH_CROSS_PROTOCOL", SourceID: "a2a-1", TargetID: "res-1"}
+	path, err := ReconstructAttackPath(context.Background(), mock, f, nil)
 	if err != nil {
 		t.Fatalf("ReconstructAttackPath() error = %v", err)
 	}
@@ -190,7 +189,7 @@ func TestReconstructAttackPath_CrossProtocol(t *testing.T) {
 func TestReconstructAttackPath_Fallback(t *testing.T) {
 	mock := &graph.MockGraphDB{
 		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
-			if strings.Contains(cypher, "shortestPath") {
+			if strings.Contains(cypher, "rels*1..") {
 				return []map[string]any{
 					{
 						"nodes": []any{
@@ -198,7 +197,7 @@ func TestReconstructAttackPath_Fallback(t *testing.T) {
 							map[string]any{"id": "tgt-1", "name": "Tgt", "kinds": []any{"MCPResource"}, "properties": map[string]any{"name": "Tgt"}},
 						},
 						"edges": []any{
-							map[string]any{"source": "src-1", "target": "tgt-1", "kind": "HAS_ACCESS_TO", "properties": map[string]any{}},
+							map[string]any{"source": "src-1", "target": "tgt-1", "kind": "HAS_ACCESS_TO", "properties": map[string]any{"risk_weight": 0.2}},
 						},
 					},
 				}, nil
@@ -264,8 +263,41 @@ func TestParseAttackPath(t *testing.T) {
 		t.Errorf("got %d edges, want 2", len(path.Edges))
 	}
 	wantWeight := 0.3
-	if path.TotalRiskWeight < wantWeight-0.001 || path.TotalRiskWeight > wantWeight+0.001 {
-		t.Errorf("TotalRiskWeight = %f, want ~%f", path.TotalRiskWeight, wantWeight)
+	if path.TotalRiskWeight == nil {
+		t.Fatalf("TotalRiskWeight = nil, want ~%f (all edges carry risk_weight)", wantWeight)
+	}
+	if *path.TotalRiskWeight < wantWeight-0.001 || *path.TotalRiskWeight > wantWeight+0.001 {
+		t.Errorf("TotalRiskWeight = %f, want ~%f", *path.TotalRiskWeight, wantWeight)
+	}
+	if path.WeightMissingCount != 0 {
+		t.Errorf("WeightMissingCount = %d, want 0", path.WeightMissingCount)
+	}
+}
+
+// TestParseAttackPath_MissingWeightNullsTotal guards the nullable-weight
+// contract: if any edge lacks a risk_weight the total is unknown (nil), never
+// a benign partial sum, and the missing count is reported.
+func TestParseAttackPath_MissingWeightNullsTotal(t *testing.T) {
+	row := map[string]any{
+		"nodes": []any{
+			map[string]any{"id": "n1", "kinds": []any{"AgentInstance"}, "properties": map[string]any{}},
+			map[string]any{"id": "n2", "kinds": []any{"MCPServer"}, "properties": map[string]any{}},
+			map[string]any{"id": "n3", "kinds": []any{"MCPTool"}, "properties": map[string]any{}},
+		},
+		"edges": []any{
+			map[string]any{"source": "n1", "target": "n2", "kind": "TRUSTS_SERVER", "properties": map[string]any{"risk_weight": 0.1}},
+			map[string]any{"source": "n2", "target": "n3", "kind": "PROVIDES_TOOL", "properties": map[string]any{}},
+		},
+	}
+	path, err := parseAttackPath(row)
+	if err != nil {
+		t.Fatalf("parseAttackPath() error = %v", err)
+	}
+	if path.TotalRiskWeight != nil {
+		t.Errorf("TotalRiskWeight = %v, want nil (a weight was missing)", *path.TotalRiskWeight)
+	}
+	if path.WeightMissingCount != 1 {
+		t.Errorf("WeightMissingCount = %d, want 1", path.WeightMissingCount)
 	}
 }
 
@@ -455,15 +487,14 @@ func TestBuildImpact_CAN_REACH(t *testing.T) {
 
 func TestBuildImpact_CrossProtocol(t *testing.T) {
 	f := &Finding{
-		EdgeKind:   "CAN_REACH",
+		EdgeKind:   "CAN_REACH_CROSS_PROTOCOL",
 		SourceID:   "a2a-1",
 		SourceName: "ExtAgent",
 		TargetID:   "res-1",
 		TargetName: "ProdDB",
 	}
-	compositeProps := map[string]any{"cross_protocol": true}
 
-	impact := BuildImpact(f, nil, compositeProps)
+	impact := BuildImpact(f, nil, nil)
 	if impact == nil {
 		t.Fatal("expected impact, got nil")
 	}
@@ -613,7 +644,7 @@ func TestReconstructAttackPath_CredentialChain(t *testing.T) {
 		},
 	}
 
-	f := &Finding{EdgeKind: "CAN_REACH", SourceID: "agent-1", TargetID: "c2-1"}
+	f := &Finding{EdgeKind: "CAN_REACH_CREDENTIAL_CHAIN", SourceID: "agent-1", TargetID: "c2-1"}
 	compositeProps := map[string]any{
 		"source_collector":  "cross_service_credential_chain",
 		"via_gateway":       "litellm-gw",
@@ -704,16 +735,13 @@ func TestBuildImpact_SummaryNoExtraWart(t *testing.T) {
 // upstream provider exposure.
 func TestBuildImpact_CredentialChain(t *testing.T) {
 	f := &Finding{
-		EdgeKind:   "CAN_REACH",
+		EdgeKind:   "CAN_REACH_CREDENTIAL_CHAIN",
 		SourceID:   "agent-1",
 		SourceName: "DevAgent",
 		TargetID:   "c2-1",
 		TargetName: "openai-upstream",
 	}
-	compositeProps := map[string]any{
-		"source_collector": "cross_service_credential_chain",
-	}
-	impact := BuildImpact(f, nil, compositeProps)
+	impact := BuildImpact(f, nil, nil)
 	if impact == nil {
 		t.Fatal("expected impact, got nil")
 	}

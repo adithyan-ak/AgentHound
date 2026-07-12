@@ -1,13 +1,7 @@
-import { Outlet, useLocation } from "react-router-dom";
+import { Outlet } from "react-router-dom";
 import { NavBar } from "./NavBar";
-import { Sidebar } from "./Sidebar";
-import { useUIStore } from "@shared/model/ui-store";
 
 export function AppLayout() {
-  const sidebarOpen = useUIStore((s) => s.sidebarOpen);
-  const location = useLocation();
-  const suppressSidebar = location.pathname.startsWith("/explorer");
-
   return (
     <div className="flex h-screen flex-col overflow-hidden">
       <NavBar />
@@ -15,7 +9,6 @@ export function AppLayout() {
         <main className="flex-1 overflow-auto">
           <Outlet />
         </main>
-        {sidebarOpen && !suppressSidebar && <Sidebar />}
       </div>
     </div>
   );

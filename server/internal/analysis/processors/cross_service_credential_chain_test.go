@@ -96,16 +96,20 @@ func TestCrossServiceCredentialChain_CypherJoinsOnValueHash(t *testing.T) {
 		!strings.Contains(captured, "c1.value_hash = c1master.value_hash") {
 		t.Errorf("Cypher missing the explicit c1master.value_hash = c1.value_hash join; query:\n%s", captured)
 	}
-	// We MUST emit a CAN_REACH edge with source_collector marked so
-	// stale-edge cleanup scoping works on partial scans.
-	if !strings.Contains(captured, "MERGE (a)-[e:CAN_REACH]->(c2)") {
-		t.Errorf("Cypher missing CAN_REACH MERGE; query:\n%s", captured)
+	// We MUST emit a dedicated CAN_REACH_CREDENTIAL_CHAIN edge (never the
+	// proven CAN_REACH) with source_collector marked so stale-edge cleanup
+	// scoping works on partial scans.
+	if !strings.Contains(captured, "MERGE (a)-[e:CAN_REACH_CREDENTIAL_CHAIN]->(c2)") {
+		t.Errorf("Cypher missing CAN_REACH_CREDENTIAL_CHAIN MERGE; query:\n%s", captured)
+	}
+	if strings.Contains(captured, "[e:CAN_REACH]->") {
+		t.Errorf("Cypher must NOT overload proven CAN_REACH for credential-chain reach; query:\n%s", captured)
 	}
 	if !strings.Contains(captured, "source_collector") {
 		t.Errorf("Cypher missing source_collector tag (required for stale-edge cleanup); query:\n%s", captured)
 	}
-	if strings.Contains(captured, "NOT EXISTS((a)-[:CAN_REACH]->(c2))") {
-		t.Errorf("Cypher must refresh existing CAN_REACH scan_id instead of skipping matches; query:\n%s", captured)
+	if strings.Contains(captured, "NOT EXISTS((a)-[:CAN_REACH_CREDENTIAL_CHAIN]->(c2))") {
+		t.Errorf("Cypher must refresh existing edge scan_id instead of skipping matches; query:\n%s", captured)
 	}
 }
 

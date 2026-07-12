@@ -150,6 +150,8 @@ Returns reachable nodes grouped by ring (1-hop, 2-hop, ...). Useful for "what ca
 
 Upload collector JSON output. Runs the full pipeline: validate → normalize → deduplicate → write → post-process.
 
+Validation rejects the payload (HTTP 400 with a field-level error list) when `meta.identity_version` is present and not the version the server supports (`ingest.CurrentIdentityVersion`). Node IDs are content hashes whose derivation is versioned; an artifact from a different scheme would compute non-matching IDs and silently fail to merge (e.g. config + MCP observations of one MCPServer landing as two nodes). Re-collect and re-ingest with a current collector. A zero/absent `identity_version` defers to the current scheme (pre-contract fixtures).
+
 ```json
 // Request body: collector JSON output (see graph-model.md for schema)
 
@@ -160,6 +162,13 @@ Upload collector JSON output. Runs the full pipeline: validate → normalize →
   "edges_written": 82,
   "duration": "1.23s",
   "warnings": []
+}
+
+// Response (400) — unsupported identity version
+{
+  "errors": [
+    { "path": "meta.identity_version", "message": "unsupported identity version 1; server requires 2 — re-collect and re-ingest with a current collector" }
+  ]
 }
 ```
 
@@ -203,9 +212,9 @@ Enumerate all paths between two nodes (bounded). Same request as shortest-path, 
 
 ### `POST /api/v1/analysis/weighted-path` *(Origin-gated)*
 
-Find the lowest-risk-weight path using Dijkstra (APOC) or `shortestPath` + `reduce` fallback.
+Find the minimum-total-risk-weight path using a single bounded, forward-directed traversal (no APOC dependency). Same request format as shortest-path. The response includes `"algorithm": "bounded-min-weight"`, `"direction"`, `"max_hops"`, and the total weight is reported as `null` (unknown) when any edge on the chosen path lacks a `risk_weight` — never a benign zero.
 
-Same request format as shortest-path. Response includes `"algorithm": "dijkstra"` or `"algorithm": "shortestPath+reduce"`.
+**Generation scoping.** The shortest-path, all-paths, weighted-path, and pre-built analysis endpoints are scoped to the **current logical generations**: every node and relationship on a returned path (or every anchor of a pre-built query) must be observed by a promoted generation, so a path/result never traverses a retained (demoted) generation's facts. Each response carries a `completeness` disclosure; when no generation is promoted the result is an empty, disclosed-incomplete set.
 
 ### `GET /api/v1/analysis/findings`
 
@@ -314,7 +323,15 @@ Get scan details by ID.
 
 ### `DELETE /api/v1/scans/{id}` *(Origin-gated)*
 
-Delete a scan after deleting the nodes and edges that scan owned from Neo4j. If graph cleanup fails, the scan record is retained and the endpoint returns an internal error.
+Durably delete a scan's generation from Neo4j and Postgres. The delete is recoverable and idempotent:
+
+1. The scan is marked `delete_state = "deleting"` (persisted) **before** the graph is mutated.
+2. The generation's contribution is removed in a **single Neo4j transaction** (edge + node decrement/GC), so a shared fact another generation still owns survives.
+3. The finding snapshot is dropped, the prior valid generation is rematerialized as current (current-pointer exposure only after the recoverable delete completes), and the scan row is removed.
+
+Any failure records `delete_state = "delete_failed"` and returns an internal error; the scan row is retained so a retry (or the startup recovery sweep) completes the delete idempotently. A non-terminal scan cannot be deleted unless it is already in a delete lifecycle. `?preview=true` reports the affected generation/observations and the generation that would be rematerialized, without mutating anything.
+
+The `scans` object exposes `delete_state` (`""` normal, `deleting`, or `delete_failed`).
 
 ---
 

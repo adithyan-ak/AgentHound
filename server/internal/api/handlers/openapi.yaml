@@ -65,6 +65,194 @@ components:
           type: string
           enum: [ok, unavailable]
 
+    Completeness:
+      type: object
+      description: >
+        Whether a scan/generation-scoped read reflects a fully materialized,
+        promoted view. When complete is false the accompanying totals/verdicts
+        are NOT authoritative and MUST NOT be coalesced into an all-clear/zero
+        verdict.
+      required: [complete, coverage_status, generation_ids, truncated]
+      properties:
+        complete:
+          type: boolean
+        coverage_status:
+          type: string
+          enum: [complete, partial, failed, unknown, none]
+        generation_ids:
+          type: array
+          items:
+            type: string
+        truncated:
+          type: boolean
+        captured_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        source_errors:
+          type: array
+          items:
+            type: string
+        generations:
+          type: array
+          description: >
+            Per-current-generation ingest stage outcomes, so completeness
+            discloses exactly which stages (write/post_processing/snapshot/
+            promotion) succeeded for each promoted scope — not just a rolled-up
+            flag.
+          items:
+            type: object
+            required: [generation_id, coverage_status]
+            properties:
+              generation_id:
+                type: string
+              collector:
+                type: string
+              scope:
+                type: string
+              coverage_status:
+                type: string
+                enum: [complete, partial, failed, unknown, none]
+              stage_states:
+                type: object
+                additionalProperties:
+                  type: string
+                  enum: [succeeded, partial, failed, skipped]
+
+    FindingsPage:
+      type: object
+      description: Completeness-aware, generation-scoped page of finding occurrences.
+      required: [items, total, limit, offset, completeness]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Finding"
+        total:
+          type: integer
+          nullable: true
+          description: Suppressed (null) until the scoped view is complete.
+        limit:
+          type: integer
+        offset:
+          type: integer
+        next_offset:
+          type: integer
+        completeness:
+          $ref: "#/components/schemas/Completeness"
+
+    NodesPage:
+      type: object
+      required: [items, limit, offset, completeness]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Node"
+        total:
+          type: integer
+          nullable: true
+        limit:
+          type: integer
+        offset:
+          type: integer
+        next_offset:
+          type: integer
+        completeness:
+          $ref: "#/components/schemas/Completeness"
+
+    EdgesPage:
+      type: object
+      required: [items, limit, offset, completeness]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Edge"
+        total:
+          type: integer
+          nullable: true
+        limit:
+          type: integer
+        offset:
+          type: integer
+        next_offset:
+          type: integer
+        completeness:
+          $ref: "#/components/schemas/Completeness"
+
+    GraphStatsResponse:
+      type: object
+      required: [stats, completeness]
+      properties:
+        stats:
+          $ref: "#/components/schemas/GraphStats"
+        completeness:
+          $ref: "#/components/schemas/Completeness"
+
+    FreshnessResponse:
+      type: object
+      description: Lightweight generation-freshness poll (Postgres-only, no graph read).
+      required: [completeness, generations]
+      properties:
+        completeness:
+          $ref: "#/components/schemas/Completeness"
+        generations:
+          type: array
+          items:
+            type: object
+            properties:
+              scan_id:
+                type: string
+              collector:
+                type: string
+              generation_id:
+                type: string
+              coverage_status:
+                type: string
+              node_count:
+                type: integer
+              edge_count:
+                type: integer
+              captured_at:
+                type: string
+                format: date-time
+              completed_at:
+                type: string
+                format: date-time
+
+    ExportResponse:
+      type: object
+      description: Server-side dashboard export from one promoted generation.
+      required: [generated_at, scope, suppression_policy, health, findings]
+      properties:
+        generated_at:
+          type: string
+          format: date-time
+        scope:
+          $ref: "#/components/schemas/Completeness"
+        suppression_policy:
+          type: object
+          properties:
+            suppressed_statuses:
+              type: array
+              items:
+                type: string
+            include_suppressed:
+              type: boolean
+        health:
+          type: object
+          additionalProperties:
+            type: string
+        stats:
+          $ref: "#/components/schemas/GraphStats"
+        findings:
+          type: array
+          items:
+            $ref: "#/components/schemas/Finding"
+
     GraphStats:
       type: object
       properties:
@@ -270,6 +458,15 @@ components:
           type: string
         confidence:
           type: number
+        generation_id:
+          type: string
+        evidence_dag:
+          type: object
+          additionalProperties: true
+        composite_props:
+          type: object
+          additionalProperties: true
+          description: Immutable composite-edge evidence used by detail impact rendering.
         owasp_map:
           type: array
           items:
@@ -524,7 +721,10 @@ paths:
   /graph/stats:
     get:
       summary: Graph statistics
-      description: Returns node and edge counts grouped by kind.
+      description: >
+        Returns node and edge counts grouped by kind, scoped to the current
+        promoted generation(s), wrapped with a completeness disclosure. Counts
+        are authoritative only when completeness.complete is true.
       operationId: getGraphStats
       tags: [Graph]
       responses:
@@ -533,7 +733,24 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/GraphStats"
+                $ref: "#/components/schemas/GraphStatsResponse"
+
+  /graph/generation:
+    get:
+      summary: Generation freshness
+      description: >
+        Lightweight poll of the current promoted generations and completeness,
+        served from Postgres only (no graph read). Use for freshness polling
+        instead of re-reading the full graph.
+      operationId: getGraphGeneration
+      tags: [Graph]
+      responses:
+        "200":
+          description: Current generations and completeness
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FreshnessResponse"
 
   /graph/search:
     get:
@@ -567,7 +784,11 @@ paths:
   /graph/nodes:
     get:
       summary: List nodes
-      description: List graph nodes with optional kind filter.
+      description: >
+        List graph nodes scoped to the current promoted generation(s) with an
+        optional kind filter. Paginated via limit/offset; the completeness-aware
+        envelope discloses truncation and suppresses the total until the view is
+        complete.
       operationId: listNodes
       tags: [Graph]
       parameters:
@@ -583,15 +804,19 @@ paths:
             default: 100
             minimum: 1
             maximum: 10000
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
       responses:
         "200":
-          description: Nodes list
+          description: Nodes page
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Node"
+                $ref: "#/components/schemas/NodesPage"
 
   /graph/nodes/{id}:
     get:
@@ -714,16 +939,25 @@ paths:
             type: integer
             default: 100
             minimum: 1
-            maximum: 10000
+            maximum: 100000
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
       responses:
         "200":
-          description: Edges list
+          description: Edges page (scoped to the current promoted generation)
+          headers:
+            X-Truncated:
+              description: Present and "true" when the page hit its limit.
+              schema:
+                type: string
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Edge"
+                $ref: "#/components/schemas/EdgesPage"
 
   /ingest:
     post:
@@ -805,8 +1039,11 @@ paths:
     post:
       summary: Weighted (lowest-risk) path
       description: >-
-        Find the lowest-risk-weight path using Dijkstra (APOC) or
-        shortestPath+reduce fallback. Response includes the algorithm used.
+        Find the minimum-total-weight attack path using a single bounded,
+        forward-directed traversal (no APOC, no undirected fallback). The
+        chosen path's total is nullable: unknown when any edge on it lacks a
+        risk_weight, never a benign zero. Response includes algorithm
+        ("bounded-min-weight"), direction, and max_hops.
       operationId: weightedPath
       tags: [Analysis]
       requestBody:
@@ -831,10 +1068,13 @@ paths:
     get:
       summary: Security findings
       description: >-
-        List findings from the latest persisted snapshot (one row per
-        fingerprint), each with inline triage state. Findings triaged as
+        List finding occurrences from the current promoted generation(s), one
+        row per fingerprint, each with inline triage state and full occurrence
+        metadata (detection subtype/version, evidence DAG, confidence basis,
+        nullable attack cost, ATLAS/OWASP maps). Findings triaged as
         `accepted-risk` or `false-positive` are hidden unless
-        `include_suppressed=true`.
+        `include_suppressed=true`. The completeness-aware envelope suppresses
+        the total until the scoped view is complete.
       operationId: getFindings
       tags: [Analysis]
       parameters:
@@ -849,15 +1089,49 @@ paths:
           schema:
             type: boolean
             default: false
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 1000
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
       responses:
         "200":
-          description: Findings list
+          description: Findings page
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Finding"
+                $ref: "#/components/schemas/FindingsPage"
+
+  /analysis/export:
+    get:
+      summary: Dashboard export
+      description: >-
+        Server-side dashboard export built from one promoted generation: scope
+        + completeness, suppression policy, component health, generated time,
+        the scoped graph stats, and every finding with full ATLAS/OWASP metadata.
+      operationId: getExport
+      tags: [Analysis]
+      parameters:
+        - name: include_suppressed
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Export document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportResponse"
 
   /findings/triage/{fingerprint}:
     get:
@@ -905,6 +1179,47 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/TriageUpdateRequest"
+      responses:
+        "200":
+          description: Updated triage state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TriageState"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    patch:
+      summary: Patch finding triage state
+      description: >-
+        Field-level update with preserve-vs-clear semantics: an omitted field
+        preserves the stored value, an explicit empty string clears it. Use
+        this to edit a note without resupplying the status, or vice versa.
+      operationId: patchTriage
+      tags: [Analysis]
+      parameters:
+        - name: fingerprint
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 16-character hex finding fingerprint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: >
+                Omitted keys preserve; an explicit empty string clears. status,
+                when present, must be a valid triage status.
+              properties:
+                status:
+                  type: string
+                  enum: [new, triaging, confirmed, accepted-risk, false-positive]
+                note:
+                  type: string
       responses:
         "200":
           description: Updated triage state

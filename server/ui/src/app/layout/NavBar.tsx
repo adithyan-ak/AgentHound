@@ -1,4 +1,4 @@
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
   Compass,
@@ -6,10 +6,8 @@ import {
   ScanSearch,
   BookOpen,
   ShieldCheck,
-  PanelRight,
 } from "lucide-react";
 import { useHealth } from "@entities/health";
-import { useUIStore } from "@shared/model/ui-store";
 import { cn } from "@shared/lib/utils";
 import { SIGNAL_OK } from "@shared/theme/tokens";
 
@@ -40,10 +38,6 @@ function HealthLed({ label, ok }: HealthLedProps) {
 }
 
 export function NavBar() {
-  const location = useLocation();
-  const toggleSidebar = useUIStore((s) => s.toggleSidebar);
-  const sidebarOpen = useUIStore((s) => s.sidebarOpen);
-  const suppressSidebarToggle = location.pathname.startsWith("/explorer");
   const { data: health } = useHealth();
 
   const neo4jOk = (health?.neo4j ?? "").toLowerCase() === "ok";
@@ -78,18 +72,6 @@ export function NavBar() {
         ))}
       </nav>
       <div className="ml-auto flex items-center gap-4">
-        {!suppressSidebarToggle && (
-          <button
-            onClick={toggleSidebar}
-            className={cn(
-              "flex h-7 w-7 items-center justify-center rounded-[3px] text-muted-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground",
-              sidebarOpen && "bg-primary/10 text-primary",
-            )}
-            title="Toggle Inspector (i)"
-          >
-            <PanelRight className="h-4 w-4" />
-          </button>
-        )}
         <div className="hidden items-center gap-3 sm:flex">
           <HealthLed label="Neo4j" ok={neo4jOk} />
           <HealthLed label="PG" ok={postgresOk} />

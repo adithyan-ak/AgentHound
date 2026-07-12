@@ -9,6 +9,7 @@ import {
   HEX_NODE_HEIGHT,
 } from "@shared/lib/hex-config";
 import { useExplorerStore } from "@features/explorer/model/store";
+import { getLens } from "@features/explorer/model/lens-config";
 import { cn } from "@shared/lib/utils";
 import { EXPLORER_HEX_FILL } from "@shared/theme/tokens";
 import { NodeHandles } from "./NodeHandles";
@@ -22,6 +23,8 @@ function OrphanClusterNodeComponent({ data }: NodeProps) {
 
   const selectNode = useExplorerStore((s) => s.selectNode);
   const openDrawer = useExplorerStore((s) => s.openDrawer);
+  const activeLens = useExplorerStore((s) => s.activeLens);
+  const lensLabel = getLens(activeLens).label.toLowerCase();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const closeTimerRef = useRef<number | null>(null);
@@ -71,9 +74,23 @@ function OrphanClusterNodeComponent({ data }: NodeProps) {
       onMouseLeave={scheduleClose}
     >
       <div
-        className="relative cursor-pointer transition-transform duration-150 hover:scale-[1.08]"
+        role="button"
+        tabIndex={0}
+        className="relative cursor-pointer rounded-[3px] transition-transform duration-150 hover:scale-[1.08] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/60"
         style={{ width: HEX_NODE_WIDTH, height: HEX_NODE_HEIGHT }}
-        aria-label={`${d.count} unconnected ${d.kindTag}`}
+        aria-label={`${d.count} ${d.kindTag} with no ${lensLabel} edges in this lens. Activate to browse and inspect.`}
+        aria-expanded={open}
+        onFocus={handleEnter}
+        onClick={() => setOpen((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setOpen(true);
+          } else if (e.key === "Escape") {
+            setOpen(false);
+            setSearch("");
+          }
+        }}
       >
         <svg
           width={HEX_NODE_WIDTH}
@@ -157,7 +174,7 @@ function OrphanClusterNodeComponent({ data }: NodeProps) {
             />
             <div className="flex flex-col">
               <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                Unconnected
+                No {lensLabel} edges
               </div>
               <div className="text-sm font-semibold text-foreground">
                 {d.count} {d.kindTag.toLowerCase()}

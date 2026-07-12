@@ -83,6 +83,11 @@ func (m *MockGraphDB) WriteEdges(ctx context.Context, edges []ingest.Edge, scanI
 	return len(edges), nil
 }
 
+func (m *MockGraphDB) WriteEdgesForScan(ctx context.Context, edges []ingest.Edge, scanID string) (int, error) {
+	m.record("WriteEdgesForScan", edges, scanID)
+	return m.WriteEdges(ctx, edges, scanID)
+}
+
 func (m *MockGraphDB) UpdateNodeProperties(ctx context.Context, objectID string, props map[string]any) error {
 	m.record("UpdateNodeProperties", objectID, props)
 	return m.UpdateNodeError
@@ -106,7 +111,33 @@ func (m *MockGraphDB) ListNodes(ctx context.Context, kind string, limit int) ([]
 	return m.ListNodesResult, m.ListNodesError
 }
 
+// ListNodesPage returns the canned result only on the first page (offset 0)
+// so callers that page to exhaustion terminate: page one yields the fixture,
+// subsequent offsets yield an empty page.
+func (m *MockGraphDB) ListNodesPage(ctx context.Context, kind string, limit, offset int) ([]ingest.Node, error) {
+	m.record("ListNodesPage", kind, limit, offset)
+	if m.ListNodesError != nil {
+		return nil, m.ListNodesError
+	}
+	if offset > 0 {
+		return nil, nil
+	}
+	return m.ListNodesResult, nil
+}
+
 func (m *MockGraphDB) HasAPOC(ctx context.Context) bool {
 	m.record("HasAPOC")
 	return m.HasAPOCResult
+}
+
+// DeleteGenerationTxError, when set, is returned by DeleteGenerationTx /
+// DeleteByScanIDTx so tests can simulate a transactional delete failure.
+func (m *MockGraphDB) DeleteGenerationTx(ctx context.Context, generationID string) error {
+	m.record("DeleteGenerationTx", generationID)
+	return m.ExecuteWriteError
+}
+
+func (m *MockGraphDB) DeleteByScanIDTx(ctx context.Context, scanID string) error {
+	m.record("DeleteByScanIDTx", scanID)
+	return m.ExecuteWriteError
 }

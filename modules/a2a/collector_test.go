@@ -12,10 +12,45 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/collector"
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	jose "github.com/go-jose/go-jose/v4"
 )
+
+func TestCollect_CoveragePreservesTargetFailure(t *testing.T) {
+	c := NewA2ACollector(WithTimeout(1*time.Second), WithJWKSFetch(false))
+	// Unreachable target (connection refused): the fetch failure must be
+	// preserved as a failed coverage outcome, not silently dropped, so a
+	// downstream reader cannot mistake it for a clean empty scan.
+	data, err := c.Collect(context.Background(), collector.CollectOptions{
+		TargetURL:   "http://127.0.0.1:1/.well-known/agent-card.json",
+		RulesEngine: testA2AEngine(t),
+	})
+	if err != nil {
+		t.Fatalf("Collect returned error: %v", err)
+	}
+	cov := data.Meta.Coverage
+	if cov == nil {
+		t.Fatal("expected coverage manifest, got nil")
+	}
+	if len(cov.Targets) != 1 {
+		t.Fatalf("expected 1 target outcome, got %d", len(cov.Targets))
+	}
+	if cov.Targets[0].Status != ingest.StatusFailed {
+		t.Errorf("target status = %q, want failed", cov.Targets[0].Status)
+	}
+	if cov.Targets[0].Error == "" {
+		t.Error("expected non-empty error on failed target")
+	}
+	if cov.Status != ingest.StatusFailed {
+		t.Errorf("coverage status = %q, want failed", cov.Status)
+	}
+	if len(cov.Rules) == 0 {
+		t.Error("expected rule manifest to be populated on coverage")
+	}
+}
 
 func TestCollector_Name(t *testing.T) {
 	c := NewA2ACollector()

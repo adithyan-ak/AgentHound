@@ -17,8 +17,22 @@ func NewNormalizer() *Normalizer {
 func (n *Normalizer) Normalize(data *ingest.IngestData) []string {
 	var warnings []string
 
+	// Non-null arrays: guarantee the graph collections and per-node kinds are
+	// non-nil slices so every downstream reader (writer, JSON responses, UI)
+	// sees [] rather than null. Absence must be an empty set, never a null the
+	// caller has to defensively coalesce.
+	if data.Graph.Nodes == nil {
+		data.Graph.Nodes = []ingest.Node{}
+	}
+	if data.Graph.Edges == nil {
+		data.Graph.Edges = []ingest.Edge{}
+	}
+
 	for i := range data.Graph.Nodes {
 		node := &data.Graph.Nodes[i]
+		if node.Kinds == nil {
+			node.Kinds = []string{}
+		}
 		if node.Properties == nil {
 			node.Properties = make(map[string]any)
 		}

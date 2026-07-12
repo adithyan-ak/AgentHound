@@ -88,6 +88,34 @@ func TestCleanStaleCompositeEdges_IncludesDerivedCredentialChain(t *testing.T) {
 	}
 }
 
+// TestCleanStaleCompositeEdges_ScanExpandsToConstituentDomains is the F2
+// counterexample: a merged "scan" bundle's stale composite edges are tagged
+// with the constituent collectors (mcp/a2a/config), not a bare "scan", so the
+// cleanup domain must expand to those constituents — otherwise a prior bundle's
+// composite edges are never retired.
+func TestCleanStaleCompositeEdges_ScanExpandsToConstituentDomains(t *testing.T) {
+	db := &graph.MockGraphDB{ExecuteWriteResult: 0}
+	_, err := cleanStaleCompositeEdges(context.Background(), db, "scan-99", []string{"scan"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	calls := db.CallsTo("ExecuteWrite")
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 ExecuteWrite call, got %d", len(calls))
+	}
+	params, _ := calls[0].Args[1].(map[string]any)
+	collectors, _ := params["collectors"].([]string)
+	got := map[string]bool{}
+	for _, c := range collectors {
+		got[c] = true
+	}
+	for _, want := range []string{"mcp", "a2a", "config", "cross_service_credential_chain"} {
+		if !got[want] {
+			t.Errorf("scan cleanup domain must include constituent %q; got %v", want, collectors)
+		}
+	}
+}
+
 func TestRunPostProcessors_RunsAll(t *testing.T) {
 	db := &graph.MockGraphDB{
 		ExecuteWriteResult: 0,

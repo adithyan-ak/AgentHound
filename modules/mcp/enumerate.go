@@ -20,12 +20,21 @@ type ServerResult struct {
 	Nodes []ingest.Node
 	Edges []ingest.Edge
 	Error error
+	// Target is the human-readable server identity (URL for http, name or
+	// command for stdio) used to key coverage outcomes.
+	Target string
+	// Methods records the per-method (tools/list, resources/list, ...)
+	// coverage outcome so a partial enumeration is not read as a clean
+	// empty server. Populated only when the server was reachable.
+	Methods []ingest.MethodOutcome
+	// Truncated is true when any method hit the max-items safety valve.
+	Truncated bool
 }
 
 const defaultMaxItems = 10000
 
 func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, scanID string) *ServerResult {
-	result := &ServerResult{}
+	result := &ServerResult{Target: specTarget(spec)}
 	serverID := computeServerID(spec)
 
 	transport, err := buildTransport(spec, c.insecure)
@@ -66,42 +75,14 @@ func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, sca
 	} else if spec.Transport == "stdio" {
 		hostID := common.HostNodeID("localhost")
 		hostInfo := common.ClassifyHost("localhost")
-		result.Nodes = append(result.Nodes, common.NewNode(hostID, []string{"Host"}, map[string]any{
-			"hostname":   hostInfo.Hostname,
-			"ip":         hostInfo.IP,
-			"is_local":   hostInfo.IsLocal,
-			"is_private": hostInfo.IsPrivate,
-			"is_public":  hostInfo.IsPublic,
-		}))
+		result.Nodes = append(result.Nodes, common.NewNode(hostID, []string{"Host"}, common.HostNodeProps(hostInfo)))
 		result.Edges = append(result.Edges, common.NewEdge(serverID, hostID, "RUNS_ON", "MCPServer", "Host",
 			common.DefaultEdgeProps(scanID)))
 	}
 
 	caps := initResult.Capabilities
 
-	var untrustedTools map[string]string
-	if caps != nil && caps.Tools != nil {
-		tools := c.enumerateTools(ctx, session, serverID, scanID)
-		result.Nodes = append(result.Nodes, tools.nodes...)
-		result.Edges = append(result.Edges, tools.edges...)
-		untrustedTools = tools.sourceTrust
-	}
-
-	if caps != nil && caps.Resources != nil {
-		resources := c.enumerateResources(ctx, session, serverID, scanID)
-		result.Nodes = append(result.Nodes, resources.nodes...)
-		result.Edges = append(result.Edges, resources.edges...)
-
-		templates := c.enumerateResourceTemplates(ctx, session, serverID, scanID)
-		result.Nodes = append(result.Nodes, templates.nodes...)
-		result.Edges = append(result.Edges, templates.edges...)
-	}
-
-	if caps != nil && caps.Prompts != nil {
-		prompts := c.enumeratePrompts(ctx, session, serverID, scanID)
-		result.Nodes = append(result.Nodes, prompts.nodes...)
-		result.Edges = append(result.Edges, prompts.edges...)
-	}
+	untrustedTools := c.enumerateCapabilities(ctx, session, serverID, scanID, caps, result)
 
 	// INGESTS_UNTRUSTED join: a tool tagged with an untrusted source_trust
 	// ingests attacker-controllable content, so it taints the resources on
@@ -114,7 +95,7 @@ func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, sca
 }
 
 func (c *MCPCollector) retryWithSSE(ctx context.Context, spec ServerSpec, scanID, serverID string, origErr error) *ServerResult {
-	result := &ServerResult{}
+	result := &ServerResult{Target: specTarget(spec)}
 
 	sseTransport := buildSSETransport(spec, c.insecure)
 
@@ -147,29 +128,7 @@ func (c *MCPCollector) retryWithSSE(ctx context.Context, spec ServerSpec, scanID
 
 	caps := initResult.Capabilities
 
-	var untrustedTools map[string]string
-	if caps != nil && caps.Tools != nil {
-		tools := c.enumerateTools(ctx, session, serverID, scanID)
-		result.Nodes = append(result.Nodes, tools.nodes...)
-		result.Edges = append(result.Edges, tools.edges...)
-		untrustedTools = tools.sourceTrust
-	}
-
-	if caps != nil && caps.Resources != nil {
-		resources := c.enumerateResources(ctx, session, serverID, scanID)
-		result.Nodes = append(result.Nodes, resources.nodes...)
-		result.Edges = append(result.Edges, resources.edges...)
-
-		templates := c.enumerateResourceTemplates(ctx, session, serverID, scanID)
-		result.Nodes = append(result.Nodes, templates.nodes...)
-		result.Edges = append(result.Edges, templates.edges...)
-	}
-
-	if caps != nil && caps.Prompts != nil {
-		prompts := c.enumeratePrompts(ctx, session, serverID, scanID)
-		result.Nodes = append(result.Nodes, prompts.nodes...)
-		result.Edges = append(result.Edges, prompts.edges...)
-	}
+	untrustedTools := c.enumerateCapabilities(ctx, session, serverID, scanID, caps, result)
 
 	// INGESTS_UNTRUSTED join: a tool tagged with an untrusted source_trust
 	// ingests attacker-controllable content, so it taints the resources on
@@ -181,6 +140,49 @@ func (c *MCPCollector) retryWithSSE(ctx context.Context, spec ServerSpec, scanID
 	return result
 }
 
+// enumerateCapabilities runs each advertised list method against the session,
+// appends nodes/edges to result, and records a coverage MethodOutcome per
+// method so a partial or failed enumeration is preserved rather than read as
+// a clean empty server. It returns the untrusted-tool source-trust map for
+// the INGESTS_UNTRUSTED join.
+func (c *MCPCollector) enumerateCapabilities(ctx context.Context, session *mcpsdk.ClientSession, serverID, scanID string, caps *mcpsdk.ServerCapabilities, result *ServerResult) map[string]string {
+	target := result.Target
+
+	var untrustedTools map[string]string
+	if caps != nil && caps.Tools != nil {
+		tools := c.enumerateTools(ctx, session, serverID, scanID)
+		result.Nodes = append(result.Nodes, tools.nodes...)
+		result.Edges = append(result.Edges, tools.edges...)
+		untrustedTools = tools.sourceTrust
+		result.Methods = append(result.Methods, tools.methodOutcome(target, "tools/list"))
+		result.Truncated = result.Truncated || tools.truncated
+	}
+
+	if caps != nil && caps.Resources != nil {
+		resources := c.enumerateResources(ctx, session, serverID, scanID)
+		result.Nodes = append(result.Nodes, resources.nodes...)
+		result.Edges = append(result.Edges, resources.edges...)
+		result.Methods = append(result.Methods, resources.methodOutcome(target, "resources/list"))
+		result.Truncated = result.Truncated || resources.truncated
+
+		templates := c.enumerateResourceTemplates(ctx, session, serverID, scanID)
+		result.Nodes = append(result.Nodes, templates.nodes...)
+		result.Edges = append(result.Edges, templates.edges...)
+		result.Methods = append(result.Methods, templates.methodOutcome(target, "resources/templates/list"))
+		result.Truncated = result.Truncated || templates.truncated
+	}
+
+	if caps != nil && caps.Prompts != nil {
+		prompts := c.enumeratePrompts(ctx, session, serverID, scanID)
+		result.Nodes = append(result.Nodes, prompts.nodes...)
+		result.Edges = append(result.Edges, prompts.edges...)
+		result.Methods = append(result.Methods, prompts.methodOutcome(target, "prompts/list"))
+		result.Truncated = result.Truncated || prompts.truncated
+	}
+
+	return untrustedTools
+}
+
 type enumResult struct {
 	nodes []ingest.Node
 	edges []ingest.Edge
@@ -189,21 +191,45 @@ type enumResult struct {
 	// untrusted_fileshare). Populated only by enumerateTools; consumed by
 	// the INGESTS_UNTRUSTED join after resources are enumerated.
 	sourceTrust map[string]string
+	// status is the coverage outcome of this method enumeration:
+	// complete (iterator drained), partial (error after some items, or
+	// safety-valve truncation), or failed (error before any item).
+	status ingest.CollectionStatus
+	// err is the enumeration error when status is partial/failed.
+	err error
+	// truncated is true when the max-items safety valve fired.
+	truncated bool
+}
+
+// methodOutcome converts a completed enumResult into a coverage MethodOutcome
+// for the given target/method. A "method not found" error is normalized to
+// StatusComplete-empty: the server advertised the capability but returned
+// nothing enumerable, which is a real (empty) observation, not a failure.
+func (r enumResult) methodOutcome(target, method string) ingest.MethodOutcome {
+	out := ingest.MethodOutcome{Target: target, Method: method, Status: r.status}
+	if r.err != nil {
+		out.Error = r.err.Error()
+	}
+	return out
 }
 
 func (c *MCPCollector) enumerateTools(ctx context.Context, session *mcpsdk.ClientSession, serverID, scanID string) enumResult {
 	var result enumResult
 
+	result.status = ingest.StatusComplete
 	var tools []*mcpsdk.Tool
 	count := 0
 	for tool, err := range session.Tools(ctx, nil) {
 		if err != nil {
 			logEnumerationError("tool", serverID, err)
+			result.status, result.err = enumErrorStatus(err, len(tools))
 			break
 		}
 		count++
 		if count > c.maxItems {
 			log.Printf("[mcp] tool enumeration hit safety valve (%d items) for server %s", c.maxItems, serverID)
+			result.truncated = true
+			result.status = ingest.StatusPartial
 			break
 		}
 		tools = append(tools, tool)
@@ -233,6 +259,11 @@ func (c *MCPCollector) enumerateTools(ctx context.Context, session *mcpsdk.Clien
 		if signals.Annotations != nil {
 			props["annotations"] = signals.Annotations
 		}
+		if len(signals.CapabilityEvidence) > 0 {
+			// Serialized as JSON (like input_schema) so the rule/match/
+			// confidence basis survives as a single scalar node property.
+			props["capability_evidence"] = marshalJSON(signals.CapabilityEvidence)
+		}
 		if keys := inputSchemaKeys(tool.InputSchema); len(keys) > 0 {
 			props["schema_keys"] = keys
 		}
@@ -254,30 +285,37 @@ func (c *MCPCollector) enumerateTools(ctx context.Context, session *mcpsdk.Clien
 
 func (c *MCPCollector) enumerateResources(ctx context.Context, session *mcpsdk.ClientSession, serverID, scanID string) enumResult {
 	var result enumResult
+	result.status = ingest.StatusComplete
 	count := 0
+	emitted := 0
 
 	for res, err := range session.Resources(ctx, nil) {
 		if err != nil {
 			logEnumerationError("resource", serverID, err)
+			result.status, result.err = enumErrorStatus(err, emitted)
 			break
 		}
 		count++
 		if count > c.maxItems {
 			log.Printf("[mcp] resource enumeration hit safety valve (%d items) for server %s", c.maxItems, serverID)
+			result.truncated = true
+			result.status = ingest.StatusPartial
 			break
 		}
+		emitted++
 
 		signals := computeResourceSignals(res.URI, c.engine)
 		resID := ingest.ComputeNodeID("MCPResource", serverID, res.URI)
 
 		result.nodes = append(result.nodes, common.NewNode(resID, []string{"MCPResource"}, map[string]any{
-			"uri":         res.URI,
-			"name":        res.Name,
-			"mime_type":   res.MIMEType,
-			"size":        res.Size,
-			"description": res.Description,
-			"uri_scheme":  signals.URIScheme,
-			"sensitivity": signals.Sensitivity,
+			"uri":               res.URI,
+			"name":              res.Name,
+			"mime_type":         res.MIMEType,
+			"size":              res.Size,
+			"description":       res.Description,
+			"uri_scheme":        signals.URIScheme,
+			"sensitivity":       signals.Sensitivity,
+			"sensitivity_state": string(signals.SensitivityState),
 		}))
 		result.edges = append(result.edges, common.NewEdge(serverID, resID, "PROVIDES_RESOURCE", "MCPServer", "MCPResource",
 			common.NewEdgeProps(scanID, 1.0, 0.2)))
@@ -288,30 +326,37 @@ func (c *MCPCollector) enumerateResources(ctx context.Context, session *mcpsdk.C
 
 func (c *MCPCollector) enumerateResourceTemplates(ctx context.Context, session *mcpsdk.ClientSession, serverID, scanID string) enumResult {
 	var result enumResult
+	result.status = ingest.StatusComplete
 	count := 0
+	emitted := 0
 
 	for tmpl, err := range session.ResourceTemplates(ctx, nil) {
 		if err != nil {
 			logEnumerationError("resource template", serverID, err)
+			result.status, result.err = enumErrorStatus(err, emitted)
 			break
 		}
 		count++
 		if count > c.maxItems {
 			log.Printf("[mcp] resource template enumeration hit safety valve (%d items) for server %s", c.maxItems, serverID)
+			result.truncated = true
+			result.status = ingest.StatusPartial
 			break
 		}
+		emitted++
 
 		signals := computeResourceSignals(tmpl.URITemplate, c.engine)
 		resID := ingest.ComputeNodeID("MCPResource", serverID, tmpl.URITemplate)
 
 		result.nodes = append(result.nodes, common.NewNode(resID, []string{"MCPResource"}, map[string]any{
-			"uri":         tmpl.URITemplate,
-			"name":        tmpl.Name,
-			"mime_type":   tmpl.MIMEType,
-			"description": tmpl.Description,
-			"uri_scheme":  signals.URIScheme,
-			"sensitivity": signals.Sensitivity,
-			"is_template": true,
+			"uri":               tmpl.URITemplate,
+			"name":              tmpl.Name,
+			"mime_type":         tmpl.MIMEType,
+			"description":       tmpl.Description,
+			"uri_scheme":        signals.URIScheme,
+			"sensitivity":       signals.Sensitivity,
+			"sensitivity_state": string(signals.SensitivityState),
+			"is_template":       true,
 		}))
 		result.edges = append(result.edges, common.NewEdge(serverID, resID, "PROVIDES_RESOURCE", "MCPServer", "MCPResource",
 			common.NewEdgeProps(scanID, 1.0, 0.2)))
@@ -322,18 +367,24 @@ func (c *MCPCollector) enumerateResourceTemplates(ctx context.Context, session *
 
 func (c *MCPCollector) enumeratePrompts(ctx context.Context, session *mcpsdk.ClientSession, serverID, scanID string) enumResult {
 	var result enumResult
+	result.status = ingest.StatusComplete
 	count := 0
+	emitted := 0
 
 	for prompt, err := range session.Prompts(ctx, nil) {
 		if err != nil {
 			logEnumerationError("prompt", serverID, err)
+			result.status, result.err = enumErrorStatus(err, emitted)
 			break
 		}
 		count++
 		if count > c.maxItems {
 			log.Printf("[mcp] prompt enumeration hit safety valve (%d items) for server %s", c.maxItems, serverID)
+			result.truncated = true
+			result.status = ingest.StatusPartial
 			break
 		}
+		emitted++
 
 		promptID := ingest.ComputeNodeID("MCPPrompt", serverID, prompt.Name)
 
@@ -353,10 +404,10 @@ func computeServerID(spec ServerSpec) string {
 	if spec.Transport == "http" {
 		return ingest.ComputeMCPServerID("http", spec.URL)
 	}
-	sorted := make([]string, len(spec.Args))
-	copy(sorted, spec.Args)
-	sort.Strings(sorted)
-	return ingest.ComputeMCPServerID("stdio", spec.Command, sorted...)
+	// Args are passed in launch order (identity version 2). The config
+	// collector derives the same order from the same config entry, so both
+	// collectors merge on a shared MCPServer ID.
+	return ingest.ComputeMCPServerID("stdio", spec.Command, spec.Args...)
 }
 
 func buildServerNode(serverID string, spec ServerSpec, initResult *mcpsdk.InitializeResult, engine *rules.Engine) ingest.Node {
@@ -455,13 +506,7 @@ func buildHostNodes(serverID, serverURL, scanID string) hostResult {
 	}
 
 	hostID := common.HostNodeID(hostname)
-	result.nodes = append(result.nodes, common.NewNode(hostID, []string{"Host"}, map[string]any{
-		"hostname":   hostInfo.Hostname,
-		"ip":         hostInfo.IP,
-		"is_local":   hostInfo.IsLocal,
-		"is_private": hostInfo.IsPrivate,
-		"is_public":  hostInfo.IsPublic,
-	}))
+	result.nodes = append(result.nodes, common.NewNode(hostID, []string{"Host"}, common.HostNodeProps(hostInfo)))
 	result.edges = append(result.edges, common.NewEdge(serverID, hostID, "RUNS_ON", "MCPServer", "Host",
 		common.DefaultEdgeProps(scanID)))
 
@@ -522,12 +567,49 @@ func marshalJSON(v any) string {
 }
 
 func logEnumerationError(kind, serverID string, err error) {
-	msg := err.Error()
-	if strings.Contains(msg, "Method not found") || strings.Contains(msg, "method not found") {
+	if isMethodNotFound(err) {
 		slog.Debug("server does not support optional method", "method", methodForKind(kind), "server", serverID)
 		return
 	}
 	log.Printf("[mcp] %s enumeration error for server %s: %v", kind, serverID, err)
+}
+
+// isMethodNotFound reports whether err is a JSON-RPC "method not found" —
+// the server advertised the capability but the optional list method is
+// unimplemented. That is an empty (complete) observation, not a failure.
+func isMethodNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Method not found") || strings.Contains(msg, "method not found")
+}
+
+// enumErrorStatus maps an enumeration error to a coverage status. A
+// method-not-found is complete-empty. Otherwise the enumeration is partial
+// when items were already emitted (present facts are trustworthy) and failed
+// when nothing was observed. The returned error is nil for the
+// method-not-found case so it is not surfaced as a coverage failure.
+func enumErrorStatus(err error, emitted int) (ingest.CollectionStatus, error) {
+	if isMethodNotFound(err) {
+		return ingest.StatusComplete, nil
+	}
+	if emitted > 0 {
+		return ingest.StatusPartial, err
+	}
+	return ingest.StatusFailed, err
+}
+
+// specTarget is the coverage target string for a server spec: the URL for
+// http transport, else the configured name (falling back to the command).
+func specTarget(spec ServerSpec) string {
+	if spec.Transport == "http" && spec.URL != "" {
+		return spec.URL
+	}
+	if spec.Name != "" {
+		return spec.Name
+	}
+	return spec.Command
 }
 
 // methodForKind maps an enumeration kind to the real MCP JSON-RPC method name

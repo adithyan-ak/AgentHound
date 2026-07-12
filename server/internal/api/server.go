@@ -62,13 +62,29 @@ func NewServer(deps ServerDeps) *Server {
 	r.Use(apimw.CORS(deps.CORSOrigins))
 
 	healthH := handlers.NewHealthHandler(deps.Reader, deps.PGPool)
-	graphH := handlers.NewGraphHandler(deps.Reader)
+	graphH := handlers.NewGraphHandler(deps.Reader, deps.ScanStore)
 	ingestH := handlers.NewIngestHandler(deps.Pipeline)
 	queryH := handlers.NewQueryHandler(deps.Reader)
-	analysisH := handlers.NewAnalysisHandler(deps.GraphDB, deps.FindingStore)
-	scanH := handlers.NewScanHandler(deps.ScanStore, deps.GraphDB)
+	analysisH := handlers.NewAnalysisHandler(deps.GraphDB, deps.FindingStore, deps.ScanStore)
+	scanH := handlers.NewScanHandler(deps.ScanStore, deps.FindingStore, deps.GraphDB)
+	// Share the pipeline's coordinator so scan deletion serializes against
+	// ingest: a delete's generation GC never races an in-flight ingest's
+	// untagged writes.
+	if deps.Pipeline != nil {
+		scanH.SetCoordinator(deps.Pipeline.Coordinator())
+	}
+	// Resume any scan delete interrupted mid-flight (crash between the Neo4j
+	// graph mutation and the Postgres row removal). The recovery sweep runs the
+	// same idempotent durable-delete sequence, serialized against ingest, so the
+	// current pointer is only exposed once each interrupted delete is complete.
+	if deps.ScanStore != nil && deps.GraphDB != nil {
+		if err := scanH.RecoverPendingDeletes(context.Background()); err != nil {
+			slog.Warn("scan delete recovery sweep failed", "error", err)
+		}
+	}
 	rulesH := handlers.NewRulesHandler(deps.RulesEngine)
 	triageH := handlers.NewTriageHandler(deps.FindingStore)
+	dashboardH := handlers.NewDashboardHandler(deps.Reader, deps.FindingStore, deps.ScanStore, deps.PGPool)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Open read endpoints. Single-user posture means localhost
@@ -79,6 +95,8 @@ func NewServer(deps ServerDeps) *Server {
 		r.Get("/docs", handlers.HandleOpenAPIDocs)
 
 		r.Get("/graph/stats", graphH.HandleStats)
+		// Lightweight generation-freshness poll (Postgres-only; no graph read).
+		r.Get("/graph/generation", dashboardH.HandleFreshness)
 		r.Get("/graph/search", graphH.HandleSearch)
 		r.Get("/graph/nodes", graphH.HandleListNodes)
 		r.Get("/graph/nodes/{id}", graphH.HandleGetNode)
@@ -90,6 +108,8 @@ func NewServer(deps ServerDeps) *Server {
 		r.Get("/analysis/findings/{id}", analysisH.HandleFindingDetail)
 		r.Get("/analysis/prebuilt", analysisH.HandleListPreBuilt)
 		r.Get("/analysis/prebuilt/{id}", analysisH.HandlePreBuilt)
+		// Server-side dashboard export from the current promoted generation.
+		r.Get("/analysis/export", dashboardH.HandleExport)
 
 		// Triage read is open (same posture as findings reads); the
 		// mutating PUT is gated below.
@@ -115,6 +135,7 @@ func NewServer(deps ServerDeps) *Server {
 			r.Post("/analysis/all-paths", analysisH.HandleAllPaths)
 			r.Post("/analysis/weighted-path", analysisH.HandleWeightedPath)
 			r.Put("/findings/triage/{fingerprint}", triageH.HandleSet)
+			r.Patch("/findings/triage/{fingerprint}", triageH.HandlePatch)
 		})
 	})
 

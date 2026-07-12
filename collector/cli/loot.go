@@ -198,6 +198,14 @@ func buildLootEnvelope(target, kind, engagementID string, res *action.LootResult
 			CollectorVersion: "0.2.0-dev",
 			Timestamp:        time.Now().UTC().Format(time.RFC3339),
 			ScanID:           scanID,
+			SchemaVersion:    ingest.CurrentSchemaVersion,
+			IdentityVersion:  ingest.CurrentIdentityVersion,
+			// Real coverage derived from the observed probe outcomes — NOT a
+			// hand-authored/absent manifest. An empty loot artifact is clean
+			// only when every probe completed; a 401 on /key/list makes the
+			// posture explicitly partial so downstream reads never coalesce it
+			// into an all-clear.
+			Coverage: res.Coverage(kind),
 			Extra: map[string]any{
 				"loot_type":      kind,
 				"loot_target":    target,

@@ -29,6 +29,17 @@ func TestComputeMCPServerIDMatchesAcrossCollectors(t *testing.T) {
 	}
 }
 
+func TestComputeMCPServerIDPreservesArgOrder(t *testing.T) {
+	// Identity version 2: argv order is significant. Two invocations that
+	// differ only in arg order are distinct servers and MUST hash apart.
+	ab := ComputeMCPServerID("stdio", "npx", "a", "b")
+	ba := ComputeMCPServerID("stdio", "npx", "b", "a")
+	if ab == ba {
+		t.Errorf("arg order must be significant: %q and %q produced the same ID %s",
+			[]string{"a", "b"}, []string{"b", "a"}, ab)
+	}
+}
+
 func TestComputeMCPServerIDDoesNotMutateArgs(t *testing.T) {
 	args := []string{"server-b", "server-a", "server-c"}
 	orig := append([]string(nil), args...)

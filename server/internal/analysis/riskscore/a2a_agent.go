@@ -30,8 +30,8 @@ func A2AAgentRiskScore(ctx context.Context, db graph.GraphDB, objectID string) (
 }
 
 func a2aAuthStrength(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
-	cypher := `MATCH (a {objectid: $id}) RETURN a.auth_method AS am`
-	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
+	cypher := `MATCH (a {objectid: $id}) WHERE ($scan_id = '' OR a.scan_id = $scan_id) RETURN a.auth_method AS am`
+	rows, err := db.Query(ctx, cypher, riskParams(ctx, objectID))
 	if err != nil {
 		return 0, err
 	}
@@ -46,10 +46,15 @@ func a2aAuthStrength(ctx context.Context, db graph.GraphDB, objectID string) (fl
 }
 
 func a2aBlastRadius(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
+	// Count both proven reach and the dedicated cross-protocol pivot: an
+	// A2A agent's blast radius includes resources it can reach heuristically
+	// across the A2A→MCP boundary, or the risk score would understate an
+	// externally-reachable agent that has no proven CAN_REACH edge.
 	cypher := `
-MATCH (a {objectid: $id})-[:CAN_REACH]->(r:MCPResource)
+MATCH (a {objectid: $id})-[:CAN_REACH|CAN_REACH_CROSS_PROTOCOL]->(r:MCPResource)
+WHERE ($scan_id = '' OR a.scan_id = $scan_id)
 RETURN count(DISTINCT r) AS cnt`
-	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
+	rows, err := db.Query(ctx, cypher, riskParams(ctx, objectID))
 	if err != nil {
 		return 0, err
 	}
@@ -63,8 +68,9 @@ RETURN count(DISTINCT r) AS cnt`
 func a2aDelegationSurface(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
 	cypher := `
 MATCH (a {objectid: $id})-[:DELEGATES_TO]->(peer:A2AAgent)
+WHERE ($scan_id = '' OR a.scan_id = $scan_id)
 RETURN count(DISTINCT peer) AS cnt`
-	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
+	rows, err := db.Query(ctx, cypher, riskParams(ctx, objectID))
 	if err != nil {
 		return 0, err
 	}
@@ -78,8 +84,9 @@ RETURN count(DISTINCT peer) AS cnt`
 func a2aImpersonationRisk(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
 	cypher := `
 MATCH (a {objectid: $id})-[:CAN_IMPERSONATE]-(peer:A2AAgent)
+WHERE ($scan_id = '' OR a.scan_id = $scan_id)
 RETURN count(DISTINCT peer) AS cnt`
-	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
+	rows, err := db.Query(ctx, cypher, riskParams(ctx, objectID))
 	if err != nil {
 		return 0, err
 	}
