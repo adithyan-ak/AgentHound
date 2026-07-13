@@ -144,6 +144,51 @@ trust path and is not classified as anonymous network access.
 
 **Risk:** Poisoned instructions can override agent safety behavior, cause data exfiltration, or grant unauthorized access.
 
+### Canonical instruction shadow
+
+Injection detection over config instruction files runs a second, canonicalized
+pass so bounded Unicode obfuscation cannot slip a phrase past the raw regex. The
+canonical shadow is deliberately narrow:
+
+- **Eligibility gate.** The shadow pass fires only for a rule that emits the
+  `has_injection_patterns` finding type, has scope `collector: config` (or
+  `all`), and lists `instruction.content` in `scope.targets`. It is only
+  requested for the `config` collector's `instruction.content` field; any other
+  collector, target, or finding type evaluates the raw view alone.
+- **Raw first, raw order preserved.** Every eligible rule is always evaluated
+  against the raw input first, and its raw matches are returned in the exact
+  matcher-selection order, unchanged. If a raw match already exists the shadow
+  cannot displace or reorder it.
+- **Accepted shadow suffix only.** The canonical pass runs only when the shadow
+  text actually differs from the raw input, and it can only *append* matches the
+  raw pass did not already find. Those shadow-only matches are stable-sorted by
+  rule ID, then full raw start offset, then full raw end offset, then matcher
+  ordinal, and appended after the raw matches; a raw match always wins a dedup
+  contest against an identical shadow span.
+- **Exact transforms.** The frozen V1 pipeline runs once, with no recursion:
+  NFKC normalization, enumerated control-character removal and whitespace
+  mapping, restricted mixed-script confusable folding, then bounded
+  letter-spacing collapse. Letter-spacing collapse only fixes a maximal run of
+  4..64 single ASCII letters separated by exactly one ASCII space (for example
+  `i g n o r e` → `ignore`). An ASCII-only input takes an identity fast path and
+  is never transformed.
+- **Exclusions.** Leetspeak is never decoded (`1gn0re` stays `1gn0re`),
+  punctuation is never stripped or reordered (`ignore, previous` keeps its
+  comma), and letter-spacing runs of 1..3 or 65+ letters — or any run
+  interrupted by two spaces, a newline, a digit, punctuation, a non-ASCII
+  letter, or invalid UTF-8 — are left wholly unchanged.
+- **Full raw-span projection and evidence cap.** Each shadow match is projected
+  back onto the full raw byte range that produced it, so the finding's raw
+  offset and the dedup identity always reference original bytes. Raw input is
+  capped at 1 MiB before evaluation and the emitted evidence text is capped at
+  100 bytes from the match offset; the full raw span (not the capped evidence)
+  is what drives dedup.
+
+**Risk:** The canonical shadow catches bounded homoglyph, zero-width, and
+letter-spacing obfuscation of override phrases without decoding leetspeak or
+rewriting punctuation, so it adds recall without inventing matches the raw text
+does not support.
+
 ## Hardcoded secrets (MCP03, ASI04)
 
 **What:** High-entropy strings in MCP server configuration that are likely hardcoded API keys or secrets.

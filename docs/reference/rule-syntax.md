@@ -126,6 +126,34 @@ matcher:
       pattern: "\\$\\{.*\\}"
 ```
 
+### Canonical instruction shadow eligibility
+
+A custom detection rule opts into the config instruction canonical shadow pass
+automatically — there is no flag. A rule is eligible when all three hold:
+
+- `emit.finding_type` is `has_injection_patterns`;
+- `scope.collector` is `config` or `all`;
+- `scope.targets` includes `instruction.content`.
+
+Eligibility is a per-rule property, not per-target: a rule that also targets
+other fields (for example both `tool.description` and `instruction.content`)
+is still eligible, and the shadow pass applies whenever it evaluates the
+`config` collector's `instruction.content` field. The canonical transforms and
+exclusions are the same frozen V1 set documented under
+[Canonical instruction shadow](detection-rules.md#canonical-instruction-shadow).
+
+### `RunTests` parity
+
+`agenthound rules test` (and the builtin fixture guard) evaluate each inline
+`tests:` input through the exact same code path used at scan time: the raw view
+is matched first, and only when the rule is canonicalization-eligible and the
+canonical text differs is the shadow pass consulted. A single test input is
+evaluated once per rule regardless of how many `scope.targets` the rule
+declares, so an eligible multi-target rule's positive fixtures pass on either
+the raw or the shadow match, and its negative fixtures must fail on both.
+Fixtures for eligible rules therefore lock the same raw-first ordering and
+bounded-transform behavior that production scanning uses.
+
 ---
 
 ## Fingerprint Rules
