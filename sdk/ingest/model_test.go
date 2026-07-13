@@ -239,7 +239,7 @@ func TestRawEdgeKindsComplete(t *testing.T) {
 	}
 }
 
-// TestCampaignEdgeKindsRegistered guards the v0.6 campaign-runner additions.
+// TestCampaignEdgeKindsRegistered guards the campaign-runner additions.
 // The differential credential-reach scenario emits CREDENTIAL_REACH_VERIFIED
 // (Credential→MCPResource) as raw supporting evidence that upgrades the existing
 // CAN_REACH finding, and PUBLIC_ACCESS_OBSERVED (MCPServer→MCPResource) as an
@@ -249,13 +249,13 @@ func TestRawEdgeKindsComplete(t *testing.T) {
 func TestCampaignEdgeKindsRegistered(t *testing.T) {
 	for _, kind := range []string{"CREDENTIAL_REACH_VERIFIED", "PUBLIC_ACCESS_OBSERVED"} {
 		if !RawEdgeKinds[kind] {
-			t.Errorf("RawEdgeKinds missing v0.6 edge %q (validator gate rejects ingest)", kind)
+			t.Errorf("RawEdgeKinds missing campaign edge %q (validator gate rejects ingest)", kind)
 		}
 		if !AllowedEdgeKinds[kind] {
-			t.Errorf("AllowedEdgeKinds missing v0.6 edge %q", kind)
+			t.Errorf("AllowedEdgeKinds missing campaign edge %q", kind)
 		}
 		if _, ok := EdgeKindEndpoints[kind]; !ok {
-			t.Errorf("EdgeKindEndpoints missing v0.6 edge %q", kind)
+			t.Errorf("EdgeKindEndpoints missing campaign edge %q", kind)
 		}
 	}
 	if ep := EdgeKindEndpoints["CREDENTIAL_REACH_VERIFIED"]; len(ep.SourceKinds) == 0 ||

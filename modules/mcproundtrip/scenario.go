@@ -1,4 +1,4 @@
-// Package mcproundtrip implements the v0.6 reversible mcppoison round-trip
+// Package mcproundtrip implements the reversible mcppoison round-trip
 // campaign scenario — a STANDALONE target-mutation validation.
 //
 // It reuses modules/mcppoison (Poison + the conflict-aware, no-blind-write

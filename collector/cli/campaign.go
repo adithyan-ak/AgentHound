@@ -1,4 +1,4 @@
-// Package cli — campaign.go is the v0.6 entry point for the predicted-to-verified
+// Package cli — campaign.go is the entry point for the predicted-to-verified
 // campaign runner.
 //
 // CLI shape:
@@ -57,7 +57,7 @@ var campaignCmd = &cobra.Command{
 relationship with observed evidence, or validates a reversible target
 mutation end to end.
 
-v0.6 ships two scenarios:
+The runner ships two scenarios:
 
 cred-reach — a READ-ONLY differential credential-reach oracle. Given a
 server-exported witness for a predicted CAN_REACH / credential-chain

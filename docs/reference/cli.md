@@ -437,9 +437,9 @@ agenthound extract <source-node-id> --type embedding-invert \
 
 ### `agenthound campaign`
 
-Run an ordered, evidence-producing campaign scenario against a known service (v0.6). A campaign scenario verifies a *predicted* graph relationship with *observed* evidence, using a stable witness exported from the server (`agenthound-server witness`).
+Run an ordered, evidence-producing campaign scenario against a known service. A campaign scenario verifies a *predicted* graph relationship with *observed* evidence, using a stable witness exported from the server (`agenthound-server witness`).
 
-v0.6 ships two scenarios. The first is **`cred-reach`** — a READ-ONLY differential credential-reach oracle. Given a witness for a predicted credential-gated `CAN_REACH` finding, it reads the exact predicted MCP resource once **without** authentication (control) and once **with** a hash-matched credential (authed), then classifies the pair:
+The runner ships two scenarios. The first is **`cred-reach`** — a READ-ONLY differential credential-reach oracle. Given a witness for a predicted credential-gated `CAN_REACH` finding, it reads the exact predicted MCP resource once **without** authentication (control) and once **with** a hash-matched credential (authed), then classifies the pair:
 
 | Control (unauth) | Authed | Outcome | Emits |
 |------------------|--------|---------|-------|
@@ -664,7 +664,7 @@ agenthound-server query --findings --fail-on critical --format json
 
 ### `agenthound-server witness`
 
-Export a stable, sanitized **witness** for a predicted credential-gated `CAN_REACH` finding so the collector-side `agenthound campaign` runner can verify it (v0.6).
+Export a stable, sanitized **witness** for a predicted credential-gated `CAN_REACH` finding so the collector-side `agenthound campaign` runner can verify it.
 
 The witness is a content-addressed tuple — credential/server/resource node IDs, the credential `value_hash` + `merge_key`, the predicted edge kind, the ordered path topology, and the publication/schema revision. It contains **no** Neo4j relationship IDs (composite edges are recreated every epoch), **no** arbitrary node properties, and **no** secrets. It is built under a guarded read of the published projection and stamped with that projection's revision.
 

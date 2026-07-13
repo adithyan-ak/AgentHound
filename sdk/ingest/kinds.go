@@ -121,7 +121,7 @@ func ConcreteNodeKind(kinds []string) string {
 // Ollama Looter; EXTRACTED_FROM is emitted by the v0.5 embedding-inversion
 // Extractor (AIModel → ExtractedTrainingSignal); INGESTS_UNTRUSTED is emitted by
 // the MCP Collector for tools whose rule-derived source_trust is untrusted;
-// CREDENTIAL_REACH_VERIFIED and PUBLIC_ACCESS_OBSERVED are emitted by the v0.6
+// CREDENTIAL_REACH_VERIFIED and PUBLIC_ACCESS_OBSERVED are emitted by the
 // campaign runner's differential credential-reach scenario as raw supporting
 // evidence (Credential→MCPResource and MCPServer→MCPResource respectively).
 var RawEdgeKinds = map[string]bool{
@@ -227,7 +227,7 @@ var EdgeKindEndpoints = map[string]EdgeEndpoints{
 	"PROVIDES_MODEL":        {SourceKinds: []string{"OllamaInstance"}, TargetKinds: []string{"AIModel"}},
 	"EXTRACTED_FROM":        {SourceKinds: []string{"AIModel"}, TargetKinds: []string{"ExtractedTrainingSignal"}},
 	"INGESTS_UNTRUSTED":     {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPResource"}},
-	// v0.6 campaign-runner verification evidence. CREDENTIAL_REACH_VERIFIED
+	// campaign-runner verification evidence. CREDENTIAL_REACH_VERIFIED
 	// records a differentially-verified credential-gated read of an MCP
 	// resource (Credential→MCPResource, both real nodes). PUBLIC_ACCESS_OBSERVED
 	// records an anonymous read of a resource (MCPServer→MCPResource) — a fact,

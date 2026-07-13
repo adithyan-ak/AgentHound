@@ -153,7 +153,7 @@ agenthound extract <ai-model-node-id> \
 
 ## Campaign runner: verify and validate
 
-`agenthound campaign <host> --scenario <id>` runs an ordered, evidence-producing scenario against a known service. Like `poison`/`extract` it is gated: `--commit` is off by default (dry-run plans only), and the first invocation prompts for `AUTHORIZED` (sentinel `~/.agenthound/campaign-acknowledged`). v0.6 ships two scenarios.
+`agenthound campaign <host> --scenario <id>` runs an ordered, evidence-producing scenario against a known service. Like `poison`/`extract` it is gated: `--commit` is off by default (dry-run plans only), and the first invocation prompts for `AUTHORIZED` (sentinel `~/.agenthound/campaign-acknowledged`). The runner ships two scenarios.
 
 ### `cred-reach` — read-only differential verification
 
