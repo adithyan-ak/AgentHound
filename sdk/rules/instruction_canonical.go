@@ -2,6 +2,7 @@ package rules
 
 import (
 	"sort"
+	"unicode"
 	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
@@ -460,10 +461,281 @@ func canonicalizeControlsAndWhitespace(view canonicalView) canonicalView {
 	return b.view()
 }
 
+// instructionConfusables is the exact frozen V1 map of single-letter Greek and
+// Cyrillic confusables to their ASCII Latin fold targets. Only these runes are
+// ever folded, and only inside a mixed Latin/confusable word. The keys are
+// written as explicit code points because their glyphs are indistinguishable
+// from the ASCII targets. A zero target byte means "not mapped".
+var instructionConfusables = map[rune]byte{
+	// Greek uppercase.
+	'\u0391': 'A', '\u0392': 'B', '\u0395': 'E', '\u0396': 'Z', '\u0397': 'H',
+	'\u0399': 'I', '\u039A': 'K', '\u039C': 'M', '\u039D': 'N', '\u039F': 'O',
+	'\u03A1': 'P', '\u03A4': 'T', '\u03A5': 'Y', '\u03A7': 'X',
+	// Greek lowercase.
+	'\u03B9': 'i', '\u03BF': 'o', '\u03C1': 'p', '\u03C7': 'x',
+	// Cyrillic uppercase.
+	'\u0410': 'A', '\u0412': 'B', '\u0415': 'E', '\u041A': 'K', '\u041C': 'M',
+	'\u041D': 'H', '\u041E': 'O', '\u0420': 'P', '\u0421': 'C', '\u0422': 'T',
+	'\u0423': 'Y', '\u0425': 'X', '\u0406': 'I', '\u0408': 'J',
+	// Cyrillic lowercase.
+	'\u0430': 'a', '\u0435': 'e', '\u043E': 'o', '\u0440': 'p', '\u0441': 'c',
+	'\u0443': 'y', '\u0445': 'x', '\u0456': 'i', '\u0458': 'j', '\u0455': 's',
+}
+
+// asciiLatinRune reports whether r is an ASCII Latin letter.
+func asciiLatinRune(r rune) bool {
+	return r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z'
+}
+
+// foldInstructionConfusables folds the exact restricted set of Greek/Cyrillic
+// confusables to ASCII inside mixed Latin words. It scans maximal Unicode-letter
+// runs once (Pass 1) and folds a run only when it holds at least one ASCII Latin
+// letter, at least one explicitly mapped confusable, and no other rune;
+// multiple explicit folds in one word are allowed. Pure Greek/Cyrillic,
+// accented/other-script letters, and unmapped runes are left unchanged.
+//
+// Pass 2 rebuilds the view once with a forward span cursor (O(S+N)). Mapped
+// confusables are NFKC-stable, so they always live in affine spans and fold to a
+// single ASCII byte mapped back to the confusable rune's exact raw bytes; opaque
+// and non-affine spans (e.g. NFKC decompositions) are copied verbatim.
+func foldInstructionConfusables(view canonicalView) canonicalView {
+	text := view.text
+	type runRange struct{ start, end int }
+	var eligible []runRange
+	for i := 0; i < len(text); {
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if !unicode.IsLetter(r) {
+			i += size
+			continue
+		}
+		start := i
+		hasASCII := false
+		hasConfusable := false
+		onlyMapped := true
+		j := i
+		for j < len(text) {
+			rr, sz := utf8.DecodeRuneInString(text[j:])
+			if !unicode.IsLetter(rr) {
+				break
+			}
+			switch {
+			case asciiLatinRune(rr):
+				hasASCII = true
+			case instructionConfusables[rr] != 0:
+				hasConfusable = true
+			default:
+				onlyMapped = false
+			}
+			j += sz
+		}
+		if hasASCII && hasConfusable && onlyMapped {
+			eligible = append(eligible, runRange{start: start, end: j})
+		}
+		i = j
+	}
+	if len(eligible) == 0 {
+		return view
+	}
+
+	var b canonicalBuilder
+	ri := 0
+	for _, span := range view.spans {
+		if span.opaque || !span.affine {
+			if !b.appendSegment(
+				[]byte(text[span.shadowStart:span.shadowEnd]),
+				span.rawStart,
+				span.rawEnd,
+				span.affine,
+				span.opaque,
+			) {
+				return b.view()
+			}
+			continue
+		}
+		keepStart := span.shadowStart
+		for o := span.shadowStart; o < span.shadowEnd; {
+			r, size := utf8.DecodeRuneInString(text[o:])
+			for ri < len(eligible) && eligible[ri].end <= o {
+				ri++
+			}
+			inRun := ri < len(eligible) &&
+				o >= eligible[ri].start && o < eligible[ri].end
+			target := instructionConfusables[r]
+			if inRun && target != 0 {
+				if o > keepStart {
+					if !b.appendSegment(
+						[]byte(text[keepStart:o]),
+						span.rawStart+keepStart-span.shadowStart,
+						span.rawStart+o-span.shadowStart,
+						true,
+						false,
+					) {
+						return b.view()
+					}
+				}
+				rawStart := span.rawStart + o - span.shadowStart
+				if !b.appendSegment(
+					[]byte{target},
+					rawStart,
+					rawStart+size,
+					false,
+					false,
+				) {
+					return b.view()
+				}
+				o += size
+				keepStart = o
+				continue
+			}
+			o += size
+		}
+		if span.shadowEnd > keepStart {
+			if !b.appendSegment(
+				[]byte(text[keepStart:span.shadowEnd]),
+				span.rawStart+keepStart-span.shadowStart,
+				span.rawEnd,
+				true,
+				false,
+			) {
+				return b.view()
+			}
+		}
+	}
+	return b.view()
+}
+
+// collapseInstructionLetterSpacing collapses bounded letter-spacing obfuscation.
+// A candidate is a maximal sequence of single ASCII letters separated by exactly
+// one canonical ASCII space; only candidates of 4..64 letters are collapsed.
+// Runs of 1..3 and 65+ are left wholly unchanged, and two spaces, a newline,
+// punctuation, a digit, a non-ASCII letter, or invalid UTF-8 terminate a run.
+// Because the whole maximal run is scanned before any decision, a run that
+// contains a non-ASCII letter (e.g. an un-folded isolated Cyrillic rune) is
+// never collapsed, so "\u0456 g n o r e" stays unchanged.
+//
+// Pass 1 records the separator-space offsets to delete; Pass 2 rebuilds the view
+// once with a forward span cursor (O(S+N)), deleting only those separator spaces
+// so the removed spaces become raw gaps that projection bridges back to the
+// original spaced slice.
+func collapseInstructionLetterSpacing(view canonicalView) canonicalView {
+	text := view.text
+	var deletes []int
+	for i := 0; i < len(text); {
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if !unicode.IsLetter(r) {
+			i += size
+			continue
+		}
+		letters := 1
+		allASCII := asciiLatinRune(r)
+		mark := len(deletes)
+		j := i + size
+		for j+1 < len(text) && text[j] == ' ' {
+			r2, sz2 := utf8.DecodeRuneInString(text[j+1:])
+			if !unicode.IsLetter(r2) {
+				break
+			}
+			deletes = append(deletes, j)
+			letters++
+			if !asciiLatinRune(r2) {
+				allASCII = false
+			}
+			j += 1 + sz2
+		}
+		if !allASCII || letters < 4 || letters > 64 {
+			deletes = deletes[:mark]
+		}
+		i = j
+	}
+	if len(deletes) == 0 {
+		return view
+	}
+
+	var b canonicalBuilder
+	di := 0
+	for _, span := range view.spans {
+		if span.opaque {
+			if !b.appendSegment(
+				[]byte(text[span.shadowStart:span.shadowEnd]),
+				span.rawStart,
+				span.rawEnd,
+				span.affine,
+				true,
+			) {
+				return b.view()
+			}
+			continue
+		}
+		if !span.affine {
+			for di < len(deletes) && deletes[di] < span.shadowStart {
+				di++
+			}
+			if di < len(deletes) && deletes[di] == span.shadowStart &&
+				span.shadowEnd-span.shadowStart == 1 {
+				if !b.appendSegment(nil, span.rawStart, span.rawEnd, false, false) {
+					return b.view()
+				}
+				di++
+			} else if !b.appendSegment(
+				[]byte(text[span.shadowStart:span.shadowEnd]),
+				span.rawStart,
+				span.rawEnd,
+				false,
+				false,
+			) {
+				return b.view()
+			}
+			continue
+		}
+		keepStart := span.shadowStart
+		for o := span.shadowStart; o < span.shadowEnd; {
+			_, size := utf8.DecodeRuneInString(text[o:])
+			for di < len(deletes) && deletes[di] < o {
+				di++
+			}
+			if di < len(deletes) && deletes[di] == o {
+				if o > keepStart {
+					if !b.appendSegment(
+						[]byte(text[keepStart:o]),
+						span.rawStart+keepStart-span.shadowStart,
+						span.rawStart+o-span.shadowStart,
+						true,
+						false,
+					) {
+						return b.view()
+					}
+				}
+				rawStart := span.rawStart + o - span.shadowStart
+				if !b.appendSegment(nil, rawStart, rawStart+size, false, false) {
+					return b.view()
+				}
+				o += size
+				keepStart = o
+				di++
+				continue
+			}
+			o += size
+		}
+		if span.shadowEnd > keepStart {
+			if !b.appendSegment(
+				[]byte(text[keepStart:span.shadowEnd]),
+				span.rawStart+keepStart-span.shadowStart,
+				span.rawEnd,
+				true,
+				false,
+			) {
+				return b.view()
+			}
+		}
+	}
+	return b.view()
+}
+
 // canonicalizeInstruction builds the bounded canonical shadow of raw. It caps
-// the raw input, takes the ASCII identity fast path when possible, and
-// otherwise runs the V1 transform pipeline: NFKC, then enumerated control
-// removal and whitespace mapping.
+// the raw input, takes the ASCII identity fast path when possible, and otherwise
+// runs the frozen V1 transform pipeline exactly once with no recursion: NFKC,
+// enumerated control removal and whitespace mapping, restricted mixed-script
+// confusable folding, then bounded letter-spacing collapse.
 func canonicalizeInstruction(raw string) canonicalView {
 	raw = truncateRuleInput(raw)
 	if asciiInstructionIdentity(raw) {
@@ -471,6 +743,8 @@ func canonicalizeInstruction(raw string) canonicalView {
 	}
 	view := canonicalizeNFKC(raw)
 	view = canonicalizeControlsAndWhitespace(view)
+	view = foldInstructionConfusables(view)
+	view = collapseInstructionLetterSpacing(view)
 	view.changed = view.text != raw
 	return view
 }
