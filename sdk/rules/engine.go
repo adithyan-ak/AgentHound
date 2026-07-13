@@ -22,7 +22,7 @@ type Engine struct {
 
 type compiledRule struct {
 	rule    Rule
-	matcher CompiledMatcher
+	matcher spanMatcher
 }
 
 type LoadOptions struct {
