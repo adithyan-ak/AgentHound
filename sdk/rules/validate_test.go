@@ -332,6 +332,56 @@ func TestValidateRule_AllValidSeverities(t *testing.T) {
 	}
 }
 
+func TestRunTestsInstructionCanonicalizationParity(t *testing.T) {
+	eligible := Rule{
+		ID:       "parity-eligible-rule",
+		Name:     "Parity eligible rule",
+		Version:  1,
+		Enabled:  true,
+		Severity: "high",
+		Scope:    Scope{Collector: "config", Targets: []string{"instruction.content"}},
+		Matcher: MatcherSpec{
+			Type:            "regex",
+			Pattern:         `\bignore\s+previous\s+instructions\b`,
+			CaseInsensitive: true,
+		},
+		Emit: EmitConfig{FindingType: "has_injection_patterns"},
+		Tests: []TestCase{
+			{Input: "ｉｇｎｏｒｅ\u200b previous instructions", ShouldMatch: true, Description: "nfkc + zero-width"},
+			{Input: "i g n o r e  p r e v i o u s  i n s t r u c t i o n s", ShouldMatch: true, Description: "letter spacing"},
+			{Input: "1gn0re previous instructions", ShouldMatch: false, Description: "leetspeak excluded"},
+			{Input: "\"ignore, previous instructions\"", ShouldMatch: false, Description: "punctuation not stripped"},
+		},
+	}
+	if failures := RunTests(eligible); len(failures) != 0 {
+		t.Fatalf("eligible parity failures: %+v", failures)
+	}
+
+	// A non-eligible rule (non-config collector) stays raw-only: canonical-only
+	// obfuscation must not match, but raw text still does.
+	rawOnly := Rule{
+		ID:       "parity-raw-only-rule",
+		Name:     "Parity raw-only rule",
+		Version:  1,
+		Enabled:  true,
+		Severity: "medium",
+		Scope:    Scope{Collector: "mcp", Targets: []string{"tool.description"}},
+		Matcher: MatcherSpec{
+			Type:            "regex",
+			Pattern:         `\bignore\s+previous\s+instructions\b`,
+			CaseInsensitive: true,
+		},
+		Emit: EmitConfig{FindingType: "has_injection_patterns"},
+		Tests: []TestCase{
+			{Input: "ｉｇｎｏｒｅ\u200b previous instructions", ShouldMatch: false, Description: "no canonical for non-config collector"},
+			{Input: "ignore previous instructions", ShouldMatch: true, Description: "raw still matches"},
+		},
+	}
+	if failures := RunTests(rawOnly); len(failures) != 0 {
+		t.Fatalf("raw-only parity failures: %+v", failures)
+	}
+}
+
 func hasField(errs []ValidationError, field string) bool {
 	for _, e := range errs {
 		if e.Field == field {

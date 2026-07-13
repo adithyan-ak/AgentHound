@@ -156,6 +156,31 @@ func validateMatcher(prefix string, m MatcherSpec, nested bool) []ValidationErro
 	return errs
 }
 
+// runTestCase mirrors the engine's dual-view evaluation for a single rule so
+// custom-rule authoring (RunTests) matches runtime behavior exactly: it shares
+// truncateRuleInput, evaluateRuleRaw, and evaluateRuleShadow. Canonical shadow
+// evaluation applies only to rules eligible for config instruction
+// canonicalization and only on a changed canonical view.
+func runTestCase(
+	rule Rule,
+	matcher spanMatcher,
+	input string,
+) bool {
+	raw := truncateRuleInput(input)
+	cr := compiledRule{rule: rule, matcher: matcher}
+	rawMatches := evaluateRuleRaw(cr, raw)
+	if len(rawMatches) > 0 {
+		return true
+	}
+	if ruleUsesInstructionCanonicalization(rule) {
+		view := canonicalizeInstruction(raw)
+		if view.changed {
+			return len(evaluateRuleShadow(cr, raw, view)) > 0
+		}
+	}
+	return false
+}
+
 type TestFailure struct {
 	TestIndex   int
 	Description string
@@ -182,8 +207,7 @@ func RunTests(r Rule) []TestFailure {
 
 	var failures []TestFailure
 	for i, tc := range r.Tests {
-		results := m.Match(tc.Input)
-		got := len(results) > 0
+		got := runTestCase(r, m, tc.Input)
 		if got != tc.ShouldMatch {
 			failures = append(failures, TestFailure{
 				TestIndex:   i,

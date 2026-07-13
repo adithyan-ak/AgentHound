@@ -138,46 +138,218 @@ func (e *Engine) LoadFailures() []string {
 	return failures
 }
 
-func (e *Engine) Evaluate(collector, target, text string) []Match {
-	if len(text) > maxInputBytes {
-		text = text[:maxInputBytes]
-	}
+// evaluatedMatch is a public Match plus the full (uncapped) raw span identity
+// and matcher ordinal used for dedup and deterministic shadow ordering.
+type evaluatedMatch struct {
+	match    Match
+	rawStart int
+	rawEnd   int
+	ordinal  int
+}
 
+// matchIdentity is the full-span identity used to deduplicate shadow matches
+// against raw matches. It is computed from the full raw start/end (before the
+// evidence cap), so the 100-byte evidence truncation never affects dedup.
+type matchIdentity struct {
+	ruleID   string
+	rawStart int
+	rawEnd   int
+}
+
+// resolveCandidates returns the scope-resolved candidate rules for a request in
+// the exact existing two-key lookup/dedup order (collector then all).
+func (e *Engine) resolveCandidates(
+	collector string,
+	target string,
+) []compiledRule {
 	var candidates []compiledRule
 	seen := make(map[string]bool)
-
-	for _, key := range []string{collector + ":" + target, "all:" + target} {
+	for _, key := range []string{
+		collector + ":" + target,
+		"all:" + target,
+	} {
 		for _, cr := range e.byScope[key] {
-			if !seen[cr.rule.ID] {
-				candidates = append(candidates, cr)
-				seen[cr.rule.ID] = true
-			}
-		}
-	}
-
-	var matches []Match
-	for _, cr := range candidates {
-		results := cr.matcher.Match(text)
-		for _, r := range results {
-			if !r.Matched {
+			if seen[cr.rule.ID] {
 				continue
 			}
-			matchText := r.Text
-			if len(matchText) > 100 {
-				matchText = matchText[:100]
-			}
-			matches = append(matches, Match{
-				RuleID:   cr.rule.ID,
-				RuleName: cr.rule.Name,
-				Severity: cr.rule.Severity,
-				Labels:   cr.rule.Emit.Labels,
-				Offset:   r.Offset,
-				Text:     matchText,
-				Emit:     cr.rule.Emit,
-			})
+			seen[cr.rule.ID] = true
+			candidates = append(candidates, cr)
 		}
 	}
-	return matches
+	return candidates
+}
+
+// evaluatedRuleMatch builds one evaluatedMatch, recording the full raw span for
+// dedup and capping only the public evidence text at maxEvidenceBytes.
+func evaluatedRuleMatch(
+	rule Rule,
+	raw string,
+	rawStart int,
+	rawEnd int,
+	ordinal int,
+) evaluatedMatch {
+	evidenceEnd := rawEnd
+	if evidenceEnd-rawStart > maxEvidenceBytes {
+		evidenceEnd = rawStart + maxEvidenceBytes
+	}
+	return evaluatedMatch{
+		match: Match{
+			RuleID:   rule.ID,
+			RuleName: rule.Name,
+			Severity: rule.Severity,
+			Labels:   rule.Emit.Labels,
+			Offset:   rawStart,
+			Text:     raw[rawStart:evidenceEnd],
+			Emit:     rule.Emit,
+		},
+		rawStart: rawStart,
+		rawEnd:   rawEnd,
+		ordinal:  ordinal,
+	}
+}
+
+// evaluateRuleRaw evaluates one rule against the raw view, preserving the exact
+// matcher selection/order and recording full raw spans before the evidence cap.
+func evaluateRuleRaw(
+	cr compiledRule,
+	raw string,
+) []evaluatedMatch {
+	rawSpans := cr.matcher.matchSpans(raw)
+	rawMatches := make([]evaluatedMatch, 0, len(rawSpans))
+	for ordinal, span := range rawSpans {
+		rawMatches = append(rawMatches, evaluatedRuleMatch(
+			cr.rule,
+			raw,
+			span.start,
+			span.end,
+			ordinal,
+		))
+	}
+	return rawMatches
+}
+
+// evaluateRuleShadow evaluates one eligible rule against the canonical view,
+// projecting each full canonical span back to raw and building raw evidence. It
+// is called only for a changed view after every candidate's raw pass completed.
+func evaluateRuleShadow(
+	cr compiledRule,
+	raw string,
+	view canonicalView,
+) []evaluatedMatch {
+	if cr.rule.Emit.FindingType != "has_injection_patterns" {
+		return nil
+	}
+	shadowSpans := cr.matcher.matchSpans(view.text)
+	shadowMatches := make([]evaluatedMatch, 0, len(shadowSpans))
+	for ordinal, span := range shadowSpans {
+		rawStart, rawEnd, ok := view.projectRange(
+			span.start,
+			span.end,
+		)
+		if !ok {
+			continue
+		}
+		shadowMatches = append(shadowMatches, evaluatedRuleMatch(
+			cr.rule,
+			raw,
+			rawStart,
+			rawEnd,
+			ordinal,
+		))
+	}
+	return shadowMatches
+}
+
+// mergeInstructionMatches returns the raw matches unchanged and in exact order,
+// then appends only shadow matches whose full-span identity is not already
+// present. Shadow matches are stable-sorted by rule ID, full raw start/end, and
+// matcher ordinal before appending; raw always wins a dedup contest.
+func mergeInstructionMatches(
+	rawMatches []evaluatedMatch,
+	shadowMatches []evaluatedMatch,
+) []evaluatedMatch {
+	merged := append([]evaluatedMatch(nil), rawMatches...)
+	seen := make(map[matchIdentity]struct{}, len(rawMatches))
+	for _, match := range rawMatches {
+		seen[matchIdentity{
+			ruleID:   match.match.RuleID,
+			rawStart: match.rawStart,
+			rawEnd:   match.rawEnd,
+		}] = struct{}{}
+	}
+	sort.SliceStable(shadowMatches, func(i, j int) bool {
+		left := shadowMatches[i]
+		right := shadowMatches[j]
+		if left.match.RuleID != right.match.RuleID {
+			return left.match.RuleID < right.match.RuleID
+		}
+		if left.rawStart != right.rawStart {
+			return left.rawStart < right.rawStart
+		}
+		if left.rawEnd != right.rawEnd {
+			return left.rawEnd < right.rawEnd
+		}
+		return left.ordinal < right.ordinal
+	})
+	for _, match := range shadowMatches {
+		identity := matchIdentity{
+			ruleID:   match.match.RuleID,
+			rawStart: match.rawStart,
+			rawEnd:   match.rawEnd,
+		}
+		if _, exists := seen[identity]; exists {
+			continue
+		}
+		seen[identity] = struct{}{}
+		merged = append(merged, match)
+	}
+	return merged
+}
+
+// publicMatches projects evaluated matches to the public Match slice, preserving
+// the nil no-match behavior of the original engine.
+func publicMatches(matches []evaluatedMatch) []Match {
+	if len(matches) == 0 {
+		return nil
+	}
+	out := make([]Match, len(matches))
+	for i := range matches {
+		out[i] = matches[i].match
+	}
+	return out
+}
+
+func (e *Engine) Evaluate(collector, target, text string) []Match {
+	raw := truncateRuleInput(text)
+	candidates := e.resolveCandidates(collector, target)
+
+	var rawMatches []evaluatedMatch
+	for _, cr := range candidates {
+		rawMatches = append(
+			rawMatches,
+			evaluateRuleRaw(cr, raw)...,
+		)
+	}
+	if !isInstructionCanonicalRequest(collector, target) ||
+		!hasInstructionCanonicalCandidate(candidates) {
+		return publicMatches(rawMatches)
+	}
+
+	view := canonicalizeInstruction(raw)
+	if !view.changed {
+		return publicMatches(rawMatches)
+	}
+
+	var shadowMatches []evaluatedMatch
+	for _, cr := range candidates {
+		shadowMatches = append(
+			shadowMatches,
+			evaluateRuleShadow(cr, raw, view)...,
+		)
+	}
+	return publicMatches(
+		mergeInstructionMatches(rawMatches, shadowMatches),
+	)
 }
 
 func (e *Engine) EvaluateAll(collector string, fields map[string]string) []Match {
