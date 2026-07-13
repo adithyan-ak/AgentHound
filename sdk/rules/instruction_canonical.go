@@ -321,15 +321,156 @@ func identityCanonicalView(raw string) canonicalView {
 	}
 }
 
+// removeInstructionRune reports whether r is one of the exact, enumerated
+// invisible/control code points removed after NFKC. Only these specific
+// singletons and ranges are removed; U+00AD, U+180E, arbitrary Cf, punctuation,
+// and combining marks are never removed as a class.
+func removeInstructionRune(r rune) bool {
+	switch r {
+	case '\u034F', '\u200B', '\u200C', '\u200D', '\u2060', '\uFEFF',
+		'\u061C', '\u200E', '\u200F':
+		return true
+	}
+	return r >= '\u202A' && r <= '\u202E' ||
+		r >= '\u2066' && r <= '\u2069' ||
+		r >= '\U000E0000' && r <= '\U000E007F' ||
+		r >= '\uFE00' && r <= '\uFE0F' ||
+		r >= '\U000E0100' && r <= '\U000E01EF'
+}
+
+// instructionWhitespace maps each enumerated horizontal whitespace code point
+// to a single ASCII space and each enumerated vertical whitespace code point to
+// a single ASCII newline. Multiplicity is preserved (adjacent spaces are not
+// collapsed) and vertical code points are never converted to spaces. The bool
+// result reports whether r was mapped.
+func instructionWhitespace(r rune) (rune, bool) {
+	switch {
+	case r == '\t', r == ' ', r == '\u00A0', r == '\u1680',
+		r >= '\u2000' && r <= '\u200A',
+		r == '\u202F', r == '\u205F', r == '\u3000':
+		return ' ', true
+	case r == '\n', r == '\v', r == '\f', r == '\r',
+		r == '\u0085', r == '\u2028', r == '\u2029':
+		return '\n', true
+	default:
+		return r, false
+	}
+}
+
+// canonicalizeControlsAndWhitespace applies the frozen V1 enumerated removal
+// and whitespace mapping to an NFKC view while preserving provenance. It walks
+// the input spans in monotonically increasing shadow order with a forward
+// cursor (O(S+N), never a per-match linear scan):
+//
+//   - Opaque (invalid-byte) spans are copied unchanged and reset context.
+//   - Affine spans map raw bytes 1:1, so they are rewritten rune-by-rune:
+//     removed runes emit no span (opening a raw gap), a single-byte whitespace
+//     map that preserves the byte stays affine, and other maps retain the
+//     rune's exact raw bounds.
+//   - Non-affine spans are indivisible NFKC decompositions, so the transform is
+//     applied to the whole span and any surviving output maps back to its full
+//     contributing raw range.
+func canonicalizeControlsAndWhitespace(view canonicalView) canonicalView {
+	var b canonicalBuilder
+	var scratch []byte
+	for _, span := range view.spans {
+		if span.opaque {
+			if !b.appendSegment(
+				[]byte(view.text[span.shadowStart:span.shadowEnd]),
+				span.rawStart,
+				span.rawEnd,
+				span.affine,
+				true,
+			) {
+				return b.view()
+			}
+			continue
+		}
+		seg := view.text[span.shadowStart:span.shadowEnd]
+		if !span.affine {
+			scratch = scratch[:0]
+			for i := 0; i < len(seg); {
+				r, size := utf8.DecodeRuneInString(seg[i:])
+				if !removeInstructionRune(r) {
+					if mapped, ok := instructionWhitespace(r); ok {
+						scratch = append(scratch, byte(mapped))
+					} else {
+						scratch = append(scratch, seg[i:i+size]...)
+					}
+				}
+				i += size
+			}
+			if !b.appendSegment(scratch, span.rawStart, span.rawEnd, false, false) {
+				return b.view()
+			}
+			continue
+		}
+		// Affine span: batch consecutive kept runes into one affine segment and
+		// flush on each removed or mapped rune so raw gaps and maps keep exact
+		// bounds.
+		keepStart := 0
+		for i := 0; i < len(seg); {
+			r, size := utf8.DecodeRuneInString(seg[i:])
+			mapped, isWS := instructionWhitespace(r)
+			if !removeInstructionRune(r) && !isWS {
+				i += size
+				continue
+			}
+			if i > keepStart {
+				if !b.appendSegment(
+					[]byte(seg[keepStart:i]),
+					span.rawStart+keepStart,
+					span.rawStart+i,
+					true,
+					false,
+				) {
+					return b.view()
+				}
+			}
+			rawStart := span.rawStart + i
+			rawEnd := rawStart + size
+			if isWS {
+				if !b.appendSegment(
+					[]byte{byte(mapped)},
+					rawStart,
+					rawEnd,
+					r == mapped,
+					false,
+				) {
+					return b.view()
+				}
+			} else if !b.appendSegment(nil, rawStart, rawEnd, false, false) {
+				return b.view()
+			}
+			i += size
+			keepStart = i
+		}
+		if len(seg) > keepStart {
+			if !b.appendSegment(
+				[]byte(seg[keepStart:]),
+				span.rawStart+keepStart,
+				span.rawStart+len(seg),
+				true,
+				false,
+			) {
+				return b.view()
+			}
+		}
+	}
+	return b.view()
+}
+
 // canonicalizeInstruction builds the bounded canonical shadow of raw. It caps
 // the raw input, takes the ASCII identity fast path when possible, and
-// otherwise applies the (currently NFKC-only) V1 transform pipeline.
+// otherwise runs the V1 transform pipeline: NFKC, then enumerated control
+// removal and whitespace mapping.
 func canonicalizeInstruction(raw string) canonicalView {
 	raw = truncateRuleInput(raw)
 	if asciiInstructionIdentity(raw) {
 		return identityCanonicalView(raw)
 	}
 	view := canonicalizeNFKC(raw)
+	view = canonicalizeControlsAndWhitespace(view)
 	view.changed = view.text != raw
 	return view
 }

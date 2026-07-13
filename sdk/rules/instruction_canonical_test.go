@@ -315,3 +315,192 @@ func TestInstructionCanonicalEligibilityPredicates(t *testing.T) {
 		)
 	}
 }
+
+func TestCanonicalViewProjectionDeletedBytes(t *testing.T) {
+	raw := "\u200Babc\u200Bdef\u200B"
+	view := canonicalizeInstruction(raw)
+	if view.text != "abcdef" {
+		t.Fatalf("text = %q", view.text)
+	}
+	assertRange(t, view, 0, 3, len("\u200B"), len("\u200Babc"))
+	assertRange(
+		t,
+		view,
+		3,
+		6,
+		len("\u200Babc\u200B"),
+		len("\u200Babc\u200Bdef"),
+	)
+	assertRange(
+		t,
+		view,
+		0,
+		6,
+		len("\u200B"),
+		len("\u200Babc\u200Bdef"),
+	)
+	assertPoint(t, view, 0, projectionLeft, 0)
+	assertPoint(t, view, 0, projectionRight, 0)
+	assertPoint(t, view, 3, projectionLeft, len("\u200Babc"))
+	assertPoint(
+		t,
+		view,
+		3,
+		projectionRight,
+		len("\u200Babc\u200B"),
+	)
+	assertPoint(t, view, 6, projectionLeft, len(raw))
+	assertPoint(t, view, 6, projectionRight, len(raw))
+}
+
+func TestCanonicalizeInstructionRemovesOnlyEnumeratedControls(t *testing.T) {
+	removed := []rune{
+		'\u034F', '\u200B', '\u200C', '\u200D', '\u2060', '\uFEFF',
+		'\u061C', '\u200E', '\u200F',
+	}
+	addRange := func(lo, hi rune) {
+		for r := lo; r <= hi; r++ {
+			removed = append(removed, r)
+		}
+	}
+	addRange('\u202A', '\u202E')
+	addRange('\u2066', '\u2069')
+	addRange('\U000E0000', '\U000E007F')
+	addRange('\uFE00', '\uFE0F')
+	addRange('\U000E0100', '\U000E01EF')
+
+	for _, r := range removed {
+		raw := "a" + string(r) + "b"
+		view := canonicalizeInstruction(raw)
+		if view.text != "ab" {
+			t.Fatalf("U+%04X not removed: text = %q", r, view.text)
+		}
+		if !view.changed {
+			t.Fatalf("U+%04X removal should set changed", r)
+		}
+		// The kept letters project back across the deleted rune's raw gap.
+		assertRange(t, view, 0, 2, 0, len(raw))
+		assertPoint(t, view, 1, projectionLeft, 1)
+		assertPoint(t, view, 1, projectionRight, 1+len(string(r)))
+	}
+
+	// Runes NOT in the enumerated set are never removed as a class, even when
+	// they are format characters (U+00AD) or a formerly-space code point
+	// (U+180E).
+	for _, r := range []rune{'\u00AD', '\u180E'} {
+		raw := "a" + string(r) + "b"
+		view := canonicalizeInstruction(raw)
+		if view.text != raw {
+			t.Fatalf("U+%04X should remain: text = %q", r, view.text)
+		}
+	}
+}
+
+func TestCanonicalizeInstructionMapsWhitespace(t *testing.T) {
+	horizontal := []rune{
+		'\u0009', '\u0020', '\u00A0', '\u1680',
+		'\u2000', '\u2001', '\u2002', '\u2003', '\u2004', '\u2005',
+		'\u2006', '\u2007', '\u2008', '\u2009', '\u200A',
+		'\u202F', '\u205F', '\u3000',
+	}
+	for _, r := range horizontal {
+		raw := "a" + string(r) + "b"
+		view := canonicalizeInstruction(raw)
+		if view.text != "a b" {
+			t.Fatalf("U+%04X horizontal -> %q, want %q", r, view.text, "a b")
+		}
+	}
+
+	vertical := []rune{
+		'\u000A', '\u000B', '\u000C', '\u000D',
+		'\u0085', '\u2028', '\u2029',
+	}
+	for _, r := range vertical {
+		raw := "a" + string(r) + "b"
+		view := canonicalizeInstruction(raw)
+		if view.text != "a\nb" {
+			t.Fatalf("U+%04X vertical -> %q, want %q", r, view.text, "a\nb")
+		}
+	}
+
+	// Adjacent horizontal whitespace is mapped one-for-one; spaces are never
+	// collapsed.
+	multi := canonicalizeInstruction("a\u2000\u2000b")
+	if multi.text != "a  b" {
+		t.Fatalf("adjacent spaces collapsed: %q", multi.text)
+	}
+
+	// CRLF becomes exactly two newlines; a newline is never mapped to a space.
+	crlf := canonicalizeInstruction("a\r\nb")
+	if crlf.text != "a\n\nb" {
+		t.Fatalf("CRLF -> %q, want %q", crlf.text, "a\n\nb")
+	}
+
+	// A mapped multi-byte space projects back to its full contributing raw
+	// bytes.
+	nbsp := canonicalizeInstruction("a\u00A0b")
+	if nbsp.text != "a b" {
+		t.Fatalf("NBSP -> %q", nbsp.text)
+	}
+	assertRange(t, nbsp, 1, 2, 1, 1+len("\u00A0"))
+}
+
+func TestCanonicalizeInstructionTagsAndVariationSelectors(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"emoji vs16", "ignore\uFE0F", "ignore"},
+		{"text vs15", "a\uFE0Eb", "ab"},
+		{"supplementary vs", "a\U000E0100b", "ab"},
+		{"supplementary vs high", "a\U000E01EFb", "ab"},
+		{"tag language", "a\U000E0001b", "ab"},
+		{"tag chars", "a\U000E0041\U000E0042b", "ab"},
+		{"tag cancel", "a\U000E007Fb", "ab"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			view := canonicalizeInstruction(tc.raw)
+			if view.text != tc.want {
+				t.Fatalf("text = %q, want %q", view.text, tc.want)
+			}
+		})
+	}
+}
+
+func TestCanonicalizeInstructionDeletedBytesBeforeInsideAfter(t *testing.T) {
+	zw := "\u200B"
+	raw := zw + "ig" + zw + "nore" + zw
+	view := canonicalizeInstruction(raw)
+	if view.text != "ignore" {
+		t.Fatalf("text = %q", view.text)
+	}
+	// The whole canonical phrase excludes the deleted-before and deleted-after
+	// bytes but bridges the deleted-inside bytes.
+	assertRange(
+		t,
+		view,
+		0,
+		len("ignore"),
+		len(zw),
+		len(zw+"ig"+zw+"nore"),
+	)
+	// A sub-match ending before the interior deletion.
+	assertRange(t, view, 0, len("ig"), len(zw), len(zw+"ig"))
+	// A sub-match starting after the interior deletion.
+	assertRange(
+		t,
+		view,
+		len("ig"),
+		len("ignore"),
+		len(zw+"ig"+zw),
+		len(zw+"ig"+zw+"nore"),
+	)
+	// Boundary bias straddling the interior deletion.
+	assertPoint(t, view, len("ig"), projectionLeft, len(zw+"ig"))
+	assertPoint(t, view, len("ig"), projectionRight, len(zw+"ig"+zw))
+	// Canonical start/EOF ignore the deleted prefix/suffix.
+	assertPoint(t, view, 0, projectionRight, 0)
+	assertPoint(t, view, len("ignore"), projectionLeft, len(raw))
+}
