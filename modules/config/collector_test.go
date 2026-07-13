@@ -570,6 +570,7 @@ func TestConfigCollector_MultipleConfigPaths(t *testing.T) {
 }
 
 func TestConfigCollector_InstructionFiles(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	tmp := t.TempDir()
 
 	configPath := filepath.Join(tmp, "config.json")
