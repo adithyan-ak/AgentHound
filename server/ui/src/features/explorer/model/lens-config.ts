@@ -179,6 +179,7 @@ export const LENS_LIST: LensDefinition[] = [
       "INGESTS_UNTRUSTED",
       "CONFUSED_DEPUTY",
       "IFC_VIOLATION",
+      "PUBLIC_ACCESS_OBSERVED",
     ],
     dimOthers: false,
     subPresets: [
@@ -186,6 +187,12 @@ export const LENS_LIST: LensDefinition[] = [
         id: "HAS_ACCESS_TO",
         label: "Has Access To",
         description: "Tool → resource capability match",
+        defaultEnabled: true,
+      },
+      {
+        id: "PUBLIC_ACCESS_OBSERVED",
+        label: "Public Access Observed",
+        description: "Resource read anonymously (a fact, not a finding)",
         defaultEnabled: true,
       },
       {
@@ -273,13 +280,25 @@ export const LENS_LIST: LensDefinition[] = [
     accentClass: "bg-pink-500 text-white",
     description:
       "Identity and credential flow. Highlights exposed secrets and high-entropy values.",
-    edgeKinds: ["AUTHENTICATES_WITH", "USES_CREDENTIAL", "HAS_ENV_VAR", "EXPOSES_CREDENTIAL"],
+    edgeKinds: [
+      "AUTHENTICATES_WITH",
+      "USES_CREDENTIAL",
+      "HAS_ENV_VAR",
+      "EXPOSES_CREDENTIAL",
+      "CREDENTIAL_REACH_VERIFIED",
+    ],
     dimOthers: false,
     subPresets: [
       {
         id: "AUTHENTICATES_WITH",
         label: "Authenticates with",
         description: "Server/agent → identity",
+        defaultEnabled: true,
+      },
+      {
+        id: "CREDENTIAL_REACH_VERIFIED",
+        label: "Verified credential reach",
+        description: "Credential → resource, differentially verified",
         defaultEnabled: true,
       },
       {
@@ -432,6 +451,8 @@ export const EDGE_PRIMARY_LENS = {
   PROVIDES_MODEL: "topology",
   EXTRACTED_FROM: "topology",
   INGESTS_UNTRUSTED: "attack-surface",
+  CREDENTIAL_REACH_VERIFIED: "credentials",
+  PUBLIC_ACCESS_OBSERVED: "attack-surface",
   HAS_ACCESS_TO: "attack-surface",
   CAN_EXECUTE: "attack-surface",
   CAN_REACH: "attack-surface",

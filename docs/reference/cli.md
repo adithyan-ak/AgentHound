@@ -435,6 +435,90 @@ agenthound extract <source-node-id> --type embedding-invert \
 
 ---
 
+### `agenthound campaign`
+
+Run an ordered, evidence-producing campaign scenario against a known service (v0.6). A campaign scenario verifies a *predicted* graph relationship with *observed* evidence, using a stable witness exported from the server (`agenthound-server witness`).
+
+v0.6 ships two scenarios. The first is **`cred-reach`** — a READ-ONLY differential credential-reach oracle. Given a witness for a predicted credential-gated `CAN_REACH` finding, it reads the exact predicted MCP resource once **without** authentication (control) and once **with** a hash-matched credential (authed), then classifies the pair:
+
+| Control (unauth) | Authed | Outcome | Emits |
+|------------------|--------|---------|-------|
+| denied | allowed | `credential_gated_reach_verified` | `CREDENTIAL_REACH_VERIFIED` (upgrades the CAN_REACH finding) |
+| allowed | allowed | `anonymous_access_observed` | `PUBLIC_ACCESS_OBSERVED` (a fact) |
+| allowed | denied | `anonymous_access_observed` + credential rejected | `PUBLIC_ACCESS_OBSERVED` |
+| denied | denied (same existing resource) | `not_observed` | nothing — retires the prior verification for this domain |
+| 404 / malformed auth / protocol error / ambiguous / timeout | (any) | `indeterminate` | nothing — prior evidence preserved |
+
+The scenario mutates nothing on the target, so it needs no receipts or rollback.
+
+```bash
+# 1. export the witness on the analysis box (server)
+agenthound-server witness --finding <finding-id> > witness.json
+
+# 2. supply the credential material OUT OF BAND (env var or stdin) — never a flag
+export AGENTHOUND_CAMPAIGN_CREDENTIAL='sk-...'
+
+# 3. run the read-only differential probes and emit graph evidence
+agenthound campaign https://mcp.example/mcp --scenario cred-reach \
+    --witness witness.json --engagement-id DC35-DEMO --commit --output - \
+  | agenthound-server ingest -
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--scenario` | (required) | Scenario ID to run (`cred-reach`) |
+| `--witness` | (required) | Path to the server-exported witness JSON, or `-` for stdin |
+| `--engagement-id` | (required) | Engagement correlation key |
+| `--commit` | `false` | Run the probes and emit evidence (default: dry-run — plan only, no probe) |
+| `--insecure` | `false` | Skip TLS certificate verification for the probes |
+| `--timeout` | `30s` | Per-probe timeout |
+| `--credential-env` | `AGENTHOUND_CAMPAIGN_CREDENTIAL` | Env var holding the out-of-band credential material |
+| `--credential-stdin` | `false` | Read the credential material from stdin instead of an env var |
+
+**Credential material is supplied out of band** (env var or stdin) and hash-matched locally against the witness `value_hash`; the raw value is never logged, never a flag, and never written to the graph. A hash-only credential (no executable material) is a **precondition failure** (not runnable) — distinct from an `indeterminate` outcome.
+
+**Authorization gate:** the first `campaign` invocation prompts for `AUTHORIZED` and writes `~/.agenthound/campaign-acknowledged`. When stdin is consumed by `--witness -`/`--credential-stdin`, acknowledge non-interactively with a pre-existing sentinel or `AGENTHOUND_CAMPAIGN_AUTHORIZED=AUTHORIZED`.
+
+**Residual caveat:** the witness is a snapshot of a *published* prediction. If the graph changes between export and ingest, the server re-correlation rejects the stale/mismatched witness (no verified evidence) rather than upgrading a prediction that no longer holds. See [security.md](../operator/security.md).
+
+The second scenario is **`mcp-poison-roundtrip`** — a STANDALONE target-mutation validation. It reuses the `mcp.poison` module (Poison + the conflict-aware, no-blind-write Revert) to prove the reversible mutation machinery works end to end against a real target:
+
+1. apply the operator-authorized mutation (`mcp.poison` Poison, committed);
+2. re-read the exact injected state and compare to the receipt — the **ORACLE** (did the mutation land?);
+3. issue the conflict-aware revert;
+4. re-read and confirm the original is restored — the **CLEANUP**.
+
+The oracle and cleanup are reported **separately** and computed **independently** — a verified mutation that then fails to clean up (e.g. a third party edits the target between the oracle re-read and the revert) is reported honestly rather than masked. It is **not an attack finding** and makes **no claim** about a predicted credential path; it emits **no** graph edge (the round-trip evidence stays in the campaign transport). The mutation persists a receipt under the shared `mcp.poison` state dir, so a revert that cannot complete inline is retried by `agenthound revert <engagement>` (per-file LIFO + conflict-aware revert).
+
+| Oracle | Cleanup | Meaning |
+|--------|---------|---------|
+| `mutation_verified` | `restored` | mutation landed; original restored (target clean) |
+| `mutation_not_applied` | `restored` | the write did not change the live state; target clean |
+| `mutation_verified` | `conflict` | mutation landed but a third party edited the target — revert refused (**receipt retained**) |
+| `mutation_verified` | `indeterminate` | revert could not re-read the live state — never a blind write (**receipt retained**) |
+| `indeterminate` | (any) | post-mutation re-read failed — mutation landing is unknowable |
+
+```bash
+# STANDALONE reversible-mutation validation (mutates then restores; not an attack).
+agenthound campaign https://mcp.example/mcp --scenario mcp-poison-roundtrip \
+    --target-id support_lookup --inject "TEST MUTATION" \
+    --engagement-id DC35-DEMO --commit
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--target-id` | (required) | MCP tool whose description is mutated then restored |
+| `--inject` | (required) | Injection content applied then conflict-aware reverted |
+| `--mode` | `replace` | Injection mode: `replace`/`append`/`prepend` |
+| `--update-method` | `PUT` | HTTP method for the tool-description write |
+| `--update-path` | `/admin/tools/{id}` | Path template for the write; `{id}` is the target tool |
+| `--list-path` | `/` | JSON-RPC `tools/list` path used for the re-reads |
+| `--auth-token` | (unset) | Optional bearer token for the target admin surface |
+
+The `mcp-poison-roundtrip` scenario takes no witness and reads no credential material — pass the mutation flags above instead. `--commit` is still off by default (dry-run plans only). See [offensive-actions.md](../operator/offensive-actions.md#campaign-runner-verify-and-validate).
+
+---
+
 ### `agenthound version`
 
 Print version string and commit hash.
@@ -578,6 +662,26 @@ agenthound-server query --findings --fail-on critical --format json
 
 ---
 
+### `agenthound-server witness`
+
+Export a stable, sanitized **witness** for a predicted credential-gated `CAN_REACH` finding so the collector-side `agenthound campaign` runner can verify it (v0.6).
+
+The witness is a content-addressed tuple — credential/server/resource node IDs, the credential `value_hash` + `merge_key`, the predicted edge kind, the ordered path topology, and the publication/schema revision. It contains **no** Neo4j relationship IDs (composite edges are recreated every epoch), **no** arbitrary node properties, and **no** secrets. It is built under a guarded read of the published projection and stamped with that projection's revision.
+
+```bash
+agenthound-server witness --finding <finding-id> > witness.json
+agenthound-server witness --finding <finding-id> --output witness.json
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--finding` | (required) | Finding ID (16-char fingerprint) to export a witness for |
+| `--output` | `-` | Write the witness JSON to this path, or `-` for stdout |
+
+Also exposed over the API: `GET /api/v1/analysis/findings/{id}/witness`. See [api.md](api.md#get-apiv1analysisfindingsidwitness).
+
+---
+
 ### `agenthound-server version`
 
 Print version string and commit hash.
@@ -595,6 +699,8 @@ Print version string and commit hash.
 | `AGENTHOUND_LOG_JSON` | collector | (unset) |
 | `AGENTHOUND_RULES_BUNDLE` | collector | (unset) |
 | `AGENTHOUND_RULES_DIR` | collector | `~/.agenthound/rules/` |
+| `AGENTHOUND_CAMPAIGN_CREDENTIAL` | collector | (unset) — out-of-band credential material for `campaign` |
+| `AGENTHOUND_CAMPAIGN_AUTHORIZED` | collector | (unset) — non-interactive `campaign` authorization ack |
 | `AGENTHOUND_BIND` | server | `127.0.0.1:8080` |
 | `AGENTHOUND_NEO4J_URI` | server | `bolt://localhost:7687` |
 | `AGENTHOUND_NEO4J_USER` | server | `neo4j` |

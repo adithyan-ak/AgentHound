@@ -55,10 +55,50 @@ SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true, e.sou
     ]
 RETURN count(*) AS written`
 
+	// verifiedUpgradeCypher re-correlates a persisted raw CREDENTIAL_REACH_VERIFIED
+	// edge (emitted by the campaign runner's cred-reach scenario) against the
+	// freshly rebuilt CAN_REACH edges and, on a full match, upgrades the CAN_REACH
+	// edge's evidence-state/confidence in place. It creates NO new edge and no new
+	// finding — the existing CAN_REACH finding is upgraded, so risk is not
+	// double-counted.
+	//
+	// Re-correlation rejects forged/mismatched/stale witnesses: the LIVE credential
+	// identity (objectid + value_hash + merge_key) must equal the witness echo on
+	// the raw edge, the resource must still be served by the witness server, and a
+	// current-epoch CAN_REACH edge to that resource must route through that exact
+	// credential. A forged credential_id resolves to a reference_only node with no
+	// value_hash, so the value_hash equality fails and nothing is upgraded.
+	verifiedUpgradeCypher := `
+MATCH (c:Credential)-[v:CREDENTIAL_REACH_VERIFIED]->(r:MCPResource)
+WHERE coalesce(v.is_composite, false) = false
+  AND v.outcome = 'credential_gated_reach_verified'
+  AND c.objectid = v.credential_id
+  AND c.value_hash IS NOT NULL AND c.value_hash = v.credential_value_hash
+  AND c.merge_key = v.credential_merge_key
+  AND r.objectid = v.resource_id
+  AND EXISTS {
+    MATCH (s:MCPServer)-[:PROVIDES_RESOURCE]->(r)
+    WHERE s.objectid = v.server_id
+  }
+MATCH (a)-[e:CAN_REACH]->(r)
+WHERE e.is_composite = true
+  AND e.scan_id = $scan_id
+  AND c.objectid IN e.evidence_node_ids
+SET e.reach_evidence_state = 'verified',
+    e.verified_outcome = v.outcome,
+    e.verified_scenario_id = v.scenario_id,
+    e.verified_scenario_version = v.scenario_version,
+    e.verified_run_id = v.run_id,
+    e.verified_at = v.verified_at,
+    e.confidence = 1.0
+RETURN count(e) AS upgraded`
+
 	params := map[string]any{"scan_id": scanID}
 	var total int
 
-	for _, cypher := range []string{directCypher, credChainCypher} {
+	// The upgrade runs LAST so it re-correlates against the CAN_REACH edges the
+	// prior two queries just built this epoch.
+	for _, cypher := range []string{directCypher, credChainCypher, verifiedUpgradeCypher} {
 		n, err := db.ExecuteWrite(ctx, cypher, params)
 		if err != nil {
 			return graph.ProcessingStats{

@@ -139,6 +139,60 @@ behaviour:
   `unknown`. It must not be interpreted as anonymous, public, low sensitivity,
   unpinned, or clean.
 
+### Campaign runner: out-of-band credential material
+
+The `agenthound campaign --scenario cred-reach` runner needs an **executable**
+credential (the raw secret) to send the authed probe, but it must never persist
+or log it. Its handling is deliberately stricter than `--include-credential-values`:
+
+- **Out of band only.** The material is supplied via an environment variable
+  (`AGENTHOUND_CAMPAIGN_CREDENTIAL`, the default) or stdin (`--credential-stdin`).
+  It is **never** a CLI flag — flags leak into process listings (`ps`), shell
+  history, and container inspect output. Do **not** use
+  `--include-credential-values` for the campaign path.
+- **Local hash-match, never serialized.** The runner hashes the material locally
+  with AgentHound's SHA-256 credential contract and requires an **exact match** to
+  the witness `value_hash`. The raw value is never written to the graph, the
+  emitted evidence, the scan output, or logs. A hash-only credential (no
+  executable material, or a synthetic `merge_key=identity` reference) is a
+  **precondition failure — not runnable**, distinct from an `indeterminate`
+  probe outcome.
+- **Read-only.** The `cred-reach` scenario issues `resources/read` for the exact
+  predicted resource only (unauth control + authed probe). It mutates nothing, so
+  it needs no receipts or rollback.
+- **Anonymous access is a fact, not a finding.** When the resource reads
+  successfully without a credential the runner emits `PUBLIC_ACCESS_OBSERVED`
+  (a raw fact). Findings derive only from composite edges, so this never
+  auto-creates a finding; treat it as a policy concern only where authentication
+  was expected.
+- **Stale witnesses are rejected, not trusted.** The witness is a snapshot of a
+  *published* prediction. If the graph changes between export and ingest, the
+  server re-correlation rejects the forged/mismatched/stale witness (no verified
+  evidence) rather than upgrading a prediction that no longer holds. The witness
+  carries hashed node IDs, `value_hash`, `merge_key`, path topology, and the
+  publication/schema revision — never Neo4j relationship IDs (composite edges are
+  recreated every epoch) and never raw secrets.
+
+### Campaign runner: reversible mutation round-trip
+
+The `agenthound campaign --scenario mcp-poison-roundtrip` scenario is a STANDALONE
+target-mutation validation. Unlike `cred-reach` it **mutates** the target (reusing
+the `mcp.poison` module), so it inherits the destructive-primitive posture:
+
+- **Same gates as `poison`.** `--commit` is off by default (dry-run plans only) and
+  the first run requires an `AUTHORIZED` acknowledgement. It uses no out-of-band
+  credential material — the optional `--auth-token` for the target's admin surface
+  mirrors `agenthound poison`.
+- **Never a blind write; receipts retained.** The mutation persists a receipt
+  before the write. The inline cleanup uses the conflict-aware Revert: on a
+  third-party change (conflict) or a failed re-read (indeterminate) it writes
+  nothing and **retains** the receipt so `agenthound revert <engagement-id>` can
+  retry it (per-file LIFO). Oracle and cleanup outcomes are reported separately, so
+  a "target not clean" state is never masked.
+- **Not an attack finding.** It emits no graph edge and makes no claim about a
+  predicted credential path — the round-trip evidence stays in the campaign
+  transport. It validates only that the mutation/rollback machinery works.
+
 ### `openwebui.loot` authenticated mode
 
 `agenthound loot --type openwebui --api-key <key>` reads an

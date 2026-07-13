@@ -21,6 +21,11 @@ const (
 	FindingEvidenceInferred      FindingEvidenceState = "inferred"
 	FindingEvidenceHypothesis    FindingEvidenceState = "hypothesis"
 	FindingEvidenceReferenceOnly FindingEvidenceState = "reference_only"
+	// FindingEvidenceVerified marks a finding whose predicted relationship was
+	// actively confirmed by a campaign scenario (e.g. a differentially-verified
+	// credential-gated resource read). It is the strongest state: the composite
+	// edge was re-correlated against a persisted raw verification edge on ingest.
+	FindingEvidenceVerified FindingEvidenceState = "verified"
 )
 
 // FindingEvidence records the detector facts used to classify a finding.

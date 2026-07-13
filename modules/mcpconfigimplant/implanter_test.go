@@ -293,3 +293,38 @@ func TestImplant_RevertPreservesOriginalMode(t *testing.T) {
 		t.Errorf("revert changed mode to %o, want 644", st.Mode().Perm())
 	}
 }
+
+// TestRevert_CorruptedCurrentJSON_NoClobber audits the key-scoped
+// reverter for the blind-write pattern. If the config JSON is corrupt at
+// revert time (unparseable), revert cannot safely drop just its own key,
+// so it must surface an error and leave the file untouched rather than
+// overwriting it.
+func TestRevert_CorruptedCurrentJSON_NoClobber(t *testing.T) {
+	i := newImplanter(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mcp.json")
+	writeSeed(t, path)
+
+	receipt, err := i.Implant(context.Background(), action.Target{},
+		action.ImplantPayload{
+			InjectionContent: evilEntry,
+			EngagementID:     "ENG-CORRUPT",
+			Extras:           map[string]any{"file": path},
+		})
+	if err != nil {
+		t.Fatalf("Implant: %v", err)
+	}
+
+	const corrupt = "{ this is not valid json "
+	if err := os.WriteFile(path, []byte(corrupt), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := i.Revert(context.Background(), receipt); err == nil {
+		t.Fatal("expected error reverting against corrupted JSON (indeterminate)")
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != corrupt {
+		t.Errorf("revert clobbered corrupted file; got %q, want %q", string(got), corrupt)
+	}
+}

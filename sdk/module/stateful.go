@@ -46,11 +46,14 @@ type StatefulModule interface {
 	StateDir() string
 
 	// WriteReceipt appends r to the engagement-id's receipts file under
-	// StateDir(). Returns the absolute path of the written file. The
-	// CLI calls this AFTER the Poisoner has successfully applied the
-	// mutation, but BEFORE it reports success to the operator — a crash
-	// between the HTTP write and the receipt write would otherwise
-	// leave a tampered target without a revert path.
+	// StateDir() and returns the absolute path of the written file.
+	//
+	// Ordering (crash safety): a committing Poisoner/Implanter persists
+	// the receipt BEFORE it issues the mutating write, so a crash after
+	// the mutation can never strand a tampered target with no revert
+	// path. The receipt is written exactly once — there is no
+	// post-mutation re-write. Dry-run receipts (which mutate nothing) are
+	// persisted by the CLI after the module returns.
 	WriteReceipt(engagementID string, r action.Receipt) (path string, err error)
 
 	// ReadReceipts loads every receipt persisted under engagement-id.

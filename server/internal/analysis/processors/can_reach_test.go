@@ -35,14 +35,14 @@ func TestCanReach_ProcessSuccess(t *testing.T) {
 	if stats.ProcessorName != "can_reach" {
 		t.Errorf("ProcessorName = %q", stats.ProcessorName)
 	}
-	// 2 queries x 4 each = 8
-	if stats.EdgesCreated != 8 {
-		t.Errorf("EdgesCreated = %d, want 8", stats.EdgesCreated)
+	// 3 queries x 4 each = 12
+	if stats.EdgesCreated != 12 {
+		t.Errorf("EdgesCreated = %d, want 12", stats.EdgesCreated)
 	}
 
 	calls := mock.CallsTo("ExecuteWrite")
-	if len(calls) != 2 {
-		t.Errorf("ExecuteWrite called %d times, want 2 (direct + credential chain)", len(calls))
+	if len(calls) != 3 {
+		t.Errorf("ExecuteWrite called %d times, want 3 (direct + credential chain + verified upgrade)", len(calls))
 	}
 	direct, _ := calls[0].Args[0].(string)
 	if strings.Contains(direct, "WHERE NOT EXISTS((a)-[:CAN_REACH]->(r))") {
@@ -59,6 +59,43 @@ func TestCanReach_ProcessSuccess(t *testing.T) {
 	if strings.Contains(credential, "s1.auth_method IS NULL OR") ||
 		!strings.Contains(credential, "s1.auth_assurance IN ['unauthenticated', 'weak']") {
 		t.Fatalf("unknown auth must not satisfy credential delegation:\n%s", credential)
+	}
+}
+
+// TestCanReach_VerifiedUpgradeQuery asserts the third query re-correlates a raw
+// CREDENTIAL_REACH_VERIFIED edge against the live credential identity + topology
+// and upgrades the CAN_REACH edge in place (no new edge, no double-count).
+func TestCanReach_VerifiedUpgradeQuery(t *testing.T) {
+	mock := &graph.MockGraphDB{ExecuteWriteResult: 1}
+	p := &CanReach{}
+	if _, err := p.Process(context.Background(), mock, "scan-1"); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	calls := mock.CallsTo("ExecuteWrite")
+	if len(calls) != 3 {
+		t.Fatalf("ExecuteWrite called %d times, want 3", len(calls))
+	}
+	upgrade, _ := calls[2].Args[0].(string)
+	// Re-correlation must bind the LIVE credential identity to the witness echo.
+	for _, needle := range []string{
+		"CREDENTIAL_REACH_VERIFIED",
+		"c.value_hash = v.credential_value_hash",
+		"c.merge_key = v.credential_merge_key",
+		"r.objectid = v.resource_id",
+		"PROVIDES_RESOURCE",
+		"reach_evidence_state = 'verified'",
+		"c.objectid IN e.evidence_node_ids",
+	} {
+		if !strings.Contains(upgrade, needle) {
+			t.Fatalf("verified-upgrade query missing %q:\n%s", needle, upgrade)
+		}
+	}
+	// The upgrade must NOT MERGE/CREATE a new edge (no duplicate finding).
+	if strings.Contains(upgrade, "MERGE (a)-[e:CAN_REACH]") || strings.Contains(upgrade, "CREATE (") {
+		t.Fatalf("verified-upgrade must not create a second CAN_REACH edge:\n%s", upgrade)
+	}
+	if !strings.Contains(upgrade, "e.confidence = 1.0") {
+		t.Fatalf("verified-upgrade must raise confidence:\n%s", upgrade)
 	}
 }
 

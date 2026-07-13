@@ -327,3 +327,81 @@ func TestRevert_CorruptedSentinel_StartWithoutEnd(t *testing.T) {
 		t.Error("revert should have removed our ENG-CLEAN block")
 	}
 }
+
+// TestRevert_ThirdPartyReplacedFileNoBlock_NoClobber audits the
+// block-scoped reverter for the blind-write pattern the MCP-tool poisoner
+// had. Because revert strips only its own sentinel span, a third party
+// replacing the whole file (so our block is gone) leaves nothing to
+// strip — revert is a no-op and must NOT restore/clobber their content.
+func TestRevert_ThirdPartyReplacedFileNoBlock_NoClobber(t *testing.T) {
+	p := newPoisoner(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+	writeOriginal(t, path)
+
+	receipt, err := p.Poison(context.Background(), action.Target{},
+		action.PoisonPayload{
+			InjectionContent: injection,
+			EngagementID:     "ENG-THIRDPARTY",
+			Extras:           map[string]any{"file": path},
+		})
+	if err != nil {
+		t.Fatalf("Poison: %v", err)
+	}
+
+	const thirdParty = "# Totally rewritten by someone else\n\nNew content.\n"
+	if err := os.WriteFile(path, []byte(thirdParty), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.Revert(context.Background(), receipt); err != nil {
+		t.Fatalf("Revert (no block present): %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != thirdParty {
+		t.Errorf("revert clobbered third-party content; got %q, want %q", string(got), thirdParty)
+	}
+}
+
+// TestRevert_IndeterminateWhenUnreadable_NoWrite audits that the reverter
+// never blind-writes when it cannot read the current file. A file larger
+// than MaxFileBytes makes readFileBounded fail; revert must surface the
+// error and leave the file untouched.
+func TestRevert_IndeterminateWhenUnreadable_NoWrite(t *testing.T) {
+	p := newPoisoner(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+	oversized := make([]byte, MaxFileBytes+1)
+	if err := os.WriteFile(path, oversized, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	receipt := &action.PoisonReceipt{
+		ModuleID:     "instruction.poison",
+		EngagementID: "ENG-INDET",
+		TargetID:     path,
+		Mode:         "sentinel-bracket",
+		DryRun:       false,
+		Extra: map[string]any{
+			"file":           path,
+			"sentinel_start": "<!-- agenthound-poison-START engagement=ENG-INDET -->",
+			"sentinel_end":   "<!-- agenthound-poison-END engagement=ENG-INDET -->",
+			"file_existed":   true,
+			"orig_mode":      "600",
+		},
+	}
+	if err := p.Revert(context.Background(), receipt); err == nil {
+		t.Fatal("expected error when file exceeds MaxFileBytes (indeterminate)")
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Size() != after.Size() {
+		t.Errorf("revert modified the file on an indeterminate read (size %d -> %d)", before.Size(), after.Size())
+	}
+}

@@ -41,6 +41,11 @@ export const EDGE_CATEGORY_MAP = {
   PROVIDES_MODEL: "structure",
   EXTRACTED_FROM: "structure",
   INGESTS_UNTRUSTED: "attack",
+  // v0.6 campaign-runner evidence. A differentially-verified credential-gated
+  // reach is attack-surface proof; anonymous public access is a neutral
+  // structural fact (never an auto-finding).
+  CREDENTIAL_REACH_VERIFIED: "attack",
+  PUBLIC_ACCESS_OBSERVED: "structure",
   CONFUSED_DEPUTY: "attack",
   TAINTS: "attack",
   IFC_VIOLATION: "attack",
@@ -73,6 +78,8 @@ export const EDGE_COMPOSITE_MAP = {
   PROVIDES_MODEL: false,
   EXTRACTED_FROM: false,
   INGESTS_UNTRUSTED: false,
+  CREDENTIAL_REACH_VERIFIED: false,
+  PUBLIC_ACCESS_OBSERVED: false,
   HAS_ACCESS_TO: true,
   CAN_EXECUTE: true,
   CAN_REACH: true,

@@ -159,6 +159,26 @@ MCPServer(s2) -[HAS_ENV_VAR]-> Credential -> Identity -> MCPServer(s2) -> MCPToo
 Requires explicit unauthenticated/weak evidence for s1; missing auth evidence
 does not match. Confidence: 0.6.
 
+**Verified-reach upgrade (3rd pass):** after building the CAN_REACH edges,
+`can_reach` re-correlates any persisted raw `CREDENTIAL_REACH_VERIFIED` edge
+(emitted by the campaign runner's `cred-reach` scenario) against the freshly
+rebuilt edges. On a full match it **upgrades the CAN_REACH edge in place** —
+`reach_evidence_state='verified'`, `confidence=1.0`, plus the verified
+scenario/run/outcome metadata. It creates **no** new edge and no second finding,
+so risk is never double-counted; `findings.go` reads `reach_evidence_state` and
+raises the finding's evidence state to `verified`.
+
+Re-correlation rejects forged/mismatched/stale witnesses: the LIVE credential
+identity (`objectid` + `value_hash` + `merge_key`) must equal the witness echo on
+the raw edge, the resource must still be served by the witness server
+(`PROVIDES_RESOURCE`), and a current-epoch CAN_REACH edge to that resource must
+route through that exact credential (`credential.objectid IN e.evidence_node_ids`).
+A forged credential ID resolves to a `reference_only` node with no `value_hash`,
+so the `value_hash` equality fails and nothing is upgraded. Because the raw
+verification edge is retained across composite epochs while the CAN_REACH edge is
+rebuilt each epoch, the upgrade re-applies every epoch from the persisted raw fact
+— this is why the witness is a stable logical tuple, never a Neo4j relationship ID.
+
 ## 7. cross_service_credential_chain
 
 **Computes:** `AgentInstance -[CAN_REACH]-> Credential` (upstream provider

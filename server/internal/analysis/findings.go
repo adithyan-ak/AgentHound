@@ -286,6 +286,8 @@ RETURN src.objectid AS source_id,
        tgt.material_status AS target_material_status,
        tgt.exposure_status AS target_exposure_status,
        r.evidence_version AS evidence_version,
+       r.reach_evidence_state AS reach_evidence_state,
+       r.verified_outcome AS verified_outcome,
        detector_evidence_nodes AS exact_evidence_nodes,
        detector_evidence_edges AS exact_evidence_edges,
        r.evidence_synthetic_edge AS exact_evidence_synthetic_edge
@@ -346,6 +348,14 @@ func QueryFindings(ctx context.Context, db graph.GraphDB, severity string) ([]mo
 			sev = classifySeverity(edgeKind, true, confidence, targetSensitivity)
 		default:
 			sev = classifySeverity(edgeKind, crossProtocol, confidence, targetSensitivity)
+		}
+		// Campaign verification upgrade: when the CAN_REACH processor re-correlated
+		// a CREDENTIAL_REACH_VERIFIED edge, the composite edge carries
+		// reach_evidence_state=verified and confidence was raised to 1.0. This
+		// upgrades the SAME finding's evidence state (and, via the higher
+		// confidence already read above, its severity) — no second finding.
+		if stringVal(row, "reach_evidence_state") == string(model.FindingEvidenceVerified) {
+			evidence.State = model.FindingEvidenceVerified
 		}
 		if severity != "" && sev != severity {
 			continue

@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const CollectorVersion = "0.1.0"
+const CollectorVersion = "0.9.0-dev"
 
 func NewIngestData(collector, scanID string) *ingest.IngestData {
 	if scanID == "" {

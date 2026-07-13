@@ -402,6 +402,54 @@ stores the detector witness graph with each finding snapshot. Detail serves it d
 mutable projection has advanced or is incomplete; detail does not run a second
 query or reconstruct evidence from mutable Neo4j.
 
+### `GET /api/v1/analysis/findings/{id}/witness`
+
+Export a stable, sanitized **campaign witness** for a predicted credential-gated
+`CAN_REACH` finding (16-char fingerprint), so the collector-side campaign runner
+(`agenthound campaign --scenario cred-reach`) can verify it.
+
+The witness is a content-addressed tuple built under a guarded read of the
+published projection and stamped with that projection's revision. It contains
+**only** hashed node IDs (credential + server + resource), the credential
+`value_hash` + `merge_key`, the predicted edge kind, the ordered path topology,
+and the publication/schema revision. It carries **no** Neo4j relationship IDs
+(composite edges are recreated every epoch), **no** arbitrary node properties,
+and **no** secrets (never the raw credential value). It is not a copy of the
+finding-detail evidence exporter.
+
+Returns `404` when no runnable credential-gated `CAN_REACH` prediction matches
+the finding (e.g. the credential is a synthetic identity with no observable
+material), and a projection-conflict error when no stable published projection
+is available.
+
+```json
+{
+  "witness": {
+    "schema_version": 1,
+    "publication_revision": 7,
+    "predicted_edge_kind": "CAN_REACH",
+    "credential_id": "sha256:...",
+    "credential_value_hash": "sha256-hex",
+    "credential_merge_key": "value_hash",
+    "server_id": "sha256:...",
+    "resource_id": "sha256:...",
+    "resource_uri": "postgres://prod/customers",
+    "path_topology": [
+      { "node_id": "sha256:...", "kind": "AgentInstance" },
+      { "node_id": "sha256:...", "kind": "MCPServer" },
+      { "node_id": "sha256:...", "kind": "Credential" },
+      { "node_id": "sha256:...", "kind": "MCPResource" }
+    ]
+  },
+  "projection": { "scan_id": "scan-...", "revision": 7 }
+}
+```
+
+The same witness is produced by the `agenthound-server witness --finding <id>`
+CLI. When the verification is later ingested, the server re-correlates the
+witness against the live graph and rejects any forged/mismatched/stale witness
+(no verified evidence) before upgrading the CAN_REACH finding.
+
 ### `GET /api/v1/findings/triage/{fingerprint}`
 
 Return the cross-scan triage decision for a finding fingerprint (16-char hex). Open read; a fingerprint with no recorded decision returns the implicit `new` state.

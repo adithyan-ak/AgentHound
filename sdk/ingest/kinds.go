@@ -115,54 +115,61 @@ func ConcreteNodeKind(kinds []string) string {
 	return concrete
 }
 
-// RawEdgeKinds are the 18 collector-produced edge kinds accepted in ingest
+// RawEdgeKinds are the 20 collector-produced edge kinds accepted in ingest
 // input. EXPOSES is reserved in v0.2 for v0.3 fingerprinters; EXPOSES_CREDENTIAL
 // is emitted by the v0.2 LiteLLM Looter; PROVIDES_MODEL is emitted by the v0.3
 // Ollama Looter; EXTRACTED_FROM is emitted by the v0.5 embedding-inversion
 // Extractor (AIModel → ExtractedTrainingSignal); INGESTS_UNTRUSTED is emitted by
-// the MCP Collector for tools whose rule-derived source_trust is untrusted.
+// the MCP Collector for tools whose rule-derived source_trust is untrusted;
+// CREDENTIAL_REACH_VERIFIED and PUBLIC_ACCESS_OBSERVED are emitted by the v0.6
+// campaign runner's differential credential-reach scenario as raw supporting
+// evidence (Credential→MCPResource and MCPServer→MCPResource respectively).
 var RawEdgeKinds = map[string]bool{
-	"TRUSTS_SERVER":      true,
-	"PROVIDES_TOOL":      true,
-	"PROVIDES_RESOURCE":  true,
-	"PROVIDES_PROMPT":    true,
-	"ADVERTISES_SKILL":   true,
-	"DELEGATES_TO":       true,
-	"AUTHENTICATES_WITH": true,
-	"USES_CREDENTIAL":    true,
-	"RUNS_ON":            true,
-	"CONFIGURED_IN":      true,
-	"HAS_ENV_VAR":        true,
-	"LOADS_INSTRUCTIONS": true,
-	"SAME_AUTH_DOMAIN":   true,
-	"EXPOSES":            true,
-	"EXPOSES_CREDENTIAL": true,
-	"PROVIDES_MODEL":     true,
-	"EXTRACTED_FROM":     true,
-	"INGESTS_UNTRUSTED":  true,
+	"TRUSTS_SERVER":             true,
+	"PROVIDES_TOOL":             true,
+	"PROVIDES_RESOURCE":         true,
+	"PROVIDES_PROMPT":           true,
+	"ADVERTISES_SKILL":          true,
+	"DELEGATES_TO":              true,
+	"AUTHENTICATES_WITH":        true,
+	"USES_CREDENTIAL":           true,
+	"RUNS_ON":                   true,
+	"CONFIGURED_IN":             true,
+	"HAS_ENV_VAR":               true,
+	"LOADS_INSTRUCTIONS":        true,
+	"SAME_AUTH_DOMAIN":          true,
+	"EXPOSES":                   true,
+	"EXPOSES_CREDENTIAL":        true,
+	"PROVIDES_MODEL":            true,
+	"EXTRACTED_FROM":            true,
+	"INGESTS_UNTRUSTED":         true,
+	"CREDENTIAL_REACH_VERIFIED": true,
+	"PUBLIC_ACCESS_OBSERVED":    true,
 }
 
-// AllowedEdgeKinds includes all 30 edge kinds (18 raw + 12 composite) for Neo4j writer dispatch.
+// AllowedEdgeKinds includes all 32 edge kinds (20 raw + 12 composite) for Neo4j writer dispatch.
 var AllowedEdgeKinds = map[string]bool{
 	// Raw (collector-produced)
-	"TRUSTS_SERVER":      true,
-	"PROVIDES_TOOL":      true,
-	"PROVIDES_RESOURCE":  true,
-	"PROVIDES_PROMPT":    true,
-	"ADVERTISES_SKILL":   true,
-	"DELEGATES_TO":       true,
-	"AUTHENTICATES_WITH": true,
-	"USES_CREDENTIAL":    true,
-	"RUNS_ON":            true,
-	"CONFIGURED_IN":      true,
-	"HAS_ENV_VAR":        true,
-	"LOADS_INSTRUCTIONS": true,
-	"SAME_AUTH_DOMAIN":   true,
-	"EXPOSES":            true,
-	"EXPOSES_CREDENTIAL": true,
-	"PROVIDES_MODEL":     true,
-	"EXTRACTED_FROM":     true,
-	"INGESTS_UNTRUSTED":  true,
+	"TRUSTS_SERVER":             true,
+	"PROVIDES_TOOL":             true,
+	"PROVIDES_RESOURCE":         true,
+	"PROVIDES_PROMPT":           true,
+	"ADVERTISES_SKILL":          true,
+	"DELEGATES_TO":              true,
+	"AUTHENTICATES_WITH":        true,
+	"USES_CREDENTIAL":           true,
+	"RUNS_ON":                   true,
+	"CONFIGURED_IN":             true,
+	"HAS_ENV_VAR":               true,
+	"LOADS_INSTRUCTIONS":        true,
+	"SAME_AUTH_DOMAIN":          true,
+	"EXPOSES":                   true,
+	"EXPOSES_CREDENTIAL":        true,
+	"PROVIDES_MODEL":            true,
+	"EXTRACTED_FROM":            true,
+	"INGESTS_UNTRUSTED":         true,
+	"CREDENTIAL_REACH_VERIFIED": true,
+	"PUBLIC_ACCESS_OBSERVED":    true,
 	// Composite (post-processor produced)
 	"HAS_ACCESS_TO":         true,
 	"CAN_EXECUTE":           true,
@@ -220,10 +227,17 @@ var EdgeKindEndpoints = map[string]EdgeEndpoints{
 	"PROVIDES_MODEL":        {SourceKinds: []string{"OllamaInstance"}, TargetKinds: []string{"AIModel"}},
 	"EXTRACTED_FROM":        {SourceKinds: []string{"AIModel"}, TargetKinds: []string{"ExtractedTrainingSignal"}},
 	"INGESTS_UNTRUSTED":     {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPResource"}},
-	"CONFUSED_DEPUTY":       {SourceKinds: []string{"A2AAgent"}, TargetKinds: []string{"A2AAgent"}},
-	"TAINTS":                {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
-	"IFC_VIOLATION":         {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
-	"POISONS_CONTEXT":       {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
+	// v0.6 campaign-runner verification evidence. CREDENTIAL_REACH_VERIFIED
+	// records a differentially-verified credential-gated read of an MCP
+	// resource (Credential→MCPResource, both real nodes). PUBLIC_ACCESS_OBSERVED
+	// records an anonymous read of a resource (MCPServer→MCPResource) — a fact,
+	// not an auto-finding.
+	"CREDENTIAL_REACH_VERIFIED": {SourceKinds: []string{"Credential"}, TargetKinds: []string{"MCPResource"}},
+	"PUBLIC_ACCESS_OBSERVED":    {SourceKinds: []string{"MCPServer"}, TargetKinds: []string{"MCPResource"}},
+	"CONFUSED_DEPUTY":           {SourceKinds: []string{"A2AAgent"}, TargetKinds: []string{"A2AAgent"}},
+	"TAINTS":                    {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
+	"IFC_VIOLATION":             {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
+	"POISONS_CONTEXT":           {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
 }
 
 // endpointKindAllowed reports whether kind is a member of allowed.

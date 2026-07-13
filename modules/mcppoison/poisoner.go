@@ -71,6 +71,19 @@ const (
 	DefaultListPath = "/"
 )
 
+// Revert sentinel errors let callers classify a failed revert via errors.Is
+// without coupling to the human-readable message text. They are wrapped into
+// the descriptive errors Revert returns (the surfaced messages are unchanged).
+var (
+	// ErrRevertIndeterminate signals that the pre-write re-read failed, so the
+	// live state is unknown and Revert wrote nothing.
+	ErrRevertIndeterminate = errors.New("indeterminate")
+	// ErrRevertConflict signals that the live description matched neither the
+	// original nor our injection (a third-party change), so Revert refused to
+	// overwrite it.
+	ErrRevertConflict = errors.New("conflict")
+)
+
 // Poisoner is the registered module.
 type Poisoner struct {
 	stateful module.StatefulModule
@@ -198,8 +211,20 @@ func (p *Poisoner) Poison(ctx context.Context, t action.Target, payload action.P
 }
 
 // Revert restores the original tool description recorded on the
-// receipt. Idempotent: if the current description on the target
-// already equals OriginalContent, Revert is a no-op (returns nil).
+// receipt. It is conflict-AWARE and idempotent: it re-reads the current
+// description and decides what to do from a four-way comparison against
+// the receipt, and NEVER blind-writes.
+//
+//  1. re-read fails            → indeterminate: return an error, write
+//     nothing (we cannot know the current state, so restoring could
+//     clobber a third party or re-apply stale content).
+//  2. current == OriginalContent → no-op: nothing applied, or already
+//     reverted out of band. Return nil.
+//  3. current == InjectedContent → restore: write OriginalContent back.
+//  4. current is anything else   → conflict: a third party changed the
+//     description after we poisoned it. Refuse to overwrite (returning
+//     an error) so we do not destroy their change. A deferred --force
+//     could opt into overwriting; it is intentionally not wired here.
 //
 // receipt may be either *action.PoisonReceipt or action.PoisonReceipt
 // (the StatefulModule encoder normalizes to pointer on read; defensive
@@ -233,24 +258,68 @@ func (p *Poisoner) Revert(ctx context.Context, receipt action.Receipt) error {
 
 	client := &http.Client{Timeout: DefaultProbeTimeout}
 
-	// Idempotency check — if the current description already equals
-	// OriginalContent, we have nothing to do. The check protects against
-	// double-revert and against an out-of-band restore that beat us to it.
+	// Re-read the live description so we can decide safely. A failure
+	// here is INDETERMINATE — we must not fall back to a blind write,
+	// because we cannot tell whether our injection is still present.
 	current, err := fetchToolDescription(ctx, client, baseURL, listPath, r.TargetID, authToken)
-	if err == nil && current == r.OriginalContent {
+	if err != nil {
+		return fmt.Errorf("mcp poison revert: re-read failed, state %w (not writing): %w", ErrRevertIndeterminate, err)
+	}
+
+	switch current {
+	case r.OriginalContent:
+		// Already original — nothing applied, or an out-of-band restore
+		// beat us to it. Protects against double-revert.
 		slog.Info("mcp poison revert: target already matches original (no-op)",
 			"target_id", r.TargetID,
 			"engagement_id", r.EngagementID)
 		return nil
+	case r.InjectedContent:
+		// Our injection is still present — safe to restore.
+		//
+		// Residual TOCTOU race: between this re-read and the write below,
+		// a third party could change the description; we would then
+		// overwrite that change. Closing this window needs a conditional
+		// update (compare-and-set / If-Match ETag), but the tool-admin
+		// write surface used here (writeToolDescription: an unconditional
+		// PUT with body {"description": ...}) exposes no such primitive,
+		// so we document the residual race rather than pretend to solve
+		// it. If a future admin surface supports conditional updates, the
+		// write below should carry the ETag observed on this re-read.
+		if err := writeToolDescription(ctx, client, baseURL, updateMethod, updatePath, r.TargetID, r.OriginalContent, authToken); err != nil {
+			return fmt.Errorf("write original back: %w", err)
+		}
+		slog.Info("mcp poison reverted",
+			"target_id", r.TargetID,
+			"engagement_id", r.EngagementID)
+		return nil
+	default:
+		// Conflict: current matches neither the original nor our
+		// injection, so a third party changed it after we poisoned.
+		// Restoring OriginalContent would destroy their change, so we
+		// refuse and surface an error; the CLI retains the receipt for a
+		// later retry (a deferred --force could override this).
+		return fmt.Errorf("mcp poison revert: current description matches neither original nor injected content for target %q (third-party change?); refusing to overwrite (%w)", r.TargetID, ErrRevertConflict)
 	}
+}
 
-	if err := writeToolDescription(ctx, client, baseURL, updateMethod, updatePath, r.TargetID, r.OriginalContent, authToken); err != nil {
-		return fmt.Errorf("write original back: %w", err)
+// ReadDescription re-reads the live description of the named tool via the same
+// JSON-RPC tools/list read that Poison and Revert perform internally, so the
+// three share exactly one read implementation. It is the read primitive the
+// reversible-mutation round-trip scenario (modules/mcproundtrip) uses to verify
+// a mutation landed (its oracle) and that the original was restored (its cleanup
+// verification). listPath defaults to DefaultListPath when empty; authToken is
+// optional. It never mutates the target.
+func (p *Poisoner) ReadDescription(ctx context.Context, t action.Target, targetID, listPath, authToken string) (string, error) {
+	if strings.TrimSpace(targetID) == "" {
+		return "", errors.New("mcp poison read: target-id is required")
 	}
-	slog.Info("mcp poison reverted",
-		"target_id", r.TargetID,
-		"engagement_id", r.EngagementID)
-	return nil
+	if listPath == "" {
+		listPath = DefaultListPath
+	}
+	baseURL := strings.TrimRight(targetBaseURL(t), "/")
+	client := &http.Client{Timeout: DefaultProbeTimeout}
+	return fetchToolDescription(ctx, client, baseURL, listPath, targetID, authToken)
 }
 
 // composeContent returns the new description according to mode. The

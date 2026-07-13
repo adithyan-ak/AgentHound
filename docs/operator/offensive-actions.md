@@ -151,6 +151,41 @@ agenthound extract <ai-model-node-id> \
     --output -
 ```
 
+## Campaign runner: verify and validate
+
+`agenthound campaign <host> --scenario <id>` runs an ordered, evidence-producing scenario against a known service. Like `poison`/`extract` it is gated: `--commit` is off by default (dry-run plans only), and the first invocation prompts for `AUTHORIZED` (sentinel `~/.agenthound/campaign-acknowledged`). v0.6 ships two scenarios.
+
+### `cred-reach` — read-only differential verification
+
+Given a server-exported witness for a predicted credential-gated `CAN_REACH` finding, `cred-reach` reads the exact predicted MCP resource once **without** auth (control) and once **with** a hash-matched credential (authed), then classifies the pair to distinguish credential-gated reach from anonymous access. It mutates nothing, so it needs no rollback. Credential material is supplied **out of band** (env var or stdin), hash-matched locally, and never logged or written to the graph. See the [CLI reference](../reference/cli.md#agenthound-campaign) and [security.md](security.md#campaign-runner-out-of-band-credential-material) for the full matrix and handling rules.
+
+### `mcp-poison-roundtrip` — standalone target-mutation validation
+
+`mcp-poison-roundtrip` reuses the `mcp.poison` module (Poison + the conflict-aware Revert above) to prove the reversible mutation machinery works end to end against a real target. It is a **validation of the round-trip**, not an attack: it does **not** create a finding and makes **no** claim about a predicted credential path.
+
+```bash
+# Dry-run first (plans only — no mutation).
+agenthound campaign https://mcp.example/mcp --scenario mcp-poison-roundtrip \
+    --target-id support_lookup --inject "TEST MUTATION" \
+    --engagement-id DC35-DEMO
+
+# With --commit: mutate -> re-read (ORACLE) -> conflict-aware revert -> re-read (CLEANUP).
+agenthound campaign https://mcp.example/mcp --scenario mcp-poison-roundtrip \
+    --target-id support_lookup --inject "TEST MUTATION" \
+    --engagement-id DC35-DEMO --commit
+#
+# Output (oracle and cleanup reported SEPARATELY):
+# [campaign] COMMITTED mcp-poison-roundtrip on https://mcp.example/mcp \
+#            (STANDALONE target-mutation validation) — oracle=mutation_verified cleanup=restored
+```
+
+Behavior and safety:
+
+- **Oracle and cleanup are independent.** The oracle (did the mutation land?) is decided from the post-mutation re-read; the cleanup (was the original restored?) is decided from the conflict-aware revert plus a post-revert re-read. A verified mutation with a failed cleanup (e.g. a third party edited the target mid-run) is reported honestly, never masked.
+- **Reuses Phase A rollback.** The mutation persists a receipt under `~/.agenthound/state/mcp.poison/<engagement-id>.json` before the write. If the inline conflict-aware revert cannot complete (conflict or re-read failure — never a blind write), the receipt is retained and `agenthound revert <engagement-id>` retries it (per-file LIFO, newest first).
+- **No new graph edge.** The round-trip evidence stays in the campaign transport (a `RoundtripReport`); it is deliberately not emitted as a scored graph edge, so a finding-free validation never pollutes the graph.
+- Takes `--target-id`/`--inject` (and optional `--mode`/`--update-method`/`--update-path`/`--list-path`/`--auth-token`) — no witness, no credential material. See the [CLI reference](../reference/cli.md#agenthound-campaign) for the full flag table.
+
 ## See also
 
 - `docs/plans/v0.3-v0.4-implementation.md` — the destructive-action design rationale (decision G).

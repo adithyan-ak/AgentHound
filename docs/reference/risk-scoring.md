@@ -30,6 +30,13 @@ Lower weight = easier to exploit = attacker prefers this path.
 
 Unknown edge kinds default to 0.5 (mid-range, conservative assumption).
 
+### Campaign verification evidence
+
+The [campaign runner](../operator/offensive-actions.md#campaign-runner-verify-and-validate) does not add new scored risk:
+
+- `CREDENTIAL_REACH_VERIFIED` and `PUBLIC_ACCESS_OBSERVED` are low-weight (0.1) **supporting-evidence** raw edges, not reach hops. When a `CREDENTIAL_REACH_VERIFIED` edge re-correlates on ingest it upgrades the **existing** credential-chain `CAN_REACH` finding's evidence state/confidence in place — it does **not** create a second scored finding, so verified reach is never double-counted.
+- The `mcp-poison-roundtrip` scenario emits **no** graph edge at all (its round-trip evidence stays in the campaign transport), so it contributes nothing to any node or path score. It is a standalone reversible-mutation validation, not a finding.
+
 ---
 
 ## Node Risk Scores
