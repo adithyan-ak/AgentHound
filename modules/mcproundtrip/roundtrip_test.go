@@ -3,6 +3,7 @@ package mcproundtrip
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -80,21 +81,28 @@ func TestRealRoundtrip_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	rep := res.Roundtrip
+	rep := res.Report
 	if rep == nil {
 		t.Fatal("expected a round-trip report")
 	}
-	if rep.Oracle != campaign.OracleMutationVerified {
-		t.Errorf("oracle = %q, want mutation_verified", rep.Oracle)
+	if rep.Oracle.Outcome != string(campaign.OracleMutationVerified) {
+		t.Errorf("oracle = %q, want mutation_verified", rep.Oracle.Outcome)
 	}
-	if rep.Cleanup != campaign.CleanupRestored {
-		t.Errorf("cleanup = %q, want restored", rep.Cleanup)
+	if rep.Cleanup.Status != campaign.CleanupRestored {
+		t.Errorf("cleanup = %q, want restored", rep.Cleanup.Status)
 	}
 	if !rep.TargetClean() {
 		t.Error("target must be reported clean after a successful round-trip")
 	}
 	if got := getCurrent(); got != origDesc {
 		t.Errorf("target left at %q, want original %q", got, origDesc)
+	}
+	if rep.Budget.RequestsUsed != 6 {
+		t.Errorf("requests_used = %d, want 6 actual HTTP round trips", rep.Budget.RequestsUsed)
+	}
+	encoded, _ := json.Marshal(rep)
+	if strings.Contains(string(encoded), origDesc) || strings.Contains(string(encoded), injDesc) {
+		t.Fatal("run report leaked original/injected mutation state")
 	}
 }
 
@@ -166,15 +174,15 @@ func TestRealRoundtrip_ConflictCleanup(t *testing.T) {
 			"mode":      "replace",
 		},
 	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
+	if !errors.Is(err, campaign.ErrUnsafeCleanup) {
+		t.Fatalf("Run error = %v, want unsafe cleanup", err)
 	}
-	rep := res.Roundtrip
-	if rep.Oracle != campaign.OracleMutationVerified {
-		t.Errorf("oracle = %q, want mutation_verified (mutation landed before the third-party edit)", rep.Oracle)
+	rep := res.Report
+	if rep.Oracle.Outcome != string(campaign.OracleMutationVerified) {
+		t.Errorf("oracle = %q, want mutation_verified (mutation landed before the third-party edit)", rep.Oracle.Outcome)
 	}
-	if rep.Cleanup != campaign.CleanupConflict {
-		t.Errorf("cleanup = %q, want conflict", rep.Cleanup)
+	if rep.Cleanup.Status != campaign.CleanupConflict {
+		t.Errorf("cleanup = %q, want conflict", rep.Cleanup.Status)
 	}
 	if rep.TargetClean() {
 		t.Error("a conflicted cleanup must not report the target as clean")

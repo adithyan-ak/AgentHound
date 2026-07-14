@@ -30,19 +30,21 @@ type readResult struct {
 // consumed in order: read #0 is the oracle re-read; read #1 (if reached) is the
 // post-revert cleanup verification.
 type fakeRoundTrip struct {
-	receipt     *action.PoisonReceipt
-	mutateErr   error
-	reads       []readResult
-	revertErr   error
-	readCalls   int
-	revertCalls int
-	mutateCalls int
+	receipt      *action.PoisonReceipt
+	mutateErr    error
+	reads        []readResult
+	revertErr    error
+	readCalls    int
+	revertCalls  int
+	mutateCalls  int
+	stepSequence uint64
 }
 
-func (f *fakeRoundTrip) Mutate(_ context.Context) (*action.PoisonReceipt, error) {
+func (f *fakeRoundTrip) Mutate(_ context.Context, stepSequence uint64) (*action.PoisonReceipt, error) {
 	f.mutateCalls++
+	f.stepSequence = stepSequence
 	if f.mutateErr != nil {
-		return nil, f.mutateErr
+		return f.receipt, f.mutateErr
 	}
 	return f.receipt, nil
 }
@@ -173,18 +175,21 @@ func TestRoundtripMatrix(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &fakeRoundTrip{receipt: testReceipt(), reads: tc.reads, revertErr: tc.revertErr}
 			res, err := scenarioWith(f).Run(context.Background(), commitInput(nil))
-			if err != nil {
+			if tc.wantClean && err != nil {
 				t.Fatalf("Run: %v", err)
 			}
-			rep := res.Roundtrip
+			if !tc.wantClean && !errors.Is(err, campaign.ErrUnsafeCleanup) {
+				t.Fatalf("unsafe cleanup error = %v, want ErrUnsafeCleanup", err)
+			}
+			rep := res.Report
 			if rep == nil {
-				t.Fatal("committed round-trip must return a RoundtripReport")
+				t.Fatal("committed round-trip must return a RunReport")
 			}
-			if rep.Oracle != tc.wantOracle {
-				t.Errorf("oracle = %q, want %q", rep.Oracle, tc.wantOracle)
+			if rep.Oracle.Outcome != string(tc.wantOracle) {
+				t.Errorf("oracle = %q, want %q", rep.Oracle.Outcome, tc.wantOracle)
 			}
-			if rep.Cleanup != tc.wantCleanup {
-				t.Errorf("cleanup = %q, want %q", rep.Cleanup, tc.wantCleanup)
+			if rep.Cleanup.Status != tc.wantCleanup {
+				t.Errorf("cleanup = %q, want %q", rep.Cleanup.Status, tc.wantCleanup)
 			}
 			if rep.TargetClean() != tc.wantClean {
 				t.Errorf("TargetClean() = %v, want %v", rep.TargetClean(), tc.wantClean)
@@ -192,8 +197,14 @@ func TestRoundtripMatrix(t *testing.T) {
 			if !rep.Standalone {
 				t.Error("report must be flagged Standalone (not an attack finding)")
 			}
-			if rep.OracleType != campaign.OracleTypeReversibleMutationRoundtrip {
-				t.Errorf("oracle_type = %q, want %q", rep.OracleType, campaign.OracleTypeReversibleMutationRoundtrip)
+			if rep.Oracle.Type != campaign.OracleTypeReversibleMutationRoundtrip {
+				t.Errorf("oracle_type = %q, want %q", rep.Oracle.Type, campaign.OracleTypeReversibleMutationRoundtrip)
+			}
+			if f.stepSequence != 1 {
+				t.Errorf("step sequence = %d, want 1", f.stepSequence)
+			}
+			if rep.Budget.MutationsUsed != 2 {
+				t.Errorf("mutations_used = %d, want 2", rep.Budget.MutationsUsed)
 			}
 			if res.Evidence != nil || res.Outcome != "" {
 				t.Error("standalone round-trip must not populate differential Evidence/Outcome")
@@ -208,15 +219,15 @@ func TestRoundtripMatrix(t *testing.T) {
 func TestMutateFailureIsIndeterminate(t *testing.T) {
 	f := &fakeRoundTrip{mutateErr: errors.New("apply poison: update status 500")}
 	res, err := scenarioWith(f).Run(context.Background(), commitInput(nil))
-	if err != nil {
-		t.Fatalf("Run: %v", err)
+	if !errors.Is(err, campaign.ErrUnsafeCleanup) {
+		t.Fatalf("Run error = %v, want unsafe cleanup", err)
 	}
-	rep := res.Roundtrip
-	if rep.Oracle != campaign.OracleIndeterminate {
-		t.Errorf("oracle = %q, want indeterminate", rep.Oracle)
+	rep := res.Report
+	if rep.Oracle.Outcome != string(campaign.OracleIndeterminate) {
+		t.Errorf("oracle = %q, want indeterminate", rep.Oracle.Outcome)
 	}
-	if rep.Cleanup != campaign.CleanupIndeterminate {
-		t.Errorf("cleanup = %q, want indeterminate", rep.Cleanup)
+	if rep.Cleanup.Status != campaign.CleanupIndeterminate {
+		t.Errorf("cleanup = %q, want indeterminate", rep.Cleanup.Status)
 	}
 	if rep.TargetClean() {
 		t.Error("a failed mutation must not report the target as clean")
@@ -239,7 +250,7 @@ func TestDryRunPlansOnly(t *testing.T) {
 	if !res.DryRun || res.Plan == "" {
 		t.Fatalf("dry run must return a plan, got %+v", res)
 	}
-	if res.Roundtrip != nil {
+	if res.Report != nil {
 		t.Error("dry run must not produce a round-trip report")
 	}
 	if f.mutateCalls != 0 || f.readCalls != 0 || f.revertCalls != 0 {
@@ -285,5 +296,27 @@ func TestScenarioRegistered(t *testing.T) {
 	}
 	if got.ID() != scenarioID || got.Version() != scenarioVersion {
 		t.Fatalf("registered scenario mismatch: id=%q version=%d", got.ID(), got.Version())
+	}
+}
+
+func TestCampaignRunIDAllocatedBeforeMutatorConstruction(t *testing.T) {
+	f := &fakeRoundTrip{
+		receipt: testReceipt(),
+		reads:   []readResult{{val: injDesc}, {val: origDesc}},
+	}
+	seenRunID := ""
+	scenario := &Scenario{newRoundTrip: func(in campaign.RunInput, _ config) (roundTrip, error) {
+		seenRunID = in.RunID
+		return f, nil
+	}}
+	res, err := scenario.Run(context.Background(), commitInput(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seenRunID == "" || res.Report.CampaignRunID != seenRunID {
+		t.Fatalf("factory run id = %q, report = %+v", seenRunID, res.Report)
+	}
+	if f.stepSequence != 1 {
+		t.Fatalf("mutator step sequence = %d, want 1", f.stepSequence)
 	}
 }

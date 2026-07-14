@@ -39,6 +39,8 @@ type ImplantPayload struct {
 	InjectionContent string
 	TargetID         string
 	EngagementID     string
+	CampaignRunID    string
+	StepSequence     uint64
 	DryRun           bool
 
 	// Extras carries per-Implanter flag values populated by the CLI
@@ -56,6 +58,8 @@ type ImplantPayload struct {
 type ImplantReceipt struct {
 	ModuleID         string
 	EngagementID     string
+	CampaignRunID    string
+	StepSequence     uint64
 	Target           Target
 	TargetID         string
 	InjectionContent string

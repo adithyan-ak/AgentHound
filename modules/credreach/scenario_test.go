@@ -28,6 +28,17 @@ type fakeProber struct {
 	reqs    []campaign.ProbeRequest
 }
 
+type deadlineProber struct{ calls int }
+
+func (p *deadlineProber) Probe(ctx context.Context, _ campaign.ProbeRequest) campaign.ProbeResult {
+	p.calls++
+	<-ctx.Done()
+	return campaign.ProbeResult{
+		Stage: campaign.ProbeStageInitialize, Status: campaign.ProbeTimeout,
+		Detail: "initialize_timeout",
+	}
+}
+
 func (f *fakeProber) Probe(_ context.Context, req campaign.ProbeRequest) campaign.ProbeResult {
 	f.reqs = append(f.reqs, req)
 	if req.Unauthenticated() {
@@ -117,6 +128,18 @@ func TestScenarioMatrix(t *testing.T) {
 			}
 			if res.Evidence == nil {
 				t.Fatal("commit run must always produce Evidence for audit")
+			}
+			if res.Report == nil ||
+				res.Report.ReportVersion != campaign.RunReportVersion ||
+				res.Report.Cleanup.Status != campaign.CleanupNotApplicable {
+				t.Fatalf("shared run report missing/invalid: %+v", res.Report)
+			}
+			if len(res.Report.Steps) != 5 {
+				t.Fatalf("credreach steps = %+v, want fixed five-step sequence", res.Report.Steps)
+			}
+			if res.Report.Budget.MutationLimit != 0 ||
+				res.Report.Budget.MutationsUsed != 0 {
+				t.Fatalf("read-only mutation budget = %+v", res.Report.Budget)
 			}
 			nodes, edges := res.Evidence.EvidenceGraph("scan-x")
 			if tc.edge == "" {
@@ -249,6 +272,25 @@ func TestAcceptedQueryNeverAppearsInPlan(t *testing.T) {
 	}
 	if len(prober.reqs) != 0 {
 		t.Fatal("dry run must not probe")
+	}
+}
+
+func TestElapsedBudgetExhaustionIsIndeterminate(t *testing.T) {
+	prober := &deadlineProber{}
+	in := commitInput(t, prober)
+	in.Timeout = time.Millisecond
+	res, err := (&Scenario{}).Run(context.Background(), in)
+	if !errors.Is(err, campaign.ErrElapsedBudget) {
+		t.Fatalf("error = %v, want elapsed budget exhaustion", err)
+	}
+	if res == nil || res.Outcome != campaign.OutcomeIndeterminate {
+		t.Fatalf("budget exhaustion result = %+v, want indeterminate", res)
+	}
+	if prober.calls != 1 {
+		t.Fatalf("budget exhaustion dispatched %d probes, want no authenticated follow-up", prober.calls)
+	}
+	if res.Report == nil || res.Report.Oracle.Outcome != string(campaign.OutcomeIndeterminate) {
+		t.Fatalf("budget exhaustion report = %+v", res.Report)
 	}
 }
 

@@ -86,6 +86,9 @@ type RunInput struct {
 	Params map[string]string
 	// Now overrides the clock for deterministic verified_at values in tests.
 	Now func() time.Time
+	// CleanupRun is the authoritative run-scoped cross-module cleanup
+	// orchestrator supplied by the CLI for mutating scenarios.
+	CleanupRun RunCleanupFunc
 }
 
 // Clock returns the effective clock, defaulting to time.Now.
@@ -281,11 +284,8 @@ type RunResult struct {
 	Evidence      *Evidence
 	ControlStatus ProbeStatus
 	AuthedStatus  ProbeStatus
-	// Roundtrip is set by STANDALONE target-mutation validation scenarios (the
-	// reversible mcppoison round-trip) instead of the differential-probe fields
-	// above. It reports the oracle and cleanup outcomes independently. It is nil
-	// for the differential cred-reach scenario, which populates Outcome/Evidence.
-	Roundtrip *RoundtripReport
+	// Report is the shared bounded report envelope for both fixed scenarios.
+	Report *RunReport
 }
 
 // Scenario is a registered campaign scenario dispatched by ID from the campaign

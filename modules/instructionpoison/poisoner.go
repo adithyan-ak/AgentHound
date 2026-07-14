@@ -145,6 +145,8 @@ func (p *Poisoner) Poison(ctx context.Context, t action.Target, payload action.P
 	receipt := &action.PoisonReceipt{
 		ModuleID:        "instruction.poison",
 		EngagementID:    engagementID,
+		CampaignRunID:   payload.CampaignRunID,
+		StepSequence:    payload.StepSequence,
 		Target:          t,
 		TargetID:        path,
 		OriginalContent: "", // unused — sentinel strip is the revert primitive
@@ -226,6 +228,15 @@ func (p *Poisoner) Revert(ctx context.Context, receipt action.Receipt) error {
 	current, _, _, _, err := readFileBounded(path)
 	if err != nil {
 		return fmt.Errorf("read target file: %w", err)
+	}
+	if startIndex := strings.Index(current, sentinelStart); startIndex >= 0 {
+		expectedBlock := buildBlock(sentinelStart, sentinelEnd, r.InjectedContent)
+		if !strings.HasPrefix(current[startIndex:], expectedBlock) {
+			return fmt.Errorf(
+				"instruction poison revert: live sentinel block differs from receipt; refusing to overwrite (%w)",
+				action.ErrRevertConflict,
+			)
+		}
 	}
 	stripped, hadBlock := stripBracket(current, sentinelStart, sentinelEnd)
 	if !hadBlock {

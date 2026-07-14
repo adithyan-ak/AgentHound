@@ -52,12 +52,20 @@ func TestRunRevert_PerFileLIFO(t *testing.T) {
 	defer deregisterModule(t, rec.ID())
 
 	// Append receipts oldest -> newest, matching the file's append order.
-	for _, tid := range []string{"first", "second", "third"} {
+	for index, tid := range []string{"first", "second", "third"} {
+		runID := ""
+		sequence := uint64(0)
+		if index > 0 {
+			runID = "campaign-run"
+			sequence = uint64(index)
+		}
 		if _, err := rec.state.WriteReceipt("ENG-LIFO-ORDER", &action.PoisonReceipt{
-			ModuleID:     rec.ID(),
-			EngagementID: "ENG-LIFO-ORDER",
-			TargetID:     tid,
-			DryRun:       false,
+			ModuleID:      rec.ID(),
+			EngagementID:  "ENG-LIFO-ORDER",
+			CampaignRunID: runID,
+			StepSequence:  sequence,
+			TargetID:      tid,
+			DryRun:        false,
 		}); err != nil {
 			t.Fatalf("write receipt %s: %v", tid, err)
 		}
@@ -77,6 +85,42 @@ func TestRunRevert_PerFileLIFO(t *testing.T) {
 		if rec.reverted[i] != want[i] {
 			t.Fatalf("revert order = %v, want %v (LIFO)", rec.reverted, want)
 		}
+	}
+}
+
+func TestRunRevertBestEffortContinuesAcrossModules(t *testing.T) {
+	t.Setenv("AGENTHOUND_STATE_DIR", filepath.Join(t.TempDir(), "state"))
+	failing := &conflictReverter{
+		id:    "mock.aaa.engagement.failure",
+		state: module.NewFileStatefulModule("mock.aaa.engagement.failure"),
+	}
+	success := &lifoRecorder{
+		id:    "mock.zzz.engagement.success",
+		state: module.NewFileStatefulModule("mock.zzz.engagement.success"),
+	}
+	module.Register(failing)
+	module.Register(success)
+	defer deregisterModule(t, failing.ID())
+	defer deregisterModule(t, success.ID())
+	if _, err := failing.state.WriteReceipt("ENG-BEST-EFFORT", &action.PoisonReceipt{
+		ModuleID: failing.ID(), EngagementID: "ENG-BEST-EFFORT",
+		CampaignRunID: "run-tagged", StepSequence: 2, TargetID: "fails",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := success.state.WriteReceipt("ENG-BEST-EFFORT", &action.PoisonReceipt{
+		ModuleID: success.ID(), EngagementID: "ENG-BEST-EFFORT",
+		TargetID: "legacy-succeeds",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out := &bytes.Buffer{}
+	err := runRevert(newRevertTestCmd(out), []string{"ENG-BEST-EFFORT"})
+	if err == nil {
+		t.Fatal("engagement recovery must aggregate the failing module")
+	}
+	if len(success.reverted) != 1 || success.reverted[0] != "legacy-succeeds" {
+		t.Fatalf("best-effort recovery did not continue: %v", success.reverted)
 	}
 }
 

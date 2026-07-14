@@ -34,6 +34,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -155,6 +156,8 @@ func (i *Implanter) Implant(ctx context.Context, t action.Target, payload action
 	receipt := &action.ImplantReceipt{
 		ModuleID:         "mcp.config.implant",
 		EngagementID:     engagementID,
+		CampaignRunID:    payload.CampaignRunID,
+		StepSequence:     payload.StepSequence,
 		Target:           t,
 		TargetID:         path,
 		InjectionContent: payload.InjectionContent,
@@ -240,9 +243,20 @@ func (i *Implanter) Revert(ctx context.Context, receipt action.Receipt) error {
 	if !ok {
 		return nil
 	}
-	if _, exists := servers[serverName]; !exists {
+	currentEntry, exists := servers[serverName]
+	if !exists {
 		// Already reverted out-of-band.
 		return nil
+	}
+	var injectedEntry map[string]any
+	if err := json.Unmarshal([]byte(r.InjectionContent), &injectedEntry); err != nil {
+		return errors.New("mcp config implant revert: receipt injection state is invalid")
+	}
+	if !reflect.DeepEqual(currentEntry, injectedEntry) {
+		return fmt.Errorf(
+			"mcp config implant revert: live server entry differs from receipt; refusing to overwrite (%w)",
+			action.ErrRevertConflict,
+		)
 	}
 	delete(servers, serverName)
 	configMap[serversKey] = servers

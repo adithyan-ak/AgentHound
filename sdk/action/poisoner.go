@@ -44,6 +44,8 @@ type PoisonPayload struct {
 	TargetID         string
 	Mode             string
 	EngagementID     string
+	CampaignRunID    string
+	StepSequence     uint64
 	DryRun           bool
 
 	// Extras carries per-Poisoner flag values populated by the CLI dispatch
@@ -60,6 +62,8 @@ type PoisonPayload struct {
 type PoisonReceipt struct {
 	ModuleID        string
 	EngagementID    string
+	CampaignRunID   string
+	StepSequence    uint64
 	Target          Target
 	TargetID        string
 	OriginalContent string

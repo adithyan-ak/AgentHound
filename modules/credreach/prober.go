@@ -79,17 +79,19 @@ func buildProbeTransport(req campaign.ProbeRequest) mcpsdk.Transport {
 	if strings.TrimSpace(req.Credential) != "" {
 		headers["Authorization"] = "Bearer " + req.Credential
 	}
-	if req.Insecure || len(headers) > 0 {
-		httpTransport := &http.Transport{}
-		if req.Insecure {
-			httpTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
-		}
-		transport.HTTPClient = &http.Client{Transport: probeHeaderRoundTripper{
+	httpTransport := &http.Transport{}
+	if req.Insecure {
+		httpTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
+	}
+	var base http.RoundTripper = httpTransport
+	if len(headers) > 0 {
+		base = probeHeaderRoundTripper{
 			base:    httpTransport,
 			headers: headers,
 			origin:  origin,
-		}}
+		}
 	}
+	transport.HTTPClient = &http.Client{Transport: campaign.CountingTransport{Base: base}}
 	return transport
 }
 

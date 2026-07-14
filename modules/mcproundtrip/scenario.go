@@ -22,7 +22,7 @@
 // MCPServer->MCPTool edge would cascade churn across kinds/graphmeta/generated.ts
 // /model_test/dto/styles/semantics/lens/parity for a validation that must never
 // become a finding, so the round-trip evidence stays in the campaign transport
-// (campaign.RoundtripReport). Rollback reuses Phase A (per-file LIFO +
+// (campaign.RunReport). Rollback reuses Phase A (per-file LIFO +
 // conflict-aware revert): the mutation persists a receipt under the shared
 // mcp.poison state dir, so a revert that cannot complete inline is retried later
 // by `agenthound revert <engagement>`.
@@ -75,6 +75,10 @@ func (s *Scenario) Description() string {
 // it takes its mutation parameters from RunInput.Params instead.
 func (s *Scenario) RequiresWitness() bool { return false }
 
+// RequiresMutationConsent marks this scenario for the CLI's distinct
+// poison/destructive acknowledgement gate.
+func (s *Scenario) RequiresMutationConsent() bool { return true }
+
 // config is the parsed per-run mutation configuration read from
 // RunInput.Params. Empty method/path/list fields fall back to mcppoison's
 // defaults at execution time.
@@ -101,6 +105,13 @@ func (s *Scenario) Run(ctx context.Context, in campaign.RunInput) (*campaign.Run
 		return &campaign.RunResult{DryRun: true, Plan: planText(in, cfg)}, nil
 	}
 
+	runID := strings.TrimSpace(in.RunID)
+	if runID == "" {
+		runID = uuid.NewString()
+	}
+	// The run ID exists before mutator construction. The orchestrator assigns
+	// StepSequence immediately before each mutator invocation.
+	in.RunID = runID
 	factory := s.newRoundTrip
 	if factory == nil {
 		factory = newMCPRoundTrip
@@ -110,49 +121,152 @@ func (s *Scenario) Run(ctx context.Context, in campaign.RunInput) (*campaign.Run
 		return nil, fmt.Errorf("mcp-poison-roundtrip: build round-trip: %w", err)
 	}
 
-	report := runRoundtrip(ctx, in, cfg, rt)
-	return &campaign.RunResult{Roundtrip: report}, nil
+	report, runErr := runRoundtrip(ctx, in, cfg, rt)
+	return &campaign.RunResult{Report: report}, runErr
 }
 
 // runRoundtrip performs the mutate -> oracle -> revert -> cleanup sequence and
 // classifies the oracle and cleanup INDEPENDENTLY.
-func runRoundtrip(ctx context.Context, in campaign.RunInput, cfg config, rt roundTrip) *campaign.RoundtripReport {
-	runID := strings.TrimSpace(in.RunID)
-	if runID == "" {
-		runID = uuid.NewString()
+func runRoundtrip(
+	ctx context.Context,
+	in campaign.RunInput,
+	cfg config,
+	rt roundTrip,
+) (*campaign.RunReport, error) {
+	elapsedLimit := in.Timeout
+	if elapsedLimit <= 0 {
+		elapsedLimit = 30 * time.Second
 	}
-	report := &campaign.RoundtripReport{
-		ScenarioID:      scenarioID,
-		ScenarioVersion: scenarioVersion,
-		RunID:           runID,
-		EngagementID:    in.EngagementID,
-		OracleType:      campaign.OracleTypeReversibleMutationRoundtrip,
-		Standalone:      true,
-		TargetID:        cfg.targetID,
-		VerifiedAt:      in.Clock()().UTC().Format(time.RFC3339),
+	runCtx, cancel, budget := campaign.NewBudgetContext(ctx, campaign.RunLimits{
+		RequestLimit: 16, MutationLimit: 2, ElapsedLimit: elapsedLimit,
+	})
+	defer cancel()
+	now := in.Clock()
+	report := &campaign.RunReport{
+		ReportVersion:    campaign.RunReportVersion,
+		ScenarioID:       scenarioID,
+		ScenarioVersion:  scenarioVersion,
+		CampaignRunID:    in.RunID,
+		EngagementID:     in.EngagementID,
+		Standalone:       true,
+		MutationTargetID: cfg.targetID,
+		TargetRef:        campaign.SanitizedTargetReference(in.Host),
+		StartedAt:        now().UTC().Format(time.RFC3339),
+		Steps:            []campaign.StepObservation{},
+		Cleanup: campaign.CleanupReport{
+			Status: campaign.CleanupIndeterminate, Postcondition: "unconfirmed",
+		},
+	}
+	report.AddStep(campaign.StepAuthorizeMutation, "authorized")
+
+	if err := campaign.ConsumeMutation(runCtx); err != nil {
+		report.AddStep(campaign.StepMutate, "budget_exhausted")
+		report.AddStep(campaign.StepVerifyInjected, "not_run")
+		report.AddStep(campaign.StepRevert, "not_run")
+		report.AddStep(campaign.StepVerifyOriginal, "unconfirmed")
+		report.Oracle = campaign.OracleReport{
+			Type:        campaign.OracleTypeReversibleMutationRoundtrip,
+			Observation: "budget_exhausted", Outcome: string(campaign.OracleIndeterminate),
+		}
+		finishReport(report, budget, now)
+		return report, err
 	}
 
-	receipt, err := rt.Mutate(ctx)
-	if err != nil {
-		// The mutation failed. mcppoison persists the receipt BEFORE the write,
-		// so any partial change is recoverable via `agenthound revert`. We never
-		// established a known injected state and hold no receipt to revert inline,
-		// so both outcomes are indeterminate — never claim the target is clean.
-		report.Oracle = campaign.OracleIndeterminate
-		report.Cleanup = campaign.CleanupIndeterminate
-		report.Detail = "mutation failed before a known injected state was established; run `agenthound revert`"
-		return report
+	// StepSequence is assigned by this single run orchestrator immediately
+	// before invoking the mutator that persists the receipt.
+	receipt, mutateErr := rt.Mutate(runCtx, 1)
+	if mutateErr != nil {
+		report.AddStep(campaign.StepMutate, "failed")
+	} else {
+		report.AddStep(campaign.StepMutate, "applied")
+	}
+	report.Cleanup.ReceiptRetained = receipt != nil
+
+	oracle := campaign.OracleIndeterminate
+	if receipt != nil && mutateErr == nil {
+		oracle = classifyOracle(runCtx, rt, receipt)
+	}
+	report.AddStep(campaign.StepVerifyInjected, string(oracle))
+	report.Oracle = campaign.OracleReport{
+		Type:        campaign.OracleTypeReversibleMutationRoundtrip,
+		Observation: string(oracle),
+		Outcome:     string(oracle),
 	}
 
-	// ORACLE: did the mutation land? Re-read the exact live state and compare it
-	// to the receipt. Computed from this re-read alone.
-	report.Oracle = classifyOracle(ctx, rt, receipt)
+	cleanupCtx, cleanupCancel := budget.CleanupContext(90 * time.Second)
+	defer cleanupCancel()
+	cleanup := executeRunCleanup(cleanupCtx, in, rt, receipt)
+	report.AddStep(campaign.StepRevert, string(cleanup.Status))
 
-	// CLEANUP: conflict-aware revert, then verify the original was restored.
-	// Computed from the revert result plus a post-revert re-read — INDEPENDENT of
-	// the oracle above.
-	report.Cleanup = classifyCleanup(ctx, rt, receipt)
-	return report
+	postcondition := "unconfirmed"
+	if cleanup.Status == campaign.CleanupRestored &&
+		(cleanup.ReceiptsSelected < 1 || receipt == nil) {
+		cleanup.Status = campaign.CleanupIndeterminate
+	}
+	if cleanup.Status == campaign.CleanupRestored {
+		current, err := rt.ReadCurrent(cleanupCtx)
+		switch {
+		case err != nil:
+			cleanup.Status = campaign.CleanupFailed
+			postcondition = "reread_failed"
+		case current != receipt.OriginalContent:
+			cleanup.Status = campaign.CleanupFailed
+			postcondition = "original_mismatch"
+		default:
+			postcondition = "original_confirmed"
+		}
+	}
+	report.AddStep(campaign.StepVerifyOriginal, postcondition)
+	report.Cleanup = campaign.CleanupReport{
+		Status:          cleanup.Status,
+		Postcondition:   postcondition,
+		ReceiptRetained: cleanup.ReceiptsRetained || receipt != nil,
+	}
+	finishReport(report, budget, now)
+
+	if cleanup.Status != campaign.CleanupRestored {
+		return report, campaign.ErrUnsafeCleanup
+	}
+	if mutateErr != nil {
+		return report, campaign.ErrMutationFailed
+	}
+	if exhausted := budget.Exhaustion(runCtx); exhausted != nil {
+		return report, exhausted
+	}
+	return report, nil
+}
+
+func executeRunCleanup(
+	ctx context.Context,
+	in campaign.RunInput,
+	rt roundTrip,
+	receipt *action.PoisonReceipt,
+) campaign.CleanupExecution {
+	if in.CleanupRun != nil {
+		return in.CleanupRun(ctx, in.EngagementID, in.RunID)
+	}
+	// Test-only/local fallback. The production CLI always supplies the
+	// authoritative cross-module cleanup orchestrator.
+	if receipt == nil {
+		return campaign.CleanupExecution{
+			Status: campaign.CleanupIndeterminate, FailureCode: "receipt_missing",
+		}
+	}
+	if err := campaign.ConsumeMutation(ctx); err != nil {
+		return campaign.CleanupExecution{
+			Status: campaign.CleanupIndeterminate, ReceiptsSelected: 1,
+			ReceiptsRetained: true, FailureCode: "mutation_budget",
+		}
+	}
+	status := classifyCleanup(ctx, rt, receipt)
+	return campaign.CleanupExecution{
+		Status: status, ReceiptsSelected: 1, ReceiptsRetained: true,
+	}
+}
+
+func finishReport(report *campaign.RunReport, budget *campaign.Budget, now func() time.Time) {
+	report.CompletedAt = now().UTC().Format(time.RFC3339)
+	report.Budget = budget.Snapshot()
 }
 
 // classifyOracle re-reads the live state after the mutation and decides whether
@@ -172,9 +286,9 @@ func classifyOracle(ctx context.Context, rt roundTrip, r *action.PoisonReceipt) 
 	}
 }
 
-// classifyCleanup issues the conflict-aware revert and verifies the original was
-// restored. It maps the reverter's no-blind-write outcomes onto the cleanup
-// vocabulary and never reports "restored" without a confirming re-read.
+// classifyCleanup issues the conflict-aware revert and classifies that dispatch.
+// The run orchestrator performs the separate post-revert re-read before the
+// final report is allowed to retain CleanupRestored.
 func classifyCleanup(ctx context.Context, rt roundTrip, r *action.PoisonReceipt) campaign.RoundtripCleanup {
 	if err := rt.Revert(ctx, r); err != nil {
 		switch {
@@ -186,16 +300,7 @@ func classifyCleanup(ctx context.Context, rt roundTrip, r *action.PoisonReceipt)
 			return campaign.CleanupFailed
 		}
 	}
-	// Revert reported success (a restore or a no-op). Confirm the live state is
-	// actually back at the original before claiming the target is clean.
-	current, err := rt.ReadCurrent(ctx)
-	if err != nil {
-		return campaign.CleanupFailed
-	}
-	if current == r.OriginalContent {
-		return campaign.CleanupRestored
-	}
-	return campaign.CleanupFailed
+	return campaign.CleanupRestored
 }
 
 // parseConfig reads and validates the mutation configuration from
@@ -241,7 +346,7 @@ func planText(in campaign.RunInput, cfg config) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "scenario:      %s (v%d)\n", scenarioID, scenarioVersion)
 	fmt.Fprintf(&b, "oracle:        %s\n", campaign.OracleTypeReversibleMutationRoundtrip)
-	fmt.Fprintf(&b, "target host:   %s\n", in.Host)
+	fmt.Fprintf(&b, "target:        %s\n", campaign.SanitizedTargetReference(in.Host))
 	fmt.Fprintf(&b, "target tool:   %s\n", cfg.targetID)
 	fmt.Fprintf(&b, "mode:          %s\n", orDefault(cfg.mode, "replace"))
 	fmt.Fprintf(&b, "write:         %s %s\n", orDefault(cfg.updateMethod, "PUT"), orDefault(cfg.updatePath, "/admin/tools/{id}"))

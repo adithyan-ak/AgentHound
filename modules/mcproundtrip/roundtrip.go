@@ -2,6 +2,8 @@ package mcproundtrip
 
 import (
 	"context"
+	"errors"
+	"strings"
 
 	"github.com/adithyan-ak/agenthound/modules/mcppoison"
 	"github.com/adithyan-ak/agenthound/sdk/action"
@@ -15,7 +17,7 @@ type roundTrip interface {
 	// Mutate applies the operator-authorized mutation and returns the receipt
 	// (OriginalContent + InjectedContent captured; persisted before the write
 	// per mcppoison's crash-safety gate).
-	Mutate(ctx context.Context) (*action.PoisonReceipt, error)
+	Mutate(ctx context.Context, stepSequence uint64) (*action.PoisonReceipt, error)
 	// ReadCurrent re-reads the exact live target state. It is the oracle read
 	// (after Mutate) and the cleanup verification read (after Revert).
 	ReadCurrent(ctx context.Context) (string, error)
@@ -41,6 +43,9 @@ type mcpRoundTrip struct {
 // config. Empty method/path/list values are passed through so mcppoison applies
 // its own defaults (PUT /admin/tools/{id}, list "/").
 func newMCPRoundTrip(in campaign.RunInput, cfg config) (roundTrip, error) {
+	if strings.Contains(in.Host, "?") {
+		return nil, errors.New("mcp-poison-roundtrip: endpoint query is prohibited")
+	}
 	extras := map[string]any{}
 	if cfg.updateMethod != "" {
 		extras["update-method"] = cfg.updateMethod
@@ -62,6 +67,7 @@ func newMCPRoundTrip(in campaign.RunInput, cfg config) (roundTrip, error) {
 			TargetID:         cfg.targetID,
 			Mode:             cfg.mode,
 			EngagementID:     in.EngagementID,
+			CampaignRunID:    in.RunID,
 			// Committed round-trip; the dry-run branch is handled upstream in Run.
 			DryRun: false,
 			Extras: extras,
@@ -71,7 +77,8 @@ func newMCPRoundTrip(in campaign.RunInput, cfg config) (roundTrip, error) {
 	}, nil
 }
 
-func (m *mcpRoundTrip) Mutate(ctx context.Context) (*action.PoisonReceipt, error) {
+func (m *mcpRoundTrip) Mutate(ctx context.Context, stepSequence uint64) (*action.PoisonReceipt, error) {
+	m.payload.StepSequence = stepSequence
 	return m.poisoner.Poison(ctx, m.target, m.payload)
 }
 

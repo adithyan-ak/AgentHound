@@ -25,6 +25,8 @@ func TestFileStatefulModule_WriteReadRoundTrip(t *testing.T) {
 	r := &action.PoisonReceipt{
 		ModuleID:        "mcp.poison",
 		EngagementID:    "DC35-DEMO",
+		CampaignRunID:   "run-123",
+		StepSequence:    7,
 		TargetID:        "tool-id-123",
 		OriginalContent: "Original tool description",
 		InjectedContent: "PWNED",
@@ -57,6 +59,9 @@ func TestFileStatefulModule_WriteReadRoundTrip(t *testing.T) {
 	}
 	if rec.TargetID != "tool-id-123" {
 		t.Errorf("TargetID round-trip mismatch: %q", rec.TargetID)
+	}
+	if rec.CampaignRunID != "run-123" || rec.StepSequence != 7 {
+		t.Errorf("campaign metadata round-trip mismatch: %+v", rec)
 	}
 }
 
@@ -279,5 +284,70 @@ func TestWriteReceiptSeparateInstancesNoLoss(t *testing.T) {
 	}
 	if len(got) != N {
 		t.Errorf("expected %d receipts, got %d (receipts lost — lock failed to serialize)", N, len(got))
+	}
+}
+
+func TestReceiptPathsHaveExactPrivatePermissions(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	setStateRoot(t, root)
+	state := module.NewFileStatefulModule("permission.test")
+	path, err := state.WriteReceipt("ENG-PERMS", &action.PoisonReceipt{
+		ModuleID: "permission.test", EngagementID: "ENG-PERMS",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPerm(t, root, 0o700)
+	assertPerm(t, state.StateDir(), 0o700)
+	assertPerm(t, path, 0o600)
+}
+
+func TestReceiptPathsTightenExistingPermissiveModes(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	setStateRoot(t, root)
+	moduleDir := filepath.Join(root, "permission.tighten")
+	if err := os.MkdirAll(moduleDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(moduleDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(moduleDir, "ENG-TIGHTEN.json")
+	if err := os.WriteFile(path, []byte("[]"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o666); err != nil {
+		t.Fatal(err)
+	}
+
+	state := module.NewFileStatefulModule("permission.tighten")
+	if _, err := state.ReadReceipts("ENG-TIGHTEN"); err != nil {
+		t.Fatal(err)
+	}
+	assertPerm(t, root, 0o700)
+	assertPerm(t, moduleDir, 0o700)
+	assertPerm(t, path, 0o600)
+
+	if _, err := state.WriteReceipt("ENG-TIGHTEN", &action.PoisonReceipt{
+		ModuleID: "permission.tighten", EngagementID: "ENG-TIGHTEN",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertPerm(t, root, 0o700)
+	assertPerm(t, moduleDir, 0o700)
+	assertPerm(t, path, 0o600)
+}
+
+func assertPerm(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("%s mode = %04o, want %04o", path, got, want)
 	}
 }

@@ -41,12 +41,14 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/spf13/pflag"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/campaign"
 	"github.com/adithyan-ak/agenthound/sdk/module"
 )
 
@@ -77,11 +79,11 @@ const (
 var (
 	// ErrRevertIndeterminate signals that the pre-write re-read failed, so the
 	// live state is unknown and Revert wrote nothing.
-	ErrRevertIndeterminate = errors.New("indeterminate")
+	ErrRevertIndeterminate = action.ErrRevertIndeterminate
 	// ErrRevertConflict signals that the live description matched neither the
 	// original nor our injection (a third-party change), so Revert refused to
 	// overwrite it.
-	ErrRevertConflict = errors.New("conflict")
+	ErrRevertConflict = action.ErrRevertConflict
 )
 
 // Poisoner is the registered module.
@@ -154,7 +156,11 @@ func (p *Poisoner) Poison(ctx context.Context, t action.Target, payload action.P
 	}
 
 	baseURL := strings.TrimRight(targetBaseURL(t), "/")
-	client := &http.Client{Timeout: DefaultProbeTimeout}
+	if parsed, err := url.Parse(baseURL); err != nil ||
+		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, errors.New("mcp poison: target URL userinfo, query, and fragment are prohibited")
+	}
+	client := campaignHTTPClient()
 
 	original, err := fetchToolDescription(ctx, client, baseURL, listPath, payload.TargetID, authToken)
 	if err != nil {
@@ -166,6 +172,8 @@ func (p *Poisoner) Poison(ctx context.Context, t action.Target, payload action.P
 	receipt := &action.PoisonReceipt{
 		ModuleID:        "mcp.poison",
 		EngagementID:    payload.EngagementID,
+		CampaignRunID:   payload.CampaignRunID,
+		StepSequence:    payload.StepSequence,
 		Target:          t,
 		TargetID:        payload.TargetID,
 		OriginalContent: original,
@@ -198,7 +206,7 @@ func (p *Poisoner) Poison(ctx context.Context, t action.Target, payload action.P
 	}
 
 	if err := writeToolDescription(ctx, client, baseURL, updateMethod, updatePath, payload.TargetID, injected, authToken); err != nil {
-		return nil, fmt.Errorf("apply poison: %w", err)
+		return receipt, fmt.Errorf("apply poison: %w", err)
 	}
 
 	slog.Info("mcp poison applied",
@@ -256,7 +264,7 @@ func (p *Poisoner) Revert(ctx context.Context, receipt action.Receipt) error {
 	}
 	authToken, _ := ctx.Value(action.RevertAuthTokenKey{}).(string)
 
-	client := &http.Client{Timeout: DefaultProbeTimeout}
+	client := campaignHTTPClient()
 
 	// Re-read the live description so we can decide safely. A failure
 	// here is INDETERMINATE — we must not fall back to a blind write,
@@ -318,8 +326,15 @@ func (p *Poisoner) ReadDescription(ctx context.Context, t action.Target, targetI
 		listPath = DefaultListPath
 	}
 	baseURL := strings.TrimRight(targetBaseURL(t), "/")
-	client := &http.Client{Timeout: DefaultProbeTimeout}
+	client := campaignHTTPClient()
 	return fetchToolDescription(ctx, client, baseURL, listPath, targetID, authToken)
+}
+
+func campaignHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout:   DefaultProbeTimeout,
+		Transport: campaign.CountingTransport{Base: http.DefaultTransport},
+	}
 }
 
 // composeContent returns the new description according to mode. The
@@ -415,8 +430,7 @@ func writeToolDescription(ctx context.Context, client *http.Client, baseURL, met
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		drained, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
-		return fmt.Errorf("update status %d: %s", resp.StatusCode, strings.TrimSpace(string(drained)))
+		return fmt.Errorf("update status %d", resp.StatusCode)
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package instructionpoison
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,6 +38,8 @@ func TestPoison_AppendsSentinelBlock(t *testing.T) {
 		action.PoisonPayload{
 			InjectionContent: injection,
 			EngagementID:     "ENG-1",
+			CampaignRunID:    "run-instruction",
+			StepSequence:     4,
 			Extras:           map[string]any{"file": path},
 		})
 	if err != nil {
@@ -44,6 +47,9 @@ func TestPoison_AppendsSentinelBlock(t *testing.T) {
 	}
 	if receipt.DryRun {
 		t.Error("DryRun should be false")
+	}
+	if receipt.CampaignRunID != "run-instruction" || receipt.StepSequence != 4 {
+		t.Errorf("campaign metadata not copied to receipt: %+v", receipt)
 	}
 
 	got, err := os.ReadFile(path)
@@ -86,6 +92,32 @@ func TestPoison_DryRunDoesNotMutate(t *testing.T) {
 	}
 	if string(got) != originalCLAUDE {
 		t.Errorf("dry-run mutated file; got %q", string(got))
+	}
+}
+
+func TestRevertConflictsOnModifiedLiveSentinelBlock(t *testing.T) {
+	p := newPoisoner(t)
+	path := filepath.Join(t.TempDir(), "CLAUDE.md")
+	writeOriginal(t, path)
+	receipt, err := p.Poison(context.Background(), action.Target{}, action.PoisonPayload{
+		InjectionContent: injection,
+		EngagementID:     "ENG-MODIFIED",
+		Extras:           map[string]any{"file": path},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, _ := os.ReadFile(path)
+	modified := strings.Replace(string(current), injection, "third-party replacement\n", 1)
+	if err := os.WriteFile(path, []byte(modified), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Revert(context.Background(), receipt); !errors.Is(err, action.ErrRevertConflict) {
+		t.Fatalf("Revert error = %v, want conflict", err)
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) != modified {
+		t.Fatal("conflicting revert modified third-party sentinel content")
 	}
 }
 

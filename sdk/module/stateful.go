@@ -152,10 +152,13 @@ func (s *FileStatefulModule) WriteReceipt(engagementID string, r action.Receipt)
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("create state dir: %w", err)
+	if err := ensurePrivateStateDirs(dir); err != nil {
+		return "", err
 	}
 	path := filepath.Join(dir, engagementID+".json")
+	if err := tightenReceiptFile(path); err != nil {
+		return "", err
+	}
 
 	closer, err := lockFile(path)
 	if err != nil {
@@ -182,9 +185,16 @@ func (s *FileStatefulModule) WriteReceipt(engagementID string, r action.Receipt)
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return "", fmt.Errorf("write receipts tmp: %w", err)
 	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		_ = os.Remove(tmp)
+		return "", fmt.Errorf("chmod receipts tmp: %w", err)
+	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return "", fmt.Errorf("atomic rename: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return "", fmt.Errorf("chmod receipt file: %w", err)
 	}
 	return path, nil
 }
@@ -197,7 +207,13 @@ func (s *FileStatefulModule) ReadReceipts(engagementID string) ([]action.Receipt
 	if err != nil {
 		return nil, err
 	}
+	if err := ensurePrivateStateDirs(dir); err != nil {
+		return nil, err
+	}
 	path := filepath.Join(dir, engagementID+".json")
+	if err := tightenReceiptFile(path); err != nil {
+		return nil, err
+	}
 	envs, err := readReceiptsFile(path)
 	if err != nil {
 		return nil, err
@@ -207,6 +223,29 @@ func (s *FileStatefulModule) ReadReceipts(engagementID string) ([]action.Receipt
 		out = append(out, e.Receipt)
 	}
 	return out, nil
+}
+
+func ensurePrivateStateDirs(moduleDir string) error {
+	root, err := DefaultStateRoot()
+	if err != nil {
+		return err
+	}
+	for _, dir := range []string{root, moduleDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("create state dir: %w", err)
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return fmt.Errorf("chmod state dir: %w", err)
+		}
+	}
+	return nil
+}
+
+func tightenReceiptFile(path string) error {
+	if err := os.Chmod(path, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("chmod receipt file: %w", err)
+	}
+	return nil
 }
 
 // validEngagementID gates engagement-id strings so a hostile operator

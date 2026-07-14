@@ -1,7 +1,5 @@
 package campaign
 
-import "strings"
-
 // OracleTypeReversibleMutationRoundtrip identifies the STANDALONE
 // target-mutation validation oracle: an operator-authorized mutation is applied,
 // the exact injected state is re-read (the oracle), a conflict-aware revert is
@@ -43,6 +41,8 @@ const (
 type RoundtripCleanup string
 
 const (
+	// CleanupNotApplicable is used by read-only scenarios.
+	CleanupNotApplicable RoundtripCleanup = "not_applicable"
 	// CleanupRestored: the conflict-aware revert completed and a post-revert
 	// re-read confirms the live state equals OriginalContent. This also covers a
 	// no-op revert (the target already matched the original) — either way the
@@ -59,53 +59,3 @@ const (
 	// post-revert re-read did not observe the original. The receipt is retained.
 	CleanupFailed RoundtripCleanup = "failed"
 )
-
-// RoundtripReport is the collector-safe transport for a STANDALONE
-// target-mutation validation round-trip. It reports the oracle (did the
-// operator-authorized mutation land?) and the cleanup (was the original
-// restored?) as INDEPENDENT outcomes.
-//
-// It carries no credential material, no injected/original content, and is never
-// turned into an attack finding or a validated-credential-path claim. The
-// round-trip evidence stays in this transport — it is deliberately NOT emitted
-// as a scored graph edge (see modules/mcproundtrip for the representation
-// rationale), so a finding-free validation never pollutes the graph.
-type RoundtripReport struct {
-	ScenarioID      string `json:"scenario_id"`
-	ScenarioVersion int    `json:"scenario_version"`
-	RunID           string `json:"run_id"`
-	EngagementID    string `json:"engagement_id"`
-	OracleType      string `json:"oracle_type"`
-	// Standalone is always true: it documents on the wire that the report is a
-	// target-mutation validation, not an attack finding.
-	Standalone bool             `json:"standalone"`
-	TargetID   string           `json:"target_id"`
-	Oracle     RoundtripOracle  `json:"oracle"`
-	Cleanup    RoundtripCleanup `json:"cleanup"`
-	VerifiedAt string           `json:"verified_at"`
-	// Detail is a short, non-sensitive diagnostic. It never contains the
-	// injected/original content or any credential value.
-	Detail string `json:"detail,omitempty"`
-}
-
-// TargetClean reports whether the target was left in its original state after
-// the round-trip. A false value means the operator must run
-// `agenthound revert <engagement>` (the receipt is retained) or investigate a
-// third-party change.
-func (r RoundtripReport) TargetClean() bool {
-	return r.Cleanup == CleanupRestored
-}
-
-// Summary renders a one-line operator-facing summary that reports the oracle and
-// cleanup outcomes SEPARATELY.
-func (r RoundtripReport) Summary() string {
-	var b strings.Builder
-	b.WriteString("oracle=")
-	b.WriteString(string(r.Oracle))
-	b.WriteString(" cleanup=")
-	b.WriteString(string(r.Cleanup))
-	if !r.TargetClean() {
-		b.WriteString(" (TARGET NOT CLEAN — receipt retained; run `agenthound revert`)")
-	}
-	return b.String()
-}

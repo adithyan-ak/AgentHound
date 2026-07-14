@@ -19,9 +19,10 @@
 // Ordering is per (module, engagement) — the same scope as the receipt
 // file's advisory lock — not a global sequence across modules.
 //
-// Idempotent — already-reverted receipts surface as no-ops (the
-// Poisoner's Revert checks current target state before writing).
-// Receipts with DryRun=true are also no-ops.
+// Conflict-aware partial retries use each receipt's live-state checks. A fully
+// completed stacked rollback is not universally replay-idempotent because
+// immutable receipts carry no completion state; an older restored state may
+// correctly conflict with the newest receipt on a later full replay.
 //
 // Failure handling. Reverters must never blind-write: a Revert that
 // cannot confirm the current state (re-read failure) or finds a
@@ -40,12 +41,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/campaign"
 	"github.com/adithyan-ak/agenthound/sdk/module"
 )
 
@@ -62,9 +65,9 @@ var revertCmd = &cobra.Command{
 	Long: `Walk every module's state directory, read receipts whose engagement-id
 matches the argument, and dispatch per-module Revert.
 
-Idempotent: re-running 'agenthound revert <id>' against an already-
-reverted engagement is safe — Reverters check current target state
-before writing.
+Retries are conflict-aware: Reverters check current target state before writing.
+Receipts remain immutable, so replaying an already-completed stacked rollback is
+not guaranteed to be a no-op and may conservatively report a conflict.
 
 Dry-run receipts (poison without --commit) are no-ops.
 
@@ -218,4 +221,130 @@ func isDryRun(r action.Receipt) bool {
 		return v.DryRun
 	}
 	return false
+}
+
+type runScopedReceipt struct {
+	sequence uint64
+	receipt  action.Receipt
+	reverter action.Reverter
+}
+
+// cleanupCampaignRun is the authoritative campaign cleanup path. It selects
+// one exact engagement+run across every registered stateful module, validates
+// globally unique positive invocation sequences before writing anything, then
+// fail-stops in descending sequence order. Receipts are never changed or
+// removed.
+func cleanupCampaignRun(
+	ctx context.Context,
+	engagementID string,
+	campaignRunID string,
+) campaign.CleanupExecution {
+	if strings.TrimSpace(engagementID) == "" || strings.TrimSpace(campaignRunID) == "" {
+		return campaign.CleanupExecution{
+			Status: campaign.CleanupIndeterminate, FailureCode: "scope_missing",
+		}
+	}
+
+	selected := make([]runScopedReceipt, 0)
+	sequences := make(map[uint64]bool)
+	for _, mod := range module.List() {
+		stateful, ok := mod.(statefulModule)
+		if !ok || stateful.Stateful() == nil {
+			continue
+		}
+		receipts, err := stateful.Stateful().ReadReceipts(engagementID)
+		if err != nil {
+			return campaign.CleanupExecution{
+				Status: campaign.CleanupIndeterminate, ReceiptsRetained: true,
+				FailureCode: "receipt_read_failed",
+			}
+		}
+		for _, receipt := range receipts {
+			receiptEngagement, runID, sequence, known := receiptRunMetadata(receipt)
+			if !known || runID != campaignRunID {
+				continue
+			}
+			if receiptEngagement != engagementID || sequence == 0 || sequences[sequence] {
+				return campaign.CleanupExecution{
+					Status: campaign.CleanupIndeterminate, ReceiptsRetained: true,
+					FailureCode: "invalid_sequence_metadata",
+				}
+			}
+			reverter, ok := mod.(action.Reverter)
+			if !ok {
+				return campaign.CleanupExecution{
+					Status: campaign.CleanupIndeterminate, ReceiptsRetained: true,
+					FailureCode: "reverter_missing",
+				}
+			}
+			sequences[sequence] = true
+			selected = append(selected, runScopedReceipt{
+				sequence: sequence, receipt: receipt, reverter: reverter,
+			})
+		}
+	}
+	if len(selected) == 0 {
+		return campaign.CleanupExecution{
+			Status: campaign.CleanupIndeterminate, FailureCode: "receipt_missing",
+		}
+	}
+	sort.Slice(selected, func(i, j int) bool {
+		return selected[i].sequence > selected[j].sequence
+	})
+	for _, item := range selected {
+		if !isDryRun(item.receipt) {
+			if err := campaign.ConsumeMutation(ctx); err != nil {
+				return campaign.CleanupExecution{
+					Status:           campaign.CleanupIndeterminate,
+					ReceiptsSelected: len(selected), ReceiptsRetained: true,
+					FailureCode: "mutation_budget",
+				}
+			}
+		}
+		if err := item.reverter.Revert(ctx, item.receipt); err != nil {
+			status := campaign.CleanupFailed
+			switch {
+			case errors.Is(err, action.ErrRevertConflict):
+				status = campaign.CleanupConflict
+			case errors.Is(err, action.ErrRevertIndeterminate),
+				errors.Is(err, context.DeadlineExceeded),
+				errors.Is(err, context.Canceled):
+				status = campaign.CleanupIndeterminate
+			}
+			return campaign.CleanupExecution{
+				Status: status, ReceiptsSelected: len(selected), ReceiptsRetained: true,
+				FailureCode: "revert_failed",
+			}
+		}
+	}
+	return campaign.CleanupExecution{
+		Status:           campaign.CleanupRestored,
+		ReceiptsSelected: len(selected), ReceiptsRetained: true,
+	}
+}
+
+func receiptRunMetadata(receipt action.Receipt) (
+	engagementID string,
+	campaignRunID string,
+	stepSequence uint64,
+	known bool,
+) {
+	switch value := receipt.(type) {
+	case *action.PoisonReceipt:
+		if value == nil {
+			return "", "", 0, false
+		}
+		return value.EngagementID, value.CampaignRunID, value.StepSequence, true
+	case action.PoisonReceipt:
+		return value.EngagementID, value.CampaignRunID, value.StepSequence, true
+	case *action.ImplantReceipt:
+		if value == nil {
+			return "", "", 0, false
+		}
+		return value.EngagementID, value.CampaignRunID, value.StepSequence, true
+	case action.ImplantReceipt:
+		return value.EngagementID, value.CampaignRunID, value.StepSequence, true
+	default:
+		return "", "", 0, false
+	}
 }

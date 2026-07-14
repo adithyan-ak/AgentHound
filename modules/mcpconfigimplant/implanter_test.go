@@ -3,6 +3,7 @@ package mcpconfigimplant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,10 +48,15 @@ func TestImplant_AddsServerAndRevertRemoves(t *testing.T) {
 		action.ImplantPayload{
 			InjectionContent: evilEntry,
 			EngagementID:     "ENG-1",
+			CampaignRunID:    "run-implant",
+			StepSequence:     5,
 			Extras:           map[string]any{"file": path},
 		})
 	if err != nil {
 		t.Fatalf("Implant: %v", err)
+	}
+	if receipt.CampaignRunID != "run-implant" || receipt.StepSequence != 5 {
+		t.Errorf("campaign metadata not copied to receipt: %+v", receipt)
 	}
 
 	got, _ := os.ReadFile(path)
@@ -103,6 +109,40 @@ func TestImplant_DryRunDoesNotMutate(t *testing.T) {
 	got, _ := os.ReadFile(path)
 	if string(got) != seedConfig {
 		t.Errorf("dry-run mutated file: %s", string(got))
+	}
+}
+
+func TestRevertConflictsOnModifiedLiveServerEntry(t *testing.T) {
+	implanter := newImplanter(t)
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	writeSeed(t, path)
+	receipt, err := implanter.Implant(context.Background(), action.Target{}, action.ImplantPayload{
+		InjectionContent: evilEntry,
+		EngagementID:     "ENG-MODIFIED",
+		Extras:           map[string]any{"file": path},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	servers := config["mcpServers"].(map[string]any)
+	name := "agenthound-implant-ENG-MODIFIED"
+	servers[name] = map[string]any{"command": "third-party"}
+	modified, _ := json.MarshalIndent(config, "", "  ")
+	modified = append(modified, '\n')
+	if err := os.WriteFile(path, modified, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := implanter.Revert(context.Background(), receipt); !errors.Is(err, action.ErrRevertConflict) {
+		t.Fatalf("Revert error = %v, want conflict", err)
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) != string(modified) {
+		t.Fatal("conflicting revert modified third-party server entry")
 	}
 }
 

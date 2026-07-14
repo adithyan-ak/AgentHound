@@ -43,6 +43,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
+	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/campaign"
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
@@ -192,13 +193,34 @@ func runCampaign(cmd *cobra.Command, args []string) error {
 		stdinConsumed = witnessFromStdin || credentialStdin
 	} else {
 		in.Params = campaignMutationParams(cmd)
+		authToken := in.Params["auth-token"]
+		in.CleanupRun = func(
+			ctx context.Context,
+			engagementID string,
+			campaignRunID string,
+		) campaign.CleanupExecution {
+			if authToken != "" {
+				ctx = context.WithValue(ctx, action.RevertAuthTokenKey{}, authToken)
+			}
+			return cleanupCampaignRun(ctx, engagementID, campaignRunID)
+		}
 	}
 
 	if err := requireCampaignAcknowledged(cmd.OutOrStderr(), stdin, stdinConsumed); err != nil {
 		return err
 	}
+	if commit && scenarioRequiresMutationConsent(scenario) {
+		if err := requirePoisonAcknowledged(cmd.OutOrStderr(), stdin); err != nil {
+			return fmt.Errorf("campaign: destructive acknowledgement: %w", err)
+		}
+	}
 
-	res, err := scenario.Run(context.Background(), in)
+	res, err := scenario.Run(cmd.Context(), in)
+	if res != nil && res.Report != nil {
+		if reportErr := writeCampaignReport(cmd.OutOrStderr(), res.Report); reportErr != nil {
+			return reportErr
+		}
+	}
 	if err != nil {
 		if errors.Is(err, campaign.ErrNotRunnable) {
 			_, _ = fmt.Fprintf(cmd.OutOrStderr(), "[campaign] NOT RUNNABLE: %v\n", err)
@@ -220,10 +242,10 @@ func runCampaign(cmd *cobra.Command, args []string) error {
 	// outcomes separately. No differential graph evidence is emitted — the
 	// round-trip evidence stays in the campaign transport, never a scored edge
 	// or finding.
-	if res.Roundtrip != nil {
+	if res.Report != nil && res.Report.Standalone {
 		_, _ = fmt.Fprintf(cmd.OutOrStderr(),
 			"[campaign] COMMITTED %s on %s (STANDALONE target-mutation validation) — %s\n",
-			scenario.ID(), targetRef, res.Roundtrip.Summary())
+			scenario.ID(), targetRef, res.Report.Summary())
 		return nil
 	}
 
@@ -241,6 +263,22 @@ func runCampaign(cmd *cobra.Command, args []string) error {
 		return writeCollectorOutputStdout(envelope)
 	}
 	return writeCollectorOutput(envelope, output)
+}
+
+func scenarioRequiresMutationConsent(s campaign.Scenario) bool {
+	required, ok := s.(interface{ RequiresMutationConsent() bool })
+	return ok && required.RequiresMutationConsent()
+}
+
+func writeCampaignReport(w io.Writer, report *campaign.RunReport) error {
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		return fmt.Errorf("campaign: encode run report: %w", err)
+	}
+	if _, err := fmt.Fprintf(w, "[campaign] RUN_REPORT %s\n", encoded); err != nil {
+		return fmt.Errorf("campaign: write run report: %w", err)
+	}
+	return nil
 }
 
 // scenarioRequiresWitness reports whether a scenario consumes a credential-reach

@@ -63,32 +63,70 @@ func (s *Scenario) Run(ctx context.Context, in campaign.RunInput) (*campaign.Run
 		}, nil
 	}
 
+	runID := strings.TrimSpace(in.RunID)
+	if runID == "" {
+		runID = uuid.NewString()
+	}
+	elapsedLimit := in.Timeout
+	if elapsedLimit <= 0 {
+		elapsedLimit = defaultProbeTimeout
+	}
+	runCtx, cancel, budget := campaign.NewBudgetContext(ctx, campaign.RunLimits{
+		RequestLimit:  16,
+		MutationLimit: 0,
+		ElapsedLimit:  elapsedLimit,
+	})
+	defer cancel()
+	now := in.Clock()
+	report := &campaign.RunReport{
+		ReportVersion:   campaign.RunReportVersion,
+		ScenarioID:      scenarioID,
+		ScenarioVersion: scenarioVersion,
+		CampaignRunID:   runID,
+		EngagementID:    in.EngagementID,
+		AgentID:         in.Witness.AgentID,
+		ServerID:        in.Witness.ServerID,
+		CredentialID:    in.Witness.CredentialID,
+		ResourceID:      in.Witness.ResourceID,
+		TargetRef:       binding.TargetRef,
+		StartedAt:       now().UTC().Format(time.RFC3339),
+		Steps:           []campaign.StepObservation{},
+		Cleanup: campaign.CleanupReport{
+			Status: campaign.CleanupNotApplicable, Postcondition: "not_applicable",
+			ReceiptRetained: false,
+		},
+	}
+	report.AddStep(campaign.StepValidateBind, "bound")
+
 	prober := in.Prober
 	if prober == nil {
 		prober = defaultProber()
 	}
 
-	control := prober.Probe(ctx, campaign.ProbeRequest{
+	control := prober.Probe(runCtx, campaign.ProbeRequest{
 		Host:        binding.Endpoint,
 		ResourceURI: in.Witness.ResourceIdentityInput,
 		Credential:  "",
 		Insecure:    in.Insecure,
 		Timeout:     in.Timeout,
 	})
-	authed := prober.Probe(ctx, campaign.ProbeRequest{
-		Host:        binding.Endpoint,
-		ResourceURI: in.Witness.ResourceIdentityInput,
-		Credential:  in.CredentialMaterial,
-		Insecure:    in.Insecure,
-		Timeout:     in.Timeout,
-	})
+	report.AddStep(campaign.StepControlProbe, probeObservation(control))
+	authed := campaign.ProbeResult{}
+	if budget.Exhaustion(runCtx) == nil {
+		authed = prober.Probe(runCtx, campaign.ProbeRequest{
+			Host:        binding.Endpoint,
+			ResourceURI: in.Witness.ResourceIdentityInput,
+			Credential:  in.CredentialMaterial,
+			Insecure:    in.Insecure,
+			Timeout:     in.Timeout,
+		})
+		report.AddStep(campaign.StepAuthenticatedProbe, probeObservation(authed))
+	} else {
+		report.AddStep(campaign.StepAuthenticatedProbe, "budget_exhausted")
+	}
 
 	outcome := campaign.Classify(control, authed)
-
-	runID := strings.TrimSpace(in.RunID)
-	if runID == "" {
-		runID = uuid.NewString()
-	}
+	report.AddStep(campaign.StepClassify, string(outcome))
 
 	evidence := &campaign.Evidence{
 		ScenarioID:       scenarioID,
@@ -103,17 +141,54 @@ func (s *Scenario) Run(ctx context.Context, in campaign.RunInput) (*campaign.Run
 		AuthedStage:      authed.Stage,
 		AuthedStatus:     authed.Status,
 		AuthedAddressed:  authed.ResourceAddressed,
-		VerifiedAt:       in.Clock()().UTC().Format(time.RFC3339),
+		VerifiedAt:       now().UTC().Format(time.RFC3339),
 		Witness:          in.Witness,
 	}
 
-	return &campaign.RunResult{
+	report.AddStep(campaign.StepEmit, evidenceObservation(outcome))
+	report.Oracle = campaign.OracleReport{
+		Type:        campaign.OracleTypeDifferentialCredentialReach,
+		Observation: probePairObservation(control, authed),
+		Outcome:     string(outcome),
+	}
+	report.CompletedAt = now().UTC().Format(time.RFC3339)
+	report.Budget = budget.Snapshot()
+	result := &campaign.RunResult{
 		Outcome:       outcome,
 		Evidence:      evidence,
 		TargetRef:     binding.TargetRef,
 		ControlStatus: control.Status,
 		AuthedStatus:  authed.Status,
-	}, nil
+		Report:        report,
+	}
+	if exhausted := budget.Exhaustion(runCtx); exhausted != nil {
+		return result, exhausted
+	}
+	return result, nil
+}
+
+func probeObservation(result campaign.ProbeResult) string {
+	if result.Detail != "" {
+		return result.Detail
+	}
+	if result.Stage == "" || result.Status == "" {
+		return "incomplete"
+	}
+	return string(result.Stage) + "_" + string(result.Status)
+}
+
+func probePairObservation(control, authed campaign.ProbeResult) string {
+	if control.Stage == "" || authed.Stage == "" {
+		return "incomplete"
+	}
+	return "staged_pair"
+}
+
+func evidenceObservation(outcome campaign.Outcome) string {
+	if _, emitted := outcome.EdgeKind(); emitted {
+		return "evidence_emitted"
+	}
+	return "no_evidence"
 }
 
 // planText renders the read-only plan for a dry run. It names the exact probes
