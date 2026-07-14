@@ -20,6 +20,8 @@ Both binaries read environment variables at startup. The collector has no config
 | `AGENTHOUND_QUIET` | `--quiet` | _(unset)_ | Set to `1` to suppress non-error log output, plus the `scan` / `discover` progress line, the per-host/endpoint summary, and fingerprint output |
 | `AGENTHOUND_LOG_JSON` | `--log-json` | _(unset)_ | Set to `1` for structured JSON logs to stderr |
 | `AGENTHOUND_RULES_BUNDLE` | `--rules-bundle` | _(unset)_ | Path to a fingerprint rules bundle (directory or `.tar.gz`). Same-id rules override the embedded set. Verify cosign signature before use. |
+| `AGENTHOUND_CAMPAIGN_CREDENTIAL` | `--credential-env` (names the var) | _(unset)_ | Out-of-band credential material for `agenthound campaign`. Hash-matched locally against the witness `value_hash`; never logged, serialized, or written to the graph. Never pass credentials as a flag. |
+| `AGENTHOUND_CAMPAIGN_AUTHORIZED` | _(none)_ | _(unset)_ | Set to `AUTHORIZED` to acknowledge the `campaign` authorization gate non-interactively (needed when stdin is consumed by `--witness -` / `--credential-stdin`). |
 
 Output file permissions: `0600` on POSIX. Atomic write via temp file + rename.
 

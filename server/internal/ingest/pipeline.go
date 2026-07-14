@@ -38,6 +38,10 @@ type nodeEdgeWriter interface {
 // every ingest requires both operations.
 type scanLifecycleRecorder interface {
 	BeginScan(ctx context.Context, scan *model.Scan, dirtyCoverage []string) ([]string, error)
+	RecordCampaignRejection(
+		ctx context.Context,
+		audit appdb.CampaignRejectionAudit,
+	) error
 	ResolveRetiredCoverage(
 		ctx context.Context,
 		roots []sdkingest.CoverageRoot,
@@ -113,10 +117,25 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	// Stage 1: Validate
 	stageStart := time.Now()
 	if err := p.validator.Validate(data); err != nil {
+		if isCampaignSubmission(data) {
+			return nil, p.rejectCampaignArtifact(
+				ctx,
+				campaignAuditIdentityFromData(data),
+				campaignRejectionGenericIngestInvalid,
+			)
+		}
 		return nil, err
 	}
 	appendStage(result, "validate", sdkingest.OutcomeComplete, true, stageStart, nil)
 	slog.Info("validation passed", "nodes", len(data.Graph.Nodes), "edges", len(data.Graph.Edges))
+
+	// Campaign artifacts receive their scenario-specific structural and live
+	// topology validation before normalization, BeginScan, canonical writes, or
+	// reconciliation. Rejections are audit-only PostgreSQL rows and cannot dirty
+	// or retire coverage.
+	if err := p.prevalidateCampaignArtifact(ctx, data); err != nil {
+		return nil, err
+	}
 
 	result.Collection = *data.Meta.Collection
 	stageStart = time.Now()

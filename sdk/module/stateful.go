@@ -46,11 +46,14 @@ type StatefulModule interface {
 	StateDir() string
 
 	// WriteReceipt appends r to the engagement-id's receipts file under
-	// StateDir(). Returns the absolute path of the written file. The
-	// CLI calls this AFTER the Poisoner has successfully applied the
-	// mutation, but BEFORE it reports success to the operator — a crash
-	// between the HTTP write and the receipt write would otherwise
-	// leave a tampered target without a revert path.
+	// StateDir() and returns the absolute path of the written file.
+	//
+	// Ordering (crash safety): a committing Poisoner/Implanter persists
+	// the receipt BEFORE it issues the mutating write, so a crash after
+	// the mutation can never strand a tampered target with no revert
+	// path. The receipt is written exactly once — there is no
+	// post-mutation re-write. Dry-run receipts (which mutate nothing) are
+	// persisted by the CLI after the module returns.
 	WriteReceipt(engagementID string, r action.Receipt) (path string, err error)
 
 	// ReadReceipts loads every receipt persisted under engagement-id.
@@ -149,10 +152,13 @@ func (s *FileStatefulModule) WriteReceipt(engagementID string, r action.Receipt)
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("create state dir: %w", err)
+	if err := ensurePrivateStateDirs(dir); err != nil {
+		return "", err
 	}
 	path := filepath.Join(dir, engagementID+".json")
+	if err := tightenReceiptFile(path); err != nil {
+		return "", err
+	}
 
 	closer, err := lockFile(path)
 	if err != nil {
@@ -179,9 +185,16 @@ func (s *FileStatefulModule) WriteReceipt(engagementID string, r action.Receipt)
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return "", fmt.Errorf("write receipts tmp: %w", err)
 	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		_ = os.Remove(tmp)
+		return "", fmt.Errorf("chmod receipts tmp: %w", err)
+	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return "", fmt.Errorf("atomic rename: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return "", fmt.Errorf("chmod receipt file: %w", err)
 	}
 	return path, nil
 }
@@ -194,7 +207,13 @@ func (s *FileStatefulModule) ReadReceipts(engagementID string) ([]action.Receipt
 	if err != nil {
 		return nil, err
 	}
+	if err := ensurePrivateStateDirs(dir); err != nil {
+		return nil, err
+	}
 	path := filepath.Join(dir, engagementID+".json")
+	if err := tightenReceiptFile(path); err != nil {
+		return nil, err
+	}
 	envs, err := readReceiptsFile(path)
 	if err != nil {
 		return nil, err
@@ -204,6 +223,29 @@ func (s *FileStatefulModule) ReadReceipts(engagementID string) ([]action.Receipt
 		out = append(out, e.Receipt)
 	}
 	return out, nil
+}
+
+func ensurePrivateStateDirs(moduleDir string) error {
+	root, err := DefaultStateRoot()
+	if err != nil {
+		return err
+	}
+	for _, dir := range []string{root, moduleDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("create state dir: %w", err)
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return fmt.Errorf("chmod state dir: %w", err)
+		}
+	}
+	return nil
+}
+
+func tightenReceiptFile(path string) error {
+	if err := os.Chmod(path, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("chmod receipt file: %w", err)
+	}
+	return nil
 }
 
 // validEngagementID gates engagement-id strings so a hostile operator

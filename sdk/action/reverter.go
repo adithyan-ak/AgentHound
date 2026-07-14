@@ -1,6 +1,14 @@
 package action
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+var (
+	ErrRevertIndeterminate = errors.New("revert indeterminate")
+	ErrRevertConflict      = errors.New("revert conflict")
+)
 
 // Reverter is the destructive-action super-interface. Every Poisoner and
 // Implanter must compose it so any change made on-target can be undone.

@@ -27,6 +27,7 @@ const FINDING_EVIDENCE_STATES = new Set<FindingEvidence["state"]>([
   "inferred",
   "hypothesis",
   "reference_only",
+  "verified",
 ]);
 
 export async function fetchFindings(
@@ -179,9 +180,88 @@ function decodeFindingEvidence(value: unknown, path: string): FindingEvidence {
   if (!FINDING_EVIDENCE_STATES.has(evidence.state as FindingEvidence["state"])) {
     throw new TypeError(`${path}.state is invalid`);
   }
+  const verification =
+    evidence.verification == null
+      ? undefined
+      : decodeFindingVerification(evidence.verification, `${path}.verification`);
+  if (evidence.state === "verified" && verification == null) {
+    throw new TypeError(`${path}.verification is required for verified evidence`);
+  }
   return {
     ...(evidence as unknown as FindingEvidence),
     channels: stringCollection(evidence.channels, `${path}.channels`),
+    verification,
+  };
+}
+
+function decodeFindingVerification(
+  value: unknown,
+  path: string,
+): NonNullable<FindingEvidence["verification"]> {
+  const verification = record(value, path);
+  const scenarioVersion = finiteNumber(
+    verification.scenario_version,
+    `${path}.scenario_version`,
+  );
+  if (!Number.isSafeInteger(scenarioVersion) || scenarioVersion < 1) {
+    throw new TypeError(`${path}.scenario_version must be a positive integer`);
+  }
+  const controlStage = requiredString(
+    verification.control_stage,
+    `${path}.control_stage`,
+  );
+  const authedStage = requiredString(
+    verification.authed_stage,
+    `${path}.authed_stage`,
+  );
+  if (!["initialize", "resource_read"].includes(controlStage)) {
+    throw new TypeError(`${path}.control_stage is invalid`);
+  }
+  if (!["initialize", "resource_read"].includes(authedStage)) {
+    throw new TypeError(`${path}.authed_stage is invalid`);
+  }
+  const cleanupStatus = requiredString(
+    verification.cleanup_status,
+    `${path}.cleanup_status`,
+  );
+  if (
+    !["not_applicable", "restored", "conflict", "indeterminate", "failed"].includes(
+      cleanupStatus,
+    )
+  ) {
+    throw new TypeError(`${path}.cleanup_status is invalid`);
+  }
+  return {
+    scenario_id: requiredString(verification.scenario_id, `${path}.scenario_id`),
+    scenario_version: scenarioVersion,
+    campaign_run_id: requiredString(
+      verification.campaign_run_id,
+      `${path}.campaign_run_id`,
+    ),
+    verified_at: requiredString(verification.verified_at, `${path}.verified_at`),
+    oracle_type: requiredString(verification.oracle_type, `${path}.oracle_type`),
+    outcome: requiredString(verification.outcome, `${path}.outcome`),
+    control_stage: controlStage as "initialize" | "resource_read",
+    control_status: requiredString(
+      verification.control_status,
+      `${path}.control_status`,
+    ),
+    control_resource_addressed: requiredBoolean(
+      verification.control_resource_addressed,
+      `${path}.control_resource_addressed`,
+    ),
+    authed_stage: authedStage as "initialize" | "resource_read",
+    authed_status: requiredString(
+      verification.authed_status,
+      `${path}.authed_status`,
+    ),
+    authed_resource_addressed: requiredBoolean(
+      verification.authed_resource_addressed,
+      `${path}.authed_resource_addressed`,
+    ),
+    cleanup_status: cleanupStatus as NonNullable<
+      FindingEvidence["verification"]
+    >["cleanup_status"],
   };
 }
 

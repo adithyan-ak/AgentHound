@@ -113,8 +113,19 @@ func TestIntegrationFindingStore(t *testing.T) {
 			SourceID: "s1", SourceName: "agent", SourceKind: "AgentInstance", TargetID: "t1", TargetName: "tool", TargetKind: "MCPTool",
 			Confidence: 0.9, Variant: model.FindingVariantDefault,
 			Evidence: model.FindingEvidence{
-				State: model.FindingEvidenceInferred, Detector: "mcp",
+				State: model.FindingEvidenceVerified, Detector: "mcp",
 				Channels: []string{"file_write"},
+				Verification: &model.FindingVerification{
+					ScenarioID: "cred-reach", ScenarioVersion: 1,
+					CampaignRunID: "run-storage", VerifiedAt: "2026-07-13T12:00:00Z",
+					OracleType:   "differential_credential_reach",
+					Outcome:      "credential_gated_reach_verified",
+					ControlStage: "initialize", ControlStatus: "denied",
+					ControlResourceAddressed: false,
+					AuthedStage:              "resource_read", AuthedStatus: "allowed",
+					AuthedResourceAddressed: true,
+					CleanupStatus:           "not_applicable",
+				},
 			},
 			ExactEvidence: &model.ExactFindingEvidence{
 				Version: 1, Complete: true, Reasons: []string{},
@@ -149,10 +160,15 @@ func TestIntegrationFindingStore(t *testing.T) {
 				t.Fatalf("persisted atlas_map = %v, want [AML.T0086]", f.ATLASMap)
 			}
 			if f.Variant != model.FindingVariantDefault ||
-				f.Evidence.State != model.FindingEvidenceInferred ||
+				f.Evidence.State != model.FindingEvidenceVerified ||
 				len(f.Evidence.Channels) != 1 ||
 				f.Evidence.Channels[0] != "file_write" {
 				t.Fatalf("persisted finding evidence = %+v", f)
+			}
+			if f.Evidence.Verification == nil ||
+				f.Evidence.Verification.CampaignRunID != "run-storage" ||
+				f.Evidence.Verification.CleanupStatus != "not_applicable" {
+				t.Fatalf("persisted verification metadata = %+v", f.Evidence.Verification)
 			}
 			if f.ExactEvidence == nil ||
 				!f.ExactEvidence.Complete ||

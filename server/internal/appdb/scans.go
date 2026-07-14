@@ -41,6 +41,19 @@ type ScanFailure struct {
 	Metadata         map[string]any
 }
 
+// CampaignRejectionAudit is the complete sanitized payload persisted for a
+// campaign artifact rejected before BeginScan. It intentionally has no raw
+// artifact, artifact digest, endpoint, witness, credential material, or
+// free-form error.
+type CampaignRejectionAudit struct {
+	RejectionID     string
+	RunID           string
+	ScenarioID      string
+	ScenarioVersion int
+	Outcome         string
+	ReasonCodes     []string
+}
+
 type ScanDeleteConflictError struct {
 	Reason string
 }
@@ -241,6 +254,52 @@ func (s *ScanStore) BeginScan(
 		return nil, fmt.Errorf("commit scan lifecycle: %w", err)
 	}
 	return cumulativeDirty, nil
+}
+
+// RecordCampaignRejection writes an audit-only failed scan row without touching
+// posture_state, coverage_heads, findings, or the projection lifecycle. The
+// random rejection ID is also the row ID, so an attacker-controlled submitted
+// scan ID cannot overwrite prior scan history.
+func (s *ScanStore) RecordCampaignRejection(
+	ctx context.Context,
+	audit CampaignRejectionAudit,
+) error {
+	now := time.Now().UTC()
+	metadata := map[string]any{
+		"campaign_rejection": map[string]any{
+			"rejection_id":     audit.RejectionID,
+			"run_id":           audit.RunID,
+			"scenario_id":      audit.ScenarioID,
+			"scenario_version": audit.ScenarioVersion,
+			"outcome":          audit.Outcome,
+			"reason_codes":     append([]string(nil), audit.ReasonCodes...),
+		},
+	}
+	tag, err := s.pool.Exec(ctx, `INSERT INTO scans (
+	    id, collector, status, started_at, completed_at, error, metadata,
+	    collection_status, graph_status, analysis_status, snapshot_status,
+	    projection_status, publication_status, lifecycle_updated_at
+	) VALUES (
+	    $1, 'scan', $2, $3, $3, $4, $5, $6, $7, $7, $7, $8, $9, $3
+	)
+	ON CONFLICT (id) DO NOTHING`,
+		audit.RejectionID,
+		model.ScanStatusFailed,
+		now,
+		"campaign artifact rejected",
+		metadata,
+		model.LifecycleFailed,
+		model.LifecycleNotApplicable,
+		model.ProjectionUnknown,
+		model.PublicationUnpublished,
+	)
+	if err != nil {
+		return fmt.Errorf("record campaign rejection: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("record campaign rejection: rejection id collision")
+	}
+	return nil
 }
 
 // ResolveRetiredCoverage returns prior child heads and inherited dirty child

@@ -25,18 +25,20 @@ Four gates, all on by default. Decision G in `docs/plans/v0.3-v0.4-implementatio
 ~/.agenthound/state/<module-id>/<engagement-id>.json
 ```
 
-- Mode `0o600` on the receipt files; `0o700` on the directories.
+- Receipt files are enforced at exactly `0o600`; receipt directories are enforced at exactly `0o700`. Existing permissive paths are explicitly tightened before reads/writes, and files are chmod'd after atomic replacement so umask cannot weaken the policy.
 - One file per `(module-id, engagement-id)` tuple. Multiple receipts for the same engagement append to the same file as a JSON array.
-- Receipts include `module_id`, `target`, `target_id`, `original_content` (load-bearing for revert), `injected_content`, `mode`, `applied_at`, `dry_run`.
-- File-mutating modules (`instruction.poison`, `mcp.config.implant`) additionally record `file_existed` and `orig_mode` in the receipt's `Extra` map, so revert can restore the exact prior state — see [restore fidelity](#restore-fidelity) below.
+- New receipts carry a random opaque `receipt_id` that is independent of target paths and receipt contents. Campaign reports link only this ID; they never expose receipt paths or receipt/content hashes.
+- Receipts include `module_id`, `target`, `target_id`, the rollback state required by that module, `mode`, `applied_at`, and `dry_run`. Campaign mutations also carry `campaign_run_id` and a positive invocation-order `step_sequence`; `applied_at` is diagnostic only.
+- File-mutating modules record original file existence/mode so revert can restore the exact prior state. New `mcp.config.implant` receipts additionally store only the servers key, server name, and canonical implanted-entry SHA-256 for conflict detection—never the injected JSON plaintext or a whole-file hash. Legacy protected receipts containing plaintext `InjectionContent`, `file`, and `orig_mode` remain decodable and revertible.
 - Override the state root with `AGENTHOUND_STATE_DIR` (used by tests; production should leave it alone).
+- Receipts are the only permitted store for rollback-required original/injected mutation values. Raw credentials and auth tokens are forbidden even in receipts; auth tokens are supplied to Revert through context.
 
 ### Restore fidelity
 
 For modules that mutate on-disk files, `revert` restores the file's prior state precisely:
 
 - **File that did not exist before** is **removed** on revert (not left behind as an empty shell), restoring the original absent state. If the operator or client added other content to that file after the mutation, revert keeps the file and only drops the agenthound-owned entry/block.
-- **Pre-existing file** keeps its **original permission mode** — revert no longer narrows it to `0o600`. The mode captured at mutation time (`orig_mode`) is reapplied.
+- **Pre-existing file** keeps its **original permission mode** — revert no longer narrows it to `0o600`. The mode captured at mutation time (`orig_mode`, or `original_mode` in minimized config receipts) is reapplied.
 - Receipts written before these fields existed default to the prior conservative behavior (leave the file, mode `0o600`), so older receipts still revert safely.
 
 ## Shipped destructive modules
@@ -45,7 +47,7 @@ For modules that mutate on-disk files, `revert` restores the file's prior state 
 |---|---|---|---|
 | `mcp.tool.description` | `poison` | `MCPServer` → `MCPTool.description` | PUT the original description back via the operator-specified admin endpoint. Idempotent — checks current state before writing. |
 | `instruction.file` | `poison`, `implant` | operator machine → `CLAUDE.md` / `AGENTS.md` / `.cursorrules` | Rewrite the file to remove the sentinel-bracketed block; if the file did not exist before mutation (`file_existed=false` on the receipt), remove it entirely. Pre-existing files keep their original permission mode (`orig_mode`). |
-| `mcp.config.malicious-server` | `implant` | operator machine → MCP client config (`.cursor/mcp.json` etc.) | Remove the AgentHound-owned entry from the config's `mcpServers` (or equivalent) map; drop the file if AgentHound created it. |
+| `mcp.config.malicious-server` | `implant` | operator machine → MCP client config (`.cursor/mcp.json` etc.) | Hash-compare the current named entry against the canonical entry hash, then remove only that entry; preserve unrelated edits and drop the file only when AgentHound created it and no unrelated content remains. Legacy plaintext receipts use the same conflict-aware fallback. |
 
 `agenthound implant --type instruction.file` accepts the Poisoner-backed module too — the implant dispatcher falls back to the shared poison runner when no Implanter matches the requested target kind, so operators get consistent CLI ergonomics regardless of which contract the module implements.
 
@@ -81,7 +83,8 @@ agenthound poison <demo-mcp-host>:8080 \
 agenthound revert DC35-DEMO
 #
 # Walks every registered StatefulModule, reads receipts for DC35-DEMO,
-# dispatches per-module Revert. Idempotent: re-running is safe.
+# dispatches per-module Revert. Retries are conflict-aware; immutable stacked
+# receipts are not universally replay-idempotent after a completed rollback.
 ```
 
 ## Per-module flags (`mcp.tool.description`)
@@ -116,6 +119,7 @@ The defaults match a typical MCP stub with a `PUT /admin/tools/{id}` admin surfa
 - It does not roll back any state on the target other than what `Poison` explicitly changed (no log scrubbing, no `mtime` manipulation, no SIEM evasion).
 - It does not run on dry-run receipts (`dry_run: true`) — those never mutated anything.
 - It does not work across machines. Receipts are local; `agenthound revert` only sees what was applied from THIS machine.
+- It does not globally sequence a lost campaign run. Engagement recovery intentionally reads both legacy and run-tagged receipts, uses per-file LIFO, and continues across independent module errors. Active run-scoped cleanup instead selects one exact campaign run, globally sorts by descending `step_sequence`, and fail-stops on the first unsafe dependent step.
 
 ## What `poison` does NOT do
 
@@ -150,6 +154,55 @@ agenthound extract <ai-model-node-id> \
     --engagement-id DC35-DEMO \
     --output -
 ```
+
+## Campaign runner: verify and validate
+
+`agenthound campaign <host> --scenario <id>` runs an ordered, evidence-producing scenario against a known service. Like `poison`/`extract` it is gated: `--commit` is off by default (dry-run plans only), and the first invocation prompts for `AUTHORIZED` (sentinel `~/.agenthound/campaign-acknowledged`). The runner ships two scenarios.
+
+### `cred-reach` — read-only differential verification
+
+Given an HTTP-only witness v2 for one explicit source agent's predicted credential-gated `CAN_REACH` finding, `cred-reach` binds the untouched trimmed endpoint spelling to the witness server ID before networking, then reads the exact resource without and with the hash-matched credential. Credentials are scoped to exact scheme+hostname+effective-port across redirects. A control initialization denial plus an authenticated exact resource read verifies; only dual exact resource-read denials can retire that agent's prior evidence. Other failures are indeterminate, while a successful anonymous control read remains an independent fact. It proves credential-gated resource reach associated with the source agent—not observed agent invocation or impact.
+
+### `mcp-poison-roundtrip` — standalone target-mutation validation
+
+`mcp-poison-roundtrip` reuses the `mcp.poison` module (Poison + the conflict-aware Revert above) to prove the reversible mutation machinery works end to end against a real target. It is a **validation of the round-trip**, not an attack: it does **not** create a finding and makes **no** claim about a predicted credential path.
+
+```bash
+# Dry-run first (plans only — no mutation).
+agenthound campaign https://mcp.example/mcp --scenario mcp-poison-roundtrip \
+    --target-id support_lookup --inject "TEST MUTATION" \
+    --engagement-id DC35-DEMO
+
+# With --commit: mutate -> re-read (ORACLE) -> conflict-aware revert -> re-read (CLEANUP).
+agenthound campaign https://mcp.example/mcp --scenario mcp-poison-roundtrip \
+    --target-id support_lookup --inject "TEST MUTATION" \
+    --engagement-id DC35-DEMO --commit
+#
+# Output (oracle and cleanup reported SEPARATELY):
+# [campaign] COMMITTED mcp-poison-roundtrip on https://mcp.example/mcp \
+#            (STANDALONE target-mutation validation) — oracle=mutation_verified cleanup=restored
+```
+
+Behavior and safety:
+
+- **Oracle and cleanup are independent.** The oracle (did the mutation land?) is decided from the post-mutation re-read; the cleanup (was the original restored?) is decided from the conflict-aware revert plus a post-revert re-read. A verified mutation with a failed cleanup (e.g. a third party edited the target mid-run) is reported honestly, never masked.
+- **Distinct consent and bounded execution.** `--commit` requires both the campaign acknowledgement and poison/destructive acknowledgement. The shared `RunReport` records per-step RFC3339Nano start/end timestamps, typed operation classes, sanitized evidence/witness fingerprints, opaque receipt IDs, and actual outbound HTTP requests, forward mutator invocations, and elapsed-time limits/usage. Budget exhaustion is unsafe/indeterminate; cleanup cannot change frozen forward accounting.
+- **Authoritative run cleanup.** The run ID exists before mutator construction; each receipt gets one positive sequence immediately before invocation. Cleanup selects the exact engagement+run across all modules, rejects missing/duplicate metadata before writing, reverts globally newest-sequence first under a separate bounded non-cancellable context, and fail-stops. It then re-reads the target before reporting `restored`; unsafe cleanup emits the final report and exits nonzero.
+- **Immutable receipts and fallback.** Successful and failed cleanup retain receipts unchanged. `agenthound revert <engagement>` remains the crash/state-loss fallback over legacy and run-tagged receipts, with intentionally different per-file LIFO/best-effort behavior.
+- **No new graph edge.** Round-trip evidence stays in the bounded CLI `RunReport`; it is deliberately not emitted as a scored graph edge, finding, server execution API, or UI execution surface.
+- Takes `--target-id`/`--inject` (and optional `--mode`/`--update-method`/`--update-path`/`--list-path`/`--auth-token`) — no witness, no credential material. See the [CLI reference](../reference/cli.md#agenthound-campaign) for the full flag table.
+
+The campaign runner is deliberately two fixed local sequences. It has no DAG or
+generic scheduler, server-side execution API, impact oracle, `ATTACK_PROVEN`
+state, cleanup journal/state machine/CAS, or publication-revision equality gate.
+
+The closure regression builds the real `agenthound` collector binary, exports a
+production witness to a temporary file, exercises the real authorization/env/CLI
+surface against an authenticated MCP stub, decodes the emitted artifact, and
+passes it through the real ingest and processor-rebuild path. It asserts that
+exactly one source-agent finding upgrades; adjacent real-pipeline cases preserve
+canonical state for invalid positive/negative and tampered artifacts and keep
+the second shared-path agent predicted.
 
 ## See also
 

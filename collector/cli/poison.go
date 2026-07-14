@@ -21,11 +21,13 @@
 //  4. Receipt persistence via StatefulModule BEFORE we declare the
 //     poison "applied" to the operator. A crash between the HTTP
 //     write and the receipt write would leave a tampered target
-//     without a revert path; so we persist the receipt first (with
-//     all fields populated) THEN issue the HTTP write, then re-write
-//     the receipt with the final state. Atomic temp+rename inside
-//     StatefulModule.WriteReceipt makes this safe under concurrent
-//     readers.
+//     without a revert path; so the Poisoner persists the receipt
+//     first (with all fields populated) THEN issues the HTTP write.
+//     The receipt is written exactly once — there is no post-mutation
+//     re-write. For a dry-run (--commit off) the module mutates
+//     nothing, so the CLI persists the receipt after Poison returns.
+//     Atomic temp+rename inside StatefulModule.WriteReceipt keeps the
+//     file safe under concurrent readers.
 package cli
 
 import (
@@ -47,6 +49,12 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/module"
 )
+
+const defaultStandalonePoisonTimeout = 30 * time.Second
+
+// standalonePoisonTimeout is a variable so CLI regression tests can exercise
+// timeout behavior without waiting for the production bound.
+var standalonePoisonTimeout = defaultStandalonePoisonTimeout
 
 var poisonCmd = &cobra.Command{
 	Use:   "poison <host>",
@@ -160,7 +168,14 @@ func runPoisonDispatch(cmd *cobra.Command, args []string, label string) error {
 
 	extras := collectModuleExtras(cmd, mod)
 
-	ctx := context.Background()
+	parentCtx := cmd.Context()
+	if parentCtx == nil {
+		// Cobra sets a context during normal execution; direct in-process
+		// callers may invoke RunE without Execute and leave it nil.
+		parentCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, standalonePoisonTimeout)
+	defer cancel()
 	receipt, err := poisoner.Poison(ctx, action.Target{
 		Kind:    "host",
 		Address: target,

@@ -44,6 +44,8 @@ type PoisonPayload struct {
 	TargetID         string
 	Mode             string
 	EngagementID     string
+	CampaignRunID    string
+	StepSequence     uint64
 	DryRun           bool
 
 	// Extras carries per-Poisoner flag values populated by the CLI dispatch
@@ -58,8 +60,11 @@ type PoisonPayload struct {
 // poison "applied", so a crash between the HTTP write and the receipt
 // write would leave a tampered target without a revert path.
 type PoisonReceipt struct {
+	ReceiptID       string
 	ModuleID        string
 	EngagementID    string
+	CampaignRunID   string
+	StepSequence    uint64
 	Target          Target
 	TargetID        string
 	OriginalContent string

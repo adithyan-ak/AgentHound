@@ -203,7 +203,7 @@ func (p *YourPoisoner) ReadReceipts(engagementID string) ([]action.Receipt, erro
 }
 ```
 
-Receipts are stored at `~/.agenthound/state/<module-id>/<engagement-id>.json` with mode 0o600. The CLI persists the receipt AFTER the poison succeeds but BEFORE reporting success -- crash between mutation and receipt write is the one unrecoverable failure mode.
+Receipts are stored at `~/.agenthound/state/<module-id>/<engagement-id>.json` with mode 0o600. A committing module persists the receipt BEFORE it issues the mutating write -- and the receipt is written exactly once, with no post-mutation re-write -- so a crash after the mutation still leaves a revert path. Dry-run receipts (which mutate nothing) are persisted by the CLI after the module returns.
 
 ## Registry Lookup
 

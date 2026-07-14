@@ -283,3 +283,10 @@ same host. The correlation is represented as `CAN_REACH`, but carries
 **How detected:** The `chokepoint-servers` query finds MCP servers trusted by multiple agents. The `chokepoint-tools` query finds tools with access to many resources.
 
 **Risk:** Chokepoints are high-value targets. Compromising one chokepoint server may grant access to every agent that trusts it.
+
+## Campaign verification (evidence, not a new detection)
+
+The [campaign runner](../operator/offensive-actions.md#campaign-runner-verify-and-validate) does not add a detection layer. It **upgrades** or **records evidence** against existing detections:
+
+- **`cred-reach`** verifies a *predicted* credential-gated `CAN_REACH` finding for one explicit source agent. `CREDENTIAL_REACH_VERIFIED` is per-agent raw supporting evidence; exact current identity/topology re-correlation upgrades only that existing finding and persists the complete structured verification basis. It does not claim the agent invoked the resource, create a second finding, or double-count risk. `PUBLIC_ACCESS_OBSERVED` remains an independent raw fact.
+- **`mcp-poison-roundtrip`** is a STANDALONE reversible-mutation validation. It produces **no** graph edge, finding, or detection; its bounded CLI `RunReport` keeps oracle and cleanup separate.

@@ -286,6 +286,20 @@ RETURN src.objectid AS source_id,
        tgt.material_status AS target_material_status,
        tgt.exposure_status AS target_exposure_status,
        r.evidence_version AS evidence_version,
+       r.reach_evidence_state AS reach_evidence_state,
+       r.verified_scenario_id AS verified_scenario_id,
+       r.verified_scenario_version AS verified_scenario_version,
+       r.verified_run_id AS verified_run_id,
+       r.verified_at AS verified_at,
+       r.verified_oracle_type AS verified_oracle_type,
+       r.verified_outcome AS verified_outcome,
+       r.verified_control_stage AS verified_control_stage,
+       r.verified_control_status AS verified_control_status,
+       r.verified_control_resource_addressed AS verified_control_resource_addressed,
+       r.verified_authed_stage AS verified_authed_stage,
+       r.verified_authed_status AS verified_authed_status,
+       r.verified_authed_resource_addressed AS verified_authed_resource_addressed,
+       r.verified_cleanup_status AS verified_cleanup_status,
        detector_evidence_nodes AS exact_evidence_nodes,
        detector_evidence_edges AS exact_evidence_edges,
        r.evidence_synthetic_edge AS exact_evidence_synthetic_edge
@@ -346,6 +360,14 @@ func QueryFindings(ctx context.Context, db graph.GraphDB, severity string) ([]mo
 			sev = classifySeverity(edgeKind, true, confidence, targetSensitivity)
 		default:
 			sev = classifySeverity(edgeKind, crossProtocol, confidence, targetSensitivity)
+		}
+		// Campaign verification upgrade: when the CAN_REACH processor re-correlated
+		// a CREDENTIAL_REACH_VERIFIED edge, the composite edge carries
+		// reach_evidence_state=verified and confidence was raised to 1.0. This
+		// upgrades the SAME finding's evidence state (and, via the higher
+		// confidence already read above, its severity) — no second finding.
+		if stringVal(row, "reach_evidence_state") == string(model.FindingEvidenceVerified) {
+			evidence.State = model.FindingEvidenceVerified
 		}
 		if severity != "" && sev != severity {
 			continue
@@ -466,6 +488,28 @@ func buildFindingEvidence(
 		Channels:       append([]string{}, channels...),
 		MaterialStatus: materialStatus,
 		ExposureStatus: exposureStatus,
+		Verification:   buildFindingVerification(row),
+	}
+}
+
+func buildFindingVerification(row map[string]any) *model.FindingVerification {
+	if stringVal(row, "reach_evidence_state") != string(model.FindingEvidenceVerified) {
+		return nil
+	}
+	return &model.FindingVerification{
+		ScenarioID:               stringVal(row, "verified_scenario_id"),
+		ScenarioVersion:          intVal(row, "verified_scenario_version"),
+		CampaignRunID:            stringVal(row, "verified_run_id"),
+		VerifiedAt:               stringVal(row, "verified_at"),
+		OracleType:               stringVal(row, "verified_oracle_type"),
+		Outcome:                  stringVal(row, "verified_outcome"),
+		ControlStage:             stringVal(row, "verified_control_stage"),
+		ControlStatus:            stringVal(row, "verified_control_status"),
+		ControlResourceAddressed: boolVal(row, "verified_control_resource_addressed"),
+		AuthedStage:              stringVal(row, "verified_authed_stage"),
+		AuthedStatus:             stringVal(row, "verified_authed_status"),
+		AuthedResourceAddressed:  boolVal(row, "verified_authed_resource_addressed"),
+		CleanupStatus:            stringVal(row, "verified_cleanup_status"),
 	}
 }
 

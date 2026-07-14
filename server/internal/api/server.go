@@ -89,6 +89,7 @@ func NewServer(deps ServerDeps) *Server {
 
 		r.Get("/analysis/findings", analysisH.HandleFindings)
 		r.Get("/analysis/findings/{id}", analysisH.HandleFindingDetail)
+		r.Get("/analysis/findings/{id}/witness", analysisH.HandleWitness)
 		r.Get("/analysis/prebuilt", analysisH.HandleListPreBuilt)
 		r.Get("/analysis/prebuilt/{id}", analysisH.HandlePreBuilt)
 		r.Get("/posture", postureH.HandleState)

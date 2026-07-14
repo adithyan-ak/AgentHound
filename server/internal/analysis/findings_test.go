@@ -84,6 +84,90 @@ func TestQueryFindings_AllEdgeKinds(t *testing.T) {
 	}
 }
 
+// TestQueryFindings_VerifiedUpgradeNoDuplicate asserts a CAN_REACH edge carrying
+// reach_evidence_state=verified (set by the CAN_REACH processor's re-correlation
+// of a CREDENTIAL_REACH_VERIFIED edge) yields exactly ONE finding whose evidence
+// state is upgraded to verified — the same finding, not a duplicate.
+func TestQueryFindings_VerifiedUpgradeNoDuplicate(t *testing.T) {
+	mock := &graph.MockGraphDB{
+		QueryResult: []map[string]any{
+			{
+				"source_id": "agent-1", "source_name": "TestAgent", "source_kind": "AgentInstance",
+				"target_id": "res-1", "target_name": "ProdDB", "target_kind": "MCPResource",
+				"edge_kind": "CAN_REACH", "confidence": 1.0,
+				"cross_protocol": false, "target_sensitivity": "critical",
+				"source_collector":                    "mcp",
+				"reach_evidence_state":                "verified",
+				"verified_scenario_id":                "cred-reach",
+				"verified_scenario_version":           1,
+				"verified_run_id":                     "run-verified",
+				"verified_at":                         "2026-07-13T12:00:00Z",
+				"verified_oracle_type":                "differential_credential_reach",
+				"verified_outcome":                    "credential_gated_reach_verified",
+				"verified_control_stage":              "initialize",
+				"verified_control_status":             "denied",
+				"verified_control_resource_addressed": false,
+				"verified_authed_stage":               "resource_read",
+				"verified_authed_status":              "allowed",
+				"verified_authed_resource_addressed":  true,
+				"verified_cleanup_status":             "not_applicable",
+			},
+		},
+	}
+	findings, err := QueryFindings(context.Background(), mock, "")
+	if err != nil {
+		t.Fatalf("QueryFindings error = %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("verified upgrade must not duplicate the finding: got %d findings, want 1", len(findings))
+	}
+	f := findings[0]
+	if f.EdgeKind != "CAN_REACH" {
+		t.Fatalf("edge kind = %q, want CAN_REACH", f.EdgeKind)
+	}
+	if f.Evidence.State != model.FindingEvidenceVerified {
+		t.Fatalf("evidence state = %q, want verified", f.Evidence.State)
+	}
+	verification := f.Evidence.Verification
+	if verification == nil ||
+		verification.ScenarioID != "cred-reach" ||
+		verification.CampaignRunID != "run-verified" ||
+		verification.ControlStage != "initialize" ||
+		verification.ControlResourceAddressed ||
+		verification.AuthedStage != "resource_read" ||
+		!verification.AuthedResourceAddressed ||
+		verification.CleanupStatus != "not_applicable" {
+		t.Fatalf("structured verification metadata = %+v", verification)
+	}
+	// Verified + critical sensitivity + confidence 1.0 => critical severity.
+	if f.Severity != "critical" {
+		t.Fatalf("severity = %q, want critical", f.Severity)
+	}
+}
+
+// TestQueryFindings_UnverifiedCanReachStaysInferred confirms the upgrade does not
+// fire for an ordinary CAN_REACH edge with no verification evidence.
+func TestQueryFindings_UnverifiedCanReachStaysInferred(t *testing.T) {
+	mock := &graph.MockGraphDB{
+		QueryResult: []map[string]any{
+			{
+				"source_id": "agent-1", "source_name": "A", "source_kind": "AgentInstance",
+				"target_id": "res-1", "target_name": "DB", "target_kind": "MCPResource",
+				"edge_kind": "CAN_REACH", "confidence": 0.9,
+				"cross_protocol": false, "target_sensitivity": "high",
+				"source_collector": "mcp",
+			},
+		},
+	}
+	findings, err := QueryFindings(context.Background(), mock, "")
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if len(findings) != 1 || findings[0].Evidence.State == model.FindingEvidenceVerified {
+		t.Fatalf("unverified CAN_REACH must not be marked verified: %+v", findings)
+	}
+}
+
 func TestQueryFindings_SeverityFilter(t *testing.T) {
 	mock := &graph.MockGraphDB{
 		QueryResult: []map[string]any{

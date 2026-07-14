@@ -18,8 +18,15 @@ import (
 func freshPublicationIntegrationHarness(
 	t *testing.T,
 ) (context.Context, *Pipeline, *graph.DB, *graph.Writer, *pgxpool.Pool) {
+	return publicationIntegrationHarness(t, true)
+}
+
+func publicationIntegrationHarness(
+	t *testing.T,
+	requireFreshOptIn bool,
+) (context.Context, *Pipeline, *graph.DB, *graph.Writer, *pgxpool.Pool) {
 	t.Helper()
-	if os.Getenv("AGENTHOUND_FRESH_DB_INTEGRATION") != "1" {
+	if requireFreshOptIn && os.Getenv("AGENTHOUND_FRESH_DB_INTEGRATION") != "1" {
 		t.Skip("set AGENTHOUND_FRESH_DB_INTEGRATION=1 for destructive fresh-database integration")
 	}
 	neo4jURI := os.Getenv("AGENTHOUND_NEO4J_URI")

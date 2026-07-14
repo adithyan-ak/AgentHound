@@ -3,6 +3,7 @@ package mcpconfigimplant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,6 +38,13 @@ func writeSeed(t *testing.T, path string) {
 	}
 }
 
+func statMode(info os.FileInfo) os.FileMode {
+	if info == nil {
+		return 0
+	}
+	return info.Mode().Perm()
+}
+
 func TestImplant_AddsServerAndRevertRemoves(t *testing.T) {
 	i := newImplanter(t)
 	dir := t.TempDir()
@@ -47,10 +55,43 @@ func TestImplant_AddsServerAndRevertRemoves(t *testing.T) {
 		action.ImplantPayload{
 			InjectionContent: evilEntry,
 			EngagementID:     "ENG-1",
+			CampaignRunID:    "run-implant",
+			StepSequence:     5,
 			Extras:           map[string]any{"file": path},
 		})
 	if err != nil {
 		t.Fatalf("Implant: %v", err)
+	}
+	if receipt.CampaignRunID != "run-implant" || receipt.StepSequence != 5 {
+		t.Errorf("campaign metadata not copied to receipt: %+v", receipt)
+	}
+	if receipt.ReceiptID == "" {
+		t.Fatal("new receipt has no opaque receipt ID")
+	}
+	if receipt.InjectionContent != "" || receipt.PreSHA256 != "" || receipt.PostSHA256 != "" {
+		t.Fatalf("new receipt retained plaintext or whole-file hashes: %+v", receipt)
+	}
+	if got, _ := receipt.Extra["entry_sha256"].(string); len(got) != 64 {
+		t.Fatalf("canonical entry hash = %q, want SHA-256", got)
+	}
+	if len(receipt.Extra) != 5 {
+		t.Fatalf("new receipt extra fields = %#v, want minimized contract", receipt.Extra)
+	}
+	receiptPath := filepath.Join(i.stateful.StateDir(), "ENG-1.json")
+	persisted, err := os.ReadFile(receiptPath)
+	if err != nil {
+		t.Fatalf("read persisted receipt: %v", err)
+	}
+	for _, token := range []string{"@attacker", "mcp-rat", "InjectionContent", "PreSHA256", "PostSHA256"} {
+		if strings.Contains(string(persisted), token) {
+			t.Fatalf("new receipt contains prohibited plaintext/hash field %q: %s", token, persisted)
+		}
+	}
+	if stat, err := os.Stat(i.stateful.StateDir()); err != nil || stat.Mode().Perm() != 0o700 {
+		t.Fatalf("receipt directory mode = %v err=%v, want 0700", statMode(stat), err)
+	}
+	if stat, err := os.Stat(receiptPath); err != nil || stat.Mode().Perm() != 0o600 {
+		t.Fatalf("receipt file mode = %v err=%v, want 0600", statMode(stat), err)
 	}
 
 	got, _ := os.ReadFile(path)
@@ -103,6 +144,104 @@ func TestImplant_DryRunDoesNotMutate(t *testing.T) {
 	got, _ := os.ReadFile(path)
 	if string(got) != seedConfig {
 		t.Errorf("dry-run mutated file: %s", string(got))
+	}
+}
+
+func TestRevertConflictsOnModifiedLiveServerEntry(t *testing.T) {
+	implanter := newImplanter(t)
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	writeSeed(t, path)
+	receipt, err := implanter.Implant(context.Background(), action.Target{}, action.ImplantPayload{
+		InjectionContent: evilEntry,
+		EngagementID:     "ENG-MODIFIED",
+		Extras:           map[string]any{"file": path},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	servers, ok := config["mcpServers"].(map[string]any)
+	if !ok {
+		t.Fatalf("mcpServers has unexpected type %T", config["mcpServers"])
+	}
+	name := "agenthound-implant-ENG-MODIFIED"
+	servers[name] = map[string]any{"command": "third-party"}
+	modified, _ := json.MarshalIndent(config, "", "  ")
+	modified = append(modified, '\n')
+	if err := os.WriteFile(path, modified, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := implanter.Revert(context.Background(), receipt); !errors.Is(err, action.ErrRevertConflict) {
+		t.Fatalf("Revert error = %v, want conflict", err)
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) != string(modified) {
+		t.Fatal("conflicting revert modified third-party server entry")
+	}
+}
+
+func TestLegacyPlaintextReceiptDecodesAndReverts(t *testing.T) {
+	implanter := newImplanter(t)
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	writeSeed(t, path)
+	if _, err := implanter.Implant(
+		context.Background(),
+		action.Target{},
+		action.ImplantPayload{
+			InjectionContent: evilEntry,
+			EngagementID:     "ENG-LEGACY",
+			Extras:           map[string]any{"file": path},
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	legacyReceipt := &action.ImplantReceipt{
+		ModuleID:         "mcp.config.implant",
+		EngagementID:     "ENG-LEGACY",
+		TargetID:         path,
+		InjectionContent: evilEntry,
+		Extra: map[string]any{
+			"file":         path,
+			"servers_key":  "mcpServers",
+			"server_name":  "agenthound-implant-ENG-LEGACY",
+			"file_existed": true,
+			"orig_mode":    "600",
+		},
+	}
+	legacyEnvelope := []map[string]any{{
+		"module_id": "mcp.config.implant",
+		"type":      "implant",
+		"receipt":   legacyReceipt,
+	}}
+	encoded, err := json.MarshalIndent(legacyEnvelope, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptPath := filepath.Join(implanter.stateful.StateDir(), "ENG-LEGACY.json")
+	if err := os.WriteFile(receiptPath, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := implanter.stateful.ReadReceipts("ENG-LEGACY")
+	if err != nil {
+		t.Fatalf("decode legacy receipt: %v", err)
+	}
+	if len(decoded) != 1 {
+		t.Fatalf("decoded legacy receipts = %d, want 1", len(decoded))
+	}
+	if err := implanter.Revert(context.Background(), decoded[0]); err != nil {
+		t.Fatalf("revert decoded legacy receipt: %v", err)
+	}
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(current), "agenthound-implant-ENG-LEGACY") {
+		t.Fatalf("legacy plaintext receipt did not remove named entry: %s", current)
 	}
 }
 
@@ -291,5 +430,40 @@ func TestImplant_RevertPreservesOriginalMode(t *testing.T) {
 	}
 	if st.Mode().Perm() != 0o644 {
 		t.Errorf("revert changed mode to %o, want 644", st.Mode().Perm())
+	}
+}
+
+// TestRevert_CorruptedCurrentJSON_NoClobber audits the key-scoped
+// reverter for the blind-write pattern. If the config JSON is corrupt at
+// revert time (unparseable), revert cannot safely drop just its own key,
+// so it must surface an error and leave the file untouched rather than
+// overwriting it.
+func TestRevert_CorruptedCurrentJSON_NoClobber(t *testing.T) {
+	i := newImplanter(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mcp.json")
+	writeSeed(t, path)
+
+	receipt, err := i.Implant(context.Background(), action.Target{},
+		action.ImplantPayload{
+			InjectionContent: evilEntry,
+			EngagementID:     "ENG-CORRUPT",
+			Extras:           map[string]any{"file": path},
+		})
+	if err != nil {
+		t.Fatalf("Implant: %v", err)
+	}
+
+	const corrupt = "{ this is not valid json "
+	if err := os.WriteFile(path, []byte(corrupt), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := i.Revert(context.Background(), receipt); err == nil {
+		t.Fatal("expected error reverting against corrupted JSON (indeterminate)")
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != corrupt {
+		t.Errorf("revert clobbered corrupted file; got %q, want %q", string(got), corrupt)
 	}
 }

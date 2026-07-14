@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### Predicted-to-verified campaign runner
+
+Adds an ordered, reversible campaign runner that turns *predicted* graph relationships into *observed* evidence and validates the reversible-mutation machinery end to end. The collector cannot link Neo4j, so the server exports a stable, sanitized **witness** that the collector-side `agenthound campaign` runner verifies and the server re-correlates on ingest.
+
+**Safety / rollback foundation**
+
+- `mcp.poison` `Revert` is now conflict-**aware** and idempotent: it re-reads the live state and decides from a four-way comparison against the receipt — no-op when already original, restore when still injected, refuse (conflict) when a third party changed it, and **indeterminate** (write nothing) when the re-read fails. It never blind-writes; the residual re-read→write TOCTOU race is documented.
+- `agenthound revert` walks each module's receipts **newest-first (per-file LIFO)** on a bounded, non-cancellable context, retains receipts on failure, and reports `INCOMPLETE` / exits non-zero unless every receipt reverted.
+
+**Witness export (server)**
+
+- `agenthound-server witness --finding <id>` (and `GET /api/v1/analysis/findings/{id}/witness`) export a stable, content-addressed witness — credential/server/resource node IDs, `value_hash` + `merge_key`, predicted edge kind, path topology, and the publication/schema revision. No Neo4j relationship IDs, no arbitrary node properties, no secrets.
+
+**Scenarios (`agenthound campaign`)**
+
+- **`cred-reach`** — a READ-ONLY differential credential-reach oracle: an unauth control probe vs. a hash-matched authed probe of the exact predicted resource, classified across the full differential matrix. Credential material is supplied out of band (env/stdin), hash-matched locally, and never logged or written to the graph. A `credential_gated_reach_verified` outcome emits `CREDENTIAL_REACH_VERIFIED`, which the server re-correlates to **upgrade the existing `CAN_REACH` finding** (no duplicate finding, no risk double-count); anonymous access emits the `PUBLIC_ACCESS_OBSERVED` fact.
+- **`mcp-poison-roundtrip`** — a STANDALONE target-mutation validation: an operator-authorized `mcp.poison` mutation → injected-state re-read (ORACLE) → conflict-aware revert → restored-state re-read (CLEANUP), with the oracle and cleanup outcomes reported **separately** and computed independently. It is **not** an attack finding and makes **no** claim about a predicted credential path; it emits **no** graph edge (the round-trip evidence stays in the campaign transport) and reuses the per-file-LIFO + conflict-aware rollback.
+
+**Schema**
+
+- New raw edge kinds `CREDENTIAL_REACH_VERIFIED` (AgentInstance→MCPResource) and `PUBLIC_ACCESS_OBSERVED` (MCPServer→MCPResource); collector-produced edge kinds go 18 → 20 (32 total with composites). The reversible round-trip deliberately adds no edge kind.
+
+**Guardrails**
+
+- New collector-safe packages `sdk/campaign`, `modules/credreach`, and `modules/mcproundtrip` are added to the collector allowlist; the lean binary still links no `chi`/`pgx`/`neo4j`/`server/internal` code. `--commit` is off by default (dry-run plans only) and an `AUTHORIZED` acknowledgement gates the first run.
+
 ## v0.9.0
 
 Evidence-backed security posture milestone. Reworks the collection → analysis → API → UI pipeline so AgentHound only ever publishes a *complete* posture revision and never silently presents a partial scan as authoritative: every collection now carries explicit coverage, stage, lifecycle, and provenance contracts, and unknown / partial / failed / truncated states are preserved and disclosed end-to-end instead of being flattened into "clean". Also fixes a graph-reconciliation defect where re-publishing a LiteLLM gateway from the Looter clobbered the fingerprinter's authoritative properties.

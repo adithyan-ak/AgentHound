@@ -139,6 +139,112 @@ behaviour:
   `unknown`. It must not be interpreted as anonymous, public, low sensitivity,
   unpinned, or clean.
 
+### Campaign runner: out-of-band credential material
+
+The `agenthound campaign --scenario cred-reach` runner needs an **executable**
+credential (the raw secret) to send the authed probe, but it must never persist
+or log it. Its handling is deliberately stricter than `--include-credential-values`:
+
+- **Out of band only.** The material is supplied via an environment variable
+  (`AGENTHOUND_CAMPAIGN_CREDENTIAL`, the default) or stdin (`--credential-stdin`).
+  It is **never** a CLI flag — flags leak into process listings (`ps`), shell
+  history, and container inspect output. Do **not** use
+  `--include-credential-values` for the campaign path.
+- **Local hash-match, never serialized.** The runner hashes the material locally
+  with AgentHound's SHA-256 credential contract and requires an **exact match** to
+  the witness `value_hash`. The raw value is never written to the graph, the
+  emitted evidence, the scan output, or logs. A hash-only credential (no
+  executable material, or a synthetic `merge_key=identity` reference) is a
+  **precondition failure — not runnable**, distinct from an `indeterminate`
+  probe outcome.
+- **Endpoint binding before networking.** Surrounding whitespace is trimmed once,
+  but the untouched trimmed spelling—including any query bytes—is hashed through
+  `ResolveMCPServerIdentity("http", input)` and must equal the witness server ID.
+  Only absolute HTTP(S) URLs with valid authority/hostname and no userinfo or
+  fragment are accepted. The clear endpoint is never stored in witness v2.
+- **Query handling is defense-in-depth, not universal detection.** Fixed
+  known-sensitive decoded keys and decoded values exactly equal to the supplied
+  campaign credential are rejected. Other arbitrary query bytes remain accepted
+  identity input; AgentHound does **not** claim they are non-secret. Every accepted
+  query is omitted from reports, witnesses, evidence, graph properties, errors,
+  and logs.
+- **Exact-origin forwarding.** Credential headers are attached only when
+  lowercased scheme + hostname + effective port matches the original endpoint.
+  Path/query do not affect origin; scheme downgrade, host/port change, malformed
+  authority, or missing authority fails closed on every redirect request.
+- **Typed denial and bounded close.** Only an actually observed typed HTTP
+  `401`/`403` is a definitive auth denial; target-controlled text and JSON-RPC
+  auth-like messages remain indeterminate. The MCP SDK's exact-endpoint close
+  `DELETE` inherits the original absolute scenario deadline and is counted even
+  when it times out. No blanket client timeout is applied to SSE.
+- **Read-only.** The `cred-reach` scenario issues `resources/read` for the exact
+  predicted resource only (unauth control + authed probe). It mutates nothing, so
+  it needs no receipts or rollback.
+- **Anonymous access is a fact, not a finding.** When the resource reads
+  successfully without a credential the runner emits `PUBLIC_ACCESS_OBSERVED`
+  (a raw fact). Findings derive only from composite edges, so this never
+  auto-creates a finding; treat it as a policy concern only where authentication
+  was expected.
+- **Exact per-agent witness contract.** Witness v2 names one source
+  `AgentInstance`, is exported only for HTTP-backed resources, and carries the
+  actual ordered current `CAN_REACH` evidence node IDs with normalized concrete
+  kinds. Promotion recomputes the unkeyed fingerprint and validates every
+  identity/hash/kind/stage/outcome/topology field against current graph state.
+  The positive publication revision is provenance only; equality is not proof or
+  a promotion gate. The digest is a consistency checksum, not authenticity.
+- **Prevalidation before canonical state.** Positive and negative campaign
+  artifacts are checked immediately after generic ingest validation and before
+  normalization, `BeginScan`, graph writes, or reconciliation. A rejection
+  cannot overwrite evidence or retire coverage. Postgres retains only a random
+  rejection ID plus bounded sanitized run/scenario/outcome/reason codes—never
+  the artifact, witness, digest, endpoint, or secret.
+
+### Campaign runner: reversible mutation round-trip
+
+The `agenthound campaign --scenario mcp-poison-roundtrip` scenario is a STANDALONE
+target-mutation validation. Unlike `cred-reach` it **mutates** the target (reusing
+the `mcp.poison` module), so it inherits the destructive-primitive posture:
+
+- **Both gates are required.** `--commit` is off by default and a mutating run
+  requires the campaign acknowledgement plus the distinct poison/destructive
+  acknowledgement. The optional admin `--auth-token` is used in process and is
+  never copied to a report or receipt.
+- **Never a blind write; receipts retained.** The mutation persists a receipt
+  before the write. The inline cleanup uses the conflict-aware Revert: on a
+  third-party change (conflict) or a failed re-read (indeterminate) it writes
+  nothing and **retains** the receipt so `agenthound revert <engagement-id>` can
+  retry it. Active cleanup is run-scoped, globally reverse-sequenced, bounded,
+  non-cancellable, and fail-stop; engagement recovery is the intentionally
+  different per-file-LIFO, continue-on-error fallback. Oracle and cleanup remain
+  independent, and unsafe/unconfirmed cleanup emits its report before nonzero exit.
+- **No-op rejection and frozen accounting.** `original == injected` is rejected
+  before receipt persistence or target write and reports cleanup as
+  `not_applicable`. Forward request/mutation/elapsed usage and exhaustion are
+  frozen before separately timed cleanup begins.
+- **Bounded, secret-free reporting.** Both fixed scenarios use the same versioned
+  `RunReport`: fixed steps, sanitized target reference, per-step RFC3339Nano
+  start/end timestamps, typed operation classes, applicable sanitized
+  evidence/witness fingerprint, opaque receipt IDs, typed oracle/cleanup, and
+  explicit actual HTTP-request/mutation/elapsed limits and usage. Redirect/retry
+  dispatches count. Reports cannot carry receipt paths or hashes,
+  request/response bodies, resource contents, target error text,
+  original/injected mutation state, credentials, or auth tokens.
+- **Protected immutable receipts.** Receipt directories/files are enforced at
+  exactly `0700`/`0600`, including tightening existing permissive paths.
+  Rollback-required original/injected mutation state is allowed only there.
+  Receipts remain unchanged after success/failure; raw credentials/tokens are
+  forbidden. Conflict-aware live-state checks enable partial retry, but completed
+  stacked rollback replay is not promised universally idempotent.
+- **Minimized config receipts.** Every new receipt has a random opaque ID.
+  `mcp.config.implant` stores the target path plus only the servers key/name,
+  canonical named-entry hash, and original file existence/mode required for
+  safe reversion; it stores no injected JSON plaintext or whole-file hash.
+  Protected legacy plaintext receipts still decode and use conflict-aware
+  reversion.
+- **Not an attack finding.** It emits no graph edge and makes no claim about a
+  predicted credential path — the round-trip evidence stays in the campaign
+  transport. It validates only that the mutation/rollback machinery works.
+
 ### `openwebui.loot` authenticated mode
 
 `agenthound loot --type openwebui --api-key <key>` reads an

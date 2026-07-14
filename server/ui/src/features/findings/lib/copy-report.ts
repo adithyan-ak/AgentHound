@@ -65,6 +65,28 @@ export function buildMarkdownReport(
   lines.push(markdownText(finding.description));
   lines.push("");
 
+  const verification = finding.evidence.verification;
+  if (finding.evidence.state === "verified" && verification) {
+    lines.push("### Campaign Verification");
+    lines.push(
+      `Scenario: ${markdownText(verification.scenario_id)} v${verification.scenario_version} | Run: ${markdownText(verification.campaign_run_id)} | Verified: ${markdownText(verification.verified_at)}`,
+    );
+    lines.push(
+      `Oracle: ${markdownText(verification.oracle_type)} | Outcome: ${markdownText(verification.outcome)}`,
+    );
+    lines.push(
+      `Control: ${markdownText(verification.control_stage)} / ${markdownText(verification.control_status)} / resource_addressed=${verification.control_resource_addressed}`,
+    );
+    lines.push(
+      `Authenticated: ${markdownText(verification.authed_stage)} / ${markdownText(verification.authed_status)} / resource_addressed=${verification.authed_resource_addressed}`,
+    );
+    lines.push(`Cleanup: ${markdownText(verification.cleanup_status)}`);
+    lines.push(
+      "Proof boundary: exact credential-gated resource reach for the source agent; not observed agent invocation or impact.",
+    );
+    lines.push("");
+  }
+
   if (path && path.edges.length > 0) {
     const linear = isExactLinearEvidence(path);
     lines.push(

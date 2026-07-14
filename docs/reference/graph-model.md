@@ -86,7 +86,7 @@ This enables queries like `MATCH (n:AIService)` to find all AI infrastructure re
 
 ## 3. Edge Types
 
-### Raw Edges (18 collector-produced)
+### Raw Edges (20 collector-produced)
 
 | Edge | Source | Target | Collector | Meaning |
 |------|--------|--------|-----------|---------|
@@ -108,6 +108,15 @@ This enables queries like `MATCH (n:AIService)` to find all AI infrastructure re
 | `PROVIDES_MODEL` | OllamaInstance | AIModel | Ollama Looter | Instance serves this model |
 | `EXTRACTED_FROM` | AIModel | ExtractedTrainingSignal | Extractors | Extracted signal was derived from this model |
 | `INGESTS_UNTRUSTED` | MCPTool | MCPResource | MCP | Tool with rule-derived `source_trust` (web/email/fileshare) ingests untrusted input that taints same-server resources. **Raw edge** — not swept by composite cleanup (see post-processors doc) |
+| `CREDENTIAL_REACH_VERIFIED` | AgentInstance | MCPResource | scan (campaign runner) | Per-agent campaign evidence that a supplied credential enabled a read of the exact predicted resource. It means “campaign verification associated with this source agent,” **not** observed agent invocation. Carries witness-v2 identity/topology, staged status, and credential hash metadata; NEVER the endpoint or raw credential. On ingest the server validates the complete contract and upgrades only the matching source-agent `CAN_REACH` finding. **Raw edge.** |
+| `PUBLIC_ACCESS_OBSERVED` | MCPServer | MCPResource | scan (campaign runner) | A campaign probe read this resource with no credential. A recorded fact, not an auto-finding (findings derive only from composite edges) — only a policy concern where authentication was expected. **Raw edge.** |
+
+> The campaign runner's second scenario, `mcp-poison-roundtrip` (a STANDALONE reversible-mutation validation), deliberately emits **no** graph edge. Its oracle/cleanup evidence stays in the bounded CLI `campaign.RunReport` rather than a scored edge, so a finding-free validation never pollutes the graph. See [offensive-actions.md](../operator/offensive-actions.md#mcp-poison-roundtrip-standalone-target-mutation-validation).
+
+Campaign artifacts are prevalidated against their bounded public envelope and
+the current graph before normalization, scan lifecycle creation, canonical
+`MERGE`, or coverage retirement. Invalid positives therefore cannot overwrite a
+valid per-agent campaign edge, and invalid negatives cannot retire it.
 
 ### Composite Edges (12 post-processor computed)
 
@@ -119,7 +128,7 @@ This enables queries like `MATCH (n:AIService)` to find all AI infrastructure re
 | `POISONED_DESCRIPTION` | MCPTool | MCPTool (self-edge) | Raw edges | Tool description contains injection patterns |
 | `POISONED_INSTRUCTIONS` | InstructionFile | InstructionFile (self-edge) | Raw edges | Suspicious patterns: imperative overrides, exfiltration commands, hidden Unicode |
 | `TAINTS` | MCPTool | MCPTool | INGESTS_UNTRUSTED + `schema_keys` | Untrusted-input tool shares ≥2 schema keys with a tool on another server, so attacker data can flow between them |
-| `CAN_REACH` | AgentInstance / A2AAgent | MCPResource / Credential | HAS_ACCESS_TO and correlation joins | Inferred transitive access. Credential variants distinguish observed material from references; cross-protocol shared-host variants are 50%-confidence hypotheses, not proven invocation paths. |
+| `CAN_REACH` | AgentInstance / A2AAgent | MCPResource / Credential | HAS_ACCESS_TO and correlation joins | Inferred transitive access. Credential variants distinguish observed material from references; cross-protocol shared-host variants are 50%-confidence hypotheses, not proven invocation paths. Credential-path candidates for one `(agent, resource)` are reduced deterministically by the complete object-ID tuple `(agent, entry server, entry tool, resource server, credential, identity, resource tool, resource)`; relationship IDs never choose the witness path. When per-agent `CREDENTIAL_REACH_VERIFIED` evidence exactly re-correlates on ingest, only that source agent's credential-chain edge is upgraded in place (`reach_evidence_state=verified`, confidence 1.0), with structured verification metadata persisted on the finding. |
 | `CAN_EXFILTRATE_VIA` | AgentInstance | MCPTool | CAN_REACH | Inferred sensitive-data access plus a matched output-channel capability (incl. `auto_fetch_render` / `allowlisted_proxy`); not observed exfiltration |
 | `IFC_VIOLATION` | MCPTool | MCPTool | INGESTS_UNTRUSTED + HAS_ACCESS_TO (≤3 hops) | Untrusted source shares a resource with a high-impact sink (credential_access/file_write/email_send) |
 | `CAN_IMPERSONATE` | A2AAgent | A2AAgent | Raw edges | TF-IDF cosine similarity > 0.8 on skill descriptions |

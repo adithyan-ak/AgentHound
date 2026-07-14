@@ -34,6 +34,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -114,7 +115,7 @@ func (i *Implanter) Implant(ctx context.Context, t action.Target, payload action
 		return nil, fmt.Errorf("mcp config implant: --inject must be a JSON object: %w", err)
 	}
 
-	original, preHash, existed, origMode, err := readFileBounded(path)
+	original, _, existed, origMode, err := readFileBounded(path)
 	if err != nil {
 		return nil, fmt.Errorf("read target file: %w", err)
 	}
@@ -150,24 +151,31 @@ func (i *Implanter) Implant(ctx context.Context, t action.Target, payload action
 		return nil, fmt.Errorf("encode implanted JSON: %w", err)
 	}
 	final = append(final, '\n')
-	postHash := sha256Hex(final)
+	entryHash, err := canonicalEntrySHA256(serverEntry)
+	if err != nil {
+		return nil, fmt.Errorf("hash implanted server entry: %w", err)
+	}
+	receiptID, err := action.NewReceiptID()
+	if err != nil {
+		return nil, fmt.Errorf("mcp config implant: %w", err)
+	}
 
 	receipt := &action.ImplantReceipt{
-		ModuleID:         "mcp.config.implant",
-		EngagementID:     engagementID,
-		Target:           t,
-		TargetID:         path,
-		InjectionContent: payload.InjectionContent,
-		PreSHA256:        preHash,
-		PostSHA256:       postHash,
-		AppliedAt:        time.Now().UTC(),
-		DryRun:           payload.DryRun,
+		ReceiptID:     receiptID,
+		ModuleID:      "mcp.config.implant",
+		EngagementID:  engagementID,
+		CampaignRunID: payload.CampaignRunID,
+		StepSequence:  payload.StepSequence,
+		Target:        t,
+		TargetID:      path,
+		AppliedAt:     time.Now().UTC(),
+		DryRun:        payload.DryRun,
 		Extra: map[string]any{
-			"file":         path,
-			"servers_key":  serversKey,
-			"server_name":  serverName,
-			"file_existed": existed,
-			"orig_mode":    modeStr(writeMode),
+			"servers_key":   serversKey,
+			"server_name":   serverName,
+			"entry_sha256":  entryHash,
+			"file_existed":  existed,
+			"original_mode": modeStr(origMode),
 		},
 	}
 
@@ -205,7 +213,10 @@ func (i *Implanter) Revert(ctx context.Context, receipt action.Receipt) error {
 	if r.DryRun {
 		return nil
 	}
-	path, _ := r.Extra["file"].(string)
+	path := strings.TrimSpace(r.TargetID)
+	if legacyPath, _ := r.Extra["file"].(string); path == "" {
+		path = strings.TrimSpace(legacyPath)
+	}
 	serversKey, _ := r.Extra["servers_key"].(string)
 	serverName, _ := r.Extra["server_name"].(string)
 	if path == "" || serversKey == "" || serverName == "" {
@@ -218,7 +229,14 @@ func (i *Implanter) Revert(ctx context.Context, receipt action.Receipt) error {
 	if v, ok := r.Extra["file_existed"].(bool); ok {
 		fileExisted = v
 	}
-	origMode := parseMode(r.Extra["orig_mode"], 0o600)
+	modeValue := r.Extra["original_mode"]
+	if modeValue == nil {
+		modeValue = r.Extra["orig_mode"]
+	}
+	origMode := parseMode(modeValue, 0o600)
+	if !fileExisted && origMode == 0 {
+		origMode = 0o600
+	}
 
 	current, _, _, _, err := readFileBounded(path)
 	if err != nil {
@@ -240,9 +258,20 @@ func (i *Implanter) Revert(ctx context.Context, receipt action.Receipt) error {
 	if !ok {
 		return nil
 	}
-	if _, exists := servers[serverName]; !exists {
+	currentEntry, exists := servers[serverName]
+	if !exists {
 		// Already reverted out-of-band.
 		return nil
+	}
+	entryMatches, err := receiptEntryMatches(r, currentEntry)
+	if err != nil {
+		return err
+	}
+	if !entryMatches {
+		return fmt.Errorf(
+			"mcp config implant revert: live server entry differs from receipt; refusing to overwrite (%w)",
+			action.ErrRevertConflict,
+		)
 	}
 	delete(servers, serverName)
 	configMap[serversKey] = servers
@@ -354,6 +383,33 @@ func parseMode(v any, fallback os.FileMode) os.FileMode {
 func sha256Hex(b []byte) string {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
+}
+
+func canonicalEntrySHA256(entry any) (string, error) {
+	encoded, err := json.Marshal(entry)
+	if err != nil {
+		return "", err
+	}
+	return sha256Hex(encoded), nil
+}
+
+func receiptEntryMatches(r *action.ImplantReceipt, currentEntry any) (bool, error) {
+	if entryHash, _ := r.Extra["entry_sha256"].(string); entryHash != "" {
+		currentHash, err := canonicalEntrySHA256(currentEntry)
+		if err != nil {
+			return false, errors.New("mcp config implant revert: live server entry is not canonicalizable")
+		}
+		return currentHash == entryHash, nil
+	}
+
+	// Legacy receipts stored the plaintext injected JSON. Keep this decode path
+	// so existing protected receipt files remain revertible after the minimized
+	// hash-only receipt format is deployed.
+	var injectedEntry map[string]any
+	if err := json.Unmarshal([]byte(r.InjectionContent), &injectedEntry); err != nil {
+		return false, errors.New("mcp config implant revert: legacy receipt injection state is invalid")
+	}
+	return reflect.DeepEqual(currentEntry, injectedEntry), nil
 }
 
 func normalizeReceipt(r action.Receipt) (*action.ImplantReceipt, bool) {

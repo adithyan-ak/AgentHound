@@ -41,12 +41,14 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/spf13/pflag"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/campaign"
 	"github.com/adithyan-ak/agenthound/sdk/module"
 )
 
@@ -71,16 +73,47 @@ const (
 	DefaultListPath = "/"
 )
 
+// Revert sentinel errors let callers classify a failed revert via errors.Is
+// without coupling to the human-readable message text. They are wrapped into
+// the descriptive errors Revert returns (the surfaced messages are unchanged).
+var (
+	// ErrNoMutation signals that the requested transformation would leave the
+	// target unchanged. No receipt is constructed or persisted and no write is
+	// attempted.
+	ErrNoMutation = errors.New("mcp poison: requested mutation would not change target")
+	// ErrRevertIndeterminate signals that the pre-write re-read failed, so the
+	// live state is unknown and Revert wrote nothing.
+	ErrRevertIndeterminate = action.ErrRevertIndeterminate
+	// ErrRevertConflict signals that the live description matched neither the
+	// original nor our injection (a third-party change), so Revert refused to
+	// overwrite it.
+	ErrRevertConflict = action.ErrRevertConflict
+)
+
 // Poisoner is the registered module.
 type Poisoner struct {
-	stateful module.StatefulModule
+	stateful      module.StatefulModule
+	clientFactory func(baseURL string) (*http.Client, error)
 }
 
-// New constructs a Poisoner with a default file-backed StatefulModule.
-// Tests can swap the StatefulModule after construction.
+// New constructs a standalone Poisoner with a default file-backed
+// StatefulModule and a finite HTTP timeout as defense in depth.
 func New() *Poisoner {
 	return &Poisoner{
-		stateful: module.NewFileStatefulModule("mcp.poison"),
+		stateful:      module.NewFileStatefulModule("mcp.poison"),
+		clientFactory: standaloneHTTPClient,
+	}
+}
+
+// NewForCampaign constructs a Poisoner for the campaign runner. Campaign
+// forward and cleanup operations carry separate bounded contexts, so this
+// profile deliberately has no blanket http.Client timeout. In particular,
+// http.Client.Timeout spans response-body reads and would terminate long-lived
+// streaming responses independently of the campaign's explicit deadlines.
+func NewForCampaign() *Poisoner {
+	return &Poisoner{
+		stateful:      module.NewFileStatefulModule("mcp.poison"),
+		clientFactory: campaignHTTPClient,
 	}
 }
 
@@ -106,8 +139,8 @@ func (p *Poisoner) RegisterFlags(fs *pflag.FlagSet) {
 
 // Poison reads the current tool description, applies the injection per
 // payload.Mode, persists a receipt, and (when DryRun=false) issues the
-// mutating HTTP write. Returns the receipt regardless of DryRun so the
-// CLI can present a uniform success story.
+// mutating HTTP write. A transformation equal to the observed original returns
+// ErrNoMutation before receipt construction or persistence and before any write.
 func (p *Poisoner) Poison(ctx context.Context, t action.Target, payload action.PoisonPayload) (*action.PoisonReceipt, error) {
 	if payload.TargetID == "" {
 		return nil, errors.New("mcp poison: --target-id is required")
@@ -141,7 +174,14 @@ func (p *Poisoner) Poison(ctx context.Context, t action.Target, payload action.P
 	}
 
 	baseURL := strings.TrimRight(targetBaseURL(t), "/")
-	client := &http.Client{Timeout: DefaultProbeTimeout}
+	if parsed, err := url.Parse(baseURL); err != nil ||
+		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, errors.New("mcp poison: target URL userinfo, query, and fragment are prohibited")
+	}
+	client, err := p.httpClient(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("mcp poison: invalid target URL: %w", err)
+	}
 
 	original, err := fetchToolDescription(ctx, client, baseURL, listPath, payload.TargetID, authToken)
 	if err != nil {
@@ -149,10 +189,20 @@ func (p *Poisoner) Poison(ctx context.Context, t action.Target, payload action.P
 	}
 
 	injected := composeContent(original, payload.InjectionContent, mode)
+	if injected == original {
+		return nil, ErrNoMutation
+	}
+	receiptID, err := action.NewReceiptID()
+	if err != nil {
+		return nil, fmt.Errorf("mcp poison: %w", err)
+	}
 
 	receipt := &action.PoisonReceipt{
+		ReceiptID:       receiptID,
 		ModuleID:        "mcp.poison",
 		EngagementID:    payload.EngagementID,
+		CampaignRunID:   payload.CampaignRunID,
+		StepSequence:    payload.StepSequence,
 		Target:          t,
 		TargetID:        payload.TargetID,
 		OriginalContent: original,
@@ -185,7 +235,7 @@ func (p *Poisoner) Poison(ctx context.Context, t action.Target, payload action.P
 	}
 
 	if err := writeToolDescription(ctx, client, baseURL, updateMethod, updatePath, payload.TargetID, injected, authToken); err != nil {
-		return nil, fmt.Errorf("apply poison: %w", err)
+		return receipt, fmt.Errorf("apply poison: %w", err)
 	}
 
 	slog.Info("mcp poison applied",
@@ -198,8 +248,20 @@ func (p *Poisoner) Poison(ctx context.Context, t action.Target, payload action.P
 }
 
 // Revert restores the original tool description recorded on the
-// receipt. Idempotent: if the current description on the target
-// already equals OriginalContent, Revert is a no-op (returns nil).
+// receipt. It is conflict-AWARE and idempotent: it re-reads the current
+// description and decides what to do from a four-way comparison against
+// the receipt, and NEVER blind-writes.
+//
+//  1. re-read fails            → indeterminate: return an error, write
+//     nothing (we cannot know the current state, so restoring could
+//     clobber a third party or re-apply stale content).
+//  2. current == OriginalContent → no-op: nothing applied, or already
+//     reverted out of band. Return nil.
+//  3. current == InjectedContent → restore: write OriginalContent back.
+//  4. current is anything else   → conflict: a third party changed the
+//     description after we poisoned it. Refuse to overwrite (returning
+//     an error) so we do not destroy their change. A deferred --force
+//     could opt into overwriting; it is intentionally not wired here.
 //
 // receipt may be either *action.PoisonReceipt or action.PoisonReceipt
 // (the StatefulModule encoder normalizes to pointer on read; defensive
@@ -231,26 +293,131 @@ func (p *Poisoner) Revert(ctx context.Context, receipt action.Receipt) error {
 	}
 	authToken, _ := ctx.Value(action.RevertAuthTokenKey{}).(string)
 
-	client := &http.Client{Timeout: DefaultProbeTimeout}
+	client, err := p.httpClient(baseURL)
+	if err != nil {
+		return fmt.Errorf("mcp poison revert: invalid target URL: %w", err)
+	}
 
-	// Idempotency check — if the current description already equals
-	// OriginalContent, we have nothing to do. The check protects against
-	// double-revert and against an out-of-band restore that beat us to it.
+	// Re-read the live description so we can decide safely. A failure
+	// here is INDETERMINATE — we must not fall back to a blind write,
+	// because we cannot tell whether our injection is still present.
 	current, err := fetchToolDescription(ctx, client, baseURL, listPath, r.TargetID, authToken)
-	if err == nil && current == r.OriginalContent {
+	if err != nil {
+		return fmt.Errorf("mcp poison revert: re-read failed, state %w (not writing): %w", ErrRevertIndeterminate, err)
+	}
+
+	switch current {
+	case r.OriginalContent:
+		// Already original — nothing applied, or an out-of-band restore
+		// beat us to it. Protects against double-revert.
 		slog.Info("mcp poison revert: target already matches original (no-op)",
 			"target_id", r.TargetID,
 			"engagement_id", r.EngagementID)
 		return nil
+	case r.InjectedContent:
+		// Our injection is still present — safe to restore.
+		//
+		// Residual TOCTOU race: between this re-read and the write below,
+		// a third party could change the description; we would then
+		// overwrite that change. Closing this window needs a conditional
+		// update (compare-and-set / If-Match ETag), but the tool-admin
+		// write surface used here (writeToolDescription: an unconditional
+		// PUT with body {"description": ...}) exposes no such primitive,
+		// so we document the residual race rather than pretend to solve
+		// it. If a future admin surface supports conditional updates, the
+		// write below should carry the ETag observed on this re-read.
+		if err := writeToolDescription(ctx, client, baseURL, updateMethod, updatePath, r.TargetID, r.OriginalContent, authToken); err != nil {
+			return fmt.Errorf("write original back: %w", err)
+		}
+		slog.Info("mcp poison reverted",
+			"target_id", r.TargetID,
+			"engagement_id", r.EngagementID)
+		return nil
+	default:
+		// Conflict: current matches neither the original nor our
+		// injection, so a third party changed it after we poisoned.
+		// Restoring OriginalContent would destroy their change, so we
+		// refuse and surface an error; the CLI retains the receipt for a
+		// later retry (a deferred --force could override this).
+		return fmt.Errorf("mcp poison revert: current description matches neither original nor injected content for target %q (third-party change?); refusing to overwrite (%w)", r.TargetID, ErrRevertConflict)
 	}
+}
 
-	if err := writeToolDescription(ctx, client, baseURL, updateMethod, updatePath, r.TargetID, r.OriginalContent, authToken); err != nil {
-		return fmt.Errorf("write original back: %w", err)
+// ReadDescription re-reads the live description of the named tool via the same
+// JSON-RPC tools/list read that Poison and Revert perform internally, so the
+// three share exactly one read implementation. It is the read primitive the
+// reversible-mutation round-trip scenario (modules/mcproundtrip) uses to verify
+// a mutation landed (its oracle) and that the original was restored (its cleanup
+// verification). listPath defaults to DefaultListPath when empty; authToken is
+// optional. It never mutates the target.
+func (p *Poisoner) ReadDescription(ctx context.Context, t action.Target, targetID, listPath, authToken string) (string, error) {
+	if strings.TrimSpace(targetID) == "" {
+		return "", errors.New("mcp poison read: target-id is required")
 	}
-	slog.Info("mcp poison reverted",
-		"target_id", r.TargetID,
-		"engagement_id", r.EngagementID)
-	return nil
+	if listPath == "" {
+		listPath = DefaultListPath
+	}
+	baseURL := strings.TrimRight(targetBaseURL(t), "/")
+	client, err := p.httpClient(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("mcp poison read: invalid target URL: %w", err)
+	}
+	return fetchToolDescription(ctx, client, baseURL, listPath, targetID, authToken)
+}
+
+func (p *Poisoner) httpClient(baseURL string) (*http.Client, error) {
+	factory := p.clientFactory
+	if factory == nil {
+		// Preserve the safe standalone default for zero-value Poisoners.
+		factory = standaloneHTTPClient
+	}
+	return factory(baseURL)
+}
+
+func standaloneHTTPClient(baseURL string) (*http.Client, error) {
+	return newHTTPClient(baseURL, DefaultProbeTimeout)
+}
+
+func campaignHTTPClient(baseURL string) (*http.Client, error) {
+	return newHTTPClient(baseURL, 0)
+}
+
+func newHTTPClient(baseURL string, timeout time.Duration) (*http.Client, error) {
+	origin, err := campaign.ParseHTTPOrigin(baseURL)
+	if err != nil {
+		return nil, errors.New("target must be an absolute HTTP(S) endpoint")
+	}
+	return &http.Client{
+		Timeout: timeout,
+		Transport: campaign.CountingTransport{
+			Base: exactOriginCredentialRoundTripper{
+				base:   http.DefaultTransport,
+				origin: origin,
+			},
+		},
+	}, nil
+}
+
+// exactOriginCredentialRoundTripper strips Authorization from every request
+// whose scheme, hostname, or effective port differs from the original target.
+// This applies to redirects as well as direct requests and fails closed for
+// malformed or authority-less URLs.
+type exactOriginCredentialRoundTripper struct {
+	base   http.RoundTripper
+	origin campaign.HTTPOrigin
+}
+
+func (t exactOriginCredentialRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	cloned := req.Clone(req.Context())
+	cloned.Header = req.Header.Clone()
+	if !t.origin.Matches(req.URL) {
+		cloned.Header.Del("Authorization")
+	}
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(cloned)
 }
 
 // composeContent returns the new description according to mode. The
@@ -346,8 +513,7 @@ func writeToolDescription(ctx context.Context, client *http.Client, baseURL, met
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		drained, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
-		return fmt.Errorf("update status %d: %s", resp.StatusCode, strings.TrimSpace(string(drained)))
+		return fmt.Errorf("update status %d", resp.StatusCode)
 	}
 	return nil
 }

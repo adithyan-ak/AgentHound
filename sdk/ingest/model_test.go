@@ -228,8 +228,43 @@ func TestAllNodeLabelsComplete(t *testing.T) {
 }
 
 func TestAllowedEdgeKindsComplete(t *testing.T) {
-	if len(AllowedEdgeKinds) != 30 {
-		t.Errorf("AllowedEdgeKinds: got %d entries, want 30", len(AllowedEdgeKinds))
+	if len(AllowedEdgeKinds) != 32 {
+		t.Errorf("AllowedEdgeKinds: got %d entries, want 32", len(AllowedEdgeKinds))
+	}
+}
+
+func TestRawEdgeKindsComplete(t *testing.T) {
+	if len(RawEdgeKinds) != 20 {
+		t.Errorf("RawEdgeKinds: got %d entries, want 20", len(RawEdgeKinds))
+	}
+}
+
+// TestCampaignEdgeKindsRegistered guards the campaign-runner additions.
+// The differential credential-reach scenario emits CREDENTIAL_REACH_VERIFIED
+// (AgentInstance→MCPResource) as per-agent supporting evidence that upgrades the existing
+// CAN_REACH finding, and PUBLIC_ACCESS_OBSERVED (MCPServer→MCPResource) as an
+// anonymous-access fact. Both must be raw so the ingest validator accepts them
+// and so PUBLIC_ACCESS_OBSERVED never auto-creates a finding (findings derive
+// only from composite edges).
+func TestCampaignEdgeKindsRegistered(t *testing.T) {
+	for _, kind := range []string{"CREDENTIAL_REACH_VERIFIED", "PUBLIC_ACCESS_OBSERVED"} {
+		if !RawEdgeKinds[kind] {
+			t.Errorf("RawEdgeKinds missing campaign edge %q (validator gate rejects ingest)", kind)
+		}
+		if !AllowedEdgeKinds[kind] {
+			t.Errorf("AllowedEdgeKinds missing campaign edge %q", kind)
+		}
+		if _, ok := EdgeKindEndpoints[kind]; !ok {
+			t.Errorf("EdgeKindEndpoints missing campaign edge %q", kind)
+		}
+	}
+	if ep := EdgeKindEndpoints["CREDENTIAL_REACH_VERIFIED"]; len(ep.SourceKinds) == 0 ||
+		ep.SourceKinds[0] != "AgentInstance" || len(ep.TargetKinds) == 0 || ep.TargetKinds[0] != "MCPResource" {
+		t.Errorf("CREDENTIAL_REACH_VERIFIED endpoints: got %+v, want AgentInstance->MCPResource", ep)
+	}
+	if ep := EdgeKindEndpoints["PUBLIC_ACCESS_OBSERVED"]; len(ep.SourceKinds) == 0 ||
+		ep.SourceKinds[0] != "MCPServer" || len(ep.TargetKinds) == 0 || ep.TargetKinds[0] != "MCPResource" {
+		t.Errorf("PUBLIC_ACCESS_OBSERVED endpoints: got %+v, want MCPServer->MCPResource", ep)
 	}
 }
 
