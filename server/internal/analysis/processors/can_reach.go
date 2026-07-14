@@ -2,8 +2,11 @@ package processors
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
+	"github.com/adithyan-ak/agenthound/sdk/campaign"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 )
 
@@ -68,32 +71,78 @@ RETURN count(*) AS written`
 	// current-epoch CAN_REACH edge to that resource must route through that exact
 	// credential. A forged credential_id resolves to a reference_only node with no
 	// value_hash, so the value_hash equality fails and nothing is upgraded.
+	validatedEvidenceIDs, err := validatedCampaignEvidenceRelationshipIDs(ctx, db)
+	if err != nil {
+		return graph.ProcessingStats{
+			ProcessorName: p.Name(),
+			Duration:      time.Since(start),
+		}, err
+	}
+
 	verifiedUpgradeCypher := `
-MATCH (c:Credential)-[v:CREDENTIAL_REACH_VERIFIED]->(r:MCPResource)
+MATCH (a:AgentInstance)-[v:CREDENTIAL_REACH_VERIFIED]->(r:MCPResource)
 WHERE coalesce(v.is_composite, false) = false
+  AND id(v) IN $validated_evidence_ids
+  AND a.objectid = v.agent_id
+  AND v.agent_kind = 'AgentInstance'
+  AND v.server_kind = 'MCPServer'
+  AND v.credential_kind = 'Credential'
+  AND v.resource_kind = 'MCPResource'
+  AND v.witness_schema_version = 2
+  AND v.topology_normalization_version = 1
+  AND v.publication_revision > 0
+  AND v.predicted_edge_kind = 'CAN_REACH'
+  AND v.scenario_id = 'cred-reach'
+  AND v.scenario_version = 1
+  AND v.oracle_type = 'differential_credential_reach'
   AND v.outcome = 'credential_gated_reach_verified'
-  AND c.objectid = v.credential_id
+  AND v.authed_stage = 'resource_read'
+  AND v.authed_resource_addressed = true
+  AND v.authed_status = 'allowed'
+  AND v.control_status = 'denied'
+  AND (
+    (v.control_stage = 'initialize' AND v.control_resource_addressed = false)
+    OR
+    (v.control_stage = 'resource_read' AND v.control_resource_addressed = true)
+  )
+  AND r.objectid = v.resource_id
+  AND r.uri = v.resource_identity_input
+MATCH (s:MCPServer)-[:PROVIDES_RESOURCE]->(r)
+WHERE s.objectid = v.server_id
+MATCH (c:Credential)
+WHERE c.objectid = v.credential_id
   AND c.value_hash IS NOT NULL AND c.value_hash = v.credential_value_hash
   AND c.merge_key = v.credential_merge_key
-  AND r.objectid = v.resource_id
-  AND EXISTS {
-    MATCH (s:MCPServer)-[:PROVIDES_RESOURCE]->(r)
-    WHERE s.objectid = v.server_id
-  }
 MATCH (a)-[e:CAN_REACH]->(r)
 WHERE e.is_composite = true
   AND e.scan_id = $scan_id
-  AND c.objectid IN e.evidence_node_ids
+  AND e.evidence_node_ids = v.evidence_node_ids
+  AND size(v.evidence_node_ids) = size(v.evidence_node_kinds)
+  AND ALL(evidence_index IN range(0, size(v.evidence_node_ids) - 1) WHERE EXISTS {
+    MATCH (evidence_node)
+    WHERE evidence_node.objectid = v.evidence_node_ids[evidence_index]
+      AND v.evidence_node_kinds[evidence_index] IN labels(evidence_node)
+  })
 SET e.reach_evidence_state = 'verified',
     e.verified_outcome = v.outcome,
     e.verified_scenario_id = v.scenario_id,
     e.verified_scenario_version = v.scenario_version,
     e.verified_run_id = v.run_id,
     e.verified_at = v.verified_at,
+    e.verified_oracle_type = v.oracle_type,
+    e.verified_control_stage = v.control_stage,
+    e.verified_control_status = v.control_status,
+    e.verified_control_resource_addressed = v.control_resource_addressed,
+    e.verified_authed_stage = v.authed_stage,
+    e.verified_authed_status = v.authed_status,
+    e.verified_authed_resource_addressed = v.authed_resource_addressed,
     e.confidence = 1.0
 RETURN count(e) AS upgraded`
 
-	params := map[string]any{"scan_id": scanID}
+	params := map[string]any{
+		"scan_id":                scanID,
+		"validated_evidence_ids": validatedEvidenceIDs,
+	}
 	var total int
 
 	// The upgrade runs LAST so it re-correlates against the CAN_REACH edges the
@@ -114,4 +163,169 @@ RETURN count(e) AS upgraded`
 		EdgesCreated:  total,
 		Duration:      time.Since(start),
 	}, nil
+}
+
+const campaignEvidenceValidationQuery = `
+MATCH (a:AgentInstance)-[v:CREDENTIAL_REACH_VERIFIED]->(r:MCPResource)
+WHERE coalesce(v.is_composite, false) = false
+RETURN id(v) AS relationship_id,
+       a.objectid AS source_agent_id,
+       r.objectid AS target_resource_id,
+       properties(v) AS properties`
+
+func validatedCampaignEvidenceRelationshipIDs(
+	ctx context.Context,
+	db graph.GraphDB,
+) ([]int64, error) {
+	rows, err := db.Query(ctx, campaignEvidenceValidationQuery, nil)
+	if err != nil {
+		return nil, fmt.Errorf("query campaign verification evidence: %w", err)
+	}
+	validated := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		properties, ok := row["properties"].(map[string]any)
+		if !ok {
+			continue
+		}
+		evidence, fingerprint, err := campaignEvidenceFromProperties(properties)
+		if err != nil ||
+			evidence.Witness.Fingerprint() != fingerprint ||
+			stringProperty(row, "source_agent_id") != evidence.Witness.AgentID ||
+			stringProperty(row, "target_resource_id") != evidence.Witness.ResourceID {
+			continue
+		}
+		relationshipID, ok := int64Property(row, "relationship_id")
+		if !ok {
+			continue
+		}
+		validated = append(validated, relationshipID)
+	}
+	return validated, nil
+}
+
+func campaignEvidenceFromProperties(properties map[string]any) (campaign.Evidence, string, error) {
+	witness := campaign.Witness{
+		SchemaVersion:                intProperty(properties, campaign.PropWitnessSchema),
+		TopologyNormalizationVersion: intProperty(properties, campaign.PropTopologyVersion),
+		PublicationRevision:          intProperty(properties, campaign.PropPublicationRevision),
+		PredictedEdgeKind:            stringProperty(properties, campaign.PropPredictedEdgeKind),
+		AgentID:                      stringProperty(properties, campaign.PropAgentID),
+		AgentKind:                    stringProperty(properties, campaign.PropAgentKind),
+		CredentialID:                 stringProperty(properties, campaign.PropCredentialID),
+		CredentialKind:               stringProperty(properties, campaign.PropCredentialKind),
+		CredentialValueHash:          stringProperty(properties, campaign.PropCredentialValueHash),
+		CredentialMergeKey:           stringProperty(properties, campaign.PropCredentialMergeKey),
+		ServerID:                     stringProperty(properties, campaign.PropServerID),
+		ServerKind:                   stringProperty(properties, campaign.PropServerKind),
+		ResourceID:                   stringProperty(properties, campaign.PropResourceID),
+		ResourceKind:                 stringProperty(properties, campaign.PropResourceKind),
+		ResourceIdentityInput:        stringProperty(properties, campaign.PropResourceIdentity),
+		EvidenceNodeIDs:              stringSliceProperty(properties, campaign.PropEvidenceNodeIDs),
+		EvidenceNodeKinds:            stringSliceProperty(properties, campaign.PropEvidenceNodeKinds),
+	}
+	evidence := campaign.Evidence{
+		ScenarioID:       stringProperty(properties, campaign.PropScenarioID),
+		ScenarioVersion:  intProperty(properties, campaign.PropScenarioVersion),
+		RunID:            stringProperty(properties, campaign.PropRunID),
+		EngagementID:     stringProperty(properties, campaign.PropEngagementID),
+		OracleType:       stringProperty(properties, campaign.PropOracleType),
+		Outcome:          campaign.Outcome(stringProperty(properties, campaign.PropOutcome)),
+		ControlStage:     campaign.ProbeStage(stringProperty(properties, campaign.PropControlStage)),
+		ControlStatus:    campaign.ProbeStatus(stringProperty(properties, campaign.PropControlStatus)),
+		ControlAddressed: boolProperty(properties, campaign.PropControlAddressed),
+		AuthedStage:      campaign.ProbeStage(stringProperty(properties, campaign.PropAuthedStage)),
+		AuthedStatus:     campaign.ProbeStatus(stringProperty(properties, campaign.PropAuthedStatus)),
+		AuthedAddressed:  boolProperty(properties, campaign.PropAuthedAddressed),
+		VerifiedAt:       stringProperty(properties, campaign.PropVerifiedAt),
+		Witness:          witness,
+	}
+	if err := witness.Validate(); err != nil {
+		return campaign.Evidence{}, "", err
+	}
+	if evidence.ScenarioID != "cred-reach" ||
+		evidence.ScenarioVersion != 1 ||
+		evidence.OracleType != campaign.OracleTypeDifferentialCredentialReach ||
+		evidence.Outcome != campaign.OutcomeCredentialGatedReachVerified ||
+		strings.TrimSpace(evidence.RunID) == "" ||
+		strings.TrimSpace(evidence.EngagementID) == "" {
+		return campaign.Evidence{}, "", fmt.Errorf("campaign evidence contract mismatch")
+	}
+	if _, err := time.Parse(time.RFC3339, evidence.VerifiedAt); err != nil {
+		return campaign.Evidence{}, "", fmt.Errorf("campaign verified_at is invalid")
+	}
+	control := campaign.ProbeResult{
+		Stage: evidence.ControlStage, ResourceAddressed: evidence.ControlAddressed,
+		Status: evidence.ControlStatus,
+	}
+	authed := campaign.ProbeResult{
+		Stage: evidence.AuthedStage, ResourceAddressed: evidence.AuthedAddressed,
+		Status: evidence.AuthedStatus,
+	}
+	if campaign.Classify(control, authed) != evidence.Outcome {
+		return campaign.Evidence{}, "", fmt.Errorf("campaign staged observation contract mismatch")
+	}
+	fingerprint := stringProperty(properties, campaign.PropWitnessFingerprint)
+	if fingerprint == "" {
+		return campaign.Evidence{}, "", fmt.Errorf("campaign witness fingerprint is missing")
+	}
+	return evidence, fingerprint, nil
+}
+
+func stringProperty(properties map[string]any, key string) string {
+	value, _ := properties[key].(string)
+	return value
+}
+
+func intProperty(properties map[string]any, key string) int {
+	switch value := properties[key].(type) {
+	case int:
+		return value
+	case int32:
+		return int(value)
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
+}
+
+func int64Property(properties map[string]any, key string) (int64, bool) {
+	switch value := properties[key].(type) {
+	case int:
+		return int64(value), true
+	case int32:
+		return int64(value), true
+	case int64:
+		return value, true
+	case float64:
+		return int64(value), true
+	default:
+		return 0, false
+	}
+}
+
+func boolProperty(properties map[string]any, key string) bool {
+	value, _ := properties[key].(bool)
+	return value
+}
+
+func stringSliceProperty(properties map[string]any, key string) []string {
+	switch values := properties[key].(type) {
+	case []string:
+		return append([]string(nil), values...)
+	case []any:
+		result := make([]string, 0, len(values))
+		for _, value := range values {
+			text, ok := value.(string)
+			if !ok {
+				return nil
+			}
+			result = append(result, text)
+		}
+		return result
+	default:
+		return nil
+	}
 }

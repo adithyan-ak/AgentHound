@@ -70,14 +70,14 @@ func (s *Scenario) Run(ctx context.Context, in campaign.RunInput) (*campaign.Run
 
 	control := prober.Probe(ctx, campaign.ProbeRequest{
 		Host:        binding.Endpoint,
-		ResourceURI: in.Witness.ResourceURI,
+		ResourceURI: in.Witness.ResourceIdentityInput,
 		Credential:  "",
 		Insecure:    in.Insecure,
 		Timeout:     in.Timeout,
 	})
 	authed := prober.Probe(ctx, campaign.ProbeRequest{
 		Host:        binding.Endpoint,
-		ResourceURI: in.Witness.ResourceURI,
+		ResourceURI: in.Witness.ResourceIdentityInput,
 		Credential:  in.CredentialMaterial,
 		Insecure:    in.Insecure,
 		Timeout:     in.Timeout,
@@ -91,16 +91,20 @@ func (s *Scenario) Run(ctx context.Context, in campaign.RunInput) (*campaign.Run
 	}
 
 	evidence := &campaign.Evidence{
-		ScenarioID:      scenarioID,
-		ScenarioVersion: scenarioVersion,
-		RunID:           runID,
-		EngagementID:    in.EngagementID,
-		OracleType:      campaign.OracleTypeDifferentialCredentialReach,
-		Outcome:         outcome,
-		ControlStatus:   control.Status,
-		AuthedStatus:    authed.Status,
-		VerifiedAt:      in.Clock()().UTC().Format(time.RFC3339),
-		Witness:         in.Witness,
+		ScenarioID:       scenarioID,
+		ScenarioVersion:  scenarioVersion,
+		RunID:            runID,
+		EngagementID:     in.EngagementID,
+		OracleType:       campaign.OracleTypeDifferentialCredentialReach,
+		Outcome:          outcome,
+		ControlStage:     control.Stage,
+		ControlStatus:    control.Status,
+		ControlAddressed: control.ResourceAddressed,
+		AuthedStage:      authed.Stage,
+		AuthedStatus:     authed.Status,
+		AuthedAddressed:  authed.ResourceAddressed,
+		VerifiedAt:       in.Clock()().UTC().Format(time.RFC3339),
+		Witness:          in.Witness,
 	}
 
 	return &campaign.RunResult{
@@ -122,7 +126,7 @@ func planText(in campaign.RunInput, targetRef string) string {
 	fmt.Fprintf(&b, "target:        %s\n", targetRef)
 	fmt.Fprintf(&b, "server node:   %s\n", w.ServerID)
 	fmt.Fprintf(&b, "resource node: %s\n", w.ResourceID)
-	fmt.Fprintf(&b, "resource uri:  %s\n", w.ResourceURI)
+	fmt.Fprintf(&b, "resource uri:  %s\n", w.ResourceIdentityInput)
 	fmt.Fprintf(&b, "credential:    %s (value_hash matched out-of-band)\n", w.CredentialID)
 	b.WriteString("plan (READ-ONLY, no mutation):\n")
 	b.WriteString("  1. resources/read the exact resource WITHOUT authentication (control)\n")

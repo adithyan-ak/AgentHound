@@ -13,7 +13,11 @@ import (
 // on export and both the collector (Validate) and the server re-correlation
 // reject any other value, so a witness produced by an incompatible build is
 // rejected rather than silently misinterpreted (stale-schema rejection).
-const WitnessSchemaVersion = 1
+const WitnessSchemaVersion = 2
+
+// WitnessTopologyNormalizationVersion identifies the deterministic concrete-kind
+// normalization used for the ordered current CAN_REACH evidence topology.
+const WitnessTopologyNormalizationVersion = 1
 
 // PredictedEdgeKindCanReach is the only predicted edge the v1 differential
 // credential-reach scenario upgrades. Credential-chain predictions surface as a
@@ -26,13 +30,6 @@ const PredictedEdgeKindCanReach = "CAN_REACH"
 // and is not a runnable target (a precondition failure, not indeterminate).
 const CredentialMergeKeyValueHash = "value_hash"
 
-// PathHop is one ordered node in the predicted reach path. Only the stable
-// content-hashed node ID and its concrete kind are carried; no node properties.
-type PathHop struct {
-	NodeID string `json:"node_id"`
-	Kind   string `json:"kind"`
-}
-
 // Witness is the STABLE, SANITIZED logical artifact the server exports for a
 // predicted CAN_REACH / credential-chain finding and the collector passes back
 // as observed evidence. It is a content-addressed tuple — node IDs, the
@@ -41,25 +38,34 @@ type PathHop struct {
 // Neo4j relationship IDs (composite edges are recreated every epoch), NO
 // arbitrary node properties, and NO secrets.
 //
-// ResourceURI is the sole free-text field and is NOT arbitrary metadata: it is
-// the identity input from which ResourceID is derived
-// (ComputeNodeID("MCPResource", ServerID, ResourceURI)). Validate enforces that
-// binding so a tampered URI cannot point the read probe at a different resource
-// than the one whose ID is being verified.
+// ResourceIdentityInput is the sole free-text field and is NOT arbitrary
+// metadata: it is the identity input from which ResourceID is derived. Validate
+// enforces that binding so a tampered input cannot point the read probe at a
+// different resource than the one whose ID is being verified. The HTTP endpoint
+// remains out-of-band and never enters this artifact.
 type Witness struct {
-	SchemaVersion       int    `json:"schema_version"`
-	PublicationRevision int    `json:"publication_revision"`
-	PredictedEdgeKind   string `json:"predicted_edge_kind"`
+	SchemaVersion                int    `json:"schema_version"`
+	TopologyNormalizationVersion int    `json:"topology_normalization_version"`
+	PublicationRevision          int    `json:"publication_revision"`
+	PredictedEdgeKind            string `json:"predicted_edge_kind"`
+
+	AgentID   string `json:"agent_id"`
+	AgentKind string `json:"agent_kind"`
 
 	CredentialID        string `json:"credential_id"`
+	CredentialKind      string `json:"credential_kind"`
 	CredentialValueHash string `json:"credential_value_hash"`
 	CredentialMergeKey  string `json:"credential_merge_key"`
 
-	ServerID    string `json:"server_id"`
-	ResourceID  string `json:"resource_id"`
-	ResourceURI string `json:"resource_uri"`
+	ServerID   string `json:"server_id"`
+	ServerKind string `json:"server_kind"`
 
-	PathTopology []PathHop `json:"path_topology"`
+	ResourceID            string `json:"resource_id"`
+	ResourceKind          string `json:"resource_kind"`
+	ResourceIdentityInput string `json:"resource_identity_input"`
+
+	EvidenceNodeIDs   []string `json:"evidence_node_ids"`
+	EvidenceNodeKinds []string `json:"evidence_node_kinds"`
 }
 
 // Validate performs full structural + integrity checks, including the
@@ -84,14 +90,29 @@ func (w Witness) ValidateStructure() error {
 			w.SchemaVersion, WitnessSchemaVersion,
 		)
 	}
+	if w.TopologyNormalizationVersion != WitnessTopologyNormalizationVersion {
+		return fmt.Errorf(
+			"witness topology normalization version %d is not supported (want %d)",
+			w.TopologyNormalizationVersion, WitnessTopologyNormalizationVersion,
+		)
+	}
 	if w.PredictedEdgeKind != PredictedEdgeKindCanReach {
 		return fmt.Errorf(
 			"witness predicted_edge_kind %q is not runnable (want %q)",
 			w.PredictedEdgeKind, PredictedEdgeKindCanReach,
 		)
 	}
+	if strings.TrimSpace(w.AgentID) == "" {
+		return errors.New("witness agent_id must not be empty")
+	}
+	if w.AgentKind != "AgentInstance" {
+		return errors.New("witness agent_kind must be AgentInstance")
+	}
 	if strings.TrimSpace(w.CredentialID) == "" {
 		return errors.New("witness credential_id must not be empty")
+	}
+	if w.CredentialKind != "Credential" {
+		return errors.New("witness credential_kind must be Credential")
 	}
 	if strings.TrimSpace(w.CredentialValueHash) == "" {
 		return errors.New("witness credential_value_hash must not be empty")
@@ -106,37 +127,62 @@ func (w Witness) ValidateStructure() error {
 	if strings.TrimSpace(w.ServerID) == "" {
 		return errors.New("witness server_id must not be empty")
 	}
+	if w.ServerKind != "MCPServer" {
+		return errors.New("witness server_kind must be MCPServer")
+	}
 	if strings.TrimSpace(w.ResourceID) == "" {
 		return errors.New("witness resource_id must not be empty")
 	}
-	if strings.TrimSpace(w.ResourceURI) == "" {
-		return errors.New("witness resource_uri must not be empty")
+	if w.ResourceKind != "MCPResource" {
+		return errors.New("witness resource_kind must be MCPResource")
 	}
-	if bound := ingest.ComputeNodeID("MCPResource", w.ServerID, w.ResourceURI); bound != w.ResourceID {
+	if strings.TrimSpace(w.ResourceIdentityInput) == "" {
+		return errors.New("witness resource_identity_input must not be empty")
+	}
+	if bound := ingest.ComputeNodeID("MCPResource", w.ServerID, w.ResourceIdentityInput); bound != w.ResourceID {
 		return fmt.Errorf(
-			"witness resource_id does not bind to (server_id, resource_uri): forged or mismatched witness",
+			"witness resource_id does not bind to (server_id, resource_identity_input): forged or mismatched witness",
 		)
 	}
-	if len(w.PathTopology) == 0 {
-		return errors.New("witness path_topology must not be empty")
+	if len(w.EvidenceNodeIDs) == 0 {
+		return errors.New("witness evidence_node_ids must not be empty")
 	}
-	sawCredential, sawResource := false, false
-	for i, hop := range w.PathTopology {
-		if strings.TrimSpace(hop.NodeID) == "" || strings.TrimSpace(hop.Kind) == "" {
-			return fmt.Errorf("witness path_topology[%d] requires node_id and kind", i)
+	if len(w.EvidenceNodeKinds) != len(w.EvidenceNodeIDs) {
+		return errors.New("witness evidence_node_ids and evidence_node_kinds must have equal length")
+	}
+	required := map[string]string{
+		w.AgentID:      w.AgentKind,
+		w.ServerID:     w.ServerKind,
+		w.CredentialID: w.CredentialKind,
+		w.ResourceID:   w.ResourceKind,
+	}
+	seenRequired := make(map[string]bool, len(required))
+	for i, nodeID := range w.EvidenceNodeIDs {
+		kind := w.EvidenceNodeKinds[i]
+		if strings.TrimSpace(nodeID) == "" || strings.TrimSpace(kind) == "" {
+			return fmt.Errorf("witness evidence topology[%d] requires node id and kind", i)
 		}
-		if hop.NodeID == w.CredentialID {
-			sawCredential = true
+		if ingest.ConcreteNodeKind([]string{kind}) != kind {
+			return fmt.Errorf("witness evidence_node_kinds[%d] is not a normalized concrete kind", i)
 		}
-		if hop.NodeID == w.ResourceID {
-			sawResource = true
+		if requiredKind, ok := required[nodeID]; ok {
+			if kind != requiredKind {
+				return fmt.Errorf("witness evidence topology kind mismatch for required node")
+			}
+			seenRequired[nodeID] = true
 		}
 	}
-	if !sawCredential {
-		return errors.New("witness path_topology must include the credential node")
+	if w.EvidenceNodeIDs[0] != w.AgentID || w.EvidenceNodeKinds[0] != w.AgentKind {
+		return errors.New("witness evidence topology must begin with the source agent")
 	}
-	if !sawResource {
-		return errors.New("witness path_topology must include the resource node")
+	if w.EvidenceNodeIDs[len(w.EvidenceNodeIDs)-1] != w.ResourceID ||
+		w.EvidenceNodeKinds[len(w.EvidenceNodeKinds)-1] != w.ResourceKind {
+		return errors.New("witness evidence topology must end with the target resource")
+	}
+	for nodeID := range required {
+		if !seenRequired[nodeID] {
+			return errors.New("witness evidence topology is missing a required identity node")
+		}
 	}
 	return nil
 }
@@ -152,24 +198,4 @@ func (w Witness) Fingerprint() string {
 		return ""
 	}
 	return hash
-}
-
-// PathTopologyNodeIDs returns the ordered node IDs, for edge serialization and
-// server re-correlation.
-func (w Witness) PathTopologyNodeIDs() []string {
-	ids := make([]string, len(w.PathTopology))
-	for i, hop := range w.PathTopology {
-		ids[i] = hop.NodeID
-	}
-	return ids
-}
-
-// PathTopologyKinds returns the ordered node kinds, parallel to
-// PathTopologyNodeIDs.
-func (w Witness) PathTopologyKinds() []string {
-	kinds := make([]string, len(w.PathTopology))
-	for i, hop := range w.PathTopology {
-		kinds[i] = hop.Kind
-	}
-	return kinds
 }

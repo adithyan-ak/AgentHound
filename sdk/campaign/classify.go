@@ -94,7 +94,8 @@ func exactResourceRead(result ProbeResult) bool {
 
 func validControlDenial(result ProbeResult) bool {
 	return result.Status == ProbeDenied &&
-		(result.Stage == ProbeStageInitialize || exactResourceRead(result))
+		((result.Stage == ProbeStageInitialize && !result.ResourceAddressed) ||
+			exactResourceRead(result))
 }
 
 // Definitive reports whether the outcome is a completed observation whose

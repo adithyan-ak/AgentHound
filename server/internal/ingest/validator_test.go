@@ -82,27 +82,32 @@ func campaignEvidenceIngest() *ingest.IngestData {
 	uri := "postgres://prod/customers"
 	resID := ingest.ComputeNodeID("MCPResource", serverID, uri)
 	credID := "sha256:camp-cred"
+	agentID := "sha256:camp-agent"
 	ev := campaign.Evidence{
 		ScenarioID: "cred-reach", ScenarioVersion: 1, RunID: "run-1",
 		EngagementID: "ENG", OracleType: campaign.OracleTypeDifferentialCredentialReach,
-		Outcome:       campaign.OutcomeCredentialGatedReachVerified,
-		ControlStatus: campaign.ProbeDenied, AuthedStatus: campaign.ProbeAllowed,
+		Outcome:      campaign.OutcomeCredentialGatedReachVerified,
+		ControlStage: campaign.ProbeStageResourceRead, ControlStatus: campaign.ProbeDenied, ControlAddressed: true,
+		AuthedStage: campaign.ProbeStageResourceRead, AuthedStatus: campaign.ProbeAllowed, AuthedAddressed: true,
 		VerifiedAt: "2026-07-12T00:00:00Z",
 		Witness: campaign.Witness{
-			SchemaVersion: campaign.WitnessSchemaVersion, PublicationRevision: 1,
-			PredictedEdgeKind: campaign.PredictedEdgeKindCanReach,
-			CredentialID:      credID, CredentialValueHash: "deadbeef",
+			SchemaVersion:                campaign.WitnessSchemaVersion,
+			TopologyNormalizationVersion: campaign.WitnessTopologyNormalizationVersion,
+			PublicationRevision:          1,
+			PredictedEdgeKind:            campaign.PredictedEdgeKindCanReach,
+			AgentID:                      agentID, AgentKind: "AgentInstance",
+			CredentialID: credID, CredentialValueHash: "deadbeef",
+			CredentialKind:     "Credential",
 			CredentialMergeKey: campaign.CredentialMergeKeyValueHash,
-			ServerID:           serverID, ResourceID: resID, ResourceURI: uri,
-			PathTopology: []campaign.PathHop{
-				{NodeID: credID, Kind: "Credential"},
-				{NodeID: resID, Kind: "MCPResource"},
-			},
+			ServerID:           serverID, ServerKind: "MCPServer",
+			ResourceID: resID, ResourceKind: "MCPResource", ResourceIdentityInput: uri,
+			EvidenceNodeIDs:   []string{agentID, serverID, credID, resID},
+			EvidenceNodeKinds: []string{"AgentInstance", "MCPServer", "Credential", "MCPResource"},
 		},
 	}
 	scanID := "scan-camp-001"
 	nodes, edges := ev.EvidenceGraph(scanID)
-	scope := ingest.CanonicalCoverageKey("scan", "campaign", "cred-reach\x001\x00"+credID+"\x00"+serverID+"\x00"+resID)
+	scope := ingest.CanonicalCoverageKey("scan", "campaign", "cred-reach\x001\x00"+agentID+"\x00"+credID+"\x00"+serverID+"\x00"+resID)
 	data := &ingest.IngestData{
 		Meta: ingest.IngestMeta{
 			Version: ingest.CurrentVersion, Type: ingest.IngestType,
@@ -136,10 +141,10 @@ func TestValidatorAcceptsCampaignEvidence(t *testing.T) {
 // node must fail validation (the validator requires both edge endpoints present).
 func TestValidatorRejectsCampaignMissingEndpoint(t *testing.T) {
 	data := campaignEvidenceIngest()
-	// Drop the credential (source) endpoint node, keep the edge.
+	// Drop the source-agent endpoint node, keep the edge.
 	var kept []ingest.Node
 	for _, n := range data.Graph.Nodes {
-		if !hasKind(n.Kinds, "Credential") {
+		if !hasKind(n.Kinds, "AgentInstance") {
 			kept = append(kept, n)
 		}
 	}

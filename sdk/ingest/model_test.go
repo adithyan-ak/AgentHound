@@ -241,7 +241,7 @@ func TestRawEdgeKindsComplete(t *testing.T) {
 
 // TestCampaignEdgeKindsRegistered guards the campaign-runner additions.
 // The differential credential-reach scenario emits CREDENTIAL_REACH_VERIFIED
-// (Credential→MCPResource) as raw supporting evidence that upgrades the existing
+// (AgentInstance→MCPResource) as per-agent supporting evidence that upgrades the existing
 // CAN_REACH finding, and PUBLIC_ACCESS_OBSERVED (MCPServer→MCPResource) as an
 // anonymous-access fact. Both must be raw so the ingest validator accepts them
 // and so PUBLIC_ACCESS_OBSERVED never auto-creates a finding (findings derive
@@ -259,8 +259,8 @@ func TestCampaignEdgeKindsRegistered(t *testing.T) {
 		}
 	}
 	if ep := EdgeKindEndpoints["CREDENTIAL_REACH_VERIFIED"]; len(ep.SourceKinds) == 0 ||
-		ep.SourceKinds[0] != "Credential" || len(ep.TargetKinds) == 0 || ep.TargetKinds[0] != "MCPResource" {
-		t.Errorf("CREDENTIAL_REACH_VERIFIED endpoints: got %+v, want Credential->MCPResource", ep)
+		ep.SourceKinds[0] != "AgentInstance" || len(ep.TargetKinds) == 0 || ep.TargetKinds[0] != "MCPResource" {
+		t.Errorf("CREDENTIAL_REACH_VERIFIED endpoints: got %+v, want AgentInstance->MCPResource", ep)
 	}
 	if ep := EdgeKindEndpoints["PUBLIC_ACCESS_OBSERVED"]; len(ep.SourceKinds) == 0 ||
 		ep.SourceKinds[0] != "MCPServer" || len(ep.TargetKinds) == 0 || ep.TargetKinds[0] != "MCPResource" {

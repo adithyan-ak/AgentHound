@@ -5,7 +5,10 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/adithyan-ak/agenthound/sdk/campaign"
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 )
 
@@ -79,12 +82,17 @@ func TestCanReach_VerifiedUpgradeQuery(t *testing.T) {
 	// Re-correlation must bind the LIVE credential identity to the witness echo.
 	for _, needle := range []string{
 		"CREDENTIAL_REACH_VERIFIED",
+		"id(v) IN $validated_evidence_ids",
+		"a.objectid = v.agent_id",
 		"c.value_hash = v.credential_value_hash",
 		"c.merge_key = v.credential_merge_key",
 		"r.objectid = v.resource_id",
+		"r.uri = v.resource_identity_input",
 		"PROVIDES_RESOURCE",
 		"reach_evidence_state = 'verified'",
-		"c.objectid IN e.evidence_node_ids",
+		"e.evidence_node_ids = v.evidence_node_ids",
+		"v.evidence_node_kinds[evidence_index] IN labels(evidence_node)",
+		"v.publication_revision > 0",
 	} {
 		if !strings.Contains(upgrade, needle) {
 			t.Fatalf("verified-upgrade query missing %q:\n%s", needle, upgrade)
@@ -96,6 +104,9 @@ func TestCanReach_VerifiedUpgradeQuery(t *testing.T) {
 	}
 	if !strings.Contains(upgrade, "e.confidence = 1.0") {
 		t.Fatalf("verified-upgrade must raise confidence:\n%s", upgrade)
+	}
+	if strings.Contains(upgrade, "publication_revision =") {
+		t.Fatalf("publication revision must be provenance-only, not equality-gated:\n%s", upgrade)
 	}
 }
 
@@ -125,5 +136,140 @@ func TestCanReach_ProcessSecondQueryError(t *testing.T) {
 	_, err := p.Process(context.Background(), mock, "scan-1")
 	if err == nil {
 		t.Fatal("expected error on second query")
+	}
+}
+
+func validCampaignEvidenceRow(t *testing.T, agentID string, relationshipID int64) map[string]any {
+	t.Helper()
+	serverID := "sha256:campaign-server"
+	resourceInput := "postgres://prod/customers"
+	resourceID := ingest.ComputeNodeID("MCPResource", serverID, resourceInput)
+	witness := campaign.Witness{
+		SchemaVersion:                campaign.WitnessSchemaVersion,
+		TopologyNormalizationVersion: campaign.WitnessTopologyNormalizationVersion,
+		PublicationRevision:          1,
+		PredictedEdgeKind:            campaign.PredictedEdgeKindCanReach,
+		AgentID:                      agentID,
+		AgentKind:                    "AgentInstance",
+		CredentialID:                 "sha256:campaign-credential",
+		CredentialKind:               "Credential",
+		CredentialValueHash:          "sha256:campaign-value",
+		CredentialMergeKey:           campaign.CredentialMergeKeyValueHash,
+		ServerID:                     serverID,
+		ServerKind:                   "MCPServer",
+		ResourceID:                   resourceID,
+		ResourceKind:                 "MCPResource",
+		ResourceIdentityInput:        resourceInput,
+		EvidenceNodeIDs: []string{
+			agentID, serverID, "sha256:campaign-credential", resourceID,
+		},
+		EvidenceNodeKinds: []string{
+			"AgentInstance", "MCPServer", "Credential", "MCPResource",
+		},
+	}
+	evidence := campaign.Evidence{
+		ScenarioID:       "cred-reach",
+		ScenarioVersion:  1,
+		RunID:            "run-1",
+		EngagementID:     "ENG-1",
+		OracleType:       campaign.OracleTypeDifferentialCredentialReach,
+		Outcome:          campaign.OutcomeCredentialGatedReachVerified,
+		ControlStage:     campaign.ProbeStageInitialize,
+		ControlStatus:    campaign.ProbeDenied,
+		ControlAddressed: false,
+		AuthedStage:      campaign.ProbeStageResourceRead,
+		AuthedStatus:     campaign.ProbeAllowed,
+		AuthedAddressed:  true,
+		VerifiedAt:       time.Unix(0, 0).UTC().Format(time.RFC3339),
+		Witness:          witness,
+	}
+	_, edges := evidence.EvidenceGraph("scan-campaign")
+	if len(edges) != 1 {
+		t.Fatal("valid campaign evidence did not emit an edge")
+	}
+	return map[string]any{
+		"relationship_id":    relationshipID,
+		"source_agent_id":    agentID,
+		"target_resource_id": resourceID,
+		"properties":         edges[0].Properties,
+	}
+}
+
+func TestValidatedCampaignEvidenceAcceptsOldPositivePublicationRevision(t *testing.T) {
+	row := validCampaignEvidenceRow(t, "sha256:agent-a", 41)
+	db := &graph.MockGraphDB{QueryResult: []map[string]any{row}}
+	ids, err := validatedCampaignEvidenceRelationshipIDs(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] != 41 {
+		t.Fatalf("validated ids = %v, want [41]", ids)
+	}
+}
+
+func TestValidatedCampaignEvidenceRejectsPerFieldTamper(t *testing.T) {
+	base := validCampaignEvidenceRow(t, "sha256:agent-a", 41)
+	baseProps := base["properties"].(map[string]any)
+	tampers := map[string]func(map[string]any, map[string]any){
+		"source agent":                   func(row, _ map[string]any) { row["source_agent_id"] = "sha256:agent-b" },
+		"target resource":                func(row, _ map[string]any) { row["target_resource_id"] = "sha256:other" },
+		campaign.PropWitnessSchema:       func(_, props map[string]any) { props[campaign.PropWitnessSchema] = 1 },
+		campaign.PropTopologyVersion:     func(_, props map[string]any) { props[campaign.PropTopologyVersion] = 2 },
+		campaign.PropPublicationRevision: func(_, props map[string]any) { props[campaign.PropPublicationRevision] = 0 },
+		campaign.PropPredictedEdgeKind:   func(_, props map[string]any) { props[campaign.PropPredictedEdgeKind] = "HAS_ACCESS_TO" },
+		campaign.PropAgentID:             func(_, props map[string]any) { props[campaign.PropAgentID] = "sha256:agent-b" },
+		campaign.PropAgentKind:           func(_, props map[string]any) { props[campaign.PropAgentKind] = "A2AAgent" },
+		campaign.PropCredentialID:        func(_, props map[string]any) { props[campaign.PropCredentialID] = "sha256:other" },
+		campaign.PropCredentialKind:      func(_, props map[string]any) { props[campaign.PropCredentialKind] = "Identity" },
+		campaign.PropCredentialValueHash: func(_, props map[string]any) { props[campaign.PropCredentialValueHash] = "sha256:other" },
+		campaign.PropCredentialMergeKey:  func(_, props map[string]any) { props[campaign.PropCredentialMergeKey] = "identity" },
+		campaign.PropServerID:            func(_, props map[string]any) { props[campaign.PropServerID] = "sha256:other" },
+		campaign.PropServerKind:          func(_, props map[string]any) { props[campaign.PropServerKind] = "Host" },
+		campaign.PropResourceID:          func(_, props map[string]any) { props[campaign.PropResourceID] = "sha256:other" },
+		campaign.PropResourceKind:        func(_, props map[string]any) { props[campaign.PropResourceKind] = "Credential" },
+		campaign.PropResourceIdentity:    func(_, props map[string]any) { props[campaign.PropResourceIdentity] = "other://resource" },
+		campaign.PropEvidenceNodeIDs:     func(_, props map[string]any) { props[campaign.PropEvidenceNodeIDs] = []string{"sha256:agent-a"} },
+		campaign.PropEvidenceNodeKinds:   func(_, props map[string]any) { props[campaign.PropEvidenceNodeKinds] = []string{"AgentInstance"} },
+		campaign.PropWitnessFingerprint:  func(_, props map[string]any) { props[campaign.PropWitnessFingerprint] = "tampered" },
+		campaign.PropScenarioID:          func(_, props map[string]any) { props[campaign.PropScenarioID] = "other" },
+		campaign.PropScenarioVersion:     func(_, props map[string]any) { props[campaign.PropScenarioVersion] = 2 },
+		campaign.PropOracleType:          func(_, props map[string]any) { props[campaign.PropOracleType] = "other" },
+		campaign.PropOutcome:             func(_, props map[string]any) { props[campaign.PropOutcome] = string(campaign.OutcomeNotObserved) },
+		campaign.PropControlStage: func(_, props map[string]any) {
+			props[campaign.PropControlStage] = string(campaign.ProbeStageResourceRead)
+		},
+		campaign.PropControlStatus:    func(_, props map[string]any) { props[campaign.PropControlStatus] = string(campaign.ProbeAllowed) },
+		campaign.PropControlAddressed: func(_, props map[string]any) { props[campaign.PropControlAddressed] = true },
+		campaign.PropAuthedStage:      func(_, props map[string]any) { props[campaign.PropAuthedStage] = string(campaign.ProbeStageInitialize) },
+		campaign.PropAuthedStatus:     func(_, props map[string]any) { props[campaign.PropAuthedStatus] = string(campaign.ProbeDenied) },
+		campaign.PropAuthedAddressed:  func(_, props map[string]any) { props[campaign.PropAuthedAddressed] = false },
+	}
+	for name, tamper := range tampers {
+		t.Run(name, func(t *testing.T) {
+			props := make(map[string]any, len(baseProps))
+			for key, value := range baseProps {
+				switch typed := value.(type) {
+				case []string:
+					props[key] = append([]string(nil), typed...)
+				default:
+					props[key] = value
+				}
+			}
+			row := map[string]any{
+				"relationship_id":    base["relationship_id"],
+				"source_agent_id":    base["source_agent_id"],
+				"target_resource_id": base["target_resource_id"],
+				"properties":         props,
+			}
+			tamper(row, props)
+			db := &graph.MockGraphDB{QueryResult: []map[string]any{row}}
+			ids, err := validatedCampaignEvidenceRelationshipIDs(context.Background(), db)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(ids) != 0 {
+				t.Fatalf("tampered evidence validated with ids %v", ids)
+			}
+		})
 	}
 }

@@ -19,6 +19,7 @@ import (
 
 const (
 	campTestServerID = "sha256:camp-server"
+	campTestAgentID  = "sha256:camp-agent"
 	campTestCredID   = "sha256:camp-credential"
 	campTestResURI   = "postgres://prod/customers"
 	campTestMaterial = "sk-campaign-secret"
@@ -27,35 +28,42 @@ const (
 func campTestWitness() campaign.Witness {
 	resID := ingest.ComputeNodeID("MCPResource", campTestServerID, campTestResURI)
 	return campaign.Witness{
-		SchemaVersion:       campaign.WitnessSchemaVersion,
-		PublicationRevision: 3,
-		PredictedEdgeKind:   campaign.PredictedEdgeKindCanReach,
-		CredentialID:        campTestCredID,
-		CredentialValueHash: common.HashCredentialValue(campTestMaterial),
-		CredentialMergeKey:  campaign.CredentialMergeKeyValueHash,
-		ServerID:            campTestServerID,
-		ResourceID:          resID,
-		ResourceURI:         campTestResURI,
-		PathTopology: []campaign.PathHop{
-			{NodeID: campTestServerID, Kind: "MCPServer"},
-			{NodeID: campTestCredID, Kind: "Credential"},
-			{NodeID: resID, Kind: "MCPResource"},
-		},
+		SchemaVersion:                campaign.WitnessSchemaVersion,
+		TopologyNormalizationVersion: campaign.WitnessTopologyNormalizationVersion,
+		PublicationRevision:          3,
+		PredictedEdgeKind:            campaign.PredictedEdgeKindCanReach,
+		AgentID:                      campTestAgentID,
+		AgentKind:                    "AgentInstance",
+		CredentialID:                 campTestCredID,
+		CredentialKind:               "Credential",
+		CredentialValueHash:          common.HashCredentialValue(campTestMaterial),
+		CredentialMergeKey:           campaign.CredentialMergeKeyValueHash,
+		ServerID:                     campTestServerID,
+		ServerKind:                   "MCPServer",
+		ResourceID:                   resID,
+		ResourceKind:                 "MCPResource",
+		ResourceIdentityInput:        campTestResURI,
+		EvidenceNodeIDs:              []string{campTestAgentID, campTestServerID, campTestCredID, resID},
+		EvidenceNodeKinds:            []string{"AgentInstance", "MCPServer", "Credential", "MCPResource"},
 	}
 }
 
 func campTestEvidence(outcome campaign.Outcome) *campaign.Evidence {
 	return &campaign.Evidence{
-		ScenarioID:      "cred-reach",
-		ScenarioVersion: 1,
-		RunID:           "run-abc",
-		EngagementID:    "ENG-CAMP",
-		OracleType:      campaign.OracleTypeDifferentialCredentialReach,
-		Outcome:         outcome,
-		ControlStatus:   campaign.ProbeDenied,
-		AuthedStatus:    campaign.ProbeAllowed,
-		VerifiedAt:      "2026-07-12T00:00:00Z",
-		Witness:         campTestWitness(),
+		ScenarioID:       "cred-reach",
+		ScenarioVersion:  1,
+		RunID:            "run-abc",
+		EngagementID:     "ENG-CAMP",
+		OracleType:       campaign.OracleTypeDifferentialCredentialReach,
+		Outcome:          outcome,
+		ControlStage:     campaign.ProbeStageResourceRead,
+		ControlStatus:    campaign.ProbeDenied,
+		ControlAddressed: true,
+		AuthedStage:      campaign.ProbeStageResourceRead,
+		AuthedStatus:     campaign.ProbeAllowed,
+		AuthedAddressed:  true,
+		VerifiedAt:       "2026-07-12T00:00:00Z",
+		Witness:          campTestWitness(),
 	}
 }
 
@@ -117,7 +125,7 @@ func TestBuildCampaignEnvelopeIndeterminatePreserves(t *testing.T) {
 }
 
 // TestCampaignCoverageDomainDeterministic: the domain excludes run id / outcome /
-// timestamp; only (scenario id/version, cred, server, resource) drive it.
+// timestamp; only (scenario id/version, agent, cred, server, resource) drive it.
 func TestCampaignCoverageDomainDeterministic(t *testing.T) {
 	a := campTestEvidence(campaign.OutcomeCredentialGatedReachVerified)
 	a.RunID = "run-1"
@@ -131,6 +139,11 @@ func TestCampaignCoverageDomainDeterministic(t *testing.T) {
 	other.ResourceID = "sha256:other-resource"
 	if campaignCoverageScope("cred-reach", 1, a.Witness) == campaignCoverageScope("cred-reach", 1, other) {
 		t.Fatal("coverage scope must change with the resource ID")
+	}
+	other = campTestWitness()
+	other.AgentID = "sha256:other-agent"
+	if campaignCoverageScope("cred-reach", 1, a.Witness) == campaignCoverageScope("cred-reach", 1, other) {
+		t.Fatal("coverage scope must change with the source agent ID")
 	}
 }
 
@@ -206,8 +219,9 @@ func (f *fakeCLIScenario) Run(_ context.Context, in campaign.RunInput) (*campaig
 	ev := &campaign.Evidence{
 		ScenarioID: "cli-fake", ScenarioVersion: 1, RunID: "r1",
 		EngagementID: in.EngagementID, OracleType: campaign.OracleTypeDifferentialCredentialReach,
-		Outcome:       campaign.OutcomeCredentialGatedReachVerified,
-		ControlStatus: campaign.ProbeDenied, AuthedStatus: campaign.ProbeAllowed,
+		Outcome:      campaign.OutcomeCredentialGatedReachVerified,
+		ControlStage: campaign.ProbeStageResourceRead, ControlStatus: campaign.ProbeDenied, ControlAddressed: true,
+		AuthedStage: campaign.ProbeStageResourceRead, AuthedStatus: campaign.ProbeAllowed, AuthedAddressed: true,
 		VerifiedAt: "2026-07-12T00:00:00Z", Witness: in.Witness,
 	}
 	return &campaign.RunResult{

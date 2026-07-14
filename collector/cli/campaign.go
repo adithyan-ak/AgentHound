@@ -317,7 +317,7 @@ func resolveCredentialMaterial(fromStdin bool, envName string, stdin io.Reader) 
 
 // buildCampaignEnvelope wraps the scenario's evidence in a "scan"-collector
 // ingest envelope, mirroring extract.go's buildExtractEnvelope. The coverage
-// domain is deterministic on (scenario id/version, credential, server, resource)
+// domain is deterministic on (scenario id/version, agent, credential, server, resource)
 // — excluding run id / timestamp / outcome — so a later valid negative under the
 // same domain retires the prior verification. Non-definitive (indeterminate)
 // outcomes are marked partial so the domain is NOT promoted and prior evidence
@@ -370,12 +370,13 @@ func buildCampaignEnvelope(scenarioID string, scenarioVersion int, engagementID 
 }
 
 // campaignCoverageScope is the deterministic coverage domain identity: scenario
-// id/version + credential ID + server ID + resource ID. It deliberately excludes
+// id/version + agent ID + credential ID + server ID + resource ID. It deliberately excludes
 // run id, timestamps, outcome, finding id, and any secret.
 func campaignCoverageScope(scenarioID string, scenarioVersion int, w campaign.Witness) string {
 	return strings.Join([]string{
 		scenarioID,
 		strconv.Itoa(scenarioVersion),
+		w.AgentID,
 		w.CredentialID,
 		w.ServerID,
 		w.ResourceID,

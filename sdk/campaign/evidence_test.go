@@ -8,16 +8,20 @@ import (
 
 func testEvidence(outcome Outcome) Evidence {
 	return Evidence{
-		ScenarioID:      "cred-reach",
-		ScenarioVersion: 1,
-		RunID:           "run-123",
-		EngagementID:    "ENG-1",
-		OracleType:      OracleTypeDifferentialCredentialReach,
-		Outcome:         outcome,
-		ControlStatus:   ProbeDenied,
-		AuthedStatus:    ProbeAllowed,
-		VerifiedAt:      "2026-07-12T00:00:00Z",
-		Witness:         validWitness(),
+		ScenarioID:       "cred-reach",
+		ScenarioVersion:  1,
+		RunID:            "run-123",
+		EngagementID:     "ENG-1",
+		OracleType:       OracleTypeDifferentialCredentialReach,
+		Outcome:          outcome,
+		ControlStage:     ProbeStageResourceRead,
+		ControlStatus:    ProbeDenied,
+		ControlAddressed: true,
+		AuthedStage:      ProbeStageResourceRead,
+		AuthedStatus:     ProbeAllowed,
+		AuthedAddressed:  true,
+		VerifiedAt:       "2026-07-12T00:00:00Z",
+		Witness:          validWitness(),
 	}
 }
 
@@ -31,8 +35,8 @@ func TestEvidenceGraphCredentialReachVerified(t *testing.T) {
 	if edge.Kind != "CREDENTIAL_REACH_VERIFIED" {
 		t.Fatalf("edge kind = %q", edge.Kind)
 	}
-	if edge.Source != ev.Witness.CredentialID || edge.SourceKind != "Credential" {
-		t.Fatalf("source = %s/%s, want credential", edge.Source, edge.SourceKind)
+	if edge.Source != ev.Witness.AgentID || edge.SourceKind != "AgentInstance" {
+		t.Fatalf("source = %s/%s, want source agent", edge.Source, edge.SourceKind)
 	}
 	if edge.Target != ev.Witness.ResourceID || edge.TargetKind != "MCPResource" {
 		t.Fatalf("target = %s/%s, want resource", edge.Target, edge.TargetKind)
@@ -75,6 +79,13 @@ func TestEvidenceGraphNeverCarriesRawCredential(t *testing.T) {
 	if edges[0].Properties[PropWitnessFingerprint] != ev.Witness.Fingerprint() {
 		t.Fatalf("witness fingerprint echo missing from evidence edge")
 	}
+	if edges[0].Properties[PropAgentID] != ev.Witness.AgentID {
+		t.Fatalf("explicit agent identity missing from evidence edge")
+	}
+	if got, ok := edges[0].Properties[PropEvidenceNodeIDs].([]string); !ok ||
+		len(got) != len(ev.Witness.EvidenceNodeIDs) {
+		t.Fatalf("ordered evidence topology missing: %#v", edges[0].Properties[PropEvidenceNodeIDs])
+	}
 }
 
 func TestEvidenceGraphPublicAccess(t *testing.T) {
@@ -101,5 +112,29 @@ func TestEvidenceGraphNoEdgeOutcomes(t *testing.T) {
 		if len(nodes) != 0 || len(edges) != 0 {
 			t.Fatalf("%s must emit no evidence graph, got %d nodes / %d edges", outcome, len(nodes), len(edges))
 		}
+	}
+}
+
+func TestEvidenceGraphRetainsIndependentPerAgentRelationships(t *testing.T) {
+	first := testEvidence(OutcomeCredentialGatedReachVerified)
+	second := testEvidence(OutcomeCredentialGatedReachVerified)
+	second.Witness.AgentID = "sha256:second-agent"
+	second.Witness.EvidenceNodeIDs = append([]string(nil), first.Witness.EvidenceNodeIDs...)
+	second.Witness.EvidenceNodeIDs[0] = second.Witness.AgentID
+
+	_, firstEdges := first.EvidenceGraph("scan-1")
+	_, secondEdges := second.EvidenceGraph("scan-2")
+	if len(firstEdges) != 1 || len(secondEdges) != 1 {
+		t.Fatal("both agent observations must emit raw evidence")
+	}
+	if firstEdges[0].Source == secondEdges[0].Source {
+		t.Fatal("shared credential/resource observations collapsed onto one relationship identity")
+	}
+	if firstEdges[0].Target != secondEdges[0].Target {
+		t.Fatal("test setup requires the same resource")
+	}
+	if firstEdges[0].Properties[PropCredentialID] !=
+		secondEdges[0].Properties[PropCredentialID] {
+		t.Fatal("test setup requires the same credential")
 	}
 }

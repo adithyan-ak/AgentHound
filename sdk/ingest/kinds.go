@@ -123,7 +123,7 @@ func ConcreteNodeKind(kinds []string) string {
 // the MCP Collector for tools whose rule-derived source_trust is untrusted;
 // CREDENTIAL_REACH_VERIFIED and PUBLIC_ACCESS_OBSERVED are emitted by the
 // campaign runner's differential credential-reach scenario as raw supporting
-// evidence (Credential→MCPResource and MCPServer→MCPResource respectively).
+// evidence (AgentInstance→MCPResource and MCPServer→MCPResource respectively).
 var RawEdgeKinds = map[string]bool{
 	"TRUSTS_SERVER":             true,
 	"PROVIDES_TOOL":             true,
@@ -228,11 +228,12 @@ var EdgeKindEndpoints = map[string]EdgeEndpoints{
 	"EXTRACTED_FROM":        {SourceKinds: []string{"AIModel"}, TargetKinds: []string{"ExtractedTrainingSignal"}},
 	"INGESTS_UNTRUSTED":     {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPResource"}},
 	// campaign-runner verification evidence. CREDENTIAL_REACH_VERIFIED
-	// records a differentially-verified credential-gated read of an MCP
-	// resource (Credential→MCPResource, both real nodes). PUBLIC_ACCESS_OBSERVED
+	// records per-agent campaign verification evidence for a credential-gated
+	// read (AgentInstance→MCPResource). It does not claim observed agent
+	// invocation. PUBLIC_ACCESS_OBSERVED
 	// records an anonymous read of a resource (MCPServer→MCPResource) — a fact,
 	// not an auto-finding.
-	"CREDENTIAL_REACH_VERIFIED": {SourceKinds: []string{"Credential"}, TargetKinds: []string{"MCPResource"}},
+	"CREDENTIAL_REACH_VERIFIED": {SourceKinds: []string{"AgentInstance"}, TargetKinds: []string{"MCPResource"}},
 	"PUBLIC_ACCESS_OBSERVED":    {SourceKinds: []string{"MCPServer"}, TargetKinds: []string{"MCPResource"}},
 	"CONFUSED_DEPUTY":           {SourceKinds: []string{"A2AAgent"}, TargetKinds: []string{"A2AAgent"}},
 	"TAINTS":                    {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},

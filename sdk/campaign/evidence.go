@@ -25,19 +25,30 @@ const (
 	PropEngagementID        = "engagement_id"
 	PropOracleType          = "oracle_type"
 	PropOutcome             = "outcome"
+	PropControlStage        = "control_stage"
 	PropControlStatus       = "control_status"
+	PropControlAddressed    = "control_resource_addressed"
+	PropAuthedStage         = "authed_stage"
 	PropAuthedStatus        = "authed_status"
+	PropAuthedAddressed     = "authed_resource_addressed"
 	PropVerifiedAt          = "verified_at"
 	PropWitnessSchema       = "witness_schema_version"
+	PropTopologyVersion     = "topology_normalization_version"
 	PropPublicationRevision = "publication_revision"
 	PropPredictedEdgeKind   = "predicted_edge_kind"
+	PropAgentID             = "agent_id"
+	PropAgentKind           = "agent_kind"
 	PropCredentialID        = "credential_id"
+	PropCredentialKind      = "credential_kind"
 	PropCredentialValueHash = "credential_value_hash"
 	PropCredentialMergeKey  = "credential_merge_key"
 	PropServerID            = "server_id"
+	PropServerKind          = "server_kind"
 	PropResourceID          = "resource_id"
-	PropPathTopology        = "path_topology"
-	PropPathTopologyKinds   = "path_topology_kinds"
+	PropResourceKind        = "resource_kind"
+	PropResourceIdentity    = "resource_identity_input"
+	PropEvidenceNodeIDs     = "evidence_node_ids"
+	PropEvidenceNodeKinds   = "evidence_node_kinds"
 	PropWitnessFingerprint  = "witness_fingerprint"
 )
 
@@ -46,16 +57,20 @@ const (
 // value — only its precomputed value_hash (via the witness) and the classified
 // probe statuses.
 type Evidence struct {
-	ScenarioID      string      `json:"scenario_id"`
-	ScenarioVersion int         `json:"scenario_version"`
-	RunID           string      `json:"run_id"`
-	EngagementID    string      `json:"engagement_id"`
-	OracleType      string      `json:"oracle_type"`
-	Outcome         Outcome     `json:"outcome"`
-	ControlStatus   ProbeStatus `json:"control_status"`
-	AuthedStatus    ProbeStatus `json:"authed_status"`
-	VerifiedAt      string      `json:"verified_at"`
-	Witness         Witness     `json:"witness"`
+	ScenarioID       string      `json:"scenario_id"`
+	ScenarioVersion  int         `json:"scenario_version"`
+	RunID            string      `json:"run_id"`
+	EngagementID     string      `json:"engagement_id"`
+	OracleType       string      `json:"oracle_type"`
+	Outcome          Outcome     `json:"outcome"`
+	ControlStage     ProbeStage  `json:"control_stage"`
+	ControlStatus    ProbeStatus `json:"control_status"`
+	ControlAddressed bool        `json:"control_resource_addressed"`
+	AuthedStage      ProbeStage  `json:"authed_stage"`
+	AuthedStatus     ProbeStatus `json:"authed_status"`
+	AuthedAddressed  bool        `json:"authed_resource_addressed"`
+	VerifiedAt       string      `json:"verified_at"`
+	Witness          Witness     `json:"witness"`
 }
 
 // edgeProperties builds the canonical edge property map for an emitted evidence
@@ -74,19 +89,30 @@ func (e Evidence) edgeProperties(scanID string) map[string]any {
 		PropEngagementID:        e.EngagementID,
 		PropOracleType:          e.OracleType,
 		PropOutcome:             string(e.Outcome),
+		PropControlStage:        string(e.ControlStage),
 		PropControlStatus:       string(e.ControlStatus),
+		PropControlAddressed:    e.ControlAddressed,
+		PropAuthedStage:         string(e.AuthedStage),
 		PropAuthedStatus:        string(e.AuthedStatus),
+		PropAuthedAddressed:     e.AuthedAddressed,
 		PropVerifiedAt:          e.VerifiedAt,
 		PropWitnessSchema:       w.SchemaVersion,
+		PropTopologyVersion:     w.TopologyNormalizationVersion,
 		PropPublicationRevision: w.PublicationRevision,
 		PropPredictedEdgeKind:   w.PredictedEdgeKind,
+		PropAgentID:             w.AgentID,
+		PropAgentKind:           w.AgentKind,
 		PropCredentialID:        w.CredentialID,
+		PropCredentialKind:      w.CredentialKind,
 		PropCredentialValueHash: w.CredentialValueHash,
 		PropCredentialMergeKey:  w.CredentialMergeKey,
 		PropServerID:            w.ServerID,
+		PropServerKind:          w.ServerKind,
 		PropResourceID:          w.ResourceID,
-		PropPathTopology:        w.PathTopologyNodeIDs(),
-		PropPathTopologyKinds:   w.PathTopologyKinds(),
+		PropResourceKind:        w.ResourceKind,
+		PropResourceIdentity:    w.ResourceIdentityInput,
+		PropEvidenceNodeIDs:     append([]string{}, w.EvidenceNodeIDs...),
+		PropEvidenceNodeKinds:   append([]string{}, w.EvidenceNodeKinds...),
 		PropWitnessFingerprint:  w.Fingerprint(),
 	}
 }
@@ -121,7 +147,7 @@ func (e Evidence) EvidenceGraph(scanID string) ([]ingest.Node, []ingest.Edge) {
 	var sourceID, sourceKind string
 	switch kind {
 	case "CREDENTIAL_REACH_VERIFIED":
-		sourceID, sourceKind = w.CredentialID, "Credential"
+		sourceID, sourceKind = w.AgentID, "AgentInstance"
 	case "PUBLIC_ACCESS_OBSERVED":
 		sourceID, sourceKind = w.ServerID, "MCPServer"
 	default:

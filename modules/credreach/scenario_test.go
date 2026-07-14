@@ -14,6 +14,7 @@ import (
 
 const (
 	testHost       = "https://mcp.example/mcp"
+	testAgentID    = "sha256:source-agent"
 	testCredID     = "sha256:credential-node"
 	testResURI     = "postgres://prod/customers"
 	testCredMateri = "sk-live-secret"
@@ -52,21 +53,23 @@ func testWitness(t *testing.T) campaign.Witness {
 	testServerID := ingest.ResolveMCPServerIdentity("http", testHost).ObjectID
 	resID := ingest.ComputeNodeID("MCPResource", testServerID, testResURI)
 	return campaign.Witness{
-		SchemaVersion:       campaign.WitnessSchemaVersion,
-		PublicationRevision: 4,
-		PredictedEdgeKind:   campaign.PredictedEdgeKindCanReach,
-		CredentialID:        testCredID,
-		CredentialValueHash: common.HashCredentialValue(testCredMateri),
-		CredentialMergeKey:  campaign.CredentialMergeKeyValueHash,
-		ServerID:            testServerID,
-		ResourceID:          resID,
-		ResourceURI:         testResURI,
-		PathTopology: []campaign.PathHop{
-			{NodeID: "sha256:agent", Kind: "AgentInstance"},
-			{NodeID: testServerID, Kind: "MCPServer"},
-			{NodeID: testCredID, Kind: "Credential"},
-			{NodeID: resID, Kind: "MCPResource"},
-		},
+		SchemaVersion:                campaign.WitnessSchemaVersion,
+		TopologyNormalizationVersion: campaign.WitnessTopologyNormalizationVersion,
+		PublicationRevision:          4,
+		PredictedEdgeKind:            campaign.PredictedEdgeKindCanReach,
+		AgentID:                      testAgentID,
+		AgentKind:                    "AgentInstance",
+		CredentialID:                 testCredID,
+		CredentialKind:               "Credential",
+		CredentialValueHash:          common.HashCredentialValue(testCredMateri),
+		CredentialMergeKey:           campaign.CredentialMergeKeyValueHash,
+		ServerID:                     testServerID,
+		ServerKind:                   "MCPServer",
+		ResourceID:                   resID,
+		ResourceKind:                 "MCPResource",
+		ResourceIdentityInput:        testResURI,
+		EvidenceNodeIDs:              []string{testAgentID, testServerID, testCredID, resID},
+		EvidenceNodeKinds:            []string{"AgentInstance", "MCPServer", "Credential", "MCPResource"},
 	}
 }
 
@@ -198,7 +201,7 @@ func TestInvalidWitnessRejected(t *testing.T) {
 	s := &Scenario{}
 	in := commitInput(t, &fakeProber{})
 	w := in.Witness
-	w.ResourceURI = "postgres://prod/tampered" // breaks resource_id binding
+	w.ResourceIdentityInput = "postgres://prod/tampered" // breaks resource_id binding
 	in.Witness = w
 	if _, err := s.Run(context.Background(), in); err == nil {
 		t.Fatal("forged/mismatched witness must be rejected before probing")
@@ -226,13 +229,13 @@ func TestAcceptedQueryNeverAppearsInPlan(t *testing.T) {
 	in := commitInput(t, prober)
 	in.Host = endpoint
 	in.Witness.ServerID = ingest.ResolveMCPServerIdentity("http", endpoint).ObjectID
-	in.Witness.ResourceID = ingest.ComputeNodeID("MCPResource", in.Witness.ServerID, in.Witness.ResourceURI)
-	for i := range in.Witness.PathTopology {
-		switch in.Witness.PathTopology[i].Kind {
+	in.Witness.ResourceID = ingest.ComputeNodeID("MCPResource", in.Witness.ServerID, in.Witness.ResourceIdentityInput)
+	for i := range in.Witness.EvidenceNodeIDs {
+		switch in.Witness.EvidenceNodeKinds[i] {
 		case "MCPServer":
-			in.Witness.PathTopology[i].NodeID = in.Witness.ServerID
+			in.Witness.EvidenceNodeIDs[i] = in.Witness.ServerID
 		case "MCPResource":
-			in.Witness.PathTopology[i].NodeID = in.Witness.ResourceID
+			in.Witness.EvidenceNodeIDs[i] = in.Witness.ResourceID
 		}
 	}
 	in.Commit = false

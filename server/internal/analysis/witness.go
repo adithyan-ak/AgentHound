@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/adithyan-ak/agenthound/sdk/campaign"
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 )
 
@@ -27,17 +28,31 @@ WHERE e.is_composite = true
   AND e.via_credential IS NOT NULL
   AND coalesce(r.is_template, false) = false
 MATCH (sr:MCPServer)-[:PROVIDES_RESOURCE]->(r)
+WHERE toLower(coalesce(sr.transport, '')) = 'http'
 MATCH (c:Credential)
 WHERE c.objectid IN e.evidence_node_ids
   AND c.merge_key = 'value_hash'
   AND coalesce(c.value_hash, '') <> ''
+WITH a, e, r, sr, c, e.evidence_node_ids AS evidence_node_ids
+CALL {
+  WITH evidence_node_ids
+  UNWIND range(0, size(evidence_node_ids) - 1) AS evidence_index
+  OPTIONAL MATCH (evidence_node)
+  WHERE evidence_node.objectid = evidence_node_ids[evidence_index]
+  WITH evidence_index, labels(evidence_node) AS evidence_labels
+  ORDER BY evidence_index
+  RETURN collect(evidence_labels) AS evidence_node_labels
+}
 RETURN a.objectid AS agent_id,
        r.objectid AS resource_id,
        r.uri AS resource_uri,
        c.objectid AS credential_id,
        c.value_hash AS credential_value_hash,
        c.merge_key AS credential_merge_key,
-       sr.objectid AS server_id`
+       sr.objectid AS server_id,
+       sr.transport AS server_transport,
+       evidence_node_ids,
+       evidence_node_labels`
 
 // BuildWitness exports a stable, sanitized witness for the predicted CAN_REACH
 // finding identified by findingID (its 16-char fingerprint). The returned
@@ -72,21 +87,31 @@ func BuildWitness(
 		}
 		serverID := stringVal(row, "server_id")
 		credentialID := stringVal(row, "credential_id")
+		if strings.ToLower(stringVal(row, "server_transport")) != "http" {
+			continue
+		}
+		evidenceNodeIDs := stringSliceVal(row, "evidence_node_ids")
+		evidenceNodeKinds, err := normalizedEvidenceNodeKinds(row["evidence_node_labels"])
+		if err != nil {
+			return nil, fmt.Errorf("witness export: invalid current evidence topology: %w", err)
+		}
 		witness := &campaign.Witness{
-			SchemaVersion:       campaign.WitnessSchemaVersion,
-			PredictedEdgeKind:   campaign.PredictedEdgeKindCanReach,
-			CredentialID:        credentialID,
-			CredentialValueHash: stringVal(row, "credential_value_hash"),
-			CredentialMergeKey:  stringVal(row, "credential_merge_key"),
-			ServerID:            serverID,
-			ResourceID:          resourceID,
-			ResourceURI:         stringVal(row, "resource_uri"),
-			PathTopology: []campaign.PathHop{
-				{NodeID: agentID, Kind: "AgentInstance"},
-				{NodeID: serverID, Kind: "MCPServer"},
-				{NodeID: credentialID, Kind: "Credential"},
-				{NodeID: resourceID, Kind: "MCPResource"},
-			},
+			SchemaVersion:                campaign.WitnessSchemaVersion,
+			TopologyNormalizationVersion: campaign.WitnessTopologyNormalizationVersion,
+			PredictedEdgeKind:            campaign.PredictedEdgeKindCanReach,
+			AgentID:                      agentID,
+			AgentKind:                    "AgentInstance",
+			CredentialID:                 credentialID,
+			CredentialKind:               "Credential",
+			CredentialValueHash:          stringVal(row, "credential_value_hash"),
+			CredentialMergeKey:           stringVal(row, "credential_merge_key"),
+			ServerID:                     serverID,
+			ServerKind:                   "MCPServer",
+			ResourceID:                   resourceID,
+			ResourceKind:                 "MCPResource",
+			ResourceIdentityInput:        stringVal(row, "resource_uri"),
+			EvidenceNodeIDs:              evidenceNodeIDs,
+			EvidenceNodeKinds:            evidenceNodeKinds,
 		}
 		if err := witness.ValidateStructure(); err != nil {
 			return nil, fmt.Errorf(
@@ -97,4 +122,67 @@ func BuildWitness(
 	}
 	return nil, fmt.Errorf(
 		"witness export: no runnable credential-gated CAN_REACH prediction matches finding %q", findingID)
+}
+
+func normalizedEvidenceNodeKinds(value any) ([]string, error) {
+	rawNodes, ok := anySlice(value)
+	if !ok {
+		return nil, errors.New("evidence node labels are not an array")
+	}
+	kinds := make([]string, 0, len(rawNodes))
+	for i, raw := range rawNodes {
+		labels := stringSliceFromAny(raw)
+		concrete := normalizedConcreteKind(labels)
+		if concrete == "" {
+			return nil, fmt.Errorf("evidence node %d has no unique public concrete kind", i)
+		}
+		kinds = append(kinds, concrete)
+	}
+	return kinds, nil
+}
+
+func normalizedConcreteKind(labels []string) string {
+	concrete := ""
+	seen := make(map[string]bool, len(labels))
+	for _, label := range labels {
+		if seen[label] || !ingest.AllowedNodeKinds[label] {
+			return ""
+		}
+		seen[label] = true
+		if ingest.UmbrellaLabels[label] {
+			continue
+		}
+		if concrete != "" {
+			return ""
+		}
+		concrete = label
+	}
+	if concrete == "" {
+		return ""
+	}
+	for label := range seen {
+		if label != concrete && !ingest.UmbrellaCompanions[concrete][label] {
+			return ""
+		}
+	}
+	return concrete
+}
+
+func stringSliceFromAny(value any) []string {
+	switch values := value.(type) {
+	case []string:
+		return append([]string(nil), values...)
+	case []any:
+		result := make([]string, 0, len(values))
+		for _, value := range values {
+			text, ok := value.(string)
+			if !ok {
+				return nil
+			}
+			result = append(result, text)
+		}
+		return result
+	default:
+		return nil
+	}
 }

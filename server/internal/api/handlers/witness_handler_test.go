@@ -33,6 +33,14 @@ func TestHandleWitness_Success(t *testing.T) {
 		"credential_value_hash": "abcd1234",
 		"credential_merge_key":  "value_hash",
 		"server_id":             serverID,
+		"server_transport":      "http",
+		"evidence_node_ids":     []any{agentID, serverID, credID, resID},
+		"evidence_node_labels": []any{
+			[]any{"AgentInstance"},
+			[]any{"MCPServer"},
+			[]any{"Credential"},
+			[]any{"MCPResource"},
+		},
 	}}}
 	h := newStableAnalysisHandler(mock) // published revision 1
 
@@ -65,6 +73,12 @@ func TestHandleWitness_Success(t *testing.T) {
 	}
 	if _, leaked := resp.Witness["value"]; leaked {
 		t.Fatal("witness must never carry a raw credential value")
+	}
+	if resp.Witness["agent_id"] != agentID {
+		t.Fatalf("source agent missing: %+v", resp.Witness)
+	}
+	if _, leaked := resp.Witness["endpoint"]; leaked {
+		t.Fatal("witness must never carry a clear endpoint")
 	}
 }
 

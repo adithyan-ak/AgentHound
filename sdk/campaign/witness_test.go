@@ -10,6 +10,7 @@ import (
 
 const (
 	testServerID   = "sha256:server"
+	testAgentID    = "sha256:agent"
 	testCredID     = "sha256:credential"
 	testResURI     = "postgres://prod/customers"
 	testCredMateri = "sk-super-secret-value"
@@ -22,20 +23,26 @@ func testResourceID() string {
 func validWitness() Witness {
 	resID := testResourceID()
 	return Witness{
-		SchemaVersion:       WitnessSchemaVersion,
-		PublicationRevision: 7,
-		PredictedEdgeKind:   PredictedEdgeKindCanReach,
-		CredentialID:        testCredID,
-		CredentialValueHash: common.HashCredentialValue(testCredMateri),
-		CredentialMergeKey:  CredentialMergeKeyValueHash,
-		ServerID:            testServerID,
-		ResourceID:          resID,
-		ResourceURI:         testResURI,
-		PathTopology: []PathHop{
-			{NodeID: "sha256:agent", Kind: "AgentInstance"},
-			{NodeID: testServerID, Kind: "MCPServer"},
-			{NodeID: testCredID, Kind: "Credential"},
-			{NodeID: resID, Kind: "MCPResource"},
+		SchemaVersion:                WitnessSchemaVersion,
+		TopologyNormalizationVersion: WitnessTopologyNormalizationVersion,
+		PublicationRevision:          7,
+		PredictedEdgeKind:            PredictedEdgeKindCanReach,
+		AgentID:                      testAgentID,
+		AgentKind:                    "AgentInstance",
+		CredentialID:                 testCredID,
+		CredentialKind:               "Credential",
+		CredentialValueHash:          common.HashCredentialValue(testCredMateri),
+		CredentialMergeKey:           CredentialMergeKeyValueHash,
+		ServerID:                     testServerID,
+		ServerKind:                   "MCPServer",
+		ResourceID:                   resID,
+		ResourceKind:                 "MCPResource",
+		ResourceIdentityInput:        testResURI,
+		EvidenceNodeIDs: []string{
+			testAgentID, "sha256:tool-1", testServerID, testCredID, resID,
+		},
+		EvidenceNodeKinds: []string{
+			"AgentInstance", "MCPTool", "MCPServer", "Credential", "MCPResource",
 		},
 	}
 }
@@ -57,7 +64,7 @@ func TestWitnessValidateStaleSchema(t *testing.T) {
 func TestWitnessValidateForgedResourceBinding(t *testing.T) {
 	w := validWitness()
 	// Tamper the URI so it no longer hashes to resource_id.
-	w.ResourceURI = "postgres://prod/other"
+	w.ResourceIdentityInput = "postgres://prod/other"
 	if err := w.Validate(); err == nil {
 		t.Fatal("resource_id that does not bind to (server_id, resource_uri) must be rejected")
 	}
@@ -74,20 +81,30 @@ func TestWitnessValidateHashOnlyMergeKey(t *testing.T) {
 func TestWitnessValidateMissingFields(t *testing.T) {
 	base := validWitness()
 	mutators := map[string]func(*Witness){
-		"empty credential_id":         func(w *Witness) { w.CredentialID = "" },
-		"empty value_hash":            func(w *Witness) { w.CredentialValueHash = "" },
-		"empty server_id":             func(w *Witness) { w.ServerID = "" },
-		"empty resource_uri":          func(w *Witness) { w.ResourceURI = "" },
-		"zero publication_revision":   func(w *Witness) { w.PublicationRevision = 0 },
-		"empty path_topology":         func(w *Witness) { w.PathTopology = nil },
-		"wrong predicted_edge_kind":   func(w *Witness) { w.PredictedEdgeKind = "HAS_ACCESS_TO" },
-		"topology missing credential": func(w *Witness) { w.PathTopology = []PathHop{{NodeID: w.ResourceID, Kind: "MCPResource"}} },
+		"empty agent_id":            func(w *Witness) { w.AgentID = "" },
+		"wrong agent_kind":          func(w *Witness) { w.AgentKind = "A2AAgent" },
+		"empty credential_id":       func(w *Witness) { w.CredentialID = "" },
+		"wrong credential_kind":     func(w *Witness) { w.CredentialKind = "Identity" },
+		"empty value_hash":          func(w *Witness) { w.CredentialValueHash = "" },
+		"empty server_id":           func(w *Witness) { w.ServerID = "" },
+		"wrong server_kind":         func(w *Witness) { w.ServerKind = "Host" },
+		"empty resource identity":   func(w *Witness) { w.ResourceIdentityInput = "" },
+		"wrong resource_kind":       func(w *Witness) { w.ResourceKind = "Credential" },
+		"zero publication_revision": func(w *Witness) { w.PublicationRevision = 0 },
+		"wrong topology version":    func(w *Witness) { w.TopologyNormalizationVersion++ },
+		"empty evidence topology":   func(w *Witness) { w.EvidenceNodeIDs = nil; w.EvidenceNodeKinds = nil },
+		"topology length mismatch":  func(w *Witness) { w.EvidenceNodeKinds = w.EvidenceNodeKinds[:1] },
+		"wrong predicted_edge_kind": func(w *Witness) { w.PredictedEdgeKind = "HAS_ACCESS_TO" },
+		"topology missing credential": func(w *Witness) {
+			w.EvidenceNodeIDs = []string{w.AgentID, w.ServerID, w.ResourceID}
+			w.EvidenceNodeKinds = []string{w.AgentKind, w.ServerKind, w.ResourceKind}
+		},
 	}
 	for name, mutate := range mutators {
 		t.Run(name, func(t *testing.T) {
 			w := base
-			// Deep-copy the slice header so mutators don't alias base.
-			w.PathTopology = append([]PathHop(nil), base.PathTopology...)
+			w.EvidenceNodeIDs = append([]string(nil), base.EvidenceNodeIDs...)
+			w.EvidenceNodeKinds = append([]string(nil), base.EvidenceNodeKinds...)
 			mutate(&w)
 			if err := w.Validate(); err == nil {
 				t.Fatalf("expected rejection for %q", name)
