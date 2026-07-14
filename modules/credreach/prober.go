@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -33,7 +34,8 @@ func (p *mcpProber) Probe(ctx context.Context, req campaign.ProbeRequest) campai
 	pctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	transport := buildProbeTransport(req)
+	deadline, _ := pctx.Deadline()
+	transport := buildProbeTransport(req, deadline)
 	client := mcpsdk.NewClient(
 		&mcpsdk.Implementation{Name: "AgentHound", Version: common.CollectorVersion},
 		nil,
@@ -48,7 +50,7 @@ func (p *mcpProber) Probe(ctx context.Context, req campaign.ProbeRequest) campai
 			Detail: probeDetailCode(campaign.ProbeStageInitialize, status),
 		}
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	if _, err := session.ReadResource(pctx, &mcpsdk.ReadResourceParams{URI: req.ResourceURI}); err != nil {
 		status := classifyProbeError(pctx, err)
@@ -68,12 +70,13 @@ func (p *mcpProber) Probe(ctx context.Context, req campaign.ProbeRequest) campai
 }
 
 // buildProbeTransport builds a streamable HTTP transport. The authed probe adds
-// an Authorization: Bearer header scoped to the endpoint host so redirects can
-// never leak the credential to a third-party host. TLS verification stays on
-// unless the operator opted into --insecure.
-func buildProbeTransport(req campaign.ProbeRequest) mcpsdk.Transport {
+// an Authorization: Bearer header scoped to the endpoint's exact origin so
+// redirects cannot leak the credential across scheme, hostname, or effective
+// port. TLS verification stays on unless the operator opted into --insecure.
+func buildProbeTransport(req campaign.ProbeRequest, deadline time.Time) mcpsdk.Transport {
 	transport := &mcpsdk.StreamableClientTransport{Endpoint: req.Host}
 	origin, _ := campaign.ParseHTTPOrigin(req.Host)
+	endpoint, _ := url.Parse(req.Host)
 
 	headers := map[string]string{}
 	if strings.TrimSpace(req.Credential) != "" {
@@ -91,8 +94,83 @@ func buildProbeTransport(req campaign.ProbeRequest) mcpsdk.Transport {
 			origin:  origin,
 		}
 	}
-	transport.HTTPClient = &http.Client{Transport: campaign.CountingTransport{Base: base}}
+	base = observedHTTPStatusRoundTripper{base: base}
+	base = campaign.CountingTransport{Base: base}
+	transport.HTTPClient = &http.Client{Transport: endpointDeleteDeadlineRoundTripper{
+		base:     base,
+		endpoint: endpoint,
+		deadline: deadline,
+	}}
 	return transport
+}
+
+// observedHTTPStatusError preserves a status actually returned by the target.
+// Error text alone is never sufficient to establish a definitive auth denial.
+type observedHTTPStatusError struct {
+	statusCode int
+}
+
+func (e *observedHTTPStatusError) Error() string {
+	return "observed HTTP response: " + http.StatusText(e.statusCode)
+}
+
+// observedHTTPStatusRoundTripper converts only observed 401/403 responses into
+// typed errors before the MCP SDK flattens their status into error text.
+type observedHTTPStatusRoundTripper struct {
+	base http.RoundTripper
+}
+
+func (t observedHTTPStatusRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	resp, err := base.RoundTrip(req)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	if resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusForbidden {
+		return resp, nil
+	}
+	if resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	return nil, &observedHTTPStatusError{statusCode: resp.StatusCode}
+}
+
+// endpointDeleteDeadlineRoundTripper restores the original absolute scenario
+// deadline only for the MCP SDK's exact-endpoint DELETE. The SDK intentionally
+// detaches its connection context, so Close would otherwise be unbounded. This
+// wrapper is outside CountingTransport: a DELETE dispatched before the deadline
+// is counted even when the target hangs until that deadline.
+type endpointDeleteDeadlineRoundTripper struct {
+	base     http.RoundTripper
+	endpoint *url.URL
+	deadline time.Time
+}
+
+func (t endpointDeleteDeadlineRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if req.Method != http.MethodDelete || !sameEndpoint(req.URL, t.endpoint) || t.deadline.IsZero() {
+		return base.RoundTrip(req)
+	}
+	ctx, cancel := context.WithDeadline(req.Context(), t.deadline)
+	defer cancel()
+	return base.RoundTrip(req.Clone(ctx))
+}
+
+func sameEndpoint(left, right *url.URL) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	return strings.EqualFold(left.Scheme, right.Scheme) &&
+		left.Host == right.Host &&
+		left.EscapedPath() == right.EscapedPath() &&
+		left.RawQuery == right.RawQuery &&
+		left.ForceQuery == right.ForceQuery
 }
 
 // probeHeaderRoundTripper injects headers only for requests to the original
@@ -125,12 +203,18 @@ func (h probeHeaderRoundTripper) RoundTrip(req *http.Request) (*http.Response, e
 }
 
 // classifyProbeError maps a connect/read error to a ProbeStatus conservatively.
-// Structured MCP/JSON-RPC codes are preferred; otherwise the message is
-// inspected. Anything it cannot map cleanly becomes ProbeAmbiguous so an
-// uncertain result never collapses to a definitive not_observed.
+// Only a typed HTTP response observed by observedHTTPStatusRoundTripper can
+// establish a 401/403 denial. Structured non-auth MCP codes and conservative
+// non-denial diagnostics remain classified; unknowns are ambiguous.
 func classifyProbeError(ctx context.Context, err error) campaign.ProbeStatus {
 	if err == nil {
 		return campaign.ProbeAllowed
+	}
+	var observed *observedHTTPStatusError
+	if errors.As(err, &observed) &&
+		(observed.statusCode == http.StatusUnauthorized ||
+			observed.statusCode == http.StatusForbidden) {
+		return campaign.ProbeDenied
 	}
 	if errors.Is(err, context.DeadlineExceeded) ||
 		(ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded)) {
@@ -154,11 +238,6 @@ func classifyStructuredError(err error) (campaign.ProbeStatus, bool) {
 	case mcpsdk.CodeHeaderMismatch:
 		return campaign.ProbeMalformedAuth, true
 	default:
-		// A structured error with an auth-flavored message is a denial; other
-		// codes fall through to message inspection for HTTP-status hints.
-		if isAuthDenial(strings.ToLower(wire.Message)) {
-			return campaign.ProbeDenied, true
-		}
 		return "", false
 	}
 }
@@ -166,8 +245,6 @@ func classifyStructuredError(err error) (campaign.ProbeStatus, bool) {
 func classifyErrorMessage(raw string) campaign.ProbeStatus {
 	msg := strings.ToLower(raw)
 	switch {
-	case isAuthDenial(msg):
-		return campaign.ProbeDenied
 	case containsAny(msg, "404", "not found", "resource not found", "no such resource"):
 		return campaign.ProbeNotFound
 	case containsAny(msg, "400", "bad request", "malformed"):
@@ -181,10 +258,6 @@ func classifyErrorMessage(raw string) campaign.ProbeStatus {
 	default:
 		return campaign.ProbeAmbiguous
 	}
-}
-
-func isAuthDenial(msg string) bool {
-	return containsAny(msg, "401", "403", "unauthorized", "forbidden", "permission denied", "access denied")
 }
 
 func containsAny(haystack string, needles ...string) bool {

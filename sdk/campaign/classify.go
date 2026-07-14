@@ -9,8 +9,8 @@ type ProbeStatus string
 const (
 	// ProbeAllowed: the exact predicted resource was read successfully.
 	ProbeAllowed ProbeStatus = "allowed"
-	// ProbeDenied: a definitive authorization denial (e.g. 401/403 or the MCP
-	// unauthorized error) of an EXISTING resource. NOT a missing resource.
+	// ProbeDenied: a definitive typed, observed HTTP 401/403 authorization
+	// denial. No MCP/JSON-RPC authentication codes are currently recognized.
 	ProbeDenied ProbeStatus = "denied"
 	// ProbeNotFound: the resource is missing (HTTP 404 / MCP resource-not-found).
 	// Distinct from an authz denial: we cannot conclude anything about access.

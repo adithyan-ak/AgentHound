@@ -41,7 +41,8 @@ const (
 type RoundtripCleanup string
 
 const (
-	// CleanupNotApplicable is used by read-only scenarios.
+	// CleanupNotApplicable is used by read-only scenarios and rejected no-op
+	// mutations that created no receipt and require no cleanup.
 	CleanupNotApplicable RoundtripCleanup = "not_applicable"
 	// CleanupRestored: the conflict-aware revert completed and a post-revert
 	// re-read confirms the live state equals OriginalContent. This also covers a

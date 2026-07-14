@@ -97,8 +97,8 @@ func TestRealRoundtrip_HappyPath(t *testing.T) {
 	if got := getCurrent(); got != origDesc {
 		t.Errorf("target left at %q, want original %q", got, origDesc)
 	}
-	if rep.Budget.RequestsUsed != 6 {
-		t.Errorf("requests_used = %d, want 6 actual HTTP round trips", rep.Budget.RequestsUsed)
+	if rep.Budget.RequestsUsed != 3 {
+		t.Errorf("forward requests_used = %d, want 3 before cleanup", rep.Budget.RequestsUsed)
 	}
 	encoded, _ := json.Marshal(rep)
 	if strings.Contains(string(encoded), origDesc) || strings.Contains(string(encoded), injDesc) {

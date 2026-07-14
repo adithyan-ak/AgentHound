@@ -3,6 +3,7 @@ package mcppoison
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -142,6 +143,93 @@ func TestPoison_CommitMutatesAndReverts(t *testing.T) {
 	}
 	if got := getCurrent(); got != originalDesc {
 		t.Errorf("after revert: current = %q, want %q", got, originalDesc)
+	}
+}
+
+func TestPoison_RejectsNoOpBeforeReceiptOrWrite(t *testing.T) {
+	srv, ctl := mcpPoisonStubRW(t)
+	defer srv.Close()
+
+	p := newPoisonerWithTempState(t)
+	receipt, err := p.Poison(context.Background(),
+		action.Target{Address: strings.TrimPrefix(srv.URL, "http://")},
+		action.PoisonPayload{
+			TargetID:         "support_lookup",
+			InjectionContent: originalDesc,
+			Mode:             "replace",
+			EngagementID:     "ENG-NOOP",
+		})
+	if !errors.Is(err, ErrNoMutation) {
+		t.Fatalf("Poison error = %v, want ErrNoMutation", err)
+	}
+	if receipt != nil {
+		t.Fatalf("no-op mutation returned receipt: %+v", receipt)
+	}
+	if ctl.putCount() != 0 {
+		t.Fatalf("no-op mutation issued %d write(s)", ctl.putCount())
+	}
+	if got := ctl.get(); got != originalDesc {
+		t.Fatalf("no-op mutation changed target to %q", got)
+	}
+	receipts, readErr := p.Stateful().ReadReceipts("ENG-NOOP")
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(receipts) != 0 {
+		t.Fatalf("no-op mutation persisted %d receipt(s)", len(receipts))
+	}
+}
+
+func TestCredentialsAreStrippedFromCrossOriginRedirects(t *testing.T) {
+	const token = "redirect-secret"
+	var readAuth, writeAuth string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			readAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"support_lookup","description":"original"}]}}`))
+		case http.MethodPut:
+			writeAuth = r.Header.Get("Authorization")
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer target.Close()
+
+	var sourceReadAuth, sourceWriteAuth string
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			sourceReadAuth = r.Header.Get("Authorization")
+		case http.MethodPut:
+			sourceWriteAuth = r.Header.Get("Authorization")
+		}
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer source.Close()
+
+	client, err := campaignHTTPClient(source.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fetchToolDescription(
+		context.Background(), client, source.URL, "/", "support_lookup", token,
+	); err != nil {
+		t.Fatalf("redirected read: %v", err)
+	}
+	if err := writeToolDescription(
+		context.Background(), client, source.URL, http.MethodPut,
+		"/admin/tools/{id}", "support_lookup", "injected", token,
+	); err != nil {
+		t.Fatalf("redirected write: %v", err)
+	}
+	if sourceReadAuth != "Bearer "+token || sourceWriteAuth != "Bearer "+token {
+		t.Fatalf("original origin did not receive credentials: read=%q write=%q", sourceReadAuth, sourceWriteAuth)
+	}
+	if readAuth != "" || writeAuth != "" {
+		t.Fatalf("credential leaked across origin redirect: read=%q write=%q", readAuth, writeAuth)
 	}
 }
 

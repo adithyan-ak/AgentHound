@@ -139,14 +139,33 @@ func TestMutationAndElapsedBudgets(t *testing.T) {
 	}
 }
 
-func TestCleanupContextIsSeparateBoundedAndCounted(t *testing.T) {
+func TestCleanupContextCannotConsumeOrFlipFrozenForwardBudget(t *testing.T) {
 	parent, parentCancel := context.WithCancel(context.Background())
-	_, cancel, budget := NewBudgetContext(parent, RunLimits{
-		RequestLimit: 0, MutationLimit: 0, ElapsedLimit: time.Second,
+	forwardCtx, cancel, budget := NewBudgetContext(parent, RunLimits{
+		RequestLimit: 1, MutationLimit: 1, ElapsedLimit: time.Second,
 	})
 	defer cancel()
-	parentCancel()
+	if err := ConsumeMutation(forwardCtx); err != nil {
+		t.Fatal(err)
+	}
+	base := roundTripTestFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusNoContent, Header: make(http.Header),
+			Body: http.NoBody, Request: req,
+		}, nil
+	})
+	req, _ := http.NewRequestWithContext(forwardCtx, http.MethodGet, "http://example.invalid", nil)
+	resp, err := (&http.Client{Transport: CountingTransport{Base: base}}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	frozen, frozenErr := budget.FreezeForward(forwardCtx)
+	if frozenErr != nil {
+		t.Fatalf("freeze exhaustion = %v", frozenErr)
+	}
 
+	parentCancel()
 	cleanupCtx, cleanupCancel := budget.CleanupContext(time.Second)
 	defer cleanupCancel()
 	if cleanupCtx.Err() != nil {
@@ -155,21 +174,18 @@ func TestCleanupContextIsSeparateBoundedAndCounted(t *testing.T) {
 	if err := ConsumeMutation(cleanupCtx); err != nil {
 		t.Fatalf("cleanup mutation must bypass exhausted forward cap: %v", err)
 	}
-	base := roundTripTestFunc(func(req *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusNoContent, Header: make(http.Header),
-			Body: http.NoBody, Request: req,
-		}, nil
-	})
-	req, _ := http.NewRequestWithContext(cleanupCtx, http.MethodGet, "http://example.invalid", nil)
-	resp, err := (&http.Client{Transport: CountingTransport{Base: base}}).Do(req)
+	req, _ = http.NewRequestWithContext(cleanupCtx, http.MethodGet, "http://example.invalid", nil)
+	resp, err = (&http.Client{Transport: CountingTransport{Base: base}}).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	usage := budget.Snapshot()
-	if usage.RequestsUsed != 1 || usage.MutationsUsed != 1 {
-		t.Fatalf("cleanup usage = %+v", usage)
+	time.Sleep(10 * time.Millisecond)
+	if usage := budget.Snapshot(); usage != frozen {
+		t.Fatalf("cleanup changed frozen usage: before=%+v after=%+v", frozen, usage)
+	}
+	if exhausted := budget.Exhaustion(forwardCtx); exhausted != nil {
+		t.Fatalf("cleanup/cancel flipped frozen exhaustion to %v", exhausted)
 	}
 }
 

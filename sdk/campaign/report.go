@@ -139,16 +139,20 @@ func (r RunReport) Summary() string {
 type budgetContextKey struct{}
 type cleanupContextKey struct{}
 
-// Budget tracks actual dispatches. Cleanup contexts retain this tracker for
-// accounting but bypass the forward-execution caps so safety restoration is not
-// prevented by an exhausted primary budget.
+// Budget tracks forward-run dispatches and mutations. FreezeForward captures
+// the forward elapsed/exhaustion boundary before cleanup. Cleanup contexts keep
+// the tracker only to identify themselves; their work is separately bounded and
+// cannot consume or alter the frozen forward budget.
 type Budget struct {
-	mu        sync.Mutex
-	limits    RunLimits
-	startedAt time.Time
-	requests  int
-	mutations int
-	exhausted error
+	mu               sync.Mutex
+	limits           RunLimits
+	startedAt        time.Time
+	requests         int
+	mutations        int
+	exhausted        error
+	frozen           bool
+	frozenElapsed    time.Duration
+	frozenExhaustion error
 }
 
 func NewBudgetContext(parent context.Context, limits RunLimits) (context.Context, context.CancelFunc, *Budget) {
@@ -176,7 +180,37 @@ func (b *Budget) Snapshot() BudgetReport {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	elapsed := time.Since(b.startedAt)
+	return b.snapshotLocked()
+}
+
+// FreezeForward atomically captures forward usage and exhaustion before cleanup
+// starts. Repeated calls return the original frozen values.
+func (b *Budget) FreezeForward(ctx context.Context) (BudgetReport, error) {
+	if b == nil {
+		return BudgetReport{}, nil
+	}
+	contextErr := elapsedBudgetError(ctx)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.frozen {
+		b.frozen = true
+		b.frozenElapsed = time.Since(b.startedAt)
+		if b.frozenElapsed < 0 {
+			b.frozenElapsed = 0
+		}
+		b.frozenExhaustion = contextErr
+		if b.frozenExhaustion == nil {
+			b.frozenExhaustion = b.exhausted
+		}
+	}
+	return b.snapshotLocked(), b.frozenExhaustion
+}
+
+func (b *Budget) snapshotLocked() BudgetReport {
+	elapsed := b.frozenElapsed
+	if !b.frozen {
+		elapsed = time.Since(b.startedAt)
+	}
 	if elapsed < 0 {
 		elapsed = 0
 	}
@@ -191,6 +225,16 @@ func (b *Budget) Snapshot() BudgetReport {
 }
 
 func (b *Budget) Exhaustion(ctx context.Context) error {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	if b.frozen {
+		err := b.frozenExhaustion
+		b.mu.Unlock()
+		return err
+	}
+	b.mu.Unlock()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return ErrElapsedBudget
 	}
@@ -207,13 +251,19 @@ func ConsumeMutation(ctx context.Context) error {
 	if budget == nil {
 		return nil
 	}
+	cleanup, _ := ctx.Value(cleanupContextKey{}).(bool)
+	if cleanup {
+		return ctx.Err()
+	}
 	if err := elapsedBudgetError(ctx); err != nil {
 		return err
 	}
-	cleanup, _ := ctx.Value(cleanupContextKey{}).(bool)
 	budget.mu.Lock()
 	defer budget.mu.Unlock()
-	if !cleanup && budget.mutations >= budget.limits.MutationLimit {
+	if budget.frozen {
+		return context.Canceled
+	}
+	if budget.mutations >= budget.limits.MutationLimit {
 		budget.exhausted = ErrMutationBudget
 		return ErrMutationBudget
 	}
@@ -244,13 +294,19 @@ func consumeRequest(ctx context.Context) error {
 	if budget == nil {
 		return nil
 	}
+	cleanup, _ := ctx.Value(cleanupContextKey{}).(bool)
+	if cleanup {
+		return ctx.Err()
+	}
 	if err := elapsedBudgetError(ctx); err != nil {
 		return err
 	}
-	cleanup, _ := ctx.Value(cleanupContextKey{}).(bool)
 	budget.mu.Lock()
 	defer budget.mu.Unlock()
-	if !cleanup && budget.requests >= budget.limits.RequestLimit {
+	if budget.frozen {
+		return context.Canceled
+	}
+	if budget.requests >= budget.limits.RequestLimit {
 		budget.exhausted = ErrRequestBudget
 		return ErrRequestBudget
 	}

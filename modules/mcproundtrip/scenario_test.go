@@ -38,6 +38,7 @@ type fakeRoundTrip struct {
 	revertCalls  int
 	mutateCalls  int
 	stepSequence uint64
+	revertDelay  time.Duration
 }
 
 func (f *fakeRoundTrip) Mutate(_ context.Context, stepSequence uint64) (*action.PoisonReceipt, error) {
@@ -58,8 +59,17 @@ func (f *fakeRoundTrip) ReadCurrent(_ context.Context) (string, error) {
 	return "", errors.New("fake: no more programmed reads")
 }
 
-func (f *fakeRoundTrip) Revert(_ context.Context, _ action.Receipt) error {
+func (f *fakeRoundTrip) Revert(ctx context.Context, _ action.Receipt) error {
 	f.revertCalls++
+	if f.revertDelay > 0 {
+		timer := time.NewTimer(f.revertDelay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	return f.revertErr
 }
 
@@ -203,8 +213,8 @@ func TestRoundtripMatrix(t *testing.T) {
 			if f.stepSequence != 1 {
 				t.Errorf("step sequence = %d, want 1", f.stepSequence)
 			}
-			if rep.Budget.MutationsUsed != 2 {
-				t.Errorf("mutations_used = %d, want 2", rep.Budget.MutationsUsed)
+			if rep.Budget.MutationsUsed != 1 {
+				t.Errorf("forward mutations_used = %d, want 1", rep.Budget.MutationsUsed)
 			}
 			if res.Evidence != nil || res.Outcome != "" {
 				t.Error("standalone round-trip must not populate differential Evidence/Outcome")
@@ -234,6 +244,67 @@ func TestMutateFailureIsIndeterminate(t *testing.T) {
 	}
 	if f.readCalls != 0 || f.revertCalls != 0 {
 		t.Errorf("mutate failure must not read (%d) or revert (%d)", f.readCalls, f.revertCalls)
+	}
+}
+
+func TestNoOpMutationReportsNotAppliedWithoutCleanupOrReceipt(t *testing.T) {
+	f := &fakeRoundTrip{mutateErr: mcppoison.ErrNoMutation}
+	res, err := scenarioWith(f).Run(context.Background(), commitInput(nil))
+	if !errors.Is(err, mcppoison.ErrNoMutation) {
+		t.Fatalf("Run error = %v, want typed ErrNoMutation", err)
+	}
+	rep := res.Report
+	if rep.Oracle.Outcome != string(campaign.OracleMutationNotApplied) {
+		t.Errorf("oracle = %q, want mutation_not_applied", rep.Oracle.Outcome)
+	}
+	if rep.Cleanup.Status != campaign.CleanupNotApplicable ||
+		rep.Cleanup.Postcondition != "not_applicable" {
+		t.Errorf("cleanup = %+v, want not_applicable", rep.Cleanup)
+	}
+	if rep.Cleanup.ReceiptRetained {
+		t.Error("no-op mutation must report no retained receipt")
+	}
+	if f.readCalls != 0 || f.revertCalls != 0 {
+		t.Fatalf("no-op mutation read=%d revert=%d, want neither", f.readCalls, f.revertCalls)
+	}
+}
+
+func TestOracleDefensivelyRejectsEqualOriginalAndInjected(t *testing.T) {
+	receipt := testReceipt()
+	receipt.InjectedContent = receipt.OriginalContent
+	f := &fakeRoundTrip{reads: []readResult{{val: receipt.InjectedContent}}}
+	if got := classifyOracle(context.Background(), f, receipt); got != campaign.OracleMutationNotApplied {
+		t.Fatalf("equal receipt oracle = %q, want mutation_not_applied", got)
+	}
+	if f.readCalls != 0 {
+		t.Fatalf("defensive equality check performed %d target reads", f.readCalls)
+	}
+}
+
+func TestCleanupElapsedDoesNotConsumeOrExhaustForwardBudget(t *testing.T) {
+	f := &fakeRoundTrip{
+		receipt:     testReceipt(),
+		reads:       []readResult{{val: injDesc}, {val: origDesc}},
+		revertDelay: 150 * time.Millisecond,
+	}
+	in := commitInput(nil)
+	in.Timeout = 100 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	started := time.Now()
+	res, err := scenarioWith(f).Run(ctx, in)
+	if err != nil {
+		t.Fatalf("cleanup flipped forward exhaustion: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed < f.revertDelay {
+		t.Fatalf("test cleanup elapsed %s, want at least %s", elapsed, f.revertDelay)
+	}
+	if used := time.Duration(res.Report.Budget.ElapsedUsedMS) * time.Millisecond; used >= in.Timeout {
+		t.Fatalf("forward elapsed_used=%s includes cleanup beyond %s", used, in.Timeout)
+	}
+	if res.Report.Budget.MutationsUsed != 1 {
+		t.Fatalf("forward mutations_used=%d, cleanup consumed budget", res.Report.Budget.MutationsUsed)
 	}
 }
 

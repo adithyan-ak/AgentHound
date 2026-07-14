@@ -77,6 +77,10 @@ const (
 // without coupling to the human-readable message text. They are wrapped into
 // the descriptive errors Revert returns (the surfaced messages are unchanged).
 var (
+	// ErrNoMutation signals that the requested transformation would leave the
+	// target unchanged. No receipt is constructed or persisted and no write is
+	// attempted.
+	ErrNoMutation = errors.New("mcp poison: requested mutation would not change target")
 	// ErrRevertIndeterminate signals that the pre-write re-read failed, so the
 	// live state is unknown and Revert wrote nothing.
 	ErrRevertIndeterminate = action.ErrRevertIndeterminate
@@ -121,8 +125,8 @@ func (p *Poisoner) RegisterFlags(fs *pflag.FlagSet) {
 
 // Poison reads the current tool description, applies the injection per
 // payload.Mode, persists a receipt, and (when DryRun=false) issues the
-// mutating HTTP write. Returns the receipt regardless of DryRun so the
-// CLI can present a uniform success story.
+// mutating HTTP write. A transformation equal to the observed original returns
+// ErrNoMutation before receipt construction or persistence and before any write.
 func (p *Poisoner) Poison(ctx context.Context, t action.Target, payload action.PoisonPayload) (*action.PoisonReceipt, error) {
 	if payload.TargetID == "" {
 		return nil, errors.New("mcp poison: --target-id is required")
@@ -160,7 +164,10 @@ func (p *Poisoner) Poison(ctx context.Context, t action.Target, payload action.P
 		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return nil, errors.New("mcp poison: target URL userinfo, query, and fragment are prohibited")
 	}
-	client := campaignHTTPClient()
+	client, err := campaignHTTPClient(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("mcp poison: invalid target URL: %w", err)
+	}
 
 	original, err := fetchToolDescription(ctx, client, baseURL, listPath, payload.TargetID, authToken)
 	if err != nil {
@@ -168,6 +175,9 @@ func (p *Poisoner) Poison(ctx context.Context, t action.Target, payload action.P
 	}
 
 	injected := composeContent(original, payload.InjectionContent, mode)
+	if injected == original {
+		return nil, ErrNoMutation
+	}
 
 	receipt := &action.PoisonReceipt{
 		ModuleID:        "mcp.poison",
@@ -264,7 +274,10 @@ func (p *Poisoner) Revert(ctx context.Context, receipt action.Receipt) error {
 	}
 	authToken, _ := ctx.Value(action.RevertAuthTokenKey{}).(string)
 
-	client := campaignHTTPClient()
+	client, err := campaignHTTPClient(baseURL)
+	if err != nil {
+		return fmt.Errorf("mcp poison revert: invalid target URL: %w", err)
+	}
 
 	// Re-read the live description so we can decide safely. A failure
 	// here is INDETERMINATE — we must not fall back to a blind write,
@@ -326,15 +339,46 @@ func (p *Poisoner) ReadDescription(ctx context.Context, t action.Target, targetI
 		listPath = DefaultListPath
 	}
 	baseURL := strings.TrimRight(targetBaseURL(t), "/")
-	client := campaignHTTPClient()
+	client, err := campaignHTTPClient(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("mcp poison read: invalid target URL: %w", err)
+	}
 	return fetchToolDescription(ctx, client, baseURL, listPath, targetID, authToken)
 }
 
-func campaignHTTPClient() *http.Client {
-	return &http.Client{
-		Timeout:   DefaultProbeTimeout,
-		Transport: campaign.CountingTransport{Base: http.DefaultTransport},
+func campaignHTTPClient(baseURL string) (*http.Client, error) {
+	origin, err := campaign.ParseHTTPOrigin(baseURL)
+	if err != nil {
+		return nil, errors.New("target must be an absolute HTTP(S) endpoint")
 	}
+	return &http.Client{Transport: campaign.CountingTransport{
+		Base: exactOriginCredentialRoundTripper{
+			base:   http.DefaultTransport,
+			origin: origin,
+		},
+	}}, nil
+}
+
+// exactOriginCredentialRoundTripper strips Authorization from every request
+// whose scheme, hostname, or effective port differs from the original target.
+// This applies to redirects as well as direct requests and fails closed for
+// malformed or authority-less URLs.
+type exactOriginCredentialRoundTripper struct {
+	base   http.RoundTripper
+	origin campaign.HTTPOrigin
+}
+
+func (t exactOriginCredentialRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	cloned := req.Clone(req.Context())
+	cloned.Header = req.Header.Clone()
+	if !t.origin.Matches(req.URL) {
+		cloned.Header.Del("Authorization")
+	}
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(cloned)
 }
 
 // composeContent returns the new description according to mode. The

@@ -168,19 +168,45 @@ func runRoundtrip(
 			Type:        campaign.OracleTypeReversibleMutationRoundtrip,
 			Observation: "budget_exhausted", Outcome: string(campaign.OracleIndeterminate),
 		}
-		finishReport(report, budget, now)
+		forwardBudget, _ := budget.FreezeForward(runCtx)
+		cancel()
+		finishReport(report, forwardBudget, now)
 		return report, err
 	}
 
 	// StepSequence is assigned by this single run orchestrator immediately
 	// before invoking the mutator that persists the receipt.
 	receipt, mutateErr := rt.Mutate(runCtx, 1)
-	if mutateErr != nil {
+	if errors.Is(mutateErr, mcppoison.ErrNoMutation) && receipt == nil {
+		report.AddStep(campaign.StepMutate, string(campaign.OracleMutationNotApplied))
+	} else if mutateErr != nil {
 		report.AddStep(campaign.StepMutate, "failed")
 	} else {
 		report.AddStep(campaign.StepMutate, "applied")
 	}
 	report.Cleanup.ReceiptRetained = receipt != nil
+
+	if errors.Is(mutateErr, mcppoison.ErrNoMutation) && receipt == nil {
+		report.AddStep(campaign.StepVerifyInjected, string(campaign.OracleMutationNotApplied))
+		report.Oracle = campaign.OracleReport{
+			Type:        campaign.OracleTypeReversibleMutationRoundtrip,
+			Observation: string(campaign.OracleMutationNotApplied),
+			Outcome:     string(campaign.OracleMutationNotApplied),
+		}
+		forwardBudget, forwardErr := budget.FreezeForward(runCtx)
+		cancel()
+		report.AddStep(campaign.StepRevert, string(campaign.CleanupNotApplicable))
+		report.AddStep(campaign.StepVerifyOriginal, "not_applicable")
+		report.Cleanup = campaign.CleanupReport{
+			Status: campaign.CleanupNotApplicable, Postcondition: "not_applicable",
+			ReceiptRetained: false,
+		}
+		finishReport(report, forwardBudget, now)
+		if forwardErr != nil {
+			return report, forwardErr
+		}
+		return report, mcppoison.ErrNoMutation
+	}
 
 	oracle := campaign.OracleIndeterminate
 	if receipt != nil && mutateErr == nil {
@@ -193,6 +219,11 @@ func runRoundtrip(
 		Outcome:     string(oracle),
 	}
 
+	// Freeze every forward-run counter and the exhaustion decision before
+	// creating the separately bounded cleanup context. Cleanup duration and
+	// requests cannot consume or flip the forward budget.
+	forwardBudget, forwardErr := budget.FreezeForward(runCtx)
+	cancel()
 	cleanupCtx, cleanupCancel := budget.CleanupContext(90 * time.Second)
 	defer cleanupCancel()
 	cleanup := executeRunCleanup(cleanupCtx, in, rt, receipt)
@@ -222,7 +253,7 @@ func runRoundtrip(
 		Postcondition:   postcondition,
 		ReceiptRetained: cleanup.ReceiptsRetained || receipt != nil,
 	}
-	finishReport(report, budget, now)
+	finishReport(report, forwardBudget, now)
 
 	if cleanup.Status != campaign.CleanupRestored {
 		return report, campaign.ErrUnsafeCleanup
@@ -230,8 +261,8 @@ func runRoundtrip(
 	if mutateErr != nil {
 		return report, campaign.ErrMutationFailed
 	}
-	if exhausted := budget.Exhaustion(runCtx); exhausted != nil {
-		return report, exhausted
+	if forwardErr != nil {
+		return report, forwardErr
 	}
 	return report, nil
 }
@@ -264,14 +295,17 @@ func executeRunCleanup(
 	}
 }
 
-func finishReport(report *campaign.RunReport, budget *campaign.Budget, now func() time.Time) {
+func finishReport(report *campaign.RunReport, budget campaign.BudgetReport, now func() time.Time) {
 	report.CompletedAt = now().UTC().Format(time.RFC3339)
-	report.Budget = budget.Snapshot()
+	report.Budget = budget
 }
 
 // classifyOracle re-reads the live state after the mutation and decides whether
 // the injection landed, comparing against the receipt.
 func classifyOracle(ctx context.Context, rt roundTrip, r *action.PoisonReceipt) campaign.RoundtripOracle {
+	if r.OriginalContent == r.InjectedContent {
+		return campaign.OracleMutationNotApplied
+	}
 	current, err := rt.ReadCurrent(ctx)
 	if err != nil {
 		return campaign.OracleIndeterminate
