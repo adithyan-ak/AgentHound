@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/module"
@@ -233,6 +234,29 @@ func TestCredentialsAreStrippedFromCrossOriginRedirects(t *testing.T) {
 	}
 	if readAuth != "" || writeAuth != "" {
 		t.Fatalf("credential leaked across origin redirect: read=%q write=%q", readAuth, writeAuth)
+	}
+}
+
+func TestHTTPClientTimeoutProfiles(t *testing.T) {
+	standalone, err := New().httpClient("http://127.0.0.1:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if standalone.Timeout != DefaultProbeTimeout {
+		t.Fatalf("standalone client timeout = %v, want %v", standalone.Timeout, DefaultProbeTimeout)
+	}
+
+	campaignClient, err := NewForCampaign().httpClient("http://127.0.0.1:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if campaignClient.Timeout != 0 {
+		t.Fatalf("campaign client timeout = %v, want no blanket timeout", campaignClient.Timeout)
+	}
+
+	// Guard against accidentally weakening the production standalone default.
+	if standalone.Timeout <= 0 || standalone.Timeout > time.Minute {
+		t.Fatalf("standalone client timeout is not a finite probe-scale bound: %v", standalone.Timeout)
 	}
 }
 

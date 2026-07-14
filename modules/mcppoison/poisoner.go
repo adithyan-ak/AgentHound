@@ -92,14 +92,28 @@ var (
 
 // Poisoner is the registered module.
 type Poisoner struct {
-	stateful module.StatefulModule
+	stateful      module.StatefulModule
+	clientFactory func(baseURL string) (*http.Client, error)
 }
 
-// New constructs a Poisoner with a default file-backed StatefulModule.
-// Tests can swap the StatefulModule after construction.
+// New constructs a standalone Poisoner with a default file-backed
+// StatefulModule and a finite HTTP timeout as defense in depth.
 func New() *Poisoner {
 	return &Poisoner{
-		stateful: module.NewFileStatefulModule("mcp.poison"),
+		stateful:      module.NewFileStatefulModule("mcp.poison"),
+		clientFactory: standaloneHTTPClient,
+	}
+}
+
+// NewForCampaign constructs a Poisoner for the campaign runner. Campaign
+// forward and cleanup operations carry separate bounded contexts, so this
+// profile deliberately has no blanket http.Client timeout. In particular,
+// http.Client.Timeout spans response-body reads and would terminate long-lived
+// streaming responses independently of the campaign's explicit deadlines.
+func NewForCampaign() *Poisoner {
+	return &Poisoner{
+		stateful:      module.NewFileStatefulModule("mcp.poison"),
+		clientFactory: campaignHTTPClient,
 	}
 }
 
@@ -164,7 +178,7 @@ func (p *Poisoner) Poison(ctx context.Context, t action.Target, payload action.P
 		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return nil, errors.New("mcp poison: target URL userinfo, query, and fragment are prohibited")
 	}
-	client, err := campaignHTTPClient(baseURL)
+	client, err := p.httpClient(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("mcp poison: invalid target URL: %w", err)
 	}
@@ -279,7 +293,7 @@ func (p *Poisoner) Revert(ctx context.Context, receipt action.Receipt) error {
 	}
 	authToken, _ := ctx.Value(action.RevertAuthTokenKey{}).(string)
 
-	client, err := campaignHTTPClient(baseURL)
+	client, err := p.httpClient(baseURL)
 	if err != nil {
 		return fmt.Errorf("mcp poison revert: invalid target URL: %w", err)
 	}
@@ -344,24 +358,44 @@ func (p *Poisoner) ReadDescription(ctx context.Context, t action.Target, targetI
 		listPath = DefaultListPath
 	}
 	baseURL := strings.TrimRight(targetBaseURL(t), "/")
-	client, err := campaignHTTPClient(baseURL)
+	client, err := p.httpClient(baseURL)
 	if err != nil {
 		return "", fmt.Errorf("mcp poison read: invalid target URL: %w", err)
 	}
 	return fetchToolDescription(ctx, client, baseURL, listPath, targetID, authToken)
 }
 
+func (p *Poisoner) httpClient(baseURL string) (*http.Client, error) {
+	factory := p.clientFactory
+	if factory == nil {
+		// Preserve the safe standalone default for zero-value Poisoners.
+		factory = standaloneHTTPClient
+	}
+	return factory(baseURL)
+}
+
+func standaloneHTTPClient(baseURL string) (*http.Client, error) {
+	return newHTTPClient(baseURL, DefaultProbeTimeout)
+}
+
 func campaignHTTPClient(baseURL string) (*http.Client, error) {
+	return newHTTPClient(baseURL, 0)
+}
+
+func newHTTPClient(baseURL string, timeout time.Duration) (*http.Client, error) {
 	origin, err := campaign.ParseHTTPOrigin(baseURL)
 	if err != nil {
 		return nil, errors.New("target must be an absolute HTTP(S) endpoint")
 	}
-	return &http.Client{Transport: campaign.CountingTransport{
-		Base: exactOriginCredentialRoundTripper{
-			base:   http.DefaultTransport,
-			origin: origin,
+	return &http.Client{
+		Timeout: timeout,
+		Transport: campaign.CountingTransport{
+			Base: exactOriginCredentialRoundTripper{
+				base:   http.DefaultTransport,
+				origin: origin,
+			},
 		},
-	}}, nil
+	}, nil
 }
 
 // exactOriginCredentialRoundTripper strips Authorization from every request

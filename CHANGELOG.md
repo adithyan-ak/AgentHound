@@ -22,7 +22,7 @@ Adds an ordered, reversible campaign runner that turns *predicted* graph relatio
 
 **Schema**
 
-- New raw edge kinds `CREDENTIAL_REACH_VERIFIED` (Credential→MCPResource) and `PUBLIC_ACCESS_OBSERVED` (MCPServer→MCPResource); collector-produced edge kinds go 18 → 20 (32 total with composites). The reversible round-trip deliberately adds no edge kind.
+- New raw edge kinds `CREDENTIAL_REACH_VERIFIED` (AgentInstance→MCPResource) and `PUBLIC_ACCESS_OBSERVED` (MCPServer→MCPResource); collector-produced edge kinds go 18 → 20 (32 total with composites). The reversible round-trip deliberately adds no edge kind.
 
 **Guardrails**
 

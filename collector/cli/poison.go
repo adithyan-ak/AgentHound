@@ -50,6 +50,12 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/module"
 )
 
+const defaultStandalonePoisonTimeout = 30 * time.Second
+
+// standalonePoisonTimeout is a variable so CLI regression tests can exercise
+// timeout behavior without waiting for the production bound.
+var standalonePoisonTimeout = defaultStandalonePoisonTimeout
+
 var poisonCmd = &cobra.Command{
 	Use:   "poison <host>",
 	Short: "Inject attacker-controlled content into a destructive target (Reverter mandatory)",
@@ -162,7 +168,14 @@ func runPoisonDispatch(cmd *cobra.Command, args []string, label string) error {
 
 	extras := collectModuleExtras(cmd, mod)
 
-	ctx := context.Background()
+	parentCtx := cmd.Context()
+	if parentCtx == nil {
+		// Cobra sets a context during normal execution; direct in-process
+		// callers may invoke RunE without Execute and leave it nil.
+		parentCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, standalonePoisonTimeout)
+	defer cancel()
 	receipt, err := poisoner.Poison(ctx, action.Target{
 		Kind:    "host",
 		Address: target,

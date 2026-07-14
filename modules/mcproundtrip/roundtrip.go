@@ -60,7 +60,9 @@ func newMCPRoundTrip(in campaign.RunInput, cfg config) (roundTrip, error) {
 		extras["auth-token"] = cfg.authToken
 	}
 	return &mcpRoundTrip{
-		poisoner: mcppoison.New(),
+		// The scenario supplies separately bounded forward and cleanup contexts,
+		// so it must not inherit the standalone client's blanket timeout.
+		poisoner: mcppoison.NewForCampaign(),
 		target:   action.Target{Kind: "host", Address: in.Host},
 		payload: action.PoisonPayload{
 			InjectionContent: cfg.inject,
