@@ -5,47 +5,51 @@ import "testing"
 func TestClassifyFullMatrix(t *testing.T) {
 	cases := []struct {
 		name    string
-		control ProbeStatus
-		authed  ProbeStatus
+		control ProbeResult
+		authed  ProbeResult
 		want    Outcome
 	}{
-		{"unauth denied, auth allowed => verified", ProbeDenied, ProbeAllowed, OutcomeCredentialGatedReachVerified},
-		{"both allowed => anonymous", ProbeAllowed, ProbeAllowed, OutcomeAnonymousAccessObserved},
-		{"unauth allowed, auth denied => anonymous+rejected", ProbeAllowed, ProbeDenied, OutcomeAnonymousAccessCredentialRejected},
-		{"both denied => not_observed", ProbeDenied, ProbeDenied, OutcomeNotObserved},
+		{"control initialize denied, auth read allowed => verified", initResult(ProbeDenied), readResult(ProbeAllowed), OutcomeCredentialGatedReachVerified},
+		{"control read denied, auth read allowed => verified", readResult(ProbeDenied), readResult(ProbeAllowed), OutcomeCredentialGatedReachVerified},
+		{"both read allowed => anonymous", readResult(ProbeAllowed), readResult(ProbeAllowed), OutcomeAnonymousAccessObserved},
+		{"control read allowed, auth read denied => anonymous+rejected", readResult(ProbeAllowed), readResult(ProbeDenied), OutcomeAnonymousAccessCredentialRejected},
+		{"both read denied => not_observed", readResult(ProbeDenied), readResult(ProbeDenied), OutcomeNotObserved},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := Classify(tc.control, tc.authed); got != tc.want {
-				t.Fatalf("Classify(%s,%s) = %q, want %q", tc.control, tc.authed, got, tc.want)
+				t.Fatalf("Classify(%+v,%+v) = %q, want %q", tc.control, tc.authed, got, tc.want)
 			}
 		})
 	}
 }
 
-// TestClassifyIndeterminate asserts that ANY non-definitive probe on either side
-// forces indeterminate and NEVER not_observed. not_observed must require both
-// sides to be definitive authz denials.
+func readResult(status ProbeStatus) ProbeResult {
+	return ProbeResult{Stage: ProbeStageResourceRead, ResourceAddressed: true, Status: status}
+}
+
+func initResult(status ProbeStatus) ProbeResult {
+	return ProbeResult{Stage: ProbeStageInitialize, Status: status}
+}
+
+// TestClassifyIndeterminate asserts that non-definitive or incomplete
+// credential probes cannot produce verified/not_observed. A successful exact
+// control read remains an independently reportable anonymous-access fact.
 func TestClassifyIndeterminate(t *testing.T) {
 	nonDefinitive := []ProbeStatus{
 		ProbeNotFound, ProbeMalformedAuth, ProbeProtocolError,
 		ProbeAmbiguous, ProbeTimeout, ProbeError,
 	}
-	definitive := []ProbeStatus{ProbeAllowed, ProbeDenied}
 
 	for _, nd := range nonDefinitive {
-		for _, d := range definitive {
-			if got := Classify(nd, d); got != OutcomeIndeterminate {
-				t.Errorf("Classify(control=%s, authed=%s) = %q, want indeterminate", nd, d, got)
-			}
-			if got := Classify(d, nd); got != OutcomeIndeterminate {
-				t.Errorf("Classify(control=%s, authed=%s) = %q, want indeterminate", d, nd, got)
-			}
+		if got := Classify(readResult(nd), readResult(ProbeDenied)); got != OutcomeIndeterminate {
+			t.Errorf("Classify(control=%s, authed=denied) = %q, want indeterminate", nd, got)
 		}
-		for _, nd2 := range nonDefinitive {
-			if got := Classify(nd, nd2); got != OutcomeIndeterminate {
-				t.Errorf("Classify(control=%s, authed=%s) = %q, want indeterminate", nd, nd2, got)
-			}
+		if got := Classify(readResult(ProbeDenied), readResult(nd)); got != OutcomeIndeterminate {
+			t.Errorf("Classify(control=denied, authed=%s) = %q, want indeterminate", nd, got)
+		}
+		if got := Classify(readResult(ProbeAllowed), readResult(nd)); got != OutcomeAnonymousAccessObserved {
+			t.Errorf("successful control + authed=%s = %q, want anonymous observation", nd, got)
 		}
 	}
 }
@@ -53,11 +57,32 @@ func TestClassifyIndeterminate(t *testing.T) {
 // TestNotFoundNeverNotObserved guards the specific regression the plan calls out:
 // a missing resource (404) on a denied control must NOT collapse to not_observed.
 func TestNotFoundNeverNotObserved(t *testing.T) {
-	if got := Classify(ProbeDenied, ProbeNotFound); got != OutcomeIndeterminate {
+	if got := Classify(readResult(ProbeDenied), readResult(ProbeNotFound)); got != OutcomeIndeterminate {
 		t.Fatalf("denied control + 404 authed = %q, want indeterminate", got)
 	}
-	if got := Classify(ProbeNotFound, ProbeNotFound); got != OutcomeIndeterminate {
+	if got := Classify(readResult(ProbeNotFound), readResult(ProbeNotFound)); got != OutcomeIndeterminate {
 		t.Fatalf("both 404 = %q, want indeterminate", got)
+	}
+}
+
+func TestNegativeRequiresDualExactResourceReadDenials(t *testing.T) {
+	cases := []struct {
+		name    string
+		control ProbeResult
+		authed  ProbeResult
+	}{
+		{"control initialization denied", initResult(ProbeDenied), readResult(ProbeDenied)},
+		{"authed initialization denied", readResult(ProbeDenied), initResult(ProbeDenied)},
+		{"control wrong resource", ProbeResult{Stage: ProbeStageResourceRead, Status: ProbeDenied}, readResult(ProbeDenied)},
+		{"authed wrong resource", readResult(ProbeDenied), ProbeResult{Stage: ProbeStageResourceRead, Status: ProbeDenied}},
+		{"incomplete control", ProbeResult{Status: ProbeDenied}, readResult(ProbeDenied)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Classify(tc.control, tc.authed); got != OutcomeIndeterminate {
+				t.Fatalf("Classify = %q, want indeterminate", got)
+			}
+		})
 	}
 }
 
@@ -69,8 +94,8 @@ func TestOutcomeDefinitiveAndEdgeKind(t *testing.T) {
 		emits      bool
 	}{
 		{OutcomeCredentialGatedReachVerified, true, "CREDENTIAL_REACH_VERIFIED", true},
-		{OutcomeAnonymousAccessObserved, true, "PUBLIC_ACCESS_OBSERVED", true},
-		{OutcomeAnonymousAccessCredentialRejected, true, "PUBLIC_ACCESS_OBSERVED", true},
+		{OutcomeAnonymousAccessObserved, false, "PUBLIC_ACCESS_OBSERVED", true},
+		{OutcomeAnonymousAccessCredentialRejected, false, "PUBLIC_ACCESS_OBSERVED", true},
 		{OutcomeNotObserved, true, "", false},
 		{OutcomeIndeterminate, false, "", false},
 	}

@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
 // ErrNotRunnable marks a precondition failure that is distinct from an
@@ -29,17 +31,28 @@ type ProbeRequest struct {
 	Timeout     time.Duration
 }
 
+// ProbeStage identifies the last protocol stage reached by a probe.
+type ProbeStage string
+
+const (
+	ProbeStageInitialize   ProbeStage = "initialize"
+	ProbeStageResourceRead ProbeStage = "resource_read"
+)
+
 // Unauthenticated reports whether this is the control probe.
 func (r ProbeRequest) Unauthenticated() bool {
 	return strings.TrimSpace(r.Credential) == ""
 }
 
-// ProbeResult is the classified result of a single read probe. Detail is a
-// non-sensitive diagnostic string — it MUST NOT contain resource content or the
-// credential value.
+// ProbeResult is the classified result of a single read probe. Stage records
+// where the probe stopped. ResourceAddressed is true only after dispatching the
+// exact requested resources/read operation. Detail is a bounded diagnostic code,
+// never a target error, endpoint, resource content, or credential value.
 type ProbeResult struct {
-	Status ProbeStatus
-	Detail string
+	Stage             ProbeStage
+	ResourceAddressed bool
+	Status            ProbeStatus
+	Detail            string
 }
 
 // Prober executes read-only probes against the exact predicted resource. It is
@@ -83,6 +96,179 @@ func (in RunInput) Clock() func() time.Time {
 	return time.Now
 }
 
+// HTTPOrigin is the exact credential-forwarding boundary for an HTTP endpoint.
+// It intentionally excludes path and query. Its fields are private so callers
+// cannot accidentally serialize an origin derived from a potentially sensitive
+// endpoint.
+type HTTPOrigin struct {
+	scheme   string
+	hostname string
+	port     string
+}
+
+// EndpointBinding is the validated, witness-bound endpoint used by a campaign.
+// Endpoint preserves the untouched trimmed input for HTTP identity compatibility
+// and live requests. TargetRef is safe for diagnostics because its query is
+// removed. Neither value is part of witness or evidence serialization.
+type EndpointBinding struct {
+	Endpoint  string
+	TargetRef string
+	Origin    HTTPOrigin
+}
+
+var sensitiveQueryKeys = map[string]struct{}{
+	"access_token":  {},
+	"api-key":       {},
+	"api_key":       {},
+	"apikey":        {},
+	"auth":          {},
+	"authorization": {},
+	"credential":    {},
+	"key":           {},
+	"password":      {},
+	"secret":        {},
+	"token":         {},
+}
+
+// BindEndpoint validates an operator-supplied HTTP(S) endpoint, applies
+// best-effort known-secret query defenses, and binds the untouched trimmed
+// representation to the exported server identity before any network operation.
+//
+// Arbitrary query bytes cannot be proven non-secret. Unknown query data remains
+// identity-significant and is accepted, but the query is omitted from every
+// returned diagnostic reference. Fixed known-sensitive decoded keys and decoded
+// values exactly matching credentialMaterial are rejected as defense-in-depth.
+func BindEndpoint(input, credentialMaterial, expectedServerID string) (EndpointBinding, error) {
+	trimmed := strings.TrimSpace(input)
+	u, origin, err := parseAbsoluteHTTPEndpoint(trimmed)
+	if err != nil {
+		return EndpointBinding{}, err
+	}
+	if queryContainsKnownSecret(u.RawQuery, credentialMaterial) {
+		return EndpointBinding{}, fmt.Errorf("%w: endpoint query contains prohibited known-sensitive data", ErrNotRunnable)
+	}
+	actualServerID := ingest.ResolveMCPServerIdentity("http", trimmed).ObjectID
+	if actualServerID != expectedServerID {
+		return EndpointBinding{}, fmt.Errorf(
+			"%w: endpoint identity does not match witness server_id", ErrNotRunnable,
+		)
+	}
+	return EndpointBinding{
+		Endpoint:  trimmed,
+		TargetRef: redactedURL(u),
+		Origin:    origin,
+	}, nil
+}
+
+// ParseHTTPOrigin validates endpoint and returns its exact lowercased
+// scheme+hostname+effective-port origin. It is shared by campaign and MCP
+// transports so credential headers use one fail-closed policy.
+func ParseHTTPOrigin(endpoint string) (HTTPOrigin, error) {
+	_, origin, err := parseAbsoluteHTTPEndpoint(strings.TrimSpace(endpoint))
+	return origin, err
+}
+
+// Matches reports whether u has the exact scheme, hostname, and effective port.
+// Missing/malformed authority always fails closed.
+func (o HTTPOrigin) Matches(u *url.URL) bool {
+	if o.scheme == "" || o.hostname == "" || o.port == "" || u == nil {
+		return false
+	}
+	candidate, err := originFromURL(u)
+	if err != nil {
+		return false
+	}
+	return o == candidate
+}
+
+// SanitizedTargetReference removes query data from a valid endpoint for CLI
+// diagnostics. Invalid inputs return a fixed placeholder rather than echoing
+// potentially sensitive bytes.
+func SanitizedTargetReference(endpoint string) string {
+	u, _, err := parseAbsoluteHTTPEndpoint(strings.TrimSpace(endpoint))
+	if err != nil {
+		return "<invalid-http-endpoint>"
+	}
+	return redactedURL(u)
+}
+
+func parseAbsoluteHTTPEndpoint(endpoint string) (*url.URL, HTTPOrigin, error) {
+	if endpoint == "" {
+		return nil, HTTPOrigin{}, fmt.Errorf("%w: HTTP endpoint is empty", ErrNotRunnable)
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, HTTPOrigin{}, fmt.Errorf("%w: HTTP endpoint is malformed", ErrNotRunnable)
+	}
+	if !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, HTTPOrigin{}, fmt.Errorf("%w: endpoint must be absolute HTTP(S)", ErrNotRunnable)
+	}
+	if u.Host == "" || u.Hostname() == "" {
+		return nil, HTTPOrigin{}, fmt.Errorf("%w: HTTP endpoint requires a valid authority and hostname", ErrNotRunnable)
+	}
+	if u.User != nil {
+		return nil, HTTPOrigin{}, fmt.Errorf("%w: endpoint userinfo is prohibited", ErrNotRunnable)
+	}
+	if u.Fragment != "" {
+		return nil, HTTPOrigin{}, fmt.Errorf("%w: endpoint fragments are prohibited", ErrNotRunnable)
+	}
+	origin, err := originFromURL(u)
+	if err != nil {
+		return nil, HTTPOrigin{}, fmt.Errorf("%w: HTTP endpoint origin is malformed", ErrNotRunnable)
+	}
+	return u, origin, nil
+}
+
+func originFromURL(u *url.URL) (HTTPOrigin, error) {
+	if u == nil || u.Host == "" || u.Hostname() == "" {
+		return HTTPOrigin{}, errors.New("missing authority")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return HTTPOrigin{}, errors.New("unsupported scheme")
+	}
+	port := u.Port()
+	if port == "" {
+		if scheme == "http" {
+			port = "80"
+		} else {
+			port = "443"
+		}
+	}
+	return HTTPOrigin{
+		scheme:   scheme,
+		hostname: strings.ToLower(u.Hostname()),
+		port:     port,
+	}, nil
+}
+
+func queryContainsKnownSecret(rawQuery, credentialMaterial string) bool {
+	if rawQuery == "" {
+		return false
+	}
+	for _, field := range strings.Split(rawQuery, "&") {
+		keyRaw, valueRaw, _ := strings.Cut(field, "=")
+		key, keyErr := url.QueryUnescape(keyRaw)
+		value, valueErr := url.QueryUnescape(valueRaw)
+		if keyErr == nil {
+			if _, denied := sensitiveQueryKeys[strings.ToLower(strings.TrimSpace(key))]; denied {
+				return true
+			}
+		}
+		if valueErr == nil && credentialMaterial != "" && value == credentialMaterial {
+			return true
+		}
+	}
+	return false
+}
+
+func redactedURL(u *url.URL) string {
+	safe := *u
+	safe.RawQuery = ""
+	safe.ForceQuery = false
+	return safe.String()
+}
+
 // RunResult is the scenario's outcome. On a dry run, Plan is populated and
 // Evidence is nil. On commit, Outcome and Evidence are set; the caller builds
 // the ingest graph from Evidence.EvidenceGraph so the envelope owns the scan ID
@@ -90,6 +276,7 @@ func (in RunInput) Clock() func() time.Time {
 type RunResult struct {
 	DryRun        bool
 	Plan          string
+	TargetRef     string
 	Outcome       Outcome
 	Evidence      *Evidence
 	ControlStatus ProbeStatus

@@ -50,9 +50,17 @@ func (s *Scenario) Run(ctx context.Context, in campaign.RunInput) (*campaign.Run
 	if err := campaign.MatchCredentialMaterial(in.Witness, in.CredentialMaterial); err != nil {
 		return nil, err
 	}
+	binding, err := campaign.BindEndpoint(in.Host, in.CredentialMaterial, in.Witness.ServerID)
+	if err != nil {
+		return nil, err
+	}
 
 	if !in.Commit {
-		return &campaign.RunResult{DryRun: true, Plan: planText(in)}, nil
+		return &campaign.RunResult{
+			DryRun:    true,
+			Plan:      planText(in, binding.TargetRef),
+			TargetRef: binding.TargetRef,
+		}, nil
 	}
 
 	prober := in.Prober
@@ -61,21 +69,21 @@ func (s *Scenario) Run(ctx context.Context, in campaign.RunInput) (*campaign.Run
 	}
 
 	control := prober.Probe(ctx, campaign.ProbeRequest{
-		Host:        in.Host,
+		Host:        binding.Endpoint,
 		ResourceURI: in.Witness.ResourceURI,
 		Credential:  "",
 		Insecure:    in.Insecure,
 		Timeout:     in.Timeout,
 	})
 	authed := prober.Probe(ctx, campaign.ProbeRequest{
-		Host:        in.Host,
+		Host:        binding.Endpoint,
 		ResourceURI: in.Witness.ResourceURI,
 		Credential:  in.CredentialMaterial,
 		Insecure:    in.Insecure,
 		Timeout:     in.Timeout,
 	})
 
-	outcome := campaign.Classify(control.Status, authed.Status)
+	outcome := campaign.Classify(control, authed)
 
 	runID := strings.TrimSpace(in.RunID)
 	if runID == "" {
@@ -98,6 +106,7 @@ func (s *Scenario) Run(ctx context.Context, in campaign.RunInput) (*campaign.Run
 	return &campaign.RunResult{
 		Outcome:       outcome,
 		Evidence:      evidence,
+		TargetRef:     binding.TargetRef,
 		ControlStatus: control.Status,
 		AuthedStatus:  authed.Status,
 	}, nil
@@ -105,12 +114,12 @@ func (s *Scenario) Run(ctx context.Context, in campaign.RunInput) (*campaign.Run
 
 // planText renders the read-only plan for a dry run. It names the exact probes
 // without revealing the credential material.
-func planText(in campaign.RunInput) string {
+func planText(in campaign.RunInput, targetRef string) string {
 	w := in.Witness
 	var b strings.Builder
 	fmt.Fprintf(&b, "scenario:      %s (v%d)\n", scenarioID, scenarioVersion)
 	fmt.Fprintf(&b, "oracle:        %s\n", campaign.OracleTypeDifferentialCredentialReach)
-	fmt.Fprintf(&b, "target host:   %s\n", in.Host)
+	fmt.Fprintf(&b, "target:        %s\n", targetRef)
 	fmt.Fprintf(&b, "server node:   %s\n", w.ServerID)
 	fmt.Fprintf(&b, "resource node: %s\n", w.ResourceID)
 	fmt.Fprintf(&b, "resource uri:  %s\n", w.ResourceURI)

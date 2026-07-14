@@ -3,6 +3,7 @@ package credreach
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,7 +14,6 @@ import (
 
 const (
 	testHost       = "https://mcp.example/mcp"
-	testServerID   = "sha256:server-node"
 	testCredID     = "sha256:credential-node"
 	testResURI     = "postgres://prod/customers"
 	testCredMateri = "sk-live-secret"
@@ -22,21 +22,34 @@ const (
 // fakeProber returns preconfigured statuses and records whether each probe
 // carried a credential, so tests can assert the control probe is unauthenticated.
 type fakeProber struct {
-	control campaign.ProbeStatus
-	authed  campaign.ProbeStatus
+	control campaign.ProbeResult
+	authed  campaign.ProbeResult
 	reqs    []campaign.ProbeRequest
 }
 
 func (f *fakeProber) Probe(_ context.Context, req campaign.ProbeRequest) campaign.ProbeResult {
 	f.reqs = append(f.reqs, req)
 	if req.Unauthenticated() {
-		return campaign.ProbeResult{Status: f.control}
+		return f.control
 	}
-	return campaign.ProbeResult{Status: f.authed}
+	return f.authed
+}
+
+func readProbe(status campaign.ProbeStatus) campaign.ProbeResult {
+	return campaign.ProbeResult{
+		Stage:             campaign.ProbeStageResourceRead,
+		ResourceAddressed: true,
+		Status:            status,
+	}
+}
+
+func initializeProbe(status campaign.ProbeStatus) campaign.ProbeResult {
+	return campaign.ProbeResult{Stage: campaign.ProbeStageInitialize, Status: status}
 }
 
 func testWitness(t *testing.T) campaign.Witness {
 	t.Helper()
+	testServerID := ingest.ResolveMCPServerIdentity("http", testHost).ObjectID
 	resID := ingest.ComputeNodeID("MCPResource", testServerID, testResURI)
 	return campaign.Witness{
 		SchemaVersion:       campaign.WitnessSchemaVersion,
@@ -72,18 +85,21 @@ func commitInput(t *testing.T, prober campaign.Prober) campaign.RunInput {
 func TestScenarioMatrix(t *testing.T) {
 	cases := []struct {
 		name    string
-		control campaign.ProbeStatus
-		authed  campaign.ProbeStatus
+		control campaign.ProbeResult
+		authed  campaign.ProbeResult
 		want    campaign.Outcome
 		edge    string // "" => no evidence edge
 	}{
-		{"verified", campaign.ProbeDenied, campaign.ProbeAllowed, campaign.OutcomeCredentialGatedReachVerified, "CREDENTIAL_REACH_VERIFIED"},
-		{"anonymous", campaign.ProbeAllowed, campaign.ProbeAllowed, campaign.OutcomeAnonymousAccessObserved, "PUBLIC_ACCESS_OBSERVED"},
-		{"anon+rejected", campaign.ProbeAllowed, campaign.ProbeDenied, campaign.OutcomeAnonymousAccessCredentialRejected, "PUBLIC_ACCESS_OBSERVED"},
-		{"not_observed", campaign.ProbeDenied, campaign.ProbeDenied, campaign.OutcomeNotObserved, ""},
-		{"404 => indeterminate", campaign.ProbeDenied, campaign.ProbeNotFound, campaign.OutcomeIndeterminate, ""},
-		{"malformed => indeterminate", campaign.ProbeMalformedAuth, campaign.ProbeAllowed, campaign.OutcomeIndeterminate, ""},
-		{"timeout => indeterminate", campaign.ProbeTimeout, campaign.ProbeDenied, campaign.OutcomeIndeterminate, ""},
+		{"control initialize denied verifies", initializeProbe(campaign.ProbeDenied), readProbe(campaign.ProbeAllowed), campaign.OutcomeCredentialGatedReachVerified, "CREDENTIAL_REACH_VERIFIED"},
+		{"verified", readProbe(campaign.ProbeDenied), readProbe(campaign.ProbeAllowed), campaign.OutcomeCredentialGatedReachVerified, "CREDENTIAL_REACH_VERIFIED"},
+		{"anonymous", readProbe(campaign.ProbeAllowed), readProbe(campaign.ProbeAllowed), campaign.OutcomeAnonymousAccessObserved, "PUBLIC_ACCESS_OBSERVED"},
+		{"anon+rejected", readProbe(campaign.ProbeAllowed), readProbe(campaign.ProbeDenied), campaign.OutcomeAnonymousAccessCredentialRejected, "PUBLIC_ACCESS_OBSERVED"},
+		{"not_observed", readProbe(campaign.ProbeDenied), readProbe(campaign.ProbeDenied), campaign.OutcomeNotObserved, ""},
+		{"initialize denial negative => indeterminate", initializeProbe(campaign.ProbeDenied), readProbe(campaign.ProbeDenied), campaign.OutcomeIndeterminate, ""},
+		{"404 => indeterminate", readProbe(campaign.ProbeDenied), readProbe(campaign.ProbeNotFound), campaign.OutcomeIndeterminate, ""},
+		{"malformed => indeterminate", readProbe(campaign.ProbeMalformedAuth), readProbe(campaign.ProbeAllowed), campaign.OutcomeIndeterminate, ""},
+		{"timeout => indeterminate", readProbe(campaign.ProbeTimeout), readProbe(campaign.ProbeDenied), campaign.OutcomeIndeterminate, ""},
+		{"anonymous survives authed timeout", readProbe(campaign.ProbeAllowed), readProbe(campaign.ProbeTimeout), campaign.OutcomeAnonymousAccessObserved, "PUBLIC_ACCESS_OBSERVED"},
 	}
 	s := &Scenario{}
 	for _, tc := range cases {
@@ -119,7 +135,7 @@ func TestScenarioMatrix(t *testing.T) {
 // TestUnauthControlProbe asserts the control probe carries NO credential and the
 // authed probe carries one.
 func TestUnauthControlProbe(t *testing.T) {
-	prober := &fakeProber{control: campaign.ProbeDenied, authed: campaign.ProbeAllowed}
+	prober := &fakeProber{control: readProbe(campaign.ProbeDenied), authed: readProbe(campaign.ProbeAllowed)}
 	s := &Scenario{}
 	if _, err := s.Run(context.Background(), commitInput(t, prober)); err != nil {
 		t.Fatalf("Run error: %v", err)
@@ -159,7 +175,7 @@ func TestRejectMismatchedMaterial(t *testing.T) {
 }
 
 func TestDryRunPlansOnly(t *testing.T) {
-	prober := &fakeProber{control: campaign.ProbeDenied, authed: campaign.ProbeAllowed}
+	prober := &fakeProber{control: readProbe(campaign.ProbeDenied), authed: readProbe(campaign.ProbeAllowed)}
 	s := &Scenario{}
 	in := commitInput(t, prober)
 	in.Commit = false
@@ -186,6 +202,50 @@ func TestInvalidWitnessRejected(t *testing.T) {
 	in.Witness = w
 	if _, err := s.Run(context.Background(), in); err == nil {
 		t.Fatal("forged/mismatched witness must be rejected before probing")
+	}
+}
+
+func TestEndpointIdentityMismatchRejectedBeforeProbe(t *testing.T) {
+	prober := &fakeProber{
+		control: readProbe(campaign.ProbeDenied),
+		authed:  readProbe(campaign.ProbeAllowed),
+	}
+	in := commitInput(t, prober)
+	in.Host = "https://other.example/mcp"
+	if _, err := (&Scenario{}).Run(context.Background(), in); !errors.Is(err, campaign.ErrNotRunnable) {
+		t.Fatalf("endpoint mismatch must be not-runnable, got %v", err)
+	}
+	if len(prober.reqs) != 0 {
+		t.Fatalf("endpoint mismatch dispatched %d probes", len(prober.reqs))
+	}
+}
+
+func TestAcceptedQueryNeverAppearsInPlan(t *testing.T) {
+	const endpoint = "https://mcp.example/mcp?opaque=potentially-sensitive"
+	prober := &fakeProber{}
+	in := commitInput(t, prober)
+	in.Host = endpoint
+	in.Witness.ServerID = ingest.ResolveMCPServerIdentity("http", endpoint).ObjectID
+	in.Witness.ResourceID = ingest.ComputeNodeID("MCPResource", in.Witness.ServerID, in.Witness.ResourceURI)
+	for i := range in.Witness.PathTopology {
+		switch in.Witness.PathTopology[i].Kind {
+		case "MCPServer":
+			in.Witness.PathTopology[i].NodeID = in.Witness.ServerID
+		case "MCPResource":
+			in.Witness.PathTopology[i].NodeID = in.Witness.ResourceID
+		}
+	}
+	in.Commit = false
+
+	res, err := (&Scenario{}).Run(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if strings.Contains(res.Plan, "opaque=") || strings.Contains(res.TargetRef, "opaque=") {
+		t.Fatalf("accepted endpoint query leaked into plan/result: %+v", res)
+	}
+	if len(prober.reqs) != 0 {
+		t.Fatal("dry run must not probe")
 	}
 }
 

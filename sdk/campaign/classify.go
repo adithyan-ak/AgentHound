@@ -61,34 +61,49 @@ const (
 	OutcomeIndeterminate Outcome = "indeterminate"
 )
 
-// Classify implements the complete differential outcome matrix. not_observed is
-// returned ONLY when BOTH probes are definitive authorization denials of the
-// same existing resource; any non-definitive probe yields indeterminate.
-func Classify(control, authed ProbeStatus) Outcome {
-	if !control.IsDefinitive() || !authed.IsDefinitive() {
-		return OutcomeIndeterminate
-	}
+// Classify implements the stage-aware differential outcome matrix.
+// Credential-gated reach permits the control denial to occur during initialize,
+// but requires the authenticated probe to read the exact resource. A negative
+// is valid only when both probes reached resource_read, addressed that same
+// exact requested resource, and received definitive denials. An independently
+// successful control read emits anonymous-access evidence even when the
+// credential observation is otherwise indeterminate.
+func Classify(control, authed ProbeResult) Outcome {
+	controlRead := exactResourceRead(control)
+	authedRead := exactResourceRead(authed)
+
 	switch {
-	case control == ProbeDenied && authed == ProbeAllowed:
+	case validControlDenial(control) && authedRead && authed.Status == ProbeAllowed:
 		return OutcomeCredentialGatedReachVerified
-	case control == ProbeAllowed && authed == ProbeAllowed:
-		return OutcomeAnonymousAccessObserved
-	case control == ProbeAllowed && authed == ProbeDenied:
+	case controlRead && control.Status == ProbeAllowed &&
+		authedRead && authed.Status == ProbeDenied:
 		return OutcomeAnonymousAccessCredentialRejected
-	case control == ProbeDenied && authed == ProbeDenied:
+	case controlRead && control.Status == ProbeAllowed:
+		return OutcomeAnonymousAccessObserved
+	case controlRead && authedRead &&
+		control.Status == ProbeDenied && authed.Status == ProbeDenied:
 		return OutcomeNotObserved
 	default:
-		// Unreachable: both statuses are definitive so one of the four cases
-		// above matched. Fail closed to indeterminate.
 		return OutcomeIndeterminate
 	}
 }
 
+func exactResourceRead(result ProbeResult) bool {
+	return result.Stage == ProbeStageResourceRead && result.ResourceAddressed
+}
+
+func validControlDenial(result ProbeResult) bool {
+	return result.Status == ProbeDenied &&
+		(result.Stage == ProbeStageInitialize || exactResourceRead(result))
+}
+
 // Definitive reports whether the outcome is a completed observation whose
-// coverage domain may be promoted (and thus retire prior evidence). Only
-// indeterminate is non-definitive; it must leave prior evidence untouched.
+// credential coverage domain may be promoted (and thus retire prior evidence).
+// Only a matching positive or exact dual-denial negative may do so. Anonymous
+// observations are still emitted, but remain partial so they cannot retire a
+// prior credential verification.
 func (o Outcome) Definitive() bool {
-	return o != OutcomeIndeterminate
+	return o == OutcomeCredentialGatedReachVerified || o == OutcomeNotObserved
 }
 
 // EdgeKind returns the raw evidence edge kind emitted for the outcome, and

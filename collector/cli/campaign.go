@@ -137,6 +137,7 @@ func init() {
 
 func runCampaign(cmd *cobra.Command, args []string) error {
 	host := args[0]
+	targetRef := campaign.SanitizedTargetReference(host)
 	scenarioID, _ := cmd.Flags().GetString("scenario")
 	engagementID, _ := cmd.Flags().GetString("engagement-id")
 	commit, _ := cmd.Flags().GetBool("commit")
@@ -206,7 +207,10 @@ func runCampaign(cmd *cobra.Command, args []string) error {
 	}
 
 	if res.DryRun {
-		_, _ = fmt.Fprintf(cmd.OutOrStderr(), "[campaign] DRY-RUN %s on %s\n", scenario.ID(), host)
+		if res.TargetRef != "" {
+			targetRef = res.TargetRef
+		}
+		_, _ = fmt.Fprintf(cmd.OutOrStderr(), "[campaign] DRY-RUN %s on %s\n", scenario.ID(), targetRef)
 		_, _ = fmt.Fprint(cmd.OutOrStderr(), res.Plan)
 		_, _ = fmt.Fprintf(cmd.OutOrStderr(), "[campaign] re-run with --commit to execute.\n")
 		return nil
@@ -219,13 +223,13 @@ func runCampaign(cmd *cobra.Command, args []string) error {
 	if res.Roundtrip != nil {
 		_, _ = fmt.Fprintf(cmd.OutOrStderr(),
 			"[campaign] COMMITTED %s on %s (STANDALONE target-mutation validation) — %s\n",
-			scenario.ID(), host, res.Roundtrip.Summary())
+			scenario.ID(), targetRef, res.Roundtrip.Summary())
 		return nil
 	}
 
 	_, _ = fmt.Fprintf(cmd.OutOrStderr(),
 		"[campaign] COMMITTED %s on %s — outcome=%s control=%s authed=%s\n",
-		scenario.ID(), host, res.Outcome, res.ControlStatus, res.AuthedStatus)
+		scenario.ID(), targetRef, res.Outcome, res.ControlStatus, res.AuthedStatus)
 
 	envelope := buildCampaignEnvelope(scenario.ID(), scenario.Version(), engagementID, res.Evidence)
 

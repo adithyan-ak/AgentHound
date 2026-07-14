@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -42,20 +41,30 @@ func (p *mcpProber) Probe(ctx context.Context, req campaign.ProbeRequest) campai
 
 	session, err := client.Connect(pctx, transport, nil)
 	if err != nil {
+		status := classifyProbeError(pctx, err)
 		return campaign.ProbeResult{
-			Status: classifyProbeError(pctx, err),
-			Detail: sanitizeDetail(err),
+			Stage:  campaign.ProbeStageInitialize,
+			Status: status,
+			Detail: probeDetailCode(campaign.ProbeStageInitialize, status),
 		}
 	}
 	defer session.Close()
 
 	if _, err := session.ReadResource(pctx, &mcpsdk.ReadResourceParams{URI: req.ResourceURI}); err != nil {
+		status := classifyProbeError(pctx, err)
 		return campaign.ProbeResult{
-			Status: classifyProbeError(pctx, err),
-			Detail: sanitizeDetail(err),
+			Stage:             campaign.ProbeStageResourceRead,
+			ResourceAddressed: true,
+			Status:            status,
+			Detail:            probeDetailCode(campaign.ProbeStageResourceRead, status),
 		}
 	}
-	return campaign.ProbeResult{Status: campaign.ProbeAllowed, Detail: "read succeeded"}
+	return campaign.ProbeResult{
+		Stage:             campaign.ProbeStageResourceRead,
+		ResourceAddressed: true,
+		Status:            campaign.ProbeAllowed,
+		Detail:            "resource_read_allowed",
+	}
 }
 
 // buildProbeTransport builds a streamable HTTP transport. The authed probe adds
@@ -64,6 +73,7 @@ func (p *mcpProber) Probe(ctx context.Context, req campaign.ProbeRequest) campai
 // unless the operator opted into --insecure.
 func buildProbeTransport(req campaign.ProbeRequest) mcpsdk.Transport {
 	transport := &mcpsdk.StreamableClientTransport{Endpoint: req.Host}
+	origin, _ := campaign.ParseHTTPOrigin(req.Host)
 
 	headers := map[string]string{}
 	if strings.TrimSpace(req.Credential) != "" {
@@ -77,7 +87,7 @@ func buildProbeTransport(req campaign.ProbeRequest) mcpsdk.Transport {
 		transport.HTTPClient = &http.Client{Transport: probeHeaderRoundTripper{
 			base:    httpTransport,
 			headers: headers,
-			host:    endpointHost(req.Host),
+			origin:  origin,
 		}}
 	}
 	return transport
@@ -90,24 +100,26 @@ func buildProbeTransport(req campaign.ProbeRequest) mcpsdk.Transport {
 type probeHeaderRoundTripper struct {
 	base    http.RoundTripper
 	headers map[string]string
-	host    string
+	origin  campaign.HTTPOrigin
 }
 
 func (h probeHeaderRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	if h.host == "" || req.URL.Host == h.host {
+	cloned := req.Clone(req.Context())
+	cloned.Header = req.Header.Clone()
+	if h.origin.Matches(req.URL) {
 		for k, v := range h.headers {
-			req.Header.Set(k, v)
+			cloned.Header.Set(k, v)
+		}
+	} else {
+		for k := range h.headers {
+			cloned.Header.Del(k)
 		}
 	}
-	return h.base.RoundTrip(req)
-}
-
-func endpointHost(endpoint string) string {
-	u, err := url.Parse(endpoint)
-	if err != nil {
-		return ""
+	base := h.base
+	if base == nil {
+		base = http.DefaultTransport
 	}
-	return u.Host
+	return base.RoundTrip(cloned)
 }
 
 // classifyProbeError maps a connect/read error to a ProbeStatus conservatively.
@@ -182,17 +194,6 @@ func containsAny(haystack string, needles ...string) bool {
 	return false
 }
 
-// sanitizeDetail returns a short, non-sensitive diagnostic. Errors describe a
-// failure, not resource content, and the credential is never placed in a
-// request error — but Detail is bounded and never persisted into evidence.
-func sanitizeDetail(err error) string {
-	if err == nil {
-		return ""
-	}
-	msg := err.Error()
-	const max = 200
-	if len(msg) > max {
-		return msg[:max] + "…"
-	}
-	return msg
+func probeDetailCode(stage campaign.ProbeStage, status campaign.ProbeStatus) string {
+	return string(stage) + "_" + string(status)
 }
