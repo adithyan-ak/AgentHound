@@ -141,8 +141,13 @@ func (p *Poisoner) Poison(ctx context.Context, t action.Target, payload action.P
 	}
 
 	postHash := sha256Hex([]byte(final))
+	receiptID, err := action.NewReceiptID()
+	if err != nil {
+		return nil, fmt.Errorf("instruction poison: %w", err)
+	}
 
 	receipt := &action.PoisonReceipt{
+		ReceiptID:       receiptID,
 		ModuleID:        "instruction.poison",
 		EngagementID:    engagementID,
 		CampaignRunID:   payload.CampaignRunID,

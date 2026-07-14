@@ -194,9 +194,10 @@ func TestRunReportIsBoundedAndSecretFree(t *testing.T) {
 		ReportVersion: RunReportVersion,
 		ScenarioID:    "test", ScenarioVersion: 1,
 		CampaignRunID: "run", EngagementID: "eng",
-		TargetRef: "https://example.test/mcp",
-		Steps:     []StepObservation{},
-		Cleanup:   CleanupReport{Status: CleanupNotApplicable, Postcondition: "not_applicable"},
+		TargetRef:           "https://example.test/mcp",
+		EvidenceFingerprint: strings.Repeat("a", 64),
+		Steps:               []StepObservation{},
+		Cleanup:             CleanupReport{Status: CleanupNotApplicable, Postcondition: "not_applicable"},
 	}
 	for i := 0; i < maxReportSteps+3; i++ {
 		report.AddStep(StepClassify, "fixed_code")
@@ -204,11 +205,34 @@ func TestRunReportIsBoundedAndSecretFree(t *testing.T) {
 	if len(report.Steps) != maxReportSteps {
 		t.Fatalf("steps = %d, want bounded %d", len(report.Steps), maxReportSteps)
 	}
+	for index, step := range report.Steps {
+		if step.Sequence != index+1 || step.OperationClass == "" {
+			t.Fatalf("step %d missing typed sequence/class: %+v", index, step)
+		}
+		if _, err := time.Parse(time.RFC3339Nano, step.StartedAt); err != nil {
+			t.Fatalf("step %d started_at is not RFC3339Nano: %q", index, step.StartedAt)
+		}
+		if _, err := time.Parse(time.RFC3339Nano, step.CompletedAt); err != nil {
+			t.Fatalf("step %d completed_at is not RFC3339Nano: %q", index, step.CompletedAt)
+		}
+	}
+	for _, receiptID := range []string{"opaque-one", "opaque-one", "opaque-two"} {
+		report.LinkReceipt(receiptID)
+	}
+	if len(report.ReceiptRefs) != 2 {
+		t.Fatalf("receipt_refs = %v, want bounded unique opaque IDs", report.ReceiptRefs)
+	}
 	payload, err := json.Marshal(report)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"raw-credential", "original-content", "injected-content"} {
+	for _, forbidden := range []string{
+		"raw-credential",
+		"original-content",
+		"injected-content",
+		"/.agenthound/state/",
+		"receipt_path",
+	} {
 		if strings.Contains(string(payload), forbidden) {
 			t.Fatalf("report leaked forbidden value %q", forbidden)
 		}

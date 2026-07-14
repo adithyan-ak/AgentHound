@@ -126,6 +126,9 @@ func TestPoison_CommitMutatesAndReverts(t *testing.T) {
 	if receipt.DryRun {
 		t.Error("receipt.DryRun should be false")
 	}
+	if receipt.ReceiptID == "" {
+		t.Fatal("committed mutation receipt has no opaque receipt ID")
+	}
 	if got := getCurrent(); got != injection {
 		t.Errorf("after poison: current = %q, want %q", got, injection)
 	}

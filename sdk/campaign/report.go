@@ -11,6 +11,7 @@ import (
 const (
 	RunReportVersion = 1
 	maxReportSteps   = 8
+	maxReceiptRefs   = 8
 )
 
 var (
@@ -57,12 +58,30 @@ const (
 	StepVerifyOriginal     StepName = "verify_original"
 )
 
+// OperationClass is the bounded category of work performed by a report step.
+// It prevents target-controlled descriptions from becoming report data.
+type OperationClass string
+
+const (
+	OperationValidation         OperationClass = "validation"
+	OperationNetworkRead        OperationClass = "network_read"
+	OperationDecision           OperationClass = "decision"
+	OperationEvidenceEmission   OperationClass = "evidence_emission"
+	OperationAuthorization      OperationClass = "authorization"
+	OperationTargetMutation     OperationClass = "target_mutation"
+	OperationTargetVerification OperationClass = "target_verification"
+	OperationCleanup            OperationClass = "cleanup"
+)
+
 // StepObservation is intentionally code-only and bounded; target errors and
 // request/response payloads never enter a report.
 type StepObservation struct {
-	Sequence    int      `json:"sequence"`
-	Step        StepName `json:"step"`
-	Observation string   `json:"observation"`
+	Sequence       int            `json:"sequence"`
+	Step           StepName       `json:"step"`
+	OperationClass OperationClass `json:"operation_class"`
+	StartedAt      string         `json:"started_at"`
+	CompletedAt    string         `json:"completed_at"`
+	Observation    string         `json:"observation"`
 }
 
 type OracleReport struct {
@@ -102,12 +121,14 @@ type RunReport struct {
 	EngagementID    string `json:"engagement_id"`
 	Standalone      bool   `json:"standalone"`
 
-	AgentID          string `json:"agent_id,omitempty"`
-	ServerID         string `json:"server_id,omitempty"`
-	CredentialID     string `json:"credential_id,omitempty"`
-	ResourceID       string `json:"resource_id,omitempty"`
-	MutationTargetID string `json:"mutation_target_id,omitempty"`
-	TargetRef        string `json:"target_ref"`
+	AgentID             string   `json:"agent_id,omitempty"`
+	ServerID            string   `json:"server_id,omitempty"`
+	CredentialID        string   `json:"credential_id,omitempty"`
+	ResourceID          string   `json:"resource_id,omitempty"`
+	MutationTargetID    string   `json:"mutation_target_id,omitempty"`
+	TargetRef           string   `json:"target_ref"`
+	EvidenceFingerprint string   `json:"evidence_fingerprint,omitempty"`
+	ReceiptRefs         []string `json:"receipt_refs,omitempty"`
 
 	StartedAt   string `json:"started_at"`
 	CompletedAt string `json:"completed_at"`
@@ -119,12 +140,45 @@ type RunReport struct {
 }
 
 func (r *RunReport) AddStep(step StepName, observation string) {
+	now := time.Now().UTC()
+	r.AddStepAt(step, OperationDecision, observation, now, now)
+}
+
+func (r *RunReport) AddStepAt(
+	step StepName,
+	operationClass OperationClass,
+	observation string,
+	startedAt time.Time,
+	completedAt time.Time,
+) {
 	if r == nil || len(r.Steps) >= maxReportSteps {
 		return
 	}
+	if completedAt.Before(startedAt) {
+		completedAt = startedAt
+	}
 	r.Steps = append(r.Steps, StepObservation{
-		Sequence: len(r.Steps) + 1, Step: step, Observation: observation,
+		Sequence:       len(r.Steps) + 1,
+		Step:           step,
+		OperationClass: operationClass,
+		StartedAt:      startedAt.UTC().Format(time.RFC3339Nano),
+		CompletedAt:    completedAt.UTC().Format(time.RFC3339Nano),
+		Observation:    observation,
 	})
+}
+
+// LinkReceipt records only an opaque receipt ID, never a receipt path or
+// content-derived hash.
+func (r *RunReport) LinkReceipt(receiptID string) {
+	if r == nil || receiptID == "" || len(r.ReceiptRefs) >= maxReceiptRefs {
+		return
+	}
+	for _, existing := range r.ReceiptRefs {
+		if existing == receiptID {
+			return
+		}
+	}
+	r.ReceiptRefs = append(r.ReceiptRefs, receiptID)
 }
 
 func (r RunReport) TargetClean() bool {

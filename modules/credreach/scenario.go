@@ -78,31 +78,40 @@ func (s *Scenario) Run(ctx context.Context, in campaign.RunInput) (*campaign.Run
 	})
 	defer cancel()
 	now := in.Clock()
+	runStarted := now().UTC()
 	report := &campaign.RunReport{
-		ReportVersion:   campaign.RunReportVersion,
-		ScenarioID:      scenarioID,
-		ScenarioVersion: scenarioVersion,
-		CampaignRunID:   runID,
-		EngagementID:    in.EngagementID,
-		AgentID:         in.Witness.AgentID,
-		ServerID:        in.Witness.ServerID,
-		CredentialID:    in.Witness.CredentialID,
-		ResourceID:      in.Witness.ResourceID,
-		TargetRef:       binding.TargetRef,
-		StartedAt:       now().UTC().Format(time.RFC3339),
-		Steps:           []campaign.StepObservation{},
+		ReportVersion:       campaign.RunReportVersion,
+		ScenarioID:          scenarioID,
+		ScenarioVersion:     scenarioVersion,
+		CampaignRunID:       runID,
+		EngagementID:        in.EngagementID,
+		AgentID:             in.Witness.AgentID,
+		ServerID:            in.Witness.ServerID,
+		CredentialID:        in.Witness.CredentialID,
+		ResourceID:          in.Witness.ResourceID,
+		TargetRef:           binding.TargetRef,
+		EvidenceFingerprint: in.Witness.Fingerprint(),
+		StartedAt:           runStarted.Format(time.RFC3339Nano),
+		Steps:               []campaign.StepObservation{},
 		Cleanup: campaign.CleanupReport{
 			Status: campaign.CleanupNotApplicable, Postcondition: "not_applicable",
 			ReceiptRetained: false,
 		},
 	}
-	report.AddStep(campaign.StepValidateBind, "bound")
+	report.AddStepAt(
+		campaign.StepValidateBind,
+		campaign.OperationValidation,
+		"bound",
+		runStarted,
+		now(),
+	)
 
 	prober := in.Prober
 	if prober == nil {
 		prober = defaultProber()
 	}
 
+	controlStarted := now()
 	control := prober.Probe(runCtx, campaign.ProbeRequest{
 		Host:        binding.Endpoint,
 		ResourceURI: in.Witness.ResourceIdentityInput,
@@ -110,9 +119,16 @@ func (s *Scenario) Run(ctx context.Context, in campaign.RunInput) (*campaign.Run
 		Insecure:    in.Insecure,
 		Timeout:     in.Timeout,
 	})
-	report.AddStep(campaign.StepControlProbe, probeObservation(control))
+	report.AddStepAt(
+		campaign.StepControlProbe,
+		campaign.OperationNetworkRead,
+		probeObservation(control),
+		controlStarted,
+		now(),
+	)
 	authed := campaign.ProbeResult{}
 	if budget.Exhaustion(runCtx) == nil {
+		authedStarted := now()
 		authed = prober.Probe(runCtx, campaign.ProbeRequest{
 			Host:        binding.Endpoint,
 			ResourceURI: in.Witness.ResourceIdentityInput,
@@ -120,14 +136,35 @@ func (s *Scenario) Run(ctx context.Context, in campaign.RunInput) (*campaign.Run
 			Insecure:    in.Insecure,
 			Timeout:     in.Timeout,
 		})
-		report.AddStep(campaign.StepAuthenticatedProbe, probeObservation(authed))
+		report.AddStepAt(
+			campaign.StepAuthenticatedProbe,
+			campaign.OperationNetworkRead,
+			probeObservation(authed),
+			authedStarted,
+			now(),
+		)
 	} else {
-		report.AddStep(campaign.StepAuthenticatedProbe, "budget_exhausted")
+		stepTime := now()
+		report.AddStepAt(
+			campaign.StepAuthenticatedProbe,
+			campaign.OperationNetworkRead,
+			"budget_exhausted",
+			stepTime,
+			stepTime,
+		)
 	}
 
+	classifyStarted := now()
 	outcome := campaign.Classify(control, authed)
-	report.AddStep(campaign.StepClassify, string(outcome))
+	report.AddStepAt(
+		campaign.StepClassify,
+		campaign.OperationDecision,
+		string(outcome),
+		classifyStarted,
+		now(),
+	)
 
+	emitStarted := now()
 	evidence := &campaign.Evidence{
 		ScenarioID:       scenarioID,
 		ScenarioVersion:  scenarioVersion,
@@ -145,13 +182,19 @@ func (s *Scenario) Run(ctx context.Context, in campaign.RunInput) (*campaign.Run
 		Witness:          in.Witness,
 	}
 
-	report.AddStep(campaign.StepEmit, evidenceObservation(outcome))
+	report.AddStepAt(
+		campaign.StepEmit,
+		campaign.OperationEvidenceEmission,
+		evidenceObservation(outcome),
+		emitStarted,
+		now(),
+	)
 	report.Oracle = campaign.OracleReport{
 		Type:        campaign.OracleTypeDifferentialCredentialReach,
 		Observation: probePairObservation(control, authed),
 		Outcome:     string(outcome),
 	}
-	report.CompletedAt = now().UTC().Format(time.RFC3339)
+	report.CompletedAt = now().UTC().Format(time.RFC3339Nano)
 	report.Budget = budget.Snapshot()
 	result := &campaign.RunResult{
 		Outcome:       outcome,

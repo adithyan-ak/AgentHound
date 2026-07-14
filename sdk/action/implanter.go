@@ -56,17 +56,18 @@ type ImplantPayload struct {
 // — Reverter logs an explicit warning if the post-revert hash doesn't
 // match (operator concurrent-edit detection).
 type ImplantReceipt struct {
+	ReceiptID        string
 	ModuleID         string
 	EngagementID     string
 	CampaignRunID    string
 	StepSequence     uint64
 	Target           Target
 	TargetID         string
-	InjectionContent string
-	SentinelStart    string
-	SentinelEnd      string
-	PreSHA256        string
-	PostSHA256       string
+	InjectionContent string `json:",omitempty"`
+	SentinelStart    string `json:",omitempty"`
+	SentinelEnd      string `json:",omitempty"`
+	PreSHA256        string `json:",omitempty"`
+	PostSHA256       string `json:",omitempty"`
 	AppliedAt        time.Time
 	DryRun           bool
 

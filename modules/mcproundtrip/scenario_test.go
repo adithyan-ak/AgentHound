@@ -75,6 +75,7 @@ func (f *fakeRoundTrip) Revert(ctx context.Context, _ action.Receipt) error {
 
 func testReceipt() *action.PoisonReceipt {
 	return &action.PoisonReceipt{
+		ReceiptID:       "opaque-receipt-test-id",
 		ModuleID:        "mcp.poison",
 		EngagementID:    "ENG-RT",
 		TargetID:        testTargetID,
@@ -207,6 +208,20 @@ func TestRoundtripMatrix(t *testing.T) {
 			if !rep.Standalone {
 				t.Error("report must be flagged Standalone (not an attack finding)")
 			}
+			if len(rep.ReceiptRefs) != 1 || rep.ReceiptRefs[0] != f.receipt.ReceiptID {
+				t.Errorf("receipt_refs = %v, want opaque receipt ID only", rep.ReceiptRefs)
+			}
+			for stepIndex, step := range rep.Steps {
+				if step.OperationClass == "" {
+					t.Errorf("step %d has no typed operation class: %+v", stepIndex, step)
+				}
+				if _, parseErr := time.Parse(time.RFC3339Nano, step.StartedAt); parseErr != nil {
+					t.Errorf("step %d started_at = %q: %v", stepIndex, step.StartedAt, parseErr)
+				}
+				if _, parseErr := time.Parse(time.RFC3339Nano, step.CompletedAt); parseErr != nil {
+					t.Errorf("step %d completed_at = %q: %v", stepIndex, step.CompletedAt, parseErr)
+				}
+			}
 			if rep.Oracle.Type != campaign.OracleTypeReversibleMutationRoundtrip {
 				t.Errorf("oracle_type = %q, want %q", rep.Oracle.Type, campaign.OracleTypeReversibleMutationRoundtrip)
 			}
@@ -263,6 +278,9 @@ func TestNoOpMutationReportsNotAppliedWithoutCleanupOrReceipt(t *testing.T) {
 	}
 	if rep.Cleanup.ReceiptRetained {
 		t.Error("no-op mutation must report no retained receipt")
+	}
+	if len(rep.ReceiptRefs) != 0 {
+		t.Fatalf("no-op mutation linked receipt refs: %v", rep.ReceiptRefs)
 	}
 	if f.readCalls != 0 || f.revertCalls != 0 {
 		t.Fatalf("no-op mutation read=%d revert=%d, want neither", f.readCalls, f.revertCalls)

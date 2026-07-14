@@ -137,6 +137,26 @@ func TestScenarioMatrix(t *testing.T) {
 			if len(res.Report.Steps) != 5 {
 				t.Fatalf("credreach steps = %+v, want fixed five-step sequence", res.Report.Steps)
 			}
+			if res.Report.EvidenceFingerprint != res.Evidence.Witness.Fingerprint() {
+				t.Fatalf(
+					"report evidence fingerprint = %q, want witness fingerprint",
+					res.Report.EvidenceFingerprint,
+				)
+			}
+			if len(res.Report.ReceiptRefs) != 0 {
+				t.Fatalf("read-only report linked receipts: %v", res.Report.ReceiptRefs)
+			}
+			for stepIndex, step := range res.Report.Steps {
+				if step.OperationClass == "" {
+					t.Errorf("step %d has no typed operation class: %+v", stepIndex, step)
+				}
+				if _, parseErr := time.Parse(time.RFC3339Nano, step.StartedAt); parseErr != nil {
+					t.Errorf("step %d started_at = %q: %v", stepIndex, step.StartedAt, parseErr)
+				}
+				if _, parseErr := time.Parse(time.RFC3339Nano, step.CompletedAt); parseErr != nil {
+					t.Errorf("step %d completed_at = %q: %v", stepIndex, step.CompletedAt, parseErr)
+				}
+			}
 			if res.Report.Budget.MutationLimit != 0 ||
 				res.Report.Budget.MutationsUsed != 0 {
 				t.Fatalf("read-only mutation budget = %+v", res.Report.Budget)

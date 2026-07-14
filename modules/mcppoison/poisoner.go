@@ -178,8 +178,13 @@ func (p *Poisoner) Poison(ctx context.Context, t action.Target, payload action.P
 	if injected == original {
 		return nil, ErrNoMutation
 	}
+	receiptID, err := action.NewReceiptID()
+	if err != nil {
+		return nil, fmt.Errorf("mcp poison: %w", err)
+	}
 
 	receipt := &action.PoisonReceipt{
+		ReceiptID:       receiptID,
 		ModuleID:        "mcp.poison",
 		EngagementID:    payload.EngagementID,
 		CampaignRunID:   payload.CampaignRunID,

@@ -51,6 +51,9 @@ func TestPoison_AppendsSentinelBlock(t *testing.T) {
 	if receipt.CampaignRunID != "run-instruction" || receipt.StepSequence != 4 {
 		t.Errorf("campaign metadata not copied to receipt: %+v", receipt)
 	}
+	if receipt.ReceiptID == "" {
+		t.Fatal("instruction mutation receipt has no opaque receipt ID")
+	}
 
 	got, err := os.ReadFile(path)
 	if err != nil {

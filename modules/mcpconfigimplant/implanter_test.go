@@ -38,6 +38,13 @@ func writeSeed(t *testing.T, path string) {
 	}
 }
 
+func statMode(info os.FileInfo) os.FileMode {
+	if info == nil {
+		return 0
+	}
+	return info.Mode().Perm()
+}
+
 func TestImplant_AddsServerAndRevertRemoves(t *testing.T) {
 	i := newImplanter(t)
 	dir := t.TempDir()
@@ -57,6 +64,34 @@ func TestImplant_AddsServerAndRevertRemoves(t *testing.T) {
 	}
 	if receipt.CampaignRunID != "run-implant" || receipt.StepSequence != 5 {
 		t.Errorf("campaign metadata not copied to receipt: %+v", receipt)
+	}
+	if receipt.ReceiptID == "" {
+		t.Fatal("new receipt has no opaque receipt ID")
+	}
+	if receipt.InjectionContent != "" || receipt.PreSHA256 != "" || receipt.PostSHA256 != "" {
+		t.Fatalf("new receipt retained plaintext or whole-file hashes: %+v", receipt)
+	}
+	if got, _ := receipt.Extra["entry_sha256"].(string); len(got) != 64 {
+		t.Fatalf("canonical entry hash = %q, want SHA-256", got)
+	}
+	if len(receipt.Extra) != 5 {
+		t.Fatalf("new receipt extra fields = %#v, want minimized contract", receipt.Extra)
+	}
+	receiptPath := filepath.Join(i.stateful.StateDir(), "ENG-1.json")
+	persisted, err := os.ReadFile(receiptPath)
+	if err != nil {
+		t.Fatalf("read persisted receipt: %v", err)
+	}
+	for _, token := range []string{"@attacker", "mcp-rat", "InjectionContent", "PreSHA256", "PostSHA256"} {
+		if strings.Contains(string(persisted), token) {
+			t.Fatalf("new receipt contains prohibited plaintext/hash field %q: %s", token, persisted)
+		}
+	}
+	if stat, err := os.Stat(i.stateful.StateDir()); err != nil || stat.Mode().Perm() != 0o700 {
+		t.Fatalf("receipt directory mode = %v err=%v, want 0700", statMode(stat), err)
+	}
+	if stat, err := os.Stat(receiptPath); err != nil || stat.Mode().Perm() != 0o600 {
+		t.Fatalf("receipt file mode = %v err=%v, want 0600", statMode(stat), err)
 	}
 
 	got, _ := os.ReadFile(path)
@@ -146,6 +181,67 @@ func TestRevertConflictsOnModifiedLiveServerEntry(t *testing.T) {
 	after, _ := os.ReadFile(path)
 	if string(after) != string(modified) {
 		t.Fatal("conflicting revert modified third-party server entry")
+	}
+}
+
+func TestLegacyPlaintextReceiptDecodesAndReverts(t *testing.T) {
+	implanter := newImplanter(t)
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	writeSeed(t, path)
+	if _, err := implanter.Implant(
+		context.Background(),
+		action.Target{},
+		action.ImplantPayload{
+			InjectionContent: evilEntry,
+			EngagementID:     "ENG-LEGACY",
+			Extras:           map[string]any{"file": path},
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	legacyReceipt := &action.ImplantReceipt{
+		ModuleID:         "mcp.config.implant",
+		EngagementID:     "ENG-LEGACY",
+		TargetID:         path,
+		InjectionContent: evilEntry,
+		Extra: map[string]any{
+			"file":         path,
+			"servers_key":  "mcpServers",
+			"server_name":  "agenthound-implant-ENG-LEGACY",
+			"file_existed": true,
+			"orig_mode":    "600",
+		},
+	}
+	legacyEnvelope := []map[string]any{{
+		"module_id": "mcp.config.implant",
+		"type":      "implant",
+		"receipt":   legacyReceipt,
+	}}
+	encoded, err := json.MarshalIndent(legacyEnvelope, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptPath := filepath.Join(implanter.stateful.StateDir(), "ENG-LEGACY.json")
+	if err := os.WriteFile(receiptPath, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := implanter.stateful.ReadReceipts("ENG-LEGACY")
+	if err != nil {
+		t.Fatalf("decode legacy receipt: %v", err)
+	}
+	if len(decoded) != 1 {
+		t.Fatalf("decoded legacy receipts = %d, want 1", len(decoded))
+	}
+	if err := implanter.Revert(context.Background(), decoded[0]); err != nil {
+		t.Fatalf("revert decoded legacy receipt: %v", err)
+	}
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(current), "agenthound-implant-ENG-LEGACY") {
+		t.Fatalf("legacy plaintext receipt did not remove named entry: %s", current)
 	}
 }
 

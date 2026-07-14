@@ -142,6 +142,7 @@ func runRoundtrip(
 	})
 	defer cancel()
 	now := in.Clock()
+	runStarted := now().UTC()
 	report := &campaign.RunReport{
 		ReportVersion:    campaign.RunReportVersion,
 		ScenarioID:       scenarioID,
@@ -151,19 +152,32 @@ func runRoundtrip(
 		Standalone:       true,
 		MutationTargetID: cfg.targetID,
 		TargetRef:        campaign.SanitizedTargetReference(in.Host),
-		StartedAt:        now().UTC().Format(time.RFC3339),
+		StartedAt:        runStarted.Format(time.RFC3339Nano),
 		Steps:            []campaign.StepObservation{},
 		Cleanup: campaign.CleanupReport{
 			Status: campaign.CleanupIndeterminate, Postcondition: "unconfirmed",
 		},
 	}
-	report.AddStep(campaign.StepAuthorizeMutation, "authorized")
+	report.AddStepAt(
+		campaign.StepAuthorizeMutation,
+		campaign.OperationAuthorization,
+		"authorized",
+		runStarted,
+		now(),
+	)
 
+	mutateStarted := now()
 	if err := campaign.ConsumeMutation(runCtx); err != nil {
-		report.AddStep(campaign.StepMutate, "budget_exhausted")
-		report.AddStep(campaign.StepVerifyInjected, "not_run")
-		report.AddStep(campaign.StepRevert, "not_run")
-		report.AddStep(campaign.StepVerifyOriginal, "unconfirmed")
+		report.AddStepAt(
+			campaign.StepMutate,
+			campaign.OperationTargetMutation,
+			"budget_exhausted",
+			mutateStarted,
+			now(),
+		)
+		addInstantStep(report, now, campaign.StepVerifyInjected, campaign.OperationTargetVerification, "not_run")
+		addInstantStep(report, now, campaign.StepRevert, campaign.OperationCleanup, "not_run")
+		addInstantStep(report, now, campaign.StepVerifyOriginal, campaign.OperationTargetVerification, "unconfirmed")
 		report.Oracle = campaign.OracleReport{
 			Type:        campaign.OracleTypeReversibleMutationRoundtrip,
 			Observation: "budget_exhausted", Outcome: string(campaign.OracleIndeterminate),
@@ -177,17 +191,45 @@ func runRoundtrip(
 	// StepSequence is assigned by this single run orchestrator immediately
 	// before invoking the mutator that persists the receipt.
 	receipt, mutateErr := rt.Mutate(runCtx, 1)
+	mutateCompleted := now()
 	if errors.Is(mutateErr, mcppoison.ErrNoMutation) && receipt == nil {
-		report.AddStep(campaign.StepMutate, string(campaign.OracleMutationNotApplied))
+		report.AddStepAt(
+			campaign.StepMutate,
+			campaign.OperationTargetMutation,
+			string(campaign.OracleMutationNotApplied),
+			mutateStarted,
+			mutateCompleted,
+		)
 	} else if mutateErr != nil {
-		report.AddStep(campaign.StepMutate, "failed")
+		report.AddStepAt(
+			campaign.StepMutate,
+			campaign.OperationTargetMutation,
+			"failed",
+			mutateStarted,
+			mutateCompleted,
+		)
 	} else {
-		report.AddStep(campaign.StepMutate, "applied")
+		report.AddStepAt(
+			campaign.StepMutate,
+			campaign.OperationTargetMutation,
+			"applied",
+			mutateStarted,
+			mutateCompleted,
+		)
 	}
 	report.Cleanup.ReceiptRetained = receipt != nil
+	if receipt != nil {
+		report.LinkReceipt(receipt.ReceiptID)
+	}
 
 	if errors.Is(mutateErr, mcppoison.ErrNoMutation) && receipt == nil {
-		report.AddStep(campaign.StepVerifyInjected, string(campaign.OracleMutationNotApplied))
+		addInstantStep(
+			report,
+			now,
+			campaign.StepVerifyInjected,
+			campaign.OperationTargetVerification,
+			string(campaign.OracleMutationNotApplied),
+		)
 		report.Oracle = campaign.OracleReport{
 			Type:        campaign.OracleTypeReversibleMutationRoundtrip,
 			Observation: string(campaign.OracleMutationNotApplied),
@@ -195,8 +237,20 @@ func runRoundtrip(
 		}
 		forwardBudget, forwardErr := budget.FreezeForward(runCtx)
 		cancel()
-		report.AddStep(campaign.StepRevert, string(campaign.CleanupNotApplicable))
-		report.AddStep(campaign.StepVerifyOriginal, "not_applicable")
+		addInstantStep(
+			report,
+			now,
+			campaign.StepRevert,
+			campaign.OperationCleanup,
+			string(campaign.CleanupNotApplicable),
+		)
+		addInstantStep(
+			report,
+			now,
+			campaign.StepVerifyOriginal,
+			campaign.OperationTargetVerification,
+			"not_applicable",
+		)
 		report.Cleanup = campaign.CleanupReport{
 			Status: campaign.CleanupNotApplicable, Postcondition: "not_applicable",
 			ReceiptRetained: false,
@@ -208,11 +262,18 @@ func runRoundtrip(
 		return report, mcppoison.ErrNoMutation
 	}
 
+	verifyInjectedStarted := now()
 	oracle := campaign.OracleIndeterminate
 	if receipt != nil && mutateErr == nil {
 		oracle = classifyOracle(runCtx, rt, receipt)
 	}
-	report.AddStep(campaign.StepVerifyInjected, string(oracle))
+	report.AddStepAt(
+		campaign.StepVerifyInjected,
+		campaign.OperationTargetVerification,
+		string(oracle),
+		verifyInjectedStarted,
+		now(),
+	)
 	report.Oracle = campaign.OracleReport{
 		Type:        campaign.OracleTypeReversibleMutationRoundtrip,
 		Observation: string(oracle),
@@ -226,9 +287,17 @@ func runRoundtrip(
 	cancel()
 	cleanupCtx, cleanupCancel := budget.CleanupContext(90 * time.Second)
 	defer cleanupCancel()
+	revertStarted := now()
 	cleanup := executeRunCleanup(cleanupCtx, in, rt, receipt)
-	report.AddStep(campaign.StepRevert, string(cleanup.Status))
+	report.AddStepAt(
+		campaign.StepRevert,
+		campaign.OperationCleanup,
+		string(cleanup.Status),
+		revertStarted,
+		now(),
+	)
 
+	verifyOriginalStarted := now()
 	postcondition := "unconfirmed"
 	if cleanup.Status == campaign.CleanupRestored &&
 		(cleanup.ReceiptsSelected < 1 || receipt == nil) {
@@ -247,7 +316,13 @@ func runRoundtrip(
 			postcondition = "original_confirmed"
 		}
 	}
-	report.AddStep(campaign.StepVerifyOriginal, postcondition)
+	report.AddStepAt(
+		campaign.StepVerifyOriginal,
+		campaign.OperationTargetVerification,
+		postcondition,
+		verifyOriginalStarted,
+		now(),
+	)
 	report.Cleanup = campaign.CleanupReport{
 		Status:          cleanup.Status,
 		Postcondition:   postcondition,
@@ -296,8 +371,19 @@ func executeRunCleanup(
 }
 
 func finishReport(report *campaign.RunReport, budget campaign.BudgetReport, now func() time.Time) {
-	report.CompletedAt = now().UTC().Format(time.RFC3339)
+	report.CompletedAt = now().UTC().Format(time.RFC3339Nano)
 	report.Budget = budget
+}
+
+func addInstantStep(
+	report *campaign.RunReport,
+	now func() time.Time,
+	step campaign.StepName,
+	operationClass campaign.OperationClass,
+	observation string,
+) {
+	at := now()
+	report.AddStepAt(step, operationClass, observation, at, at)
 }
 
 // classifyOracle re-reads the live state after the mutation and decides whether

@@ -614,7 +614,7 @@ components:
       properties:
         state:
           type: string
-          enum: [unknown, observed_signal, inferred, hypothesis, reference_only]
+          enum: [unknown, observed_signal, inferred, hypothesis, reference_only, verified]
         detector:
           type: string
         match_type:
@@ -629,6 +629,128 @@ components:
           type: string
         correlation:
           type: string
+        verification:
+          $ref: "#/components/schemas/FindingVerification"
+
+    FindingVerification:
+      type: object
+      additionalProperties: false
+      required:
+        - scenario_id
+        - scenario_version
+        - campaign_run_id
+        - verified_at
+        - oracle_type
+        - outcome
+        - control_stage
+        - control_status
+        - control_resource_addressed
+        - authed_stage
+        - authed_status
+        - authed_resource_addressed
+        - cleanup_status
+      properties:
+        scenario_id:
+          type: string
+          minLength: 1
+        scenario_version:
+          type: integer
+          minimum: 1
+        campaign_run_id:
+          type: string
+          minLength: 1
+        verified_at:
+          type: string
+          format: date-time
+        oracle_type:
+          type: string
+          minLength: 1
+        outcome:
+          type: string
+          minLength: 1
+        control_stage:
+          type: string
+          enum: [initialize, resource_read]
+        control_status:
+          type: string
+          enum: [allowed, denied, not_found, malformed_auth, protocol_error, ambiguous, timeout, error]
+        control_resource_addressed:
+          type: boolean
+        authed_stage:
+          type: string
+          enum: [initialize, resource_read]
+        authed_status:
+          type: string
+          enum: [allowed, denied, not_found, malformed_auth, protocol_error, ambiguous, timeout, error]
+        authed_resource_addressed:
+          type: boolean
+        cleanup_status:
+          type: string
+          enum: [not_applicable, restored, conflict, indeterminate, failed]
+
+    CampaignWitness:
+      type: object
+      additionalProperties: false
+      required:
+        - schema_version
+        - topology_normalization_version
+        - publication_revision
+        - predicted_edge_kind
+        - agent_id
+        - agent_kind
+        - credential_id
+        - credential_kind
+        - credential_value_hash
+        - credential_merge_key
+        - server_id
+        - server_kind
+        - resource_id
+        - resource_kind
+        - resource_identity_input
+        - evidence_node_ids
+        - evidence_node_kinds
+      properties:
+        schema_version:
+          type: integer
+          enum: [2]
+        topology_normalization_version:
+          type: integer
+          enum: [1]
+        publication_revision:
+          type: integer
+          minimum: 1
+        predicted_edge_kind:
+          type: string
+          enum: [CAN_REACH]
+        agent_id: { type: string, minLength: 1 }
+        agent_kind: { type: string, enum: [AgentInstance] }
+        credential_id: { type: string, minLength: 1 }
+        credential_kind: { type: string, enum: [Credential] }
+        credential_value_hash: { type: string, minLength: 1 }
+        credential_merge_key: { type: string, enum: [value_hash] }
+        server_id: { type: string, minLength: 1 }
+        server_kind: { type: string, enum: [MCPServer] }
+        resource_id: { type: string, minLength: 1 }
+        resource_kind: { type: string, enum: [MCPResource] }
+        resource_identity_input: { type: string, minLength: 1 }
+        evidence_node_ids:
+          type: array
+          minItems: 1
+          items: { type: string, minLength: 1 }
+        evidence_node_kinds:
+          type: array
+          minItems: 1
+          items: { type: string, minLength: 1 }
+
+    FindingWitnessResponse:
+      type: object
+      additionalProperties: false
+      required: [witness, projection]
+      properties:
+        witness:
+          $ref: "#/components/schemas/CampaignWitness"
+        projection:
+          $ref: "#/components/schemas/ProjectionIdentity"
 
     TriageState:
       type: object
@@ -1935,6 +2057,36 @@ paths:
                 $ref: "#/components/schemas/FindingDetail"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /analysis/findings/{id}/witness:
+    get:
+      summary: Export campaign witness
+      description: >-
+        Exports the sanitized witness for one predicted CAN_REACH finding from
+        a stable complete published projection. The witness contains no clear
+        endpoint, raw credential, payload, receipt, or relationship ID.
+      operationId: exportFindingWitness
+      tags: [Analysis]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[0-9a-f]{16}$"
+      responses:
+        "200":
+          description: Sanitized campaign witness and projection identity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FindingWitnessResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/ProjectionConflict"
 
   /analysis/prebuilt:
     get:

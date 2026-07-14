@@ -60,6 +60,7 @@ type PoisonPayload struct {
 // poison "applied", so a crash between the HTTP write and the receipt
 // write would leave a tampered target without a revert path.
 type PoisonReceipt struct {
+	ReceiptID       string
 	ModuleID        string
 	EngagementID    string
 	CampaignRunID   string
