@@ -159,6 +159,13 @@ MCPServer(s2) -[HAS_ENV_VAR]-> Credential -> Identity -> MCPServer(s2) -> MCPToo
 Requires explicit unauthenticated/weak evidence for s1; missing auth evidence
 does not match. Confidence: 0.6.
 
+When multiple credential paths connect the same `(agent, resource)`, the
+processor orders candidates by the complete stable object-ID tuple
+`(a, s1, t1, s2, c, i, t2, r)` and selects the first before `MERGE`.
+Neo4j relationship IDs are retained only as post-selection evidence and never
+participate in winner selection, so witness topology cannot flip with
+relationship recreation order.
+
 **Verified-reach upgrade (3rd pass):** after building the CAN_REACH edges,
 `can_reach` re-correlates any persisted per-agent raw
 `CREDENTIAL_REACH_VERIFIED` edge
@@ -168,6 +175,12 @@ rebuilt edges. On a full match it **upgrades the CAN_REACH edge in place** —
 scenario/run/oracle/staged-observation/cleanup metadata. It creates **no** new edge and no second finding,
 so risk is never double-counted; `findings.go` reads `reach_evidence_state` and
 raises the finding's evidence state to `verified`.
+
+The ingest pipeline admits that raw campaign edge only after generic validation
+and campaign-specific envelope/current-topology prevalidation, all before
+normalization, `BeginScan`, canonical writes, and reconciliation. Rejected
+positive or negative submissions leave canonical edges and coverage untouched;
+diagnostics are limited to a sanitized Postgres rejection audit.
 
 Before the Cypher upgrade, Go reconstructs witness v2 from each raw edge and
 recomputes its unkeyed fingerprint; invalid evidence remains stored for

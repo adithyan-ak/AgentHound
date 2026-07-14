@@ -451,7 +451,14 @@ The runner ships two scenarios. The first is **`cred-reach`** — a READ-ONLY di
 | exact `resource_read` denied | exact same `resource_read` denied | `not_observed` | nothing — retires only this agent's prior verification |
 | 404 / malformed auth / protocol error / ambiguous / timeout | (any) | `indeterminate` | nothing — prior evidence preserved |
 
-Initialization denial is never a valid negative. Any missing/wrong resource, malformed/protocol response, timeout, incomplete stage, or budget exhaustion is indeterminate and preserves prior credential evidence. A successful control read may still emit the independent anonymous-access fact without retiring credential evidence. The scenario mutates nothing, so cleanup is `not_applicable`.
+Initialization denial is never a valid negative. Only a typed HTTP response that
+actually observed status `401` or `403` is a definitive denial; auth-like target
+text and JSON-RPC messages are indeterminate. Any missing/wrong resource,
+malformed/protocol response, timeout, incomplete stage, or budget exhaustion is
+indeterminate and preserves prior credential evidence. A successful control
+read may still emit the independent anonymous-access fact without retiring
+credential evidence. The scenario mutates nothing, so cleanup is
+`not_applicable`.
 
 ```bash
 # 1. export the witness on the analysis box (server)
@@ -479,9 +486,9 @@ agenthound campaign https://mcp.example/mcp --scenario cred-reach \
 
 **Credential material is supplied out of band** (env var or stdin) and hash-matched locally against the witness `value_hash`; the raw value is never logged, never a flag, and never written to the graph. A hash-only credential (no executable material) is a **precondition failure** (not runnable) — distinct from an `indeterminate` outcome.
 
-Before any request, the runner trims surrounding whitespace once, validates an absolute HTTP(S) endpoint, and binds the untouched trimmed spelling to `ResolveMCPServerIdentity("http", input)`. The endpoint never enters the witness. Query bytes remain identity-significant: fixed known-sensitive decoded keys and values exactly equal to the supplied campaign credential are rejected as best-effort defense-in-depth; arbitrary other query bytes are accepted, but the entire query is always redacted from reports, evidence, witnesses, errors, and logs. This is not a universal query-secret detector. Credentials are forwarded only to the exact lowercased scheme + hostname + effective-port origin, including redirects.
+Before any request, the runner trims surrounding whitespace once, validates an absolute HTTP(S) endpoint, and binds the untouched trimmed spelling to `ResolveMCPServerIdentity("http", input)`. The endpoint never enters the witness. Query bytes remain identity-significant: fixed known-sensitive decoded keys and values exactly equal to the supplied campaign credential are rejected as best-effort defense-in-depth; arbitrary other query bytes are accepted, but the entire query is always redacted from reports, evidence, witnesses, errors, and logs. This is not a universal query-secret detector. Credentials are forwarded only to the exact lowercased scheme + hostname + effective-port origin, including redirects. The MCP SDK's exact-endpoint close `DELETE` is bounded by the original absolute scenario deadline and counted as an outbound request; AgentHound does not apply a blanket HTTP-client timeout that would break long-lived SSE.
 
-Each committed scenario emits the same bounded, versioned `RunReport` with fixed local steps, sanitized target references, start/completion times, and explicit actual outbound-request, mutation, and elapsed-time limits/usage. Redirect/retry `RoundTrip` dispatches count as requests. Budget exhaustion is indeterminate/unsafe, never a valid negative.
+Each committed scenario emits the same bounded, versioned `RunReport` with fixed local steps, sanitized target references, report start/completion times, per-step RFC3339Nano start/end times, typed operation classes, an applicable sanitized evidence/witness fingerprint, opaque receipt references, and explicit actual outbound-request, mutation, and elapsed-time limits/usage. Reports never contain receipt paths or receipt/content hashes. Redirect/retry `RoundTrip` dispatches count as requests. Budget exhaustion is indeterminate/unsafe, never a valid negative.
 
 **Authorization gate:** the first `campaign` invocation prompts for `AUTHORIZED` and writes `~/.agenthound/campaign-acknowledged`. When stdin is consumed by `--witness -`/`--credential-stdin`, acknowledge non-interactively with a pre-existing sentinel or `AGENTHOUND_CAMPAIGN_AUTHORIZED=AUTHORIZED`.
 
@@ -494,7 +501,7 @@ The second scenario is **`mcp-poison-roundtrip`** — a STANDALONE target-mutati
 3. issue the conflict-aware revert;
 4. re-read and confirm the original is restored — the **CLEANUP**.
 
-The oracle and cleanup are reported **separately** and computed **independently**. A mutating run requires both campaign authorization and the distinct poison/destructive acknowledgement. `campaign_run_id` is allocated before mutator construction; each mutator receipt carries that run ID and a positive invocation-order `step_sequence`. Active cleanup selects the exact engagement+run across all stateful modules, rejects missing/duplicate sequence metadata, reverts in global descending sequence order under a bounded non-cancellable context, and fail-stops on the first conflict/indeterminate/failure. Receipts remain immutable after success or failure. The final `RunReport` is emitted before an unsafe/unconfirmed cleanup returns nonzero.
+The oracle and cleanup are reported **separately** and computed **independently**. A mutating run requires both campaign authorization and the distinct poison/destructive acknowledgement. `campaign_run_id` is allocated before mutator construction; each mutator receipt carries that run ID, a random opaque `receipt_id`, and a positive invocation-order `step_sequence`. A no-op (`original == injected`) writes neither target nor receipt and reports `mutation_not_applied` with cleanup `not_applicable`. Active cleanup selects the exact engagement+run across all stateful modules, rejects missing/duplicate sequence metadata, reverts in global descending sequence order under a bounded non-cancellable context, and fail-stops on the first conflict/indeterminate/failure. Forward elapsed/usage accounting is frozen before that separately timed cleanup starts. Receipts remain immutable after success or failure. The final `RunReport` is emitted before an unsafe/unconfirmed cleanup returns nonzero.
 
 | Oracle | Cleanup | Meaning |
 |--------|---------|---------|

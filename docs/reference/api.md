@@ -200,6 +200,16 @@ serialized lifecycle: validate →
 normalize → freeze pre-write totals → write → reconcile complete observation
 domains → post-process → freeze post-analysis totals → snapshot → publish.
 
+Campaign submissions add a scenario-specific prevalidation stage immediately
+after generic validation and before normalization, `BeginScan`, graph writes, or
+coverage reconciliation. Both positive and negative artifacts must match their
+bounded witness/staged-observation envelope and current topology. A rejection
+cannot overwrite canonical campaign evidence or retire coverage. It creates only
+a failed Postgres scan-audit row whose `metadata.campaign_rejection` contains a
+random rejection ID, sanitized run/scenario/version/outcome fields, and fixed
+reason codes—never the raw artifact, witness, fingerprint, digest, endpoint, or
+credential material.
+
 ```json
 // Request body (abridged; see graph-model.md for the complete schema)
 {
@@ -424,10 +434,13 @@ IDs/kinds. The endpoint remains out-of-band. It carries no Neo4j relationship
 IDs, arbitrary properties, or raw credential. Its unkeyed fingerprint is a
 consistency checksum, not authenticity or authorization.
 
-Returns `404` when no runnable credential-gated `CAN_REACH` prediction matches
-the finding (e.g. the credential is a synthetic identity with no observable
-material), and a projection-conflict error when no stable published projection
-is available.
+Returns `400` for a malformed finding ID, `404` when no runnable
+credential-gated `CAN_REACH` prediction matches the finding (e.g. the credential
+is a synthetic identity with no observable material), and `409` when no stable
+published projection is available or the projection changes during the guarded
+read. The served OpenAPI contract defines the complete witness response and
+`FindingVerification` schemas; `evidence.verification` remains optional for
+non-verified findings.
 
 ```json
 {

@@ -275,7 +275,11 @@ func TestPrevalidateCampaignArtifactsKeepAgentsIndependent(t *testing.T) {
 	db := &graph.MockGraphDB{
 		QueryFunc: func(_ context.Context, cypher string, params map[string]any) ([]map[string]any, error) {
 			if cypher == campaignCurrentTopologyValidationQuery {
-				validatedAgents = append(validatedAgents, params["agent_id"].(string))
+				agentID, ok := params["agent_id"].(string)
+				if !ok {
+					t.Fatalf("agent_id parameter has type %T", params["agent_id"])
+				}
+				validatedAgents = append(validatedAgents, agentID)
 				return []map[string]any{{"matches": int64(1)}}, nil
 			}
 			return nil, nil

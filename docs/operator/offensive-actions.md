@@ -27,8 +27,9 @@ Four gates, all on by default. Decision G in `docs/plans/v0.3-v0.4-implementatio
 
 - Receipt files are enforced at exactly `0o600`; receipt directories are enforced at exactly `0o700`. Existing permissive paths are explicitly tightened before reads/writes, and files are chmod'd after atomic replacement so umask cannot weaken the policy.
 - One file per `(module-id, engagement-id)` tuple. Multiple receipts for the same engagement append to the same file as a JSON array.
-- Receipts include `module_id`, `target`, `target_id`, rollback-required original/injected mutation state, `mode`, `applied_at`, and `dry_run`. Campaign mutations also carry `campaign_run_id` and a positive invocation-order `step_sequence`; `applied_at` is diagnostic only.
-- File-mutating modules (`instruction.poison`, `mcp.config.implant`) additionally record `file_existed` and `orig_mode` in the receipt's `Extra` map, so revert can restore the exact prior state — see [restore fidelity](#restore-fidelity) below.
+- New receipts carry a random opaque `receipt_id` that is independent of target paths and receipt contents. Campaign reports link only this ID; they never expose receipt paths or receipt/content hashes.
+- Receipts include `module_id`, `target`, `target_id`, the rollback state required by that module, `mode`, `applied_at`, and `dry_run`. Campaign mutations also carry `campaign_run_id` and a positive invocation-order `step_sequence`; `applied_at` is diagnostic only.
+- File-mutating modules record original file existence/mode so revert can restore the exact prior state. New `mcp.config.implant` receipts additionally store only the servers key, server name, and canonical implanted-entry SHA-256 for conflict detection—never the injected JSON plaintext or a whole-file hash. Legacy protected receipts containing plaintext `InjectionContent`, `file`, and `orig_mode` remain decodable and revertible.
 - Override the state root with `AGENTHOUND_STATE_DIR` (used by tests; production should leave it alone).
 - Receipts are the only permitted store for rollback-required original/injected mutation values. Raw credentials and auth tokens are forbidden even in receipts; auth tokens are supplied to Revert through context.
 
@@ -37,7 +38,7 @@ Four gates, all on by default. Decision G in `docs/plans/v0.3-v0.4-implementatio
 For modules that mutate on-disk files, `revert` restores the file's prior state precisely:
 
 - **File that did not exist before** is **removed** on revert (not left behind as an empty shell), restoring the original absent state. If the operator or client added other content to that file after the mutation, revert keeps the file and only drops the agenthound-owned entry/block.
-- **Pre-existing file** keeps its **original permission mode** — revert no longer narrows it to `0o600`. The mode captured at mutation time (`orig_mode`) is reapplied.
+- **Pre-existing file** keeps its **original permission mode** — revert no longer narrows it to `0o600`. The mode captured at mutation time (`orig_mode`, or `original_mode` in minimized config receipts) is reapplied.
 - Receipts written before these fields existed default to the prior conservative behavior (leave the file, mode `0o600`), so older receipts still revert safely.
 
 ## Shipped destructive modules
@@ -46,7 +47,7 @@ For modules that mutate on-disk files, `revert` restores the file's prior state 
 |---|---|---|---|
 | `mcp.tool.description` | `poison` | `MCPServer` → `MCPTool.description` | PUT the original description back via the operator-specified admin endpoint. Idempotent — checks current state before writing. |
 | `instruction.file` | `poison`, `implant` | operator machine → `CLAUDE.md` / `AGENTS.md` / `.cursorrules` | Rewrite the file to remove the sentinel-bracketed block; if the file did not exist before mutation (`file_existed=false` on the receipt), remove it entirely. Pre-existing files keep their original permission mode (`orig_mode`). |
-| `mcp.config.malicious-server` | `implant` | operator machine → MCP client config (`.cursor/mcp.json` etc.) | Remove the AgentHound-owned entry from the config's `mcpServers` (or equivalent) map; drop the file if AgentHound created it. |
+| `mcp.config.malicious-server` | `implant` | operator machine → MCP client config (`.cursor/mcp.json` etc.) | Hash-compare the current named entry against the canonical entry hash, then remove only that entry; preserve unrelated edits and drop the file only when AgentHound created it and no unrelated content remains. Legacy plaintext receipts use the same conflict-aware fallback. |
 
 `agenthound implant --type instruction.file` accepts the Poisoner-backed module too — the implant dispatcher falls back to the shared poison runner when no Implanter matches the requested target kind, so operators get consistent CLI ergonomics regardless of which contract the module implements.
 
@@ -185,7 +186,7 @@ agenthound campaign https://mcp.example/mcp --scenario mcp-poison-roundtrip \
 Behavior and safety:
 
 - **Oracle and cleanup are independent.** The oracle (did the mutation land?) is decided from the post-mutation re-read; the cleanup (was the original restored?) is decided from the conflict-aware revert plus a post-revert re-read. A verified mutation with a failed cleanup (e.g. a third party edited the target mid-run) is reported honestly, never masked.
-- **Distinct consent and bounded execution.** `--commit` requires both the campaign acknowledgement and poison/destructive acknowledgement. The shared `RunReport` records fixed steps plus actual outbound HTTP requests, mutator/reverter invocations, and elapsed-time limits/usage. Budget exhaustion is unsafe/indeterminate.
+- **Distinct consent and bounded execution.** `--commit` requires both the campaign acknowledgement and poison/destructive acknowledgement. The shared `RunReport` records per-step RFC3339Nano start/end timestamps, typed operation classes, sanitized evidence/witness fingerprints, opaque receipt IDs, and actual outbound HTTP requests, forward mutator invocations, and elapsed-time limits/usage. Budget exhaustion is unsafe/indeterminate; cleanup cannot change frozen forward accounting.
 - **Authoritative run cleanup.** The run ID exists before mutator construction; each receipt gets one positive sequence immediately before invocation. Cleanup selects the exact engagement+run across all modules, rejects missing/duplicate metadata before writing, reverts globally newest-sequence first under a separate bounded non-cancellable context, and fail-stops. It then re-reads the target before reporting `restored`; unsafe cleanup emits the final report and exits nonzero.
 - **Immutable receipts and fallback.** Successful and failed cleanup retain receipts unchanged. `agenthound revert <engagement>` remains the crash/state-loss fallback over legacy and run-tagged receipts, with intentionally different per-file LIFO/best-effort behavior.
 - **No new graph edge.** Round-trip evidence stays in the bounded CLI `RunReport`; it is deliberately not emitted as a scored graph edge, finding, server execution API, or UI execution surface.
@@ -194,6 +195,14 @@ Behavior and safety:
 The campaign runner is deliberately two fixed local sequences. It has no DAG or
 generic scheduler, server-side execution API, impact oracle, `ATTACK_PROVEN`
 state, cleanup journal/state machine/CAS, or publication-revision equality gate.
+
+The closure regression builds the real `agenthound` collector binary, exports a
+production witness to a temporary file, exercises the real authorization/env/CLI
+surface against an authenticated MCP stub, decodes the emitted artifact, and
+passes it through the real ingest and processor-rebuild path. It asserts that
+exactly one source-agent finding upgrades; adjacent real-pipeline cases preserve
+canonical state for invalid positive/negative and tampered artifacts and keep
+the second shared-path agent predicted.
 
 ## See also
 

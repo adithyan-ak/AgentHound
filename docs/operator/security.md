@@ -172,6 +172,11 @@ or log it. Its handling is deliberately stricter than `--include-credential-valu
   lowercased scheme + hostname + effective port matches the original endpoint.
   Path/query do not affect origin; scheme downgrade, host/port change, malformed
   authority, or missing authority fails closed on every redirect request.
+- **Typed denial and bounded close.** Only an actually observed typed HTTP
+  `401`/`403` is a definitive auth denial; target-controlled text and JSON-RPC
+  auth-like messages remain indeterminate. The MCP SDK's exact-endpoint close
+  `DELETE` inherits the original absolute scenario deadline and is counted even
+  when it times out. No blanket client timeout is applied to SSE.
 - **Read-only.** The `cred-reach` scenario issues `resources/read` for the exact
   predicted resource only (unauth control + authed probe). It mutates nothing, so
   it needs no receipts or rollback.
@@ -187,6 +192,12 @@ or log it. Its handling is deliberately stricter than `--include-credential-valu
   identity/hash/kind/stage/outcome/topology field against current graph state.
   The positive publication revision is provenance only; equality is not proof or
   a promotion gate. The digest is a consistency checksum, not authenticity.
+- **Prevalidation before canonical state.** Positive and negative campaign
+  artifacts are checked immediately after generic ingest validation and before
+  normalization, `BeginScan`, graph writes, or reconciliation. A rejection
+  cannot overwrite evidence or retire coverage. Postgres retains only a random
+  rejection ID plus bounded sanitized run/scenario/outcome/reason codes—never
+  the artifact, witness, digest, endpoint, or secret.
 
 ### Campaign runner: reversible mutation round-trip
 
@@ -206,18 +217,30 @@ the `mcp.poison` module), so it inherits the destructive-primitive posture:
   non-cancellable, and fail-stop; engagement recovery is the intentionally
   different per-file-LIFO, continue-on-error fallback. Oracle and cleanup remain
   independent, and unsafe/unconfirmed cleanup emits its report before nonzero exit.
+- **No-op rejection and frozen accounting.** `original == injected` is rejected
+  before receipt persistence or target write and reports cleanup as
+  `not_applicable`. Forward request/mutation/elapsed usage and exhaustion are
+  frozen before separately timed cleanup begins.
 - **Bounded, secret-free reporting.** Both fixed scenarios use the same versioned
-  `RunReport`: fixed steps, sanitized target reference, timestamps, typed
-  oracle/cleanup, and explicit actual HTTP-request/mutation/elapsed limits and
-  usage. Redirect/retry dispatches count. Reports cannot carry request/response
-  bodies, resource contents, target error text, original/injected mutation state,
-  credentials, or auth tokens.
+  `RunReport`: fixed steps, sanitized target reference, per-step RFC3339Nano
+  start/end timestamps, typed operation classes, applicable sanitized
+  evidence/witness fingerprint, opaque receipt IDs, typed oracle/cleanup, and
+  explicit actual HTTP-request/mutation/elapsed limits and usage. Redirect/retry
+  dispatches count. Reports cannot carry receipt paths or hashes,
+  request/response bodies, resource contents, target error text,
+  original/injected mutation state, credentials, or auth tokens.
 - **Protected immutable receipts.** Receipt directories/files are enforced at
   exactly `0700`/`0600`, including tightening existing permissive paths.
   Rollback-required original/injected mutation state is allowed only there.
   Receipts remain unchanged after success/failure; raw credentials/tokens are
   forbidden. Conflict-aware live-state checks enable partial retry, but completed
   stacked rollback replay is not promised universally idempotent.
+- **Minimized config receipts.** Every new receipt has a random opaque ID.
+  `mcp.config.implant` stores the target path plus only the servers key/name,
+  canonical named-entry hash, and original file existence/mode required for
+  safe reversion; it stores no injected JSON plaintext or whole-file hash.
+  Protected legacy plaintext receipts still decode and use conflict-aware
+  reversion.
 - **Not an attack finding.** It emits no graph edge and makes no claim about a
   predicted credential path — the round-trip evidence stays in the campaign
   transport. It validates only that the mutation/rollback machinery works.

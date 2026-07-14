@@ -1,20 +1,24 @@
 package ingest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
-	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/adithyan-ak/agenthound/modules/credreach"
 	"github.com/adithyan-ak/agenthound/sdk/campaign"
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
@@ -25,7 +29,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestIntegrationCampaignExportProbeIngestPromotesOnlySourceAgent(t *testing.T) {
+func TestIntegrationCompiledCampaignExportProbeIngestPromotesOnlySourceAgent(t *testing.T) {
 	ctx, pipeline, db, _, pool := publicationIntegrationHarness(t, false)
 	const (
 		credentialMaterial = "campaign-vertical-secret"
@@ -192,20 +196,23 @@ func TestIntegrationCampaignExportProbeIngestPromotesOnlySourceAgent(t *testing.
 		)
 	}
 
-	run, err := (&credreach.Scenario{}).Run(ctx, campaign.RunInput{
-		Witness: *witness, CredentialMaterial: credentialMaterial,
-		Host: httpServer.URL, EngagementID: "ENG-VERTICAL",
-		RunID: "run-vertical", Commit: true, Timeout: 5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("live credreach run: %v", err)
-	}
-	if run.Outcome != campaign.OutcomeCredentialGatedReachVerified {
-		t.Fatalf("live outcome = %q report=%+v", run.Outcome, run.Report)
-	}
-
-	campaignData := campaignVerticalEnvelope("campaign-vertical-evidence", *run.Evidence)
+	campaignData := runCompiledCampaign(
+		t,
+		ctx,
+		*witness,
+		httpServer.URL,
+		credentialMaterial,
+	)
 	campaignScope := campaignData.Meta.Collection.CoverageKeys[0]
+	compiledEvidence, _, err := campaignEvidenceFromProperties(
+		campaignData.Graph.Edges[0].Properties,
+	)
+	if err != nil {
+		t.Fatalf("decode compiled campaign evidence: %v", err)
+	}
+	if compiledEvidence.Outcome != campaign.OutcomeCredentialGatedReachVerified {
+		t.Fatalf("compiled campaign outcome = %q", compiledEvidence.Outcome)
+	}
 	if _, err := pipeline.Ingest(ctx, campaignData); err != nil {
 		t.Fatalf("campaign evidence ingest: %v", err)
 	}
@@ -255,7 +262,7 @@ RETURN count(v) AS count`, map[string]any{
 		t.Fatalf("read canonical campaign coverage: %v", err)
 	}
 
-	invalidPositive := campaignVerticalEnvelope("campaign-invalid-positive", *run.Evidence)
+	invalidPositive := campaignVerticalEnvelope("campaign-invalid-positive", compiledEvidence)
 	invalidPositive.Graph.Edges[0].Properties[campaign.PropWitnessFingerprint] = "tampered"
 	_, err = pipeline.Ingest(ctx, invalidPositive)
 	var positiveRejection *CampaignArtifactRejectionError
@@ -268,7 +275,7 @@ RETURN count(v) AS count`, map[string]any{
 	)
 	assertSanitizedCampaignRejectionAudit(t, ctx, pool, positiveRejection.RejectionID)
 
-	negative := *run.Evidence
+	negative := compiledEvidence
 	negative.RunID = "run-invalid-negative"
 	negative.Outcome = campaign.OutcomeNotObserved
 	negative.AuthedStatus = campaign.ProbeDenied
@@ -286,6 +293,128 @@ RETURN count(v) AS count`, map[string]any{
 		canonicalCoverageScanID,
 	)
 	assertSanitizedCampaignRejectionAudit(t, ctx, pool, negativeRejection.RejectionID)
+}
+
+func runCompiledCampaign(
+	t *testing.T,
+	ctx context.Context,
+	witness campaign.Witness,
+	endpoint string,
+	credentialMaterial string,
+) *sdkingest.IngestData {
+	t.Helper()
+
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate integration test source")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", ".."))
+	tempDir := t.TempDir()
+	binaryPath := filepath.Join(tempDir, "agenthound")
+	build := exec.CommandContext(
+		ctx,
+		"go",
+		"build",
+		"-o",
+		binaryPath,
+		"./collector/cmd/agenthound",
+	)
+	build.Dir = repoRoot
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build compiled collector: %v: %s", err, output)
+	}
+
+	witnessPath := filepath.Join(tempDir, "witness.json")
+	witnessJSON, err := json.MarshalIndent(witness, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(witnessPath, witnessJSON, 0o600); err != nil {
+		t.Fatalf("write production witness: %v", err)
+	}
+
+	artifactPath := filepath.Join(tempDir, "campaign-artifact.json")
+	homeDir := filepath.Join(tempDir, "home")
+	if err := os.MkdirAll(homeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	run := exec.CommandContext(
+		ctx,
+		binaryPath,
+		"campaign",
+		endpoint,
+		"--scenario",
+		"cred-reach",
+		"--witness",
+		witnessPath,
+		"--engagement-id",
+		"ENG-COMPILED-E2E",
+		"--commit",
+		"--timeout",
+		"5s",
+		"--output",
+		artifactPath,
+	)
+	run.Dir = repoRoot
+	run.Env = environmentWithOverrides(map[string]string{
+		"HOME":                           homeDir,
+		"AGENTHOUND_CAMPAIGN_AUTHORIZED": "AUTHORIZED",
+		"AGENTHOUND_CAMPAIGN_CREDENTIAL": credentialMaterial,
+	})
+	runOutput, err := run.CombinedOutput()
+	if bytes.Contains(runOutput, []byte(credentialMaterial)) {
+		t.Fatal("compiled campaign output exposed credential material")
+	}
+	if err != nil {
+		t.Fatalf("run compiled campaign: %v: %s", err, runOutput)
+	}
+	if !bytes.Contains(runOutput, []byte("[campaign] RUN_REPORT ")) {
+		t.Fatalf("compiled campaign did not emit bounded run report: %s", runOutput)
+	}
+	if _, err := os.Stat(
+		filepath.Join(homeDir, ".agenthound", "campaign-acknowledged"),
+	); err != nil {
+		t.Fatalf("compiled campaign did not exercise authorization gate: %v", err)
+	}
+
+	serialized, err := os.ReadFile(artifactPath)
+	if err != nil {
+		t.Fatalf("read compiled campaign artifact: %v", err)
+	}
+	if bytes.Contains(serialized, []byte(credentialMaterial)) {
+		t.Fatal("serialized campaign artifact exposed credential material")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(serialized))
+	decoder.DisallowUnknownFields()
+	var artifact sdkingest.IngestData
+	if err := decoder.Decode(&artifact); err != nil {
+		t.Fatalf("decode compiled campaign artifact: %v", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		t.Fatalf("compiled campaign artifact has trailing data: %v", err)
+	}
+	if artifact.Meta.Collection == nil ||
+		len(artifact.Meta.Collection.CoverageKeys) != 1 ||
+		len(artifact.Graph.Edges) != 1 {
+		t.Fatalf("compiled campaign artifact is incomplete: %+v", artifact.Meta)
+	}
+	return &artifact
+}
+
+func environmentWithOverrides(overrides map[string]string) []string {
+	base := os.Environ()
+	result := make([]string, 0, len(base)+len(overrides))
+	for _, entry := range base {
+		key, _, _ := strings.Cut(entry, "=")
+		if _, replaced := overrides[key]; replaced {
+			continue
+		}
+		result = append(result, entry)
+	}
+	for key, value := range overrides {
+		result = append(result, key+"="+value)
+	}
+	return result
 }
 
 func campaignVerticalEnvelope(
