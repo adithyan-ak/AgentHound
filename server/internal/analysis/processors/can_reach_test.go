@@ -91,8 +91,9 @@ func TestCanReach_VerifiedUpgradeQuery(t *testing.T) {
 		"PROVIDES_RESOURCE",
 		"reach_evidence_state = 'verified'",
 		"e.evidence_node_ids = v.evidence_node_ids",
-		"v.evidence_node_kinds[evidence_index] IN labels(evidence_node)",
+		"v.evidence_node_kinds[evidence_index] IN labels(candidate)",
 		"v.publication_revision > 0",
+		"e.verified_cleanup_status = 'not_applicable'",
 	} {
 		if !strings.Contains(upgrade, needle) {
 			t.Fatalf("verified-upgrade query missing %q:\n%s", needle, upgrade)
@@ -209,7 +210,10 @@ func TestValidatedCampaignEvidenceAcceptsOldPositivePublicationRevision(t *testi
 
 func TestValidatedCampaignEvidenceRejectsPerFieldTamper(t *testing.T) {
 	base := validCampaignEvidenceRow(t, "sha256:agent-a", 41)
-	baseProps := base["properties"].(map[string]any)
+	baseProps, ok := base["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties have unexpected type %T", base["properties"])
+	}
 	tampers := map[string]func(map[string]any, map[string]any){
 		"source agent":                   func(row, _ map[string]any) { row["source_agent_id"] = "sha256:agent-b" },
 		"target resource":                func(row, _ map[string]any) { row["target_resource_id"] = "sha256:other" },

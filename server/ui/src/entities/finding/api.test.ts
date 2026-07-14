@@ -35,6 +35,31 @@ function finding() {
   };
 }
 
+function verifiedFinding() {
+  return {
+    ...finding(),
+    evidence: {
+      state: "verified",
+      channels: [],
+      verification: {
+        scenario_id: "cred-reach",
+        scenario_version: 1,
+        campaign_run_id: "run-ui",
+        verified_at: "2026-07-13T12:00:00Z",
+        oracle_type: "differential_credential_reach",
+        outcome: "credential_gated_reach_verified",
+        control_stage: "initialize",
+        control_status: "denied",
+        control_resource_addressed: false,
+        authed_stage: "resource_read",
+        authed_status: "allowed",
+        authed_resource_addressed: true,
+        cleanup_status: "not_applicable",
+      },
+    },
+  };
+}
+
 function exactFindingDetail({
   nodes = [],
   edges = [],
@@ -132,6 +157,53 @@ describe("published finding scope", () => {
         stale: false,
       },
     });
+  });
+
+  it("decodes verified finding evidence and structured metadata", async () => {
+    mocks.json.mockResolvedValue({
+      findings: [verifiedFinding()],
+      scope: {
+        mode: "published",
+        scan_id: "scan-1",
+        revision: 7,
+        published_at: "2026-07-11T00:00:00Z",
+        projection_status: "complete",
+        snapshot_status: "complete",
+        available: true,
+        stale: false,
+      },
+    });
+    const result = await fetchFindings();
+    expect(result.findings[0]?.evidence).toMatchObject({
+      state: "verified",
+      verification: {
+        campaign_run_id: "run-ui",
+        control_stage: "initialize",
+        control_resource_addressed: false,
+        authed_stage: "resource_read",
+        authed_resource_addressed: true,
+        cleanup_status: "not_applicable",
+      },
+    });
+  });
+
+  it("rejects verified evidence without its verification contract", async () => {
+    mocks.json.mockResolvedValue({
+      findings: [{ ...finding(), evidence: { state: "verified", channels: [] } }],
+      scope: {
+        mode: "published",
+        scan_id: "scan-1",
+        revision: 7,
+        published_at: "2026-07-11T00:00:00Z",
+        projection_status: "complete",
+        snapshot_status: "complete",
+        available: true,
+        stale: false,
+      },
+    });
+    await expect(fetchFindings()).rejects.toThrow(
+      "findings[0].evidence.verification is required",
+    );
   });
 
   it("requests detail from the same published scope", async () => {

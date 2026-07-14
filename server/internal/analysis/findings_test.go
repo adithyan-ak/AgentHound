@@ -96,9 +96,21 @@ func TestQueryFindings_VerifiedUpgradeNoDuplicate(t *testing.T) {
 				"target_id": "res-1", "target_name": "ProdDB", "target_kind": "MCPResource",
 				"edge_kind": "CAN_REACH", "confidence": 1.0,
 				"cross_protocol": false, "target_sensitivity": "critical",
-				"source_collector":     "mcp",
-				"reach_evidence_state": "verified",
-				"verified_outcome":     "credential_gated_reach_verified",
+				"source_collector":                    "mcp",
+				"reach_evidence_state":                "verified",
+				"verified_scenario_id":                "cred-reach",
+				"verified_scenario_version":           1,
+				"verified_run_id":                     "run-verified",
+				"verified_at":                         "2026-07-13T12:00:00Z",
+				"verified_oracle_type":                "differential_credential_reach",
+				"verified_outcome":                    "credential_gated_reach_verified",
+				"verified_control_stage":              "initialize",
+				"verified_control_status":             "denied",
+				"verified_control_resource_addressed": false,
+				"verified_authed_stage":               "resource_read",
+				"verified_authed_status":              "allowed",
+				"verified_authed_resource_addressed":  true,
+				"verified_cleanup_status":             "not_applicable",
 			},
 		},
 	}
@@ -115,6 +127,17 @@ func TestQueryFindings_VerifiedUpgradeNoDuplicate(t *testing.T) {
 	}
 	if f.Evidence.State != model.FindingEvidenceVerified {
 		t.Fatalf("evidence state = %q, want verified", f.Evidence.State)
+	}
+	verification := f.Evidence.Verification
+	if verification == nil ||
+		verification.ScenarioID != "cred-reach" ||
+		verification.CampaignRunID != "run-verified" ||
+		verification.ControlStage != "initialize" ||
+		verification.ControlResourceAddressed ||
+		verification.AuthedStage != "resource_read" ||
+		!verification.AuthedResourceAddressed ||
+		verification.CleanupStatus != "not_applicable" {
+		t.Fatalf("structured verification metadata = %+v", verification)
 	}
 	// Verified + critical sensitivity + confidence 1.0 => critical severity.
 	if f.Severity != "critical" {

@@ -37,6 +37,26 @@ type FindingEvidence struct {
 	MaterialStatus string               `json:"material_status,omitempty"`
 	ExposureStatus string               `json:"exposure_status,omitempty"`
 	Correlation    string               `json:"correlation,omitempty"`
+	Verification   *FindingVerification `json:"verification,omitempty"`
+}
+
+// FindingVerification is the structured, persisted basis for a campaign-
+// verified prediction. It contains only bounded status/identity metadata; no
+// endpoint, credential, payload, resource content, or receipt state.
+type FindingVerification struct {
+	ScenarioID               string `json:"scenario_id"`
+	ScenarioVersion          int    `json:"scenario_version"`
+	CampaignRunID            string `json:"campaign_run_id"`
+	VerifiedAt               string `json:"verified_at"`
+	OracleType               string `json:"oracle_type"`
+	Outcome                  string `json:"outcome"`
+	ControlStage             string `json:"control_stage"`
+	ControlStatus            string `json:"control_status"`
+	ControlResourceAddressed bool   `json:"control_resource_addressed"`
+	AuthedStage              string `json:"authed_stage"`
+	AuthedStatus             string `json:"authed_status"`
+	AuthedResourceAddressed  bool   `json:"authed_resource_addressed"`
+	CleanupStatus            string `json:"cleanup_status"`
 }
 
 // ExactFindingEvidence is the detector-selected witness snapshot captured

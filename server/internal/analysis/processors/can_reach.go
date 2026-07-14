@@ -118,11 +118,16 @@ WHERE e.is_composite = true
   AND e.scan_id = $scan_id
   AND e.evidence_node_ids = v.evidence_node_ids
   AND size(v.evidence_node_ids) = size(v.evidence_node_kinds)
-  AND ALL(evidence_index IN range(0, size(v.evidence_node_ids) - 1) WHERE EXISTS {
-    MATCH (evidence_node)
-    WHERE evidence_node.objectid = v.evidence_node_ids[evidence_index]
-      AND v.evidence_node_kinds[evidence_index] IN labels(evidence_node)
-  })
+MATCH (evidence_node)
+WHERE evidence_node.objectid IN v.evidence_node_ids
+WITH a, v, r, e, collect(DISTINCT evidence_node) AS evidence_nodes
+WHERE size(evidence_nodes) = size(v.evidence_node_ids)
+  AND ALL(evidence_index IN range(0, size(v.evidence_node_ids) - 1) WHERE
+    ANY(candidate IN evidence_nodes WHERE
+      candidate.objectid = v.evidence_node_ids[evidence_index]
+      AND v.evidence_node_kinds[evidence_index] IN labels(candidate)
+    )
+  )
 SET e.reach_evidence_state = 'verified',
     e.verified_outcome = v.outcome,
     e.verified_scenario_id = v.scenario_id,
@@ -136,6 +141,7 @@ SET e.reach_evidence_state = 'verified',
     e.verified_authed_stage = v.authed_stage,
     e.verified_authed_status = v.authed_status,
     e.verified_authed_resource_addressed = v.authed_resource_addressed,
+    e.verified_cleanup_status = 'not_applicable',
     e.confidence = 1.0
 RETURN count(e) AS upgraded`
 

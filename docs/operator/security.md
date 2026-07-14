@@ -157,6 +157,21 @@ or log it. Its handling is deliberately stricter than `--include-credential-valu
   executable material, or a synthetic `merge_key=identity` reference) is a
   **precondition failure — not runnable**, distinct from an `indeterminate`
   probe outcome.
+- **Endpoint binding before networking.** Surrounding whitespace is trimmed once,
+  but the untouched trimmed spelling—including any query bytes—is hashed through
+  `ResolveMCPServerIdentity("http", input)` and must equal the witness server ID.
+  Only absolute HTTP(S) URLs with valid authority/hostname and no userinfo or
+  fragment are accepted. The clear endpoint is never stored in witness v2.
+- **Query handling is defense-in-depth, not universal detection.** Fixed
+  known-sensitive decoded keys and decoded values exactly equal to the supplied
+  campaign credential are rejected. Other arbitrary query bytes remain accepted
+  identity input; AgentHound does **not** claim they are non-secret. Every accepted
+  query is omitted from reports, witnesses, evidence, graph properties, errors,
+  and logs.
+- **Exact-origin forwarding.** Credential headers are attached only when
+  lowercased scheme + hostname + effective port matches the original endpoint.
+  Path/query do not affect origin; scheme downgrade, host/port change, malformed
+  authority, or missing authority fails closed on every redirect request.
 - **Read-only.** The `cred-reach` scenario issues `resources/read` for the exact
   predicted resource only (unauth control + authed probe). It mutates nothing, so
   it needs no receipts or rollback.
@@ -165,13 +180,13 @@ or log it. Its handling is deliberately stricter than `--include-credential-valu
   (a raw fact). Findings derive only from composite edges, so this never
   auto-creates a finding; treat it as a policy concern only where authentication
   was expected.
-- **Stale witnesses are rejected, not trusted.** The witness is a snapshot of a
-  *published* prediction. If the graph changes between export and ingest, the
-  server re-correlation rejects the forged/mismatched/stale witness (no verified
-  evidence) rather than upgrading a prediction that no longer holds. The witness
-  carries hashed node IDs, `value_hash`, `merge_key`, path topology, and the
-  publication/schema revision — never Neo4j relationship IDs (composite edges are
-  recreated every epoch) and never raw secrets.
+- **Exact per-agent witness contract.** Witness v2 names one source
+  `AgentInstance`, is exported only for HTTP-backed resources, and carries the
+  actual ordered current `CAN_REACH` evidence node IDs with normalized concrete
+  kinds. Promotion recomputes the unkeyed fingerprint and validates every
+  identity/hash/kind/stage/outcome/topology field against current graph state.
+  The positive publication revision is provenance only; equality is not proof or
+  a promotion gate. The digest is a consistency checksum, not authenticity.
 
 ### Campaign runner: reversible mutation round-trip
 
@@ -179,16 +194,30 @@ The `agenthound campaign --scenario mcp-poison-roundtrip` scenario is a STANDALO
 target-mutation validation. Unlike `cred-reach` it **mutates** the target (reusing
 the `mcp.poison` module), so it inherits the destructive-primitive posture:
 
-- **Same gates as `poison`.** `--commit` is off by default (dry-run plans only) and
-  the first run requires an `AUTHORIZED` acknowledgement. It uses no out-of-band
-  credential material — the optional `--auth-token` for the target's admin surface
-  mirrors `agenthound poison`.
+- **Both gates are required.** `--commit` is off by default and a mutating run
+  requires the campaign acknowledgement plus the distinct poison/destructive
+  acknowledgement. The optional admin `--auth-token` is used in process and is
+  never copied to a report or receipt.
 - **Never a blind write; receipts retained.** The mutation persists a receipt
   before the write. The inline cleanup uses the conflict-aware Revert: on a
   third-party change (conflict) or a failed re-read (indeterminate) it writes
   nothing and **retains** the receipt so `agenthound revert <engagement-id>` can
-  retry it (per-file LIFO). Oracle and cleanup outcomes are reported separately, so
-  a "target not clean" state is never masked.
+  retry it. Active cleanup is run-scoped, globally reverse-sequenced, bounded,
+  non-cancellable, and fail-stop; engagement recovery is the intentionally
+  different per-file-LIFO, continue-on-error fallback. Oracle and cleanup remain
+  independent, and unsafe/unconfirmed cleanup emits its report before nonzero exit.
+- **Bounded, secret-free reporting.** Both fixed scenarios use the same versioned
+  `RunReport`: fixed steps, sanitized target reference, timestamps, typed
+  oracle/cleanup, and explicit actual HTTP-request/mutation/elapsed limits and
+  usage. Redirect/retry dispatches count. Reports cannot carry request/response
+  bodies, resource contents, target error text, original/injected mutation state,
+  credentials, or auth tokens.
+- **Protected immutable receipts.** Receipt directories/files are enforced at
+  exactly `0700`/`0600`, including tightening existing permissive paths.
+  Rollback-required original/injected mutation state is allowed only there.
+  Receipts remain unchanged after success/failure; raw credentials/tokens are
+  forbidden. Conflict-aware live-state checks enable partial retry, but completed
+  stacked rollback replay is not promised universally idempotent.
 - **Not an attack finding.** It emits no graph edge and makes no claim about a
   predicted credential path — the round-trip evidence stays in the campaign
   transport. It validates only that the mutation/rollback machinery works.

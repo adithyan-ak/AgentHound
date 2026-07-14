@@ -66,10 +66,10 @@ finding, it reads the exact predicted MCP resource once WITHOUT
 authentication (control) and once WITH a hash-matched credential
 (authed), then classifies the pair:
 
-  unauth denied + auth allowed  -> credential_gated_reach_verified
+  control denied at initialize/read + exact auth read allowed -> credential_gated_reach_verified
   both allowed                  -> anonymous_access_observed
   unauth allowed + auth denied  -> anonymous_access_observed (+ credential_rejected)
-  both denied (same resource)   -> not_observed (retires prior verification)
+  both exact resource reads denied -> not_observed (retires this agent's prior verification)
   404 / malformed / timeout / … -> indeterminate (prior evidence preserved)
 
 It mutates nothing, so it needs no rollback. Credential material is
@@ -114,7 +114,7 @@ func init() {
 	campaignCmd.Flags().String("engagement-id", "", "Engagement identifier. Required.")
 	campaignCmd.Flags().Bool("commit", false, "Execute the scenario and emit evidence. Default: dry-run (plan only).")
 	campaignCmd.Flags().Bool("insecure", false, "Skip TLS certificate verification for the probes. Default: verify.")
-	campaignCmd.Flags().Duration("timeout", 30*time.Second, "Per-probe timeout.")
+	campaignCmd.Flags().Duration("timeout", 30*time.Second, "Total forward scenario elapsed-time limit.")
 	campaignCmd.Flags().String("credential-env", defaultCredentialEnv, "Environment variable holding the out-of-band credential material.")
 	campaignCmd.Flags().Bool("credential-stdin", false, "Read the credential material from stdin instead of an env var.")
 	// Mutation parameters for the mcp-poison-roundtrip scenario (ignored by

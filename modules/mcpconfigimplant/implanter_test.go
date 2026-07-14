@@ -129,7 +129,10 @@ func TestRevertConflictsOnModifiedLiveServerEntry(t *testing.T) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		t.Fatal(err)
 	}
-	servers := config["mcpServers"].(map[string]any)
+	servers, ok := config["mcpServers"].(map[string]any)
+	if !ok {
+		t.Fatalf("mcpServers has unexpected type %T", config["mcpServers"])
+	}
 	name := "agenthound-implant-ENG-MODIFIED"
 	servers[name] = map[string]any{"command": "third-party"}
 	modified, _ := json.MarshalIndent(config, "", "  ")

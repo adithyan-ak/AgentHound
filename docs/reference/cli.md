@@ -349,9 +349,11 @@ agenthound revert <engagement-id> [flags]
 |------|---------|-------------|
 | `--auth-token` | | Bearer token for authenticated targets (passed via context, not stored on disk). |
 
-**Idempotent:** re-running against an already-reverted engagement is safe. Reverters check current target state before writing. Dry-run receipts are no-ops.
+Retries are conflict-aware: each Reverter checks live target state before writing, and dry-run receipts are no-ops. Receipts are immutable and carry no completion state, so replaying a fully completed **stacked** rollback is not universally idempotent; it may conservatively conflict when the final restored state no longer matches the newest receipt.
 
 Receipts live at `~/.agenthound/state/<module-id>/<engagement-id>.json` and are NOT deleted after revert — they are the audit trail.
+
+Engagement recovery processes both legacy receipts and campaign run-tagged receipts. It intentionally keeps per-module/per-file LIFO and continues across independent module failures while aggregating errors. This differs from an active campaign's run-scoped cleanup, which selects one exact run, orders all modules globally by `step_sequence`, and fail-stops on the first unsafe dependent step.
 
 #### Example
 
@@ -443,13 +445,13 @@ The runner ships two scenarios. The first is **`cred-reach`** — a READ-ONLY di
 
 | Control (unauth) | Authed | Outcome | Emits |
 |------------------|--------|---------|-------|
-| denied | allowed | `credential_gated_reach_verified` | `CREDENTIAL_REACH_VERIFIED` (upgrades the CAN_REACH finding) |
+| denied at `initialize` or exact `resource_read` | exact `resource_read` allowed | `credential_gated_reach_verified` | per-agent `CREDENTIAL_REACH_VERIFIED` (upgrades only the source-agent CAN_REACH finding) |
 | allowed | allowed | `anonymous_access_observed` | `PUBLIC_ACCESS_OBSERVED` (a fact) |
 | allowed | denied | `anonymous_access_observed` + credential rejected | `PUBLIC_ACCESS_OBSERVED` |
-| denied | denied (same existing resource) | `not_observed` | nothing — retires the prior verification for this domain |
+| exact `resource_read` denied | exact same `resource_read` denied | `not_observed` | nothing — retires only this agent's prior verification |
 | 404 / malformed auth / protocol error / ambiguous / timeout | (any) | `indeterminate` | nothing — prior evidence preserved |
 
-The scenario mutates nothing on the target, so it needs no receipts or rollback.
+Initialization denial is never a valid negative. Any missing/wrong resource, malformed/protocol response, timeout, incomplete stage, or budget exhaustion is indeterminate and preserves prior credential evidence. A successful control read may still emit the independent anonymous-access fact without retiring credential evidence. The scenario mutates nothing, so cleanup is `not_applicable`.
 
 ```bash
 # 1. export the witness on the analysis box (server)
@@ -466,16 +468,20 @@ agenthound campaign https://mcp.example/mcp --scenario cred-reach \
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--scenario` | (required) | Scenario ID to run (`cred-reach`) |
+| `--scenario` | (required) | Scenario ID to run (`cred-reach` or `mcp-poison-roundtrip`) |
 | `--witness` | (required) | Path to the server-exported witness JSON, or `-` for stdin |
 | `--engagement-id` | (required) | Engagement correlation key |
 | `--commit` | `false` | Run the probes and emit evidence (default: dry-run — plan only, no probe) |
 | `--insecure` | `false` | Skip TLS certificate verification for the probes |
-| `--timeout` | `30s` | Per-probe timeout |
+| `--timeout` | `30s` | Total forward scenario elapsed-time limit; cleanup, where applicable, uses a separate bounded non-cancellable context |
 | `--credential-env` | `AGENTHOUND_CAMPAIGN_CREDENTIAL` | Env var holding the out-of-band credential material |
 | `--credential-stdin` | `false` | Read the credential material from stdin instead of an env var |
 
 **Credential material is supplied out of band** (env var or stdin) and hash-matched locally against the witness `value_hash`; the raw value is never logged, never a flag, and never written to the graph. A hash-only credential (no executable material) is a **precondition failure** (not runnable) — distinct from an `indeterminate` outcome.
+
+Before any request, the runner trims surrounding whitespace once, validates an absolute HTTP(S) endpoint, and binds the untouched trimmed spelling to `ResolveMCPServerIdentity("http", input)`. The endpoint never enters the witness. Query bytes remain identity-significant: fixed known-sensitive decoded keys and values exactly equal to the supplied campaign credential are rejected as best-effort defense-in-depth; arbitrary other query bytes are accepted, but the entire query is always redacted from reports, evidence, witnesses, errors, and logs. This is not a universal query-secret detector. Credentials are forwarded only to the exact lowercased scheme + hostname + effective-port origin, including redirects.
+
+Each committed scenario emits the same bounded, versioned `RunReport` with fixed local steps, sanitized target references, start/completion times, and explicit actual outbound-request, mutation, and elapsed-time limits/usage. Redirect/retry `RoundTrip` dispatches count as requests. Budget exhaustion is indeterminate/unsafe, never a valid negative.
 
 **Authorization gate:** the first `campaign` invocation prompts for `AUTHORIZED` and writes `~/.agenthound/campaign-acknowledged`. When stdin is consumed by `--witness -`/`--credential-stdin`, acknowledge non-interactively with a pre-existing sentinel or `AGENTHOUND_CAMPAIGN_AUTHORIZED=AUTHORIZED`.
 
@@ -488,7 +494,7 @@ The second scenario is **`mcp-poison-roundtrip`** — a STANDALONE target-mutati
 3. issue the conflict-aware revert;
 4. re-read and confirm the original is restored — the **CLEANUP**.
 
-The oracle and cleanup are reported **separately** and computed **independently** — a verified mutation that then fails to clean up (e.g. a third party edits the target between the oracle re-read and the revert) is reported honestly rather than masked. It is **not an attack finding** and makes **no claim** about a predicted credential path; it emits **no** graph edge (the round-trip evidence stays in the campaign transport). The mutation persists a receipt under the shared `mcp.poison` state dir, so a revert that cannot complete inline is retried by `agenthound revert <engagement>` (per-file LIFO + conflict-aware revert).
+The oracle and cleanup are reported **separately** and computed **independently**. A mutating run requires both campaign authorization and the distinct poison/destructive acknowledgement. `campaign_run_id` is allocated before mutator construction; each mutator receipt carries that run ID and a positive invocation-order `step_sequence`. Active cleanup selects the exact engagement+run across all stateful modules, rejects missing/duplicate sequence metadata, reverts in global descending sequence order under a bounded non-cancellable context, and fail-stops on the first conflict/indeterminate/failure. Receipts remain immutable after success or failure. The final `RunReport` is emitted before an unsafe/unconfirmed cleanup returns nonzero.
 
 | Oracle | Cleanup | Meaning |
 |--------|---------|---------|
@@ -515,7 +521,7 @@ agenthound campaign https://mcp.example/mcp --scenario mcp-poison-roundtrip \
 | `--list-path` | `/` | JSON-RPC `tools/list` path used for the re-reads |
 | `--auth-token` | (unset) | Optional bearer token for the target admin surface |
 
-The `mcp-poison-roundtrip` scenario takes no witness and reads no credential material — pass the mutation flags above instead. `--commit` is still off by default (dry-run plans only). See [offensive-actions.md](../operator/offensive-actions.md#campaign-runner-verify-and-validate).
+The `mcp-poison-roundtrip` scenario takes no witness and reads no campaign credential material — pass the mutation flags above instead. It creates no graph edge or finding. `--commit` is still off by default (dry-run plans only). See [offensive-actions.md](../operator/offensive-actions.md#campaign-runner-verify-and-validate).
 
 ---
 
@@ -666,7 +672,7 @@ agenthound-server query --findings --fail-on critical --format json
 
 Export a stable, sanitized **witness** for a predicted credential-gated `CAN_REACH` finding so the collector-side `agenthound campaign` runner can verify it.
 
-The witness is a content-addressed tuple — credential/server/resource node IDs, the credential `value_hash` + `merge_key`, the predicted edge kind, the ordered path topology, and the publication/schema revision. It contains **no** Neo4j relationship IDs (composite edges are recreated every epoch), **no** arbitrary node properties, and **no** secrets. It is built under a guarded read of the published projection and stamped with that projection's revision.
+Witness v2 is exported only for HTTP-backed resources. It carries the explicit source `AgentInstance`, server/credential/resource IDs and concrete kinds, credential `value_hash` + `merge_key`, resource identity input, predicted edge kind, topology-normalization version, and the actual ordered current `CAN_REACH.evidence_node_ids` with one normalized concrete kind per node. Its positive publication revision is provenance only, not an equality gate. The unkeyed fingerprint detects inconsistency but is not a signature or authorization proof. It contains no clear endpoint, Neo4j relationship ID, arbitrary node property, or secret.
 
 ```bash
 agenthound-server witness --finding <finding-id> > witness.json

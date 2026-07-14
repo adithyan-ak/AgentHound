@@ -15,6 +15,7 @@ import { HopEvidenceTimeline } from "./HopEvidenceTimeline";
 import { FindingImpact } from "./FindingImpact";
 import { FindingRemediation } from "./FindingRemediation";
 import { FindingReferences } from "./FindingReferences";
+import { FindingVerification } from "./FindingVerification";
 
 export function FindingDetailPage() {
   const { findingId } = useParams<{ findingId: string }>();
@@ -129,6 +130,7 @@ export function FindingDetailPage() {
             contentMin="58%"
             side={
               <Stack gap="0.75rem">
+                <FindingVerification evidence={f.evidence} />
                 <FindingImpact impact={detail.impact} path={detail.attack_path} />
                 <FindingRemediation steps={detail.remediation} />
                 <FindingReferences finding={f} />
