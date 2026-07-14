@@ -1,13 +1,14 @@
 package campaign
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
 func testEvidence(outcome Outcome) Evidence {
-	return Evidence{
+	evidence := Evidence{
 		ScenarioID:       "cred-reach",
 		ScenarioVersion:  1,
 		RunID:            "run-123",
@@ -23,6 +24,20 @@ func testEvidence(outcome Outcome) Evidence {
 		VerifiedAt:       "2026-07-12T00:00:00Z",
 		Witness:          validWitness(),
 	}
+	switch outcome {
+	case OutcomeNotObserved:
+		evidence.AuthedStatus = ProbeDenied
+	case OutcomeAnonymousAccessObserved:
+		evidence.ControlStatus = ProbeAllowed
+	case OutcomeAnonymousAccessCredentialRejected:
+		evidence.ControlStatus = ProbeAllowed
+		evidence.AuthedStatus = ProbeDenied
+	case OutcomeIndeterminate:
+		evidence.AuthedStage = ""
+		evidence.AuthedStatus = ""
+		evidence.AuthedAddressed = false
+	}
+	return evidence
 }
 
 func TestEvidenceGraphCredentialReachVerified(t *testing.T) {
@@ -136,5 +151,57 @@ func TestEvidenceGraphRetainsIndependentPerAgentRelationships(t *testing.T) {
 	if firstEdges[0].Properties[PropCredentialID] !=
 		secondEdges[0].Properties[PropCredentialID] {
 		t.Fatal("test setup requires the same credential")
+	}
+}
+
+func TestEvidenceArtifactValidatesPositiveAndNegative(t *testing.T) {
+	for _, outcome := range []Outcome{
+		OutcomeCredentialGatedReachVerified,
+		OutcomeNotObserved,
+	} {
+		t.Run(string(outcome), func(t *testing.T) {
+			artifact := testEvidence(outcome).Artifact()
+			if err := artifact.Validate(); err != nil {
+				t.Fatalf("valid artifact rejected: %v", err)
+			}
+			if artifact.Witness.Fingerprint() == "" {
+				t.Fatal("artifact witness fingerprint is empty")
+			}
+		})
+	}
+}
+
+func TestEvidenceArtifactRejectsUnboundedOrInconsistentMetadata(t *testing.T) {
+	tests := map[string]func(*EvidenceArtifact){
+		"unbounded run id": func(artifact *EvidenceArtifact) {
+			artifact.RunID = strings.Repeat("r", 129)
+		},
+		"unsafe run id": func(artifact *EvidenceArtifact) {
+			artifact.RunID = "run/secret"
+		},
+		"unbounded topology": func(artifact *EvidenceArtifact) {
+			for len(artifact.Witness.EvidenceNodeIDs) <= 16 {
+				artifact.Witness.EvidenceNodeIDs = append(
+					artifact.Witness.EvidenceNodeIDs,
+					artifact.Witness.ServerID,
+				)
+				artifact.Witness.EvidenceNodeKinds = append(
+					artifact.Witness.EvidenceNodeKinds,
+					artifact.Witness.ServerKind,
+				)
+			}
+		},
+		"staged outcome mismatch": func(artifact *EvidenceArtifact) {
+			artifact.Outcome = OutcomeNotObserved
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			artifact := testEvidence(OutcomeCredentialGatedReachVerified).Artifact()
+			mutate(&artifact)
+			if err := artifact.Validate(); err == nil {
+				t.Fatal("invalid artifact accepted")
+			}
+		})
 	}
 }

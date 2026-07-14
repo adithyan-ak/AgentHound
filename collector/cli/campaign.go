@@ -365,11 +365,7 @@ func buildCampaignEnvelope(scenarioID string, scenarioVersion int, engagementID 
 	env := common.NewIngestData("scan", scanID)
 	env.Meta.CollectorVersion = common.CollectorVersion
 	env.Meta.Extra = map[string]any{
-		"campaign_scenario":         scenarioID,
-		"campaign_scenario_version": scenarioVersion,
-		"engagement_id":             engagementID,
-		"campaign_outcome":          string(ev.Outcome),
-		"campaign_run_id":           ev.RunID,
+		campaign.EvidenceArtifactMetadataKey: ev.Artifact(),
 	}
 
 	w := ev.Witness

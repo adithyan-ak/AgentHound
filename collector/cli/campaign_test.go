@@ -49,7 +49,7 @@ func campTestWitness() campaign.Witness {
 }
 
 func campTestEvidence(outcome campaign.Outcome) *campaign.Evidence {
-	return &campaign.Evidence{
+	evidence := &campaign.Evidence{
 		ScenarioID:       "cred-reach",
 		ScenarioVersion:  1,
 		RunID:            "run-abc",
@@ -65,6 +65,10 @@ func campTestEvidence(outcome campaign.Outcome) *campaign.Evidence {
 		VerifiedAt:       "2026-07-12T00:00:00Z",
 		Witness:          campTestWitness(),
 	}
+	if outcome == campaign.OutcomeNotObserved {
+		evidence.AuthedStatus = campaign.ProbeDenied
+	}
+	return evidence
 }
 
 func TestBuildCampaignEnvelopeVerified(t *testing.T) {
@@ -105,6 +109,16 @@ func TestBuildCampaignEnvelopeRetireOnValidNegative(t *testing.T) {
 	}
 	if len(negative.Graph.Edges) != 0 {
 		t.Fatalf("not_observed must emit no edge, got %d", len(negative.Graph.Edges))
+	}
+	if len(negative.Meta.Extra) != 1 {
+		t.Fatalf("negative metadata must contain only the bounded artifact: %#v", negative.Meta.Extra)
+	}
+	artifact, ok := negative.Meta.Extra[campaign.EvidenceArtifactMetadataKey].(campaign.EvidenceArtifact)
+	if !ok {
+		t.Fatalf("negative campaign artifact has type %T", negative.Meta.Extra[campaign.EvidenceArtifactMetadataKey])
+	}
+	if err := artifact.Validate(); err != nil {
+		t.Fatalf("negative campaign artifact is invalid: %v", err)
 	}
 	// Same deterministic domain across both runs.
 	if verified.Meta.Collection.CoverageKeys[0] != negative.Meta.Collection.CoverageKeys[0] {

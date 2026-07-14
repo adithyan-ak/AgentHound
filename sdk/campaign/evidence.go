@@ -1,6 +1,8 @@
 package campaign
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
@@ -9,6 +11,12 @@ import (
 // OracleTypeDifferentialCredentialReach identifies the v1 read-only differential
 // oracle (unauth control vs. authed probe of the exact predicted resource).
 const OracleTypeDifferentialCredentialReach = "differential_credential_reach"
+
+// EvidenceArtifactMetadataKey is the sole ingest metadata key used to carry a
+// bounded campaign artifact. In particular, a negative campaign result has an
+// empty graph and is represented by this sanitized witness + staged-observation
+// tuple rather than by unverifiable empty coverage.
+const EvidenceArtifactMetadataKey = "campaign_artifact"
 
 // evidenceRiskWeight is the risk_weight stamped on emitted evidence edges. Raw
 // edges MUST carry a finite, non-negative risk_weight (ingest validator +
@@ -71,6 +79,184 @@ type Evidence struct {
 	AuthedAddressed  bool        `json:"authed_resource_addressed"`
 	VerifiedAt       string      `json:"verified_at"`
 	Witness          Witness     `json:"witness"`
+}
+
+// StagedObservation is the bounded wire representation of one campaign probe.
+// It contains no target error, endpoint, payload, content, or credential.
+type StagedObservation struct {
+	Stage             ProbeStage  `json:"stage"`
+	Status            ProbeStatus `json:"status"`
+	ResourceAddressed bool        `json:"resource_addressed"`
+}
+
+// EvidenceArtifact is the sanitized metadata required to prevalidate both
+// positive and negative campaign submissions before canonical graph or coverage
+// state is touched. It deliberately excludes engagement metadata, endpoints,
+// free-form diagnostics, payloads, and raw credentials.
+type EvidenceArtifact struct {
+	ScenarioID      string            `json:"scenario_id"`
+	ScenarioVersion int               `json:"scenario_version"`
+	RunID           string            `json:"run_id"`
+	OracleType      string            `json:"oracle_type"`
+	Outcome         Outcome           `json:"outcome"`
+	Control         StagedObservation `json:"control"`
+	Authenticated   StagedObservation `json:"authenticated"`
+	Witness         Witness           `json:"witness"`
+}
+
+// Artifact returns the bounded metadata form of evidence.
+func (e Evidence) Artifact() EvidenceArtifact {
+	return EvidenceArtifact{
+		ScenarioID:      e.ScenarioID,
+		ScenarioVersion: e.ScenarioVersion,
+		RunID:           e.RunID,
+		OracleType:      e.OracleType,
+		Outcome:         e.Outcome,
+		Control: StagedObservation{
+			Stage:             e.ControlStage,
+			Status:            e.ControlStatus,
+			ResourceAddressed: e.ControlAddressed,
+		},
+		Authenticated: StagedObservation{
+			Stage:             e.AuthedStage,
+			Status:            e.AuthedStatus,
+			ResourceAddressed: e.AuthedAddressed,
+		},
+		Witness: e.Witness,
+	}
+}
+
+// Validate checks the bounded public campaign contract. It is intentionally
+// independent of live graph state; the server performs that re-correlation
+// before beginning a scan.
+func (a EvidenceArtifact) Validate() error {
+	if a.ScenarioID != "cred-reach" || a.ScenarioVersion != 1 {
+		return fmt.Errorf("campaign scenario contract mismatch")
+	}
+	if !validOpaqueRunID(a.RunID) {
+		return fmt.Errorf("campaign run_id is invalid")
+	}
+	if a.OracleType != OracleTypeDifferentialCredentialReach {
+		return fmt.Errorf("campaign oracle contract mismatch")
+	}
+	if !validOutcome(a.Outcome) {
+		return fmt.Errorf("campaign outcome is invalid")
+	}
+	if err := a.Witness.Validate(); err != nil {
+		return err
+	}
+	if err := validateBoundedWitness(a.Witness); err != nil {
+		return err
+	}
+	if err := validateStagedObservation(a.Control, a.Outcome.Definitive()); err != nil {
+		return err
+	}
+	if err := validateStagedObservation(a.Authenticated, a.Outcome.Definitive()); err != nil {
+		return err
+	}
+	control := ProbeResult{
+		Stage:             a.Control.Stage,
+		Status:            a.Control.Status,
+		ResourceAddressed: a.Control.ResourceAddressed,
+	}
+	authenticated := ProbeResult{
+		Stage:             a.Authenticated.Stage,
+		Status:            a.Authenticated.Status,
+		ResourceAddressed: a.Authenticated.ResourceAddressed,
+	}
+	if Classify(control, authenticated) != a.Outcome {
+		return fmt.Errorf("campaign staged observation contract mismatch")
+	}
+	return nil
+}
+
+func validOpaqueRunID(value string) bool {
+	if strings.TrimSpace(value) == "" || len(value) > 128 {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') ||
+			(char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') ||
+			char == '-' || char == '_' || char == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validOutcome(outcome Outcome) bool {
+	switch outcome {
+	case OutcomeCredentialGatedReachVerified,
+		OutcomeAnonymousAccessObserved,
+		OutcomeAnonymousAccessCredentialRejected,
+		OutcomeNotObserved,
+		OutcomeIndeterminate:
+		return true
+	default:
+		return false
+	}
+}
+
+func validateStagedObservation(observation StagedObservation, required bool) error {
+	switch observation.Stage {
+	case ProbeStageInitialize, ProbeStageResourceRead:
+	case "":
+		if !required && observation.Status == "" && !observation.ResourceAddressed {
+			return nil
+		}
+		return fmt.Errorf("campaign probe stage is invalid")
+	default:
+		return fmt.Errorf("campaign probe stage is invalid")
+	}
+	switch observation.Status {
+	case ProbeAllowed, ProbeDenied, ProbeNotFound, ProbeMalformedAuth,
+		ProbeProtocolError, ProbeAmbiguous, ProbeTimeout, ProbeError:
+		return nil
+	default:
+		return fmt.Errorf("campaign probe status is invalid")
+	}
+}
+
+func validateBoundedWitness(w Witness) error {
+	const (
+		maxIdentityBytes = 512
+		maxResourceBytes = 4096
+		maxTopologyNodes = 16
+	)
+	values := []string{
+		w.PredictedEdgeKind,
+		w.AgentID,
+		w.AgentKind,
+		w.CredentialID,
+		w.CredentialKind,
+		w.CredentialValueHash,
+		w.CredentialMergeKey,
+		w.ServerID,
+		w.ServerKind,
+		w.ResourceID,
+		w.ResourceKind,
+	}
+	for _, value := range values {
+		if len(value) > maxIdentityBytes {
+			return fmt.Errorf("campaign witness identity field exceeds bound")
+		}
+	}
+	if len(w.ResourceIdentityInput) > maxResourceBytes {
+		return fmt.Errorf("campaign witness resource identity exceeds bound")
+	}
+	if len(w.EvidenceNodeIDs) > maxTopologyNodes ||
+		len(w.EvidenceNodeKinds) > maxTopologyNodes {
+		return fmt.Errorf("campaign witness topology exceeds bound")
+	}
+	for i := range w.EvidenceNodeIDs {
+		if len(w.EvidenceNodeIDs[i]) > maxIdentityBytes ||
+			len(w.EvidenceNodeKinds[i]) > maxIdentityBytes {
+			return fmt.Errorf("campaign witness topology field exceeds bound")
+		}
+	}
+	return nil
 }
 
 // edgeProperties builds the canonical edge property map for an emitted evidence

@@ -63,6 +63,19 @@ func TestCanReach_ProcessSuccess(t *testing.T) {
 		!strings.Contains(credential, "s1.auth_assurance IN ['unauthenticated', 'weak']") {
 		t.Fatalf("unknown auth must not satisfy credential delegation:\n%s", credential)
 	}
+	if !strings.Contains(
+		credential,
+		"ORDER BY a.objectid, s1.objectid, t1.objectid, s2.objectid,\n"+
+			"         c.objectid, i.objectid, t2.objectid, r.objectid",
+	) || !strings.Contains(credential, "})[0] AS winner") {
+		t.Fatalf("credential paths must reduce by the complete stable object-ID tuple:\n%s", credential)
+	}
+	orderStart := strings.Index(credential, "ORDER BY")
+	winnerStart := strings.Index(credential, "})[0] AS winner")
+	if orderStart < 0 || winnerStart < orderStart ||
+		strings.Contains(credential[orderStart:winnerStart], "id(") {
+		t.Fatalf("relationship IDs must not participate in credential-path selection:\n%s", credential)
+	}
 }
 
 // TestCanReach_VerifiedUpgradeQuery asserts the third query re-correlates a raw

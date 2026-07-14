@@ -2,9 +2,12 @@ package ingest
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +20,9 @@ import (
 	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/server/internal/analysis"
 	"github.com/adithyan-ak/agenthound/server/internal/appdb"
+	"github.com/adithyan-ak/agenthound/server/internal/graph"
 	"github.com/adithyan-ak/agenthound/server/model"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestIntegrationCampaignExportProbeIngestPromotesOnlySourceAgent(t *testing.T) {
@@ -29,6 +34,8 @@ func TestIntegrationCampaignExportProbeIngestPromotesOnlySourceAgent(t *testing.
 		agentB             = "campaign-agent-b"
 		entryServer        = "campaign-entry-server"
 		entryTool          = "campaign-entry-tool"
+		alternateServer    = "campaign-entry-server-z"
+		alternateTool      = "campaign-entry-tool-z"
 		resourceTool       = "campaign-resource-tool"
 		credentialID       = "campaign-shared-credential"
 		identityID         = "campaign-shared-identity"
@@ -86,12 +93,20 @@ func TestIntegrationCampaignExportProbeIngestPromotesOnlySourceAgent(t *testing.
 			"name": "entry", "transport": "http", "auth_method": "apiKey",
 			"auth_assurance": "weak", "auth_evidence": "configured_credential",
 		}),
+		node(alternateServer, "MCPServer", map[string]any{
+			"name": "alternate entry", "transport": "http", "auth_method": "apiKey",
+			"auth_assurance": "weak", "auth_evidence": "configured_credential",
+		}),
 		node(serverID, "MCPServer", map[string]any{
 			"name": "resource", "transport": "http", "auth_method": "bearer",
 			"auth_assurance": "moderate", "auth_evidence": "configured_credential",
 		}),
 		node(entryTool, "MCPTool", map[string]any{
 			"name": "read config", "description": "read local configuration",
+			"capability_surface": []string{"file_read"},
+		}),
+		node(alternateTool, "MCPTool", map[string]any{
+			"name": "read alternate config", "description": "read local configuration",
 			"capability_surface": []string{"file_read"},
 		}),
 		node(resourceTool, "MCPTool", map[string]any{
@@ -121,7 +136,10 @@ func TestIntegrationCampaignExportProbeIngestPromotesOnlySourceAgent(t *testing.
 	base.Graph.Edges = []sdkingest.Edge{
 		edge(agentA, entryServer, "TRUSTS_SERVER", "AgentInstance", "MCPServer"),
 		edge(agentB, entryServer, "TRUSTS_SERVER", "AgentInstance", "MCPServer"),
+		edge(agentA, alternateServer, "TRUSTS_SERVER", "AgentInstance", "MCPServer"),
+		edge(agentB, alternateServer, "TRUSTS_SERVER", "AgentInstance", "MCPServer"),
 		edge(entryServer, entryTool, "PROVIDES_TOOL", "MCPServer", "MCPTool"),
+		edge(alternateServer, alternateTool, "PROVIDES_TOOL", "MCPServer", "MCPTool"),
 		edge(serverID, resourceTool, "PROVIDES_TOOL", "MCPServer", "MCPTool"),
 		edge(serverID, resourceID, "PROVIDES_RESOURCE", "MCPServer", "MCPResource"),
 		edge(serverID, credentialID, "HAS_ENV_VAR", "MCPServer", "Credential"),
@@ -162,6 +180,17 @@ func TestIntegrationCampaignExportProbeIngestPromotesOnlySourceAgent(t *testing.
 	if err := witness.Validate(); err != nil {
 		t.Fatalf("exported witness invalid: %v", err)
 	}
+	wantTopology := []string{
+		agentA, entryServer, entryTool, serverID,
+		credentialID, identityID, resourceTool, resourceID,
+	}
+	if !reflect.DeepEqual(witness.EvidenceNodeIDs, wantTopology) {
+		t.Fatalf(
+			"multipath witness topology = %v, want stable complete tuple %v",
+			witness.EvidenceNodeIDs,
+			wantTopology,
+		)
+	}
 
 	run, err := (&credreach.Scenario{}).Run(ctx, campaign.RunInput{
 		Witness: *witness, CredentialMaterial: credentialMaterial,
@@ -175,33 +204,8 @@ func TestIntegrationCampaignExportProbeIngestPromotesOnlySourceAgent(t *testing.
 		t.Fatalf("live outcome = %q report=%+v", run.Outcome, run.Report)
 	}
 
-	campaignScope := sdkingest.CanonicalCoverageKey(
-		"scan",
-		"campaign",
-		strings.Join([]string{
-			"cred-reach", strconv.Itoa(1), witness.AgentID, witness.CredentialID,
-			witness.ServerID, witness.ResourceID,
-		}, "\x00"),
-	)
-	campaignData := common.NewIngestData("scan", "campaign-vertical-evidence")
-	campaignData.Meta.Extra = map[string]any{
-		"campaign_scenario": "cred-reach", "campaign_scenario_version": 1,
-		"engagement_id": "ENG-VERTICAL", "campaign_run_id": "run-vertical",
-		"campaign_outcome": string(run.Outcome),
-	}
-	nodes, edges := run.Evidence.EvidenceGraph(campaignData.Meta.ScanID)
-	campaignData.Graph.Nodes = nodes
-	campaignData.Graph.Edges = edges
-	campaignData.Meta.Collection = &sdkingest.CollectionReport{
-		State:        sdkingest.OutcomeComplete,
-		CoverageKeys: []string{campaignScope},
-		Outcomes: []sdkingest.CollectionOutcome{{
-			Collector: "scan", CoverageKey: campaignScope, Target: witness.ServerID,
-			Method: "campaign:cred-reach", State: sdkingest.OutcomeComplete,
-			Items: len(edges),
-		}},
-	}
-	sdkingest.TagObservationDomain(&campaignData.Graph, campaignScope)
+	campaignData := campaignVerticalEnvelope("campaign-vertical-evidence", *run.Evidence)
+	campaignScope := campaignData.Meta.Collection.CoverageKeys[0]
 	if _, err := pipeline.Ingest(ctx, campaignData); err != nil {
 		t.Fatalf("campaign evidence ingest: %v", err)
 	}
@@ -228,5 +232,179 @@ func TestIntegrationCampaignExportProbeIngestPromotesOnlySourceAgent(t *testing.
 	}
 	if verifiedA != 1 || verifiedB != 0 {
 		t.Fatalf("verified findings: source=%d other=%d all=%+v", verifiedA, verifiedB, findings)
+	}
+
+	evidenceRows, err := db.Query(ctx, `
+MATCH (:AgentInstance {objectid: $agent_id})-[v:CREDENTIAL_REACH_VERIFIED]->
+      (:MCPResource {objectid: $resource_id})
+RETURN count(v) AS count`, map[string]any{
+		"agent_id": agentA, "resource_id": resourceID,
+	})
+	if err != nil {
+		t.Fatalf("count canonical campaign evidence: %v", err)
+	}
+	canonicalEvidenceCount, ok := int64Property(evidenceRows[0], "count")
+	if !ok || canonicalEvidenceCount != 1 {
+		t.Fatalf("canonical campaign evidence count = %v, want 1", evidenceRows)
+	}
+	var canonicalCoverageScanID string
+	if err := pool.QueryRow(ctx,
+		`SELECT scan_id FROM coverage_heads WHERE coverage_key = $1`,
+		campaignScope,
+	).Scan(&canonicalCoverageScanID); err != nil {
+		t.Fatalf("read canonical campaign coverage: %v", err)
+	}
+
+	invalidPositive := campaignVerticalEnvelope("campaign-invalid-positive", *run.Evidence)
+	invalidPositive.Graph.Edges[0].Properties[campaign.PropWitnessFingerprint] = "tampered"
+	_, err = pipeline.Ingest(ctx, invalidPositive)
+	var positiveRejection *CampaignArtifactRejectionError
+	if !errors.As(err, &positiveRejection) {
+		t.Fatalf("invalid positive error = %v, want campaign rejection", err)
+	}
+	assertCampaignCanonicalState(
+		t, ctx, db, pool, agentA, resourceID, campaignScope,
+		canonicalCoverageScanID,
+	)
+	assertSanitizedCampaignRejectionAudit(t, ctx, pool, positiveRejection.RejectionID)
+
+	negative := *run.Evidence
+	negative.RunID = "run-invalid-negative"
+	negative.Outcome = campaign.OutcomeNotObserved
+	negative.AuthedStatus = campaign.ProbeDenied
+	invalidNegative := campaignVerticalEnvelope("campaign-invalid-negative", negative)
+	artifact := negative.Artifact()
+	artifact.Authenticated.Status = campaign.ProbeAllowed
+	invalidNegative.Meta.Extra[campaign.EvidenceArtifactMetadataKey] = artifact
+	_, err = pipeline.Ingest(ctx, invalidNegative)
+	var negativeRejection *CampaignArtifactRejectionError
+	if !errors.As(err, &negativeRejection) {
+		t.Fatalf("invalid negative error = %v, want campaign rejection", err)
+	}
+	assertCampaignCanonicalState(
+		t, ctx, db, pool, agentA, resourceID, campaignScope,
+		canonicalCoverageScanID,
+	)
+	assertSanitizedCampaignRejectionAudit(t, ctx, pool, negativeRejection.RejectionID)
+}
+
+func campaignVerticalEnvelope(
+	scanID string,
+	evidence campaign.Evidence,
+) *sdkingest.IngestData {
+	data := common.NewIngestData("scan", scanID)
+	data.Meta.Extra = map[string]any{
+		campaign.EvidenceArtifactMetadataKey: evidence.Artifact(),
+	}
+	coverageKey := campaignCoverageKey(evidence.Artifact())
+	state := sdkingest.OutcomePartial
+	if evidence.Outcome.Definitive() {
+		state = sdkingest.OutcomeComplete
+	}
+	nodes, edges := evidence.EvidenceGraph(scanID)
+	data.Graph.Nodes = nodes
+	data.Graph.Edges = edges
+	if data.Graph.Nodes == nil {
+		data.Graph.Nodes = []sdkingest.Node{}
+	}
+	if data.Graph.Edges == nil {
+		data.Graph.Edges = []sdkingest.Edge{}
+	}
+	data.Meta.Collection = &sdkingest.CollectionReport{
+		State:        state,
+		CoverageKeys: []string{coverageKey},
+		Outcomes: []sdkingest.CollectionOutcome{{
+			Collector: "scan", CoverageKey: coverageKey,
+			Target: evidence.Witness.ServerID, Method: "campaign:cred-reach",
+			State: state, Items: len(edges),
+		}},
+	}
+	sdkingest.TagObservationDomain(&data.Graph, coverageKey)
+	return data
+}
+
+func assertCampaignCanonicalState(
+	t *testing.T,
+	ctx context.Context,
+	db *graph.DB,
+	pool *pgxpool.Pool,
+	agentID, resourceID, coverageKey, coverageScanID string,
+) {
+	t.Helper()
+	rows, err := db.Query(ctx, `
+MATCH (:AgentInstance {objectid: $agent_id})-[v:CREDENTIAL_REACH_VERIFIED]->
+      (:MCPResource {objectid: $resource_id})
+RETURN count(v) AS count`, map[string]any{
+		"agent_id": agentID, "resource_id": resourceID,
+	})
+	if err != nil {
+		t.Fatalf("count preserved campaign evidence: %v", err)
+	}
+	count, ok := int64Property(rows[0], "count")
+	if !ok || count != 1 {
+		t.Fatalf("canonical campaign evidence was not preserved: %v", rows)
+	}
+	var currentCoverageScanID string
+	if err := pool.QueryRow(ctx,
+		`SELECT scan_id FROM coverage_heads WHERE coverage_key = $1`,
+		coverageKey,
+	).Scan(&currentCoverageScanID); err != nil {
+		t.Fatalf("read preserved campaign coverage: %v", err)
+	}
+	if currentCoverageScanID != coverageScanID {
+		t.Fatalf(
+			"campaign coverage changed after rejection: got %q want %q",
+			currentCoverageScanID,
+			coverageScanID,
+		)
+	}
+}
+
+func assertSanitizedCampaignRejectionAudit(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	rejectionID string,
+) {
+	t.Helper()
+	scan, err := appdb.NewScanStore(pool).GetScan(ctx, rejectionID)
+	if err != nil {
+		t.Fatalf("read campaign rejection audit: %v", err)
+	}
+	if scan.Status != model.ScanStatusFailed ||
+		scan.NodeWriteRows != 0 ||
+		scan.EdgeWriteRows != 0 {
+		t.Fatalf("unexpected campaign rejection scan: %+v", scan)
+	}
+	raw, ok := scan.Metadata["campaign_rejection"].(map[string]any)
+	if !ok {
+		t.Fatalf("campaign rejection metadata = %#v", scan.Metadata)
+	}
+	wantKeys := []string{
+		"outcome", "reason_codes", "rejection_id", "run_id",
+		"scenario_id", "scenario_version",
+	}
+	var gotKeys []string
+	for key := range raw {
+		gotKeys = append(gotKeys, key)
+	}
+	sort.Strings(gotKeys)
+	if !reflect.DeepEqual(gotKeys, wantKeys) {
+		t.Fatalf("campaign rejection metadata keys = %v, want %v", gotKeys, wantKeys)
+	}
+	if raw["rejection_id"] != rejectionID {
+		t.Fatalf("campaign rejection id = %#v, want %q", raw["rejection_id"], rejectionID)
+	}
+	encoded, err := json.Marshal(scan.Metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, prohibited := range []string{
+		"campaign_artifact", "witness", "fingerprint", "digest",
+		"credential_value_hash", "evidence_node_ids",
+	} {
+		if strings.Contains(string(encoded), prohibited) {
+			t.Fatalf("rejection audit contains prohibited field %q: %s", prohibited, encoded)
+		}
 	}
 }
