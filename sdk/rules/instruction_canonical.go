@@ -203,7 +203,14 @@ func (b canonicalBuilder) view() canonicalView {
 // cannot cross it), and every NFKC output segment maps to the exact source
 // bytes the normalizer consumed for it.
 func canonicalizeNFKC(raw string) canonicalView {
-	var b canonicalBuilder
+	// Preallocate to absorb geometric slice regrowth. The /3 span heuristic
+	// self-caps for coalescing inputs and needs no rune prescan; RuneCount
+	// would over-reserve and can itself breach the 32 MiB ceiling on the
+	// pathological single-fullwidth + 1 MiB ASCII input.
+	b := canonicalBuilder{
+		text:  make([]byte, 0, len(raw)),
+		spans: make([]sourceSpan, 0, len(raw)/3),
+	}
 	i := 0
 	for i < len(raw) {
 		r, size := utf8.DecodeRuneInString(raw[i:])
@@ -372,7 +379,10 @@ func instructionWhitespace(r rune) (rune, bool) {
 //     applied to the whole span and any surviving output maps back to its full
 //     contributing raw range.
 func canonicalizeControlsAndWhitespace(view canonicalView) canonicalView {
-	var b canonicalBuilder
+	b := canonicalBuilder{
+		text:  make([]byte, 0, len(view.text)),
+		spans: make([]sourceSpan, 0, len(view.spans)),
+	}
 	var scratch []byte
 	for _, span := range view.spans {
 		if span.opaque {
@@ -537,7 +547,10 @@ func foldInstructionConfusables(view canonicalView) canonicalView {
 		return view
 	}
 
-	var b canonicalBuilder
+	b := canonicalBuilder{
+		text:  make([]byte, 0, len(view.text)),
+		spans: make([]sourceSpan, 0, len(view.spans)),
+	}
 	ri := 0
 	for _, span := range view.spans {
 		if span.opaque || !span.affine {
@@ -651,7 +664,10 @@ func collapseInstructionLetterSpacing(view canonicalView) canonicalView {
 		return view
 	}
 
-	var b canonicalBuilder
+	b := canonicalBuilder{
+		text:  make([]byte, 0, len(view.text)),
+		spans: make([]sourceSpan, 0, len(view.spans)),
+	}
 	di := 0
 	for _, span := range view.spans {
 		if span.opaque {
