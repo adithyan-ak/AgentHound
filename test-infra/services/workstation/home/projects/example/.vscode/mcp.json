@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "vscode-project-fixture": {
+      "type": "stdio",
+      "command": "/usr/bin/printf",
+      "args": ["fixture vscode project"]
+    }
+  }
+}

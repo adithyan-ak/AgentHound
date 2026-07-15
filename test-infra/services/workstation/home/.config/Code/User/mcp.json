@@ -1,0 +1,19 @@
+{
+  "servers": {
+    "vscode-profile-fixture": {
+      "type": "stdio",
+      "command": "/usr/bin/printf",
+      "args": ["fixture vscode profile"],
+      "env": {
+        "FIXTURE_API_KEY": "fixture-only-not-a-secret"
+      }
+    },
+    "vscode-profile-http-fixture": {
+      "type": "http",
+      "url": "http://mcp-target-admin:8080/mcp",
+      "headers": {
+        "Authorization": "Bearer fixture-only-not-a-token"
+      }
+    }
+  }
+}

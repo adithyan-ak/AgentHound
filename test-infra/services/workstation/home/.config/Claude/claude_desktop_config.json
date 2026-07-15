@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "claude-desktop-fixture": {
+      "command": "/usr/bin/printf",
+      "args": ["fixture claude desktop"],
+      "env": {
+        "FIXTURE_API_KEY": "fixture-only-not-a-secret"
+      }
+    },
+    "claude-desktop-http-fixture": {
+      "url": "http://mcp-target-admin:8080/mcp",
+      "headers": {
+        "Authorization": "Bearer fixture-only-not-a-token"
+      }
+    }
+  }
+}

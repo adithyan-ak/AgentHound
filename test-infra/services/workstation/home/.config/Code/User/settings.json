@@ -1,0 +1,30 @@
+{
+  "mcp": {
+    "servers": {
+      "vscode-nested-fixture": {
+        "type": "stdio",
+        "command": "/usr/bin/printf",
+        "args": ["fixture vscode nested"]
+      }
+    }
+  },
+  "augment.advanced": {
+    "mcpServers": [
+      {
+        "name": "augment-array-fixture",
+        "command": "/usr/bin/printf",
+        "args": ["fixture augment array"],
+        "env": {
+          "AUGMENT_FIXTURE_KEY": "fixture-only-not-a-secret"
+        }
+      },
+      {
+        "name": "augment-array-http-fixture",
+        "url": "http://mcp-target-admin:8080/mcp",
+        "headers": {
+          "X-Fixture-Key": "fixture-only-not-a-key"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "jetbrains-user-fixture": {
+      "command": "/usr/bin/printf",
+      "args": ["fixture jetbrains user"],
+      "env": {
+        "JETBRAINS_FIXTURE_TOKEN": "fixture-only-not-a-token"
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "mcp.servers": {
+    "vscode-dotted-fixture": {
+      "type": "stdio",
+      "command": "/usr/bin/printf",
+      "args": ["fixture vscode dotted"]
+    },
+    "vscode-dotted-http-fixture": {
+      "type": "http",
+      "url": "http://mcp-target-admin:8080/mcp"
+    }
+  }
+}

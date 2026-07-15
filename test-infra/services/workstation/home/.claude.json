@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "claude-code-fixture": {
+      "command": "/usr/bin/printf",
+      "args": ["fixture claude code"],
+      "env": {
+        "FIXTURE_TOKEN": "fixture-only-not-a-token"
+      }
+    }
+  }
+}

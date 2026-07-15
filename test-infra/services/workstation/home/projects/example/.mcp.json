@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "claude-code-project-fixture": {
+      "command": "/usr/bin/printf",
+      "args": ["fixture claude code project"]
+    }
+  }
+}

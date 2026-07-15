@@ -1,0 +1,15 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "Qwen/Qwen2-0.5B-Instruct",
+      "object": "model",
+      "created": 1720000000,
+      "owned_by": "vllm",
+      "root": "Qwen/Qwen2-0.5B-Instruct",
+      "parent": null,
+      "max_model_len": 32768,
+      "permission": []
+    }
+  ]
+}

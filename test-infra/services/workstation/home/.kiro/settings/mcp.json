@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "kiro-user-fixture": {
+      "command": "/usr/bin/printf",
+      "args": ["fixture kiro user"],
+      "env": {
+        "AWS_PROFILE": "fixture-profile"
+      }
+    }
+  }
+}

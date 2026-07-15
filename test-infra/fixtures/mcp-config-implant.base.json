@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "fixture-control": {
+      "args": [
+        "fixture control"
+      ],
+      "command": "/usr/bin/printf"
+    }
+  }
+}

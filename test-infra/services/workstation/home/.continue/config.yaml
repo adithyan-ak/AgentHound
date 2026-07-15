@@ -1,0 +1,9 @@
+mcpServers:
+  - name: continue-fixture
+    command: /usr/bin/printf
+    args:
+      - fixture continue
+    env:
+      CONTINUE_FIXTURE_KEY: fixture-only-not-a-secret
+  - name: continue-http-fixture
+    url: http://mcp-target-admin:8080/mcp

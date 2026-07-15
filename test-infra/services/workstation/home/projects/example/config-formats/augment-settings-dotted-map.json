@@ -1,0 +1,13 @@
+{
+  "augment.advanced": {
+    "mcpServers": {
+      "augment-dotted-map-fixture": {
+        "command": "/usr/bin/printf",
+        "args": ["fixture augment dotted map"],
+        "env": {
+          "AUGMENT_FIXTURE_KEY": "fixture-only-not-a-secret"
+        }
+      }
+    }
+  }
+}

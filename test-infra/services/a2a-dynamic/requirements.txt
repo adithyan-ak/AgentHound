@@ -1,0 +1,6 @@
+# Real A2A reference SDK + ASGI server. http-server extra pulls starlette +
+# sse-starlette only (no grpc), keeping the image lean and arm64-friendly.
+a2a-sdk[http-server]==1.1.0
+uvicorn==0.51.0
+# a2a-sdk 1.1.0 constrains protobuf<7,>=5.29.5; pin the latest compatible 6.x.
+protobuf==6.33.6

@@ -1,0 +1,20 @@
+model_list:
+  - model_name: agenthound-openai-placeholder
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_base: https://api.openai.com/v1
+      api_key: sk-placeholder-openai-key-not-real
+
+  - model_name: agenthound-anthropic-placeholder
+    litellm_params:
+      model: anthropic/claude-3-5-haiku-latest
+      api_base: https://api.anthropic.com
+      api_key: sk-ant-placeholder-key-not-real
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  disable_spend_logs: true
+  store_model_in_db: false
+
+litellm_settings:
+  drop_params: true

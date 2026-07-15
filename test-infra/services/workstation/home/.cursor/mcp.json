@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "cursor-global-fixture": {
+      "url": "http://mcp-target-admin:8080/mcp",
+      "headers": {
+        "X-Fixture-Key": "fixture-only-not-a-key"
+      },
+      "autoApprove": ["support_lookup"]
+    },
+    "cursor-disabled-fixture": {
+      "command": "/usr/bin/printf",
+      "args": ["disabled fixture"],
+      "disabled": true
+    }
+  }
+}
