@@ -6,21 +6,17 @@
 # which on a default deployment returns:
 #   {"experiments":[...]}  (200 OK, possibly with empty list)
 #
-# max_results is required: modern MLflow (2.22.x+) rejects the bare
-# path with INVALID_PARAMETER_VALUE (HTTP 400). Match the looter and
-# the documented probe: ?max_results=1.
-#
 # Auth: MLflow has no built-in auth. Network-perimeter or a reverse
 # proxy is the deployment-time control; default deployments expose the
 # API anonymously, which is what this rule catches.
 id: mlflow
 name: MLflow Tracking Server
-description: 'Identifies MLflow by GET /api/2.0/mlflow/experiments/search?max_results=1 returning the canonical experiments JSON'
-version: 3
+description: 'Identifies MLflow by GET /api/2.0/mlflow/experiments/search returning the canonical experiments JSON'
+version: 2
 service_kind: mlflow
 probes:
   - method: GET
-    path: /api/2.0/mlflow/experiments/search?max_results=1
+    path: /api/2.0/mlflow/experiments/search
     matchers:
       - type: http_status
         status_code: 200

@@ -21,7 +21,7 @@ func (*Fingerprinter) ID() string            { return "mlflow.fingerprint" }
 func (*Fingerprinter) Action() action.Action { return action.Fingerprint }
 func (*Fingerprinter) Target() string        { return "mlflow" }
 func (*Fingerprinter) Description() string {
-	return "Identify MLflow Tracking Server by GET /api/2.0/mlflow/experiments/search?max_results=1"
+	return "Identify MLflow Tracking Server by GET /api/2.0/mlflow/experiments/search"
 }
 func (*Fingerprinter) Version() string     { return "0.4.0-dev" }
 func (*Fingerprinter) IsDestructive() bool { return false }

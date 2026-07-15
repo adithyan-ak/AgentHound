@@ -328,11 +328,6 @@ func collectModuleExtras(cmd *cobra.Command, m module.Module) map[string]any {
 			if err == nil {
 				out[f.Name] = i
 			}
-		case "float64":
-			fl, err := cmd.Flags().GetFloat64(f.Name)
-			if err == nil {
-				out[f.Name] = fl
-			}
 		default:
 			out[f.Name] = live.Value.String()
 		}
