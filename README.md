@@ -68,7 +68,7 @@ Rewrite the tool description the LLM reads, inject `CLAUDE.md` / `.cursorrules`,
 <td width="50%" valign="top">
 
 🗄️ **RAG, vector-store & notebook attack surface**<br/>
-Inventory Qdrant collections and Jupyter sessions and notebook trees - the data-layer surfaces that ship unauthenticated by default.
+Inventory Qdrant collections and Jupyter sessions and notebook trees. Jupyter protected operations are tried without credentials first and retried with an operator-supplied bearer value only after a 401/403, so anonymous access is recorded only when it actually succeeds; bounded tree truncation is published as partial inventory.
 
 </td>
 </tr>

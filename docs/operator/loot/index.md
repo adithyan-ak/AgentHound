@@ -45,7 +45,7 @@ The first `agenthound loot` invocation on a machine triggers an interactive `AUT
 | `mlflow` | MLflow tracking server (port 5000) | Experiment + run inventory + registered models + version storage URIs (`:MCPResource` with sensitivity heuristic) — anonymous by default |
 | `qdrant` | Qdrant vector DB (port 6333) | Collection inventory (anonymous, GET-only, no Credential nodes); flag-gated payload sampling via `--include-points` emits one `:MCPResource` per scrolled point |
 | `openwebui` | Open WebUI (port 3000) | With `--api-key`: upstream OpenAI + Ollama provider keys, RAG embedding/config keys (recursive extraction). Anonymous config posture (signup, auth) otherwise. |
-| `jupyter` | Jupyter Server (port 8888) | Active sessions + notebook/file inventory (anonymous, GET-only, recursive walk bounded by `--max-depth`; emits one `:MCPResource` per notebook or file discovered under `/api/contents`; no Credential nodes) |
+| `jupyter` | Jupyter Server (port 8888) | Active sessions + notebook/file inventory (GET-only; control-first protected probes retry 401/403 with `--credential token=...`; successful responses must match session-array/directory-content shapes before access is recorded; recursive walk bounded by `--max-depth`; either depth or item truncation is partial, never authoritative; anonymous access recorded only after credential-free protected success; no Credential nodes) |
 
 See the [CLI reference](../../reference/cli.md) for the full per-module flag set of each looter.
 

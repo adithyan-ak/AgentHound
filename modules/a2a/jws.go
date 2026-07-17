@@ -1,7 +1,6 @@
 package a2a
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -13,261 +12,382 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	jose "github.com/go-jose/go-jose/v4"
+	"github.com/gowebpki/jcs"
 )
 
 var allowedAlgorithms = []jose.SignatureAlgorithm{jose.RS256, jose.ES256}
 
-// Signature verification status values emitted on A2AAgent nodes. They
-// distinguish a card with no resolvable key ("unverifiable") from a card whose
-// signatures were checked and none verified ("failed").
 const (
-	SigStatusUnsigned          = "unsigned"
-	SigStatusVerified          = "verified"
-	SigStatusPartiallyVerified = "partially_verified"
-	SigStatusFailed            = "failed"
-	SigStatusUnverifiable      = "unverifiable"
+	SigStatusUnsigned           = "unsigned"
+	SigStatusUnsupportedVersion = "unsupported_version"
+	SigStatusMalformed          = "malformed"
+	SigStatusKeyUnavailable     = "key_unavailable"
+	SigStatusInvalid            = "invalid"
+	SigStatusValidUntrusted     = "valid_untrusted"
+	SigStatusValidTrusted       = "valid_trusted"
 )
 
 const (
-	defaultJWKSMaxBytes = 256 * 1024
-	defaultJWKSMaxKeys  = 50
-	defaultJWKSTimeout  = 10 * time.Second
+	SigKeySourceNone         = "none"
+	SigKeySourceTrustedStore = "trusted_store"
+	SigKeySourceJKU          = "jku"
+
+	SigKeyTrustUnknown   = "unknown"
+	SigKeyTrustUntrusted = "untrusted"
+	SigKeyTrustTrusted   = "trusted"
 )
 
-// SignatureResult is the outcome of verifying a card's signatures.
+const (
+	defaultJWKSMaxBytes    = 256 * 1024
+	defaultJWKSMaxKeys     = 50
+	defaultJWKSTimeout     = 10 * time.Second
+	maxSignaturesPerCard   = 16
+	maxRemoteJWKSSources   = 4
+	maxSignedCardBytes     = 1024 * 1024
+	maxSignedDepth         = 32
+	maxSignedObjectMembers = 128
+	maxSignedTotalMembers  = 4096
+)
+
 type SignatureResult struct {
-	Signed bool
-	Valid  bool
-	Status string
+	Signed    bool
+	Valid     bool
+	Status    string
+	KeySource string
+	KeyTrust  string
 }
 
-// VerifyOptions controls key resolution during signature verification.
 type VerifyOptions struct {
-	// Fetcher resolves keys from a signature's protected-header `jku` (and, as
-	// a fallback, a top-level `jwks_uri`). Nil disables all network resolution
-	// (offline mode); verification then relies only on inline `jwks` and
-	// TrustedKeys.
+	// Fetcher resolves only the protected JWS header's `jku`. Nil disables
+	// network resolution.
 	Fetcher *JWKSFetcher
-	// TrustedKeys is an operator-supplied out-of-band key set (the A2A spec's
-	// "trusted key store"), consulted before any network fetch.
+	// TrustedKeys is an operator-pinned out-of-band key store. Card-controlled
+	// inline and top-level key extensions are intentionally not key sources.
 	TrustedKeys *jose.JSONWebKeySet
 }
 
-// VerifySignatures verifies a card's signatures OFFLINE (inline `jwks` only),
-// preserving the original two-value contract. New callers that want
-// spec-compliant `jku` resolution should use VerifySignaturesCtx.
-func VerifySignatures(cardJSON []byte, raw map[string]any) (signed bool, valid bool) {
-	res := VerifySignaturesCtx(context.Background(), cardJSON, raw, VerifyOptions{})
-	return res.Signed, res.Valid
-}
-
-// VerifySignaturesCtx verifies a card's JWS signatures and returns rich status.
-//
-// Semantics (any-valid): Valid is true when AT LEAST ONE signature verifies
-// against a resolvable key. Keys are resolved, per signature, from (in order)
-// the inline `jwks`, the operator's TrustedKeys, and — only when opts.Fetcher
-// is set — the protected-header `jku` (A2A spec §8.4) or a top-level
-// `jwks_uri`.
-func VerifySignaturesCtx(ctx context.Context, cardJSON []byte, raw map[string]any, opts VerifyOptions) SignatureResult {
-	sigs, ok := raw["signatures"]
+func VerifySignaturesCtx(
+	ctx context.Context,
+	raw map[string]any,
+	schemaVersion string,
+	opts VerifyOptions,
+) SignatureResult {
+	unsigned := SignatureResult{
+		Status:    SigStatusUnsigned,
+		KeySource: SigKeySourceNone,
+		KeyTrust:  SigKeyTrustUnknown,
+	}
+	value, exists := raw["signatures"]
+	if !exists || value == nil {
+		return unsigned
+	}
+	signatures, ok := value.([]any)
 	if !ok {
-		return SignatureResult{Status: SigStatusUnsigned}
+		return SignatureResult{
+			Signed:    true,
+			Status:    SigStatusMalformed,
+			KeySource: SigKeySourceNone,
+			KeyTrust:  SigKeyTrustUnknown,
+		}
 	}
-	sigArr, ok := sigs.([]any)
-	if !ok || len(sigArr) == 0 {
-		return SignatureResult{Status: SigStatusUnsigned}
+	if len(signatures) == 0 {
+		return unsigned
+	}
+	if len(signatures) > maxSignaturesPerCard {
+		return SignatureResult{
+			Signed:    true,
+			Status:    SigStatusMalformed,
+			KeySource: SigKeySourceNone,
+			KeyTrust:  SigKeyTrustUnknown,
+		}
+	}
+	if schemaVersion != "v1.0" {
+		return SignatureResult{
+			Signed:    true,
+			Status:    SigStatusUnsupportedVersion,
+			KeySource: SigKeySourceNone,
+			KeyTrust:  SigKeyTrustUnknown,
+		}
 	}
 
-	inline, err := extractJWKS(raw)
+	canonical, err := canonicalSignedPayloadV1(raw)
 	if err != nil {
-		slog.Warn("jws: failed to parse inline jwks", "error", err)
-		inline = nil
+		slog.Warn("a2a jws canonicalization failed", "error", err)
+		return SignatureResult{
+			Signed:    true,
+			Status:    SigStatusMalformed,
+			KeySource: SigKeySourceNone,
+			KeyTrust:  SigKeyTrustUnknown,
+		}
 	}
 
-	canonical, err := canonicalSignedPayload(raw)
-	if err != nil {
-		slog.Warn("jws: failed to canonicalize signed payload", "error", err)
-		return SignatureResult{Signed: true, Status: SigStatusFailed}
-	}
-
-	kp := &keyProvider{
-		inline:  inline,
+	provider := &keyProvider{
 		trusted: opts.TrustedKeys,
 		fetcher: opts.Fetcher,
-		jwksURI: topLevelString(raw, "jwks_uri"),
+		cache:   make(map[string]*jose.JSONWebKeySet),
 	}
-
-	var verified, failed, unresolved int
-	for _, entry := range sigArr {
-		switch verifyOneSignature(ctx, entry, cardJSON, canonical, kp) {
-		case sigVerified:
-			verified++
-		case sigFailed:
-			failed++
-		default:
-			unresolved++
-		}
+	verificationCtx := ctx
+	if timeout := opts.Fetcher.aggregateTimeout(); timeout > 0 {
+		var cancel context.CancelFunc
+		verificationCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
-
-	res := SignatureResult{Signed: true}
-	switch {
-	case verified == len(sigArr):
-		res.Valid = true
-		res.Status = SigStatusVerified
-	case verified >= 1:
-		res.Valid = true
-		res.Status = SigStatusPartiallyVerified
-	case failed >= 1:
-		res.Status = SigStatusFailed
-	default:
-		res.Status = SigStatusUnverifiable
+	outcomes := make([]signatureOutcome, 0, len(signatures))
+	for _, signature := range signatures {
+		outcomes = append(outcomes, verifyOneSignature(verificationCtx, signature, canonical, provider))
 	}
-	return res
+	return aggregateSignatureOutcomes(outcomes)
 }
 
-type sigOutcome int
+type signatureOutcome struct {
+	status    string
+	keySource string
+	keyTrust  string
+}
 
-const (
-	sigVerified sigOutcome = iota
-	sigFailed
-	sigUnresolved
-)
-
-// verifyOneSignature verifies a single signatures[] entry (compact string or
-// flattened {protected,signature} object) and reports whether it verified,
-// failed a resolvable-key check, or had no key to check against.
-func verifyOneSignature(ctx context.Context, entry any, cardJSON, canonical []byte, kp *keyProvider) sigOutcome {
-	var compact string
-	objectForm := false
-	switch e := entry.(type) {
-	case string:
-		compact = e
-	case map[string]any:
-		objectForm = true
-		c, ok := flattenedToCompact(e, canonical)
+func verifyOneSignature(
+	ctx context.Context,
+	entry any,
+	canonical []byte,
+	provider *keyProvider,
+) signatureOutcome {
+	malformed := signatureOutcome{
+		status:    SigStatusMalformed,
+		keySource: SigKeySourceNone,
+		keyTrust:  SigKeyTrustUnknown,
+	}
+	object, ok := entry.(map[string]any)
+	if !ok {
+		return malformed
+	}
+	protected, ok := object["protected"].(string)
+	if !ok || protected == "" {
+		return malformed
+	}
+	signature, ok := object["signature"].(string)
+	if !ok || signature == "" {
+		return malformed
+	}
+	var unprotected map[string]any
+	if rawHeader, exists := object["header"]; exists && rawHeader != nil {
+		var ok bool
+		unprotected, ok = rawHeader.(map[string]any)
 		if !ok {
-			slog.Warn("jws: object-form signature entry is malformed")
-			return sigFailed
+			return malformed
 		}
-		compact = c
-	default:
-		slog.Warn("jws: signature entry is neither string nor object")
-		return sigFailed
 	}
 
-	parsed, err := jose.ParseSigned(compact, allowedAlgorithms)
+	protectedBytes, err := base64.RawURLEncoding.DecodeString(protected)
 	if err != nil {
-		slog.Warn("jws: failed to parse signature", "error", err)
-		return sigFailed
+		return malformed
 	}
-	if len(parsed.Signatures) == 0 {
-		slog.Warn("jws: parsed JWS has no signatures")
-		return sigFailed
+	var header map[string]any
+	if err := json.Unmarshal(protectedBytes, &header); err != nil {
+		return malformed
+	}
+	for name := range unprotected {
+		if _, duplicate := header[name]; duplicate {
+			return malformed
+		}
+	}
+	algorithm, ok := header["alg"].(string)
+	if !ok || !allowedAlgorithm(algorithm) {
+		return malformed
+	}
+	kid, ok := header["kid"].(string)
+	if !ok || strings.TrimSpace(kid) == "" {
+		return malformed
+	}
+	jku := ""
+	if rawJKU, exists := header["jku"]; exists {
+		var ok bool
+		jku, ok = rawJKU.(string)
+		if !ok || strings.TrimSpace(jku) == "" {
+			return malformed
+		}
+		jku = strings.TrimSpace(jku)
+		if hasURLFragment(jku) {
+			return malformed
+		}
+	}
+	if _, err := base64.RawURLEncoding.DecodeString(signature); err != nil {
+		return malformed
 	}
 
-	hdr := parsed.Signatures[0].Protected
-	kid := hdr.KeyID
-	jku := headerString(hdr, "jku")
+	payloadSegment := base64.RawURLEncoding.EncodeToString(canonical)
+	parsed, err := jose.ParseSigned(
+		protected+"."+payloadSegment+"."+signature,
+		allowedAlgorithms,
+	)
+	if err != nil || len(parsed.Signatures) != 1 {
+		return malformed
+	}
 
-	keys := kp.keysFor(ctx, kid, jku)
+	keys, source, trust := provider.keysFor(ctx, kid, jku, algorithm)
 	if len(keys) == 0 {
-		slog.Warn("jws: no key resolvable for signature", "kid", kid)
-		return sigUnresolved
-	}
-
-	for i := range keys {
-		verifiedPayload, verr := parsed.Verify(&keys[i])
-		if verr != nil {
-			continue
+		return signatureOutcome{
+			status:    SigStatusKeyUnavailable,
+			keySource: source,
+			keyTrust:  trust,
 		}
-		if !objectForm && cardJSON != nil && !bytes.Equal(verifiedPayload, cardJSON) {
-			slog.Warn("jws: verified payload does not match card body")
-			return sigFailed
-		}
-		return sigVerified
 	}
-	slog.Warn("jws: signature verification failed", "kid", kid)
-	return sigFailed
+	for index := range keys {
+		verifiedPayload, err := parsed.Verify(&keys[index])
+		if err == nil && string(verifiedPayload) == string(canonical) {
+			status := SigStatusValidUntrusted
+			if trust == SigKeyTrustTrusted {
+				status = SigStatusValidTrusted
+			}
+			return signatureOutcome{status: status, keySource: source, keyTrust: trust}
+		}
+	}
+	return signatureOutcome{
+		status:    SigStatusInvalid,
+		keySource: source,
+		keyTrust:  trust,
+	}
 }
 
-// keyProvider resolves verification keys for a signature, preferring local
-// sources (inline jwks, operator trusted keys) and only reaching out over the
-// network (jku / jwks_uri) when a fetcher is configured.
+func aggregateSignatureOutcomes(outcomes []signatureOutcome) SignatureResult {
+	priorities := map[string]int{
+		SigStatusMalformed:      1,
+		SigStatusKeyUnavailable: 2,
+		SigStatusInvalid:        3,
+		SigStatusValidUntrusted: 4,
+		SigStatusValidTrusted:   5,
+	}
+	selected := signatureOutcome{
+		status:    SigStatusMalformed,
+		keySource: SigKeySourceNone,
+		keyTrust:  SigKeyTrustUnknown,
+	}
+	for _, outcome := range outcomes {
+		if priorities[outcome.status] > priorities[selected.status] {
+			selected = outcome
+		}
+	}
+	return SignatureResult{
+		Signed:    true,
+		Valid:     selected.status == SigStatusValidTrusted || selected.status == SigStatusValidUntrusted,
+		Status:    selected.status,
+		KeySource: selected.keySource,
+		KeyTrust:  selected.keyTrust,
+	}
+}
+
+func allowedAlgorithm(algorithm string) bool {
+	for _, allowed := range allowedAlgorithms {
+		if string(allowed) == algorithm {
+			return true
+		}
+	}
+	return false
+}
+
 type keyProvider struct {
-	inline  *jose.JSONWebKeySet
-	trusted *jose.JSONWebKeySet
-	fetcher *JWKSFetcher
-	jwksURI string
-	cache   map[string]*jose.JSONWebKeySet
+	trusted       *jose.JSONWebKeySet
+	fetcher       *JWKSFetcher
+	cache         map[string]*jose.JSONWebKeySet
+	remoteFetches int
 }
 
-func (kp *keyProvider) keysFor(ctx context.Context, kid, jku string) []jose.JSONWebKey {
-	var keys []jose.JSONWebKey
-	add := func(set *jose.JSONWebKeySet) {
-		if set == nil {
-			return
-		}
-		if kid != "" {
-			keys = append(keys, set.Key(kid)...)
-		} else {
-			keys = append(keys, set.Keys...)
-		}
-	}
-
-	add(kp.inline)
-	add(kp.trusted)
-	if len(keys) > 0 || kp.fetcher == nil {
-		return keys
-	}
-
-	for _, u := range []string{jku, kp.jwksURI} {
-		if u == "" {
-			continue
-		}
-		add(kp.fetchCached(ctx, u))
+func (provider *keyProvider) keysFor(
+	ctx context.Context,
+	kid string,
+	jku string,
+	algorithm string,
+) ([]jose.JSONWebKey, string, string) {
+	if provider.trusted != nil {
+		candidates := provider.trusted.Key(kid)
+		keys := usableKeys(candidates, algorithm)
 		if len(keys) > 0 {
-			break
+			return keys, SigKeySourceTrustedStore, SigKeyTrustTrusted
+		}
+		if len(candidates) > 0 {
+			return nil, SigKeySourceTrustedStore, SigKeyTrustTrusted
 		}
 	}
-	return keys
+	if jku == "" {
+		return nil, SigKeySourceNone, SigKeyTrustUnknown
+	}
+	if provider.fetcher == nil {
+		return nil, SigKeySourceJKU, SigKeyTrustUntrusted
+	}
+	set := provider.fetchCached(ctx, jku)
+	if set == nil {
+		return nil, SigKeySourceJKU, SigKeyTrustUntrusted
+	}
+	candidates := set.Key(kid)
+	return usableKeys(candidates, algorithm), SigKeySourceJKU, SigKeyTrustUntrusted
 }
 
-func (kp *keyProvider) fetchCached(ctx context.Context, u string) *jose.JSONWebKeySet {
-	if kp.cache == nil {
-		kp.cache = make(map[string]*jose.JSONWebKeySet)
-	}
-	if set, ok := kp.cache[u]; ok {
+func (provider *keyProvider) fetchCached(
+	ctx context.Context,
+	rawURL string,
+) *jose.JSONWebKeySet {
+	if set, exists := provider.cache[rawURL]; exists {
 		return set
 	}
-	set, err := kp.fetcher.Fetch(ctx, u)
+	if provider.remoteFetches >= maxRemoteJWKSSources {
+		provider.cache[rawURL] = nil
+		slog.Warn(
+			"a2a jku fetch budget exhausted",
+			"max_unique_sources",
+			maxRemoteJWKSSources,
+		)
+		return nil
+	}
+	provider.remoteFetches++
+	set, err := provider.fetcher.Fetch(ctx, rawURL)
 	if err != nil {
-		slog.Warn("jws: jwks fetch failed", "url", u, "error", err)
+		slog.Warn("a2a jku fetch failed", "url", rawURL, "error", err)
 		set = nil
 	}
-	kp.cache[u] = set
+	provider.cache[rawURL] = set
 	return set
 }
 
-// JWKSFetcher fetches a JWKS over HTTP(S) with SSRF hardening. Construct with
-// NewJWKSFetcher; the zero value is not usable.
+func usableKeys(keys []jose.JSONWebKey, algorithm string) []jose.JSONWebKey {
+	result := make([]jose.JSONWebKey, 0, len(keys))
+	for _, key := range keys {
+		if key.Valid() &&
+			(key.Use == "" || key.Use == "sig") &&
+			(key.Algorithm == "" || key.Algorithm == algorithm) {
+			result = append(result, key)
+		}
+	}
+	return result
+}
+
 type JWKSFetcher struct {
 	client   *http.Client
 	maxBytes int64
 	maxKeys  int
+	timeout  time.Duration
 }
 
-// NewJWKSFetcher builds an SSRF-hardened JWKS fetcher. insecure disables TLS
-// certificate verification (mirrors the collector-wide --insecure). The
-// dial-time Control hook rejects link-local/metadata and unspecified IPs on
-// the *resolved* address — this covers redirects (which re-dial) and defeats
-// DNS rebinding. Loopback and RFC1918 private ranges remain allowed so
-// operators can verify internal agents.
-func NewJWKSFetcher(insecure bool, timeout time.Duration) *JWKSFetcher {
+func (fetcher *JWKSFetcher) aggregateTimeout() time.Duration {
+	if fetcher == nil {
+		return 0
+	}
+	if fetcher.timeout > 0 {
+		return fetcher.timeout
+	}
+	if fetcher.client != nil {
+		return fetcher.client.Timeout
+	}
+	return 0
+}
+
+// NewJWKSFetcher always validates TLS certificates and server identity.
+// Collector target --insecure policy never applies to card-controlled jku.
+func NewJWKSFetcher(timeout time.Duration) *JWKSFetcher {
 	if timeout <= 0 {
 		timeout = defaultJWKSTimeout
 	}
@@ -280,187 +400,560 @@ func NewJWKSFetcher(insecure bool, timeout time.Duration) *JWKSFetcher {
 			}
 			ip := net.ParseIP(host)
 			if ip == nil || isBlockedFetchIP(ip) {
-				return fmt.Errorf("jwks fetch blocked for address %s", address)
+				return fmt.Errorf("jku fetch blocked for address %s", address)
 			}
 			return nil
 		},
 	}
 	transport := &http.Transport{
-		DialContext:           dialer.DialContext,
-		TLSClientConfig:       &tls.Config{InsecureSkipVerify: insecure},
+		DialContext: dialer.DialContext,
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		},
 		TLSHandshakeTimeout:   timeout,
 		ResponseHeaderTimeout: timeout,
 	}
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   timeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 3 {
-				return fmt.Errorf("too many redirects (max 3)")
-			}
-			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
-				return fmt.Errorf("redirect to non-http scheme %q blocked", req.URL.Scheme)
-			}
-			return nil
+	return &JWKSFetcher{
+		client: &http.Client{
+			Transport:     transport,
+			Timeout:       timeout,
+			CheckRedirect: validateJWKSRedirect,
 		},
+		maxBytes: defaultJWKSMaxBytes,
+		maxKeys:  defaultJWKSMaxKeys,
+		timeout:  timeout,
 	}
-	return &JWKSFetcher{client: client, maxBytes: defaultJWKSMaxBytes, maxKeys: defaultJWKSMaxKeys}
 }
 
-// Fetch retrieves and parses a JWKS from rawURL. It never forwards any
-// credential/Authorization header to the (card-controlled) jku host.
-func (f *JWKSFetcher) Fetch(ctx context.Context, rawURL string) (*jose.JSONWebKeySet, error) {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return nil, fmt.Errorf("parse jwks url: %w", err)
+func validateJWKSRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 3 {
+		return fmt.Errorf("too many jku redirects (max 3)")
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("unsupported jwks url scheme %q", u.Scheme)
+	if !strings.EqualFold(req.URL.Scheme, "https") {
+		return fmt.Errorf("jku redirects must remain https")
+	}
+	return nil
+}
+
+func (fetcher *JWKSFetcher) Fetch(
+	ctx context.Context,
+	rawURL string,
+) (*jose.JSONWebKeySet, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse jku: %w", err)
+	}
+	if hasURLFragment(rawURL) {
+		return nil, fmt.Errorf("jku must not contain a fragment")
+	}
+	if !strings.EqualFold(parsed.Scheme, "https") {
+		return nil, fmt.Errorf("jku must use https")
+	}
+	if parsed.Hostname() == "" || parsed.User != nil {
+		return nil, fmt.Errorf("jku must have a valid authority without userinfo")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := f.client.Do(req)
+	request.Header.Set("Accept", "application/json")
+	response, err := fetcher.client.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("fetch jwks: %w", err)
+		return nil, fmt.Errorf("fetch jku: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("jwks fetch status %d", resp.StatusCode)
-	}
-	if f.maxBytes > 0 && resp.ContentLength > f.maxBytes {
-		return nil, fmt.Errorf("jwks response too large: %d bytes (max %d)", resp.ContentLength, f.maxBytes)
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("jku fetch status %d", response.StatusCode)
 	}
 
-	limit := f.maxBytes
+	limit := fetcher.maxBytes
 	if limit <= 0 {
 		limit = defaultJWKSMaxBytes
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	if response.ContentLength > limit {
+		return nil, fmt.Errorf(
+			"jku response too large: %d bytes (max %d)",
+			response.ContentLength,
+			limit,
+		)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {
 		return nil, err
 	}
-
-	var set jose.JSONWebKeySet
-	if err := json.Unmarshal(body, &set); err != nil {
-		return nil, fmt.Errorf("parse jwks: %w", err)
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("jku response exceeds %d bytes", limit)
 	}
-	if f.maxKeys > 0 && len(set.Keys) > f.maxKeys {
-		set.Keys = set.Keys[:f.maxKeys]
-	}
-	return &set, nil
+	return parseJWKS(body, fetcher.maxKeys, time.Now())
 }
 
-// isBlockedFetchIP blocks link-local (169.254.0.0/16 incl. the 169.254.169.254
-// cloud-metadata endpoint, fe80::/10), link-local multicast, and unspecified
-// addresses. Loopback and RFC1918 private ranges are intentionally allowed so
-// operators can verify internal agents.
+func hasURLFragment(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	return err != nil || parsed.Fragment != "" || strings.Contains(rawURL, "#")
+}
+
+func parseJWKS(
+	data []byte,
+	maxKeys int,
+	now time.Time,
+) (*jose.JSONWebKeySet, error) {
+	var envelope struct {
+		Keys []json.RawMessage `json:"keys"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return nil, fmt.Errorf("parse jwks: %w", err)
+	}
+	result := &jose.JSONWebKeySet{}
+	for _, rawKey := range envelope.Keys {
+		if keyMetadataDisables(rawKey, now) {
+			continue
+		}
+		var key jose.JSONWebKey
+		if err := json.Unmarshal(rawKey, &key); err != nil {
+			return nil, fmt.Errorf("parse jwk: %w", err)
+		}
+		if key.Valid() && (key.Use == "" || key.Use == "sig") {
+			result.Keys = append(result.Keys, key)
+		}
+		if maxKeys > 0 && len(result.Keys) >= maxKeys {
+			break
+		}
+	}
+	return result, nil
+}
+
+func keyMetadataDisables(data []byte, now time.Time) bool {
+	var metadata map[string]json.RawMessage
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return true
+	}
+	if raw, exists := metadata["revoked"]; exists {
+		var revoked bool
+		if json.Unmarshal(raw, &revoked) == nil && revoked {
+			return true
+		}
+	}
+	if raw, exists := metadata["status"]; exists {
+		var status string
+		if json.Unmarshal(raw, &status) == nil && strings.EqualFold(status, "revoked") {
+			return true
+		}
+	}
+	if raw, exists := metadata["exp"]; exists {
+		if expiry, ok := parseKeyExpiry(raw); ok && !now.Before(expiry) {
+			return true
+		}
+	}
+	if raw, exists := metadata["key_ops"]; exists {
+		var operations []string
+		if json.Unmarshal(raw, &operations) == nil {
+			for _, operation := range operations {
+				if operation == "verify" {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func parseKeyExpiry(raw json.RawMessage) (time.Time, bool) {
+	var numeric json.Number
+	if err := json.Unmarshal(raw, &numeric); err == nil {
+		seconds, err := strconv.ParseInt(numeric.String(), 10, 64)
+		if err == nil {
+			return time.Unix(seconds, 0), true
+		}
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return time.Time{}, false
+	}
+	if seconds, err := strconv.ParseInt(text, 10, 64); err == nil {
+		return time.Unix(seconds, 0), true
+	}
+	parsed, err := time.Parse(time.RFC3339, text)
+	return parsed, err == nil
+}
+
 func isBlockedFetchIP(ip net.IP) bool {
 	return ip.IsUnspecified() ||
 		ip.IsLinkLocalUnicast() ||
 		ip.IsLinkLocalMulticast()
 }
 
-// LoadJWKSFile reads a JWKS JSON file (the A2A trusted-key-store escape hatch
-// backing --a2a-trusted-keys).
 func LoadJWKSFile(path string) (*jose.JSONWebKeySet, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var set jose.JSONWebKeySet
-	if err := json.Unmarshal(data, &set); err != nil {
+	set, err := parseJWKS(data, defaultJWKSMaxKeys, time.Now())
+	if err != nil {
 		return nil, fmt.Errorf("parse jwks file %s: %w", path, err)
 	}
-	return &set, nil
+	return set, nil
 }
 
-func headerString(h jose.Header, key string) string {
-	if h.ExtraHeaders == nil {
-		return ""
-	}
-	if v, ok := h.ExtraHeaders[jose.HeaderKey(key)]; ok {
-		if s, ok := v.(string); ok {
-			return strings.TrimSpace(s)
-		}
-	}
-	return ""
+type protoMessageSchema map[string]protoFieldSchema
+
+type protoFieldSchema struct {
+	required       bool
+	optional       bool
+	message        protoMessageSchema
+	repeated       protoMessageSchema
+	repeatedScalar bool
+	mapValue       protoMessageSchema
+	isMap          bool
 }
 
-func topLevelString(raw map[string]any, key string) string {
-	if v, ok := raw[key].(string); ok {
-		return strings.TrimSpace(v)
-	}
-	return ""
+var v1AgentCardSchema = protoMessageSchema{
+	"name":        {required: true},
+	"description": {required: true},
+	"supportedInterfaces": {required: true, repeated: protoMessageSchema{
+		"url":             {required: true},
+		"protocolBinding": {required: true},
+		"tenant":          {},
+		"protocolVersion": {required: true},
+	}},
+	"provider": {message: protoMessageSchema{
+		"url":          {required: true},
+		"organization": {required: true},
+	}},
+	"version":          {required: true},
+	"documentationUrl": {optional: true},
+	"capabilities": {required: true, message: protoMessageSchema{
+		"streaming":         {optional: true},
+		"pushNotifications": {optional: true},
+		"extensions": {repeated: protoMessageSchema{
+			"uri":         {},
+			"description": {},
+			"required":    {},
+			"params":      {message: protoMessageSchema{}},
+		}},
+		"extendedAgentCard": {optional: true},
+	}},
+	"securitySchemes": {isMap: true, mapValue: securitySchemeSchema()},
+	"securityRequirements": {
+		repeated: securityRequirementSchema(),
+	},
+	"defaultInputModes":  {required: true, repeatedScalar: true},
+	"defaultOutputModes": {required: true, repeatedScalar: true},
+	"skills": {required: true, repeated: protoMessageSchema{
+		"id":          {required: true},
+		"name":        {required: true},
+		"description": {required: true},
+		"tags":        {required: true, repeatedScalar: true},
+		"examples":    {},
+		"inputModes":  {},
+		"outputModes": {},
+		"securityRequirements": {
+			repeated: securityRequirementSchema(),
+		},
+	}},
+	"iconUrl": {optional: true},
 }
 
-// flattenedToCompact reconstructs a compact JWS string from a flattened
-// AgentCardSignature object {protected, signature}. Per the A2A spec
-// (section 8.4) the signed payload is the agent card with the "signatures"
-// member removed, JCS-canonicalized; it is NOT detached, so it is embedded
-// base64url-encoded as the JWS payload segment.
-func flattenedToCompact(entry map[string]any, canonicalPayload []byte) (string, bool) {
-	protected, ok := entry["protected"].(string)
-	if !ok || protected == "" {
-		return "", false
+func securityRequirementSchema() protoMessageSchema {
+	return protoMessageSchema{
+		"schemes": {
+			isMap: true,
+			mapValue: protoMessageSchema{
+				"list": {},
+			},
+		},
 	}
-	signature, ok := entry["signature"].(string)
-	if !ok || signature == "" {
-		return "", false
-	}
-	if _, err := base64.RawURLEncoding.DecodeString(protected); err != nil {
-		return "", false
-	}
-	if _, err := base64.RawURLEncoding.DecodeString(signature); err != nil {
-		return "", false
-	}
-	payloadSeg := base64.RawURLEncoding.EncodeToString(canonicalPayload)
-	return protected + "." + payloadSeg + "." + signature, true
 }
 
-// canonicalSignedPayload returns the JCS-canonicalized (RFC 8785) bytes of the
-// agent card with the "signatures" member removed, matching the content the
-// A2A signer signs (spec section 8.4.1). Go's encoding/json marshals map keys
-// in lexicographic order with no insignificant whitespace, which satisfies
-// JCS for the decoded-JSON object shapes A2A cards use; HTML escaping is
-// disabled so '<', '>' and '&' are not mangled.
-func canonicalSignedPayload(raw map[string]any) ([]byte, error) {
-	stripped := make(map[string]any, len(raw))
-	for k, v := range raw {
-		if k == "signatures" {
-			continue
-		}
-		stripped[k] = v
+func securitySchemeSchema() protoMessageSchema {
+	scalarDescription := protoMessageSchema{"description": {}}
+	return protoMessageSchema{
+		"apiKeySecurityScheme": {message: protoMessageSchema{
+			"description": {},
+			"location":    {required: true},
+			"name":        {required: true},
+		}},
+		"httpAuthSecurityScheme": {message: protoMessageSchema{
+			"description":  {},
+			"scheme":       {required: true},
+			"bearerFormat": {},
+		}},
+		"oauth2SecurityScheme": {message: protoMessageSchema{
+			"description":       {},
+			"flows":             {required: true, message: oauthFlowsSchema()},
+			"oauth2MetadataUrl": {},
+		}},
+		"openIdConnectSecurityScheme": {message: protoMessageSchema{
+			"description":      {},
+			"openIdConnectUrl": {required: true},
+		}},
+		"mtlsSecurityScheme": {message: scalarDescription},
 	}
-
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(stripped); err != nil {
-		return nil, err
-	}
-	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
-func extractJWKS(raw map[string]any) (*jose.JSONWebKeySet, error) {
-	jwksRaw, ok := raw["jwks"]
-	if !ok {
-		return nil, nil
+func oauthFlowsSchema() protoMessageSchema {
+	scopes := protoFieldSchema{required: true, isMap: true}
+	return protoMessageSchema{
+		"authorizationCode": {message: protoMessageSchema{
+			"authorizationUrl": {required: true},
+			"tokenUrl":         {required: true},
+			"refreshUrl":       {},
+			"scopes":           scopes,
+			"pkceRequired":     {},
+		}},
+		"clientCredentials": {message: protoMessageSchema{
+			"tokenUrl":   {required: true},
+			"refreshUrl": {},
+			"scopes":     scopes,
+		}},
+		"implicit": {message: protoMessageSchema{
+			"authorizationUrl": {},
+			"refreshUrl":       {},
+			"scopes":           {isMap: true},
+		}},
+		"password": {message: protoMessageSchema{
+			"tokenUrl":   {},
+			"refreshUrl": {},
+			"scopes":     {isMap: true},
+		}},
+		"deviceCode": {message: protoMessageSchema{
+			"deviceAuthorizationUrl": {required: true},
+			"tokenUrl":               {required: true},
+			"refreshUrl":             {},
+			"scopes":                 scopes,
+		}},
 	}
+}
 
-	jwksBytes, err := json.Marshal(jwksRaw)
+type normalizationLimits struct {
+	members int
+}
+
+func canonicalSignedPayloadV1(raw map[string]any) ([]byte, error) {
+	preflight, err := json.Marshal(raw)
 	if err != nil {
 		return nil, err
 	}
-
-	var jwks jose.JSONWebKeySet
-	if err := json.Unmarshal(jwksBytes, &jwks); err != nil {
+	if len(preflight) > maxSignedCardBytes {
+		return nil, fmt.Errorf("signed card exceeds %d bytes", maxSignedCardBytes)
+	}
+	normalized, err := normalizeProtoMessage(
+		raw,
+		v1AgentCardSchema,
+		0,
+		&normalizationLimits{},
+		true,
+	)
+	if err != nil {
 		return nil, err
 	}
-	return &jwks, nil
+	serialized, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, err
+	}
+	if len(serialized) > maxSignedCardBytes {
+		return nil, fmt.Errorf("normalized signed card exceeds %d bytes", maxSignedCardBytes)
+	}
+	return jcs.Transform(serialized)
+}
+
+func normalizeProtoMessage(
+	raw map[string]any,
+	schema protoMessageSchema,
+	depth int,
+	limits *normalizationLimits,
+	root bool,
+) (map[string]any, error) {
+	if depth > maxSignedDepth {
+		return nil, fmt.Errorf("signed card exceeds maximum depth %d", maxSignedDepth)
+	}
+	if len(raw) > maxSignedObjectMembers {
+		return nil, fmt.Errorf(
+			"signed card object members %d exceed maximum %d",
+			len(raw),
+			maxSignedObjectMembers,
+		)
+	}
+	limits.members += len(raw)
+	if limits.members > maxSignedTotalMembers {
+		return nil, fmt.Errorf(
+			"signed card total members exceed maximum %d",
+			maxSignedTotalMembers,
+		)
+	}
+
+	result := make(map[string]any, len(raw))
+	for name, value := range raw {
+		if root && name == "signatures" {
+			continue
+		}
+		field, known := schema[name]
+		normalized, err := normalizeProtoValue(value, field, known, depth+1, limits)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		if known && !field.required && !field.optional &&
+			protoDefaultValue(normalized, field) {
+			continue
+		}
+		result[name] = normalized
+	}
+	for name, field := range schema {
+		if !field.required {
+			continue
+		}
+		if _, exists := raw[name]; exists {
+			continue
+		}
+		result[name] = requiredProtoDefault(field)
+	}
+	return result, nil
+}
+
+func requiredProtoDefault(field protoFieldSchema) any {
+	switch {
+	case field.message != nil:
+		return map[string]any{}
+	case field.repeated != nil || field.repeatedScalar:
+		return []any{}
+	case field.isMap:
+		return map[string]any{}
+	default:
+		// Every required scalar reachable from AgentCard in v1.0.1 is a
+		// string. No numeric/boolean required scalar needs a distinct default.
+		return ""
+	}
+}
+
+func normalizeProtoValue(
+	value any,
+	field protoFieldSchema,
+	known bool,
+	depth int,
+	limits *normalizationLimits,
+) (any, error) {
+	if object, ok := value.(map[string]any); ok {
+		switch {
+		case known && field.message != nil:
+			return normalizeProtoMessage(object, field.message, depth, limits, false)
+		case known && field.isMap:
+			return normalizeProtoMap(object, field.mapValue, depth, limits)
+		default:
+			return normalizeProtoMessage(object, nil, depth, limits, false)
+		}
+	}
+	if array, ok := value.([]any); ok {
+		result := make([]any, 0, len(array))
+		for index, item := range array {
+			if object, ok := item.(map[string]any); ok {
+				itemSchema := protoMessageSchema(nil)
+				if known {
+					itemSchema = field.repeated
+				}
+				normalized, err := normalizeProtoMessage(
+					object,
+					itemSchema,
+					depth,
+					limits,
+					false,
+				)
+				if err != nil {
+					return nil, fmt.Errorf("[%d]: %w", index, err)
+				}
+				result = append(result, normalized)
+				continue
+			}
+			result = append(result, item)
+		}
+		return result, nil
+	}
+	return value, nil
+}
+
+func normalizeProtoMap(
+	raw map[string]any,
+	valueSchema protoMessageSchema,
+	depth int,
+	limits *normalizationLimits,
+) (map[string]any, error) {
+	if len(raw) > maxSignedObjectMembers {
+		return nil, fmt.Errorf(
+			"signed card object members %d exceed maximum %d",
+			len(raw),
+			maxSignedObjectMembers,
+		)
+	}
+	limits.members += len(raw)
+	if limits.members > maxSignedTotalMembers {
+		return nil, fmt.Errorf(
+			"signed card total members exceed maximum %d",
+			maxSignedTotalMembers,
+		)
+	}
+	result := make(map[string]any, len(raw))
+	for name, value := range raw {
+		if object, ok := value.(map[string]any); ok && valueSchema != nil {
+			normalized, err := normalizeProtoMessage(
+				object,
+				valueSchema,
+				depth,
+				limits,
+				false,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", name, err)
+			}
+			result[name] = normalized
+		} else {
+			normalized, err := normalizeProtoValue(
+				value,
+				protoFieldSchema{},
+				false,
+				depth+1,
+				limits,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", name, err)
+			}
+			result[name] = normalized
+		}
+	}
+	return result, nil
+}
+
+func protoDefaultValue(value any, field protoFieldSchema) bool {
+	if field.message != nil {
+		return false
+	}
+	switch typed := value.(type) {
+	case nil:
+		return true
+	case bool:
+		return !typed
+	case string:
+		return typed == ""
+	case float64:
+		return typed == 0
+	case float32:
+		return typed == 0
+	case int:
+		return typed == 0
+	case int32:
+		return typed == 0
+	case int64:
+		return typed == 0
+	case uint:
+		return typed == 0
+	case uint32:
+		return typed == 0
+	case uint64:
+		return typed == 0
+	case []any:
+		return len(typed) == 0
+	case map[string]any:
+		return field.isMap && len(typed) == 0
+	default:
+		return false
+	}
 }

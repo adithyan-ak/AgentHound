@@ -17,12 +17,19 @@ The detections summarized below are the **pre-built-query** layer. The 35 underl
 
 ## Scan-specific ruleset provenance
 
-Each scan artifact records the effective text and fingerprint rules that
-actually ran. Every manifest entry includes the rule ID/version/source class,
-a semantic SHA-256 content identifier, and a canonical
-`effective_matcher` JSON definition. Text entries preserve the compiled matcher
-shape; fingerprint entries preserve the effective probe and response-matcher
-sequence, including same-ID bundle overrides.
+Each scan artifact records the effective text rules, fingerprint rules, and
+versioned native detectors that actually ran. Every manifest entry includes
+the rule or detector ID/version/source class, a semantic SHA-256 content
+identifier, and a canonical `effective_matcher` JSON definition. Text entries
+preserve the compiled matcher shape; fingerprint entries preserve the effective
+probe and response-matcher sequence, including same-ID bundle overrides.
+Jupyter's default two-step `/api` + `/api/status` decision is code-backed
+because the rule DSL cannot express its conditional 200-or-401/403 status
+semantics; it is recorded as detector `jupyter-http-native` version 1. An exact
+bundle rule with `id: jupyter` and `service_kind: jupyter` replaces both its
+runtime behavior and manifest entry when it emits exactly the ingest-valid
+ordered tuple `[JupyterServer, AIService]`. Other Jupyter rule IDs or node-kind
+tuples are rejected as unexecutable instead of being recorded as effective.
 
 Files that cannot be read, parsed, validated, or compiled are not silently
 treated as loaded. Their failures are persisted in `ruleset.errors` and make
@@ -156,7 +163,13 @@ trust path and is not classified as anonymous network access.
 
 **How detected:** The query requires
 `signature_verification_status=unsigned`. Missing verification status is
-unknown and does not match.
+unknown and does not match. An absent, ProtoJSON `null`, or empty
+`signatures` field is normalized to `unsigned`; a non-null wrong-shaped field
+remains `malformed`. `malformed`, `key_unavailable`, `invalid`,
+`valid_untrusted`, `valid_trusted`, and v0.3 `unsupported_version` are distinct
+evidence states and do not match the unsigned-card rule.
+Ingest rejects contradictory signature status, key-source, trust, and
+`is_signed` combinations before they can influence this rule.
 
 ## Shell access paths (MCP01)
 

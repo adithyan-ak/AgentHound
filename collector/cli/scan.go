@@ -19,6 +19,7 @@ import (
 
 	a2acollector "github.com/adithyan-ak/agenthound/modules/a2a"
 	configcollector "github.com/adithyan-ak/agenthound/modules/config"
+	"github.com/adithyan-ak/agenthound/modules/jupyterfp"
 	mcpcollector "github.com/adithyan-ak/agenthound/modules/mcp"
 	"github.com/adithyan-ak/agenthound/modules/networkscan"
 	"github.com/adithyan-ak/agenthound/sdk/action"
@@ -84,7 +85,7 @@ func init() {
 	scanCmd.Flags().StringSlice("discover-domain", nil, "Domains to probe for well-known agent cards")
 	scanCmd.Flags().String("targets-file", "", "File with A2A agent URLs (one per line)")
 	scanCmd.Flags().String("auth-token", "", "Bearer token for authenticated A2A agents")
-	scanCmd.Flags().Bool("no-verify-jwks", false, "Disable remote JWKS (jku) resolution during A2A signature verification (offline: inline jwks + --a2a-trusted-keys only)")
+	scanCmd.Flags().Bool("no-verify-jwks", false, "Disable remote JWKS (jku) resolution during A2A signature verification (offline: --a2a-trusted-keys only)")
 	scanCmd.Flags().String("a2a-trusted-keys", "", "Path to a JWKS JSON file of trusted keys for A2A signature verification (offline key store)")
 
 	scanCmd.Flags().Int("scan-concurrency", 5, "Max parallel connections")
@@ -374,16 +375,57 @@ func loadEffectiveRules() (*rules.Engine, *ingest.RulesetManifest) {
 			"load fingerprint rules: "+fingerprintErr.Error(),
 		)
 	}
-	manifest := rules.BuildManifest(
-		engine.Rules(),
+	effectiveFingerprints, detectors, dispatchFailures := effectiveFingerprintSemantics(
 		fingerprints,
+	)
+	loadFailures = append(loadFailures, dispatchFailures...)
+	manifest := rules.BuildManifestWithDetectors(
+		engine.Rules(),
+		effectiveFingerprints,
+		detectors,
 		loadFailures...,
 	)
 	slog.Info("rules engine loaded",
 		"text_rules", engine.RuleCount(),
-		"fingerprint_rules", len(fingerprints),
+		"fingerprint_rules", len(effectiveFingerprints),
+		"native_detectors", len(detectors),
 		"ruleset_digest", manifest.Digest)
 	return engine, &manifest
+}
+
+func effectiveFingerprintSemantics(
+	fingerprints []rules.FingerprintRule,
+) ([]rules.FingerprintRule, []rules.CodeDetector, []string) {
+	effective := make([]rules.FingerprintRule, 0, len(fingerprints))
+	var failures []string
+	jupyterOverridePresent := false
+
+	for _, fingerprint := range fingerprints {
+		switch {
+		case fingerprint.ID == jupyterfp.BundleOverrideID:
+			jupyterOverridePresent = true
+			if err := jupyterfp.ValidateBundleOverride(fingerprint); err != nil {
+				failures = append(failures, err.Error())
+				continue
+			}
+			effective = append(effective, fingerprint)
+		case fingerprint.ServiceKind == "jupyter":
+			failures = append(failures, fmt.Sprintf(
+				"fingerprint rule %s cannot execute: Jupyter bundle overrides must use id %q",
+				fingerprint.ID,
+				jupyterfp.BundleOverrideID,
+			))
+		default:
+			effective = append(effective, fingerprint)
+		}
+	}
+
+	if jupyterOverridePresent {
+		return effective, nil, failures
+	}
+	return effective, []rules.CodeDetector{
+		jupyterfp.NativeDetectorDefinition(),
+	}, failures
 }
 
 func collectorRootCoverageKey(collectorName string) string {

@@ -4,9 +4,11 @@
   "url": "https://weather.example.com/a2a",
   "version": "1.2.0",
   "provider": {
-    "organization": "WeatherCorp"
+    "organization": "WeatherCorp",
+    "url": "https://weather.example.com"
   },
   "protocolVersion": "0.3.0",
+  "preferredTransport": "JSONRPC",
   "capabilities": {
     "streaming": true,
     "pushNotifications": false,
@@ -24,6 +26,8 @@
       "api_key_auth": []
     }
   ],
+  "defaultInputModes": ["application/json"],
+  "defaultOutputModes": ["application/json"],
   "skills": [
     {
       "id": "get-weather",

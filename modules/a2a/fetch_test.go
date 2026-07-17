@@ -70,6 +70,34 @@ func TestFetchAgentCard_FallbackToV030(t *testing.T) {
 	}
 }
 
+func TestFetchAgentCardRetainsDuplicateKeyAsConformanceError(t *testing.T) {
+	body := []byte(`{"name":"first","name":"second","signatures":[{"protected":"x","signature":"y"}]}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(server.Close)
+
+	raw, err := FetchAgentCard(context.Background(), server.URL, "", false, time.Second)
+	if err != nil {
+		t.Fatalf("FetchAgentCard: %v", err)
+	}
+	if !strings.Contains(raw.JSONValidationError, `duplicate JSON object key "name"`) {
+		t.Fatalf("JSON validation error = %q", raw.JSONValidationError)
+	}
+	card, err := ParseAgentCard(
+		context.Background(),
+		raw,
+		testA2AEngine(t),
+		VerifyOptions{},
+	)
+	if err != nil {
+		t.Fatalf("ParseAgentCard: %v", err)
+	}
+	if card.Conformant || card.SignatureStatus != SigStatusMalformed {
+		t.Fatalf("duplicate-key card result = %+v", card)
+	}
+}
+
 func TestFetchAgentCard_BothPathsFail(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)

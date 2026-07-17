@@ -24,8 +24,8 @@ These are the node kinds accepted in ingest input (`sdk/ingest.AllowedNodeKinds`
 | `MCPTool` | MCP | `name`, `description`, `input_schema`, `output_schema`, `annotations`, `description_hash` (SHA-256), `input_schema_hash` (SHA-256), `schema_keys[]`, `capability_surface[]`, `source_trust` (untrusted_web/email/fileshare), `has_injection_patterns`, `has_cross_references` |
 | `MCPResource` | MCP | `uri`, `name`, `mime_type`, `size`, `uri_scheme`, `sensitivity` (`critical`/`high`/`medium`/`low`/`none`/`unknown`), `sensitivity_rule_id`, `sensitivity_evidence` |
 | `MCPPrompt` | MCP | `name`, `description`, `arguments` |
-| `A2AAgent` | A2A | `name`, `description`, `url`, `provider`, `version`, `protocol_versions`, `capabilities`, `security_schemes`, `auth_method`, `auth_assurance`, `auth_evidence`, `auth_strength` (numeric only when known), `is_https`, `is_signed`, `signature_verification_status`, `card_hash` |
-| `A2ASkill` | A2A | `id`, `name`, `description`, `input_modes`, `output_modes`, `description_hash`, `has_injection_patterns` |
+| `A2AAgent` | A2A | `name`, `description`, `url`, `provider`, `version`, `card_schema_version`, `card_present_fields`, `card_conformant`, `card_conformance_errors`, ordered `interfaces`, `protocol_versions`, `capabilities`, `security_schemes`, OR-of-AND `security_requirements`, `auth_method`, `auth_assurance`, `auth_evidence`, `auth_strength` (numeric only when known), `is_https`, `is_signed`, `signature_verification_status`, `signature_key_source`, `signature_key_trust`, `card_hash` |
+| `A2ASkill` | A2A | `id`, `name`, `description`, `input_modes`, `output_modes`, `security_requirements`, `conformant`, `conformance_errors`, `description_hash`, `has_injection_patterns` |
 | `AgentInstance` | Config | `name`, `framework`, `config_path` |
 | `Identity` | Config + MCP | `type` (none/apiKey/oauth/bearer/mtls), `scope`, `is_static` |
 | `Credential` | Config + LiteLLM/Open WebUI Looters | `type`, `name`, `source`, required `merge_key` (`value_hash`/`identity`), `identity_basis` (`value_hash`/`provider_name`/`metadata`/`unknown`), `material_status` (`observed`/`masked`/`hashed`/`unobserved`/`unknown`), `exposure_status` (`exposed`/`not_observed`/`unknown`), `high_entropy`, `format`, `value_hash`, `blast_radius` |
@@ -37,7 +37,7 @@ These are the node kinds accepted in ingest input (`sdk/ingest.AllowedNodeKinds`
 | `QdrantInstance` | Network scan + Qdrant fingerprinter + Qdrant Looter | `endpoint`, `version`, `collection_count`, `collections` (sorted names), `total_points`, `anonymous_listing` (Looter-enriched) |
 | `MLflowServer` | Network scan + MLflow fingerprinter | `endpoint`, `version`, `experiment_count` |
 | `LiteLLMGateway` | Network scan + LiteLLM fingerprinter | `endpoint`, `auth_method`, `is_anonymous_loot`, `docs_enabled` |
-| `JupyterServer` | Network scan + Jupyter fingerprinter | `endpoint`, `version`, `token_required` |
+| `JupyterServer` | Network scan + Jupyter fingerprinter + Jupyter Looter | `endpoint`, fingerprint-owned `version`, `status_access`, `status_anonymous_access`, `fingerprint_detector_id`, `fingerprint_detector_version`, `fingerprint_detector_source`; Looter-owned `sessions_access`, `contents_access`, `auth_required` (only when known), observed `auth_method`, `auth_assurance`, `auth_evidence`, `anonymous_access_observed`, `is_anonymous_loot` |
 | `LangServeApp` | Network scan + LangServe fingerprinter | `endpoint`, `chains` |
 | `OpenWebUIInstance` | Network scan + Open WebUI fingerprinter + Open WebUI Looter | `endpoint`, `version`, `signup_enabled`, `auth_required`, `ollama_backend_urls` (canonicalized list, Looter-enriched from admin `/ollama/config`) |
 | `AIService` | Multi-label umbrella (see below) | _(no unique properties — carried as companion label)_ |
@@ -53,24 +53,61 @@ explicit pinned/unpinned evidence.
 Neo4j's internal `SchemaVersion` node is excluded from every public inventory
 count and node collection.
 
-### A2AAgent Signature Verification (`is_signed`, `signature_verification_status`)
+### A2A conformance, interfaces, and signatures
 
-`A2AAgent` carries two signature properties:
+The A2A collector treats discovery and protocol conformance as separate facts.
+`card_schema_version` is pinned to v0.3.0 or v1.0.1,
+`card_present_fields` records raw top-level presence, and
+`card_conformant`/`card_conformance_errors` record versioned required-field
+validation. Nonconformant cards remain observable. `interfaces` preserves wire
+order and marks entry zero `preferred=true`; later JSON-RPC entries never
+replace it. Invalid skills and interfaces remain properties/nodes where they
+have stable identity, but do not produce `ADVERTISES_SKILL` or `RUNS_ON`.
+Optional skill `examples`, `inputModes`, and `outputModes` accept absent/null
+ProtoJSON fields or arrays of strings; another JSON shape makes that skill
+nonconformant and suppresses its functional edge.
 
-- **`is_signed`** — `true` when the agent card has a non-empty `signatures[]` array, regardless of cryptographic validity.
-- **`signature_verification_status`** — the authoritative outcome:
-  - `unsigned` — no `signatures[]`.
-  - `verified` — every signature verified.
-  - `partially_verified` — at least one, but not all, signatures verified.
-  - `failed` — signatures were checked against resolvable keys but none verified (tampered card, wrong key, unsupported algorithm).
-  - `unverifiable` — no key could be resolved for any signature, so verification could not be attempted.
+`security_requirements` preserves alternatives in array order. Each alternative
+contains the schemes that must be used together plus their scopes. Scheme
+declarations alone are inactive. `auth_method` and `AUTHENTICATES_WITH` are
+emitted only when active conformant requirements reduce unambiguously to one
+scalar method; AND combinations or distinct OR methods remain `unknown`. In
+v1.0.1, an empty requirement (`{}`, including ProtoJSON's omitted empty
+`schemes` map) is a conformant anonymous alternative. Omitted/null `list`
+inside a `StringList` is likewise an empty scope list. These forms preserve the
+skill's `ADVERTISES_SKILL` edge and record declared `auth_method=none` where the
+requirements reduce to anonymous access; they are not runtime proof of
+anonymous access.
 
-**Key resolution** (per signature, in order): the card's inline `jwks`; operator-supplied trusted keys (`--a2a-trusted-keys`, a JWKS file); then — unless `--no-verify-jwks` is set — the JWS protected-header **`jku`** URL (the A2A spec §8.4 mechanism) and, as a fallback, a top-level `jwks_uri`. Remote resolution is **on by default** via an SSRF-hardened fetcher: it validates the resolved IP at dial time (refusing link-local/cloud-metadata `169.254.0.0/16`, `fe80::/10`, and unspecified addresses; loopback and RFC1918 remain allowed for internal engagements), caps redirects and response size, honors `--insecure` for TLS, and never forwards `--auth-token` to the `jku` host.
+`is_signed` records a non-empty signature declaration.
+`signature_verification_status` is:
 
-The collector accepts both JWS serializations a card may use:
+- `unsigned` — absent, ProtoJSON `null`, or empty `signatures[]`.
+- `unsupported_version` — a v0.3 signature is structurally observed, but v0.3
+  has no v1 canonicalization contract.
+- `malformed` — the object signature, protected header, required `alg`/`kid`,
+  bounds, ProtoJSON normalization, or JCS input is invalid.
+- `key_unavailable` — the signature is structurally usable but no permitted,
+  current key resolved.
+- `invalid` — a permitted key resolved but did not verify the canonical card.
+- `valid_untrusted` — verification succeeded with an HTTPS `jku` key.
+- `valid_trusted` — verification succeeded with an operator-pinned key.
 
-- **Compact** — each `signatures[]` entry is a compact JWS string.
-- **Flattened JSON (object form)** — each entry is `{ "protected": "<b64url>", "signature": "<b64url>" }`, the spec-conformant A2A shape. The signed payload is the agent card with the `signatures` member removed and JCS-canonicalized (key ordering, no insignificant whitespace); it is embedded base64url-encoded as the JWS payload and verified per RFC 7515. Tampering with any other card field invalidates the signature.
+`signature_key_source` (`none`/`trusted_store`/`jku`) and
+`signature_key_trust` (`unknown`/`untrusted`/`trusted`) keep cryptographic
+validity separate from identity trust. Ingest rejects contradictory
+status/source/trust/`is_signed` tuples. v1.0.1 verification applies pinned
+ProtoJSON presence/default metadata, removes `signatures`, bounds signed-card
+size/depth/object width, then uses RFC 8785 JCS and object-form JWS. Compact
+strings, duplicate protected/unprotected JOSE parameters, inline `jwks`, and
+top-level `jwks_uri` are not accepted inputs; a JWK `alg` constraint must match.
+An absent or ProtoJSON `null` unprotected `header` is equivalent to no header;
+a non-null non-object header is malformed.
+Remote `jku` is HTTPS-only across redirects, always validates TLS server
+identity (independent of target `--insecure`), refuses link-local/metadata
+addresses, rejects fragments, and filters explicitly expired or revoked keys.
+Each card is limited to 16 signatures and four unique remote key sources under
+one aggregate verification deadline.
 
 ---
 
@@ -94,11 +131,11 @@ This enables queries like `MATCH (n:AIService)` to find all AI infrastructure re
 | `PROVIDES_TOOL` | MCPServer | MCPTool | MCP | Server exposes this tool |
 | `PROVIDES_RESOURCE` | MCPServer / JupyterServer / MLflowServer / QdrantInstance | MCPResource | MCP / Jupyter Looter / MLflow Looter (Model Registry storage URIs) / Qdrant Looter (scrolled point payloads under `--include-points`) | Server exposes this resource. MLflow URIs are plain `storage_location or source` (s3://, gs://, dbfs:/, file:///), NOT presigned credentials. Qdrant point resources are per-collection payload samples. |
 | `PROVIDES_PROMPT` | MCPServer | MCPPrompt | MCP | Server exposes this prompt template |
-| `ADVERTISES_SKILL` | A2AAgent | A2ASkill | A2A | Agent advertises this skill |
+| `ADVERTISES_SKILL` | A2AAgent | A2ASkill | A2A | A conformant skill declaration advertises this skill; invalid skill observations do not emit the edge |
 | `DELEGATES_TO` | A2AAgent | A2AAgent | A2A | Lexical possible-delegation hypothesis. `match_type`, `match_field`, and `matched_reference` preserve the boundary/context witness; not proof of runtime delegation. |
-| `AUTHENTICATES_WITH` | MCPServer / A2AAgent | Identity | Config / A2A | Entity uses this auth identity |
+| `AUTHENTICATES_WITH` | MCPServer / A2AAgent | Identity | Config / A2A | Entity uses this auth identity. A2A emits it only for conformant, active, scalar-unambiguous security requirements. |
 | `USES_CREDENTIAL` | Identity | Credential | Config | Identity backed by this credential material |
-| `RUNS_ON` | MCPServer / A2AAgent | Host | Config / A2A / MCP | Entity runs on this host |
+| `RUNS_ON` | MCPServer / A2AAgent | Host | Config / A2A / MCP | Entity runs on this host. A2A requires a conformant preferred interface; later interfaces do not replace entry zero. |
 | `CONFIGURED_IN` | MCPServer | ConfigFile | Config | Server defined in this config file |
 | `HAS_ENV_VAR` | MCPServer | Credential | Config | Server has access to this env var |
 | `LOADS_INSTRUCTIONS` | AgentInstance | InstructionFile | Config | Agent loads this instruction file; validity depends on both the agent config scope and instruction-file scope |

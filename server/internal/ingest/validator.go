@@ -778,23 +778,105 @@ func validateCanonicalNodeProperties(node ingest.Node, index int) []FieldError {
 	if hasKind(node.Kinds, "A2AAgent") {
 		status, _ := node.Properties["signature_verification_status"].(string)
 		switch status {
-		case "unknown", "unsigned", "verified", "partially_verified", "failed", "unverifiable":
+		case "unknown",
+			"unsigned",
+			"unsupported_version",
+			"malformed",
+			"key_unavailable",
+			"invalid",
+			"valid_untrusted",
+			"valid_trusted":
 		default:
 			errs = append(errs, FieldError{
 				Path:    fmt.Sprintf("graph.nodes[%d].properties.signature_verification_status", index),
 				Message: fmt.Sprintf("invalid canonical signature status %q", status),
 			})
 		}
+		source, _ := node.Properties["signature_key_source"].(string)
+		switch source {
+		case "none", "trusted_store", "jku":
+		default:
+			errs = append(errs, FieldError{
+				Path:    fmt.Sprintf("graph.nodes[%d].properties.signature_key_source", index),
+				Message: fmt.Sprintf("invalid signature key source %q", source),
+			})
+		}
+		trust, _ := node.Properties["signature_key_trust"].(string)
+		switch trust {
+		case "unknown", "untrusted", "trusted":
+		default:
+			errs = append(errs, FieldError{
+				Path:    fmt.Sprintf("graph.nodes[%d].properties.signature_key_trust", index),
+				Message: fmt.Sprintf("invalid signature key trust %q", trust),
+			})
+		}
+		if status == "valid_trusted" && (source != "trusted_store" || trust != "trusted") {
+			errs = append(errs, FieldError{
+				Path:    fmt.Sprintf("graph.nodes[%d].properties.signature_key_trust", index),
+				Message: "valid_trusted requires trusted_store source and trusted key",
+			})
+		}
+		if status == "valid_untrusted" && (source != "jku" || trust != "untrusted") {
+			errs = append(errs, FieldError{
+				Path:    fmt.Sprintf("graph.nodes[%d].properties.signature_key_trust", index),
+				Message: "valid_untrusted requires jku source and untrusted key",
+			})
+		}
+		if !validA2ASignatureProvenancePair(source, trust) ||
+			!validA2ASignatureStatusProvenance(status, source, trust) {
+			errs = append(errs, FieldError{
+				Path: fmt.Sprintf(
+					"graph.nodes[%d].properties.signature_key_source",
+					index,
+				),
+				Message: "signature status, key source, and key trust are contradictory",
+			})
+		}
 		if signed, exists := node.Properties["is_signed"]; exists {
-			if _, ok := signed.(bool); !ok {
+			signedValue, ok := signed.(bool)
+			if !ok {
 				errs = append(errs, FieldError{
 					Path:    fmt.Sprintf("graph.nodes[%d].properties.is_signed", index),
 					Message: "must be boolean when present",
 				})
+			} else {
+				expectedSigned := status != "unknown" && status != "unsigned"
+				if signedValue != expectedSigned {
+					errs = append(errs, FieldError{
+						Path: fmt.Sprintf(
+							"graph.nodes[%d].properties.is_signed",
+							index,
+						),
+						Message: "is_signed contradicts signature verification status",
+					})
+				}
 			}
 		}
 	}
 	return errs
+}
+
+func validA2ASignatureProvenancePair(source, trust string) bool {
+	return (source == "none" && trust == "unknown") ||
+		(source == "trusted_store" && trust == "trusted") ||
+		(source == "jku" && trust == "untrusted")
+}
+
+func validA2ASignatureStatusProvenance(status, source, trust string) bool {
+	switch status {
+	case "unknown", "unsigned", "unsupported_version", "malformed":
+		return source == "none" && trust == "unknown"
+	case "key_unavailable":
+		return validA2ASignatureProvenancePair(source, trust)
+	case "invalid":
+		return source != "none" && validA2ASignatureProvenancePair(source, trust)
+	case "valid_untrusted":
+		return source == "jku" && trust == "untrusted"
+	case "valid_trusted":
+		return source == "trusted_store" && trust == "trusted"
+	default:
+		return false
+	}
 }
 
 func validateStdioChildID(

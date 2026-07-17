@@ -50,7 +50,9 @@
           "auth_assurance": "weak",
           "auth_evidence": "declared_security_scheme",
           "is_signed": true,
-          "signature_verification_status": "verified",
+          "signature_verification_status": "valid_trusted",
+          "signature_key_source": "trusted_store",
+          "signature_key_trust": "trusted",
           "card_hash": "d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5",
           "objectid": "sha256:7dca4e1baacbb9d6b9b958c6685c708c837f4674feec650dbe73786b6417b1d1"
         },
@@ -73,6 +75,8 @@
           "auth_evidence": "anonymous_probe_succeeded",
           "is_signed": false,
           "signature_verification_status": "unsigned",
+          "signature_key_source": "none",
+          "signature_key_trust": "unknown",
           "card_hash": "e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6",
           "objectid": "sha256:f29d41afd3993adb0740cf7f7c3f302033e31316c541d57c2b1d2254eb6fbc64"
         },

@@ -396,10 +396,10 @@ func TestLoadFingerprints_EmbeddedRulesValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFingerprints: %v", err)
 	}
-	if len(rules) < 8 {
-		t.Errorf("expected at least 8 embedded fingerprint rules, got %d", len(rules))
+	if len(rules) < 7 {
+		t.Errorf("expected at least 7 embedded fingerprint rules, got %d", len(rules))
 	}
-	wantKinds := []string{"ollama", "litellm", "vllm", "openwebui", "jupyter", "qdrant", "mlflow", "langserve"}
+	wantKinds := []string{"ollama", "litellm", "vllm", "openwebui", "qdrant", "mlflow", "langserve"}
 	found := make(map[string]bool)
 	for _, r := range rules {
 		found[r.ServiceKind] = true

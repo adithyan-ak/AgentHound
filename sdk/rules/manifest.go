@@ -28,6 +28,29 @@ func BuildManifest(
 	fingerprintRules []FingerprintRule,
 	loadFailures ...string,
 ) ingest.RulesetManifest {
+	return BuildManifestWithDetectors(
+		textRules,
+		fingerprintRules,
+		nil,
+		loadFailures...,
+	)
+}
+
+// CodeDetector records versioned native detection semantics that cannot be
+// represented faithfully by the generic fingerprint rule DSL.
+type CodeDetector struct {
+	ID               string
+	Version          int
+	Source           string
+	EffectiveMatcher json.RawMessage
+}
+
+func BuildManifestWithDetectors(
+	textRules []Rule,
+	fingerprintRules []FingerprintRule,
+	codeDetectors []CodeDetector,
+	loadFailures ...string,
+) ingest.RulesetManifest {
 	manifest := ingest.RulesetManifest{
 		LoadState:    ingest.OutcomeComplete,
 		Authenticity: "unverified",
@@ -49,6 +72,37 @@ func BuildManifest(
 			Version:          rule.Version,
 			SemanticSHA256:   semanticDigest(ruleForDigest(rule)),
 			Source:           ruleSourceClass(rule.Source),
+			EffectiveMatcher: effectiveMatcher,
+		})
+	}
+	for _, detector := range codeDetectors {
+		if strings.TrimSpace(detector.ID) == "" || detector.Version <= 0 {
+			manifest.Errors = append(
+				manifest.Errors,
+				"code detector must include an ID and positive version",
+			)
+			continue
+		}
+		effectiveMatcher, err := canonicalCodeDetectorMatcherJSON(
+			detector.EffectiveMatcher,
+		)
+		if err != nil {
+			manifest.Errors = append(
+				manifest.Errors,
+				fmt.Sprintf("code detector %s matcher: %v", detector.ID, err),
+			)
+			continue
+		}
+		manifest.Entries = append(manifest.Entries, ingest.RuleManifestEntry{
+			Type:    "detector",
+			ID:      detector.ID,
+			Version: detector.Version,
+			SemanticSHA256: semanticDigest(struct {
+				ID      string          `json:"id"`
+				Version int             `json:"version"`
+				Matcher json.RawMessage `json:"matcher"`
+			}{detector.ID, detector.Version, effectiveMatcher}),
+			Source:           ruleSourceClass(detector.Source),
 			EffectiveMatcher: effectiveMatcher,
 		})
 	}
@@ -95,6 +149,14 @@ func BuildManifest(
 	}
 	manifest.Digest = semanticDigest(manifest.Entries)
 	return manifest
+}
+
+func canonicalCodeDetectorMatcherJSON(raw json.RawMessage) (json.RawMessage, error) {
+	var matcher map[string]any
+	if err := json.Unmarshal(raw, &matcher); err != nil {
+		return nil, fmt.Errorf("must be a JSON object: %w", err)
+	}
+	return json.Marshal(matcher)
 }
 
 type canonicalTextMatcher struct {
