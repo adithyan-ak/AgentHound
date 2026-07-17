@@ -2,82 +2,60 @@ package a2a
 
 import "testing"
 
-func TestAuthPostureScore(t *testing.T) {
-	tests := []struct {
-		name    string
-		schemes []SecurityScheme
-		want    int
-	}{
-		{"no schemes", nil, -1},
-		{"apiKey", []SecurityScheme{{Name: "ak", Type: "apiKey"}}, 70},
-		{"http/bearer", []SecurityScheme{{Name: "bearer", Type: "http", Scheme: "bearer"}}, 50},
-		{"oauth2", []SecurityScheme{{Name: "oauth", Type: "oauth2"}}, 25},
-		{"openIdConnect", []SecurityScheme{{Name: "oidc", Type: "openIdConnect"}}, 20},
-		{"mutualTLS", []SecurityScheme{{Name: "mtls", Type: "mutualTLS"}}, 10},
-		{
-			"multiple picks strongest",
-			[]SecurityScheme{
-				{Name: "ak", Type: "apiKey"},
-				{Name: "oauth", Type: "oauth2"},
-			},
-			25,
-		},
-		{
-			"mtls plus apiKey",
-			[]SecurityScheme{
-				{Name: "ak", Type: "apiKey"},
-				{Name: "mtls", Type: "mutualTLS"},
-			},
-			10,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := AuthPostureScore(tt.schemes)
-			if got != tt.want {
-				t.Errorf("AuthPostureScore() = %d, want %d", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestDeriveAuthMethod(t *testing.T) {
 	tests := []struct {
-		name    string
-		schemes []SecurityScheme
-		refs    []any
-		want    string
+		name         string
+		schemes      []SecurityScheme
+		requirements []SecurityRequirement
+		want         string
 	}{
 		{"no schemes", nil, nil, "unknown"},
-		{"apiKey only", []SecurityScheme{{Name: "ak", Type: "apiKey"}}, nil, "apiKey"},
-		{"http bearer", []SecurityScheme{{Name: "b", Type: "http", Scheme: "bearer"}}, nil, "bearer"},
-		{"http basic", []SecurityScheme{{Name: "b", Type: "http", Scheme: "basic"}}, nil, "basic"},
-		{"http scheme missing", []SecurityScheme{{Name: "b", Type: "http"}}, nil, "unknown"},
-		{"oauth2", []SecurityScheme{{Name: "o", Type: "oauth2"}}, nil, "oauth"},
-		{"openIdConnect", []SecurityScheme{{Name: "oidc", Type: "openIdConnect"}}, nil, "oidc"},
-		{"mutualTLS", []SecurityScheme{{Name: "m", Type: "mutualTLS"}}, nil, "mtls"},
 		{
-			"multiple returns strongest",
-			[]SecurityScheme{
-				{Name: "ak", Type: "apiKey"},
-				{Name: "m", Type: "mutualTLS"},
-			},
+			"declared only remains inactive",
+			[]SecurityScheme{{Name: "ak", Type: "apiKey", Conformant: true}},
 			nil,
-			"mtls",
+			"unknown",
 		},
 		{
-			"refs filter to active",
-			[]SecurityScheme{
-				{Name: "ak", Type: "apiKey"},
-				{Name: "m", Type: "mutualTLS"},
-			},
-			[]any{map[string]any{"ak": []any{}}},
+			"single active api key",
+			[]SecurityScheme{{Name: "ak", Type: "apiKey", Conformant: true}},
+			[]SecurityRequirement{{
+				Conformant: true,
+				Schemes:    []SecurityRequirementScheme{{Name: "ak"}},
+			}},
 			"apiKey",
+		},
+		{
+			"and requirement cannot be scalar",
+			[]SecurityScheme{
+				{Name: "ak", Type: "apiKey", Conformant: true},
+				{Name: "m", Type: "mutualTLS", Conformant: true},
+			},
+			[]SecurityRequirement{{
+				Conformant: true,
+				Schemes: []SecurityRequirementScheme{
+					{Name: "ak"},
+					{Name: "m"},
+				},
+			}},
+			"unknown",
+		},
+		{
+			"same method alternatives are unambiguous",
+			[]SecurityScheme{
+				{Name: "one", Type: "http", Scheme: "bearer", Conformant: true},
+				{Name: "two", Type: "http", Scheme: "bearer", Conformant: true},
+			},
+			[]SecurityRequirement{
+				{Conformant: true, Schemes: []SecurityRequirementScheme{{Name: "one"}}},
+				{Conformant: true, Schemes: []SecurityRequirementScheme{{Name: "two"}}},
+			},
+			"bearer",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := DeriveAuthMethod(tt.schemes, tt.refs)
+			got := DeriveAuthMethod(tt.schemes, tt.requirements)
 			if got != tt.want {
 				t.Errorf("DeriveAuthMethod() = %q, want %q", got, tt.want)
 			}
@@ -131,9 +109,10 @@ func TestDetectDelegation_ByURL(t *testing.T) {
 			URL:         "https://orch.example.com",
 		},
 		{
-			Name:        "WorkerTarget",
-			Description: "Executes work",
-			URL:         "https://worker.example.com",
+			Name:              "WorkerTarget",
+			Description:       "Executes work",
+			URL:               "https://worker.example.com",
+			PreferredURLValid: true,
 		},
 	}
 	edges := DetectDelegation(cards)
@@ -185,19 +164,25 @@ func TestDetectDelegation_RequiresBoundaryAndDelegationContext(t *testing.T) {
 func TestDetectSameAuthDomain(t *testing.T) {
 	cards := []*AgentCardData{
 		{
-			Name:            "Agent1",
-			URL:             "https://api.example.com/a",
-			SecuritySchemes: []SecurityScheme{{Name: "oauth", Type: "oauth2"}},
+			Name:                 "Agent1",
+			URL:                  "https://api.example.com/a",
+			PreferredURLValid:    true,
+			SecuritySchemes:      []SecurityScheme{{Name: "oauth", Type: "oauth2", Conformant: true}},
+			SecurityRequirements: []SecurityRequirement{{Conformant: true, Schemes: []SecurityRequirementScheme{{Name: "oauth"}}}},
 		},
 		{
-			Name:            "Agent2",
-			URL:             "https://api.example.com/b",
-			SecuritySchemes: []SecurityScheme{{Name: "oauth", Type: "oauth2"}},
+			Name:                 "Agent2",
+			URL:                  "https://api.example.com/b",
+			PreferredURLValid:    true,
+			SecuritySchemes:      []SecurityScheme{{Name: "oauth", Type: "oauth2", Conformant: true}},
+			SecurityRequirements: []SecurityRequirement{{Conformant: true, Schemes: []SecurityRequirementScheme{{Name: "oauth"}}}},
 		},
 		{
-			Name:            "Agent3",
-			URL:             "https://other.example.com",
-			SecuritySchemes: []SecurityScheme{{Name: "oauth", Type: "oauth2"}},
+			Name:                 "Agent3",
+			URL:                  "https://other.example.com",
+			PreferredURLValid:    true,
+			SecuritySchemes:      []SecurityScheme{{Name: "oauth", Type: "oauth2", Conformant: true}},
+			SecurityRequirements: []SecurityRequirement{{Conformant: true, Schemes: []SecurityRequirementScheme{{Name: "oauth"}}}},
 		},
 	}
 	edges := DetectSameAuthDomain(cards)
@@ -209,14 +194,16 @@ func TestDetectSameAuthDomain(t *testing.T) {
 func TestDetectSameAuthDomain_NoOAuth(t *testing.T) {
 	cards := []*AgentCardData{
 		{
-			Name:            "Agent1",
-			URL:             "https://a.example.com",
-			SecuritySchemes: []SecurityScheme{{Name: "ak", Type: "apiKey"}},
+			Name:                 "Agent1",
+			URL:                  "https://a.example.com",
+			SecuritySchemes:      []SecurityScheme{{Name: "ak", Type: "apiKey", Conformant: true}},
+			SecurityRequirements: []SecurityRequirement{{Conformant: true, Schemes: []SecurityRequirementScheme{{Name: "ak"}}}},
 		},
 		{
-			Name:            "Agent2",
-			URL:             "https://a.example.com",
-			SecuritySchemes: []SecurityScheme{{Name: "ak", Type: "apiKey"}},
+			Name:                 "Agent2",
+			URL:                  "https://a.example.com",
+			SecuritySchemes:      []SecurityScheme{{Name: "ak", Type: "apiKey", Conformant: true}},
+			SecurityRequirements: []SecurityRequirement{{Conformant: true, Schemes: []SecurityRequirementScheme{{Name: "ak"}}}},
 		},
 	}
 	edges := DetectSameAuthDomain(cards)

@@ -15,7 +15,7 @@ AgentHound ships as **two binaries**: `agenthound` (collector) and `agenthound-s
 | `--log-level` | `AGENTHOUND_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
 | `--quiet` | `AGENTHOUND_QUIET=1` | `false` | Suppress non-error log output. |
 | `--log-json` | `AGENTHOUND_LOG_JSON=1` | `false` | Emit structured JSON logs. |
-| `--rules-bundle` | `AGENTHOUND_RULES_BUNDLE` | | Path to a fingerprint rules bundle (dir or `.tar.gz`). Same-id rules override the embedded set. Verify cosign signature before use. |
+| `--rules-bundle` | `AGENTHOUND_RULES_BUNDLE` | | Path to a fingerprint rules bundle (dir or `.tar.gz`). Same-ID rules override shipped rule-backed detectors; `id: jupyter` can replace the versioned native Jupyter detector. Bundles do not register new scanner dispatch targets. Verify cosign signature before use. |
 
 Priority: CLI flag > env var > default.
 
@@ -81,12 +81,31 @@ Read-only: calls `tools/list`, `resources/list`, `resources/templates/list`, `pr
 | `--targets-file` | | File with agent URLs (one per line). |
 | `--discover-domain` | | Domains to probe for `/.well-known/agent-card.json`. |
 | `--auth-token` | | Bearer token for authenticated agents. |
-| `--no-verify-jwks` | `false` | Disable remote JWKS (`jku`) resolution during signature verification; verify only against inline `jwks` and `--a2a-trusted-keys` (offline). |
+| `--no-verify-jwks` | `false` | Disable remote JWKS (`jku`) resolution during v1 signature verification; verify only against `--a2a-trusted-keys` (offline). |
 | `--a2a-trusted-keys` | | Path to a JWKS JSON file of trusted keys used to verify signed agent cards (offline key store). |
 
 At least one of `--target`, `--targets`, `--targets-file`, or `--discover-domain` is required with `--a2a`.
 
-Signed agent cards are verified by default: keys are resolved from the card's inline `jwks`, then `--a2a-trusted-keys`, then the JWS protected-header `jku` URL over an SSRF-hardened fetcher (loopback/RFC1918 allowed; link-local/cloud-metadata refused). `--no-verify-jwks` restricts verification to local key sources. Results are surfaced on the `A2AAgent` node via `signature_verification_status` (`verified` / `partially_verified` / `failed` / `unverifiable` / `unsigned`).
+The collector validates v0.3.0 and v1.0.1 required fields but retains invalid
+cards as `card_conformant=false` observations. Ordered interfaces are preserved;
+entry zero remains preferred. Skill, host, and authentication edges are emitted
+only when the facts supporting each edge are conformant. Security requirements
+retain their OR-of-AND structure and scopes; a declared scheme is inactive until
+referenced by a requirement, and `auth_method` remains `unknown` when a scalar
+method would be ambiguous.
+
+Only v1.0.1 cards have a defined signing algorithm. Their ProtoJSON
+presence/default rules are applied before RFC 8785 JCS and object-form JWS
+verification. Keys resolve first from `--a2a-trusted-keys`, then from the
+protected header's `jku`; card-controlled inline `jwks`, top-level `jwks_uri`,
+and compact signature strings are not key/signature inputs. Remote `jku` is
+HTTPS-only, validates server identity even when target collection uses
+`--insecure`, and remains untrusted identity evidence unless the key was
+operator-pinned. Each card is limited to 16 signatures and four unique remote
+key sources under one aggregate verification deadline; `jku` fragments are
+rejected. Results use `unsigned`, `unsupported_version`, `malformed`,
+`key_unavailable`, `invalid`, `valid_untrusted`, or `valid_trusted`, with
+separate `signature_key_source` and `signature_key_trust` properties.
 
 #### Network Mode Flags
 
@@ -218,7 +237,7 @@ Without `--include-points` the Qdrant Looter is pure-GET (`GET /collections` + `
 |------|---------|-------------|
 | `--max-depth` | `4` | Maximum recursion depth into `/api/contents` subdirectories. Arbitrary safety cap — Jupyter Server places no upper bound on tree depth, so a hostile or accidentally-deep tree could exhaust the Looter without one. |
 
-The Jupyter Looter is anonymous and pure-GET: it inventories active sessions via `GET /api/sessions` (empty-path console kernels are counted) and walks the notebook tree recursively via `GET /api/contents/`, emitting one `:MCPResource` per discovered notebook OR file. Per-directory 4xx/5xx failures are recorded as `PartialErrors` and the walk continues on sibling directories.
+The Jupyter Looter is pure-GET. It first tries `GET /api/sessions` and root `GET /api/contents/` without credentials. On 401/403 it retries with the bare value from `--credential token=...` (one existing `Bearer ` prefix is normalized) and propagates that bearer through the recursive walk. A 2xx response counts as protected access only after sessions decode as an array or contents decode with a directory `content` array; malformed success bodies are partial failures, not anonymous evidence. Direct URL targets retain their base path and implicit HTTP(S) port. Directories count against the common `--max-items` budget, bounding both emitted resources and recursive traversal. Exhausting that budget or encountering a directory beyond `--max-depth` marks the collection partial so incomplete inventory cannot retire current graph state. It does not perform password login. `auth_required`, `auth_method`, and anonymous-access properties come from protected-operation outcomes; status-page access alone never creates an anonymous-loot conclusion. Mixed endpoint authorization remains `auth_method=unknown` rather than guessing a server-wide mechanism.
 
 #### `--type mlflow` — coverage note
 

@@ -49,6 +49,13 @@ func TestDetectVersion_NoAuth(t *testing.T) {
 	}
 }
 
+func TestDetectVersionUsesWellKnownPathForMalformedV1Card(t *testing.T) {
+	raw := map[string]any{"name": "missing required v1 fields"}
+	if got := detectVersionWithPathHint(raw, "v1.0"); got != "v1.0" {
+		t.Fatalf("path-hinted malformed v1 card detected as %q", got)
+	}
+}
+
 func TestParseV030(t *testing.T) {
 	engine := testA2AEngine(t)
 	m := mustParseFixture(t, "agent_card_v030.json")
@@ -170,9 +177,12 @@ func TestParseV030_MissingName(t *testing.T) {
 		"url":         "https://example.com",
 		"description": "no name",
 	}
-	_, err := parseV030(raw, "hash", engine)
-	if err == nil {
-		t.Fatal("expected error for missing name")
+	card, err := parseV030(raw, "hash", engine)
+	if err != nil {
+		t.Fatalf("parseV030: %v", err)
+	}
+	if card.Conformant || !containsString(card.ConformanceErrors, "name: required field is missing") {
+		t.Fatalf("missing-name card was not retained as nonconformant: %+v", card)
 	}
 }
 
@@ -181,9 +191,12 @@ func TestParseV10_MissingName(t *testing.T) {
 	raw := map[string]any{
 		"supportedInterfaces": []any{},
 	}
-	_, err := parseV10(raw, "hash", engine)
-	if err == nil {
-		t.Fatal("expected error for missing name")
+	card, err := parseV10(raw, "hash", engine)
+	if err != nil {
+		t.Fatalf("parseV10: %v", err)
+	}
+	if card.Conformant || !containsString(card.ConformanceErrors, "name: required field is missing") {
+		t.Fatalf("missing-name card was not retained as nonconformant: %+v", card)
 	}
 }
 
@@ -207,8 +220,6 @@ func TestParseAgentCard_Dispatch(t *testing.T) {
 			}
 
 			raw := &RawCard{
-				URL:      "https://example.com",
-				Body:     data,
 				Parsed:   parsed,
 				Version:  DetectVersion(parsed),
 				CardHash: "abc123",

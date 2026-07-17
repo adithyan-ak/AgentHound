@@ -38,11 +38,17 @@ func EndpointParts(t Target, defaultPort int, defaultScheme string) (string, str
 			scheme = u.Scheme
 		}
 		host := u.Hostname()
-		port := defaultPort
+		port := 0
 		if p := u.Port(); p != "" {
 			if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
 				port = parsed
 			}
+		} else if strings.EqualFold(scheme, "https") {
+			port = 443
+		} else if strings.EqualFold(scheme, "http") {
+			port = 80
+		} else {
+			port = defaultPort
 		}
 		return scheme, host, port
 	}
@@ -66,10 +72,24 @@ func EndpointParts(t Target, defaultPort int, defaultScheme string) (string, str
 }
 
 // EndpointBaseURL returns an http(s) base URL for a target. Meta["url"] is an
-// explicit override; otherwise the URL is reconstructed from EndpointParts.
+// explicit override. URL-shaped addresses preserve their base path and URL
+// port semantics; host-shaped addresses retain the module's default port.
 func EndpointBaseURL(t Target, defaultPort int, defaultScheme string) string {
 	if u := strings.TrimSpace(t.Meta["url"]); u != "" {
 		return strings.TrimRight(u, "/")
+	}
+	if parsed, err := url.Parse(strings.TrimSpace(t.Address)); err == nil &&
+		parsed.Scheme != "" && parsed.Host != "" {
+		if override := strings.TrimSpace(t.Meta["scheme"]); override != "" {
+			parsed.Scheme = override
+		}
+		parsed.User = nil
+		parsed.RawQuery = ""
+		parsed.ForceQuery = false
+		parsed.Fragment = ""
+		parsed.Path = strings.TrimRight(parsed.Path, "/")
+		parsed.RawPath = strings.TrimRight(parsed.RawPath, "/")
+		return parsed.String()
 	}
 	scheme, host, port := EndpointParts(t, defaultPort, defaultScheme)
 	if port > 0 {

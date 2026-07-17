@@ -105,8 +105,15 @@ The collector makes outbound network calls to:
 
 1. **Targets specified by the operator** — `--target`, `--targets`,
    `--config`, `--url`, or paths discovered by `--discover`.
-2. **No one else.** No telemetry, no phone-home, no version-check
-   pings, no crash reporting, and no upload to a central server.
+2. **A2A v1 signature key URLs declared by those targets** — protected-header
+   `jku` retrieval is enabled unless `--no-verify-jwks` is set. It is
+   HTTPS-only across redirects, validates TLS identity even when target
+   collection uses `--insecure`, refuses link-local/cloud-metadata addresses,
+   rejects fragments, is response- and per-card-work-bounded, and receives no
+   target authorization header.
+
+There is no telemetry, phone-home, version-check ping, crash reporting, or
+upload to a central server.
 
 Scan output is written to a local file (or to stdout via `--output -`).
 Transport to the operator's analysis box is the operator's
@@ -245,6 +252,25 @@ the `mcp.poison` module), so it inherits the destructive-primitive posture:
   predicted credential path — the round-trip evidence stays in the campaign
   transport. It validates only that the mutation/rollback machinery works.
 
+### A2A card evidence and key trust
+
+A2A v1.0.1 signature verification separates cryptographic validity from identity trust. Operator-pinned JWKS keys produce `valid_trusted`. A key retrieved from a protected-header `jku` can produce only `valid_untrusted`: HTTPS authenticates the key host, not the claimed agent/provider. Inline `jwks` and top-level `jwks_uri` are recorded as nonstandard inactive evidence.
+
+Remote `jku` requires HTTPS on the initial request and every redirect, validates the certificate identity even when `--insecure` is used for card retrieval, blocks link-local/metadata destinations, rejects fragments, and bounds redirects, bytes, key count, signatures, unique remote sources, and aggregate verification time. Invalid, expired, or explicitly revoked key evidence is rejected. Operators needing private/self-signed key infrastructure must pin the key locally with `--a2a-trusted-keys`; `--insecure` is not a bypass.
+
+Card conformance and signature state qualify functional A2A edges. Invalid
+cards are retained for visibility, but declarations alone do not create active
+authentication identities or edges. A v1.0.1 empty security requirement is a
+valid anonymous alternative under the protocol/OpenAPI model, so it remains
+conformant and does not suppress a valid skill. Its `auth_method=none` evidence
+is a declaration, not proof that a credential-free runtime request succeeded.
+ProtoJSON null scope lists are empty scopes; optional skill repeated fields are
+absent/null or arrays of strings. Other shapes make the skill nonconformant and
+prevent it from emitting a functional `ADVERTISES_SKILL` edge.
+An absent, null, or empty `signatures` field is unsigned and remains eligible
+for the unsigned-card finding. A null optional unprotected signature header is
+absent; non-null wrong-shaped signature fields remain malformed.
+
 ### `openwebui.loot` authenticated mode
 
 `agenthound loot --type openwebui --api-key <key>` reads an
@@ -281,6 +307,10 @@ output stored on Windows as readable by every local user account.
 - All HTTP transports verify certificates by default.
 - `--insecure` disables certificate verification. Use only against
   self-signed targets in an authorized assessment, never as a default.
+- `--insecure` applies only to the selected collection target. A
+  card-controlled A2A `jku` always requires HTTPS with certificate and server
+  identity validation. Operators assessing internal/self-signed issuers must
+  pin their keys with `--a2a-trusted-keys` instead.
 - A regression test in `modules/{mcp,a2a}/*_test.go` asserts strict
   default verification — a code change that silently weakens this
   fails CI.

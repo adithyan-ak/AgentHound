@@ -2,8 +2,10 @@
   "name": "DataAnalyst",
   "description": "AI-powered data analysis agent that delegates to WeatherAgent for weather data",
   "provider": {
-    "organization": "AnalyticsCo"
+    "organization": "AnalyticsCo",
+    "url": "https://analytics.example.com"
   },
+  "version": "1.0.0",
   "supportedInterfaces": [
     {
       "protocolBinding": "JSONRPC",
@@ -17,23 +19,30 @@
   },
   "securitySchemes": {
     "oauth": {
-      "type": "oauth2",
-      "flows": {
-        "clientCredentials": {
-          "tokenUrl": "https://auth.example.com/token",
-          "scopes": {
-            "read": "Read access",
-            "write": "Write access"
+      "oauth2SecurityScheme": {
+        "flows": {
+          "clientCredentials": {
+            "tokenUrl": "https://auth.example.com/token",
+            "scopes": {
+              "read": "Read access",
+              "write": "Write access"
+            }
           }
         }
       }
     }
   },
-  "security": [
+  "securityRequirements": [
     {
-      "oauth": ["read"]
+      "schemes": {
+        "oauth": {
+          "list": ["read"]
+        }
+      }
     }
   ],
+  "defaultInputModes": ["application/json"],
+  "defaultOutputModes": ["application/json"],
   "skills": [
     {
       "id": "analyze-data",
