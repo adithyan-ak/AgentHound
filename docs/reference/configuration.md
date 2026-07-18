@@ -21,9 +21,17 @@ Both binaries read environment variables at startup. The collector has no config
 | `AGENTHOUND_LOG_JSON` | `--log-json` | _(unset)_ | Set to `1` for structured JSON logs to stderr |
 | `AGENTHOUND_RULES_BUNDLE` | `--rules-bundle` | _(unset)_ | Path to a fingerprint rules bundle (directory or `.tar.gz`). Same-id rules override the embedded set. Verify cosign signature before use. |
 | `AGENTHOUND_CAMPAIGN_CREDENTIAL` | `--credential-env` (names the var) | _(unset)_ | Out-of-band credential material for `agenthound campaign`. Hash-matched locally against the witness `value_hash`; never logged, serialized, or written to the graph. Never pass credentials as a flag. |
+| `AGENTHOUND_MCP_TOKEN` | _(none)_ | _(unset)_ | Explicit bearer value for MCP SDK observation by the ContextForge poison/round-trip adapter. Overrides exact-URL MCP client-config credential discovery. Never stored in receipts or reports. |
+| `AGENTHOUND_CONTEXTFORGE_TOKEN` | _(none)_ | _(unset)_ | Explicit ContextForge management-bearer override. Required for cross-origin management; otherwise same-origin management reuses the resolved MCP bearer. Never stored in receipts or reports. |
 | `AGENTHOUND_CAMPAIGN_AUTHORIZED` | _(none)_ | _(unset)_ | Set to `AUTHORIZED` to acknowledge the `campaign` authorization gate non-interactively (needed when stdin is consumed by `--witness -` / `--credential-stdin`). |
 
 Output file permissions: `0600` on POSIX. Atomic write via temp file + rename.
+
+For ContextForge operations, MCP and management authentication remain independently configurable and origin-bound. If `AGENTHOUND_MCP_TOKEN` is unset, AgentHound searches its existing MCP client-config discovery paths for one unique `Authorization` header whose configured URL is byte-for-byte equal to the positional MCP URL after surrounding whitespace is trimmed. It does not use host-only, prefix, normalized, or fuzzy matching, and conflicting exact-URL headers fail closed. Stdio wrappers, routing headers, and unresolved credential references are not inferred.
+
+When `AGENTHOUND_CONTEXTFORGE_TOKEN` is set, it overrides the management bearer only. Otherwise management may reuse the resolved MCP bearer only when its origin is the same; a cross-origin `--management-url` requires the explicit ContextForge override. ContextForge v1.0.5 enforces token permission claims as a ceiling before its database RBAC check. AgentHound therefore accepts a session token or an API token whose permission ceiling is empty or contains `*`, then reads the fixed `/v1/auth/email/me` profile. For a non-admin it queries `/v1/rbac/my/permissions?team_id=<uuid>` for the exact server and tool team contexts; effective RBAC must contain `servers.read`, `tools.read`, and `tools.update`, so use a dedicated account whose provider roles contain only those permissions. The account must also be the direct `ownerEmail` of both objects; token team membership does not establish ContextForge's team-owner role. A platform-admin bypass is accepted only from the provider-authenticated profile. Exact non-wildcard API-token ceilings fail closed because they block the preflight endpoints needed to prove authorization. Exact server/tool reads must also succeed. Credentials are never persisted.
+
+AgentHound does not create, retrieve, or elevate ContextForge management credentials. Obtain the bearer from the authorized deployment's existing authentication or API-token workflow, and provision its provider identity/RBAC before running the adapter.
 
 ---
 

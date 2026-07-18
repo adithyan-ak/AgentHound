@@ -45,7 +45,7 @@ func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, sca
 	}
 
 	client := mcpsdk.NewClient(
-		&mcpsdk.Implementation{Name: "AgentHound", Version: common.CollectorVersion},
+		&mcpsdk.Implementation{Name: "AgentHound", Version: common.CollectorVersion()},
 		nil,
 	)
 
@@ -145,7 +145,7 @@ func (c *MCPCollector) retryWithSSE(ctx context.Context, spec ServerSpec, scanID
 	sseTransport := buildSSETransport(spec, c.insecure)
 
 	client := mcpsdk.NewClient(
-		&mcpsdk.Implementation{Name: "AgentHound", Version: common.CollectorVersion},
+		&mcpsdk.Implementation{Name: "AgentHound", Version: common.CollectorVersion()},
 		nil,
 	)
 
@@ -237,28 +237,20 @@ type enumResult struct {
 func (c *MCPCollector) enumerateTools(ctx context.Context, session *mcpsdk.ClientSession, serverID, scanID string) enumResult {
 	var result enumResult
 
-	var tools []*mcpsdk.Tool
-	count := 0
 	state := ingest.OutcomeComplete
 	var outcomeErr error
-	for tool, err := range session.Tools(ctx, nil) {
-		if err != nil {
-			logEnumerationError("tool", serverID, err)
-			outcomeErr = err
-			if len(tools) > 0 {
-				state = ingest.OutcomePartial
-			} else {
-				state = ingest.OutcomeFailed
-			}
-			break
+	tools, truncated, err := observeSessionTools(ctx, session, c.maxItems)
+	if err != nil {
+		logEnumerationError("tool", serverID, err)
+		outcomeErr = err
+		if len(tools) > 0 {
+			state = ingest.OutcomePartial
+		} else {
+			state = ingest.OutcomeFailed
 		}
-		count++
-		if count > c.maxItems {
-			log.Printf("[mcp] tool enumeration hit safety valve (%d items) for server %s", c.maxItems, serverID)
-			state = ingest.OutcomeTruncated
-			break
-		}
-		tools = append(tools, tool)
+	} else if truncated {
+		log.Printf("[mcp] tool enumeration hit safety valve (%d items) for server %s", c.maxItems, serverID)
+		state = ingest.OutcomeTruncated
 	}
 	result.outcome = enumerationOutcome(serverID, "tools/list", state, len(tools), outcomeErr)
 

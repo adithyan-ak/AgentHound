@@ -24,48 +24,56 @@ type AuthDomainEdge struct {
 	AgentID2 string
 }
 
-func AuthPostureScore(schemes []SecurityScheme) int {
-	assessment := AuthAssessmentForSchemes(schemes, nil)
-	if assessment.Weakness == nil {
-		return -1
-	}
-	return int(*assessment.Weakness)
+func DeriveAuthMethod(
+	schemes []SecurityScheme,
+	requirements []SecurityRequirement,
+) string {
+	return string(AuthAssessmentForSchemes(schemes, requirements).Method)
 }
 
-func DeriveAuthMethod(schemes []SecurityScheme, securityRefs []any) string {
-	return string(AuthAssessmentForSchemes(schemes, securityRefs).Method)
-}
-
-func AuthAssessmentForSchemes(schemes []SecurityScheme, securityRefs []any) common.AuthAssessment {
-	if len(schemes) == 0 {
-		// A missing securitySchemes object is absence of assessment evidence,
-		// not a declaration that the runtime accepts anonymous requests.
+func AuthAssessmentForSchemes(
+	schemes []SecurityScheme,
+	requirements []SecurityRequirement,
+) common.AuthAssessment {
+	if len(requirements) == 0 {
+		// Scheme declarations are a catalog, not active runtime requirements.
 		return common.AssessAuth(string(common.AuthUnknown))
 	}
 
-	activeSchemes := schemes
-	if len(securityRefs) > 0 {
-		activeSchemes = resolveActiveSchemes(schemes, securityRefs)
+	byName := make(map[string]SecurityScheme, len(schemes))
+	for _, scheme := range schemes {
+		byName[scheme.Name] = scheme
 	}
-	if len(activeSchemes) == 0 {
-		activeSchemes = schemes
-	}
-
-	var best *common.AuthAssessment
-	for _, scheme := range activeSchemes {
-		assessment := common.AssessAuth(string(authMethodForScheme(scheme)))
-		if assessment.Weakness == nil {
-			continue
+	var method common.AuthMethod
+	for _, requirement := range requirements {
+		if !requirement.Conformant {
+			return common.AssessAuth(string(common.AuthUnknown))
 		}
-		if best == nil || *assessment.Weakness < *best.Weakness {
-			copy := assessment
-			best = &copy
+		var alternative common.AuthMethod
+		switch len(requirement.Schemes) {
+		case 0:
+			alternative = common.AuthNone
+		case 1:
+			scheme, ok := byName[requirement.Schemes[0].Name]
+			if !ok || !scheme.Conformant {
+				return common.AssessAuth(string(common.AuthUnknown))
+			}
+			alternative = authMethodForScheme(scheme)
+			if alternative == common.AuthUnknown {
+				return common.AssessAuth(string(common.AuthUnknown))
+			}
+		default:
+			// A scalar auth_method cannot represent an AND requirement.
+			return common.AssessAuth(string(common.AuthUnknown))
+		}
+		if method == "" {
+			method = alternative
+		} else if method != alternative {
+			// Distinct OR alternatives cannot be represented by one method.
+			return common.AssessAuth(string(common.AuthUnknown))
 		}
 	}
-	if best != nil {
-		return *best
-	}
-	return common.AssessAuth(string(common.AuthUnknown))
+	return common.AssessAuth(string(method))
 }
 
 func authMethodForScheme(scheme SecurityScheme) common.AuthMethod {
@@ -91,16 +99,17 @@ func authMethodForScheme(scheme SecurityScheme) common.AuthMethod {
 	}
 }
 
-func resolveActiveSchemes(schemes []SecurityScheme, securityRefs []any) []SecurityScheme {
+func resolveActiveSchemes(
+	schemes []SecurityScheme,
+	requirements []SecurityRequirement,
+) []SecurityScheme {
 	nameSet := make(map[string]bool)
-	for _, ref := range securityRefs {
-		switch v := ref.(type) {
-		case map[string]any:
-			for k := range v {
-				nameSet[k] = true
-			}
-		case string:
-			nameSet[v] = true
+	for _, requirement := range requirements {
+		if !requirement.Conformant {
+			continue
+		}
+		for _, reference := range requirement.Schemes {
+			nameSet[reference.Name] = true
 		}
 	}
 
@@ -122,10 +131,14 @@ func DetectDelegation(cards []*AgentCardData) []DelegationEdge {
 
 	refs := make([]agentRef, len(cards))
 	for i, c := range cards {
+		url := ""
+		if c.PreferredURLValid {
+			url = strings.ToLower(c.URL)
+		}
 		refs[i] = agentRef{
 			id:   agentNodeID(c),
 			name: strings.ToLower(c.Name),
-			url:  strings.ToLower(c.URL),
+			url:  url,
 		}
 	}
 
@@ -156,11 +169,20 @@ func delegationEvidence(
 	card *AgentCardData,
 	name, agentURL string,
 ) (matchType, matchField, matchedRef string, ok bool) {
-	fields := []struct {
+	var fields []struct {
 		name string
 		text string
-	}{{name: "agent.description", text: card.Description}}
+	}
+	if card.DescriptionValid || card.Description != "" {
+		fields = append(fields, struct {
+			name string
+			text string
+		}{name: "agent.description", text: card.Description})
+	}
 	for _, skill := range card.Skills {
+		if !skill.Conformant {
+			continue
+		}
 		fields = append(fields, struct {
 			name string
 			text string
@@ -299,8 +321,11 @@ func DetectSameAuthDomain(cards []*AgentCardData) []AuthDomainEdge {
 }
 
 func extractOAuthDomains(card *AgentCardData) []string {
+	if !card.PreferredURLValid {
+		return nil
+	}
 	var domains []string
-	for _, s := range card.SecuritySchemes {
+	for _, s := range resolveActiveSchemes(card.SecuritySchemes, card.SecurityRequirements) {
 		if s.Type == "oauth2" || s.Type == "openIdConnect" {
 			if d := extractDomain(card.URL); d != "" {
 				domains = append(domains, d)

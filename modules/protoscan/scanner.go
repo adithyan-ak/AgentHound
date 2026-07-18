@@ -464,6 +464,8 @@ func EmitDiscoveryNodes(targets []action.Target) ingest.GraphData {
 					"auth_assurance":                string(common.AuthAssuranceUnknown),
 					"auth_evidence":                 common.AuthEvidenceUnknown,
 					"signature_verification_status": "unknown",
+					"signature_key_source":          "none",
+					"signature_key_trust":           "unknown",
 				},
 			})
 		}

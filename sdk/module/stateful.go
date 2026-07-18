@@ -30,7 +30,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
 )
@@ -181,22 +180,46 @@ func (s *FileStatefulModule) WriteReceipt(engagementID string, r action.Receipt)
 	if err != nil {
 		return "", fmt.Errorf("marshal receipts: %w", err)
 	}
-	tmp := fmt.Sprintf("%s.tmp.%d", path, time.Now().UnixNano())
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return "", fmt.Errorf("write receipts tmp: %w", err)
-	}
-	if err := os.Chmod(tmp, 0o600); err != nil {
-		_ = os.Remove(tmp)
-		return "", fmt.Errorf("chmod receipts tmp: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return "", fmt.Errorf("atomic rename: %w", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return "", fmt.Errorf("chmod receipt file: %w", err)
+	if err := persistReceiptFile(path, data); err != nil {
+		return "", err
 	}
 	return path, nil
+}
+
+func persistReceiptFile(path string, data []byte) (retErr error) {
+	dir := filepath.Dir(path)
+	tmpFile, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create receipts tmp: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		if tmpFile != nil {
+			_ = tmpFile.Close()
+		}
+		if retErr != nil {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if err := tmpFile.Chmod(0o600); err != nil {
+		return fmt.Errorf("chmod receipts tmp: %w", err)
+	}
+	if _, err := tmpFile.Write(data); err != nil {
+		return fmt.Errorf("write receipts tmp: %w", err)
+	}
+	if err := tmpFile.Sync(); err != nil {
+		return fmt.Errorf("sync receipts tmp: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close receipts tmp: %w", err)
+	}
+	tmpFile = nil
+
+	if err := durableReplaceReceipt(tmpPath, path, dir); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *FileStatefulModule) ReadReceipts(engagementID string) ([]action.Receipt, error) {

@@ -1,6 +1,10 @@
 # `--rules-bundle` — out-of-band fingerprint rule updates
 
-The fingerprint rules engine ships rules embedded in the AgentHound binary (`sdk/rules/builtin/fingerprints/*.yaml`). AgentHound provides a `--rules-bundle <path>` override so operators can pick up rule fixes without rebuilding the collector.
+Most fingerprint detectors ship as rules embedded in the AgentHound binary
+(`sdk/rules/builtin/fingerprints/*.yaml`). AgentHound provides a
+`--rules-bundle <path>` override so operators can pick up rule fixes without
+rebuilding the collector. Jupyter's stronger default detector is code-backed,
+but an exact `id: jupyter`, `service_kind: jupyter` bundle rule can replace it.
 
 > **The operator is responsible for verifying the cosign signature on the bundle BEFORE pointing AgentHound at it.** Verification is optional by design — the loader does not call cosign automatically and does not refuse unsigned bundles. Always run `cosign verify-blob` against the tarball yourself (see below) before pointing AgentHound at it.
 
@@ -41,9 +45,16 @@ The bundle merges into the embedded rule set with **same-id rules from the bundl
 |---|---|---|
 | `id: ollama` | (absent) | embedded |
 | `id: ollama` | `id: ollama` | bundle (override wins) |
-| (absent) | `id: my-custom` | bundle (additive) |
+| Jupyter native detector | `id: jupyter`, `service_kind: jupyter` | bundle rule replaces the native detector |
 
-This is what you want for hot-fixing a broken regex in a shipped rule, or for adding a new fingerprinter rule the binary's rule set doesn't yet include.
+This is what you want for hot-fixing a shipped detector without rebuilding the
+collector. A bundle does not register a new fingerprinter module or scanner
+dispatch target: arbitrary additive IDs are not executable merely because they
+load. Jupyter overrides must use the reserved `jupyter` ID; another Jupyter ID
+is reported in `ruleset.errors` and excluded from effective semantics. The
+override must emit exactly `[JupyterServer, AIService]` in that order; node
+identity, endpoint, service kind, and detector-provenance properties remain
+collector-owned even if a bundle tries to set them.
 
 ---
 
@@ -57,7 +68,7 @@ A bundle is one of:
 Each YAML file follows the same shape as the embedded rules at `sdk/rules/builtin/fingerprints/`:
 
 ```yaml
-id: ollama-hotfix-2026-06
+id: ollama
 name: Ollama (CVE-2026-XXXXX hotfix)
 description: refines the Ollama version regex to catch the new patch series
 version: 2
@@ -109,7 +120,12 @@ The release artifacts:
 
 **Bundle doesn't load at all.** Check the path. `agenthound --rules-bundle <path>` surfaces the error from `LoadFingerprintBundle` if the path doesn't exist or doesn't unpack. Check the format with `tar -tzf <bundle>.tar.gz` showing one or more `*.yaml` entries.
 
-**Bundle loads but my override doesn't take effect.** Same-id-wins requires the bundle's rule ID to match the embedded rule ID exactly. Check the embedded set with `agenthound rules list`.
+**Bundle loads but my override doesn't take effect.** Same-id-wins requires the
+bundle's rule ID to match the shipped detector ID exactly. Jupyter specifically
+requires `id: jupyter`, `service_kind: jupyter`, and ordered node kinds exactly
+`[JupyterServer, AIService]`. The scan artifact's `ruleset.entries` records the
+rule or native detector that actually ran; `ruleset.errors` reports unsupported
+Jupyter rules instead of presenting them as effective.
 
 **Bundle loads but a rule is silently dropped.** The loader skips files that fail YAML parsing. Sanity-check bundle files with `yamllint` — `agenthound rules validate` uses the *detection*-rule schema (`sdk/rules/rule.go`) rather than the *fingerprint*-rule schema (`sdk/rules/fingerprint.go`), so it will not accept a fingerprint YAML. The tar.gz reader also caps per-entry size at 1 MiB (fingerprint YAMLs are tiny; larger entries are treated as suspicious and skipped). The directory reader has no per-file size cap.
 

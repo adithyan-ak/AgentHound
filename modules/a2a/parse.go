@@ -2,7 +2,8 @@ package a2a
 
 import (
 	"context"
-	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/adithyan-ak/agenthound/sdk/common"
@@ -10,37 +11,72 @@ import (
 )
 
 type AgentCardData struct {
-	Name             string
-	Description      string
-	URL              string
-	Provider         string
-	Version          string
-	ProtocolVersions []string
-	Capabilities     []string
-	SecuritySchemes  []SecurityScheme
-	AuthMethod       string
-	Skills           []SkillData
-	IsSigned         bool
-	SignatureValid   bool
-	SignatureStatus  string
-	IsHTTPS          bool
-	CardHash         string
+	Name                 string
+	Description          string
+	URL                  string
+	Provider             string
+	Version              string
+	SchemaVersion        string
+	PresentFields        []string
+	ProtocolVersions     []string
+	Interfaces           []AgentInterfaceData
+	Capabilities         []string
+	SecuritySchemes      []SecurityScheme
+	SecurityRequirements []SecurityRequirement
+	AuthMethod           string
+	Skills               []SkillData
+	Conformant           bool
+	ConformanceErrors    []string
+	DescriptionValid     bool
+	PreferredURLValid    bool
+	SecurityValid        bool
+	IsSigned             bool
+	SignatureStatus      string
+	SignatureKeySource   string
+	SignatureKeyTrust    string
+	IsHTTPS              bool
+	CardHash             string
 }
 
 type SkillData struct {
-	ID              string
-	Name            string
-	Description     string
-	InputModes      []string
-	OutputModes     []string
-	DescriptionHash string
-	HasInjection    bool
+	ID                   string
+	Name                 string
+	Description          string
+	InputModes           []string
+	OutputModes          []string
+	SecurityRequirements []SecurityRequirement
+	DescriptionHash      string
+	HasInjection         bool
+	Conformant           bool
+	ConformanceErrors    []string
 }
 
 type SecurityScheme struct {
+	Name       string
+	Type       string
+	Scheme     string
+	Conformant bool
+}
+
+// SecurityRequirement preserves the wire-level OR-of-AND model. The outer
+// slice on AgentCardData is OR; Schemes within one requirement are AND.
+type SecurityRequirement struct {
+	Schemes    []SecurityRequirementScheme
+	Conformant bool
+}
+
+type SecurityRequirementScheme struct {
 	Name   string
-	Type   string
-	Scheme string
+	Scopes []string
+}
+
+type AgentInterfaceData struct {
+	URL             string
+	ProtocolBinding string
+	ProtocolVersion string
+	Tenant          string
+	Preferred       bool
+	Conformant      bool
 }
 
 func DetectVersion(raw map[string]any) string {
@@ -53,6 +89,16 @@ func DetectVersion(raw map[string]any) string {
 	return "v0.3.0"
 }
 
+func detectVersionWithPathHint(raw map[string]any, pathVersion string) string {
+	if _, ok := raw["supportedInterfaces"]; ok {
+		return "v1.0"
+	}
+	if _, ok := raw["url"]; ok {
+		return "v0.3.0"
+	}
+	return pathVersion
+}
+
 func ParseAgentCard(ctx context.Context, raw *RawCard, engine *rules.Engine, verifyOpts VerifyOptions) (*AgentCardData, error) {
 	switch raw.Version {
 	case "v1.0":
@@ -60,181 +106,289 @@ func ParseAgentCard(ctx context.Context, raw *RawCard, engine *rules.Engine, ver
 		if err != nil {
 			return nil, err
 		}
-		card.IsHTTPS = strings.HasPrefix(raw.URL, "https://")
-		applySignatureResult(card, VerifySignaturesCtx(ctx, raw.Body, raw.Parsed, verifyOpts))
+		card.IsHTTPS = card.PreferredURLValid &&
+			strings.HasPrefix(strings.ToLower(card.URL), "https://")
+		result := VerifySignaturesCtx(ctx, raw.Parsed, raw.Version, verifyOpts)
+		applyRawCardValidation(card, raw, &result)
+		applySignatureResult(card, result)
 		return card, nil
 	default:
 		card, err := parseV030(raw.Parsed, raw.CardHash, engine)
 		if err != nil {
 			return nil, err
 		}
-		card.IsHTTPS = strings.HasPrefix(raw.URL, "https://")
-		applySignatureResult(card, VerifySignaturesCtx(ctx, raw.Body, raw.Parsed, verifyOpts))
+		card.IsHTTPS = card.PreferredURLValid &&
+			strings.HasPrefix(strings.ToLower(card.URL), "https://")
+		result := VerifySignaturesCtx(ctx, raw.Parsed, raw.Version, verifyOpts)
+		applyRawCardValidation(card, raw, &result)
+		applySignatureResult(card, result)
 		return card, nil
+	}
+}
+
+func applyRawCardValidation(
+	card *AgentCardData,
+	raw *RawCard,
+	signature *SignatureResult,
+) {
+	if raw.JSONValidationError == "" {
+		return
+	}
+	card.ConformanceErrors = append(
+		card.ConformanceErrors,
+		"json: "+raw.JSONValidationError,
+	)
+	sort.Strings(card.ConformanceErrors)
+	card.Conformant = false
+	if signature.Signed {
+		*signature = SignatureResult{
+			Signed:    true,
+			Status:    SigStatusMalformed,
+			KeySource: SigKeySourceNone,
+			KeyTrust:  SigKeyTrustUnknown,
+		}
 	}
 }
 
 func applySignatureResult(card *AgentCardData, res SignatureResult) {
 	card.IsSigned = res.Signed
-	card.SignatureValid = res.Valid
 	card.SignatureStatus = res.Status
+	card.SignatureKeySource = res.KeySource
+	card.SignatureKeyTrust = res.KeyTrust
 }
 
 func parseV030(raw map[string]any, cardHash string, engine *rules.Engine) (*AgentCardData, error) {
 	card := &AgentCardData{
-		Name:        getString030(raw, "name"),
-		Description: getString030(raw, "description"),
-		URL:         getString030(raw, "url"),
-		Version:     getString030(raw, "version"),
-		CardHash:    cardHash,
+		Name:             getString(raw, "name"),
+		Description:      getString(raw, "description"),
+		URL:              getString(raw, "url"),
+		Version:          getString(raw, "version"),
+		SchemaVersion:    "v0.3.0",
+		PresentFields:    presentFields(raw),
+		CardHash:         cardHash,
+		DescriptionValid: isStringField(raw, "description"),
 	}
 
-	if card.Name == "" {
-		return nil, fmt.Errorf("v0.3.0 agent card missing required field: name")
-	}
+	card.ConformanceErrors = validateV030Card(raw)
 
 	if provider, ok := raw["provider"].(map[string]any); ok {
-		card.Provider = getString030(provider, "organization")
+		card.Provider = getString(provider, "organization")
 	}
 
 	switch pv := raw["protocolVersion"].(type) {
 	case string:
-		card.ProtocolVersions = []string{pv}
+		card.ProtocolVersions = []string{strings.TrimSpace(pv)}
 	case []any:
 		for _, v := range pv {
 			if s, ok := v.(string); ok {
-				card.ProtocolVersions = append(card.ProtocolVersions, s)
+				card.ProtocolVersions = append(card.ProtocolVersions, strings.TrimSpace(s))
 			}
 		}
 	}
-
-	if caps, ok := raw["capabilities"].(map[string]any); ok {
-		for key, val := range caps {
-			if b, ok := val.(bool); ok && b {
-				card.Capabilities = append(card.Capabilities, key)
-			}
-		}
+	card.Interfaces = parseV030Interfaces(raw)
+	if len(card.Interfaces) > 0 {
+		card.PreferredURLValid = card.Interfaces[0].Conformant
 	}
 
-	card.SecuritySchemes = parseSecuritySchemes(raw)
-	card.AuthMethod = DeriveAuthMethod(card.SecuritySchemes, getSecurityRefs(raw))
+	card.Capabilities = parseCapabilities(raw)
+
+	card.SecuritySchemes = parseV030SecuritySchemes(raw)
+	card.ConformanceErrors = append(
+		card.ConformanceErrors,
+		securitySchemeConformanceErrors(card.SecuritySchemes)...,
+	)
+	var securityErrors []string
+	card.SecurityRequirements, card.SecurityValid, securityErrors = parseV030SecurityRequirements(
+		raw["security"],
+		card.SecuritySchemes,
+	)
+	card.ConformanceErrors = append(card.ConformanceErrors, securityErrors...)
+	card.AuthMethod = DeriveAuthMethod(card.SecuritySchemes, card.SecurityRequirements)
 
 	if skills, ok := raw["skills"].([]any); ok {
-		for _, s := range skills {
+		for index, s := range skills {
 			sObj, ok := s.(map[string]any)
 			if !ok {
 				continue
 			}
-			skill := parseSkill(sObj, engine)
+			skill := parseSkill(sObj, engine, "v0.3.0", index, card.SecuritySchemes)
 			card.Skills = append(card.Skills, skill)
 		}
 	}
 
+	sort.Strings(card.ConformanceErrors)
+	card.Conformant = len(card.ConformanceErrors) == 0
 	return card, nil
 }
 
 func parseV10(raw map[string]any, cardHash string, engine *rules.Engine) (*AgentCardData, error) {
 	card := &AgentCardData{
-		Name:        getString030(raw, "name"),
-		Description: getString030(raw, "description"),
-		CardHash:    cardHash,
+		Name:             getString(raw, "name"),
+		Description:      getString(raw, "description"),
+		Version:          getString(raw, "version"),
+		SchemaVersion:    "v1.0.1",
+		PresentFields:    presentFields(raw),
+		CardHash:         cardHash,
+		DescriptionValid: isStringField(raw, "description"),
 	}
 
-	if card.Name == "" {
-		return nil, fmt.Errorf("v1.0 agent card missing required field: name")
-	}
+	card.ConformanceErrors = validateV10Card(raw)
 
 	if provider, ok := raw["provider"].(map[string]any); ok {
-		card.Provider = getString030(provider, "organization")
+		card.Provider = getString(provider, "organization")
 	}
 
-	if ifaces, ok := raw["supportedInterfaces"].([]any); ok {
-		seenPV := make(map[string]bool)
-		for _, iface := range ifaces {
-			ifObj, ok := iface.(map[string]any)
-			if !ok {
-				continue
-			}
-			// The transport discriminator is protocolBinding (values JSONRPC,
-			// GRPC, HTTP+JSON per A2A v1.0 §4.4.6) — there is no "type" field.
-			// Prefer the JSONRPC interface URL; otherwise fall back to the
-			// first interface that carries a URL.
-			u := getString030(ifObj, "url")
-			binding := getString030(ifObj, "protocolBinding")
-			if u != "" && (card.URL == "" || strings.EqualFold(binding, "JSONRPC")) {
-				card.URL = u
-			}
-			if pv := getString030(ifObj, "protocolVersion"); pv != "" && !seenPV[pv] {
-				seenPV[pv] = true
-				card.ProtocolVersions = append(card.ProtocolVersions, pv)
-			}
+	card.Interfaces = parseV10Interfaces(raw)
+	seenPV := make(map[string]bool)
+	for _, iface := range card.Interfaces {
+		if iface.Preferred {
+			card.URL = iface.URL
+			card.PreferredURLValid = iface.Conformant
+		}
+		if iface.ProtocolVersion != "" && !seenPV[iface.ProtocolVersion] {
+			seenPV[iface.ProtocolVersion] = true
+			card.ProtocolVersions = append(card.ProtocolVersions, iface.ProtocolVersion)
 		}
 	}
 
-	if caps, ok := raw["capabilities"].(map[string]any); ok {
-		for key, val := range caps {
-			if b, ok := val.(bool); ok && b {
-				card.Capabilities = append(card.Capabilities, key)
-			}
-		}
-	}
+	card.Capabilities = parseCapabilities(raw)
 
-	card.SecuritySchemes = parseSecuritySchemes(raw)
-	card.AuthMethod = DeriveAuthMethod(card.SecuritySchemes, getSecurityRefs(raw))
+	card.SecuritySchemes = parseV10SecuritySchemes(raw)
+	card.ConformanceErrors = append(
+		card.ConformanceErrors,
+		securitySchemeConformanceErrors(card.SecuritySchemes)...,
+	)
+	var securityErrors []string
+	card.SecurityRequirements, card.SecurityValid, securityErrors = parseV10SecurityRequirements(
+		raw["securityRequirements"],
+		card.SecuritySchemes,
+	)
+	card.ConformanceErrors = append(card.ConformanceErrors, securityErrors...)
+	card.AuthMethod = DeriveAuthMethod(card.SecuritySchemes, card.SecurityRequirements)
 
 	if skills, ok := raw["skills"].([]any); ok {
-		for _, s := range skills {
+		for index, s := range skills {
 			sObj, ok := s.(map[string]any)
 			if !ok {
 				continue
 			}
-			skill := parseSkill(sObj, engine)
+			skill := parseSkill(sObj, engine, "v1.0.1", index, card.SecuritySchemes)
 			card.Skills = append(card.Skills, skill)
 		}
 	}
 
+	sort.Strings(card.ConformanceErrors)
+	card.Conformant = len(card.ConformanceErrors) == 0
 	return card, nil
 }
 
-func parseSecuritySchemes(raw map[string]any) []SecurityScheme {
-	schemes, ok := raw["securitySchemes"].(map[string]any)
+func parseV030Interfaces(raw map[string]any) []AgentInterfaceData {
+	protocolVersion := getString(raw, "protocolVersion")
+	preferred := AgentInterfaceData{
+		URL:             getString(raw, "url"),
+		ProtocolBinding: getString(raw, "preferredTransport"),
+		ProtocolVersion: protocolVersion,
+		Preferred:       true,
+	}
+	if preferred.ProtocolBinding == "" {
+		preferred.ProtocolBinding = "JSONRPC"
+	}
+	preferred.Conformant = validInterfaceURL(preferred.URL) &&
+		preferred.ProtocolBinding != "" &&
+		preferred.ProtocolVersion != ""
+	interfaces := []AgentInterfaceData{preferred}
+
+	additional, ok := raw["additionalInterfaces"].([]any)
+	if !ok {
+		return interfaces
+	}
+	for _, value := range additional {
+		object, ok := value.(map[string]any)
+		if !ok {
+			interfaces = append(interfaces, AgentInterfaceData{
+				ProtocolVersion: protocolVersion,
+			})
+			continue
+		}
+		iface := AgentInterfaceData{
+			URL:             getString(object, "url"),
+			ProtocolBinding: getString(object, "transport"),
+			ProtocolVersion: protocolVersion,
+		}
+		iface.Conformant = validInterfaceURL(iface.URL) &&
+			iface.ProtocolBinding != "" &&
+			iface.ProtocolVersion != ""
+		interfaces = append(interfaces, iface)
+	}
+	return interfaces
+}
+
+func parseV10Interfaces(raw map[string]any) []AgentInterfaceData {
+	values, ok := raw["supportedInterfaces"].([]any)
 	if !ok {
 		return nil
 	}
-	var result []SecurityScheme
-	for name, v := range schemes {
-		obj, ok := v.(map[string]any)
+	interfaces := make([]AgentInterfaceData, 0, len(values))
+	for index, value := range values {
+		object, ok := value.(map[string]any)
 		if !ok {
+			interfaces = append(interfaces, AgentInterfaceData{
+				Preferred: index == 0,
+			})
 			continue
 		}
-		t := getString030(obj, "type")
-		if t == "" {
-			continue
+		iface := AgentInterfaceData{
+			URL:             getString(object, "url"),
+			ProtocolBinding: getString(object, "protocolBinding"),
+			ProtocolVersion: getString(object, "protocolVersion"),
+			Tenant:          getString(object, "tenant"),
+			Preferred:       index == 0,
 		}
-		result = append(result, SecurityScheme{
-			Name:   name,
-			Type:   t,
-			Scheme: getString030(obj, "scheme"),
-		})
+		iface.Conformant = validInterfaceURL(iface.URL) &&
+			iface.ProtocolBinding != "" &&
+			iface.ProtocolVersion != ""
+		interfaces = append(interfaces, iface)
 	}
+	return interfaces
+}
+
+func parseCapabilities(raw map[string]any) []string {
+	capabilities, ok := raw["capabilities"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	var result []string
+	for key, value := range capabilities {
+		if enabled, ok := value.(bool); ok && enabled {
+			result = append(result, key)
+		}
+	}
+	sort.Strings(result)
 	return result
 }
 
-func getSecurityRefs(raw map[string]any) []any {
-	sec, ok := raw["security"].([]any)
-	if !ok {
-		return nil
+func presentFields(raw map[string]any) []string {
+	fields := make([]string, 0, len(raw))
+	for field := range raw {
+		fields = append(fields, field)
 	}
-	return sec
+	sort.Strings(fields)
+	return fields
 }
 
-// parseSkill parses an A2A AgentSkill for both v0.3.0 and v1.0 cards. Media
-// types come from the spec's inputModes/outputModes string arrays; AgentSkill
-// has no inputSchema/outputSchema field in any A2A version.
-func parseSkill(s map[string]any, engine *rules.Engine) SkillData {
-	id := getString030(s, "id")
-	name := getString030(s, "name")
-	desc := getString030(s, "description")
+// parseSkill parses an A2A AgentSkill while retaining its independent
+// conformance state. Invalid skill observations are kept, but graph
+// construction does not emit functional ADVERTISES_SKILL edges for them.
+func parseSkill(
+	s map[string]any,
+	engine *rules.Engine,
+	schemaVersion string,
+	index int,
+	schemes []SecurityScheme,
+) SkillData {
+	id := getString(s, "id")
+	name := getString(s, "name")
+	desc := getString(s, "description")
 
 	inputModes := toStrSlice(s["inputModes"])
 	outputModes := toStrSlice(s["outputModes"])
@@ -252,7 +406,7 @@ func parseSkill(s map[string]any, engine *rules.Engine) SkillData {
 		}
 	}
 
-	return SkillData{
+	skill := SkillData{
 		ID:              id,
 		Name:            name,
 		Description:     desc,
@@ -261,9 +415,43 @@ func parseSkill(s map[string]any, engine *rules.Engine) SkillData {
 		DescriptionHash: descHash,
 		HasInjection:    hasInj,
 	}
+	path := "skills[" + strconv.Itoa(index) + "]"
+	skill.ConformanceErrors = validateSkill(s, path)
+	if schemaVersion == "v1.0.1" {
+		var securityErrors []string
+		skill.SecurityRequirements, _, securityErrors = parseV10SecurityRequirements(
+			s["securityRequirements"],
+			schemes,
+		)
+		skill.ConformanceErrors = append(
+			skill.ConformanceErrors,
+			prefixConformanceErrors(path+".", securityErrors)...,
+		)
+	} else {
+		var securityErrors []string
+		skill.SecurityRequirements, _, securityErrors = parseV030SecurityRequirements(
+			s["security"],
+			schemes,
+		)
+		skill.ConformanceErrors = append(
+			skill.ConformanceErrors,
+			prefixConformanceErrors(path+".", securityErrors)...,
+		)
+	}
+	sort.Strings(skill.ConformanceErrors)
+	skill.Conformant = len(skill.ConformanceErrors) == 0
+	return skill
 }
 
-func getString030(m map[string]any, key string) string {
+func prefixConformanceErrors(prefix string, errors []string) []string {
+	result := make([]string, len(errors))
+	for index, value := range errors {
+		result[index] = prefix + value
+	}
+	return result
+}
+
+func getString(m map[string]any, key string) string {
 	if v, ok := m[key].(string); ok {
 		return strings.TrimSpace(v)
 	}

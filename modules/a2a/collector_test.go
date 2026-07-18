@@ -2,15 +2,11 @@ package a2a
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/sdk/collector"
@@ -177,22 +173,42 @@ func TestCollector_MultipleTargets(t *testing.T) {
 func TestCollector_A2ARelationsDeclareAllDependencies(t *testing.T) {
 	cardBodies := []map[string]any{
 		{
-			"name":        "AgentAlpha",
-			"description": "I delegate tasks to AgentBeta for processing",
-			"url":         "https://api.example.com/alpha",
-			"version":     "1.0.0",
+			"name":            "AgentAlpha",
+			"description":     "I delegate tasks to AgentBeta for processing",
+			"url":             "https://api.example.com/alpha",
+			"version":         "1.0.0",
+			"protocolVersion": "0.3.0",
 			"securitySchemes": map[string]any{
-				"oauth": map[string]any{"type": "oauth2"},
+				"oauth": map[string]any{
+					"type": "oauth2",
+					"flows": map[string]any{
+						"clientCredentials": map[string]any{
+							"tokenUrl": "https://auth.example/token",
+							"scopes":   map[string]any{},
+						},
+					},
+				},
 			},
+			"security": []any{map[string]any{"oauth": []any{}}},
 		},
 		{
-			"name":        "AgentBeta",
-			"description": "Processes delegated tasks",
-			"url":         "https://api.example.com/beta",
-			"version":     "1.0.0",
+			"name":            "AgentBeta",
+			"description":     "Processes delegated tasks",
+			"url":             "https://api.example.com/beta",
+			"version":         "1.0.0",
+			"protocolVersion": "0.3.0",
 			"securitySchemes": map[string]any{
-				"oauth": map[string]any{"type": "oauth2"},
+				"oauth": map[string]any{
+					"type": "oauth2",
+					"flows": map[string]any{
+						"clientCredentials": map[string]any{
+							"tokenUrl": "https://auth.example/token",
+							"scopes":   map[string]any{},
+						},
+					},
+				},
 			},
+			"security": []any{map[string]any{"oauth": []any{}}},
 		},
 	}
 	targets := make([]string, 0, len(cardBodies))
@@ -243,7 +259,7 @@ func TestCollector_A2ARelationsDeclareAllDependencies(t *testing.T) {
 		}
 	}
 	if relationCount != 2 {
-		t.Fatalf("two-card relation count = %d, want delegation and auth-domain edges", relationCount)
+		t.Fatalf("two-card relation count = %d, want delegation and auth-domain edges: %+v", relationCount, data.Graph.Edges)
 	}
 }
 
@@ -380,6 +396,47 @@ func TestCollector_FailedTarget(t *testing.T) {
 	}
 	if data.Meta.Collection == nil || data.Meta.Collection.State != ingest.OutcomeFailed {
 		t.Fatalf("failed-empty target lost collection failure: %+v", data.Meta.Collection)
+	}
+}
+
+func TestCollectorRetainsNonconformantV1CardObservation(t *testing.T) {
+	body := []byte(`{"name":"Incomplete V1 Agent"}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(server.Close)
+
+	data, err := NewA2ACollector().Collect(
+		context.Background(),
+		collector.CollectOptions{TargetURL: server.URL, ScanID: "nonconformant-v1"},
+	)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if data.Meta.Collection == nil || data.Meta.Collection.State != ingest.OutcomeComplete {
+		t.Fatalf("collection state = %+v", data.Meta.Collection)
+	}
+	var properties map[string]any
+	for _, node := range data.Graph.Nodes {
+		for _, kind := range node.Kinds {
+			if kind == "A2AAgent" {
+				properties = node.Properties
+			}
+		}
+	}
+	if properties == nil {
+		t.Fatal("nonconformant card observation was dropped")
+	}
+	if properties["card_schema_version"] != "v1.0.1" ||
+		properties["card_conformant"] != false {
+		t.Fatalf("nonconformant properties = %+v", properties)
+	}
+	for _, edge := range data.Graph.Edges {
+		switch edge.Kind {
+		case "ADVERTISES_SKILL", "RUNS_ON", "AUTHENTICATES_WITH":
+			t.Fatalf("nonconformant facts emitted functional edge: %+v", edge)
+		}
 	}
 }
 
@@ -536,8 +593,8 @@ func TestCollector_SignedCard(t *testing.T) {
 	if _, legacy := props["signature_valid"]; legacy {
 		t.Error("collector emitted legacy signature_valid alias")
 	}
-	if props["signature_verification_status"] != "unverifiable" {
-		t.Errorf("expected signature_verification_status=unverifiable, got %v", props["signature_verification_status"])
+	if props["signature_verification_status"] != SigStatusUnsupportedVersion {
+		t.Errorf("expected signature_verification_status=%s, got %v", SigStatusUnsupportedVersion, props["signature_verification_status"])
 	}
 	if props["auth_method"] != "mtls" {
 		t.Errorf("expected auth_method=mtls, got %v", props["auth_method"])
@@ -545,14 +602,30 @@ func TestCollector_SignedCard(t *testing.T) {
 }
 
 func TestCollector_SignedCard_ObjectForm_Valid(t *testing.T) {
-	body := buildSignedObjectFormCardJSON(t)
+	key := mustECDSAKey(t)
+	card := signV1Card(t, validV10Card(), key, "trusted-key", "")
+	body, err := json.Marshal(card)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustedKeys, err := json.Marshal(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{
+		Key:   &key.PublicKey,
+		KeyID: "trusted-key",
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustedKeysPath := filepath.Join(t.TempDir(), "trusted.jwks")
+	if err := os.WriteFile(trustedKeysPath, trustedKeys, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(body)
 	}))
 	defer srv.Close()
 
-	c := NewA2ACollector()
+	c := NewA2ACollector(WithTrustedKeysFile(trustedKeysPath))
 	data, err := c.Collect(context.Background(), collector.CollectOptions{
 		TargetURL: srv.URL,
 		ScanID:    "test-scan-signed-valid",
@@ -580,8 +653,12 @@ func TestCollector_SignedCard_ObjectForm_Valid(t *testing.T) {
 	if _, legacy := props["signature_valid"]; legacy {
 		t.Error("collector emitted legacy signature_valid alias")
 	}
-	if props["signature_verification_status"] != "verified" {
-		t.Errorf("expected signature_verification_status=verified, got %v", props["signature_verification_status"])
+	if props["signature_verification_status"] != SigStatusValidTrusted {
+		t.Errorf("expected signature_verification_status=%s, got %v", SigStatusValidTrusted, props["signature_verification_status"])
+	}
+	if props["signature_key_source"] != SigKeySourceTrustedStore ||
+		props["signature_key_trust"] != SigKeyTrustTrusted {
+		t.Errorf("unexpected signature key provenance: source=%v trust=%v", props["signature_key_source"], props["signature_key_trust"])
 	}
 }
 
@@ -657,57 +734,4 @@ func TestCollector_OutputFormat(t *testing.T) {
 	if _, ok := roundTrip["graph"]; !ok {
 		t.Error("missing 'graph' in output")
 	}
-}
-
-func buildSignedObjectFormCardJSON(t *testing.T) []byte {
-	t.Helper()
-
-	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	card := map[string]any{
-		"name":            "SecureAgent",
-		"description":     "A security-hardened agent with a real signed card",
-		"url":             "https://secure.example.com/a2a",
-		"version":         "2.0.0",
-		"protocolVersion": "0.3.0",
-		"jwks":            jwksToMap(t, []jose.JSONWebKey{{Key: &privKey.PublicKey, KeyID: "key-1"}}),
-	}
-
-	canonical, err := canonicalSignedPayload(card)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	signer, err := jose.NewSigner(jose.SigningKey{
-		Algorithm: jose.ES256,
-		Key:       &jose.JSONWebKey{Key: privKey, KeyID: "key-1"},
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	jws, err := signer.Sign(canonical)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compact, err := jws.CompactSerialize()
-	if err != nil {
-		t.Fatal(err)
-	}
-	parts := strings.Split(compact, ".")
-	if len(parts) != 3 {
-		t.Fatalf("expected 3 compact segments, got %d", len(parts))
-	}
-
-	card["signatures"] = []any{
-		map[string]any{"protected": parts[0], "signature": parts[2]},
-	}
-
-	body, err := json.Marshal(card)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return body
 }

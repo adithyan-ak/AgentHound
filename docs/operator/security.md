@@ -105,8 +105,15 @@ The collector makes outbound network calls to:
 
 1. **Targets specified by the operator** — `--target`, `--targets`,
    `--config`, `--url`, or paths discovered by `--discover`.
-2. **No one else.** No telemetry, no phone-home, no version-check
-   pings, no crash reporting, and no upload to a central server.
+2. **A2A v1 signature key URLs declared by those targets** — protected-header
+   `jku` retrieval is enabled unless `--no-verify-jwks` is set. It is
+   HTTPS-only across redirects, validates TLS identity even when target
+   collection uses `--insecure`, refuses link-local/cloud-metadata addresses,
+   rejects fragments, is response- and per-card-work-bounded, and receives no
+   target authorization header.
+
+There is no telemetry, phone-home, version-check ping, crash reporting, or
+upload to a central server.
 
 Scan output is written to a local file (or to stdout via `--output -`).
 Transport to the operator's analysis box is the operator's
@@ -202,25 +209,94 @@ or log it. Its handling is deliberately stricter than `--include-credential-valu
 ### Campaign runner: reversible mutation round-trip
 
 The `agenthound campaign --scenario mcp-poison-roundtrip` scenario is a STANDALONE
-target-mutation validation. Unlike `cred-reach` it **mutates** the target (reusing
-the `mcp.poison` module), so it inherits the destructive-primitive posture:
+ContextForge target-mutation validation. Unlike `cred-reach` it **mutates** the
+target (reusing the `mcp.poison` module), so it inherits the
+destructive-primitive posture:
 
 - **Both gates are required.** `--commit` is off by default and a mutating run
   requires the campaign acknowledgement plus the distinct poison/destructive
-  acknowledgement. The optional admin `--auth-token` is used in process and is
-  never copied to a report or receipt.
-- **Never a blind write; receipts retained.** The mutation persists a receipt
-  before the write. The inline cleanup uses the conflict-aware Revert: on a
-  third-party change (conflict) or a failed re-read (indeterminate) it writes
-  nothing and **retains** the receipt so `agenthound revert <engagement-id>` can
-  retry it. Active cleanup is run-scoped, globally reverse-sequenced, bounded,
+  acknowledgement. The round-trip generates its own inert, run-specific marker;
+  it accepts no operator-supplied mutation text.
+- **Explicit provider boundary.** MCP defines tool observation, not metadata
+  mutation. The required `--adapter contextforge` selects one fixed provider
+  contract: a server-scoped MCP URL ending in `/servers/<server-uuid>/mcp`, fixed
+  ContextForge `/v1` association/tool reads, and one fixed tool-description PUT.
+  `--management-url` overrides only the deployment root. There is no generic
+  endpoint, method, path, status, management-row ID, or request-body adapter.
+- **Independent, least-privilege credentials.** MCP observation uses
+  `AGENTHOUND_MCP_TOKEN` or one unambiguous exact-positional-URL `Authorization`
+  header from local MCP client configuration. `AGENTHOUND_CONTEXTFORGE_TOKEN`
+  independently overrides management authentication. Without it, management
+  reuses the resolved MCP bearer only on the same origin; cross-origin
+  management requires the override. ContextForge v1.0.5 token permission
+  claims are only a ceiling, so AgentHound accepts session tokens or API tokens
+  with an empty/wildcard permission ceiling. It resolves identity through
+  `/v1/auth/email/me` and proves database RBAC through team-context
+  `/v1/rbac/my/permissions?team_id=<uuid>` reads. Effective `servers.read`,
+  `tools.read`, and `tools.update` plus exact server/tool reads are required. A
+  non-admin must be the direct `ownerEmail` of both server and tool; team
+  membership alone does not prove ownership. Exact non-wildcard API-token
+  ceilings fail closed because they block the provider RBAC proof.
+  Credentials remain origin-bound and never enter logs, reports, or receipts.
+- **One forward write; receipts retained.** A typed ContextForge receipt is
+  persisted before the single PUT. It records the provider contract, separate
+  MCP/management identities and URLs, original/updated descriptions, original
+  ContextForge version, and unique forward/restore operation User-Agents, but no
+  credentials. Unknown or missing receipt type, version, or provider profile is
+  rejected before networking. Bounded read-only polling verifies both the
+  ContextForge row and MCP SDK projection; it never repeats the write.
+  Both the forward and restoration bodies must fit the 256 KiB request limit,
+  and the measured exact tool record plus projected update must retain safety
+  headroom inside the separate 1 MiB response limit before mutation.
+- **Fail closed after ambiguous or normalized writes.** A lost write response is
+  accepted as forward success only when management subsequently shows the exact
+  intended text, version `V+1`, and pre-recorded forward operation User-Agent.
+  Normalized landed text `C` or failed MCP projection makes the forward result
+  fail, but the exact tool UUID plus `V+1` and forward User-Agent permit one
+  inline restore of `C`; AgentHound never repeats the forward write.
+  Management rows whose description is `null` or non-string are rejected before
+  mutation: MCP projects provider `null` as empty text, while ContextForge's
+  update contract cannot restore `null` byte-for-byte.
+- **Conflict-aware recovery.** Revert may restore any landed description only
+  when the exact receipt tool UUID remains at `V+1` with the forward User-Agent;
+  equality with the outbound text is not required. A different UUID, version,
+  or User-Agent is a conflict, and a failed exact-row read is indeterminate.
+  A row already at the recorded original description is a safe no-op only when
+  it is not this receipt's `V+1` forward-attributed state. An original-looking
+  normalized forward write must complete the restore transition to `V+2` and
+  the recorded restore User-Agent before another operation is allowed.
+  Association drift does not block restoration of the attributed row, but MCP
+  verification is then reported unavailable. After the one restore, management
+  must show original text, `V+2`, and the restore User-Agent; MCP must show the
+  original when association remains intact.
+- **No live AgentHound write stacking.** A row that still carries an AgentHound
+  forward-operation User-Agent cannot be mutated again, even under another
+  engagement, until recovery restores it. This prevents an immutable receipt
+  chain whose provider versions could not be unwound safely.
+- **Operation User-Agent is a deployment requirement.** ContextForge and every
+  intervening proxy must preserve AgentHound's unique forward/restore
+  User-Agents. If a proxy overwrites them, write ownership and safe automated
+  recovery cannot be established.
+- **No atomic compare-and-swap.** ContextForge does not expose a conditional
+  update primitive used by this contract. Version and User-Agent checks are
+  post-hoc ownership evidence, not CAS: a concurrent writer can still land
+  between the final read and unconditional PUT during either forward mutation
+  or restoration. Run only in an exclusive operation window; strict safety
+  requires server-side preconditions.
+- **No non-mutating restorability probe.** ContextForge v1.0.5 can read a
+  description created under an older or more permissive validation policy even
+  when the current `ToolUpdate` or content-security validators reject that same
+  text. It exposes no validation-only update endpoint, and a no-op PUT would
+  itself change version and audit attribution. AgentHound therefore cannot prove
+  byte-exact updateability from `ToolRead`; pre-engagement validator-policy drift
+  can make the restore PUT fail. Operators must verify current-policy acceptance
+  before committing against deployments whose validation configuration changed.
+- **Run-scoped cleanup.** Active cleanup is globally reverse-sequenced, bounded,
   non-cancellable, and fail-stop; engagement recovery is the intentionally
   different per-file-LIFO, continue-on-error fallback. Oracle and cleanup remain
-  independent, and unsafe/unconfirmed cleanup emits its report before nonzero exit.
-- **No-op rejection and frozen accounting.** `original == injected` is rejected
-  before receipt persistence or target write and reports cleanup as
-  `not_applicable`. Forward request/mutation/elapsed usage and exhaustion are
-  frozen before separately timed cleanup begins.
+  independent, and unsafe or unconfirmed cleanup emits its report before a
+  nonzero exit. Forward request/mutation/elapsed accounting is frozen before
+  separately timed cleanup begins.
 - **Bounded, secret-free reporting.** Both fixed scenarios use the same versioned
   `RunReport`: fixed steps, sanitized target reference, per-step RFC3339Nano
   start/end timestamps, typed operation classes, applicable sanitized
@@ -244,6 +320,25 @@ the `mcp.poison` module), so it inherits the destructive-primitive posture:
 - **Not an attack finding.** It emits no graph edge and makes no claim about a
   predicted credential path — the round-trip evidence stays in the campaign
   transport. It validates only that the mutation/rollback machinery works.
+
+### A2A card evidence and key trust
+
+A2A v1.0.1 signature verification separates cryptographic validity from identity trust. Operator-pinned JWKS keys produce `valid_trusted`. A key retrieved from a protected-header `jku` can produce only `valid_untrusted`: HTTPS authenticates the key host, not the claimed agent/provider. Inline `jwks` and top-level `jwks_uri` are recorded as nonstandard inactive evidence.
+
+Remote `jku` requires HTTPS on the initial request and every redirect, validates the certificate identity even when `--insecure` is used for card retrieval, blocks link-local/metadata destinations, rejects fragments, and bounds redirects, bytes, key count, signatures, unique remote sources, and aggregate verification time. Invalid, expired, or explicitly revoked key evidence is rejected. Operators needing private/self-signed key infrastructure must pin the key locally with `--a2a-trusted-keys`; `--insecure` is not a bypass.
+
+Card conformance and signature state qualify functional A2A edges. Invalid
+cards are retained for visibility, but declarations alone do not create active
+authentication identities or edges. A v1.0.1 empty security requirement is a
+valid anonymous alternative under the protocol/OpenAPI model, so it remains
+conformant and does not suppress a valid skill. Its `auth_method=none` evidence
+is a declaration, not proof that a credential-free runtime request succeeded.
+ProtoJSON null scope lists are empty scopes; optional skill repeated fields are
+absent/null or arrays of strings. Other shapes make the skill nonconformant and
+prevent it from emitting a functional `ADVERTISES_SKILL` edge.
+An absent, null, or empty `signatures` field is unsigned and remains eligible
+for the unsigned-card finding. A null optional unprotected signature header is
+absent; non-null wrong-shaped signature fields remain malformed.
 
 ### `openwebui.loot` authenticated mode
 
@@ -281,6 +376,13 @@ output stored on Windows as readable by every local user account.
 - All HTTP transports verify certificates by default.
 - `--insecure` disables certificate verification. Use only against
   self-signed targets in an authorized assessment, never as a default.
+- For ContextForge poisoning, round-trip, and receipt recovery, `--insecure`
+  applies to both the MCP and management transports. It does not relax endpoint
+  shape, redirect, origin-binding, authorization, response, or ownership checks.
+- `--insecure` applies only to the selected collection target. A
+  card-controlled A2A `jku` always requires HTTPS with certificate and server
+  identity validation. Operators assessing internal/self-signed issuers must
+  pin their keys with `--a2a-trusted-keys` instead.
 - A regression test in `modules/{mcp,a2a}/*_test.go` asserts strict
   default verification — a code change that silently weakens this
   fails CI.

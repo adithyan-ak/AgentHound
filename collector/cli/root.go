@@ -6,6 +6,9 @@ import (
 	"os"
 
 	"github.com/adithyan-ak/agenthound/collector/internal/clientcfg"
+	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/module"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
 	"github.com/spf13/cobra"
 )
@@ -56,10 +59,33 @@ UI's Scan Manager → Import Scan dialog.`,
 
 func SetVersion(version, commit string) {
 	rootCmd.Version = fmt.Sprintf("%s (commit: %s)", version, commit)
+	common.SetCollectorVersion(version)
 }
 
 func Execute() error {
+	finalizeModuleFlags()
 	return rootCmd.Execute()
+}
+
+// finalizeModuleFlags runs after every blank-imported module has completed its
+// init registration and before Cobra parses argv. Registration is idempotent so
+// embedded callers and tests may execute the command tree repeatedly.
+func finalizeModuleFlags() {
+	for _, mod := range module.ListByAction(action.Loot) {
+		registerFlagsAvoidingDupes(lootCmd, mod)
+	}
+	for _, mod := range module.ListByAction(action.Extract) {
+		registerFlagsAvoidingDupes(extractCmd, mod)
+	}
+	for _, mod := range module.ListByAction(action.Implant) {
+		registerFlagsAvoidingDupes(implantCmd, mod)
+	}
+	for _, mod := range module.ListByAction(action.Poison) {
+		registerFlagsAvoidingDupes(poisonCmd, mod)
+		if mod.Target() == "instruction.file" {
+			registerFlagsAvoidingDupes(implantCmd, mod)
+		}
+	}
 }
 
 func init() {

@@ -11,13 +11,13 @@
 // Revert for each receipt.
 //
 // Per-file LIFO. Each module's receipt file is append-ordered (oldest
-// first). Revert walks each file newest-first so repeated mutations of
-// the same target unwind in reverse: for two sequential poisons A→B then
-// B→C, reverting C→B before B→A restores A. Reverting oldest-first would
-// instead hit the conflict-aware guard (current C matches neither the
-// first receipt's original A nor its injected B) and refuse to write.
-// Ordering is per (module, engagement) — the same scope as the receipt
-// file's advisory lock — not a global sequence across modules.
+// first), and revert walks it newest-first. Individual reverters still
+// enforce their own ownership and stacking contracts; ContextForge rejects
+// a new same-row mutation while an earlier forward operation remains live
+// because immutable provider version attribution cannot safely unwind such a
+// chain. Ordering is per
+// (module, engagement) — the same scope as the receipt file's advisory lock —
+// not a global sequence across modules.
 //
 // Conflict-aware partial retries use each receipt's live-state checks. A fully
 // completed stacked rollback is not universally replay-idempotent because
@@ -28,9 +28,10 @@
 // cannot confirm the current state (re-read failure) or finds a
 // third-party change returns an error rather than overwriting. Any such
 // error is collected, the receipts are RETAINED (never deleted), and the
-// command exits nonzero. We report a clean rollback only when every
-// receipt reverted or was already clean — a partial rollback is reported
-// as INCOMPLETE so the operator can investigate and re-run.
+// command exits nonzero. We report a clean rollback only when every receipt
+// reverted or was already clean. A partial rollback is INCOMPLETE; a provider-
+// permitted management-only restoration is PARTIALLY VERIFIED so reduced
+// observation is visible without misclassifying the completed recovery write.
 //
 // The CLI does NOT delete receipts after a successful revert — they
 // are the durable audit trail for the engagement. Operators clean up
@@ -61,7 +62,7 @@ const perReceiptRevertTimeout = 90 * time.Second
 
 var revertCmd = &cobra.Command{
 	Use:   "revert <engagement-id>",
-	Short: "Roll back every destructive action recorded for an engagement",
+	Short: "Attempt recovery for destructive actions recorded for an engagement",
 	Long: `Walk every module's state directory, read receipts whose engagement-id
 matches the argument, and dispatch per-module Revert.
 
@@ -82,8 +83,8 @@ and are NOT deleted after revert — they are the audit trail.`,
 }
 
 func init() {
-	revertCmd.Flags().String("auth-token", "",
-		"Bearer token for authenticated targets. Passed to Reverter via context (not stored on disk).")
+	revertCmd.Flags().Bool("insecure", false,
+		"Skip TLS certificate verification for receipt recovery. Default: verify.")
 	rootCmd.AddCommand(revertCmd)
 }
 
@@ -102,7 +103,7 @@ func runRevert(cmd *cobra.Command, args []string) error {
 		return errors.New("revert: engagement-id is required")
 	}
 
-	authToken, _ := cmd.Flags().GetString("auth-token")
+	insecure, _ := cmd.Flags().GetBool("insecure")
 
 	// Cleanup runs on a non-cancellable base context: derive from
 	// context.Background() (NEVER cmd.Context()) so a Ctrl-C that cancels
@@ -111,8 +112,8 @@ func runRevert(cmd *cobra.Command, args []string) error {
 	// individually (perReceiptRevertTimeout) so the run still cannot hang
 	// forever on an unresponsive endpoint.
 	baseCtx := context.Background()
-	if authToken != "" {
-		baseCtx = context.WithValue(baseCtx, action.RevertAuthTokenKey{}, authToken)
+	if insecure {
+		baseCtx = context.WithValue(baseCtx, action.RevertInsecureKey{}, true)
 	}
 	mods := module.List()
 
@@ -120,6 +121,7 @@ func runRevert(cmd *cobra.Command, args []string) error {
 		totalRead     int
 		totalReverted int
 		totalSkipped  int
+		totalPartial  int
 		errs          []string
 	)
 
@@ -151,10 +153,9 @@ func runRevert(cmd *cobra.Command, args []string) error {
 			"[revert] %s — %d receipt(s) for engagement %s (newest first)\n",
 			mod.ID(), len(receipts), engagementID)
 
-		// Per-file LIFO: walk this module's append-ordered receipts
-		// newest-first so repeated same-target mutations unwind in
-		// reverse. #N is the receipt's position in the file, so the
-		// printed order counts down (visibly LIFO).
+		// Walk this module's append-ordered receipts newest-first. #N is
+		// the receipt's position in the file, so the printed order counts
+		// down (visibly LIFO).
 		for i := len(receipts) - 1; i >= 0; i-- {
 			r := receipts[i]
 			totalRead++
@@ -167,6 +168,13 @@ func runRevert(cmd *cobra.Command, args []string) error {
 				continue
 			}
 			if err := revertReceipt(baseCtx, reverter, r); err != nil {
+				if errors.Is(err, action.ErrRevertPartiallyVerified) {
+					totalReverted++
+					totalPartial++
+					_, _ = fmt.Fprintf(cmd.OutOrStderr(),
+						"[revert]   #%d: PARTIALLY VERIFIED — %v\n", i+1, err)
+					continue
+				}
 				errs = append(errs, fmt.Sprintf("%s receipt #%d: %v", mod.ID(), i+1, err))
 				_, _ = fmt.Fprintf(cmd.OutOrStderr(),
 					"[revert]   #%d: FAILED — %v\n", i+1, err)
@@ -178,15 +186,21 @@ func runRevert(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Only report a clean rollback when nothing failed. A conflict or an
-	// indeterminate re-read surfaces as an error here; the receipts stay
-	// on disk (we never delete them) so the operator can investigate and
-	// re-run, and the command exits nonzero.
+	// A conflict or indeterminate re-read surfaces as an error; receipts stay
+	// on disk so the operator can investigate and re-run. A partially verified
+	// result completed its provider-authorized recovery write but remains
+	// explicitly qualified because a secondary observation was unavailable.
 	if len(errs) > 0 {
 		_, _ = fmt.Fprintf(cmd.OutOrStderr(),
 			"[revert] INCOMPLETE — %d reverted, %d dry-run skipped, %d failed (of %d total receipts); receipts retained for retry\n",
 			totalReverted, totalSkipped, len(errs), totalRead)
 		return fmt.Errorf("revert had %d error(s):\n  %s", len(errs), strings.Join(errs, "\n  "))
+	}
+	if totalPartial > 0 {
+		_, _ = fmt.Fprintf(cmd.OutOrStderr(),
+			"[revert] PARTIALLY VERIFIED — %d reverted, %d dry-run skipped, %d recovery outcome(s) require qualification (of %d total receipts)\n",
+			totalReverted, totalSkipped, totalPartial, totalRead)
+		return nil
 	}
 	_, _ = fmt.Fprintf(cmd.OutOrStderr(),
 		"[revert] complete — %d reverted, %d dry-run skipped, 0 failed (of %d total receipts)\n",
@@ -194,11 +208,10 @@ func runRevert(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// revertReceipt dispatches a single rollback under a bounded, non-
-// cancellable context. baseCtx carries the optional auth token and is
-// derived from context.Background(); the per-call timeout is the only
-// cancellation source, so a rollback in progress runs to completion or
-// times out cleanly rather than being interrupted mid-write.
+// revertReceipt dispatches a single rollback under a bounded context.
+// The per-call timeout is the only cancellation source, so a rollback in
+// progress runs to completion or times out cleanly rather than being
+// interrupted mid-write.
 func revertReceipt(baseCtx context.Context, reverter action.Reverter, r action.Receipt) error {
 	ctx, cancel := context.WithTimeout(baseCtx, perReceiptRevertTimeout)
 	defer cancel()
@@ -302,6 +315,9 @@ func cleanupCampaignRun(
 			}
 		}
 		if err := item.reverter.Revert(ctx, item.receipt); err != nil {
+			if errors.Is(err, action.ErrRevertPartiallyVerified) {
+				continue
+			}
 			status := campaign.CleanupFailed
 			switch {
 			case errors.Is(err, action.ErrRevertConflict):
