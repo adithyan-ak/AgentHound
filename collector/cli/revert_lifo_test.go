@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -14,9 +15,10 @@ import (
 // which the CLI hands it receipts, so we can assert `agenthound revert`
 // walks each module's append-ordered receipt file newest-first (LIFO).
 type lifoRecorder struct {
-	id       string
-	state    *module.FileStatefulModule
-	reverted []string
+	id        string
+	state     *module.FileStatefulModule
+	reverted  []string
+	revertErr error
 }
 
 func (m *lifoRecorder) ID() string            { return m.id }
@@ -35,7 +37,7 @@ func (m *lifoRecorder) Revert(ctx context.Context, receipt action.Receipt) error
 	if r, ok := receipt.(*action.PoisonReceipt); ok {
 		m.reverted = append(m.reverted, r.TargetID)
 	}
-	return nil
+	return m.revertErr
 }
 
 // TestRunRevert_PerFileLIFO asserts revert dispatches a module's receipts
@@ -121,6 +123,29 @@ func TestRunRevertBestEffortContinuesAcrossModules(t *testing.T) {
 	}
 	if len(success.reverted) != 1 || success.reverted[0] != "legacy-succeeds" {
 		t.Fatalf("best-effort recovery did not continue: %v", success.reverted)
+	}
+}
+
+func TestRunRevertReportsPartiallyVerifiedRecovery(t *testing.T) {
+	t.Setenv("AGENTHOUND_STATE_DIR", filepath.Join(t.TempDir(), "state"))
+	rec := &lifoRecorder{
+		id: "mock.partial.recovery", state: module.NewFileStatefulModule("mock.partial.recovery"),
+		revertErr: fmt.Errorf("management restored; MCP verification unavailable: %w", action.ErrRevertPartiallyVerified),
+	}
+	module.Register(rec)
+	defer deregisterModule(t, rec.ID())
+	if _, err := rec.state.WriteReceipt("ENG-PARTIAL", &action.PoisonReceipt{
+		ModuleID: rec.ID(), EngagementID: "ENG-PARTIAL", TargetID: "tool-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out := &bytes.Buffer{}
+	if err := runRevert(newRevertTestCmd(out), []string{"ENG-PARTIAL"}); err != nil {
+		t.Fatalf("runRevert: %v", err)
+	}
+	if !bytes.Contains(out.Bytes(), []byte("PARTIALLY VERIFIED")) ||
+		!bytes.Contains(out.Bytes(), []byte("MCP verification unavailable")) {
+		t.Fatalf("partial recovery was not operator-visible:\n%s", out.String())
 	}
 }
 

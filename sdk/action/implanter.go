@@ -7,8 +7,8 @@ import (
 
 // Implanter installs a persistent payload (cron entry, hook, modified
 // binary, scheduled task, MCP-config entry) on or adjacent to a Target.
-// Composes Reverter for the same reason Poisoner does — every implant
-// must be undoable.
+// Composes Reverter for the same reason Poisoner does: every implant must
+// provide a recovery implementation whose runtime result callers verify.
 //
 // Implementations also implement sdk/module.Module.
 type Implanter interface {

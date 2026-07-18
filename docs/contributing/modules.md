@@ -16,7 +16,7 @@ Choose the interface that matches your module's purpose:
 | `Poisoner` | `poison` | Inject content into upstream artifacts | **Yes** — requires `Reverter` |
 | `Implanter` | `implant` | Plant persistent backdoors in target config | **Yes** — requires `Reverter` |
 
-`Reverter` (`sdk/action/reverter.go`) is not an action of its own — it is a compile-time-mandatory super-interface every `Poisoner` and `Implanter` embeds, so any change made on-target can be undone via `agenthound revert`.
+`Reverter` (`sdk/action/reverter.go`) is not an action of its own — it is a compile-time-mandatory super-interface every `Poisoner` and `Implanter` embeds, so every destructive module ships an explicit `agenthound revert` recovery path. Runtime restoration must be verified and may still be blocked by provider policy, conflicts, deletion, or loss of access.
 
 All interfaces are defined in `sdk/action/`. Every module also implements `sdk/module.Module`:
 

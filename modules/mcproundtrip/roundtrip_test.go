@@ -2,6 +2,7 @@ package mcproundtrip
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,189 +12,227 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/campaign"
 )
 
-// mcpStub is a stateful tools/list + tool-update stub mirroring the mcppoison
-// test harness, so the REAL mcppoison-backed round-trip runs end to end against
-// a live HTTP surface rather than a fake.
-func mcpStub(t *testing.T, initial string) (*httptest.Server, func() string) {
-	t.Helper()
-	var (
-		mu      sync.Mutex
-		current = initial
-	)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == "POST" && r.URL.Path == "/":
-			mu.Lock()
-			desc := current
-			mu.Unlock()
-			w.Header().Set("Content-Type", "application/json")
-			body, _ := json.Marshal(map[string]any{
-				"jsonrpc": "2.0", "id": 1,
-				"result": map[string]any{"tools": []map[string]any{
-					{"name": testTargetID, "description": desc},
-				}},
-			})
-			_, _ = w.Write(body)
-		case r.Method == "PUT" && strings.HasPrefix(r.URL.Path, "/admin/tools/"):
-			b, _ := io.ReadAll(r.Body)
-			defer func() { _ = r.Body.Close() }()
-			var parsed struct {
-				Description string `json:"description"`
-			}
-			if err := json.Unmarshal(b, &parsed); err != nil {
-				w.WriteHeader(400)
-				return
-			}
-			mu.Lock()
-			current = parsed.Description
-			mu.Unlock()
-			w.WriteHeader(204)
-		default:
-			w.WriteHeader(404)
-		}
-	}))
-	return srv, func() string { mu.Lock(); defer mu.Unlock(); return current }
+type roundtripContextForgeFixture struct {
+	mu                  sync.Mutex
+	description         string
+	version             int64
+	modifiedUserAgent   string
+	writes              int
+	intermediateMCPRead bool
+	mcp                 *mcpsdk.Server
+	mcpHTTP             *httptest.Server
+	managementHTTP      *httptest.Server
 }
 
-// TestRealRoundtrip_HappyPath drives the REAL mcppoison Poison + conflict-aware
-// Revert (no fake) against a live stub, proving genuine reuse: the mutation
-// lands (oracle verified), the original is restored (cleanup restored), and the
-// target is confirmed back at its original description.
-func TestRealRoundtrip_HappyPath(t *testing.T) {
-	t.Setenv("AGENTHOUND_STATE_DIR", t.TempDir())
-	srv, getCurrent := mcpStub(t, origDesc)
-	defer srv.Close()
+func newRoundtripContextForgeFixture(t *testing.T) *roundtripContextForgeFixture {
+	return newRoundtripContextForgeFixtureWithTLS(t, false)
+}
 
-	s := &Scenario{} // nil newRoundTrip => real mcppoison-backed factory
-	res, err := s.Run(context.Background(), campaign.RunInput{
-		Host:         srv.URL,
-		EngagementID: "ENG-REAL",
-		Commit:       true,
+func newRoundtripContextForgeFixtureWithTLS(t *testing.T, useTLS bool) *roundtripContextForgeFixture {
+	t.Helper()
+	f := &roundtripContextForgeFixture{description: origDesc, version: 1}
+	f.mcp = mcpsdk.NewServer(
+		&mcpsdk.Implementation{Name: "contextforge-roundtrip-test", Version: "1.0.5"}, nil,
+	)
+	f.publishTool(origDesc)
+	sdkHandler := mcpsdk.NewStreamableHTTPHandler(
+		func(*http.Request) *mcpsdk.Server { return f.mcp },
+		&mcpsdk.StreamableHTTPOptions{JSONResponse: true},
+	)
+	mcpHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read MCP request: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(strings.NewReader(string(body)))
+		if strings.Contains(string(body), `"method":"tools/list"`) {
+			f.mu.Lock()
+			if f.writes == 1 && f.description != origDesc {
+				f.intermediateMCPRead = true
+			}
+			f.mu.Unlock()
+		}
+		sdkHandler.ServeHTTP(w, r)
+	})
+	if useTLS {
+		f.mcpHTTP = httptest.NewTLSServer(mcpHandler)
+		f.managementHTTP = httptest.NewTLSServer(http.HandlerFunc(f.serveManagement))
+	} else {
+		f.mcpHTTP = httptest.NewServer(mcpHandler)
+		f.managementHTTP = httptest.NewServer(http.HandlerFunc(f.serveManagement))
+	}
+	t.Cleanup(func() {
+		f.managementHTTP.Close()
+		f.mcpHTTP.Close()
+	})
+	return f
+}
+
+func TestRealContextForgeRoundtripInsecureAppliesToBothSurfacesAndReceiptObservations(t *testing.T) {
+	t.Setenv("AGENTHOUND_STATE_DIR", t.TempDir())
+	t.Setenv("AGENTHOUND_CONTEXTFORGE_TOKEN", roundtripManagementToken())
+	t.Setenv("AGENTHOUND_MCP_TOKEN", "")
+	fixture := newRoundtripContextForgeFixtureWithTLS(t, true)
+
+	res, err := (&Scenario{}).Run(context.Background(), campaign.RunInput{
+		Host:         fixture.mcpHTTP.URL + "/servers/" + testServerUUID + "/mcp",
+		EngagementID: "ENG-INSECURE-REAL", Commit: true, Insecure: true,
 		Params: map[string]string{
-			"target-id": testTargetID,
-			"inject":    injDesc,
-			"mode":      "replace",
+			"target-id": testTargetID, "adapter": action.ContextForgeProfile,
+			"management-url": fixture.managementHTTP.URL,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run with explicit insecure: %v", err)
+	}
+	if !res.Report.TargetClean() {
+		t.Fatalf("roundtrip report = %+v", res.Report)
+	}
+}
+
+func (f *roundtripContextForgeFixture) publishTool(description string) {
+	f.mcp.AddTool(&mcpsdk.Tool{
+		Name: testTargetID, Description: description,
+		InputSchema: &jsonschema.Schema{Type: "object"},
+	}, func(context.Context, *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+		return &mcpsdk.CallToolResult{}, nil
+	})
+}
+
+func (f *roundtripContextForgeFixture) serveManagement(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != "Bearer "+roundtripManagementToken() {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/v1/auth/email/me":
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"email": "operator@example.com", "is_admin": false, "is_active": true,
+		})
+	case r.Method == http.MethodGet && r.URL.Path == "/v1/rbac/my/permissions":
+		_ = json.NewEncoder(w).Encode([]string{"servers.read", "tools.read", "tools.update"})
+	case r.Method == http.MethodGet && r.URL.Path == "/v1/servers/"+testServerUUID:
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": testServerUUID, "ownerEmail": "operator@example.com",
+			"associatedToolIds": []string{testToolUUID},
+		})
+	case r.Method == http.MethodGet && r.URL.Path == "/v1/servers/"+testServerUUID+"/tools":
+		_ = json.NewEncoder(w).Encode([]map[string]any{f.toolRecord()})
+	case r.Method == http.MethodGet && r.URL.Path == "/v1/tools/"+testToolUUID:
+		_ = json.NewEncoder(w).Encode(f.toolRecord())
+	case r.Method == http.MethodPut && r.URL.Path == "/v1/tools/"+testToolUUID:
+		var body struct {
+			Description string `json:"description"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		f.mu.Lock()
+		f.description = body.Description
+		f.version++
+		f.modifiedUserAgent = r.UserAgent()
+		f.writes++
+		f.mu.Unlock()
+		f.publishTool(body.Description)
+		_ = json.NewEncoder(w).Encode(f.toolRecord())
+	default:
+		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+func (f *roundtripContextForgeFixture) toolRecord() map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return map[string]any{
+		"id": testToolUUID, "name": testTargetID, "description": f.description,
+		"version": f.version, "modifiedUserAgent": f.modifiedUserAgent,
+		"ownerEmail": "operator@example.com",
+	}
+}
+
+func roundtripManagementToken() string {
+	encode := func(value any) string {
+		data, _ := json.Marshal(value)
+		return base64.RawURLEncoding.EncodeToString(data)
+	}
+	return encode(map[string]string{"alg": "none"}) + "." + encode(map[string]any{
+		"sub": "operator@example.com", "token_use": "api",
+		"user":   map[string]any{"email": "operator@example.com", "is_admin": false},
+		"scopes": map[string]any{"permissions": []string{"*"}},
+	}) + ".signature"
+}
+
+func TestRealContextForgePreflightFailureNeedsNoCleanup(t *testing.T) {
+	t.Setenv("AGENTHOUND_STATE_DIR", t.TempDir())
+	t.Setenv("AGENTHOUND_CONTEXTFORGE_TOKEN", "not-the-accepted-token")
+	t.Setenv("AGENTHOUND_MCP_TOKEN", "")
+	fixture := newRoundtripContextForgeFixture(t)
+
+	res, err := (&Scenario{}).Run(context.Background(), campaign.RunInput{
+		Host:         fixture.mcpHTTP.URL + "/servers/" + testServerUUID + "/mcp",
+		EngagementID: "ENG-PREFLIGHT-FAIL", Commit: true,
+		Params: map[string]string{
+			"target-id": testTargetID, "adapter": action.ContextForgeProfile,
+			"management-url": fixture.managementHTTP.URL,
+		},
+	})
+	if !errors.Is(err, campaign.ErrMutationFailed) {
+		t.Fatalf("Run error = %v, want mutation failed", err)
+	}
+	if res.Report.Cleanup.Status != campaign.CleanupNotApplicable ||
+		res.Report.Cleanup.Postcondition != "mutation_not_applied" {
+		t.Fatalf("cleanup = %+v, want not applicable", res.Report.Cleanup)
+	}
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	if fixture.writes != 0 {
+		t.Fatalf("preflight failure issued %d writes", fixture.writes)
+	}
+}
+
+func TestRealContextForgeRoundtripProvesIntermediateChangeAndRestoration(t *testing.T) {
+	t.Setenv("AGENTHOUND_STATE_DIR", t.TempDir())
+	t.Setenv("AGENTHOUND_CONTEXTFORGE_TOKEN", roundtripManagementToken())
+	t.Setenv("AGENTHOUND_MCP_TOKEN", "")
+	fixture := newRoundtripContextForgeFixture(t)
+
+	res, err := (&Scenario{}).Run(context.Background(), campaign.RunInput{
+		Host:         fixture.mcpHTTP.URL + "/servers/" + testServerUUID + "/mcp",
+		EngagementID: "ENG-REAL", Commit: true,
+		Params: map[string]string{
+			"target-id": testTargetID, "adapter": action.ContextForgeProfile,
+			"management-url": fixture.managementHTTP.URL,
 		},
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	rep := res.Report
-	if rep == nil {
-		t.Fatal("expected a round-trip report")
+	if res.Report.Oracle.Outcome != string(campaign.OracleMutationVerified) ||
+		res.Report.Cleanup.Status != campaign.CleanupRestored || !res.Report.TargetClean() {
+		t.Fatalf("roundtrip report = %+v", res.Report)
 	}
-	if rep.Oracle.Outcome != string(campaign.OracleMutationVerified) {
-		t.Errorf("oracle = %q, want mutation_verified", rep.Oracle.Outcome)
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	if !fixture.intermediateMCPRead {
+		t.Fatal("roundtrip did not prove an intermediate MCP-visible change")
 	}
-	if rep.Cleanup.Status != campaign.CleanupRestored {
-		t.Errorf("cleanup = %q, want restored", rep.Cleanup.Status)
+	if fixture.writes != 2 {
+		t.Fatalf("management writes = %d, want exactly one forward and one restore", fixture.writes)
 	}
-	if !rep.TargetClean() {
-		t.Error("target must be reported clean after a successful round-trip")
-	}
-	if got := getCurrent(); got != origDesc {
-		t.Errorf("target left at %q, want original %q", got, origDesc)
-	}
-	if rep.Budget.RequestsUsed != 3 {
-		t.Errorf("forward requests_used = %d, want 3 before cleanup", rep.Budget.RequestsUsed)
-	}
-	encoded, _ := json.Marshal(rep)
-	if strings.Contains(string(encoded), origDesc) || strings.Contains(string(encoded), injDesc) {
-		t.Fatal("run report leaked original/injected mutation state")
-	}
-}
-
-// TestRealRoundtrip_ConflictCleanup proves the conflict-aware revert does not
-// blind-write against a live surface: a third-party edit landing after the
-// mutation makes the revert refuse, so cleanup=conflict and the third-party
-// value is preserved. The stub flips to a third-party value once it has served
-// the mutation write and the oracle read.
-func TestRealRoundtrip_ConflictCleanup(t *testing.T) {
-	t.Setenv("AGENTHOUND_STATE_DIR", t.TempDir())
-
-	const thirdParty = "THIRD-PARTY DESCRIPTION"
-	var (
-		mu       sync.Mutex
-		current  = origDesc
-		putCount int
-		listGET  int
-	)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == "POST" && r.URL.Path == "/":
-			mu.Lock()
-			listGET++
-			// Reads in order: 1=poison original, 2=oracle. After the oracle read
-			// a third party edits the tool, so the revert's own re-read (3) sees
-			// a value matching neither original nor injected -> conflict.
-			if listGET >= 3 {
-				current = thirdParty
-			}
-			desc := current
-			mu.Unlock()
-			w.Header().Set("Content-Type", "application/json")
-			body, _ := json.Marshal(map[string]any{
-				"jsonrpc": "2.0", "id": 1,
-				"result": map[string]any{"tools": []map[string]any{
-					{"name": testTargetID, "description": desc},
-				}},
-			})
-			_, _ = w.Write(body)
-		case r.Method == "PUT" && strings.HasPrefix(r.URL.Path, "/admin/tools/"):
-			b, _ := io.ReadAll(r.Body)
-			defer func() { _ = r.Body.Close() }()
-			var parsed struct {
-				Description string `json:"description"`
-			}
-			if err := json.Unmarshal(b, &parsed); err != nil {
-				w.WriteHeader(400)
-				return
-			}
-			mu.Lock()
-			current = parsed.Description
-			putCount++
-			mu.Unlock()
-			w.WriteHeader(204)
-		default:
-			w.WriteHeader(404)
-		}
-	}))
-	defer srv.Close()
-
-	s := &Scenario{}
-	res, err := s.Run(context.Background(), campaign.RunInput{
-		Host:         srv.URL,
-		EngagementID: "ENG-CONFLICT",
-		Commit:       true,
-		Params: map[string]string{
-			"target-id": testTargetID,
-			"inject":    injDesc,
-			"mode":      "replace",
-		},
-	})
-	if !errors.Is(err, campaign.ErrUnsafeCleanup) {
-		t.Fatalf("Run error = %v, want unsafe cleanup", err)
-	}
-	rep := res.Report
-	if rep.Oracle.Outcome != string(campaign.OracleMutationVerified) {
-		t.Errorf("oracle = %q, want mutation_verified (mutation landed before the third-party edit)", rep.Oracle.Outcome)
-	}
-	if rep.Cleanup.Status != campaign.CleanupConflict {
-		t.Errorf("cleanup = %q, want conflict", rep.Cleanup.Status)
-	}
-	if rep.TargetClean() {
-		t.Error("a conflicted cleanup must not report the target as clean")
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	// Exactly one PUT (the mutation). The conflict-aware revert must not write.
-	if putCount != 1 {
-		t.Errorf("PUT count = %d, want 1 (revert must not blind-write on conflict)", putCount)
-	}
-	if current != thirdParty {
-		t.Errorf("target = %q, want the preserved third-party value %q", current, thirdParty)
+	if fixture.description != origDesc {
+		t.Fatalf("description = %q, want original", fixture.description)
 	}
 }

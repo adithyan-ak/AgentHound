@@ -47,7 +47,7 @@ import (
 
 const (
 	scenarioID      = "mcp-poison-roundtrip"
-	scenarioVersion = 1
+	scenarioVersion = 2
 )
 
 // Scenario is the reversible mcppoison round-trip validation.
@@ -63,8 +63,8 @@ func init() { campaign.Register(&Scenario{}) }
 func (s *Scenario) ID() string   { return scenarioID }
 func (s *Scenario) Version() int { return scenarioVersion }
 func (s *Scenario) Description() string {
-	return "Reversible mcppoison round-trip (STANDALONE target-mutation validation): " +
-		"operator-authorized mutation, injected-state oracle, conflict-aware revert, " +
+	return "Reversible ContextForge MCP round-trip (STANDALONE target-mutation validation): " +
+		"generated inert marker, MCP-visible oracle, conflict-aware revert, " +
 		"restored-state cleanup — oracle and cleanup reported separately. Not an attack finding."
 }
 
@@ -79,21 +79,17 @@ func (s *Scenario) RequiresWitness() bool { return false }
 // poison/destructive acknowledgement gate.
 func (s *Scenario) RequiresMutationConsent() bool { return true }
 
-// config is the parsed per-run mutation configuration read from
-// RunInput.Params. Empty method/path/list fields fall back to mcppoison's
-// defaults at execution time.
+// config is the parsed ContextForge adapter configuration read from
+// RunInput.Params. The adapter derives and validates all endpoint paths and
+// generates the inert round-trip marker internally.
 type config struct {
-	targetID     string
-	inject       string
-	mode         string
-	updateMethod string
-	updatePath   string
-	listPath     string
-	authToken    string
+	targetID      string
+	adapter       string
+	managementURL string
 }
 
 // Run executes the round-trip. On a dry run it plans only and never mutates.
-// Precondition failures (missing target-id/inject, bad mode) return an error
+// Precondition failures (missing target-id or unsupported adapter) return an error
 // before anything is touched.
 func (s *Scenario) Run(ctx context.Context, in campaign.RunInput) (*campaign.RunResult, error) {
 	cfg, err := parseConfig(in)
@@ -138,7 +134,7 @@ func runRoundtrip(
 		elapsedLimit = 30 * time.Second
 	}
 	runCtx, cancel, budget := campaign.NewBudgetContext(ctx, campaign.RunLimits{
-		RequestLimit: 16, MutationLimit: 2, ElapsedLimit: elapsedLimit,
+		RequestLimit: 64, MutationLimit: 2, ElapsedLimit: elapsedLimit,
 	})
 	defer cancel()
 	now := in.Clock()
@@ -261,6 +257,33 @@ func runRoundtrip(
 		}
 		return report, mcppoison.ErrNoMutation
 	}
+	if mutateErr != nil && receipt == nil {
+		addInstantStep(
+			report,
+			now,
+			campaign.StepVerifyInjected,
+			campaign.OperationTargetVerification,
+			string(campaign.OracleMutationNotApplied),
+		)
+		report.Oracle = campaign.OracleReport{
+			Type:        campaign.OracleTypeReversibleMutationRoundtrip,
+			Observation: string(campaign.OracleMutationNotApplied),
+			Outcome:     string(campaign.OracleMutationNotApplied),
+		}
+		forwardBudget, forwardErr := budget.FreezeForward(runCtx)
+		cancel()
+		addInstantStep(report, now, campaign.StepRevert, campaign.OperationCleanup, string(campaign.CleanupNotApplicable))
+		addInstantStep(report, now, campaign.StepVerifyOriginal, campaign.OperationTargetVerification, "mutation_not_applied")
+		report.Cleanup = campaign.CleanupReport{
+			Status: campaign.CleanupNotApplicable, Postcondition: "mutation_not_applied",
+			ReceiptRetained: false,
+		}
+		finishReport(report, forwardBudget, now)
+		if forwardErr != nil {
+			return report, forwardErr
+		}
+		return report, fmt.Errorf("%w: %v", campaign.ErrMutationFailed, mutateErr)
+	}
 
 	verifyInjectedStarted := now()
 	oracle := campaign.OracleIndeterminate
@@ -304,14 +327,16 @@ func runRoundtrip(
 		cleanup.Status = campaign.CleanupIndeterminate
 	}
 	if cleanup.Status == campaign.CleanupRestored {
-		current, err := rt.ReadCurrent(cleanupCtx)
+		observation, err := rt.Observe(cleanupCtx, receipt)
 		switch {
 		case err != nil:
 			cleanup.Status = campaign.CleanupFailed
 			postcondition = "reread_failed"
-		case current != receipt.OriginalContent:
+		case !restorationConfirmed(observation, receipt):
 			cleanup.Status = campaign.CleanupFailed
 			postcondition = "original_mismatch"
+		case !observation.Associated:
+			postcondition = "original_management_confirmed_mcp_unavailable"
 		default:
 			postcondition = "original_confirmed"
 		}
@@ -334,6 +359,9 @@ func runRoundtrip(
 		return report, campaign.ErrUnsafeCleanup
 	}
 	if mutateErr != nil {
+		return report, campaign.ErrMutationFailed
+	}
+	if oracle != campaign.OracleMutationVerified {
 		return report, campaign.ErrMutationFailed
 	}
 	if forwardErr != nil {
@@ -392,18 +420,63 @@ func classifyOracle(ctx context.Context, rt roundTrip, r *action.PoisonReceipt) 
 	if r.OriginalContent == r.InjectedContent {
 		return campaign.OracleMutationNotApplied
 	}
-	current, err := rt.ReadCurrent(ctx)
+	observation, err := rt.Observe(ctx, r)
 	if err != nil {
 		return campaign.OracleIndeterminate
 	}
-	switch current {
-	case r.InjectedContent:
-		return campaign.OracleMutationVerified
-	case r.OriginalContent:
-		return campaign.OracleMutationNotApplied
-	default:
+	state := r.ContextForge
+	if state == nil || observation.ToolID != state.Management.ToolID ||
+		observation.ServerID != state.Management.ServerID || !observation.Associated ||
+		!observation.ManagementObserved || !observation.MCPObserved {
+		return campaign.OracleIndeterminate
+	}
+	if observation.ManagementDescription == r.OriginalContent &&
+		observation.MCPDescription == r.OriginalContent {
+		if observation.ManagementVersion == state.Management.OriginalVersion &&
+			matchesOriginalUserAgent(observation.ManagementModifiedUserAgent, state.Management.OriginalModifiedUserAgent) {
+			return campaign.OracleMutationNotApplied
+		}
 		return campaign.OracleMutationConflict
 	}
+	if observation.ManagementVersion == state.Management.OriginalVersion+1 &&
+		observation.ManagementModifiedUserAgent == state.Management.ForwardUserAgent &&
+		observation.ManagementDescription != r.OriginalContent &&
+		observation.MCPDescription == observation.ManagementDescription {
+		return campaign.OracleMutationVerified
+	}
+	if observation.ManagementVersion != state.Management.OriginalVersion+1 ||
+		observation.ManagementModifiedUserAgent != state.Management.ForwardUserAgent {
+		return campaign.OracleMutationConflict
+	}
+	return campaign.OracleIndeterminate
+}
+
+func matchesOriginalUserAgent(observed string, original *string) bool {
+	if original == nil {
+		return observed == ""
+	}
+	return observed == *original
+}
+
+func restorationConfirmed(observation mcppoison.Observation, r *action.PoisonReceipt) bool {
+	if r == nil || r.ContextForge == nil {
+		return false
+	}
+	state := r.ContextForge
+	if !observation.ManagementObserved || observation.ToolID != state.Management.ToolID ||
+		observation.ServerID != state.Management.ServerID ||
+		observation.ManagementDescription != r.OriginalContent {
+		return false
+	}
+	restoredByAgent := observation.ManagementVersion == state.Management.OriginalVersion+2 &&
+		observation.ManagementModifiedUserAgent == state.Management.RestoreUserAgent
+	neverChanged := observation.ManagementVersion == state.Management.OriginalVersion &&
+		matchesOriginalUserAgent(observation.ManagementModifiedUserAgent, state.Management.OriginalModifiedUserAgent)
+	if !restoredByAgent && !neverChanged {
+		return false
+	}
+	return !observation.Associated ||
+		(observation.MCPObserved && observation.MCPDescription == r.OriginalContent)
 }
 
 // classifyCleanup issues the conflict-aware revert and classifies that dispatch.
@@ -412,6 +485,8 @@ func classifyOracle(ctx context.Context, rt roundTrip, r *action.PoisonReceipt) 
 func classifyCleanup(ctx context.Context, rt roundTrip, r *action.PoisonReceipt) campaign.RoundtripCleanup {
 	if err := rt.Revert(ctx, r); err != nil {
 		switch {
+		case errors.Is(err, mcppoison.ErrRevertPartiallyVerified):
+			return campaign.CleanupRestored
 		case errors.Is(err, mcppoison.ErrRevertIndeterminate):
 			return campaign.CleanupIndeterminate
 		case errors.Is(err, mcppoison.ErrRevertConflict):
@@ -423,33 +498,30 @@ func classifyCleanup(ctx context.Context, rt roundTrip, r *action.PoisonReceipt)
 	return campaign.CleanupRestored
 }
 
-// parseConfig reads and validates the mutation configuration from
-// RunInput.Params. target-id and inject are required; mode, when set, must be
-// one of replace/append/prepend.
+// parseConfig reads and validates the provider-specific round-trip contract.
+// ContextForge is intentionally the only adapter: MCP itself defines no tool
+// metadata mutation API.
 func parseConfig(in campaign.RunInput) (config, error) {
 	p := in.Params
 	targetID := strings.TrimSpace(param(p, "target-id"))
 	if targetID == "" {
 		return config{}, errors.New(`mcp-poison-roundtrip: params["target-id"] is required (the MCP tool whose description is mutated)`)
 	}
-	inject := param(p, "inject")
-	if strings.TrimSpace(inject) == "" {
-		return config{}, errors.New(`mcp-poison-roundtrip: params["inject"] is required (the injection content)`)
+	adapter := strings.TrimSpace(param(p, "adapter"))
+	if adapter != action.ContextForgeProfile {
+		return config{}, fmt.Errorf(
+			`mcp-poison-roundtrip: params["adapter"] must be %q (MCP defines no generic mutation endpoint)`,
+			action.ContextForgeProfile,
+		)
 	}
-	mode := strings.TrimSpace(param(p, "mode"))
-	switch mode {
-	case "", "replace", "append", "prepend":
-	default:
-		return config{}, fmt.Errorf("mcp-poison-roundtrip: unsupported mode %q (use replace/append/prepend)", mode)
+	managementURL := strings.TrimSpace(param(p, "management-url"))
+	if err := mcppoison.ValidateContextForgeEndpoints(in.Host, managementURL); err != nil {
+		return config{}, fmt.Errorf("mcp-poison-roundtrip: %w", err)
 	}
 	return config{
-		targetID:     targetID,
-		inject:       inject,
-		mode:         mode,
-		updateMethod: strings.TrimSpace(param(p, "update-method")),
-		updatePath:   strings.TrimSpace(param(p, "update-path")),
-		listPath:     strings.TrimSpace(param(p, "list-path")),
-		authToken:    param(p, "auth-token"),
+		targetID:      targetID,
+		adapter:       adapter,
+		managementURL: managementURL,
 	}, nil
 }
 
@@ -460,29 +532,24 @@ func param(m map[string]string, k string) string {
 	return m[k]
 }
 
-// planText renders the round-trip plan for a dry run. It names the exact write
-// surface without revealing the injection content.
+// planText renders the round-trip plan without probing either surface.
 func planText(in campaign.RunInput, cfg config) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "scenario:      %s (v%d)\n", scenarioID, scenarioVersion)
 	fmt.Fprintf(&b, "oracle:        %s\n", campaign.OracleTypeReversibleMutationRoundtrip)
 	fmt.Fprintf(&b, "target:        %s\n", campaign.SanitizedTargetReference(in.Host))
 	fmt.Fprintf(&b, "target tool:   %s\n", cfg.targetID)
-	fmt.Fprintf(&b, "mode:          %s\n", orDefault(cfg.mode, "replace"))
-	fmt.Fprintf(&b, "write:         %s %s\n", orDefault(cfg.updateMethod, "PUT"), orDefault(cfg.updatePath, "/admin/tools/{id}"))
-	fmt.Fprintf(&b, "list path:     %s\n", orDefault(cfg.listPath, "/"))
+	fmt.Fprintf(&b, "adapter:       %s\n", cfg.adapter)
+	if cfg.managementURL == "" {
+		b.WriteString("management:    derive ContextForge /v1 from the server-scoped MCP URL\n")
+	} else {
+		fmt.Fprintf(&b, "management:    %s\n", campaign.SanitizedTargetReference(cfg.managementURL))
+	}
 	b.WriteString("plan (STANDALONE target-mutation validation; NOT an attack finding):\n")
-	b.WriteString("  1. apply the operator-authorized mutation (mcppoison Poison)\n")
-	b.WriteString("  2. re-read the exact injected state and compare to the receipt (ORACLE)\n")
-	b.WriteString("  3. conflict-aware revert (mcppoison Revert; never a blind write)\n")
-	b.WriteString("  4. re-read and confirm the original is restored (CLEANUP)\n")
+	b.WriteString("  1. bind the MCP name to the exact ContextForge server/tool UUID and prove permissions\n")
+	b.WriteString("  2. append one generated inert marker and prove an MCP-visible intermediate change (ORACLE)\n")
+	b.WriteString("  3. restore once only when ContextForge version and operation attribution match\n")
+	b.WriteString("  4. re-read management and MCP state and confirm the original (CLEANUP)\n")
 	b.WriteString("  oracle and cleanup are reported SEPARATELY.\n")
 	return b.String()
-}
-
-func orDefault(v, def string) string {
-	if strings.TrimSpace(v) == "" {
-		return def
-	}
-	return v
 }
