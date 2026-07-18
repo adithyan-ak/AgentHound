@@ -214,12 +214,17 @@ func isWordRune(r rune) bool {
 func lowerSpanToOrig(text string, loStart, loEnd int) (start, end int, ok bool) {
 	start, end = -1, -1
 	loPos, origPos := 0, 0
-	for _, r := range text {
+	for origPos < len(text) {
+		// Decode explicitly so an invalid byte advances origPos by its true width
+		// (1), not by the 3-byte width of the replacement rune it lowercases to.
+		// loPos still advances by the lowered replacement-rune width, matching
+		// strings.ToLower(text) used as the search string.
+		r, size := utf8.DecodeRuneInString(text[origPos:])
 		if loPos >= loStart && start < 0 {
 			start = origPos
 		}
 		loPos += len(strings.ToLower(string(r)))
-		origPos += len(string(r))
+		origPos += size
 		if loPos >= loEnd && end < 0 {
 			end = origPos
 		}

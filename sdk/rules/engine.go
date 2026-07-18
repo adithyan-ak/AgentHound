@@ -239,9 +239,19 @@ func evaluateRuleShadow(
 	if cr.rule.Emit.FindingType != "has_injection_patterns" {
 		return nil
 	}
+	if cr.rule.ShadowExclude {
+		return nil
+	}
 	shadowSpans := cr.matcher.matchSpans(view.text)
 	shadowMatches := make([]evaluatedMatch, 0, len(shadowSpans))
 	for ordinal, span := range shadowSpans {
+		// On a shadow truncated at the canonical cap, a match ending exactly at
+		// the cut is untrustworthy: an end-anchored ($) or boundary-sensitive
+		// pattern may be firing against a boundary that only exists because the
+		// projection was cut off. Suppress those; the raw pass still runs.
+		if view.truncated && span.end == len(view.text) {
+			continue
+		}
 		rawStart, rawEnd, ok := view.projectRange(
 			span.start,
 			span.end,
@@ -269,14 +279,35 @@ func mergeInstructionMatches(
 	shadowMatches []evaluatedMatch,
 ) []evaluatedMatch {
 	merged := append([]evaluatedMatch(nil), rawMatches...)
-	seen := make(map[matchIdentity]struct{}, len(rawMatches))
+	// A shadow match is dropped when it exactly duplicates or properly overlaps
+	// an already-accepted span of the same rule (raw seeds the accepted set, so
+	// raw always wins) — this also covers the case where confusable/whitespace
+	// collapse projects the shadow match to a wider raw span than the raw match.
+	//
+	// Dedup is kept near-linear: exact spans use an O(1) map (the high-volume
+	// common case and the only way zero-length matches can conflict), and proper
+	// overlap uses a forward pointer over each rule's start-sorted raw ranges plus
+	// a running max end of accepted shadow spans. A per-match linear scan here was
+	// O(matches^2) and a DoS surface for single-token custom rules on 1 MiB input.
+	exact := make(map[matchIdentity]struct{}, len(rawMatches))
+	rawByRule := make(map[string][]matcherSpan, len(rawMatches))
 	for _, match := range rawMatches {
-		seen[matchIdentity{
-			ruleID:   match.match.RuleID,
-			rawStart: match.rawStart,
-			rawEnd:   match.rawEnd,
-		}] = struct{}{}
+		exact[matchIdentity{match.match.RuleID, match.rawStart, match.rawEnd}] = struct{}{}
+		rawByRule[match.match.RuleID] = append(
+			rawByRule[match.match.RuleID],
+			matcherSpan{start: match.rawStart, end: match.rawEnd},
+		)
 	}
+	for id := range rawByRule {
+		spans := rawByRule[id]
+		sort.Slice(spans, func(i, j int) bool {
+			if spans[i].start != spans[j].start {
+				return spans[i].start < spans[j].start
+			}
+			return spans[i].end < spans[j].end
+		})
+	}
+
 	sort.SliceStable(shadowMatches, func(i, j int) bool {
 		left := shadowMatches[i]
 		right := shadowMatches[j]
@@ -291,16 +322,41 @@ func mergeInstructionMatches(
 		}
 		return left.ordinal < right.ordinal
 	})
+
+	var (
+		curRule      string
+		rawSpans     []matcherSpan
+		ri           int
+		maxShadowEnd int
+		started      bool
+	)
 	for _, match := range shadowMatches {
-		identity := matchIdentity{
-			ruleID:   match.match.RuleID,
-			rawStart: match.rawStart,
-			rawEnd:   match.rawEnd,
+		id := match.match.RuleID
+		if !started || id != curRule {
+			curRule, rawSpans, ri, maxShadowEnd, started = id, rawByRule[id], 0, 0, true
 		}
-		if _, exists := seen[identity]; exists {
+		s, e := match.rawStart, match.rawEnd
+		identity := matchIdentity{id, s, e}
+		if _, dup := exact[identity]; dup {
 			continue
 		}
-		seen[identity] = struct{}{}
+		// Proper overlap with a raw span: advance to the first raw range ending
+		// after s; it overlaps iff it also starts before e.
+		for ri < len(rawSpans) && rawSpans[ri].end <= s {
+			ri++
+		}
+		if ri < len(rawSpans) && rawSpans[ri].start < e {
+			continue
+		}
+		// Proper overlap with an already-accepted shadow span (accepted spans are
+		// non-overlapping and start at or before s, so the running max suffices).
+		if s < maxShadowEnd {
+			continue
+		}
+		exact[identity] = struct{}{}
+		if e > maxShadowEnd {
+			maxShadowEnd = e
+		}
 		merged = append(merged, match)
 	}
 	return merged
@@ -336,6 +392,14 @@ func (e *Engine) Evaluate(collector, target, text string) []Match {
 	}
 
 	view := canonicalizeInstruction(raw)
+	if view.overflow {
+		slog.Debug(
+			"canonical instruction shadow declined: provenance ceiling exceeded",
+			"collector", collector,
+			"target", target,
+			"bytes", len(raw),
+		)
+	}
 	if !view.changed {
 		return publicMatches(rawMatches)
 	}

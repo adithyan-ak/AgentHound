@@ -86,6 +86,40 @@ func TestCanonicalizeInstructionAllocationCeiling(t *testing.T) {
 	}
 }
 
+// BenchmarkCanonicalizeInstructionShapes covers the realistic clean shapes the
+// original suite skipped (benign non-ASCII, CRLF) alongside the pathological
+// provenance shapes the memory bound targets (tabs coalesce; NBSP and
+// high-cardinality decline).
+func BenchmarkCanonicalizeInstructionShapes(b *testing.B) {
+	const size = 4 << 10
+	highCardinality := func(n int) string {
+		var sb strings.Builder
+		for i := 0; sb.Len() < n; i++ {
+			sb.WriteRune(rune(0xFF01 + (i % 0x5E)))
+		}
+		return sb.String()
+	}
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"clean_ascii", strings.Repeat("the quick brown fox. ", size/21)},
+		{"clean_nonascii", strings.Repeat("café résumé naïve ", size/19)},
+		{"clean_crlf", strings.Repeat("line one\r\nline two\r\n", size/20)},
+		{"pathological_tabs", strings.Repeat("\t", size)},
+		{"pathological_nbsp", strings.Repeat("\u00A0", size/2)},
+		{"pathological_highcard", highCardinality(size)},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				_ = canonicalizeInstruction(tc.input)
+			}
+		})
+	}
+}
+
 func BenchmarkEngineEvaluateInstruction(b *testing.B) {
 	engine := benchmarkInstructionEngine(
 		b,

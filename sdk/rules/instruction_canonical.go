@@ -13,6 +13,23 @@ import (
 // tables it depends on. It is dormant until the semantic digest consumes it.
 const instructionCanonicalizationVersion = "instruction-shadow-v1+unicode-" + norm.Version
 
+// maxCanonicalSpans bounds the provenance spans one canonical builder may hold.
+// Byte-preserving transforms coalesce, so normal text stays far below this;
+// only adversarial inputs that force one non-affine span per rune (e.g. a
+// megabyte of NBSP or distinct decomposing runes) approach it. On breach the
+// builder declines (overflow) and the caller skips the shadow, capping
+// worst-case provenance memory at ~10 MiB/stage (maxCanonicalSpans * 40 B).
+const maxCanonicalSpans = maxInputBytes / 4
+
+// spanCap bounds a preallocation hint to the provenance ceiling so a large
+// input cannot reserve an unbounded span slice up front.
+func spanCap(n int) int {
+	if n > maxCanonicalSpans {
+		return maxCanonicalSpans
+	}
+	return n
+}
+
 // projectionBias selects which raw boundary a non-affine or between-span offset
 // projects to.
 type projectionBias uint8
@@ -41,6 +58,8 @@ type canonicalView struct {
 	spans     []sourceSpan
 	sourceEnd int
 	changed   bool
+	overflow  bool
+	truncated bool
 }
 
 // projectPoint maps a shadow byte offset back to a raw byte offset in
@@ -130,6 +149,8 @@ type canonicalBuilder struct {
 	text      []byte
 	spans     []sourceSpan
 	sourceEnd int
+	overflow  bool
+	truncated bool
 }
 
 // truncateRuleInput enforces the raw 1 MiB input cap on a byte boundary.
@@ -154,6 +175,7 @@ func (b *canonicalBuilder) appendSegment(
 ) bool {
 	if len(b.text)+len(out) > maxInputBytes {
 		b.sourceEnd = rawStart
+		b.truncated = true
 		return false
 	}
 	if len(out) == 0 {
@@ -178,6 +200,13 @@ func (b *canonicalBuilder) appendSegment(
 			return true
 		}
 	}
+	// Provenance ceiling: a new, non-coalescable span beyond the bound means the
+	// input is adversarially non-affine. Decline rather than explode memory; the
+	// caller drops the shadow for this input and the raw pass still runs.
+	if len(b.spans) >= maxCanonicalSpans {
+		b.overflow = true
+		return false
+	}
 	b.spans = append(b.spans, sourceSpan{
 		shadowStart: shadowStart,
 		shadowEnd:   shadowEnd,
@@ -194,6 +223,8 @@ func (b canonicalBuilder) view() canonicalView {
 		text:      string(b.text),
 		spans:     b.spans,
 		sourceEnd: b.sourceEnd,
+		overflow:  b.overflow,
+		truncated: b.truncated,
 	}
 }
 
@@ -209,7 +240,7 @@ func canonicalizeNFKC(raw string) canonicalView {
 	// pathological single-fullwidth + 1 MiB ASCII input.
 	b := canonicalBuilder{
 		text:  make([]byte, 0, len(raw)),
-		spans: make([]sourceSpan, 0, len(raw)/3),
+		spans: make([]sourceSpan, 0, spanCap(len(raw)/3)),
 	}
 	i := 0
 	for i < len(raw) {
@@ -441,11 +472,17 @@ func canonicalizeControlsAndWhitespace(view canonicalView) canonicalView {
 			rawStart := span.rawStart + i
 			rawEnd := rawStart + size
 			if isWS {
+				// A 1-byte source whitespace rune maps to a 1-byte space/newline,
+				// so the mapping is offset-preserving (affine) even when the byte
+				// value changes (e.g. tab -> space). This lets long control runs
+				// coalesce with adjacent identity spans with no projection-precision
+				// loss. Multi-byte whitespace (NBSP, U+2028, ...) is not
+				// offset-preserving and stays non-affine.
 				if !b.appendSegment(
 					[]byte{byte(mapped)},
 					rawStart,
 					rawEnd,
-					r == mapped,
+					size == 1,
 					false,
 				) {
 					return b.view()
@@ -495,6 +532,16 @@ var instructionConfusables = map[rune]byte{
 // asciiLatinRune reports whether r is an ASCII Latin letter.
 func asciiLatinRune(r rune) bool {
 	return r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z'
+}
+
+// nextRuneIsLetter reports whether the rune beginning at byte offset off in text
+// is a Unicode letter. An offset at or past the end of text is not a letter.
+func nextRuneIsLetter(text string, off int) bool {
+	if off >= len(text) {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(text[off:])
+	return unicode.IsLetter(r)
 }
 
 // foldInstructionConfusables folds the exact restricted set of Greek/Cyrillic
@@ -639,13 +686,33 @@ func collapseInstructionLetterSpacing(view canonicalView) canonicalView {
 			i += size
 			continue
 		}
+		// Only an isolated single-letter token can begin or extend a spaced run.
+		// Letter tokens are maximal, so the token at i is preceded by a non-letter
+		// (or the string start); it is a single letter iff the following rune is
+		// not a letter. Landing on a multi-letter word must never start a run, so
+		// skip the whole word — this stops the run from absorbing a neighbouring
+		// word's boundary letter (e.g. the "p" of "previous").
+		if nextRuneIsLetter(text, i+size) {
+			i += size
+			for i < len(text) {
+				rr, sz := utf8.DecodeRuneInString(text[i:])
+				if !unicode.IsLetter(rr) {
+					break
+				}
+				i += sz
+			}
+			continue
+		}
 		letters := 1
 		allASCII := asciiLatinRune(r)
 		mark := len(deletes)
 		j := i + size
 		for j+1 < len(text) && text[j] == ' ' {
 			r2, sz2 := utf8.DecodeRuneInString(text[j+1:])
-			if !unicode.IsLetter(r2) {
+			// A run member must itself be an isolated single letter: a letter
+			// immediately followed by another letter is the head of a multi-letter
+			// word and terminates the run without joining it.
+			if !unicode.IsLetter(r2) || nextRuneIsLetter(text, j+1+sz2) {
 				break
 			}
 			deletes = append(deletes, j)
@@ -758,9 +825,26 @@ func canonicalizeInstruction(raw string) canonicalView {
 		return identityCanonicalView(raw)
 	}
 	view := canonicalizeNFKC(raw)
+	if view.overflow {
+		return canonicalView{overflow: true}
+	}
+	truncated := view.truncated
 	view = canonicalizeControlsAndWhitespace(view)
+	if view.overflow {
+		return canonicalView{overflow: true}
+	}
+	truncated = truncated || view.truncated
 	view = foldInstructionConfusables(view)
+	if view.overflow {
+		return canonicalView{overflow: true}
+	}
+	truncated = truncated || view.truncated
 	view = collapseInstructionLetterSpacing(view)
+	if view.overflow {
+		return canonicalView{overflow: true}
+	}
+	truncated = truncated || view.truncated
+	view.truncated = truncated
 	view.changed = view.text != raw
 	return view
 }
@@ -772,9 +856,14 @@ func isInstructionCanonicalRequest(collector, target string) bool {
 }
 
 // ruleUsesInstructionCanonicalization reports whether a rule can participate in
-// config instruction canonicalization: it emits the injection finding type and
-// its scope resolves the config instruction content field.
+// config instruction canonicalization: it is not shadow-excluded, emits the
+// injection finding type, and its scope resolves the config instruction content
+// field. This mirrors the engine's shadow gate so the digest and RunTests treat
+// a shadow-excluded rule as canonicalizer-independent.
 func ruleUsesInstructionCanonicalization(rule Rule) bool {
+	if rule.ShadowExclude {
+		return false
+	}
 	if rule.Emit.FindingType != "has_injection_patterns" {
 		return false
 	}

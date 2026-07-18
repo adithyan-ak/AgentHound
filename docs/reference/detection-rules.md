@@ -169,9 +169,18 @@ canonical shadow is deliberately narrow:
   NFKC normalization, enumerated control-character removal and whitespace
   mapping, restricted mixed-script confusable folding, then bounded
   letter-spacing collapse. Letter-spacing collapse only fixes a maximal run of
-  4..64 single ASCII letters separated by exactly one ASCII space (for example
-  `i g n o r e` → `ignore`). An ASCII-only input takes an identity fast path and
+  4..64 *isolated single* ASCII letters separated by exactly one ASCII space
+  (for example `i g n o r e` → `ignore`). Every run member must be a lone letter
+  bounded by a non-letter on both sides, so a neighbouring multi-letter word is
+  never absorbed: `i g n o r e previous` becomes `ignore previous` (not
+  `ignoreprevious`), and `vitamins a b c d e together` becomes
+  `vitamins abcde together`. An ASCII-only input takes an identity fast path and
   is never transformed.
+- **Structural rules stay raw-only.** A rule may set `shadow_exclude: true` to
+  opt out of the shadow pass. Bare charset-run detectors (the base64 payload
+  rule, `[A-Za-z0-9+/]{20,}`) set it, because NFKC folding and letter-spacing
+  collapse can synthesize long alphanumeric runs from benign text; such rules
+  run against the raw view only. Natural-language phrase rules stay on the shadow.
 - **Exclusions.** Leetspeak is never decoded (`1gn0re` stays `1gn0re`),
   punctuation is never stripped or reordered (`ignore, previous` keeps its
   comma), and letter-spacing runs of 1..3 or 65+ letters — or any run
@@ -183,6 +192,13 @@ canonical shadow is deliberately narrow:
   capped at 1 MiB before evaluation and the emitted evidence text is capped at
   100 bytes from the match offset; the full raw span (not the capped evidence)
   is what drives dedup.
+- **Bounded provenance and truncation.** Provenance spans are capped; an
+  adversarial input that would force one non-coalescable span per rune (a
+  megabyte of NBSP or distinct decomposing runes) makes the shadow decline
+  rather than allocate unboundedly, and the raw pass still runs. If the canonical
+  output itself reaches the 1 MiB cap the shadow is marked truncated, and a
+  shadow match ending exactly at that fabricated boundary (for example an
+  end-anchored `$` rule) is suppressed so truncation cannot invent a match.
 
 **Risk:** The canonical shadow catches bounded homoglyph, zero-width, and
 letter-spacing obfuscation of override phrases without decoding leetspeak or
