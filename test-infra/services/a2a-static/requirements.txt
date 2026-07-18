@@ -1,0 +1,4 @@
+# Build-stage-only deps for reproducibly signing the A2A agent card.
+# Discarded after the multi-stage build; the runtime image is nginx:alpine only.
+cryptography==49.0.0
+jwcrypto==1.5.8

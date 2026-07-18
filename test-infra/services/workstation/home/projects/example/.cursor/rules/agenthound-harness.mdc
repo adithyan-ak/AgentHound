@@ -1,0 +1,6 @@
+---
+description: AgentHound compatibility harness project guidance
+alwaysApply: true
+---
+
+Use explicit error handling and deterministic fixture values.

@@ -1,0 +1,13 @@
+{
+  "servers": {
+    "everything-stdio": {
+      "type": "stdio",
+      "command": "/usr/local/bin/mcp-server-everything",
+      "args": ["stdio"]
+    },
+    "everything-http": {
+      "type": "http",
+      "url": "http://mcp-streamable:3001/mcp"
+    }
+  }
+}

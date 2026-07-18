@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "everything-sse": {
+      "serverUrl": "http://mcp-sse:3001/sse"
+    }
+  }
+}

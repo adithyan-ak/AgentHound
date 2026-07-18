@@ -1,0 +1,7 @@
+{
+  "name": "agenthound-mcp-everything-harness",
+  "private": true,
+  "dependencies": {
+    "@modelcontextprotocol/server-everything": "2026.7.4"
+  }
+}

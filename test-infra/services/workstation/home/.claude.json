@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "everything-stdio": {
+      "command": "/usr/local/bin/mcp-server-everything",
+      "args": ["stdio"]
+    }
+  }
+}
