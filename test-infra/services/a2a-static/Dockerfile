@@ -18,6 +18,8 @@ RUN chmod +x keygen.sh && ./keygen.sh /out
 FROM nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=signer /out/agent-card.json /out/jwks.json /usr/share/nginx/html/.well-known/
+COPY --from=signer /out/agent-card.json /usr/share/nginx/html/.well-known/agent-card.json
+COPY --from=signer /out/legacy-agent.json /usr/share/nginx/html/legacy/.well-known/agent.json
+COPY --from=signer /out/jwks.json /usr/share/nginx/html/.well-known/jwks.json
 
 EXPOSE 80

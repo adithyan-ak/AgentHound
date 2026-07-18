@@ -1,17 +1,7 @@
 {
   "mcpServers": {
-    "windsurf-fixture": {
-      "command": "/usr/bin/printf",
-      "args": ["fixture windsurf"],
-      "env": {
-        "WINDSURF_FIXTURE_TOKEN": "fixture-only-not-a-token"
-      }
-    },
-    "windsurf-http-fixture": {
-      "serverUrl": "http://mcp-target-admin:8080/mcp",
-      "headers": {
-        "X-Fixture-Key": "fixture-only-not-a-key"
-      }
+    "everything-sse": {
+      "serverUrl": "http://mcp-sse:3001/sse"
     }
   }
 }

@@ -3,6 +3,11 @@ set -eu
 
 QDRANT_URL="${QDRANT_URL:-http://qdrant:6333}"
 
+if [ "${QDRANT_URL}" != "http://qdrant:6333" ]; then
+	echo "refusing destructive fixture reconciliation outside the compose Qdrant target" >&2
+	exit 1
+fi
+
 attempt=0
 until curl --connect-timeout 2 --max-time 5 --fail --silent --show-error \
 	"${QDRANT_URL}/readyz" >/dev/null 2>&1; do
@@ -14,7 +19,10 @@ until curl --connect-timeout 2 --max-time 5 --fail --silent --show-error \
 	sleep 2
 done
 
-for collection in docs chat-history; do
+# The volume may survive a --keep run; make the independently asserted
+# collection set exact using Qdrant's real management API.
+for collection in $(curl --fail --silent --show-error "${QDRANT_URL}/collections" |
+	jq -r '.result.collections[].name'); do
 	curl --silent --show-error --request DELETE \
 		"${QDRANT_URL}/collections/${collection}" >/dev/null
 done

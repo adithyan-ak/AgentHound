@@ -1,9 +1,9 @@
 {
   "servers": {
-    "vscode-project-fixture": {
+    "everything-stdio": {
       "type": "stdio",
-      "command": "/usr/bin/printf",
-      "args": ["fixture vscode project"]
+      "command": "/usr/local/bin/mcp-server-everything",
+      "args": ["stdio"]
     }
   }
 }

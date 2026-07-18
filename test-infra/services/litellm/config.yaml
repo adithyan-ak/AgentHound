@@ -1,13 +1,13 @@
 model_list:
   - model_name: agenthound-openai-placeholder
     litellm_params:
-      model: openai/gpt-4o-mini
+      model: openai/gpt-4o-mini-2024-07-18
       api_base: https://api.openai.com/v1
       api_key: sk-placeholder-openai-key-not-real
 
   - model_name: agenthound-anthropic-placeholder
     litellm_params:
-      model: anthropic/claude-3-5-haiku-latest
+      model: anthropic/claude-3-5-haiku-20241022
       api_base: https://api.anthropic.com
       api_key: sk-ant-placeholder-key-not-real
 

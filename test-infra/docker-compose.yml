@@ -1,18 +1,8 @@
-# AgentHound offline collector test topology.
+# AgentHound collector compatibility topology.
 #
-# Target services use fixed addresses on a /24 so
-# `agenthound scan 10.20.30.0/24` yields predictable network-mode output.
-# The supporting database uses a dynamic address. Every target is a real
-# upstream image or a thin authored build; no mock HTTP handlers. Service IPs,
-# ports, and PORT/token specifics match the collector's default probe sets (see
-# modules/networkscan/scanner.go DefaultPorts and
-# modules/protoscan/scanner.go DefaultMCP/A2APorts).
-#
-# Several build contexts and mounted config files are produced by other phase
-# workers (services/*/Dockerfile, app.py, Caddyfile, config.yaml, home/, etc.).
-# Those references are intentional and expected to exist at `up --build` time;
-# `docker compose config` only requires the referenced paths to be resolvable.
-
+# Every protocol surface below is a real upstream implementation. Images are
+# immutable tag@digest references and authored services use their projects'
+# official SDKs. See UPSTREAMS.md for source revisions and refresh policy.
 name: agenthound-test
 
 networks:
@@ -27,20 +17,17 @@ volumes:
   ollama-models:
   qdrant-storage:
   litellm-postgres-data:
+  huggingface-cache:
 
 services:
-  # --- AI-service fingerprint + loot targets (networkscan.DefaultPorts) ---
-
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.12.0@sha256:14def4e0b9ac8c91b3ec6f7fa7684c924ffe244541d5fd827d9b89035cc33310
     networks:
       agenthound-test:
         ipv4_address: 10.20.30.10
     volumes:
       - ollama-models:/root/.ollama
     healthcheck:
-      # `ollama list` talks to the local API, so a 0 exit confirms the server
-      # is serving even before qwen2:0.5b is pulled by the seed step.
       test: ["CMD", "ollama", "list"]
       interval: 10s
       timeout: 5s
@@ -52,39 +39,56 @@ services:
           cpus: "4.0"
           memory: 2g
 
-  vllm-mock:
-    # caddy serves the captured real /v1/models bytes; the fingerprinter
-    # contract is byte-level, not runtime-level (see services/vllm-mock/SOURCE.md).
-    image: caddy:latest
+  vllm:
+    # The official CPU image is the upstream-supported way to run vLLM without
+    # a GPU. The model revision is immutable and intentionally small.
+    image: vllm/vllm-openai-cpu:latest@sha256:6b301f040db8152dfb8ff55e06fd348aa5d0d9a311f58118160c7058262c8628
+    command:
+      - HuggingFaceTB/SmolLM2-135M-Instruct
+      - --revision
+      - 12fd25f77366fa6b3b4b768ec3050bf629380bac
+      - --served-model-name
+      - agenthound-vllm-fixture
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --max-model-len
+      - "256"
+      - --enforce-eager
+      # On the CPU backend this upstream flag controls the fraction of system
+      # RAM reserved for model weights and KV cache (despite its GPU-oriented
+      # name). Keep the real server within the disposable Docker VM budget.
+      - --gpu-memory-utilization
+      - "0.18"
+    environment:
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      VLLM_CPU_OMP_THREADS_BIND: "0-3"
+    volumes:
+      - huggingface-cache:/root/.cache/huggingface
     networks:
       agenthound-test:
         ipv4_address: 10.20.30.11
-    volumes:
-      - ./services/vllm-mock/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./services/vllm-mock/v1_models.json:/srv/v1_models.json:ro
     healthcheck:
-      # busybox wget ships in caddy:latest (alpine).
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8000/v1/models || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 10s
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/models')\""]
+      interval: 15s
+      timeout: 10s
+      retries: 60
+      start_period: 180s
     deploy:
       resources:
         limits:
-          cpus: "0.5"
-          memory: 256m
+          cpus: "4.0"
+          memory: 6g
 
   langserve:
-    # Real LangServe + FastAPI exposing one chain (services/langserve/serve.py).
     build:
       context: ./services/langserve
     networks:
       agenthound-test:
         ipv4_address: 10.20.30.12
     healthcheck:
-      # Authored python image; a TCP connect avoids coupling to a route path.
-      test: ["CMD-SHELL", "python -c \"import socket; socket.create_connection(('localhost',8000),2).close()\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/docs')\""]
       interval: 10s
       timeout: 5s
       retries: 18
@@ -96,18 +100,17 @@ services:
           memory: 512m
 
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.15.5@sha256:0fb8897412abc81d1c0430a899b9a81eb8328aa634e7242d1bc804c1fe8fe863
     networks:
       agenthound-test:
         ipv4_address: 10.20.30.13
     volumes:
       - qdrant-storage:/qdrant/storage
     healthcheck:
-      # qdrant's debian-slim image ships bash but no curl/wget; /dev/tcp probe.
       test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 12
+      retries: 18
       start_period: 15s
     deploy:
       resources:
@@ -116,19 +119,16 @@ services:
           memory: 1g
 
   mlflow:
-    image: ghcr.io/mlflow/mlflow:latest
-    # --allowed-hosts is required by modern MLflow Host-header protection when
-    # binding 0.0.0.0; fingerprint/loot/seed use Host mlflow:5000 and 10.20.30.14:5000.
+    image: ghcr.io/mlflow/mlflow:v3.5.0@sha256:1ef270be615bdfeecb1b65e6c557a14cd2f1d811204fe9c8e34c3bb0408fe550
     command: ["mlflow", "server", "--host", "0.0.0.0", "--port", "5000", "--workers", "1", "--allowed-hosts", "*"]
     networks:
       agenthound-test:
         ipv4_address: 10.20.30.14
     healthcheck:
-      # python is on PATH in the mlflow image; /health returns 200.
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health')\""]
       interval: 10s
       timeout: 5s
-      retries: 18
+      retries: 24
       start_period: 30s
     deploy:
       resources:
@@ -136,11 +136,8 @@ services:
           cpus: "1.0"
           memory: 2560m
 
-
   litellm-postgres:
-    # LiteLLM v1.92 requires PostgreSQL for /key/generate and /key/list. Match
-    # upstream's Postgres 16 recommendation while pinning the full image tag.
-    image: postgres:16.14-alpine3.24
+    image: postgres:16.14-alpine3.24@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     environment:
       POSTGRES_DB: litellm
       POSTGRES_USER: litellm
@@ -153,7 +150,7 @@ services:
       test: ["CMD-SHELL", "pg_isready -d litellm -U litellm"]
       interval: 2s
       timeout: 5s
-      retries: 15
+      retries: 30
     deploy:
       resources:
         limits:
@@ -161,10 +158,7 @@ services:
           memory: 256m
 
   litellm:
-    # Official database image at the current stable release. DATABASE_URL makes
-    # the Prisma client run migrations and activates the real key-management
-    # endpoints used by litellmloot.
-    image: ghcr.io/berriai/litellm-database:v1.92.0
+    image: ghcr.io/berriai/litellm-database:v1.92.0@sha256:64d3547e0b131bf4638342e52c12bc46d6f1d9b8498e4b731ff31be5ab316ea9
     command: ["--config", "/app/config.yaml", "--host", "0.0.0.0", "--port", "4000"]
     environment:
       DATABASE_URL: postgresql://litellm:litellm-local-password@litellm-postgres:5432/litellm
@@ -180,12 +174,10 @@ services:
       agenthound-test:
         ipv4_address: 10.20.30.15
     healthcheck:
-      # The idempotent seed doubles as the readiness gate: dependents cannot
-      # start until real /model/info and /key/list data both validate.
       test: ["CMD", "python3", "/seed/litellm-seed.py"]
       interval: 10s
       timeout: 30s
-      retries: 18
+      retries: 24
       start_period: 30s
     deploy:
       resources:
@@ -194,19 +186,18 @@ services:
           memory: 2g
 
   jupyter:
-    image: quay.io/jupyter/base-notebook:latest
-    # jupyter-server 2 moved token ownership to IdentityProvider; the deprecated
-    # --NotebookApp.token would leave /api/sessions + /api/contents 403ing.
-    command: ["start-notebook.py", "--IdentityProvider.token="]
+    image: quay.io/jupyter/base-notebook:2025-08-25@sha256:e9222d8476431543c605f1f203654ef8f89f573cb169c2065e6b1aff8bbfa5b9
+    command: ["start-notebook.py", "--IdentityProvider.token=agenthound-jupyter-token"]
     networks:
       agenthound-test:
         ipv4_address: 10.20.30.16
     healthcheck:
-      # empty token -> /api is reachable unauthenticated.
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8888/api')\""]
+      # /api is a real public discovery endpoint; protected content is checked
+      # independently by verify-upstreams.sh with and without the token.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8888/api')\""]
       interval: 10s
       timeout: 5s
-      retries: 18
+      retries: 24
       start_period: 30s
     deploy:
       resources:
@@ -215,105 +206,156 @@ services:
           memory: 1g
 
   openwebui:
-    image: ghcr.io/open-webui/open-webui:main
-    # Upstream Dockerfile defaults PORT=8080; override so the service actually
-    # listens on 3000 to match networkscan.DefaultPorts.
+    image: ghcr.io/open-webui/open-webui:v0.10.2@sha256:9fcea9c6e32ab60b0498f3986c6cdf651ddbe61db48d2213a3d28048ddd673d4
     environment:
       PORT: "3000"
-      OLLAMA_BASE_URL: http://ollama:11434
-      # Skip default sentence-transformers bootstrap; loot path does not need RAG embeddings.
-      RAG_EMBEDDING_ENGINE: "ollama"
-      RAG_EMBEDDING_MODEL: "qwen2:0.5b"
+      WEBUI_AUTH: "true"
+      ENABLE_SIGNUP: "true"
+      OLLAMA_BASE_URLS: http://ollama:11434
+      OPENAI_API_BASE_URLS: http://litellm:4000/v1
+      OPENAI_API_KEYS: sk-agenthound-openwebui-upstream-not-production
+      RAG_EMBEDDING_ENGINE: ollama
+      RAG_EMBEDDING_MODEL: qwen2:0.5b
       ENABLE_RAG_HYBRID_SEARCH: "false"
     depends_on:
       ollama:
+        condition: service_healthy
+      litellm:
         condition: service_healthy
     networks:
       agenthound-test:
         ipv4_address: 10.20.30.17
     healthcheck:
-      # curl is present in the open-webui image (used by its own HEALTHCHECK).
       test: ["CMD-SHELL", "curl -f http://127.0.0.1:3000/health || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 36
+      retries: 48
       start_period: 180s
     deploy:
       resources:
         limits:
-          cpus: "1.0"
-          memory: 1536m
+          cpus: "2.0"
+          memory: 2g
 
-  # --- Protocol-discovery surfaces (protoscan.DefaultMCP/A2APorts) ---
-
-  mcp-target-admin:
-    # Authored: official mcp SDK streamable-http at /mcp + bare JSON-RPC
-    # /admin/tools-list + PUT /admin/tools/{name}, sharing one tools dict.
-    build:
-      context: ./services/mcp-target-admin
-    environment:
-      # Harness (lib/gen-witness.sh) exports this before `up` so the gated
-      # read_resource returns 401 unless the bearer token hashes to it. Empty
-      # default keeps `docker compose config` resolvable in isolation.
-      GATED_RESOURCE_TOKEN_HASH: ${GATED_RESOURCE_TOKEN_HASH:-}
+  openai-decoy:
+    # A real OpenAI-compatible LiteLLM process on vLLM's conventional port.
+    # It is a near-miss oracle: it must never be classified as vLLM merely
+    # because /v1/models has an OpenAI-compatible response shape.
+    image: ghcr.io/berriai/litellm-database:v1.92.0@sha256:64d3547e0b131bf4638342e52c12bc46d6f1d9b8498e4b731ff31be5ab316ea9
+    command: ["--config", "/app/config.yaml", "--host", "0.0.0.0", "--port", "8000"]
+    volumes:
+      - ./services/litellm/config-decoy.yaml:/app/config.yaml:ro
+    # Start this second full LiteLLM process only after the real CPU vLLM has
+    # reserved its model memory. Both remain live concurrently for scanning.
+    depends_on:
+      vllm:
+        condition: service_healthy
     networks:
       agenthound-test:
-        ipv4_address: 10.20.30.20
+        ipv4_address: 10.20.30.18
     healthcheck:
-      # /admin/tools-list and /mcp are POST/session routes; TCP connect avoids
-      # coupling the healthcheck to JSON-RPC semantics.
-      test: ["CMD-SHELL", "python -c \"import socket; socket.create_connection(('localhost',8080),2).close()\""]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/models')\""]
       interval: 10s
-      timeout: 5s
-      retries: 18
+      timeout: 10s
+      retries: 24
       start_period: 30s
     deploy:
       resources:
         limits:
           cpus: "1.0"
-          memory: 512m
+          memory: 1g
+
+  mcp-streamable:
+    build:
+      context: ./services/mcp-everything
+    command: ["streamableHttp"]
+    environment:
+      PORT: "3001"
+    networks:
+      agenthound-test:
+        ipv4_address: 10.20.30.20
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3001/mcp',{method:'POST'}).then(()=>process.exit(0)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
 
   a2a-static:
-    # nginx serving a JWS-signed .well-known/agent-card.json + jwks.json,
-    # generated at image build via openssl (services/a2a-static/Dockerfile).
     build:
       context: ./services/a2a-static
     networks:
       agenthound-test:
         ipv4_address: 10.20.30.21
     healthcheck:
-      # busybox wget ships in nginx:alpine.
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/.well-known/agent-card.json || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 12
+      retries: 18
       start_period: 10s
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 128m
 
   a2a-dynamic:
-    # Real a2aproject/a2a-python reference agent (services/a2a-dynamic/agent.py).
     build:
       context: ./services/a2a-dynamic
     networks:
       agenthound-test:
         ipv4_address: 10.20.30.22
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import socket; socket.create_connection(('localhost',9000),2).close()\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/.well-known/agent-card.json')\""]
       interval: 10s
       timeout: 5s
       retries: 18
       start_period: 30s
+
+  mcp-sse:
+    build:
+      context: ./services/mcp-everything
+    command: ["sse"]
+    environment:
+      PORT: "3001"
+    networks:
+      agenthound-test:
+        ipv4_address: 10.20.30.23
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3001/sse').then(r=>process.exit(r.status < 500 ? 0 : 1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+
+  contextforge:
+    image: ghcr.io/ibm/mcp-context-forge:v1.0.5@sha256:fda7f025a21dd7df75afde0576432e28d39880e1914301c93b323aaf4bfcfcf0
+    environment:
+      HOST: 0.0.0.0
+      PORT: "4444"
+      GUNICORN_WORKERS: "1"
+      DATABASE_URL: sqlite:////tmp/contextforge.db
+      JWT_SECRET_KEY: agenthound-contextforge-jwt-secret-32-bytes-minimum
+      AUTH_ENCRYPTION_SECRET: agenthound-contextforge-encryption-secret-32-bytes
+      AUTH_REQUIRED: "true"
+      MCP_REQUIRE_AUTH: "true"
+      MCPGATEWAY_UI_ENABLED: "false"
+      MCPGATEWAY_ADMIN_API_ENABLED: "true"
+      PLATFORM_ADMIN_EMAIL: admin@agenthound.invalid
+      PLATFORM_ADMIN_PASSWORD: Harness-Admin-Password-2026!
+      PLATFORM_ADMIN_FULL_NAME: AgentHound Harness Admin
+      SECURE_COOKIES: "false"
+      SSRF_ALLOW_PRIVATE_NETWORKS: "true"
+      SSRF_DNS_FAIL_CLOSED: "false"
+    networks:
+      agenthound-test:
+        ipv4_address: 10.20.30.24
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:4444/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 45s
     deploy:
       resources:
         limits:
-          cpus: "1.0"
-          memory: 512m
-
-  # --- Harness runner + config/implant/poison/extract target ---
+          cpus: "2.0"
+          memory: 2g
 
   workstation:
     build:
@@ -322,15 +364,11 @@ services:
       agenthound-test:
         ipv4_address: 10.20.30.100
     volumes:
-      # witness.json is generated by lib/gen-witness.sh into ./fixtures at
-      # harness startup; referenced as /root/fixtures/witness.json by campaign.
       - ./fixtures:/root/fixtures
-      # extract --type embedding-invert reads the synthetic gguf fixture.
-      - ../testdata/extract:/root/testdata/extract:ro
     depends_on:
       ollama:
         condition: service_healthy
-      vllm-mock:
+      vllm:
         condition: service_healthy
       langserve:
         condition: service_healthy
@@ -344,14 +382,20 @@ services:
         condition: service_healthy
       openwebui:
         condition: service_healthy
-      mcp-target-admin:
+      openai-decoy:
+        condition: service_healthy
+      mcp-streamable:
+        condition: service_healthy
+      mcp-sse:
         condition: service_healthy
       a2a-static:
         condition: service_healthy
       a2a-dynamic:
         condition: service_healthy
+      contextforge:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "command -v agenthound >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "command -v agenthound >/dev/null 2>&1 && command -v mcp-server-everything >/dev/null 2>&1"]
       interval: 10s
       timeout: 5s
       retries: 6

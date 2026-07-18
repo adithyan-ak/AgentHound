@@ -1,21 +1,47 @@
-# Offline collector test infrastructure
+# Real-infrastructure collector compatibility harness
 
-This is a local, offline integration stack for exercising the `agenthound`
-collector against disposable services. The root `.gitignore` excludes the
-entire `/test-infra/` tree, including this README and generated artifacts, so
-changes here do not appear in normal `git status` output.
+This manual harness answers one question: **does the current collector work
+against the real implementations it claims to support?** It is deliberately
+not a collector regression mock suite. The upstream topology is validated
+without using AgentHound, then the collector is run against that fixed truth.
+Collector output never changes the fixtures or expectations.
+
+The harness is intentionally outside CI for now. A run is local/offline in the
+sense that every target is isolated on a disposable Docker bridge and no
+production or cloud service is contacted. The first run still needs network
+access to pull pinned images, npm packages, and model artifacts.
+
+## Safety and interpretation
+
+The runner has two distinct failure classes:
+
+1. **Harness invalid:** an image, seed operation, checksum, protocol handshake,
+   authenticated control, or exact upstream inventory is wrong. Collector
+   scenarios do not start.
+2. **Collector incompatible:** independent upstream truth passed, but a
+   collector command exited non-zero, leaked raw credential material, or
+   disagreed with an exact oracle. Every remaining scenario still runs and the
+   failures are aggregated in `artifacts/<run-id>/summary.json`.
+
+A collector-incompatible result is the intended way to identify drift. Do not
+change this harness to make such a result pass. Investigate and fix the
+collector in a separate change, then rerun the same pinned truth set.
+
+All destructive scenarios are restricted to the Compose project. The seed
+scripts refuse destructive inventory reconciliation if their service URL is
+changed from the fixed Compose hostname. Never repoint this harness or its
+fixture scripts at production.
 
 ## Requirements
 
-- Apple-silicon Mac with Docker Desktop using Linux/arm64 containers and Docker
-  Compose v2 (`docker compose`)
-- Bash
-- Go 1.25.12 or newer on the host, used to build the collector binary
-- `jq` on the host, used by the assertion harness
-- Approximately 8 GiB of free Docker memory and 15-25 GiB of free disk
+- macOS with Docker Desktop/Engine, Compose v2, and Linux containers (the
+  native Claude Desktop path lane deliberately depends on the host platform)
+- Bash, Go 1.25.12 or newer, `curl`, and `jq`
+- Approximately 16 GiB available to Docker and 25 GiB free disk on a cold run
+- Network access for the initial immutable downloads
 
-No AgentHound server, Neo4j, PostgreSQL installation, cloud account, API key, or
-GPU is required. PostgreSQL used by LiteLLM runs inside the stack.
+No AgentHound server, Neo4j, cloud account, external API key, or GPU is needed.
+vLLM uses its official CPU image. PostgreSQL is internal to the LiteLLM target.
 
 ## Run
 
@@ -25,121 +51,120 @@ From the repository root:
 bash test-infra/run-tests.sh
 ```
 
-The harness builds `agenthound`, pulls or builds the containers, waits for
-health checks, seeds deterministic fixtures, runs the collector scenarios,
-checks their JSON with `jq`, and removes the stack and its volumes after a
-successful run.
-
-The first run typically downloads about 8-12 GiB of images plus the roughly
-350 MiB `qwen2:0.5b` Ollama model, uses about 5-6 GiB of memory at peak, and
-takes 10-30 minutes depending on the network and Docker build cache. A warm run
-normally takes a few minutes. Treat these as estimates: upstream `latest`
-images can change size and startup time.
-
-## Services
-
-All targets are reachable only on the `agenthound-test` bridge network
-(`10.20.30.0/24`); the Compose file publishes no host ports.
-
-- Ollama with `qwen2:0.5b`, Qdrant, MLflow, LiteLLM with PostgreSQL, Jupyter,
-  and Open WebUI provide the real AI-service fingerprint and loot targets.
-- LangServe runs a real deterministic echo chain.
-- `mcp-target-admin` uses the official Python MCP SDK and exposes MCP plus a
-  shared in-memory admin mutation surface.
-- `a2a-static` serves an OpenSSL-generated, JWS-signed card through nginx;
-  `a2a-dynamic` uses the A2A Python SDK reference server.
-- `vllm-mock` uses Caddy to serve a cited capture of a real vLLM
-  `/v1/models` response because vLLM itself requires a supported GPU.
-- `workstation` contains the collector, realistic client configurations, and
-  disposable files used by config, poison, implant, extract, and campaign
-  scenarios.
-
-## Lifecycle, debugging, and artifacts
-
-Keep the stack and mutated test state after the run:
+Keep the topology after completion or a collector-incompatible result:
 
 ```bash
 bash test-infra/run-tests.sh --keep
 ```
 
-Inspect a kept or failed stack:
+The runner performs these phases in order:
+
+1. downloads the pinned official GGUF and verifies its SHA-256 and standard
+   byte magic;
+2. builds the current collector without modifying it;
+3. starts only pinned upstream images or services authored with official SDKs;
+4. seeds data through upstream public APIs;
+5. proves exact upstream truth, authentication controls, MCP handshakes, signed
+   A2A cards, and inventories without invoking AgentHound;
+6. runs all collector features and exact assertions, continuing after each
+   collector failure;
+7. emits a machine-readable summary that separates harness validity from
+   collector compatibility.
+
+## Real topology
+
+No target implements an endpoint invented for the collector.
+
+- Ollama with one real model and the opt-in embedding path
+- vLLM's official CPU OpenAI server with a pinned Hugging Face model revision
+- a real LangServe application
+- Qdrant with exact collections and points seeded through its REST API
+- MLflow with a real experiment, run, registered model, and model version
+- LiteLLM with PostgreSQL, provider definitions, and a generated virtual key
+- token-protected Jupyter Server with a recursive real Contents API tree
+- authenticated Open WebUI with Ollama and OpenAI-compatible upstream config
+- a second real LiteLLM process on port 8000 as a vLLM near-miss control
+- the official MCP `server-everything` package over stdio, Streamable HTTP, and
+  SSE
+- IBM ContextForge v1.0.5 with real login, catalog API token, management API,
+  virtual server, tool, resource, MCP authentication gate, poison/revert
+  target, and campaign target
+- an A2A Python SDK agent plus conformant current and legacy cards served by
+  nginx, with the current card genuinely ES256-signed
+- current client config paths and formats for Claude Code, Cursor, VS Code,
+  Windsurf, Continue, Zed, Cline, Junie, Kiro, Amazon Q, and Augment
+- a host-native macOS Claude Desktop path lane, instead of pretending Claude
+  Desktop's macOS path exists in the Linux workstation
+
+The exact releases, digests, source revisions, checksums, and refresh rules are
+in [UPSTREAMS.md](UPSTREAMS.md).
+
+## Feature coverage
+
+The collector phase covers:
+
+- config discovery, current instruction/rules paths, credential hashing, and
+  host-native platform discovery;
+- direct MCP enumeration and config-driven stdio/HTTP/SSE enumeration;
+- multi-agent A2A parsing, legacy fallback, offline JWKS verification, skills,
+  and delegation inference;
+- protocol discovery and AI-service network fingerprinting with a near-miss
+  negative control;
+- every registered looter, including Ollama embeddings, Qdrant point sampling,
+  authenticated Jupyter, authenticated Open WebUI, and raw-secret redaction;
+- embedding extraction against a real official GGUF;
+- credential-reach against a genuinely credential-gated MCP resource;
+- ContextForge tool-description poison/revert and campaign round-trip against
+  the actual GA management API;
+- instruction poison/revert and MCP config implant/revert using a launchable
+  official MCP stdio command;
+- rules and version smoke paths.
+
+The current `main` registration surface maps to the harness as follows. Module
+IDs are grouped only when one scenario exercises the same real target through
+the shared network dispatcher.
+
+| Registered surface | Harness scenario | Real implementation |
+|---|---|---|
+| `config.enumerate` | `scan-config`, `scan-config-host` | Native client files on Linux plus the macOS Claude Desktop path |
+| `mcp.enumerate` | `scan-mcp`, `scan-mcp-configured` | MCP Everything over HTTP/SSE/stdio and ContextForge MCP |
+| `a2a.enumerate` | `scan-a2a` | A2A SDK v1 agent and signed current/unsigned legacy static cards |
+| `network.scan` and all eight `*.fingerprint` modules | `scan-network` | Ollama, vLLM, LangServe, Qdrant, MLflow, LiteLLM, Jupyter, and Open WebUI |
+| All six `*.loot` modules | `loot-*` | Authenticated/public APIs of those six upstream services |
+| `embedding.extract` | `extract-embedding` | Official, checksum-pinned GGUF artifact |
+| `mcp.poison` | `poison-mcp` | ContextForge v1.0.5 management API |
+| `instruction.poison` | `poison-instruction` | Real instruction file with exact restore oracle |
+| `mcp.config.implant` | `implant-mcp-config` | Cursor config plus launchable MCP Everything stdio entry |
+| Campaign registry | `campaign-cred-reach`, `campaign-mcp-roundtrip` | Credential-gated ContextForge resource and reversible real tool mutation |
+| Protocol discovery, rules, and version CLI surfaces | `discover`, `rules-list`, `version` | Live MCP/A2A discovery plus local smoke checks |
+
+## Artifacts and debugging
+
+Each run writes a new directory under `test-infra/artifacts/`. Important files:
+
+- `summary.json`: final harness/collector classification and every scenario
+- `results.ndjson`: append-only scenario results used to build the summary
+- `upstream-truth.json` (under `fixtures/`): independent exact truth record
+- `<scenario>.json`: collector output
+- `<scenario>.stderr`: diagnostics, with raw-secret checks applied
+
+Inspect a retained stack:
 
 ```bash
 docker compose -f test-infra/docker-compose.yml ps
-docker compose -f test-infra/docker-compose.yml logs --tail=200
 docker compose -f test-infra/docker-compose.yml logs --tail=200 SERVICE
 docker compose -f test-infra/docker-compose.yml exec workstation sh
 ```
 
-Collector JSON and assertion diagnostics are written beneath
-`test-infra/artifacts/`. Failures preserve these files for inspection. The
-generated campaign witness is under `test-infra/fixtures/`.
-
-The mutation scenarios are intentionally destructive, but only within
-throwaway state:
-
-- MCP tool-description changes are held in the authored target's memory.
-- Instruction poison and MCP config implant change canned files inside the
-  disposable workstation container and are exercised with reversion.
-- Qdrant seeding deletes and recreates only the fixture collections `docs` and
-  `chat-history` in the stack's dedicated named volume.
-- `docker compose down -v` deletes only this Compose project's named volumes:
-  Ollama models, Qdrant storage, and LiteLLM PostgreSQL data.
-
-Do not repoint the harness at production services or replace its fixture mounts
-with non-disposable host paths.
-
-## Test-only credentials
-
-Every credential in this directory is a fixture and must never be reused:
-
-- PostgreSQL: `litellm` / `litellm-local-password`
-- LiteLLM master key: `sk-local-agenthound-master-key-not-production`
-- Provider keys beginning with `sk-placeholder-` or
-  `sk-ant-placeholder-`
-- Workstation values containing `fixture-only` and notebook/Qdrant placeholder
-  keys
-- The harness-generated campaign bearer credential and LiteLLM virtual key
-
-The MCP target receives only the campaign credential's SHA-256 hash. The static
-A2A signing key is generated during image build and deleted immediately after
-the card is signed.
-
-## Cleanup
-
-Remove containers, the bridge network, and all stack volumes:
+Remove only this harness's containers, network, and named volumes:
 
 ```bash
 docker compose -f test-infra/docker-compose.yml down -v --remove-orphans
 ```
 
-Remove generated host-side outputs:
+## Controlled refresh
 
-```bash
-rm -rf test-infra/artifacts
-rm -f test-infra/fixtures/witness.json
-rm -f test-infra/services/workstation/bin/agenthound
-```
-
-Docker images and build cache are retained for faster subsequent runs. Remove
-them separately with Docker Desktop only when the disk space is needed.
-
-## Troubleshooting
-
-- **`docker compose` is unavailable:** update Docker Desktop; the legacy
-  `docker-compose` command is not used.
-- **An image reports an architecture error:** ensure Docker Desktop is running
-  Linux/arm64 containers. The stack is designed for Apple silicon, not an
-  amd64-only daemon.
-- **The network cannot be created:** another Docker network may already use
-  `10.20.30.0/24`. Remove the conflicting throwaway network before rerunning;
-  changing the subnet also requires updating fixed addresses and assertions.
-- **A service stays unhealthy:** inspect its logs with the commands above.
-  Open WebUI, LiteLLM migrations, and the first Ollama model pull are normally
-  the slowest steps.
-- **Disk or memory pressure:** allocate at least 8 GiB to Docker Desktop, free
-  15-25 GiB of disk, run the cleanup command, and retry.
-- **A rerun sees stale data:** run the cleanup command with `-v`; this resets
-  every persistent fixture volume.
-- **Assertions fail:** inspect the matching JSON and diagnostics in
-  `test-infra/artifacts/`, then rerun with `--keep` to inspect live containers.
+Upstream refreshes are never inferred from a collector failure. Follow the
+review procedure in `UPSTREAMS.md`, update the immutable reference and its
+truth assertion together, run the complete harness, and review any newly
+exposed collector findings independently.

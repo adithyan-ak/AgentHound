@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "kiro-project-fixture": {
-      "url": "http://mcp-target-admin:8080/mcp"
+    "everything-http": {
+      "url": "http://mcp-streamable:3001/mcp"
     }
   }
 }

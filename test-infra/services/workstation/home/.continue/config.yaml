@@ -1,9 +1,8 @@
+name: AgentHound harness
+version: 1.0.0
+schema: v1
 mcpServers:
-  - name: continue-fixture
-    command: /usr/bin/printf
+  - name: everything-stdio
+    command: /usr/local/bin/mcp-server-everything
     args:
-      - fixture continue
-    env:
-      CONTINUE_FIXTURE_KEY: fixture-only-not-a-secret
-  - name: continue-http-fixture
-    url: http://mcp-target-admin:8080/mcp
+      - stdio

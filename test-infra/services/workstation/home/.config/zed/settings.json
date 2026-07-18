@@ -1,11 +1,8 @@
 {
   "context_servers": {
-    "zed-fixture": {
-      "command": "/usr/bin/printf",
-      "args": ["fixture zed"]
-    },
-    "zed-http-fixture": {
-      "url": "http://mcp-target-admin:8080/mcp"
+    "everything-stdio": {
+      "command": "/usr/local/bin/mcp-server-everything",
+      "args": ["stdio"]
     }
   }
 }

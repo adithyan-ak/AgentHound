@@ -1,6 +1,11 @@
 # Host-side harness outputs (stack volumes are managed by compose).
 /artifacts/
 /fixtures/witness.json
+/fixtures/runtime.json
+/fixtures/upstream-truth.json
+/fixtures/a2a-trusted-jwks.json
+/fixtures/models/
 /services/workstation/bin/agenthound
+/services/workstation/bin/agenthound-host
 __pycache__/
 *.pyc

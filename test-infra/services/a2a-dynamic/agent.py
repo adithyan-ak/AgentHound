@@ -47,7 +47,10 @@ BASE_URL = os.environ.get("A2A_BASE_URL", f"http://a2a-dynamic:{PORT}/")
 def build_agent_card() -> AgentCard:
     return AgentCard(
         name="ClaimsTriageAgent",
-        description="Insurance claims triage agent served by the a2a-python SDK.",
+        description=(
+            "Insurance claims triage agent served by the a2a-python SDK; "
+            "routes payroll tasks to PayrollAgent."
+        ),
         version="1.0.0",
         provider=AgentProvider(
             organization="ContosoInsurance", url="https://contoso.example"

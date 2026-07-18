@@ -15,6 +15,8 @@ compose exec -T workstation sh -s <"${SEED_DIR}/ollama-seed.sh"
 compose exec -T workstation sh -s <"${SEED_DIR}/qdrant-seed.sh"
 compose exec -T mlflow python - <"${SEED_DIR}/mlflow-seed.py"
 compose exec -T litellm python3 /seed/litellm-seed.py
+compose exec -T workstation sh -s <"${SEED_DIR}/contextforge-seed.sh"
+compose exec -T workstation sh -s <"${SEED_DIR}/openwebui-seed.sh"
 
 # The notebook image is upstream and intentionally unmodified. Copy the authored
 # placeholder fixtures after startup so the looter walks the real Contents API.
@@ -24,6 +26,12 @@ compose cp "${SEED_DIR}/jupyter-notebooks/." \
 compose exec -T jupyter test -f \
   "${JUPYTER_FIXTURE_DIR}/agenthound-fixture.ipynb"
 compose exec -T jupyter test -f \
-  "${JUPYTER_FIXTURE_DIR}/data/support-context.md"
+	"${JUPYTER_FIXTURE_DIR}/data/support-context.md"
+
+# Exercise the collector's offline trusted-key-store path using the genuine
+# public key that signed the current A2A card at image-build time.
+compose exec -T workstation curl -fsS \
+  http://a2a-static/.well-known/jwks.json \
+  -o /root/fixtures/a2a-trusted-jwks.json
 
 printf 'Seeded all deterministic service fixtures.\n'
