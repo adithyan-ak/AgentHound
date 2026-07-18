@@ -77,15 +77,11 @@ supplied out of band (env var or stdin) and hash-matched locally; the raw
 value is never logged or written to the graph. A hash-only credential (no
 executable material) is not runnable.
 
-mcp-poison-roundtrip — a STANDALONE target-mutation validation. It
-applies an operator-authorized mcppoison mutation, re-reads the exact
-injected state (the ORACLE), issues the conflict-aware revert, and
-re-reads to confirm the original is restored (the CLEANUP). The oracle
-and cleanup outcomes are reported SEPARATELY. It is NOT an attack finding
-and makes NO claim about a predicted credential path — it validates only
-that the reversible mutation machinery works against this target. It
-takes --target-id / --inject (and optional --mode / --update-method /
---update-path / --list-path / --auth-token) instead of a witness.
+mcp-poison-roundtrip — a STANDALONE ContextForge target-mutation
+validation. It discovers the exact management row backing a server-scoped
+MCP tool, applies a generated inert marker, proves the intermediate MCP
+state, and restores the original. It is NOT an attack finding and takes no
+operator-supplied mutation text or management endpoint paths.
 
 By default --commit is OFF: the scenario plans only. Pass --commit only
 when you have authorization for this engagement.
@@ -97,8 +93,9 @@ Examples:
   agenthound campaign https://mcp.example/mcp --scenario cred-reach \
       --witness witness.json --engagement-id DC35-DEMO --commit --output -
 
-  agenthound campaign https://mcp.example/mcp --scenario mcp-poison-roundtrip \
-      --target-id support_lookup --inject "TEST MUTATION" \
+  agenthound campaign https://gateway.example/servers/<server-uuid>/mcp \
+      --scenario mcp-poison-roundtrip --adapter contextforge \
+      --target-id support-lookup \
       --engagement-id DC35-DEMO --commit
 
 See https://docs.agenthound.io/operator/offensive-actions/ for the full guide.`,
@@ -117,16 +114,11 @@ func init() {
 	campaignCmd.Flags().Duration("timeout", 30*time.Second, "Total forward scenario elapsed-time limit.")
 	campaignCmd.Flags().String("credential-env", defaultCredentialEnv, "Environment variable holding the out-of-band credential material.")
 	campaignCmd.Flags().Bool("credential-stdin", false, "Read the credential material from stdin instead of an env var.")
-	// Mutation parameters for the mcp-poison-roundtrip scenario (ignored by
-	// witness-based scenarios). They mirror the `agenthound poison` per-module
-	// flags so the STANDALONE target-mutation validation is driven the same way.
+	// ContextForge mutation parameters for mcp-poison-roundtrip. Tool identity,
+	// fixed API paths, payload, and status handling are discovered internally.
 	campaignCmd.Flags().String("target-id", "", "[mcp-poison-roundtrip] MCP tool whose description is mutated then restored.")
-	campaignCmd.Flags().String("inject", "", "[mcp-poison-roundtrip] Injection content applied then conflict-aware reverted.")
-	campaignCmd.Flags().String("mode", "", "[mcp-poison-roundtrip] Injection mode: replace|append|prepend (default replace).")
-	campaignCmd.Flags().String("update-method", "", "[mcp-poison-roundtrip] HTTP method for the tool-description write (default PUT).")
-	campaignCmd.Flags().String("update-path", "", "[mcp-poison-roundtrip] Path template for the write; {id} is the target tool (default /admin/tools/{id}).")
-	campaignCmd.Flags().String("list-path", "", "[mcp-poison-roundtrip] JSON-RPC tools/list path (default /).")
-	campaignCmd.Flags().String("auth-token", "", "[mcp-poison-roundtrip] Optional bearer token for the target admin surface.")
+	campaignCmd.Flags().String("adapter", "", "[mcp-poison-roundtrip] Management adapter. Required value: contextforge.")
+	campaignCmd.Flags().String("management-url", "", "[mcp-poison-roundtrip] Optional ContextForge deployment root override; /v1 is appended.")
 	if err := campaignCmd.MarkFlagRequired("scenario"); err != nil {
 		panic(err)
 	}
@@ -193,14 +185,13 @@ func runCampaign(cmd *cobra.Command, args []string) error {
 		stdinConsumed = witnessFromStdin || credentialStdin
 	} else {
 		in.Params = campaignMutationParams(cmd)
-		authToken := in.Params["auth-token"]
 		in.CleanupRun = func(
 			ctx context.Context,
 			engagementID string,
 			campaignRunID string,
 		) campaign.CleanupExecution {
-			if authToken != "" {
-				ctx = context.WithValue(ctx, action.RevertAuthTokenKey{}, authToken)
+			if insecure {
+				ctx = context.WithValue(ctx, action.RevertInsecureKey{}, true)
 			}
 			return cleanupCampaignRun(ctx, engagementID, campaignRunID)
 		}
@@ -302,13 +293,9 @@ func campaignMutationParams(cmd *cobra.Command) map[string]string {
 		return v
 	}
 	return map[string]string{
-		"target-id":     get("target-id"),
-		"inject":        get("inject"),
-		"mode":          get("mode"),
-		"update-method": get("update-method"),
-		"update-path":   get("update-path"),
-		"list-path":     get("list-path"),
-		"auth-token":    get("auth-token"),
+		"target-id":      get("target-id"),
+		"adapter":        get("adapter"),
+		"management-url": get("management-url"),
 	}
 }
 
@@ -363,7 +350,7 @@ func resolveCredentialMaterial(fromStdin bool, envName string, stdin io.Reader) 
 func buildCampaignEnvelope(scenarioID string, scenarioVersion int, engagementID string, ev *campaign.Evidence) *ingest.IngestData {
 	scanID := uuid.New().String()
 	env := common.NewIngestData("scan", scanID)
-	env.Meta.CollectorVersion = common.CollectorVersion
+	env.Meta.CollectorVersion = common.CollectorVersion()
 	env.Meta.Extra = map[string]any{
 		campaign.EvidenceArtifactMetadataKey: ev.Artifact(),
 	}

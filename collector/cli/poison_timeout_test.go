@@ -3,257 +3,185 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
-	"sync"
-	"sync/atomic"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/spf13/cobra"
-
-	"github.com/adithyan-ak/agenthound/modules/mcppoison"
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/module"
 )
 
-func TestRunPoison_StalledToolsListIsBoundedBeforeReceiptOrMutation(t *testing.T) {
-	originalTimeout := standalonePoisonTimeout
-	standalonePoisonTimeout = 75 * time.Millisecond
-	t.Cleanup(func() { standalonePoisonTimeout = originalTimeout })
+type blockingPoisoner struct {
+	id             string
+	targetKind     string
+	state          *module.FileStatefulModule
+	started        chan struct{}
+	persistReceipt bool
+}
 
-	for _, commit := range []bool{false, true} {
-		name := "dry-run"
-		if commit {
-			name = "commit"
-		}
-		t.Run(name, func(t *testing.T) {
-			var writes atomic.Int32
-			listStarted := make(chan struct{})
-			var startedOnce sync.Once
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.Method {
-				case http.MethodPost:
-					startedOnce.Do(func() { close(listStarted) })
-					select {
-					case <-r.Context().Done():
-					case <-time.After(2 * time.Second):
-					}
-				case http.MethodPut:
-					writes.Add(1)
-					w.WriteHeader(http.StatusNoContent)
-				default:
-					w.WriteHeader(http.StatusNotFound)
-				}
-			}))
-			defer srv.Close()
-
-			engagementID := "ENG-STALL-LIST-DRY"
-			if commit {
-				engagementID = "ENG-STALL-LIST-COMMIT"
-			}
-			state, startedAt, err := executeStandaloneMCPPoison(
-				t, context.Background(), srv.URL, engagementID, commit,
-			)
-			if !errors.Is(err, context.DeadlineExceeded) {
-				t.Fatalf("run poison error = %v, want context deadline exceeded", err)
-			}
-			if elapsed := time.Since(startedAt); elapsed > time.Second {
-				t.Fatalf("stalled tools/list returned after %v, want under 1s", elapsed)
-			}
-			select {
-			case <-listStarted:
-			default:
-				t.Fatal("server never accepted the tools/list request")
-			}
-			if got := writes.Load(); got != 0 {
-				t.Fatalf("stalled pre-read issued %d mutating write(s)", got)
-			}
-			assertPoisonReceiptCount(t, state, engagementID, 0)
-		})
+func newBlockingPoisoner(id, targetKind string, persistReceipt bool) *blockingPoisoner {
+	return &blockingPoisoner{
+		id: id, targetKind: targetKind, state: module.NewFileStatefulModule(id),
+		started: make(chan struct{}), persistReceipt: persistReceipt,
 	}
 }
 
-func TestRunPoison_PropagatesCommandCancellation(t *testing.T) {
-	originalTimeout := standalonePoisonTimeout
-	standalonePoisonTimeout = 2 * time.Second
-	t.Cleanup(func() { standalonePoisonTimeout = originalTimeout })
+func (p *blockingPoisoner) ID() string                                   { return p.id }
+func (p *blockingPoisoner) Action() action.Action                        { return action.Poison }
+func (p *blockingPoisoner) Target() string                               { return p.targetKind }
+func (p *blockingPoisoner) Description() string                          { return "blocking poisoner test double" }
+func (p *blockingPoisoner) Version() string                              { return "test" }
+func (p *blockingPoisoner) IsDestructive() bool                          { return true }
+func (p *blockingPoisoner) Stateful() module.StatefulModule              { return p.state }
+func (p *blockingPoisoner) Revert(context.Context, action.Receipt) error { return nil }
 
-	var writes atomic.Int32
-	listStarted := make(chan struct{})
-	var startedOnce sync.Once
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodPost:
-			startedOnce.Do(func() { close(listStarted) })
-			select {
-			case <-r.Context().Done():
-			case <-time.After(2 * time.Second):
-			}
-		case http.MethodPut:
-			writes.Add(1)
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			w.WriteHeader(http.StatusNotFound)
+func (p *blockingPoisoner) Poison(ctx context.Context, target action.Target, payload action.PoisonPayload) (*action.PoisonReceipt, error) {
+	receipt := &action.PoisonReceipt{
+		ReceiptID: "blocking-receipt", ModuleID: p.id, EngagementID: payload.EngagementID,
+		Target: target, TargetID: payload.TargetID, OriginalContent: "original",
+		InjectedContent: payload.InjectionContent, Mode: payload.Mode, DryRun: payload.DryRun,
+	}
+	if p.persistReceipt {
+		if _, err := p.state.WriteReceipt(payload.EngagementID, receipt); err != nil {
+			return nil, err
 		}
-	}))
-	defer srv.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	cancelled := make(chan struct{})
-	go func() {
-		select {
-		case <-listStarted:
-			cancel()
-		case <-time.After(time.Second):
-		}
-		close(cancelled)
-	}()
-
-	const engagementID = "ENG-STALL-CANCEL"
-	state, startedAt, err := executeStandaloneMCPPoison(
-		t, ctx, srv.URL, engagementID, true,
-	)
-	<-cancelled
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("run poison error = %v, want context canceled", err)
 	}
-	if elapsed := time.Since(startedAt); elapsed > time.Second {
-		t.Fatalf("canceled tools/list returned after %v, want under 1s", elapsed)
+	close(p.started)
+	<-ctx.Done()
+	if p.persistReceipt {
+		return receipt, fmt.Errorf("%w: %w", action.ErrRevertIndeterminate, ctx.Err())
 	}
-	if got := writes.Load(); got != 0 {
-		t.Fatalf("canceled pre-read issued %d mutating write(s)", got)
-	}
-	assertPoisonReceiptCount(t, state, engagementID, 0)
+	return nil, ctx.Err()
 }
 
-func TestRunPoison_StalledWriteIsBoundedAndRetainsRecoveryReceipt(t *testing.T) {
+func TestRunPoisonBoundsAStalledModuleBeforeReceipt(t *testing.T) {
 	originalTimeout := standalonePoisonTimeout
-	standalonePoisonTimeout = 75 * time.Millisecond
+	standalonePoisonTimeout = 50 * time.Millisecond
 	t.Cleanup(func() { standalonePoisonTimeout = originalTimeout })
 
-	var writes atomic.Int32
-	writeStarted := make(chan struct{})
-	var startedOnce sync.Once
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/":
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"jsonrpc": "2.0",
-				"id":      1,
-				"result": map[string]any{"tools": []map[string]any{
-					{"name": "support_lookup", "description": "original"},
-				}},
-			})
-		case r.Method == http.MethodPut:
-			writes.Add(1)
-			startedOnce.Do(func() { close(writeStarted) })
-			select {
-			case <-r.Context().Done():
-			case <-time.After(2 * time.Second):
-			}
-			// Deliberately never apply the received body or send a response.
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
-
-	const engagementID = "ENG-STALL-WRITE"
-	state, startedAt, err := executeStandaloneMCPPoison(
-		t, context.Background(), srv.URL, engagementID, true,
-	)
+	p := newBlockingPoisoner("mock.poison.timeout", "mock-timeout", false)
+	module.Register(p)
+	defer deregisterModule(t, p.ID())
+	state, _, err := executeBlockingPoison(t, context.Background(), p, "ENG-TIMEOUT")
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("run poison error = %v, want context deadline exceeded", err)
+		t.Fatalf("run poison error = %v, want deadline exceeded", err)
 	}
-	if elapsed := time.Since(startedAt); elapsed > time.Second {
-		t.Fatalf("stalled write returned after %v, want under 1s", elapsed)
-	}
-	select {
-	case <-writeStarted:
-	default:
-		t.Fatal("server never accepted the mutating write")
-	}
-	if got := writes.Load(); got != 1 {
-		t.Fatalf("mutating write count = %d, want 1", got)
-	}
-
-	receipts := assertPoisonReceiptCount(t, state, engagementID, 1)
-	receipt, ok := receipts[0].(*action.PoisonReceipt)
-	if !ok {
-		t.Fatalf("receipt type = %T, want *action.PoisonReceipt", receipts[0])
-	}
-	if receipt.DryRun {
-		t.Fatal("recovery receipt is incorrectly marked dry-run")
+	if receipts, readErr := state.ReadReceipts("ENG-TIMEOUT"); readErr != nil || len(receipts) != 0 {
+		t.Fatalf("pre-mutation timeout receipts = %d, error=%v", len(receipts), readErr)
 	}
 }
 
-func executeStandaloneMCPPoison(
+func TestRunPoisonPropagatesCommandCancellation(t *testing.T) {
+	originalTimeout := standalonePoisonTimeout
+	standalonePoisonTimeout = time.Second
+	t.Cleanup(func() { standalonePoisonTimeout = originalTimeout })
+
+	p := newBlockingPoisoner("mock.poison.cancel", "mock-cancel", false)
+	module.Register(p)
+	defer deregisterModule(t, p.ID())
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-p.started
+		cancel()
+	}()
+	_, _, err := executeBlockingPoison(t, ctx, p, "ENG-CANCEL")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("run poison error = %v, want canceled", err)
+	}
+}
+
+func TestRunPoisonReportsAmbiguousCommittedStateAndRecoveryReceipt(t *testing.T) {
+	originalTimeout := standalonePoisonTimeout
+	standalonePoisonTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { standalonePoisonTimeout = originalTimeout })
+
+	p := newBlockingPoisoner("mock.poison.ambiguous", "mock-ambiguous", true)
+	module.Register(p)
+	defer deregisterModule(t, p.ID())
+	state, output, err := executeBlockingPoison(t, context.Background(), p, "ENG-AMBIGUOUS")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("run poison error = %v, want deadline exceeded", err)
+	}
+	if !strings.Contains(output, "INDETERMINATE") ||
+		!strings.Contains(output, "agenthound revert ENG-AMBIGUOUS") {
+		t.Fatalf("missing recovery diagnostics: %s", output)
+	}
+	receipts, readErr := state.ReadReceipts("ENG-AMBIGUOUS")
+	if readErr != nil || len(receipts) != 1 {
+		t.Fatalf("recovery receipts = %d, error=%v", len(receipts), readErr)
+	}
+}
+
+func TestRunPoisonRecoveryHintPreservesExplicitInsecureFlag(t *testing.T) {
+	originalTimeout := standalonePoisonTimeout
+	standalonePoisonTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { standalonePoisonTimeout = originalTimeout })
+
+	p := newBlockingPoisoner("mock.poison.ambiguous.insecure", "mock-ambiguous-insecure", true)
+	module.Register(p)
+	defer deregisterModule(t, p.ID())
+	setupSentinels(t)
+	t.Setenv("AGENTHOUND_STATE_DIR", t.TempDir())
+	p.state = module.NewFileStatefulModule(p.id)
+	out := &bytes.Buffer{}
+	cmd := newPoisonTestCmd("", out)
+	mustSetFlag(t, cmd, "type", p.targetKind)
+	mustSetFlag(t, cmd, "target-id", "target")
+	mustSetFlag(t, cmd, "inject", "injected")
+	mustSetFlag(t, cmd, "engagement-id", "ENG-AMBIGUOUS-INSECURE")
+	mustSetFlag(t, cmd, "commit", "true")
+	mustSetFlag(t, cmd, "insecure", "true")
+	err := runPoison(cmd, []string{"example.invalid"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("run poison error = %v, want deadline exceeded", err)
+	}
+	if !strings.Contains(out.String(), "agenthound revert ENG-AMBIGUOUS-INSECURE --insecure") {
+		t.Fatalf("recovery hint dropped explicit --insecure: %s", out.String())
+	}
+}
+
+func TestRevertHintIncludesInsecureOnlyWhenExplicit(t *testing.T) {
+	cmd := newPoisonTestCmd("", &bytes.Buffer{})
+	if got := poisonRevertCommand(cmd, "ENG-STRICT"); got != "agenthound revert ENG-STRICT" {
+		t.Fatalf("strict revert hint = %q", got)
+	}
+	mustSetFlag(t, cmd, "insecure", "true")
+	if got := poisonRevertCommand(cmd, "ENG-INSECURE"); got != "agenthound revert ENG-INSECURE --insecure" {
+		t.Fatalf("insecure revert hint = %q", got)
+	}
+}
+
+func TestMutationMayRemainRejectsKnownCleanFailure(t *testing.T) {
+	if mutationMayRemain(errors.New("automatic cleanup restored the original")) {
+		t.Fatal("known-clean failure was classified as an ambiguous committed mutation")
+	}
+	for _, err := range []error{action.ErrRevertIndeterminate, context.Canceled, context.DeadlineExceeded} {
+		if !mutationMayRemain(err) {
+			t.Fatalf("ambiguous error %v was not classified for recovery diagnostics", err)
+		}
+	}
+}
+
+func executeBlockingPoison(
 	t *testing.T,
 	ctx context.Context,
-	targetURL string,
+	p *blockingPoisoner,
 	engagementID string,
-	commit bool,
-) (module.StatefulModule, time.Time, error) {
+) (module.StatefulModule, string, error) {
 	t.Helper()
 	setupSentinels(t)
 	t.Setenv("AGENTHOUND_STATE_DIR", t.TempDir())
-
+	p.state = module.NewFileStatefulModule(p.id)
 	out := &bytes.Buffer{}
-	cmd := &cobra.Command{
-		Use:           "poison <host>",
-		Args:          cobra.ExactArgs(1),
-		RunE:          runPoison,
-		SilenceUsage:  true,
-		SilenceErrors: true,
-	}
-	cmd.Flags().String("type", "", "")
-	cmd.Flags().String("target-id", "", "")
-	cmd.Flags().String("inject", "", "")
-	cmd.Flags().String("inject-file", "", "")
-	cmd.Flags().String("mode", "replace", "")
-	cmd.Flags().Bool("commit", false, "")
-	cmd.Flags().String("engagement-id", "", "")
-	mcppoison.New().RegisterFlags(cmd.Flags())
+	cmd := newPoisonTestCmd("", out)
 	cmd.SetContext(ctx)
-	cmd.SetIn(bytes.NewReader(nil))
-	cmd.SetOut(out)
-	cmd.SetErr(out)
-
-	args := []string{
-		targetURL,
-		"--type", "mcp.tool.description",
-		"--target-id", "support_lookup",
-		"--inject", "injected",
-		"--engagement-id", engagementID,
-	}
-	if commit {
-		args = append(args, "--commit")
-	}
-	cmd.SetArgs(args)
-
-	startedAt := time.Now()
-	err := cmd.Execute()
-	return module.NewFileStatefulModule("mcp.poison"), startedAt, err
-}
-
-func assertPoisonReceiptCount(
-	t *testing.T,
-	state module.StatefulModule,
-	engagementID string,
-	want int,
-) []action.Receipt {
-	t.Helper()
-	receipts, err := state.ReadReceipts(engagementID)
-	if err != nil {
-		t.Fatalf("read receipts: %v", err)
-	}
-	if len(receipts) != want {
-		t.Fatalf("receipt count = %d, want %d", len(receipts), want)
-	}
-	return receipts
+	mustSetFlag(t, cmd, "type", p.targetKind)
+	mustSetFlag(t, cmd, "target-id", "target")
+	mustSetFlag(t, cmd, "inject", "injected")
+	mustSetFlag(t, cmd, "engagement-id", engagementID)
+	mustSetFlag(t, cmd, "commit", "true")
+	err := runPoison(cmd, []string{"example.invalid"})
+	return p.state, out.String(), err
 }

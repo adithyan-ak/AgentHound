@@ -37,7 +37,7 @@ func (p *mcpProber) Probe(ctx context.Context, req campaign.ProbeRequest) campai
 	deadline, _ := pctx.Deadline()
 	transport := buildProbeTransport(req, deadline)
 	client := mcpsdk.NewClient(
-		&mcpsdk.Implementation{Name: "AgentHound", Version: common.CollectorVersion},
+		&mcpsdk.Implementation{Name: "AgentHound", Version: common.CollectorVersion()},
 		nil,
 	)
 

@@ -2,13 +2,35 @@ package common
 
 import (
 	"fmt"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/google/uuid"
 )
 
-const CollectorVersion = "0.9.0-dev"
+const DefaultCollectorVersion = "0.9.0-dev"
+
+var collectorVersion atomic.Value
+
+func init() {
+	collectorVersion.Store(DefaultCollectorVersion)
+}
+
+func CollectorVersion() string {
+	version, ok := collectorVersion.Load().(string)
+	if !ok || version == "" {
+		return DefaultCollectorVersion
+	}
+	return version
+}
+
+func SetCollectorVersion(version string) {
+	if version = strings.TrimSpace(version); version != "" {
+		collectorVersion.Store(version)
+	}
+}
 
 func NewIngestData(collector, scanID string) *ingest.IngestData {
 	if scanID == "" {
@@ -19,7 +41,7 @@ func NewIngestData(collector, scanID string) *ingest.IngestData {
 			Version:          ingest.CurrentVersion,
 			Type:             ingest.IngestType,
 			Collector:        collector,
-			CollectorVersion: CollectorVersion,
+			CollectorVersion: CollectorVersion(),
 			Timestamp:        time.Now().UTC().Format(time.RFC3339),
 			ScanID:           scanID,
 			Ruleset:          ingest.EmptyRulesetManifest(),

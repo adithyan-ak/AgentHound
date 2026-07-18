@@ -25,7 +25,7 @@ func (f *fakeRoundtripScenario) Description() string           { return "fake ro
 func (f *fakeRoundtripScenario) RequiresWitness() bool         { return false }
 func (f *fakeRoundtripScenario) RequiresMutationConsent() bool { return true }
 func (f *fakeRoundtripScenario) Run(_ context.Context, in campaign.RunInput) (*campaign.RunResult, error) {
-	if strings.TrimSpace(in.Params["target-id"]) == "" || strings.TrimSpace(in.Params["inject"]) == "" {
+	if strings.TrimSpace(in.Params["target-id"]) == "" || in.Params["adapter"] != "contextforge" {
 		return nil, campaign.ErrNotRunnable
 	}
 	if !in.Commit {
@@ -67,12 +67,8 @@ func newCampaignRoundtripTestCmd(t *testing.T, out *bytes.Buffer) *cobra.Command
 	cmd.Flags().String("credential-env", defaultCredentialEnv, "")
 	cmd.Flags().Bool("credential-stdin", false, "")
 	cmd.Flags().String("target-id", "", "")
-	cmd.Flags().String("inject", "", "")
-	cmd.Flags().String("mode", "", "")
-	cmd.Flags().String("update-method", "", "")
-	cmd.Flags().String("update-path", "", "")
-	cmd.Flags().String("list-path", "", "")
-	cmd.Flags().String("auth-token", "", "")
+	cmd.Flags().String("adapter", "", "")
+	cmd.Flags().String("management-url", "", "")
 	root.AddCommand(cmd)
 	cmd.SetIn(strings.NewReader(""))
 	cmd.SetOut(out)
@@ -81,7 +77,7 @@ func newCampaignRoundtripTestCmd(t *testing.T, out *bytes.Buffer) *cobra.Command
 }
 
 // TestRunCampaignRoundtripNeedsNoWitness: a RequiresWitness()=false scenario runs
-// from --target-id/--inject with NO witness and reports oracle + cleanup
+// from --target-id/--adapter with NO witness and reports oracle + cleanup
 // separately, without writing a differential envelope.
 func TestRunCampaignRoundtripCommit(t *testing.T) {
 	_ = fakeRoundtripScenarioRegistered
@@ -92,8 +88,8 @@ func TestRunCampaignRoundtripCommit(t *testing.T) {
 	cmd := newCampaignRoundtripTestCmd(t, out)
 	mustSetFlag(t, cmd, "scenario", "cli-roundtrip-fake")
 	mustSetFlag(t, cmd, "engagement-id", "ENG-RT")
-	mustSetFlag(t, cmd, "target-id", "support_lookup")
-	mustSetFlag(t, cmd, "inject", "TEST MUTATION")
+	mustSetFlag(t, cmd, "target-id", "support-lookup")
+	mustSetFlag(t, cmd, "adapter", "contextforge")
 	mustSetFlag(t, cmd, "commit", "true")
 
 	if err := runCampaign(cmd, []string{"https://mcp.example/mcp"}); err != nil {
@@ -117,8 +113,8 @@ func TestRunCampaignRoundtripDryRun(t *testing.T) {
 	cmd := newCampaignRoundtripTestCmd(t, out)
 	mustSetFlag(t, cmd, "scenario", "cli-roundtrip-fake")
 	mustSetFlag(t, cmd, "engagement-id", "ENG-RT")
-	mustSetFlag(t, cmd, "target-id", "support_lookup")
-	mustSetFlag(t, cmd, "inject", "TEST MUTATION")
+	mustSetFlag(t, cmd, "target-id", "support-lookup")
+	mustSetFlag(t, cmd, "adapter", "contextforge")
 
 	if err := runCampaign(cmd, []string{"https://mcp.example/mcp"}); err != nil {
 		t.Fatalf("runCampaign round-trip dry-run: %v", err)
@@ -135,8 +131,8 @@ func TestRunCampaignRoundtripRequiresDistinctMutationConsent(t *testing.T) {
 	cmd := newCampaignRoundtripTestCmd(t, out)
 	mustSetFlag(t, cmd, "scenario", "cli-roundtrip-fake")
 	mustSetFlag(t, cmd, "engagement-id", "ENG-CONSENT")
-	mustSetFlag(t, cmd, "target-id", "support_lookup")
-	mustSetFlag(t, cmd, "inject", "not-run")
+	mustSetFlag(t, cmd, "target-id", "support-lookup")
+	mustSetFlag(t, cmd, "adapter", "contextforge")
 	mustSetFlag(t, cmd, "commit", "true")
 
 	err := runCampaign(cmd, []string{"https://mcp.example/mcp"})
@@ -214,8 +210,8 @@ func TestRunCampaignEmitsUnsafeReportBeforeError(t *testing.T) {
 	cmd := newCampaignRoundtripTestCmd(t, out)
 	mustSetFlag(t, cmd, "scenario", "cli-roundtrip-unsafe-fake")
 	mustSetFlag(t, cmd, "engagement-id", "ENG-UNSAFE")
-	mustSetFlag(t, cmd, "target-id", "support_lookup")
-	mustSetFlag(t, cmd, "inject", "not-reported")
+	mustSetFlag(t, cmd, "target-id", "support-lookup")
+	mustSetFlag(t, cmd, "adapter", "contextforge")
 	mustSetFlag(t, cmd, "commit", "true")
 
 	err := runCampaign(cmd, []string{"https://mcp.example/mcp"})
@@ -226,8 +222,5 @@ func TestRunCampaignEmitsUnsafeReportBeforeError(t *testing.T) {
 	if !strings.Contains(output, "RUN_REPORT") ||
 		!strings.Contains(output, `"status":"conflict"`) {
 		t.Fatalf("unsafe final report was not emitted: %s", output)
-	}
-	if strings.Contains(output, "not-reported") {
-		t.Fatal("mutation value leaked into report/diagnostic")
 	}
 }

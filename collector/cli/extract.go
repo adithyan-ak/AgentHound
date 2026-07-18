@@ -61,9 +61,6 @@ func init() {
 		panic(err)
 	}
 
-	for _, mod := range module.ListByAction(action.Extract) {
-		module.RegisterFlagsFor(extractCmd, mod)
-	}
 	rootCmd.AddCommand(extractCmd)
 }
 

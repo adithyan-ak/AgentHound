@@ -70,20 +70,6 @@ func init() {
 		panic(err)
 	}
 
-	for _, mod := range module.ListByAction(action.Implant) {
-		module.RegisterFlagsFor(implantCmd, mod)
-	}
-	for _, mod := range module.ListByAction(action.Poison) {
-		// Surface every Poisoner that targets a kind the operator might
-		// type after `agenthound implant --type` — instruction.file is
-		// the canonical example. runImplant falls back to action.Poison
-		// dispatch when no Implanter matches the requested target kind,
-		// so the per-module flags must be visible on `implant --help`
-		// too. Use registerFlagsAvoidingDupes because Implanter and
-		// Poisoner flag sets overlap (e.g. both modules use --file).
-		registerFlagsAvoidingDupes(implantCmd, mod)
-	}
-
 	rootCmd.AddCommand(implantCmd)
 }
 

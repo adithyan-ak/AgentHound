@@ -16,6 +16,7 @@ type runCleanupRecorder struct {
 	state    *module.FileStatefulModule
 	calls    *[]string
 	failOnce map[string]bool
+	partial  map[string]bool
 }
 
 func (m *runCleanupRecorder) ID() string            { return m.id }
@@ -42,6 +43,9 @@ func (m *runCleanupRecorder) Revert(_ context.Context, receipt action.Receipt) e
 	if m.failOnce[targetID] {
 		delete(m.failOnce, targetID)
 		return action.ErrRevertConflict
+	}
+	if m.partial[targetID] {
+		return action.ErrRevertPartiallyVerified
 	}
 	return nil
 }
@@ -72,7 +76,7 @@ func registerRunCleanupRecorder(
 	t.Helper()
 	recorder := &runCleanupRecorder{
 		id: id, state: module.NewFileStatefulModule(id),
-		calls: calls, failOnce: map[string]bool{},
+		calls: calls, failOnce: map[string]bool{}, partial: map[string]bool{},
 	}
 	module.Register(recorder)
 	t.Cleanup(func() { deregisterModule(t, id) })
@@ -186,6 +190,24 @@ func TestCleanupCampaignRunFailStopsAndRetriesImmutableReceipts(t *testing.T) {
 	afterSecond, _ := os.ReadFile(filepath.Join(second.state.StateDir(), "ENG-RETRY.json"))
 	if string(beforeFirst) != string(afterFirst) || string(beforeSecond) != string(afterSecond) {
 		t.Fatal("run cleanup modified immutable receipt files")
+	}
+}
+
+func TestCleanupCampaignRunContinuesAfterPartiallyVerifiedRecovery(t *testing.T) {
+	t.Setenv("AGENTHOUND_STATE_DIR", filepath.Join(t.TempDir(), "state"))
+	var calls []string
+	first := registerRunCleanupRecorder(t, "test.cleanup.partial.a", &calls)
+	second := registerRunCleanupRecorder(t, "test.cleanup.partial.b", &calls)
+	second.partial["step-2"] = true
+	writeRunReceipt(t, second.state, "ENG-PARTIAL-RUN", "run-partial", 2, "step-2")
+	writeRunReceipt(t, first.state, "ENG-PARTIAL-RUN", "run-partial", 1, "step-1")
+
+	result := cleanupCampaignRun(context.Background(), "ENG-PARTIAL-RUN", "run-partial")
+	if result.Status != campaign.CleanupRestored || result.ReceiptsSelected != 2 {
+		t.Fatalf("cleanup result = %+v", result)
+	}
+	if want := []string{"step-2", "step-1"}; !equalStringSlices(calls, want) {
+		t.Fatalf("partial cleanup calls = %v, want %v", calls, want)
 	}
 }
 

@@ -416,13 +416,31 @@ func discoveryCandidatePaths(homeDir string) []string {
 }
 
 func discoverAllConfigs() ([]ServerSpec, error) {
+	allSpecs, err := discoverRawConfigSpecs()
+	if err != nil {
+		return nil, err
+	}
+
+	uniqueSpecs := make([]ServerSpec, 0, len(allSpecs))
+	seen := make(map[string]bool)
+	for _, spec := range allSpecs {
+		key := computeServerID(spec)
+		if !seen[key] {
+			seen[key] = true
+			uniqueSpecs = append(uniqueSpecs, spec)
+		}
+	}
+
+	return uniqueSpecs, nil
+}
+
+func discoverRawConfigSpecs() ([]ServerSpec, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
 
 	var allSpecs []ServerSpec
-	seen := make(map[string]bool)
 
 	for _, path := range discoveryCandidatePaths(homeDir) {
 		if _, err := os.Stat(path); err != nil {
@@ -433,13 +451,7 @@ func discoverAllConfigs() ([]ServerSpec, error) {
 			log.Printf("[mcp] failed to parse %s: %v", path, err)
 			continue
 		}
-		for _, s := range specs {
-			key := computeServerID(s)
-			if !seen[key] {
-				seen[key] = true
-				allSpecs = append(allSpecs, s)
-			}
-		}
+		allSpecs = append(allSpecs, specs...)
 	}
 
 	return allSpecs, nil

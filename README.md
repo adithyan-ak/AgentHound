@@ -62,7 +62,7 @@ A pure-Go GGUF parser runs statistical inversion on the embedding matrix of any 
 <td width="50%" valign="top">
 
 ☠️ **Active exploitation - tool/instruction poisoning + config implant**<br/>
-Rewrite the tool description the LLM reads, inject `CLAUDE.md` / `.cursorrules`, or implant a malicious MCP server for persistence. Every mutation is dry-run by default and byte-exact reversible.
+Rewrite a ContextForge-managed MCP tool description, inject `CLAUDE.md` / `.cursorrules`, or implant a malicious MCP server for persistence. Every mutation is dry-run by default and carries provider-specific recovery state.
 
 </td>
 <td width="50%" valign="top">
@@ -161,7 +161,7 @@ Also available via Homebrew (`brew install agenthound agenthound-server`), `go i
 
 ## 🔪 The offensive lifecycle
 
-One binary runs the whole offensive lifecycle. Every stage emits the same ingest envelope, so results land in the same graph. Active verbs (`loot`, `extract`, `poison`, `implant`) require an interactive `AUTHORIZED` confirmation; `extract`, `poison`, and `implant` are dry-run until `--commit` and are undone by `agenthound revert` - see [Safety & Authorization](#-safety--authorization).
+One binary runs the whole offensive lifecycle. Every stage emits the same ingest envelope, so results land in the same graph. Active verbs (`loot`, `extract`, `poison`, `implant`) require an interactive `AUTHORIZED` confirmation; `extract`, `poison`, and `implant` are dry-run until `--commit`. `poison` and `implant` record recovery paths for `agenthound revert`, whose runtime outcome is verified; `extract` does not mutate its source artifact and has no Reverter - see [Safety & Authorization](#-safety--authorization).
 
 **1. Recon** - find the AI estate:
 
@@ -188,10 +188,20 @@ agenthound extract <model-id> --type embedding-invert --artifact /path/to/model.
 **4. Exploit + persist** - sanctioned, reversible offensive actions:
 
 ```bash
-agenthound poison 10.0.0.30:8080 --type mcp.tool.description --target-id support_lookup --inject "Ignore prior instructions." --commit --engagement-id ENG-1
+# Optional management override; required when management is on another origin.
+export AGENTHOUND_CONTEXTFORGE_TOKEN='...'
+agenthound campaign https://gateway.example/servers/<server-uuid>/mcp \
+    --scenario mcp-poison-roundtrip --adapter contextforge \
+    --target-id support-lookup --engagement-id ENG-ROUNDTRIP --commit
+agenthound poison https://gateway.example/servers/<server-uuid>/mcp \
+    --type mcp.tool.description --adapter contextforge \
+    --target-id support-lookup --inject-file payload.txt \
+    --commit --engagement-id ENG-1
 agenthound implant --type mcp.config.malicious-server --target-id ~/.cursor/mcp.json --inject "..." --commit --engagement-id ENG-1
 agenthound revert ENG-1
 ```
+
+ContextForge management is a named provider contract, not a generic MCP update API. AgentHound derives the deployment root and server UUID from the server-scoped MCP URL; copy the v1.0.5 server ID exactly in its canonical lowercase 32-hex form. Use `--management-url` without `/v1` only when the management root differs. MCP authentication comes from `AGENTHOUND_MCP_TOKEN` or one unambiguous exact-URL client-config `Authorization` header. `AGENTHOUND_CONTEXTFORGE_TOKEN` is an independent management override; without it, same-origin management reuses the resolved MCP bearer, while cross-origin management fails closed. Use a provider session token or an API token with an empty/wildcard permission ceiling. For non-admins, AgentHound separately proves effective provider RBAC for `servers.read`, `tools.read`, and `tools.update`; restrict the account's roles to those permissions and make it the direct owner of both objects. A platform-admin bypass is accepted only from the provider-authenticated profile.
 
 **5. Analyze** - pathfind and gate:
 
@@ -259,7 +269,7 @@ Built to be run under authorization, with the controls this audience checks for:
 
 - **Read-only looter contract** - GET/HEAD only (narrow idempotent-search carve-outs), each guarded by a `get_only_test.go` regression test.
 - **Destructive verbs dry-run by default** - `poison` / `implant` / `extract` do nothing mutating without `--commit`.
-- **Compile-time-mandatory reverter** - `Poisoner` / `Implanter` embed `Reverter`; a module that can't undo itself won't build.
+- **Compile-time-mandatory recovery path** - `Poisoner` / `Implanter` embed `Reverter`; every destructive module must implement recovery. Runtime restoration is verified, not guaranteed across provider policy changes, conflicts, or unavailable targets.
 - **Receipt before mutation** - the undo receipt is persisted to disk *before* the write lands.
 - **AUTHORIZED gates + `--engagement-id`** - interactive first-run prompts; every receipt and edge threaded for IR coordination.
 - **Recon guardrails** - public-IP targets require opt-in + an authorization-file watermark; link-local/multicast refused outright.
