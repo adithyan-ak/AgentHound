@@ -3,6 +3,7 @@ set -eu
 
 OLLAMA_URL="${OLLAMA_URL:-http://ollama:11434}"
 MODEL="qwen2:0.5b"
+MODEL_DIGEST="6f48b936a09f7743c7dd30e72fdb14cba296bc5861902e4d0c387e8fb5050b39"
 
 if [ "${OLLAMA_URL}" != "http://ollama:11434" ]; then
 	echo "refusing destructive fixture reconciliation outside the compose Ollama target" >&2
@@ -39,6 +40,11 @@ curl --fail --silent --show-error "${OLLAMA_URL}/api/tags" |
 	done
 
 curl --fail --silent --show-error "${OLLAMA_URL}/api/tags" |
-	grep --fixed-strings "\"model\":\"${MODEL}\"" >/dev/null
+	jq -e --arg model "${MODEL}" --arg digest "${MODEL_DIGEST}" '
+		[.models[] | {model,digest}] == [{model:$model,digest:$digest}]
+	' >/dev/null || {
+		echo "Ollama registry content for ${MODEL} does not match the reviewed digest" >&2
+		exit 1
+	}
 
 echo "Seeded Ollama model ${MODEL}"

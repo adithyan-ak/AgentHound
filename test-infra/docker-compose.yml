@@ -18,8 +18,17 @@ volumes:
   qdrant-storage:
   litellm-postgres-data:
   huggingface-cache:
+  analysis-postgres-data:
+  analysis-neo4j-data:
 
 services:
+  gguf-verifier:
+    profiles: ["tools"]
+    build:
+      context: ./services/gguf-verifier
+    volumes:
+      - ./fixtures:/fixtures:ro
+
   ollama:
     image: ollama/ollama:0.12.0@sha256:14def4e0b9ac8c91b3ec6f7fa7684c924ffe244541d5fd827d9b89035cc33310
     networks:
@@ -357,6 +366,41 @@ services:
           cpus: "2.0"
           memory: 2g
 
+  # Production analysis dependencies are started only after network scanning,
+  # so they cannot pollute the collector's real-service inventory.
+  analysis-postgres:
+    profiles: ["analysis"]
+    image: postgres:16.14-alpine3.24@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    environment:
+      POSTGRES_DB: agenthound
+      POSTGRES_USER: agenthound
+      POSTGRES_PASSWORD: agenthound-analysis-local
+    volumes:
+      - analysis-postgres-data:/var/lib/postgresql/data
+    networks:
+      - agenthound-test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d agenthound -U agenthound"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  analysis-neo4j:
+    profiles: ["analysis"]
+    image: neo4j:4.4-community@sha256:b0efe93722d27bc050908810650939380d989b1936fc5dd02ad1d7bf1c87a13b
+    environment:
+      NEO4J_AUTH: neo4j/agenthound-analysis-local
+    volumes:
+      - analysis-neo4j-data:/data
+    networks:
+      - agenthound-test
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p agenthound-analysis-local 'RETURN 1' >/dev/null"]
+      interval: 5s
+      timeout: 10s
+      retries: 36
+      start_period: 30s
+
   workstation:
     build:
       context: ./services/workstation
@@ -365,6 +409,11 @@ services:
         ipv4_address: 10.20.30.100
     volumes:
       - ./fixtures:/root/fixtures
+    environment:
+      AGENTHOUND_NEO4J_URI: bolt://analysis-neo4j:7687
+      AGENTHOUND_NEO4J_USER: neo4j
+      AGENTHOUND_NEO4J_PASSWORD: agenthound-analysis-local
+      AGENTHOUND_PG_URI: postgres://agenthound:agenthound-analysis-local@analysis-postgres:5432/agenthound?sslmode=disable
     depends_on:
       ollama:
         condition: service_healthy

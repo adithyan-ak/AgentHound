@@ -26,6 +26,7 @@ ARTIFACTS_DIR="${SCRIPT_DIR}/artifacts/${RUN_ID}"
 EXPECTED_DIR="${SCRIPT_DIR}/expected"
 BIN_DIR="${SCRIPT_DIR}/services/workstation/bin"
 COLLECTOR_BIN="${BIN_DIR}/agenthound"
+SERVER_BIN="${BIN_DIR}/agenthound-server"
 HOST_COLLECTOR_BIN="${BIN_DIR}/agenthound-host"
 RESULTS_FILE="${ARTIFACTS_DIR}/results.ndjson"
 
@@ -63,6 +64,9 @@ ws() {
 
 cleanup() {
   local ec=$?
+  if ((ec != 0)) && [[ -d "${ARTIFACTS_DIR}" ]]; then
+    assert_no_raw_secrets unexpected-exit "${ARTIFACTS_DIR}"/* || true
+  fi
   if ((ec != 0)) && [[ -d "${ARTIFACTS_DIR}" ]] &&
     [[ ! -f "${ARTIFACTS_DIR}/summary.json" ]]; then
     if [[ -f "${RESULTS_FILE}" ]]; then
@@ -82,7 +86,7 @@ cleanup() {
     return
   fi
   if ((KEEP == 0)); then
-    compose down -v --remove-orphans >/dev/null 2>&1 || true
+    compose --profile analysis --profile tools down -v --remove-orphans >/dev/null 2>&1 || true
     return
   fi
   printf '\nStack retained for inspection:\n  docker compose -f %s ps\n' "${COMPOSE_FILE}" >&2
@@ -131,6 +135,7 @@ assert_no_raw_secrets() {
     'Harness-OpenWebUI-Password-2026!'
     'agenthound-contextforge-jwt-secret-32-bytes-minimum'
     'agenthound-contextforge-encryption-secret-32-bytes'
+    'agenthound-analysis-local'
     "${AGENTHOUND_CONTEXTFORGE_TOKEN:-}"
     "${OPENWEBUI_TOKEN:-}"
   )
@@ -144,6 +149,12 @@ assert_no_raw_secrets() {
       fi
     done
   done
+}
+
+guard_scenario_secrets() {
+  local name="$1"
+  local -a paths=("${ARTIFACTS_DIR}/${name}"*)
+  assert_no_raw_secrets "${name}" "${paths[@]}"
 }
 
 run_json() {
@@ -160,16 +171,16 @@ run_json() {
   ec=$?
   set -e
 
+  if ! guard_scenario_secrets "${name}"; then
+    collector_failure "${name}" 'raw credential disclosure'
+    return 0
+  fi
   if ((ec != 0)); then
     collector_failure "${name}" "collector exited ${ec}; see ${stderr_path}"
     return 0
   fi
   if ! jq -e . "${artifact}" >/dev/null 2>&1; then
     collector_failure "${name}" 'collector output is not valid JSON'
-    return 0
-  fi
-  if ! assert_no_raw_secrets "${name}" "${artifact}" "${stderr_path}"; then
-    collector_failure "${name}" 'raw credential disclosure'
     return 0
   fi
   if ! assert_json "${name}" "${artifact}" "${expectation}"; then
@@ -191,12 +202,12 @@ run_host_json() {
     scan --config --output - >"${artifact}" 2>"${stderr_path}"
   ec=$?
   set -e
-  if ((ec != 0)); then
-    collector_failure "${name}" "collector exited ${ec}; see ${stderr_path}"
+  if ! guard_scenario_secrets "${name}"; then
+    collector_failure "${name}" 'raw credential disclosure'
     return
   fi
-  if ! assert_no_raw_secrets "${name}" "${artifact}" "${stderr_path}"; then
-    collector_failure "${name}" 'raw credential disclosure'
+  if ((ec != 0)); then
+    collector_failure "${name}" "collector exited ${ec}; see ${stderr_path}"
     return
   fi
   if ! assert_json "${name}" "${artifact}" "${EXPECTED_DIR}/${name}.jq"; then
@@ -214,6 +225,10 @@ run_smoke() {
   ws agenthound --quiet "$@" >"${ARTIFACTS_DIR}/${name}.out" 2>"${ARTIFACTS_DIR}/${name}.stderr"
   ec=$?
   set -e
+  if ! guard_scenario_secrets "${name}"; then
+    collector_failure "${name}" 'raw credential disclosure'
+    return
+  fi
   if ((ec != 0)); then
     collector_failure "${name}" "collector exited ${ec}"
     return
@@ -276,6 +291,12 @@ run_contextforge_poison() {
   set -e
   after="$(contextforge_description)"
 
+  if ! guard_scenario_secrets "${name}"; then
+    restore_contextforge_description "${before}"
+    collector_failure "${name}" 'raw credential disclosure'
+    return
+  fi
+
   if ((ec != 0)); then
     if [[ "${after}" != "${before}" ]]; then
       ws agenthound --quiet revert "${engagement}" \
@@ -296,6 +317,11 @@ run_contextforge_poison() {
     2>"${ARTIFACTS_DIR}/${name}-revert.stderr"; then
     restore_contextforge_description "${before}"
     collector_failure "${name}" 'revert failed against real ContextForge'
+    return
+  fi
+  if ! guard_scenario_secrets "${name}"; then
+    restore_contextforge_description "${before}"
+    collector_failure "${name}" 'raw credential disclosure'
     return
   fi
   restored="$(contextforge_description)"
@@ -330,6 +356,11 @@ run_instruction_poison() {
     >"${ARTIFACTS_DIR}/${name}.out" 2>"${ARTIFACTS_DIR}/${name}.stderr"
   ec=$?
   set -e
+  if ! guard_scenario_secrets "${name}"; then
+    ws /usr/local/bin/workstation-entrypoint restore-fixtures || true
+    collector_failure "${name}" 'raw credential disclosure'
+    return
+  fi
   if ((ec != 0)); then
     ws /usr/local/bin/workstation-entrypoint restore-fixtures || true
     collector_failure "${name}" "collector exited ${ec}"
@@ -340,6 +371,11 @@ run_instruction_poison() {
     >"${ARTIFACTS_DIR}/${name}-revert.out" 2>"${ARTIFACTS_DIR}/${name}-revert.stderr"; then
     ws /usr/local/bin/workstation-entrypoint restore-fixtures || true
     collector_failure "${name}" 'revert failed'
+    return
+  fi
+  if ! guard_scenario_secrets "${name}"; then
+    ws /usr/local/bin/workstation-entrypoint restore-fixtures || true
+    collector_failure "${name}" 'raw credential disclosure'
     return
   fi
   restored="$(file_sha_in_ws "${path}")"
@@ -371,6 +407,11 @@ run_config_implant() {
     >"${ARTIFACTS_DIR}/${name}.out" 2>"${ARTIFACTS_DIR}/${name}.stderr"
   ec=$?
   set -e
+  if ! guard_scenario_secrets "${name}"; then
+    ws /usr/local/bin/workstation-entrypoint restore-fixtures || true
+    collector_failure "${name}" 'raw credential disclosure'
+    return
+  fi
   if ((ec != 0)); then
     ws /usr/local/bin/workstation-entrypoint restore-fixtures || true
     collector_failure "${name}" "collector exited ${ec}"
@@ -388,6 +429,11 @@ run_config_implant() {
     >"${ARTIFACTS_DIR}/${name}-revert.out" 2>"${ARTIFACTS_DIR}/${name}-revert.stderr"; then
     ws /usr/local/bin/workstation-entrypoint restore-fixtures || true
     collector_failure "${name}" 'revert failed'
+    return
+  fi
+  if ! guard_scenario_secrets "${name}"; then
+    ws /usr/local/bin/workstation-entrypoint restore-fixtures || true
+    collector_failure "${name}" 'raw credential disclosure'
     return
   fi
   restored="$(file_sha_in_ws "${path}")"
@@ -420,6 +466,11 @@ run_contextforge_roundtrip() {
   ec=$?
   set -e
   after="$(contextforge_description)"
+  if ! guard_scenario_secrets "${name}"; then
+    restore_contextforge_description "${before}"
+    collector_failure "${name}" 'raw credential disclosure'
+    return
+  fi
   if ((ec != 0)); then
     if [[ "${after}" != "${before}" ]]; then
       ws agenthound --quiet revert "${engagement}" >/dev/null 2>&1 || true
@@ -440,6 +491,57 @@ run_contextforge_roundtrip() {
   record_result "${name}" pass
 }
 
+run_cred_reach_campaign() {
+  local name=campaign-cred-reach
+  local witness="${SCRIPT_DIR}/fixtures/witness.json"
+  local ec=0
+
+  printf '\n==> Starting production projection dependencies\n'
+  compose --profile analysis up -d --wait analysis-postgres analysis-neo4j
+
+  set +e
+  bash "${SCRIPT_DIR}/lib/export-witness.sh" \
+    "${COMPOSE_FILE}" \
+    "${ARTIFACTS_DIR}/scan-config.json" \
+    "${ARTIFACTS_DIR}/scan-mcp-configured.json" \
+    "${SCRIPT_DIR}/fixtures/runtime.json" \
+    "${ARTIFACTS_DIR}" \
+    "${witness}" \
+    >"${ARTIFACTS_DIR}/${name}-projection.out" \
+    2>"${ARTIFACTS_DIR}/${name}-projection.stderr"
+  ec=$?
+  set -e
+  if ! guard_scenario_secrets "${name}"; then
+    collector_failure "${name}" 'raw credential disclosure in production projection artifacts'
+    return
+  fi
+  if ((ec != 0)); then
+    collector_failure "${name}" 'actual collector projections did not produce a production-exportable CAN_REACH witness'
+    return
+  fi
+
+  run_json "${name}" campaign "${CONTEXTFORGE_MCP_URL}" \
+    --scenario cred-reach --witness /root/fixtures/witness.json \
+    --commit --engagement-id RTV-CRED-REACH --output -
+
+  if [[ -s "${ARTIFACTS_DIR}/${name}.json" ]] && ! jq -e \
+    --slurpfile witness "${witness}" '
+      .graph.edges[0].properties as $p |
+      $witness[0] as $w |
+      $p.agent_id == $w.agent_id and
+      $p.credential_id == $w.credential_id and
+      $p.credential_value_hash == $w.credential_value_hash and
+      $p.credential_merge_key == $w.credential_merge_key and
+      $p.server_id == $w.server_id and
+      $p.resource_id == $w.resource_id and
+      $p.evidence_node_ids == $w.evidence_node_ids and
+      $p.evidence_node_kinds == $w.evidence_node_kinds
+    ' "${ARTIFACTS_DIR}/${name}.json" >/dev/null; then
+    collector_failure campaign-cred-reach-witness-binding \
+      'campaign evidence does not preserve the production-exported witness'
+  fi
+}
+
 cd "${REPO_ROOT}"
 mkdir -p "${ARTIFACTS_DIR}" "${BIN_DIR}" "${SCRIPT_DIR}/fixtures"
 : >"${RESULTS_FILE}"
@@ -447,6 +549,17 @@ mkdir -p "${ARTIFACTS_DIR}" "${BIN_DIR}" "${SCRIPT_DIR}/fixtures"
 printf '==> Downloading and independently validating immutable data fixtures\n'
 # shellcheck source=lib/download-fixtures.sh
 source "${SCRIPT_DIR}/lib/download-fixtures.sh"
+
+printf '==> Deriving exact extraction truth with the official GGUF reader\n'
+STACK_STARTED=1
+compose --profile tools build gguf-verifier >/dev/null
+compose --profile tools run --rm --no-deps gguf-verifier \
+  /fixtures/models/stories260K.gguf 1.5 \
+  >"${ARTIFACTS_DIR}/extraction-truth.json"
+jq -e --slurpfile expected "${EXPECTED_DIR}/extraction-truth.json" \
+  '. == $expected[0]' "${ARTIFACTS_DIR}/extraction-truth.json" >/dev/null ||
+  fail 'official GGUF reader output drifted from the reviewed exact extraction truth'
+pass upstream:gguf-extraction-truth
 
 jq -e '
   .mcpServers["everything-stdio"] == {
@@ -459,10 +572,11 @@ jq -e '
 printf '==> Building collector binaries\n'
 GOOS=linux GOARCH="$(go env GOARCH)" CGO_ENABLED=0 \
   go build -trimpath -ldflags='-s -w' -o "${COLLECTOR_BIN}" ./collector/cmd/agenthound
+GOOS=linux GOARCH="$(go env GOARCH)" CGO_ENABLED=0 \
+  go build -trimpath -ldflags='-s -w' -o "${SERVER_BIN}" ./server/cmd/agenthound-server
 go build -trimpath -o "${HOST_COLLECTOR_BIN}" ./collector/cmd/agenthound
 
 printf '==> Starting real upstream topology\n'
-STACK_STARTED=1
 compose up -d --wait --build
 wait_ready "${COMPOSE_FILE}" 1200
 
@@ -473,10 +587,10 @@ printf '==> Verifying upstream truth independently of the collector\n'
 bash "${SCRIPT_DIR}/lib/verify-upstreams.sh" \
   "${COMPOSE_FILE}" "${SCRIPT_DIR}/fixtures/upstream-truth.json"
 
-# shellcheck source=lib/gen-witness.sh
-source "${SCRIPT_DIR}/lib/gen-witness.sh"
 export AGENTHOUND_CONTEXTFORGE_TOKEN
 AGENTHOUND_CONTEXTFORGE_TOKEN="$(jq -er '.contextforge.token' "${SCRIPT_DIR}/fixtures/runtime.json")"
+export AGENTHOUND_CAMPAIGN_CREDENTIAL
+AGENTHOUND_CAMPAIGN_CREDENTIAL="${AGENTHOUND_CONTEXTFORGE_TOKEN}"
 export CONTEXTFORGE_MCP_URL CONTEXTFORGE_TOOL_ID
 CONTEXTFORGE_MCP_URL="$(jq -er '.contextforge.mcp_url' "${SCRIPT_DIR}/fixtures/runtime.json")"
 CONTEXTFORGE_TOOL_ID="$(jq -er '.contextforge.tool_id' "${SCRIPT_DIR}/fixtures/runtime.json")"
@@ -497,11 +611,9 @@ run_json discover discover 10.20.30.0/24 \
 run_json scan-network scan 10.20.30.0/24 \
   --network-scan-concurrency 64 --output -
 
-# Credential-reach uses the same real catalog API token as the configured MCP
-# client and the independently verified authentication gate.
-run_json campaign-cred-reach campaign "${CONTEXTFORGE_MCP_URL}" \
-  --scenario cred-reach --witness /root/fixtures/witness.json \
-  --commit --engagement-id RTV-CRED-REACH --output -
+# The witness is exported only after these actual collector outputs pass
+# through the production ingest, processor, publication, and witness path.
+run_cred_reach_campaign
 
 run_json loot-ollama loot ollama:11434 --type ollama --include-embeddings \
   --engagement-id RTV-LOOT-OLLAMA --output -
@@ -519,7 +631,9 @@ run_json loot-jupyter loot jupyter:8888 --type jupyter \
 run_json loot-openwebui loot openwebui:3000 --type openwebui \
   --api-key "${OPENWEBUI_TOKEN}" \
   --engagement-id RTV-LOOT-OPENWEBUI --output -
-run_json extract-embedding extract "${TEST_MODEL_ID}" --type embedding-invert \
+run_json extract-embedding extract \
+  'hf://ggml-org/models@499bc8821c6b12b4e53c5bffcb21ec206f212d81/tinyllamas/stories260K.gguf' \
+  --type embedding-invert \
   --artifact /root/fixtures/models/stories260K.gguf \
   --confidence-threshold 1.5 --commit --engagement-id RTV-EXTRACT --output -
 
@@ -530,6 +644,12 @@ run_instruction_poison
 run_config_implant
 run_smoke rules-list rules list --format json
 run_smoke version version
+
+# Defense in depth: include every retained stdout/stderr/revert/cleanup file,
+# including artifacts emitted on an unexpected shell failure path.
+if ! assert_no_raw_secrets all-artifacts "${ARTIFACTS_DIR}"/*; then
+  collector_failure raw-secret-artifacts 'raw credential found in retained artifacts'
+fi
 
 jq -s \
   --arg run_id "${RUN_ID}" \

@@ -1,0 +1,26 @@
+{
+  "reader": "llama.cpp gguf-py 0.17.1",
+  "artifact_sha256": "270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d",
+  "tensor": "token_embd.weight",
+  "tensor_shape": [64, 512],
+  "row_shape": [512, 64],
+  "threshold": 1.5,
+  "mean_norm": 2.437560997239703,
+  "stddev": 0.40111391827382664,
+  "signals": [
+    {
+      "token_index": 465,
+      "token_string": "“",
+      "magnitude": 3.147420937540306,
+      "z_score": 1.7697215378500182,
+      "confidence": 1
+    },
+    {
+      "token_index": 477,
+      "token_string": "0",
+      "magnitude": 3.151688503213009,
+      "z_score": 1.7803608237941912,
+      "confidence": 1
+    }
+  ]
+}

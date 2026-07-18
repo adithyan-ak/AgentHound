@@ -40,8 +40,11 @@ fixture scripts at production.
 - Approximately 16 GiB available to Docker and 25 GiB free disk on a cold run
 - Network access for the initial immutable downloads
 
-No AgentHound server, Neo4j, cloud account, external API key, or GPU is needed.
-vLLM uses its official CPU image. PostgreSQL is internal to the LiteLLM target.
+No pre-existing AgentHound server, database, cloud account, external API key,
+or GPU is needed. The runner builds the production server CLI and starts
+isolated Neo4j/PostgreSQL only after network scanning, solely to ingest the
+actual collector projections and export the campaign witness. vLLM uses its
+official CPU image.
 
 ## Run
 
@@ -61,11 +64,13 @@ The runner performs these phases in order:
 
 1. downloads the pinned official GGUF and verifies its SHA-256 and standard
    byte magic;
-2. builds the current collector without modifying it;
+2. builds the current collector and production server CLI without modifying
+   either;
 3. starts only pinned upstream images or services authored with official SDKs;
 4. seeds data through upstream public APIs;
 5. proves exact upstream truth, authentication controls, MCP handshakes, signed
-   A2A cards, and inventories without invoking AgentHound;
+   A2A cards, dependency-locked extraction truth, and inventories without
+   invoking AgentHound;
 6. runs all collector features and exact assertions, continuing after each
    collector failure;
 7. emits a machine-readable summary that separates harness validity from
@@ -112,8 +117,11 @@ The collector phase covers:
   negative control;
 - every registered looter, including Ollama embeddings, Qdrant point sampling,
   authenticated Jupyter, authenticated Open WebUI, and raw-secret redaction;
-- embedding extraction against a real official GGUF;
-- credential-reach against a genuinely credential-gated MCP resource;
+- embedding extraction against a real official GGUF, with exact signals
+  independently derived by llama.cpp's official reader;
+- credential-reach against a genuinely credential-gated MCP resource, using a
+  witness exported from actual collector data through the production
+  ingest/analysis/publication path;
 - ContextForge tool-description poison/revert and campaign round-trip against
   the actual GA management API;
 - instruction poison/revert and MCP config implant/revert using a launchable
@@ -159,7 +167,8 @@ docker compose -f test-infra/docker-compose.yml exec workstation sh
 Remove only this harness's containers, network, and named volumes:
 
 ```bash
-docker compose -f test-infra/docker-compose.yml down -v --remove-orphans
+docker compose -f test-infra/docker-compose.yml \
+  --profile analysis --profile tools down -v --remove-orphans
 ```
 
 ## Controlled refresh

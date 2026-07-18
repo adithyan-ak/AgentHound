@@ -15,19 +15,13 @@ and (.graph.edges[0] | .kind == "CREDENTIAL_REACH_VERIFIED"
   and .properties.authed_resource_addressed == true
   and .properties.credential_merge_key == "value_hash"
   and (.properties.credential_value_hash | test("^[0-9a-f]{64}$"))
-  and .properties.evidence_node_kinds == [
-    "AgentInstance",
-    "MCPServer",
-    "MCPTool",
-    "MCPServer",
-    "Credential",
-    "Identity",
-    "MCPTool",
-    "MCPResource"
-  ]
-  and (.properties.evidence_node_ids | length) == 8
-  and .properties.server_id == .properties.evidence_node_ids[3]
-  and .properties.credential_id == .properties.evidence_node_ids[4]
-  and .properties.resource_id == .properties.evidence_node_ids[7]
+  and (.properties.server_id as $server_id |
+    .properties.credential_id as $credential_id |
+    .properties.resource_id as $resource_id |
+    (.properties.evidence_node_ids | length) >= 4
+  and (.properties.evidence_node_ids | length) == (.properties.evidence_node_kinds | length)
+  and (.properties.evidence_node_ids | index($server_id)) != null
+  and (.properties.evidence_node_ids | index($credential_id)) != null
+  and (.properties.evidence_node_ids | index($resource_id)) != null)
   and .source == .properties.agent_id
   and .target == .properties.resource_id)

@@ -6,6 +6,7 @@
 /fixtures/a2a-trusted-jwks.json
 /fixtures/models/
 /services/workstation/bin/agenthound
+/services/workstation/bin/agenthound-server
 /services/workstation/bin/agenthound-host
 __pycache__/
 *.pyc

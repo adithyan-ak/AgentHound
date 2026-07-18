@@ -27,7 +27,10 @@ expect_jq() {
 }
 
 expect_jq ollama \
-  '[.models[].model] == ["qwen2:0.5b"]' \
+  '[.models[] | {model,digest}] == [{
+    model:"qwen2:0.5b",
+    digest:"6f48b936a09f7743c7dd30e72fdb14cba296bc5861902e4d0c387e8fb5050b39"
+  }]' \
   http://ollama:11434/api/tags
 expect_jq vllm \
   '.object == "list" and [.data[].id] == ["agenthound-vllm-fixture"]' \
@@ -70,16 +73,19 @@ mlflow_experiments="$(ws curl -fsS \
 printf '%s' "${mlflow_experiments}" | jq -e '
   ([.experiments[].name] | sort) == ["Default","agenthound-offline-qa"]
 ' >/dev/null || fail 'upstream truth: MLflow experiment inventory drifted'
-mlflow_experiment_id="$(printf '%s' "${mlflow_experiments}" | jq -er \
-  '.experiments[] | select(.name == "agenthound-offline-qa") | .experiment_id')"
+mlflow_experiment_ids="$(printf '%s' "${mlflow_experiments}" | jq -c \
+  '[.experiments[].experiment_id]')"
 mlflow_runs="$(ws curl -fsS -X POST \
   -H 'Content-Type: application/json' \
-  --data "$(jq -nc --arg id "${mlflow_experiment_id}" \
-    '{experiment_ids:[$id],max_results:100}')" \
+  --data "$(jq -nc --argjson ids "${mlflow_experiment_ids}" \
+    '{experiment_ids:$ids,max_results:100}')" \
   http://mlflow:5000/api/2.0/mlflow/runs/search)"
 printf '%s' "${mlflow_runs}" | jq -e '
-  [.runs[] | select(.data.tags[]? | .key == "agenthound.fixture_id" and .value == "agenthound-seed-v1")]
-  | length == 1
+  ((.next_page_token // "") == "") and
+  (.runs | length) == 1 and
+  ([.runs[0].data.tags[]? | select(
+    .key == "agenthound.fixture_id" and .value == "agenthound-seed-v1"
+  )] | length) == 1
 ' >/dev/null || fail 'upstream truth: MLflow run inventory drifted'
 mlflow_models="$(ws curl -fsS \
   'http://mlflow:5000/api/2.0/mlflow/registered-models/search?max_results=100')"
@@ -317,7 +323,7 @@ function canonical(value) {
   const entry = card.signatures[0];
   const header = JSON.parse(Buffer.from(entry.protected, 'base64url'));
   const key = jwks.keys.find((candidate) => candidate.kid === header.kid);
-  if (header.alg !== 'ES256' || !key) process.exit(1);
+  if (header.alg !== 'ES256' || header.typ !== 'JOSE' || !key) process.exit(1);
   const unsigned = {...card};
   delete unsigned.signatures;
   const payload = Buffer.from(JSON.stringify(canonical(unsigned)));
@@ -411,7 +417,7 @@ SH
 pass upstream:contextforge-auth-gate
 
 package_version="$(ws node -p \
-  "require('/usr/local/lib/node_modules/@modelcontextprotocol/server-everything/package.json').version")"
+  "require('/opt/mcp-everything/node_modules/@modelcontextprotocol/server-everything/package.json').version")"
 [[ "${package_version}" == 2026.7.4 ]] ||
   fail "upstream truth: MCP package version ${package_version} is not pinned version"
 
@@ -472,11 +478,14 @@ jq -n \
     verified_at:$verified_at,
     source:"independent upstream APIs; no AgentHound output consumed",
     services:{
-      ollama:{models:["qwen2:0.5b"]},
+      ollama:{models:[{
+        name:"qwen2:0.5b",
+        digest:"6f48b936a09f7743c7dd30e72fdb14cba296bc5861902e4d0c387e8fb5050b39"
+      }]},
       vllm:{models:["agenthound-vllm-fixture"]},
       openai_decoy:{implementation:"LiteLLM",models:["agenthound-openai-compatible-decoy"]},
       qdrant:{collections:["chat-history","docs"],points_per_collection:2},
-      mlflow:{experiment:"agenthound-offline-qa",model:"agenthound-fixture-model"},
+      mlflow:{experiment:"agenthound-offline-qa",runs:1,model:"agenthound-fixture-model"},
       jupyter:{authentication:"token",files:["work/agenthound-fixtures/agenthound-fixture.ipynb","work/agenthound-fixtures/data/support-context.md"]},
       openwebui:{authentication:"session JWT",openai_upstreams:1,ollama_upstreams:1},
       mcp_everything:{version:"2026.7.4",transports:["stdio","streamableHttp","sse"]},

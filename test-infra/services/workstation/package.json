@@ -1,0 +1,7 @@
+{
+  "name": "agenthound-workstation-harness",
+  "private": true,
+  "dependencies": {
+    "@modelcontextprotocol/server-everything": "2026.7.4"
+  }
+}

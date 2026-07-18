@@ -8,11 +8,14 @@ test runner; card-controlled key material is intentionally not used.
 """
 
 import json
+import os
 import sys
 
 from jwcrypto import jwk, jws
 
 KID = "a2a-static-es256"
+
+
 def canonical(obj):
     return json.dumps(
         obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -73,9 +76,8 @@ def build_legacy_card():
     }
 
 
-def main(pem_path, out_current, out_legacy, out_jwks):
-    with open(pem_path, "rb") as fh:
-        key = jwk.JWK.from_pem(fh.read())
+def main(out_current, out_legacy, out_jwks):
+    key = jwk.JWK.generate(kty="EC", crv="P-256")
     key["kid"] = KID
     key["alg"] = "ES256"
     key["use"] = "sig"
@@ -88,11 +90,12 @@ def main(pem_path, out_current, out_legacy, out_jwks):
     token.add_signature(
         key,
         alg="ES256",
-        protected=json.dumps({"alg": "ES256", "kid": KID}),
+        protected=json.dumps({"alg": "ES256", "typ": "JOSE", "kid": KID}),
     )
     protected_seg, _payload_seg, signature_seg = token.serialize(compact=True).split(".")
     card["signatures"] = [{"protected": protected_seg, "signature": signature_seg}]
 
+    os.makedirs(os.path.dirname(out_current), exist_ok=True)
     with open(out_current, "w") as fh:
         json.dump(card, fh, indent=2)
         fh.write("\n")
@@ -105,4 +108,4 @@ def main(pem_path, out_current, out_legacy, out_jwks):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
+    main(sys.argv[1], sys.argv[2], sys.argv[3])
