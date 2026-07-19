@@ -165,6 +165,8 @@ golang.org/x/oauth2
 golang.org/x/oauth2/internal
 golang.org/x/sys/cpu
 golang.org/x/sys/unix
+golang.org/x/text/transform
+golang.org/x/text/unicode/norm
 gopkg.in/yaml.v3
 hash
 hash/crc32

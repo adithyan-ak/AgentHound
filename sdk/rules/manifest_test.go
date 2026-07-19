@@ -231,6 +231,120 @@ emit:
 	}
 }
 
+func TestBuildManifestInstructionCanonicalizerVersionAtomic(t *testing.T) {
+	eligible := Rule{
+		ID:       "canonical-eligible-rule",
+		Name:     "Canonical eligible rule",
+		Version:  1,
+		Enabled:  true,
+		Severity: "high",
+		Scope:    Scope{Collector: "config", Targets: []string{"instruction.content"}},
+		Matcher:  MatcherSpec{Type: "regex", Pattern: `ignore`},
+		Emit:     EmitConfig{FindingType: "has_injection_patterns"},
+		Source:   "builtin",
+	}
+	ineligible := Rule{
+		ID:       "canonical-ineligible-rule",
+		Name:     "Canonical ineligible rule",
+		Version:  1,
+		Enabled:  true,
+		Severity: "medium",
+		Scope:    Scope{Collector: "mcp", Targets: []string{"tool.description"}},
+		Matcher:  MatcherSpec{Type: "regex", Pattern: `secret`},
+		Emit:     EmitConfig{FindingType: "has_secret"},
+		Source:   "builtin",
+	}
+	fp := FingerprintRule{
+		ID:          "canonical-fingerprint",
+		Name:        "Canonical fingerprint",
+		Version:     2,
+		ServiceKind: "test",
+		Source:      "builtin",
+		Probes: []FingerprintProbe{{
+			Method:   "GET",
+			Path:     "/health",
+			Matchers: []FingerprintMatch{{Type: "http_status", StatusCode: 200}},
+		}},
+		Emit: FingerprintEmit{NodeKinds: []string{"MCPServer"}},
+	}
+
+	manifest := BuildManifest(
+		[]Rule{eligible, ineligible},
+		[]FingerprintRule{fp},
+	)
+	entries := make(map[string]sdkingest.RuleManifestEntry, len(manifest.Entries))
+	for _, entry := range manifest.Entries {
+		entries[entry.Type+":"+entry.ID] = entry
+	}
+
+	legacyDigest := func(r Rule) string {
+		r.Source = ""
+		r.Tests = nil
+		return semanticDigest(r)
+	}
+
+	eligibleEntry := entries["text:canonical-eligible-rule"]
+	ineligibleEntry := entries["text:canonical-ineligible-rule"]
+	fingerprintEntry := entries["fingerprint:canonical-fingerprint"]
+
+	// Eligible text semantic hash includes the canonicalizer version.
+	if eligibleEntry.SemanticSHA256 == legacyDigest(eligible) {
+		t.Fatalf(
+			"eligible digest is still legacy (no version): %s",
+			eligibleEntry.SemanticSHA256,
+		)
+	}
+	cleaned := eligible
+	cleaned.Source = ""
+	cleaned.Tests = nil
+	wantEligible := semanticDigest(struct {
+		Rule                 Rule   `json:"rule"`
+		CanonicalizerVersion string `json:"canonicalizer_version"`
+	}{Rule: cleaned, CanonicalizerVersion: instructionCanonicalizationVersion})
+	if eligibleEntry.SemanticSHA256 != wantEligible {
+		t.Fatalf(
+			"eligible digest = %s, want %s",
+			eligibleEntry.SemanticSHA256,
+			wantEligible,
+		)
+	}
+
+	// Ineligible text and fingerprint hashes remain legacy-identical.
+	if ineligibleEntry.SemanticSHA256 != legacyDigest(ineligible) {
+		t.Fatalf(
+			"ineligible digest changed from legacy: %s",
+			ineligibleEntry.SemanticSHA256,
+		)
+	}
+	if fingerprintEntry.SemanticSHA256 != semanticDigest(fingerprintRuleForDigest(fp)) {
+		t.Fatalf(
+			"fingerprint digest changed: %s",
+			fingerprintEntry.SemanticSHA256,
+		)
+	}
+
+	// Aggregate digest incorporates the versioned eligible entry.
+	legacyEntries := append([]sdkingest.RuleManifestEntry(nil), manifest.Entries...)
+	for i := range legacyEntries {
+		if legacyEntries[i].Type == "text" &&
+			legacyEntries[i].ID == eligible.ID {
+			legacyEntries[i].SemanticSHA256 = legacyDigest(eligible)
+		}
+	}
+	if manifest.Digest == semanticDigest(legacyEntries) {
+		t.Fatal("aggregate digest did not incorporate versioned eligible entry")
+	}
+
+	// Manifest JSON gains no field.
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if strings.Contains(string(encoded), "canonicalizer_version") {
+		t.Fatalf("manifest JSON leaked canonicalizer_version: %s", encoded)
+	}
+}
+
 func manifestTextRule(id, source string) Rule {
 	return Rule{
 		ID:      id,

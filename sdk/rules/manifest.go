@@ -274,10 +274,26 @@ func semanticDigest(v any) string {
 	return fmt.Sprintf("sha256:%x", sum)
 }
 
-func ruleForDigest(rule Rule) Rule {
+// instructionRuleDigest wraps a rule that participates in config instruction
+// canonicalization together with the semantic canonicalizer version. The rule
+// shape remains part of the digest; this wrapper additionally changes it when
+// the frozen transform contract or its Unicode edition changes. It is a
+// digest-payload shape only and is never serialized into the manifest JSON.
+type instructionRuleDigest struct {
+	Rule                 Rule   `json:"rule"`
+	CanonicalizerVersion string `json:"canonicalizer_version"`
+}
+
+func ruleForDigest(rule Rule) any {
 	rule.Source = ""
 	rule.Tests = nil
-	return rule
+	if !ruleUsesInstructionCanonicalization(rule) {
+		return rule
+	}
+	return instructionRuleDigest{
+		Rule:                 rule,
+		CanonicalizerVersion: instructionCanonicalizationVersion,
+	}
 }
 
 func fingerprintRuleForDigest(rule FingerprintRule) FingerprintRule {

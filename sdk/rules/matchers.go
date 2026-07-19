@@ -10,8 +10,26 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/common"
 )
 
+const maxEvidenceBytes = 100
+
 type CompiledMatcher interface {
 	Match(text string) []MatchResult
+}
+
+// matcherSpan is a private, uncapped match span expressed as byte offsets into
+// the text passed to matchSpans. Unlike the public evidence in MatchResult, the
+// end is the full match end and is never truncated to the evidence cap.
+type matcherSpan struct {
+	start int
+	end   int
+}
+
+// spanMatcher exposes full (uncapped) match spans alongside the public Match
+// contract. matchSpans preserves the exact selection and ordering that Match
+// produces; Match is the evidence-capped projection of matchSpans.
+type spanMatcher interface {
+	CompiledMatcher
+	matchSpans(text string) []matcherSpan
 }
 
 type MatchResult struct {
@@ -20,7 +38,24 @@ type MatchResult struct {
 	Text    string
 }
 
-func compileMatcher(spec MatcherSpec) (CompiledMatcher, error) {
+// spansToMatchResults projects full spans into public MatchResults, applying
+// the existing evidence cap to each match text while preserving offset/order.
+func spansToMatchResults(text string, spans []matcherSpan) []MatchResult {
+	if len(spans) == 0 {
+		return nil
+	}
+	results := make([]MatchResult, len(spans))
+	for i, span := range spans {
+		matched := text[span.start:span.end]
+		if len(matched) > maxEvidenceBytes {
+			matched = matched[:maxEvidenceBytes]
+		}
+		results[i] = MatchResult{Matched: true, Offset: span.start, Text: matched}
+	}
+	return results
+}
+
+func compileMatcher(spec MatcherSpec) (spanMatcher, error) {
 	switch spec.Type {
 	case "regex":
 		return compileRegex(spec)
@@ -53,20 +88,20 @@ func compileRegex(spec MatcherSpec) (*regexMatcher, error) {
 	return &regexMatcher{re: re}, nil
 }
 
-func (m *regexMatcher) Match(text string) []MatchResult {
+func (m *regexMatcher) matchSpans(text string) []matcherSpan {
 	locs := m.re.FindAllStringIndex(text, -1)
 	if len(locs) == 0 {
 		return nil
 	}
-	results := make([]MatchResult, len(locs))
+	spans := make([]matcherSpan, len(locs))
 	for i, loc := range locs {
-		matched := text[loc[0]:loc[1]]
-		if len(matched) > 100 {
-			matched = matched[:100]
-		}
-		results[i] = MatchResult{Matched: true, Offset: loc[0], Text: matched}
+		spans[i] = matcherSpan{start: loc[0], end: loc[1]}
 	}
-	return results
+	return spans
+}
+
+func (m *regexMatcher) Match(text string) []MatchResult {
+	return spansToMatchResults(text, m.matchSpans(text))
 }
 
 type keywordMatcher struct {
@@ -93,24 +128,24 @@ func compileKeyword(spec MatcherSpec) (*keywordMatcher, error) {
 	}, nil
 }
 
-func (m *keywordMatcher) Match(text string) []MatchResult {
-	var results []MatchResult
+func (m *keywordMatcher) matchSpans(text string) []matcherSpan {
+	var spans []matcherSpan
 	for _, kw := range m.keywords {
 		start, end, ok := findKeyword(text, kw, m.caseInsensitive, m.wordBoundary)
 		if ok {
-			matched := text[start:end]
-			if len(matched) > 100 {
-				matched = matched[:100]
-			}
-			results = append(results, MatchResult{Matched: true, Offset: start, Text: matched})
+			spans = append(spans, matcherSpan{start: start, end: end})
 			if !m.matchAll {
-				return results
+				return spans
 			}
 		} else if m.matchAll {
 			return nil
 		}
 	}
-	return results
+	return spans
+}
+
+func (m *keywordMatcher) Match(text string) []MatchResult {
+	return spansToMatchResults(text, m.matchSpans(text))
 }
 
 // findKeyword locates kw in text and returns the matched span as byte offsets
@@ -179,12 +214,17 @@ func isWordRune(r rune) bool {
 func lowerSpanToOrig(text string, loStart, loEnd int) (start, end int, ok bool) {
 	start, end = -1, -1
 	loPos, origPos := 0, 0
-	for _, r := range text {
+	for origPos < len(text) {
+		// Decode explicitly so an invalid byte advances origPos by its true width
+		// (1), not by the 3-byte width of the replacement rune it lowercases to.
+		// loPos still advances by the lowered replacement-rune width, matching
+		// strings.ToLower(text) used as the search string.
+		r, size := utf8.DecodeRuneInString(text[origPos:])
 		if loPos >= loStart && start < 0 {
 			start = origPos
 		}
 		loPos += len(strings.ToLower(string(r)))
-		origPos += len(string(r))
+		origPos += size
 		if loPos >= loEnd && end < 0 {
 			end = origPos
 		}
@@ -202,12 +242,12 @@ func lowerSpanToOrig(text string, loStart, loEnd int) (start, end int, ok bool) 
 }
 
 type compoundMatcher struct {
-	children []CompiledMatcher
+	children []spanMatcher
 	andMode  bool
 }
 
 func compileCompound(spec MatcherSpec) (*compoundMatcher, error) {
-	children := make([]CompiledMatcher, len(spec.Matchers))
+	children := make([]spanMatcher, len(spec.Matchers))
 	for i, sub := range spec.Matchers {
 		cm, err := compileMatcher(sub)
 		if err != nil {
@@ -221,20 +261,24 @@ func compileCompound(spec MatcherSpec) (*compoundMatcher, error) {
 	}, nil
 }
 
-func (m *compoundMatcher) Match(text string) []MatchResult {
-	var allResults []MatchResult
+func (m *compoundMatcher) matchSpans(text string) []matcherSpan {
+	var allSpans []matcherSpan
 	for _, child := range m.children {
-		results := child.Match(text)
-		if len(results) > 0 {
-			allResults = append(allResults, results...)
+		spans := child.matchSpans(text)
+		if len(spans) > 0 {
+			allSpans = append(allSpans, spans...)
 			if !m.andMode {
-				return allResults
+				return allSpans
 			}
 		} else if m.andMode {
 			return nil
 		}
 	}
-	return allResults
+	return allSpans
+}
+
+func (m *compoundMatcher) Match(text string) []MatchResult {
+	return spansToMatchResults(text, m.matchSpans(text))
 }
 
 type entropyMatcher struct {
@@ -251,7 +295,7 @@ func compileEntropy(spec MatcherSpec) (*entropyMatcher, error) {
 	}, nil
 }
 
-func (m *entropyMatcher) Match(text string) []MatchResult {
+func (m *entropyMatcher) matchSpans(text string) []matcherSpan {
 	if len(text) < m.minLength {
 		return nil
 	}
@@ -267,15 +311,14 @@ func (m *entropyMatcher) Match(text string) []MatchResult {
 	default:
 		return nil
 	}
-	entropy := common.ShannonEntropy(text)
-	if entropy <= m.threshold {
+	if common.ShannonEntropy(text) <= m.threshold {
 		return nil
 	}
-	matched := text
-	if len(matched) > 100 {
-		matched = matched[:100]
-	}
-	return []MatchResult{{Matched: true, Offset: 0, Text: matched}}
+	return []matcherSpan{{start: 0, end: len(text)}}
+}
+
+func (m *entropyMatcher) Match(text string) []MatchResult {
+	return spansToMatchResults(text, m.matchSpans(text))
 }
 
 type prefixMatcher struct {
@@ -298,7 +341,7 @@ func compilePrefix(spec MatcherSpec) (*prefixMatcher, error) {
 	}, nil
 }
 
-func (m *prefixMatcher) Match(text string) []MatchResult {
+func (m *prefixMatcher) matchSpans(text string) []matcherSpan {
 	checkText := text
 	if m.caseInsensitive {
 		checkText = strings.ToLower(text)
@@ -312,12 +355,12 @@ func (m *prefixMatcher) Match(text string) []MatchResult {
 				// valid byte offset (folds are not byte-length-preserving).
 				_, end, _ = lowerSpanToOrig(text, 0, len(p))
 			}
-			matched := text[:end]
-			if len(matched) > 100 {
-				matched = matched[:100]
-			}
-			return []MatchResult{{Matched: true, Offset: 0, Text: matched}}
+			return []matcherSpan{{start: 0, end: end}}
 		}
 	}
 	return nil
+}
+
+func (m *prefixMatcher) Match(text string) []MatchResult {
+	return spansToMatchResults(text, m.matchSpans(text))
 }

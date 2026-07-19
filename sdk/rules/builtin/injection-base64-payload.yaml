@@ -15,6 +15,10 @@ scope:
 severity: high
 owasp: [MCP04, ASI03]
 tags: [injection, prompt-injection]
+# Raw-only: this is a bare charset-run detector, and the canonical instruction
+# shadow (NFKC folding, letter-spacing collapse) can synthesize long
+# alphanumeric runs from benign text that would false-positive here.
+shadow_exclude: true
 matcher:
   type: regex
   pattern: '[A-Za-z0-9+/]{20,}={0,2}'

@@ -82,6 +82,22 @@ assert only its ID and kinds; that mode requires an empty `properties` object.
 Omitting `property_semantics` remains an authoritative property observation.
 Edge endpoint kinds are likewise explicit in v2.
 
+### Eligible-rule semantic digest boundary
+
+A text rule's `semantic_sha256` normally hashes the canonicalized rule shape
+alone. For a rule that participates in the config instruction canonical shadow
+(finding type `has_injection_patterns`, scope `config`/`all`, target
+`instruction.content`), the digest payload additionally binds the canonicalizer
+version string `instruction-shadow-v1+unicode-15.0.0`, built as
+`"instruction-shadow-v1+unicode-" + norm.Version` (currently Unicode 15.0.0). An
+eligible rule's semantic identity changes when its canonicalized rule shape
+changes and additionally when the frozen V1 transform contract or its Unicode
+edition changes. Ineligible rules do not bind the canonicalizer version. The
+version string is a digest-payload boundary only: it is never serialized into
+the manifest JSON, does not alter the manifest's field shape, and does not
+change `authenticity`, which remains `unverified` because a digest attests
+content identity, not source trust.
+
 Dynamic exhaustive collectors also declare `authoritative_roots`, pairing the
 stable collector-root key with the complete current child-key set. After a
 completed root run, previously headed children absent from that set are

@@ -490,3 +490,30 @@ func TestUnknownMatcherType(t *testing.T) {
 		t.Fatal("expected error for unknown matcher type")
 	}
 }
+
+// TestLowerSpanToOrigInvalidUTF8 pins that an invalid UTF-8 byte advances the
+// original-text cursor by its true width (1), not by the 3-byte width of the
+// replacement rune it lowercases to. Otherwise case-insensitive match offsets
+// and evidence drift off the real source bytes.
+func TestLowerSpanToOrigInvalidUTF8(t *testing.T) {
+	text := "\xff" + "ＩＧＮＯＲＥ" // one invalid byte, then fullwidth "IGNORE"
+	lo := strings.ToLower(text)
+	fwLower := strings.ToLower("ＩＧＮＯＲＥ")
+	loStart := strings.Index(lo, fwLower)
+	if loStart < 0 {
+		t.Fatal("fullwidth run not found in lowered text")
+	}
+	loEnd := loStart + len(fwLower)
+
+	start, end, ok := lowerSpanToOrig(text, loStart, loEnd)
+	if !ok {
+		t.Fatal("lowerSpanToOrig returned not ok")
+	}
+	wantStart, wantEnd := 1, 1+len("ＩＧＮＯＲＥ")
+	if start != wantStart || end != wantEnd {
+		t.Fatalf("span = [%d,%d), want [%d,%d)", start, end, wantStart, wantEnd)
+	}
+	if got := text[start:end]; got != "ＩＧＮＯＲＥ" {
+		t.Fatalf("evidence = %q, want %q", got, "ＩＧＮＯＲＥ")
+	}
+}

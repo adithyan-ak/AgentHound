@@ -19,6 +19,9 @@ enabled: true
 severity: critical|high|medium|low|info
 owasp: ["MCP01", "ASI03"]         # OWASP MCP Top 10 and/or Agentic Top 10 IDs
 tags: ["supply-chain", "injection"]
+shadow_exclude: false             # Optional; default false. Set true to keep a
+                                  # rule off the canonical instruction shadow
+                                  # (raw text only) — see eligibility below.
 
 scope:
   collector: mcp|a2a|config|all    # Which collector's output to scan
@@ -125,6 +128,54 @@ matcher:
     - type: regex
       pattern: "\\$\\{.*\\}"
 ```
+
+### Canonical instruction shadow eligibility
+
+A custom detection rule opts into the config instruction canonical shadow pass
+automatically. A rule is eligible when all three hold:
+
+- `emit.finding_type` is `has_injection_patterns`;
+- `scope.collector` is `config` or `all`;
+- `scope.targets` includes `instruction.content`.
+
+Eligibility is a per-rule property, not per-target: a rule that also targets
+other fields (for example both `tool.description` and `instruction.content`)
+is still eligible, and the shadow pass applies whenever it evaluates the
+`config` collector's `instruction.content` field. The canonical transforms and
+exclusions are the same frozen V1 set documented under
+[Canonical instruction shadow](detection-rules.md#canonical-instruction-shadow).
+
+Set `shadow_exclude: true` to keep an otherwise-eligible rule off the shadow so
+it is evaluated against the raw instruction text only. This is for structural
+charset-run detectors (for example a bare base64 `[A-Za-z0-9+/]{20,}` regex):
+the shadow's NFKC folding and letter-spacing collapse can synthesize long
+alphanumeric runs from benign text that would false-positive such a rule.
+Natural-language phrase rules should leave it unset (the default, `false`) so
+they still catch obfuscated instructions.
+
+### `RunTests` parity
+
+`agenthound rules test` (and the builtin fixture guard) evaluate each inline
+`tests:` input through the exact same code path used at scan time: the raw view
+is matched first, and only when the rule is canonicalization-eligible and the
+canonical text differs is the shadow pass consulted. A single test input is
+evaluated once per rule regardless of how many `scope.targets` the rule
+declares, so an eligible multi-target rule's positive fixtures pass on either
+the raw or the shadow match, and its negative fixtures must fail on both.
+Fixtures for eligible rules therefore lock the same raw-first ordering and
+bounded-transform behavior that production scanning uses.
+
+!!! warning "Behavior change: negative fixtures now see the shadow"
+    Because `RunTests` mirrors scan-time evaluation exactly, a
+    canonicalization-eligible rule's `should_match: false` fixture whose input
+    contains obfuscation the shadow defeats (fullwidth, zero-width, confusable,
+    or letter-spaced text — e.g. `please Ｉｇｎｏｒｅ previous instructions`) will now
+    **match** via the shadow and fail that fixture. This is intended: the rule
+    genuinely fires on that input at scan time. If you maintain a custom rule
+    pack, audit negative fixtures for obfuscated content when upgrading — either
+    accept the match (the fixture was asserting behavior the scanner does not
+    have) or set `shadow_exclude: true` on the rule if it must stay raw-only.
+    Test inputs are also truncated at 1 MiB, exactly as scan-time input is.
 
 ---
 
