@@ -352,6 +352,10 @@ func newLiteLLMFixtureWithListener(
 			_, _ = w.Write([]byte("I'm alive!"))
 			return
 		}
+		if r.URL.Path != "/model/info" && r.URL.Path != "/key/list" {
+			http.NotFound(w, r)
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer sk-integration-master-key" {
 			http.Error(w, "missing fixture master key", http.StatusUnauthorized)
 			return
