@@ -27,10 +27,14 @@ Input is the `sdk/ingest.IngestData` struct:
 ```json
 {
   "meta": {
-    "version": 2,
+    "version": 3,
     "type": "agenthound-ingest",
     "collector": "mcp",
     "scan_id": "...",
+    "origin": {
+      "host_id": "security-laptop",
+      "network_realm_id": "corp-lab"
+    },
     "collection": {
       "state": "complete",
       "coverage_keys": ["mcp:target:sha256:..."],
@@ -58,8 +62,8 @@ Input is the `sdk/ingest.IngestData` struct:
     "identity_schemes": [{
       "entity_kind": "MCPServer",
       "transport": "stdio",
-      "scheme": "mcp_stdio_v2_ordered",
-      "version": 2
+      "scheme": "mcp_stdio_v3_hashed_argv",
+      "version": 3
     }]
   },
   "graph": {
@@ -69,18 +73,31 @@ Input is the `sdk/ingest.IngestData` struct:
 }
 ```
 
-Wire version `2` is the only accepted contract. `collection`, `ruleset`, and
-`identity_schemes` are required. Every collection outcome names a canonical
+Wire version `3` is the only accepted contract; v1 and v2 artifacts are
+rejected. `origin`, `collection`, `ruleset`, and `identity_schemes` are
+required. Origin IDs are exact canonical identifiers for the collector host
+and its private-network realm. Every collection outcome names a canonical
 scoped coverage key, target, method, and explicit state; complete-empty
 collection is represented by an outcome with `items: 0`. Ruleset entries
 persist canonical effective matcher definitions and every non-fatal load
 failure. Digests identify semantics but do not attest authenticity.
+Stdio MCP server nodes publish an ordered `arg_hashes` array and matching
+`arg_count`; raw argv remains collector-local and is rejected by ingest. Every
+MCP server rejects executable `args`, `env`, `headers`, and `url` properties
+regardless of its declared transport. Every present MCP `endpoint` must be valid
+and already equal the canonical output of `SanitizeHTTPEndpoint`, even when the
+transport discriminator is missing or malformed. Authoritative MCP servers
+require the canonical string transport `http` or `stdio`; HTTP requires the
+endpoint property, while stdio publishes `command` and omits `endpoint`.
+User-info, query, fragments, invalid raw endpoint text, and the fixed invalid
+placeholder cannot enter the graph. Property-neutral `reference_only` endpoints
+remain exempt from authoritative property requirements.
 Every node and edge must carry one or more `observation_domains` drawn from the
 declared coverage keys. The server never infers fact ownership from a
 single-domain report. A node may set `property_semantics: "reference_only"` to
 assert only its ID and kinds; that mode requires an empty `properties` object.
 Omitting `property_semantics` remains an authoritative property observation.
-Edge endpoint kinds are likewise explicit in v2.
+Edge endpoint kinds are likewise explicit in v3.
 
 ### Eligible-rule semantic digest boundary
 
@@ -105,12 +122,28 @@ reconciled as complete-empty and their heads are retired. Targeted, partial,
 failed, and otherwise non-exhaustive runs do not declare authoritative roots
 and cannot retire sibling scopes.
 
+## Stage 0: Admit Collection Realm and Storage Pair
+
+Before generic validation or any lifecycle/audit write, the pipeline invokes a
+mandatory admission guard. It rereads immutable binding markers from both
+PostgreSQL and Neo4j on every ingest, verifies their marker version, exact
+host/realm tuple, and shared storage-pair UUID, then compares the artifact's
+`meta.origin` with the configured tuple.
+
+This ordering is a security and data-integrity boundary. A wrong-realm or
+unverifiable-storage artifact cannot create a failed scan row, persist a
+campaign-rejection audit, retire lifecycle coverage, or touch the graph.
+PostgreSQL stores the internal singleton binding row; Neo4j stores an internal
+`AgentHoundStorageBinding` node. Neither is part of the public graph API,
+inventory counts, search, or collector wire format.
+
 ## Stage 1: Validate
 
 `Validator.Validate()` rejects malformed payloads before any graph writes.
 
 Checks performed:
-- `meta.version` must be `2`; v1 is rejected
+- `meta.version` must be `3`; v1 and v2 are rejected
+- `meta.origin` must contain canonical exact `host_id` and `network_realm_id`
 - `meta.type` must be `"agenthound-ingest"`
 - `meta.collector` must be in `AllowedCollectors` (mcp, a2a, config, scan)
 - collector version, RFC3339 timestamp, and scan ID must be non-empty
@@ -118,9 +151,14 @@ Checks performed:
 - coverage keys must use `<collector>:<scope>:sha256:<digest>`
 - every raw fact must carry explicit declared observation domains
 - Every node must have a non-empty `id` and at least one `kind` from `AllowedNodeKinds` (23 kinds)
-- Every edge must have non-empty `source`/`target` and a `kind` from `RawEdgeKinds` (18 kinds)
+- Every edge must have non-empty `source`/`target` and a `kind` from `RawEdgeKinds` (20 kinds)
 - v1 property aliases are rejected; canonical status/evidence fields are
   required for credentials, hosts, MCP servers, and A2A agents
+- configured MCP/A2A method, assurance, and evidence must form a
+  producer-compatible tuple
+- MCP observed auth must be a complete protocol-valid tuple; A2A observed auth
+  is accepted only for the exact bounded nonexistent-task positive probe with
+  its method and status metadata
 
 Validation errors are structured (`FieldError` with JSON path + message) and returned as a `ValidationError` to the caller. On failure, the pipeline aborts -- no partial writes.
 
@@ -135,6 +173,10 @@ replacement/reconciliation/publication for that attempt.
 
 Transformations:
 - Sets `objectid` property to match node `id`
+- Migrates only exact pre-v1 direct-URL MCP anonymous observations (MCP
+  envelope, concrete reachable HTTP server, exact raw anonymous tuple, and no
+  observed fields) into `observed_auth_*`, retaining
+  `auth_observation_compat=pre_v1_raw_mcp` provenance and a typed warning
 - Strips nil values
 - Serializes complex values (nested maps, heterogeneous arrays) to JSON strings
 - Preserves homogeneous arrays (all-string, all-number, all-bool) as native Neo4j lists
@@ -165,7 +207,24 @@ Implementation details:
   owners. Additive updates are marked property-incomplete and block global
   publication until a complete observation replaces every active owner.
 - New facts carry length-delimited observation owner tokens. Shared facts keep
-  one token per active coverage domain.
+  one token per active coverage domain. Complete authoritative writes also
+  retain an internal stable-domain semantic fingerprint. Collectors and the
+  ingest pipeline preserve one contribution per owner domain; the writer
+  fingerprints each contribution before deterministically unioning compatible
+  contributions into one database fact. Conflicting overlapping semantic
+  values fail the write before graph execution instead of selecting a value by
+  input order. A co-owner can rotate its scan token without downgrading the
+  union only when its new fingerprint exactly matches the one already recorded
+  for that domain. Writer/observation timestamps (`scan_id`, `first_seen`,
+  `last_seen`, `last_verified_at`, and `extracted_at`) are excluded from this
+  comparison; the latest timestamp wins when contributions are unioned. Any
+  other collected-property, label, endpoint-kind, or observation-semantics
+  change remains property-incomplete while another owner is active. Such an
+  incompatible targeted refresh preserves the last coherent public properties
+  and labels, invalidates that owner's stored fingerprint, and cannot be
+  re-certified by retrying an older targeted artifact. A complete joint write,
+  or an exact remaining-owner write after the other owners retire, replaces the
+  fact and restores completeness.
 - Reference-only node observations add ownership without merging managed
   properties or downgrading an existing complete authoritative observation.
   Their owner tokens are tracked as an explicit subset of node owners.
@@ -183,7 +242,8 @@ Only domain states derived as explicit `complete` outcomes may replace their
 prior owner token. Reconciliation removes old owner tokens, deletes unowned raw
 relationships, then deletes unowned isolated nodes. Facts with another active
 owner survive. Partial, failed, truncated, and unknown coverage performs no
-retirement.
+retirement. Stable semantic fingerprints are retired with their authoritative
+owner domain and are never returned by the public graph reader.
 When reconciliation retires a node's last authoritative property owner but a
 reference-only owner remains, managed properties are cleared to truthful
 reference identity instead of certifying stale rich properties.
@@ -229,7 +289,8 @@ previous immutable PostgreSQL publication.
 The annotations below are each processor's declared `Dependencies() []string` return — the *processor-level* ordering contract enforced by the pipeline. Raw collector edges (`INGESTS_UNTRUSTED`, `DELEGATES_TO`, `HAS_ENV_VAR`, etc.) and pre-existing node properties (`schema_keys`, `auth_method`, …) are Cypher traversal inputs, not processor dependencies — they are present from ingest, so they do not appear here.
 
 ```
- 1. auth_strength                    (deps: none; pre-pass, sets node property)
+ 1. auth_strength                    (deps: none; pre-pass, sets paired effective
+                                     node auth + effective trust-edge assessment)
  2. has_access_to                    (deps: none)
  3. can_execute                      (deps: none)
  4. shadows                          (deps: none; also emits POISONS_CONTEXT)
@@ -237,13 +298,13 @@ The annotations below are each processor's declared `Dependencies() []string` re
  6. poisoned_instructions            (deps: none)
  7. taints                           (deps: none; runs before can_reach so its cross-tool
                                      edges influence transitive reachability)
- 8. can_reach                        (deps: has_access_to)
+ 8. can_reach                        (deps: auth_strength, has_access_to)
  9. cross_service_credential_chain   (deps: has_access_to, can_reach)
 10. ifc_violation                    (deps: has_access_to)
 11. can_exfiltrate                   (deps: can_reach)
 12. can_impersonate                  (deps: none)
 13. confused_deputy                  (deps: auth_strength, can_reach)
-14. cross_protocol                   (deps: has_access_to)
+14. cross_protocol                   (deps: auth_strength, has_access_to)
 15. risk_score                       (deps: has_access_to, can_execute, shadows,
                                      poisoned_description, poisoned_instructions,
                                      can_reach, can_exfiltrate, can_impersonate,
@@ -257,8 +318,9 @@ Dependency validation runs before the first processor executes. If a processor a
 `Pipeline.Ingest()` returns `*sdkingest.IngestResult`:
 - `ScanID` -- the scan identifier
 - `Outcome`, `ProjectionStatus` -- attempt result and mutable projection state
-- `Submitted` -- literal artifact node/edge counts
-- `WriteRows` -- Neo4j write-result rows, not unique discoveries
+- `Submitted` -- literal artifact contribution counts
+- `WriteRows` -- unique logical nodes/relationships affected by successful
+  Neo4j writes, including matches of facts that already existed
 - `GraphTotals` -- frozen public inventory totals before and after processing
 - `Warnings` -- normalizer warnings
 - `NormalizationStatus`, `NormalizationWarnings` -- deterministic

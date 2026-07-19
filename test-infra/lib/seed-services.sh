@@ -16,6 +16,7 @@ compose exec -T workstation sh -s <"${SEED_DIR}/qdrant-seed.sh"
 compose exec -T mlflow python - <"${SEED_DIR}/mlflow-seed.py"
 compose exec -T litellm python3 /seed/litellm-seed.py
 compose exec -T workstation sh -s <"${SEED_DIR}/contextforge-seed.sh"
+compose exec -T workstation sh -s <"${SEED_DIR}/cross-service-config-seed.sh"
 compose exec -T workstation sh -s <"${SEED_DIR}/openwebui-seed.sh"
 
 # The notebook image is upstream and intentionally unmodified. Copy the authored

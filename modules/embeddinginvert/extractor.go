@@ -35,6 +35,11 @@ func (e *Extractor) Extract(ctx context.Context, t action.Target, opts action.Ex
 	if opts.ArtifactPath == "" {
 		return nil, fmt.Errorf("embedding extract: --artifact <path> is required")
 	}
+	if !ingest.IsCanonicalNodeID(opts.SourceNodeID) {
+		return nil, fmt.Errorf(
+			"embedding extract: source node ID must be sha256: followed by 64 lowercase hexadecimal characters",
+		)
+	}
 	threshold := 3.0
 	if v, ok := opts.Extras["confidence-threshold"].(float64); ok && v > 0 {
 		threshold = v
@@ -122,6 +127,18 @@ func (e *Extractor) Extract(ctx context.Context, t action.Target, opts action.Ex
 
 	// Build ingest payload.
 	out := &ingest.IngestData{}
+	if len(signals) > 0 {
+		// Strict ingest-v3 requires every relationship endpoint to be present in
+		// the same envelope. The extractor only knows the already-established
+		// model identity, so carry it as a reference without claiming or
+		// replacing any model properties.
+		out.Graph.Nodes = append(out.Graph.Nodes, ingest.Node{
+			ID:                sourceNodeID,
+			Kinds:             []string{"AIModel"},
+			Properties:        map[string]any{},
+			PropertySemantics: ingest.NodePropertySemanticsReferenceOnly,
+		})
+	}
 	for _, sig := range signals {
 		confidence := math.Min(sig.ZScore/threshold, 1.0)
 		nodeID := ingest.ComputeNodeID("ExtractedTrainingSignal", sourceNodeID, fmt.Sprintf("%d", sig.Index))

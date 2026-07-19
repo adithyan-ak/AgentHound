@@ -49,7 +49,14 @@ func AgentRiskAssessment(ctx context.Context, db graph.GraphDB, objectID string)
 
 func agentCredentialRisk(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
 	cypher := `
-MATCH (a {objectid: $id})-[:TRUSTS_SERVER]->(s:MCPServer)-[:HAS_ENV_VAR]->(c:Credential)
+MATCH (a {objectid: $id})-[:TRUSTS_SERVER]->(s:MCPServer)
+      -[:AUTHENTICATES_WITH]->(:Identity)-[:USES_CREDENTIAL]->(c:Credential)
+WHERE c.value_hash IS NOT NULL AND c.value_hash <> ''
+  AND c.merge_key = 'value_hash'
+  AND c.identity_basis = 'value_hash'
+  AND c.material_status = 'observed'
+  AND c.exposure_status = 'exposed'
+WITH DISTINCT c
 RETURN c.high_entropy AS high_entropy, c.type AS cred_type,
        c.material_status AS material_status, c.exposure_status AS exposure_status,
        c.merge_key AS merge_key`
@@ -106,8 +113,8 @@ RETURN count(DISTINCT r) AS cnt`
 func agentAuthPosture(ctx context.Context, db graph.GraphDB, objectID string) (Assessment, error) {
 	cypher := `
 MATCH (a {objectid: $id})-[t:TRUSTS_SERVER]->(s:MCPServer)
-RETURN t.risk_weight AS rw,
-       t.auth_assessment_complete AS auth_assessment_complete`
+RETURN t.effective_risk_weight AS rw,
+       t.effective_auth_assessment_complete AS auth_assessment_complete`
 
 	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
 	if err != nil {

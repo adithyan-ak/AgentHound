@@ -55,8 +55,22 @@ The MCP package is the Model Context Protocol project's official client-test
 server and supplies real tools, resources, resource templates, prompts,
 pagination, and three transports. Source:
 <https://github.com/modelcontextprotocol/servers/tree/main/src/everything>.
+The two local gates are protocol-transparent enforcing proxies, not MCP
+fixtures: missing or incorrect credentials stop at `401`, while exact controls
+must reach the pinned Everything Server and receive its independent protocol
+response. The cross-service gate's bearer uses the same Compose YAML anchor as
+LiteLLM's real master key, and the client config is rendered only inside the
+disposable workstation.
 
-The A2A service is built with the official SDK and route constructors. Source:
+The A2A service is built with the official SDK and route constructors. Its v1
+lane uses the native protobuf card and dispatcher; its v0.3 lane uses the
+SDK's `to_compat_agent_card` converter and compatibility dispatcher. The
+protected lane is a local API-key gate in front of the same official request
+handler, while the ambiguous control serializes the SDK's canonical
+`VersionNotSupportedError`. Counted SDK executors and `InMemoryTaskStore`
+wrappers expose only aggregate safety counters, allowing the harness to prove
+that collection never executed an agent or mutated task state. No additional
+Python dependency or upstream pin is introduced. Source:
 <https://github.com/a2aproject/a2a-python>.
 
 Every Python transitive dependency is exact-versioned and hash-locked in the

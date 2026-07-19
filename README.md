@@ -40,7 +40,7 @@ One framework attacks every layer - MCP, A2A, model gateways, inference servers,
 <td width="50%" valign="top">
 
 🔓 **Credential looting across the gateway & service plane**<br/>
-Hand the LiteLLM looter one master key and get back every upstream provider key it brokers - OpenAI, Anthropic, Bedrock - plus virtual keys and spend. Secrets fuse across services by `value_hash`.
+Hand the LiteLLM looter one master key and get back every upstream provider key it brokers - OpenAI, Anthropic, Bedrock - plus virtual keys and spend. Credential records correlate across services by `value_hash`.
 
 </td>
 </tr>
@@ -124,7 +124,7 @@ A new attack against a new AI service is one module away - implement an action i
 - **23 module packages** - 22 self-registering attack modules + the `protoscan` discovery engine
 - **7 offensive CLI verbs** - `scan` · `discover` · `loot` · `extract` · `poison` · `implant` · `revert` (`enumerate` + `fingerprint` run inside `scan`)
 - **8 fingerprinters · 6 looters · 1 model-inversion extractor · 2 poisoners · 1 implanter**
-- **Graph:** 25 node labels · 30 edge kinds (18 raw + 12 composite) · **15 post-processors**
+- **Graph:** 23 node labels · 32 edge kinds (20 raw + 12 composite) · **15 post-processors**
 - **Intelligence:** 35 detection rules + 8 fingerprint rules · 19 prebuilt attack-path queries · OWASP MCP Top 10 + OWASP Agentic Top 10 + **7 MITRE ATLAS techniques**
 - **One static collector binary (~9.9 MiB, no DB/UI/server deps, offline by default).** Apache-2.0, cosign-signed releases with SBOM.
 
@@ -133,19 +133,30 @@ A new attack against a new AI service is one module away - implement an action i
 Prerequisites: Docker + Compose v2. No Go, no Node, no `git clone`.
 
 ```bash
-# 1. Start the analysis server (Neo4j + Postgres + UI, binds 127.0.0.1:8080)
+# 1. Name this collection vantage point and permanently pair its two DB volumes.
+export AGENTHOUND_HOST_ID=security-laptop
+export AGENTHOUND_NETWORK_REALM_ID=corp-lab
+export AGENTHOUND_STORAGE_PAIR_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+
+# 2. Start the analysis server (Neo4j + Postgres + UI, binds 127.0.0.1:8080)
 curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/docker/docker-compose.public.yml | docker compose -f - -p agenthound up -d --wait
 
-# 2. Install the collector (single static binary, ~9.9 MiB → ~/.local/bin)
+# 3. Install the collector (single static binary, ~9.9 MiB → ~/.local/bin)
 curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 
-# 3. Scan your own machine - offline, read-only, secrets hashed - and stream it in
+# 4. Scan your own machine - offline, read-only, secrets hashed - and stream it in
 agenthound scan --config --output - | curl --data-binary @- -H "Content-Type: application/json" http://127.0.0.1:8080/api/v1/ingest
 
-# 4. Open the graph
+# 5. Open the graph
 open http://127.0.0.1:8080   # xdg-open on Linux
 ```
+
+Record those three values and reuse them on every restart; do not regenerate
+the storage UUID while either named volume exists. One database pair accepts
+one exact collector host/private-network realm so host-local paths, loopback
+services, RFC1918 endpoints, and lifecycle coverage cannot be merged across
+unrelated collection vantage points. The IDs are provenance, not credentials.
 
 Prefer a reproducible, pinned install? Every release is cosign-signed with an SBOM:
 
@@ -226,7 +237,7 @@ AgentHound's findings are built around the questions red teams and defenders ask
 | **Tool poisoning** | Tool descriptions, prompts, or instruction files contain suspicious model-steering content. | Which tools or instructions could influence model behavior in unsafe ways? |
 | **Tool shadowing** | A lookalike tool mimics a trusted capability or name. | Which tool could intercept or hijack an expected action? |
 | **Rug pulls** | A tool's description, schema, or server instructions changed between scans. | What changed since the last known-good graph, and did it create a new risk path? |
-| **Unauthenticated servers or agents** | MCP servers or A2A agents are reachable without expected authentication. | Which exposed agent surfaces need immediate review? |
+| **Unauthenticated servers or agents** | MCP servers or A2A protocol handlers affirmatively accepted a credential-free probe; A2A uses a bounded read-only nonexistent-task lookup and never submits a message. | Which exposed agent surfaces need immediate review? |
 | **Risk hotspots** | Nodes and paths are prioritized with risk scores and prebuilt graph queries. | Where should investigation or remediation start first? |
 
 See [Detection Rules](https://docs.agenthound.io/reference/detection-rules/) and [Risk Scoring](https://docs.agenthound.io/reference/risk-scoring/) for the full catalog.
@@ -250,18 +261,24 @@ These edges turn AI-agent infrastructure into something you can pathfind instead
 flowchart LR
   Agent["AgentInstance<br/>claude-desktop"]
   Notes["MCPServer<br/>internal-notes"]
-  Cred["Credential<br/>value_hash: a3f9..."]
+  Identity["Identity<br/>configured auth"]
+  ConfigCred["Credential<br/>configured secret<br/>value_hash: a3f9..."]
   Gateway["LiteLLMGateway<br/>prod"]
-  Providers["LLM providers<br/>OpenAI / Anthropic / Bedrock"]
+  MasterCred["Credential<br/>gateway master key<br/>value_hash: a3f9..."]
+  ProviderCred["Credential<br/>upstream provider key"]
 
   Agent -- TRUSTS_SERVER --> Notes
-  Notes -- HAS_ENV_VAR --> Cred
-  Gateway -- EXPOSES_CREDENTIAL --> Cred
-  Agent -- CAN_REACH --> Gateway
-  Gateway -- PROVIDES_MODEL --> Providers
+  Notes -- AUTHENTICATES_WITH --> Identity
+  Identity -- USES_CREDENTIAL --> ConfigCred
+  ConfigCred -. VALUE_HASH_MATCH .-> MasterCred
+  Gateway -- EXPOSES_CREDENTIAL --> MasterCred
+  Gateway -- EXPOSES_CREDENTIAL --> ProviderCred
+  Agent -- CAN_REACH --> ProviderCred
 ```
 
-No single config file declares this path. AgentHound computes it once collector output lands in the same graph.
+No single config file declares this path. AgentHound correlates the two
+collector-owned credential records by `value_hash` and computes the reachability
+edge once both outputs land in the same graph.
 
 ## 🛡️ Safety & authorization
 

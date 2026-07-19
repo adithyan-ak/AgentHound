@@ -171,7 +171,7 @@ The `extract` verb is the third gated primitive alongside `poison` and `implant`
   - `--commit=false` by default — without it the Extractor runs end-to-end but emits a dry-run summary only, no ingest data.
   - `~/.agenthound/extract-acknowledged` sentinel + AUTHORIZED prompt on first run (separate sentinel from `poison-acknowledged`, since `extract` is billing/CPU-heavy rather than target-mutating).
   - `--artifact <path>` is required — Extractors operate only on local files the operator has already obtained out-of-band (e.g. GGUF blobs copied from `~/.ollama/models/blobs/`). AgentHound never downloads model weights on your behalf.
-- **Output:** emits `ExtractedTrainingSignal` nodes linked to their source `AIModel` via `EXTRACTED_FROM` edges.
+- **Output:** emits `ExtractedTrainingSignal` nodes linked to their source `AIModel` via `EXTRACTED_FROM` edges. The required source argument is the already-established canonical AgentHound node ID (`sha256:` plus 64 lowercase hexadecimal characters), not a URL or model name. The envelope carries that source as an empty `reference_only` endpoint, so it is strict-ingest-valid without claiming or replacing model properties.
 - **Non-destructive:** the module returns `IsDestructive() = false`; it does not modify the on-disk artifact and does not embed the `Reverter` contract.
 
 ```bash

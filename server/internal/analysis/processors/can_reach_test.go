@@ -22,8 +22,8 @@ func TestCanReach_Name(t *testing.T) {
 func TestCanReach_Dependencies(t *testing.T) {
 	p := &CanReach{}
 	deps := p.Dependencies()
-	if len(deps) != 1 || deps[0] != "has_access_to" {
-		t.Errorf("Dependencies() = %v, want [has_access_to]", deps)
+	if len(deps) != 2 || deps[0] != "auth_strength" || deps[1] != "has_access_to" {
+		t.Errorf("Dependencies() = %v, want [auth_strength has_access_to]", deps)
 	}
 }
 
@@ -51,6 +51,10 @@ func TestCanReach_ProcessSuccess(t *testing.T) {
 	if strings.Contains(direct, "WHERE NOT EXISTS((a)-[:CAN_REACH]->(r))") {
 		t.Fatalf("direct CAN_REACH must refresh an existing inferred edge:\n%s", direct)
 	}
+	if !strings.Contains(direct, "ts.effective_risk_weight <= 0.1") ||
+		strings.Contains(direct, "ts.risk_weight <=") {
+		t.Fatalf("direct confidence must use the derived effective trust weight:\n%s", direct)
+	}
 	credential, _ := calls[1].Args[0].(string)
 	if !strings.Contains(credential, "current.scan_id = $scan_id") {
 		t.Fatalf("credential pass must preserve a direct path refreshed this scan:\n%s", credential)
@@ -59,14 +63,32 @@ func TestCanReach_ProcessSuccess(t *testing.T) {
 		!strings.Contains(credential, "MATCH (a)-[current:CAN_REACH]->(r)") {
 		t.Fatalf("credential pass must use Neo4j-4.4-compatible EXISTS subquery:\n%s", credential)
 	}
-	if strings.Contains(credential, "s1.auth_method IS NULL OR") ||
-		!strings.Contains(credential, "coalesce(s1.observed_auth_assurance, s1.auth_assurance) IN ['unauthenticated', 'weak']") {
+	if strings.Contains(credential, "coalesce(s1.observed_auth_assurance, s1.auth_assurance)") ||
+		strings.Contains(credential, "s1.effective_auth_assurance IN ['unauthenticated', 'weak']") ||
+		!strings.Contains(credential, "s1.effective_auth_assurance = 'unauthenticated'") ||
+		!strings.Contains(credential, "s1.effective_auth_source = 'observed'") ||
+		!strings.Contains(credential, "OR s1.effective_auth_assurance = 'weak'") {
 		t.Fatalf("unknown auth must not satisfy credential delegation:\n%s", credential)
+	}
+	if strings.Contains(credential, "HAS_ENV_VAR") ||
+		!strings.Contains(credential, "MATCH (s2:MCPServer)-[authenticates:AUTHENTICATES_WITH]->(i:Identity)-[uses:USES_CREDENTIAL]->(c:Credential)") {
+		t.Fatalf("credential pass must use the canonical auth/uses topology, independent of credential location:\n%s", credential)
+	}
+	for _, predicate := range []string{
+		"c.value_hash IS NOT NULL AND c.value_hash <> ''",
+		"c.merge_key = 'value_hash'",
+		"c.identity_basis = 'value_hash'",
+		"c.material_status = 'observed'",
+		"c.exposure_status = 'exposed'",
+	} {
+		if !strings.Contains(credential, predicate) {
+			t.Fatalf("credential pass accepts a non-runnable credential; missing %q:\n%s", predicate, credential)
+		}
 	}
 	if !strings.Contains(
 		credential,
 		"ORDER BY a.objectid, s1.objectid, t1.objectid, s2.objectid,\n"+
-			"         c.objectid, i.objectid, t2.objectid, r.objectid",
+			"         i.objectid, c.objectid, t2.objectid, r.objectid",
 	) || !strings.Contains(credential, "})[0] AS winner") {
 		t.Fatalf("credential paths must reduce by the complete stable object-ID tuple:\n%s", credential)
 	}
@@ -75,6 +97,16 @@ func TestCanReach_ProcessSuccess(t *testing.T) {
 	if orderStart < 0 || winnerStart < orderStart ||
 		strings.Contains(credential[orderStart:winnerStart], "id(") {
 		t.Fatalf("relationship IDs must not participate in credential-path selection:\n%s", credential)
+	}
+	for _, orderedEvidence := range []string{
+		"a.objectid, winner.s1.objectid, winner.t1.objectid, winner.s2.objectid,\n" +
+			"      winner.i.objectid, winner.c.objectid, winner.t2.objectid, r.objectid",
+		"id(winner.trust1), id(winner.provides1), id(winner.authenticates),\n" +
+			"      id(winner.uses), id(winner.provides2), id(winner.access)",
+	} {
+		if !strings.Contains(credential, orderedEvidence) {
+			t.Fatalf("credential pass must persist canonical ordered evidence %q:\n%s", orderedEvidence, credential)
+		}
 	}
 }
 

@@ -3,6 +3,9 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -104,11 +107,103 @@ func TestToolObserverRejectsRedirects(t *testing.T) {
 		ServerSpec{Name: "redirect", Transport: "http", URL: redirect.URL},
 		"tool",
 	)
-	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "redirect") {
-		t.Fatalf("Observe error = %v, want redirect rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "initialize failed") {
+		t.Fatalf("Observe error = %v, want categorized initialize failure", err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "redirect") {
+		t.Fatalf("Observe error exposed raw redirect detail: %v", err)
 	}
 	if got := destinationCalls.Load(); got != 0 {
 		t.Fatalf("redirect destination calls = %d, want zero", got)
+	}
+}
+
+func TestToolObserverOmitsRawTransportSetupError(t *testing.T) {
+	const sentinel = "TRANSPORT-SETUP-SECRET-7b2f"
+
+	_, err := (ToolObserver{}).Observe(
+		context.Background(),
+		ServerSpec{Name: "unsupported", Transport: sentinel},
+		"tool",
+	)
+	if err == nil || !strings.Contains(err.Error(), "transport setup failed") {
+		t.Fatalf("Observe error = %v, want categorized transport setup failure", err)
+	}
+	if strings.Contains(err.Error(), sentinel) {
+		t.Fatalf("Observe error exposed raw transport detail: %v", err)
+	}
+}
+
+func TestToolObserverOmitsRawInitializeError(t *testing.T) {
+	const sentinel = "INITIALIZE-SECRET-941a"
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeObserverRPCError(w, r, sentinel)
+	}))
+	defer httpServer.Close()
+
+	_, err := (ToolObserver{}).Observe(
+		context.Background(),
+		ServerSpec{Name: "initialize-error", Transport: "http", URL: httpServer.URL},
+		"tool",
+	)
+	if err == nil || !strings.Contains(err.Error(), "initialize failed") {
+		t.Fatalf("Observe error = %v, want categorized initialize failure", err)
+	}
+	if strings.Contains(err.Error(), sentinel) {
+		t.Fatalf("Observe error exposed raw initialize detail: %v", err)
+	}
+}
+
+func TestToolObserverOmitsRawToolsListError(t *testing.T) {
+	const sentinel = "TOOLS-LIST-SECRET-5cd1"
+	server := mcpsdk.NewServer(
+		&mcpsdk.Implementation{Name: "list-error", Version: "1.0.0"}, nil,
+	)
+	addObserverTestTool(server, "tool", "description")
+	handler := mcpsdk.NewStreamableHTTPHandler(
+		func(*http.Request) *mcpsdk.Server { return server },
+		&mcpsdk.StreamableHTTPOptions{JSONResponse: true},
+	)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			http.Error(w, "request read failed", http.StatusInternalServerError)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		if bytes.Contains(body, []byte(`"method":"tools/list"`)) {
+			writeObserverRPCErrorBody(w, body, sentinel)
+			return
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	defer httpServer.Close()
+
+	_, err := (ToolObserver{}).Observe(
+		context.Background(),
+		ServerSpec{Name: "list-error", Transport: "http", URL: httpServer.URL},
+		"tool",
+	)
+	if err == nil || !strings.Contains(err.Error(), "tools/list failed") {
+		t.Fatalf("Observe error = %v, want categorized tools/list failure", err)
+	}
+	if strings.Contains(err.Error(), sentinel) {
+		t.Fatalf("Observe error exposed raw tools/list detail: %v", err)
+	}
+}
+
+func TestSafeToolObserverErrorPreservesOnlyContextSentinel(t *testing.T) {
+	const sentinel = "WRAPPED-CONTEXT-SECRET-04ee"
+
+	for _, contextErr := range []error{context.DeadlineExceeded, context.Canceled} {
+		rawErr := fmt.Errorf("%s: %w", sentinel, contextErr)
+		err := safeToolObserverError("initialize", rawErr)
+		if !errors.Is(err, contextErr) {
+			t.Fatalf("errors.Is(%v, %v) = false", err, contextErr)
+		}
+		if strings.Contains(err.Error(), sentinel) {
+			t.Fatalf("sanitized context error exposed raw detail: %v", err)
+		}
 	}
 }
 
@@ -266,4 +361,37 @@ func addObserverTestTool(server *mcpsdk.Server, name, description string) {
 			return &mcpsdk.CallToolResult{}, nil
 		},
 	)
+}
+
+func writeObserverRPCError(w http.ResponseWriter, r *http.Request, message string) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "request read failed", http.StatusInternalServerError)
+		return
+	}
+	writeObserverRPCErrorBody(w, body, message)
+}
+
+func writeObserverRPCErrorBody(w http.ResponseWriter, body []byte, message string) {
+	var request struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		http.Error(w, "request decode failed", http.StatusBadRequest)
+		return
+	}
+	response, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      request.ID,
+		"error": map[string]any{
+			"code":    -32000,
+			"message": message,
+		},
+	})
+	if err != nil {
+		http.Error(w, "response encode failed", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(response)
 }

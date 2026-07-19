@@ -94,15 +94,15 @@ func TestIntegrationCompiledCampaignExportProbeIngestPromotesOnlySourceAgent(t *
 		node(agentA, "AgentInstance", map[string]any{"name": "source agent"}),
 		node(agentB, "AgentInstance", map[string]any{"name": "other agent"}),
 		node(entryServer, "MCPServer", map[string]any{
-			"name": "entry", "transport": "http", "auth_method": "apiKey",
+			"name": "entry", "transport": "http", "endpoint": "https://entry.example/mcp", "auth_method": "apiKey",
 			"auth_assurance": "weak", "auth_evidence": "configured_credential",
 		}),
 		node(alternateServer, "MCPServer", map[string]any{
-			"name": "alternate entry", "transport": "http", "auth_method": "apiKey",
+			"name": "alternate entry", "transport": "http", "endpoint": "https://alternate.example/mcp", "auth_method": "apiKey",
 			"auth_assurance": "weak", "auth_evidence": "configured_credential",
 		}),
 		node(serverID, "MCPServer", map[string]any{
-			"name": "resource", "transport": "http", "auth_method": "bearer",
+			"name": "resource", "transport": "http", "endpoint": httpServer.URL, "auth_method": "bearer",
 			"auth_assurance": "moderate", "auth_evidence": "configured_credential",
 		}),
 		node(entryTool, "MCPTool", map[string]any{
@@ -119,6 +119,7 @@ func TestIntegrationCompiledCampaignExportProbeIngestPromotesOnlySourceAgent(t *
 		}),
 		node(credentialID, "Credential", map[string]any{
 			"name":       "DB_TOKEN",
+			"location":   "header",
 			"value_hash": common.HashCredentialValue(credentialMaterial),
 			"merge_key":  "value_hash", "identity_basis": "value_hash",
 			"material_status": "observed", "exposure_status": "exposed",
@@ -146,7 +147,6 @@ func TestIntegrationCompiledCampaignExportProbeIngestPromotesOnlySourceAgent(t *
 		edge(alternateServer, alternateTool, "PROVIDES_TOOL", "MCPServer", "MCPTool"),
 		edge(serverID, resourceTool, "PROVIDES_TOOL", "MCPServer", "MCPTool"),
 		edge(serverID, resourceID, "PROVIDES_RESOURCE", "MCPServer", "MCPResource"),
-		edge(serverID, credentialID, "HAS_ENV_VAR", "MCPServer", "Credential"),
 		edge(serverID, identityID, "AUTHENTICATES_WITH", "MCPServer", "Identity"),
 		edge(identityID, credentialID, "USES_CREDENTIAL", "Identity", "Credential"),
 	}
@@ -186,7 +186,7 @@ func TestIntegrationCompiledCampaignExportProbeIngestPromotesOnlySourceAgent(t *
 	}
 	wantTopology := []string{
 		agentA, entryServer, entryTool, serverID,
-		credentialID, identityID, resourceTool, resourceID,
+		identityID, credentialID, resourceTool, resourceID,
 	}
 	if !reflect.DeepEqual(witness.EvidenceNodeIDs, wantTopology) {
 		t.Fatalf(

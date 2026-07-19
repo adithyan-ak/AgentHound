@@ -12,6 +12,8 @@ AgentHound ships as **two binaries**: `agenthound` (collector) and `agenthound-s
 |------|-----|---------|-------------|
 | `--output` | `AGENTHOUND_OUTPUT` | `./scan-<scan_id>.json` | Write output JSON to this path. `-` for stdout. |
 | `--concurrency` | `AGENTHOUND_CONCURRENCY` | `5` | Max parallel collector workers. Used by `scan` as the fallback for `--scan-concurrency` when the latter is not set explicitly. |
+| `--host-id` | `AGENTHOUND_HOST_ID` | _(required for artifact-emitting operations)_ | Stable lowercase ID for this collector machine. |
+| `--network-realm-id` | `AGENTHOUND_NETWORK_REALM_ID` | _(required for artifact-emitting operations)_ | Stable lowercase ID for the private network visible from this machine. |
 | `--log-level` | `AGENTHOUND_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
 | `--quiet` | `AGENTHOUND_QUIET=1` | `false` | Suppress non-error log output. |
 | `--log-json` | `AGENTHOUND_LOG_JSON=1` | `false` | Emit structured JSON logs. |
@@ -21,13 +23,21 @@ Priority: CLI flag > env var > default.
 
 The collector is offline-by-default. No outbound HTTP, no DB clients, no phone-home. Move the resulting JSON to the analysis box via file copy, SSH pipe, or the UI's drag-drop import.
 
+Both origin IDs must match `[a-z0-9][a-z0-9._-]{0,127}` and remain stable.
+They are required whenever the command emits an ingest artifact (`scan`,
+`discover`, `loot`, committed `extract`, or a witness-backed committed
+`campaign`). They scope local paths, loopback/private endpoints, and lifecycle
+coverage to one collection vantage point; they are provenance, not secrets or
+an authentication mechanism.
+
 ---
 
 ### `agenthound scan`
 
 Enumerate MCP servers, A2A agents, and client configs, then write the merged trust graph as JSON.
 
-Scan artifacts use strict ingest wire version `2` with required evidence
+Scan artifacts use strict ingest wire version `3` with required `origin`
+(`host_id` plus `network_realm_id`) and evidence
 metadata: constituent `collection` coverage/outcomes, the effective text and
 fingerprint `ruleset` semantic digest/entries with canonical matcher
 definitions and load failures, and canonical identity-scheme metadata. A
@@ -74,6 +84,13 @@ whose generic shape is shared by several clients and whose path proves none of
 them, the servers are retained under client `unknown` instead of inventing a
 specific application.
 
+Credential-named env vars, headers, arguments, and URL components with empty or
+whitespace-only values are omitted rather than emitted as exposed credentials
+sharing the hash of an empty placeholder. Non-empty values preserve their
+exact bytes, including surrounding whitespace, when computing `value_hash`
+(recognized HTTP `Authorization` schemes still remove only the protocol scheme
+before hashing).
+
 Instruction discovery covers the root project files plus every nested
 `<component>/.cursor/rules/**/*.mdc` tree beneath the effective project root.
 It does not follow directory symlinks or enter `.git`, and bounds traversal at
@@ -93,6 +110,16 @@ reads, parser registry, and failure distinctions as config collection. Usable
 servers are retained when another config is malformed or unreadable, but the
 MCP authoritative root completes only when discovery and every active server
 scope are complete.
+
+For HTTP targets, a successful Initialize proves anonymous access only when the
+configured URL contains no userinfo/query and the request used no non-empty
+caller-configured header. Recognized `Authorization` and API-key headers retain
+their method. Every other non-empty configured header, including cookies,
+opaque session headers, `Accept`, and `User-Agent`, produces an unknown
+configured-material observation rather than fabricated anonymous evidence.
+Empty/whitespace-only values carry no credential material. There is no benign
+non-empty header allowlist and the collector does not issue a second
+Initialize without the configured headers.
 
 Read-only: calls `tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`. Never calls `tools/call` or `resources/read`.
 
@@ -117,6 +144,20 @@ only when the facts supporting each edge are conformant. Security requirements
 retain their OR-of-AND structure and scopes; a declared scheme is inactive until
 referenced by a requirement, and `auth_method` remains `unknown` when a scalar
 method would be ambiguous.
+
+After parsing, the collector performs at most one anonymous, read-only
+nonexistent-task lookup per canonical preferred protocol endpoint. It uses v1
+`GetTask` with the advertised `A2A-Version` header or v0.3 `tasks/get`, never
+`message/send`, cancellation, or push-configuration methods. The probe sends
+neither `--auth-token` nor any other credential, rejects redirects, reads at
+most 64 KiB, and runs for at most five seconds (or the shorter collector
+timeout). A card cannot expand scan scope: the preferred interface must be a
+conformant HTTP(S) JSON-RPC URL whose exact scheme/host/effective-port origin
+matches at least one requested target and contains no userinfo, query, or
+fragment bytes. Query-bearing interfaces fail closed because even an
+innocently named parameter could carry authentication material. Aliases sharing that canonical endpoint
+reuse one result. Cross-origin, non-preferred, unsupported, malformed, or
+otherwise ambiguous interfaces remain diagnostic `unknown` observations.
 
 Only v1.0.1 cards have a defined signing algorithm. Their ProtoJSON
 presence/default rules are applied before RFC 8785 JCS and object-form JWS
@@ -245,6 +286,11 @@ agenthound loot <host:port> --type <kind> [flags]
 |------|---------|-------------|
 | `--include-embeddings` | `false` | Issue one test embedding call via `POST /api/embeddings` with `keep_alive: 0` (evicts the runner immediately after the probe per Ollama `server/sched.go:389-398`; consumes compute). |
 
+The Ollama Looter records verified anonymous access only after credential-free
+`GET /api/tags` returns a JSON object with a `models` array. HTTP denial,
+transport failure, malformed JSON, or a 2xx body without that array leaves only
+the neutral service identity and `loot_observed` attempt fact.
+
 > Ollama's HTTP API does not expose a raw-weight download endpoint. See [Ollama loot](../operator/loot/ollama.md#getting-raw-weights-out-of-band) for how to obtain the GGUF weight file out-of-band when the engagement needs it.
 
 #### Per-Module Flags: `--type openwebui`
@@ -261,7 +307,7 @@ agenthound loot <host:port> --type <kind> [flags]
 | `--points-per-collection` | `100` | Cap on payloads sampled per collection when `--include-points` is set. |
 | `--max-total-resources` | `5000` | Global cap on `:MCPResource` nodes emitted across all collections (prevents runaway on large deployments). |
 
-Without `--include-points` the Qdrant Looter is pure-GET (`GET /collections` + `GET /collections/{name}`), folding `collection_count`, `collections`, `total_points`, `points_count_unknown`, and `anonymous_listing` onto the `QdrantInstance` node with no Credential nodes.
+Without `--include-points` the Qdrant Looter is pure-GET (`GET /collections` + `GET /collections/{name}`), folding `collection_count`, `collections`, `total_points`, `points_count_unknown`, and `anonymous_listing` onto the `QdrantInstance` node with no Credential nodes. Those inventory and verified-anonymous properties are added only after credential-free `/collections` returns `status=ok` with a `result.collections` array; denial, transport failure, malformed JSON, and wrong-shaped 2xx responses leave a neutral attempt node.
 
 #### Per-Module Flags: `--type jupyter`
 
@@ -273,7 +319,7 @@ The Jupyter Looter is pure-GET. It first tries `GET /api/sessions` and root `GET
 
 #### `--type mlflow` — coverage note
 
-The MLflow Looter enumerates experiments + runs (paginated via `max_results` / `next_page_token` — modern MLflow rejects `experiments/search` without `max_results`) plus the Model Registry: `registered-models/search`, `model-versions/search`, and per-version `get-download-uri`. Each returned artifact URI is emitted as an `:MCPResource` joined to `MLflowServer` via `PROVIDES_RESOURCE`, with `sensitivity` auto-classified by scheme + path (see the [artifact sensitivity heuristic in graph-model.md](graph-model.md)). No new flag; the Model Registry probes are anonymous-readable on stock MLflow deployments.
+The MLflow Looter enumerates experiments + runs (paginated via `max_results` / `next_page_token` — modern MLflow rejects `experiments/search` without `max_results`) plus the Model Registry: `registered-models/search`, `model-versions/search`, and per-version `get-download-uri`. Each returned artifact URI is emitted as an `:MCPResource` joined to `MLflowServer` via `PROVIDES_RESOURCE`, with `sensitivity` auto-classified by scheme + path (see the [artifact sensitivity heuristic in graph-model.md](graph-model.md)). No new flag; the Model Registry probes are anonymous-readable on stock MLflow deployments. Verified anonymous evidence is added only after the credential-free experiments-search response contains an `experiments` array; denial, transport failure, malformed JSON, and wrong-shaped 2xx responses retain only neutral attempt facts.
 
 #### Example
 
@@ -488,6 +534,12 @@ agenthound extract <source-node-id> --type embedding-invert \
     --artifact /tmp/loot/model.bin --commit --engagement-id DC35-DEMO
 ```
 
+`<source-node-id>` is the already-established `AIModel` object ID, not a URL,
+model name, or artifact path. It must use AgentHound's canonical
+`sha256:` plus 64 lowercase hexadecimal representation. The extractor carries
+that identity as an empty `reference_only` endpoint so strict ingest can close
+the emitted edges without inventing model properties.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--type` | (required) | Extractor kind (`embedding-invert`) |
@@ -612,6 +664,9 @@ Print version string and commit hash.
 | `--neo4j-user` | `AGENTHOUND_NEO4J_USER` | `neo4j` | Neo4j username. |
 | `--neo4j-password` | `AGENTHOUND_NEO4J_PASSWORD` | `agenthound` | Neo4j password. |
 | `--pg-uri` | `AGENTHOUND_PG_URI` | `postgres://agenthound:agenthound@localhost:5432/agenthound?sslmode=disable` | PostgreSQL URI. |
+| `--host-id` | `AGENTHOUND_HOST_ID` | _(required for DB commands)_ | Exact collector host admitted by this database pair. |
+| `--network-realm-id` | `AGENTHOUND_NETWORK_REALM_ID` | _(required for DB commands)_ | Exact private-network realm admitted by this database pair. |
+| `--storage-pair-id` | `AGENTHOUND_STORAGE_PAIR_ID` | _(required for DB commands)_ | Canonical lowercase UUID permanently pairing these PostgreSQL and Neo4j volumes. |
 | `--cors-origins` | `AGENTHOUND_CORS_ORIGINS` | `http://localhost:8080,http://127.0.0.1:8080` | Comma-separated CORS origins. |
 | `--log-level` | `AGENTHOUND_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
 
@@ -627,7 +682,14 @@ Start the API server, embedded React UI, and initialize databases.
 agenthound-server serve
 ```
 
-Auto-initializes Neo4j schema (constraints + indexes) and PostgreSQL migrations on first start. Mutating HTTP endpoints are gated by `OriginGuard` (Origin allowlist, configured via `--cors-origins`). Graceful shutdown on SIGINT/SIGTERM (10s drain).
+Before any schema mutation, reads immutable binding markers from both databases
+and requires the configured host, realm, and storage-pair UUID to match. A
+one-sided missing marker is repaired only when both stores are product-empty;
+crossed pairs, legacy non-empty stores, future marker versions, and realm
+mismatches fail closed. It then initializes Neo4j schema (constraints +
+indexes) and PostgreSQL migrations on first start. Mutating HTTP endpoints are
+gated by `OriginGuard` (Origin allowlist, configured via `--cors-origins`).
+Graceful shutdown on SIGINT/SIGTERM (10s drain).
 
 **No application-layer authentication.** Default loopback bind is the security boundary. Expose remotely only over VPN/SSH tunnel. The server logs a `WARN` if bound to a non-loopback address.
 
@@ -642,9 +704,17 @@ agenthound-server ingest <file.json>
 agenthound-server ingest -
 ```
 
-Pipeline stages: validate the strict v2 contract, normalize supported values, deduplicate (MERGE by objectid), batch write (1000 ops/txn), post-process (composite edges + risk scores).
+Pipeline stages: admit the strict v3 artifact origin and reverify both storage
+markers, validate/normalize supported values, deduplicate (MERGE by objectid),
+batch write (1000 ops/txn), and post-process (composite edges + risk scores).
 
 All three ingest entry points (CLI, `POST /api/v1/ingest`, UI drag-drop) run the same pipeline.
+
+The CLI prints the pipeline outcome, projection status, and publication
+revision. It exits successfully only when the ingest produced a complete,
+published projection. If a required stage is partial or failed, or publication
+is withheld, it exits non-zero and reports the first unhealthy required stage;
+write-row counts remain visible for diagnosis.
 
 #### Example
 

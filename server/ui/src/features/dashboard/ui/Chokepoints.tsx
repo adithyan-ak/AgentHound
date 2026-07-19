@@ -24,7 +24,12 @@ function parse(rows: Record<string, unknown>[]): ServerRow[] {
       name: String(r["server_name"] ?? "unknown"),
       agentCount: Number(r["agent_count"] ?? 0),
       toolCount: Number(r["tool_count"] ?? 0),
-      unauth: hasConfirmedAnonymousAccess(r),
+      unauth: hasConfirmedAnonymousAccess({
+        effective_auth_method: r["auth_method"],
+        effective_auth_assurance: r["auth_assurance"],
+        effective_auth_evidence: r["auth_evidence"],
+        effective_auth_source: r["auth_source"],
+      }),
     }))
     .sort((a, b) => b.agentCount - a.agentCount)
     .slice(0, MAX_ROWS);

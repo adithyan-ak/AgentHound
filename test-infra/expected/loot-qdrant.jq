@@ -3,6 +3,8 @@ and (.meta.extra.partial_errors | length) == 0
 and (.graph.nodes | any(
   (.kinds | index("QdrantInstance")) and
   .properties.endpoint == "http://qdrant:6333" and
+  .properties.loot_observed == true and
+  (.properties | has("discovered_via") | not) and
   .properties.collection_count == 2 and
   .properties.collections == ["chat-history","docs"] and
   .properties.total_points == 4 and

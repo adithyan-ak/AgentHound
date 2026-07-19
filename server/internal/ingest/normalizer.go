@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
@@ -29,6 +30,16 @@ func (n *Normalizer) Normalize(data *ingest.IngestData) []ingest.NormalizationWa
 		if node.Properties == nil {
 			node.Properties = make(map[string]any)
 		}
+		if migratePreV1RawMCPAuthObservation(data.Meta.Collector, node) {
+			warnings = append(warnings, ingest.NormalizationWarning{
+				Code:              "pre_v1_mcp_auth_observation_migrated",
+				Status:            ingest.NormalizationStatusWarning,
+				Message:           fmt.Sprintf("migrated pre-v1 raw MCP anonymous observation on node %s", node.ID),
+				Context:           fmt.Sprintf("node %s", node.ID),
+				Property:          "auth_observation_compat",
+				PublicationUnsafe: false,
+			})
+		}
 
 		// Set objectid
 		node.Properties["objectid"] = node.ID
@@ -47,6 +58,41 @@ func (n *Normalizer) Normalize(data *ingest.IngestData) []ingest.NormalizationWa
 	}
 
 	return warnings
+}
+
+// migratePreV1RawMCPAuthObservation preserves the semantics of direct-URL MCP
+// artifacts produced before the configured/observed split. Those collectors
+// wrote a successful anonymous initialize observation into raw auth_* fields.
+// The envelope, kind, network reachability, exact tuple, and complete absence
+// of the newer observed tuple must all agree before migration. Near misses are
+// left untouched and therefore cannot satisfy observed-auth analysis.
+func migratePreV1RawMCPAuthObservation(collector string, node *ingest.Node) bool {
+	if collector != "mcp" ||
+		node.PropertySemantics != "" ||
+		ingest.ConcreteNodeKind(node.Kinds) != "MCPServer" ||
+		node.Properties == nil ||
+		node.Properties["transport"] != "http" ||
+		node.Properties["status"] != "reachable" ||
+		node.Properties["auth_method"] != string(common.AuthNone) ||
+		node.Properties["auth_assurance"] != string(common.AuthAssuranceUnauthenticated) ||
+		node.Properties["auth_evidence"] != common.AuthEvidenceAnonymousProbeSucceeded {
+		return false
+	}
+	for _, key := range []string{
+		"observed_auth_method",
+		"observed_auth_assurance",
+		"observed_auth_evidence",
+	} {
+		if _, present := node.Properties[key]; present {
+			return false
+		}
+	}
+
+	node.Properties["observed_auth_method"] = string(common.AuthNone)
+	node.Properties["observed_auth_assurance"] = string(common.AuthAssuranceUnauthenticated)
+	node.Properties["observed_auth_evidence"] = common.AuthEvidenceAnonymousProbeSucceeded
+	node.Properties["auth_observation_compat"] = "pre_v1_raw_mcp"
+	return true
 }
 
 func (n *Normalizer) normalizeProps(

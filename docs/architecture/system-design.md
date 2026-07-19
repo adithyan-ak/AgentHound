@@ -66,7 +66,7 @@ scan --config         scan --mcp --url <url>           scan --a2a --target <url>
 
 **Core direction:** `Agent -> Server -> Tool -> Resource`. Edges represent exploitable relationships.
 
-### Node Types (25 total)
+### Node Types (23 total)
 
 | Label | Source | Description |
 |-------|--------|-------------|
@@ -97,12 +97,13 @@ scan --config         scan --mcp --url <url>           scan --a2a --target <url>
 Node IDs are deterministic SHA-256 hashes of `Kind:` + identifying properties. MCPServer IDs
 match across Config and MCP collectors -- this is the merge point connecting trust to capabilities.
 
-### Edge Types (30 total)
+### Edge Types (32 total)
 
-**18 raw edges** (from collectors): TRUSTS_SERVER, PROVIDES_TOOL, PROVIDES_RESOURCE,
+**20 raw edges** (from collectors): TRUSTS_SERVER, PROVIDES_TOOL, PROVIDES_RESOURCE,
 PROVIDES_PROMPT, ADVERTISES_SKILL, DELEGATES_TO, AUTHENTICATES_WITH, USES_CREDENTIAL,
 RUNS_ON, CONFIGURED_IN, HAS_ENV_VAR, LOADS_INSTRUCTIONS, SAME_AUTH_DOMAIN, EXPOSES,
-EXPOSES_CREDENTIAL, PROVIDES_MODEL, EXTRACTED_FROM, INGESTS_UNTRUSTED.
+EXPOSES_CREDENTIAL, PROVIDES_MODEL, EXTRACTED_FROM, INGESTS_UNTRUSTED,
+CREDENTIAL_REACH_VERIFIED, PUBLIC_ACCESS_OBSERVED.
 
 **12 composite edges** (computed by post-processors in dependency order):
 
@@ -157,7 +158,15 @@ Docker Compose runs three containers:
 | agenthound | golang:1.25-alpine (multi-stage) | API server + embedded UI | 127.0.0.1:8080 |
 
 ```bash
+export AGENTHOUND_HOST_ID=security-laptop
+export AGENTHOUND_NETWORK_REALM_ID=corp-lab
+export AGENTHOUND_STORAGE_PAIR_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 docker compose -f docker/docker-compose.yml up -d
 ```
 
-Configuration is env-based: `AGENTHOUND_NEO4J_URI`, `AGENTHOUND_PG_URI`, `AGENTHOUND_BIND` (default `127.0.0.1:8080`), `AGENTHOUND_CORS_ORIGINS`.
+Configuration is env-based: `AGENTHOUND_NEO4J_URI`, `AGENTHOUND_PG_URI`,
+`AGENTHOUND_BIND` (default `127.0.0.1:8080`),
+`AGENTHOUND_CORS_ORIGINS`, plus mandatory `AGENTHOUND_HOST_ID`,
+`AGENTHOUND_NETWORK_REALM_ID`, and `AGENTHOUND_STORAGE_PAIR_ID`. The last
+three bind one collector host/private-network realm to one paired PostgreSQL
+and Neo4j deployment and must remain stable for the lifetime of both volumes.

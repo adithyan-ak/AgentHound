@@ -82,6 +82,10 @@ func init() {
 }
 
 func runLoot(cmd *cobra.Command, args []string) error {
+	origin, err := requireCollectionOrigin()
+	if err != nil {
+		return err
+	}
 	target := args[0]
 	kind, _ := cmd.Flags().GetString("type")
 	masterKey, _ := cmd.Flags().GetString("master-key")
@@ -156,7 +160,7 @@ func runLoot(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loot: %w", err)
 	}
 
-	envelope := buildLootEnvelope(target, kind, engagementID, res)
+	envelope := buildLootEnvelope(origin, target, kind, engagementID, res)
 
 	_, _ = fmt.Fprintf(cmd.OutOrStderr(),
 		"[loot] %s %s — credentials_found=%d, partial_failures=%d\n",
@@ -178,10 +182,10 @@ func runLoot(cmd *cobra.Command, args []string) error {
 // envelope so the server's ingest endpoint accepts it through the same
 // path as collector scans. The watermark records the loot type and
 // engagement-id for downstream correlation.
-func buildLootEnvelope(target, kind, engagementID string, res *action.LootResult) *ingest.IngestData {
+func buildLootEnvelope(origin ingest.CollectionOrigin, target, kind, engagementID string, res *action.LootResult) *ingest.IngestData {
 	scanID := uuid.New().String()
 	env := common.NewIngestData("scan", scanID)
-	env.Meta.CollectorVersion = "0.2.0-dev"
+	env.Meta.Origin = origin
 	env.Meta.Extra = map[string]any{
 		"loot_type":      kind,
 		"loot_target":    target,

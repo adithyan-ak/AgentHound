@@ -96,6 +96,7 @@ func publicationIntegrationHarness(
 		db,
 		appdb.NewScanStore(pool),
 		appdb.NewFindingStore(pool),
+		allowOriginAdmitter{},
 	), db, writer, pool
 }
 
@@ -179,6 +180,7 @@ INSERT INTO posture_state (singleton) VALUES (TRUE);`); err != nil {
 		graph.NewDB(graph.NewReader(driver), writer),
 		appdb.NewScanStore(pool),
 		appdb.NewFindingStore(pool),
+		allowOriginAdmitter{},
 	)
 	scope := sdkingest.CanonicalCoverageKey(
 		"mcp",
@@ -205,6 +207,7 @@ INSERT INTO posture_state (singleton) VALUES (TRUE);`); err != nil {
 		Properties: map[string]any{
 			"name":           "fresh-publication-server",
 			"transport":      "http",
+			"endpoint":       "http://127.0.0.1:18080/mcp",
 			"auth_method":    "none",
 			"auth_assurance": "unauthenticated",
 			"auth_evidence":  "anonymous_probe_succeeded",
@@ -236,7 +239,7 @@ func TestIntegrationExhaustiveRootRemovesMissingChildAcrossGraphAndPublication(t
 		"target",
 		sdkingest.CanonicalURLScope("http://127.0.0.1:18082/mcp"),
 	)
-	node := func(id, name, scope string) sdkingest.Node {
+	node := func(id, name, endpoint, scope string) sdkingest.Node {
 		return sdkingest.Node{
 			ID:                 id,
 			Kinds:              []string{"MCPServer"},
@@ -244,6 +247,7 @@ func TestIntegrationExhaustiveRootRemovesMissingChildAcrossGraphAndPublication(t
 			Properties: map[string]any{
 				"name":           name,
 				"transport":      "http",
+				"endpoint":       endpoint,
 				"auth_method":    "none",
 				"auth_assurance": "unauthenticated",
 				"auth_evidence":  "anonymous_probe_succeeded",
@@ -254,8 +258,8 @@ func TestIntegrationExhaustiveRootRemovesMissingChildAcrossGraphAndPublication(t
 	first := common.NewIngestData("scan", "removed-child-first")
 	first.Meta.Collection = authoritativeMCPReport(root, childA, childB)
 	first.Graph.Nodes = []sdkingest.Node{
-		node("removed-child-a", "server-a", childA),
-		node("removed-child-b", "server-b", childB),
+		node("removed-child-a", "server-a", "http://127.0.0.1:18081/mcp", childA),
+		node("removed-child-b", "server-b", "http://127.0.0.1:18082/mcp", childB),
 	}
 	firstResult, err := pipeline.Ingest(ctx, first)
 	if err != nil {
@@ -268,7 +272,7 @@ func TestIntegrationExhaustiveRootRemovesMissingChildAcrossGraphAndPublication(t
 	second := common.NewIngestData("scan", "removed-child-second")
 	second.Meta.Collection = authoritativeMCPReport(root, childB)
 	second.Graph.Nodes = []sdkingest.Node{
-		node("removed-child-b", "server-b", childB),
+		node("removed-child-b", "server-b", "http://127.0.0.1:18082/mcp", childB),
 	}
 	secondResult, err := pipeline.Ingest(ctx, second)
 	if err != nil {
@@ -366,6 +370,7 @@ func TestIntegrationCompleteEmptyRootRecoversFailedUnheadedChildAfterRestart(t *
 		db,
 		appdb.NewScanStore(pool),
 		appdb.NewFindingStore(pool),
+		allowOriginAdmitter{},
 	)
 	completeEmpty := common.NewIngestData("mcp", "complete-empty-after-restart")
 	completeEmpty.Meta.Collection = authoritativeMCPReport(root)
@@ -469,6 +474,7 @@ func TestIntegrationTokenlessAgentWithholdsPublication(t *testing.T) {
 		Properties: map[string]any{
 			"name":           "control-server",
 			"transport":      "http",
+			"endpoint":       "http://127.0.0.1:18083/mcp",
 			"auth_method":    "none",
 			"auth_assurance": "unauthenticated",
 			"auth_evidence":  "anonymous_probe_succeeded",

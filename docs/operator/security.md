@@ -99,6 +99,30 @@ interprets last-writer `scan_id` as ownership. The API rejects pending/running
 scans, scans referenced by active coverage heads, and the currently published
 posture revision with `409`.
 
+## Collection realm and storage-pair admission
+
+Every ingest-v3 artifact declares an exact `host_id` and
+`network_realm_id`. The server accepts only the tuple configured for its one
+PostgreSQL/Neo4j database pair. This prevents accidental cross-vantage merges
+of local filesystem paths, loopback services, RFC1918 endpoints, host facts,
+and lifecycle coverage. PostgreSQL and Neo4j also carry the same immutable
+`storage_pair_id`, so combining volumes from different deployments fails
+closed.
+
+Admission is the first pipeline operation, before generic validation,
+campaign-rejection auditing, scan lifecycle writes, coverage retirement, or
+graph mutation. The server rereads both storage markers for every ingest.
+Wrong-realm artifacts receive `409 COLLECTION_REALM_MISMATCH`; unverifiable
+storage receives sanitized `503 STORAGE_BINDING_UNAVAILABLE`. Startup inspects
+both stores before migrations or graph-schema changes and repairs a one-sided
+marker only when both stores are product-empty.
+
+This is an integrity guard against operator mistakes, not a hostile-artifact
+authentication scheme. The identifiers are non-secret and unsigned; a party
+that can modify an artifact can replace them. Continue to protect the local
+server boundary and artifact transport. Never use realm admission as a
+substitute for mTLS, VPN/SSH isolation, checksums, or trusted custody.
+
 ## Collector network behaviour
 
 The collector makes outbound network calls to:
@@ -133,12 +157,34 @@ The Config Collector parses MCP client config files which often
 contain API keys, OAuth tokens, and database passwords. Default
 behaviour:
 
-- Credential **values** are SHA-256 hashed at parse time. The hash is
-  stored on the `Credential` node; the raw value never lands in the
-  scan JSON.
+- Credential **values** in environment variables, headers, recognized argv
+  flags/positions, and URL user-info/query components are SHA-256 hashed at
+  parse time. The hash is stored on the `Credential` node; the raw value never
+  lands in the scan JSON by default.
+- Raw stdio argv is never serialized as an MCPServer property. The artifact
+  carries an ordered domain-separated digest per argument plus `arg_count`, so
+  strict ingest can verify the server ID without the original argv. These
+  deterministic hashes prevent accidental disclosure; they are not encryption
+  and low-entropy arguments remain guessable offline.
+- Persisted HTTP endpoints and collection targets remove URL user-info, query,
+  and fragment bytes and record boolean redaction markers. Transport and HTTP
+  identity still use the untouched URL only in collector memory. URL paths and
+  stdio command names remain visible, so credentials must not be placed in
+  either field.
+- MCP connection and enumeration failures persist a bounded diagnostic class,
+  not raw SDK error text that might repeat a configured URL or command line.
+- MCP configuration aliases are grouped by canonical server identity only when
+  their complete execution and authentication profiles agree. HTTP header names
+  are compared in the same case-insensitive canonical form used on the wire;
+  duplicate canonical names with distinct values, or aliases with different
+  argv, environment, URL, or headers, produce a fixed ambiguity outcome before
+  any subprocess or network transport is constructed.
 - `--include-credential-values` opts into raw values. Use this only
   for offline audit work. The output file (containing raw secrets)
-  has no transport-layer protection — protect the file at rest.
+  has no transport-layer protection — protect the file at rest. This opt-in may
+  include values extracted from argv or URL components on Config Collector
+  Credential nodes, but it never restores a raw MCPServer `args` array or raw
+  public endpoint.
 - Credential identity is not exposure. Nodes record `material_status` and
   `exposure_status`; masked LiteLLM provider references and returned one-way
   hashes are excluded from exposure counts, entropy, and rotation claims.

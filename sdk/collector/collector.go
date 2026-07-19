@@ -14,6 +14,7 @@ type Collector interface {
 }
 
 type CollectOptions struct {
+	Origin                  ingest.CollectionOrigin
 	ConfigPath              string
 	ConfigPaths             []string
 	TargetURL               string

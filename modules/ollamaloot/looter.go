@@ -52,6 +52,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -120,17 +121,11 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		ID:    ollamaID,
 		Kinds: []string{"OllamaInstance", "AIService"},
 		Properties: map[string]any{
-			"objectid":          ollamaID,
-			"endpoint":          baseURL,
-			"name":              host,
-			"discovered_via":    "ollama_loot",
-			"service_kind":      "ollama",
-			"auth_method":       "none",
-			"auth_assurance":    string(common.AuthAssuranceUnauthenticated),
-			"auth_evidence":     common.AuthEvidenceAnonymousProbeSucceeded,
-			"probe_status":      string(common.VerificationVerified),
-			"last_verified_at":  time.Now().UTC().Format(time.RFC3339),
-			"is_anonymous_loot": "true",
+			"objectid":      ollamaID,
+			"endpoint":      baseURL,
+			"name":          host,
+			"loot_observed": true,
+			"service_kind":  "ollama",
 		},
 	})
 	res.Summary.EndpointsProbed++
@@ -148,6 +143,7 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		return res, nil
 	}
 	res.Summary.EndpointsProbed++
+	markAnonymousInventorySuccess(res.IngestData.Graph.Nodes[0].Properties)
 
 	for _, tag := range tags {
 		showURL := strings.TrimRight(baseURL, "/") + "/api/show"
@@ -240,13 +236,20 @@ func fetchTags(ctx context.Context, client *http.Client, url string, maxItems in
 		return nil, err
 	}
 	type rawResp struct {
-		Models []tagEntry `json:"models"`
+		Models json.RawMessage `json:"models"`
 	}
 	var parsed rawResp
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, fmt.Errorf("decode /api/tags: %w", err)
 	}
-	out := parsed.Models
+	modelsJSON := bytes.TrimSpace(parsed.Models)
+	if len(modelsJSON) == 0 || modelsJSON[0] != '[' {
+		return nil, errors.New("decode /api/tags: expected a models array")
+	}
+	var out []tagEntry
+	if err := json.Unmarshal(modelsJSON, &out); err != nil {
+		return nil, fmt.Errorf("decode /api/tags models: %w", err)
+	}
 	for i := range out {
 		if out[i].Model == "" {
 			out[i].Model = out[i].Name
@@ -256,6 +259,15 @@ func fetchTags(ctx context.Context, client *http.Client, url string, maxItems in
 		out = out[:maxItems]
 	}
 	return out, nil
+}
+
+func markAnonymousInventorySuccess(props map[string]any) {
+	props["auth_method"] = string(common.AuthNone)
+	props["auth_assurance"] = string(common.AuthAssuranceUnauthenticated)
+	props["auth_evidence"] = common.AuthEvidenceAnonymousProbeSucceeded
+	props["probe_status"] = string(common.VerificationVerified)
+	props["last_verified_at"] = time.Now().UTC().Format(time.RFC3339)
+	props["is_anonymous_loot"] = "true"
 }
 
 // showEntry captures the slice of /api/show that we promote onto the

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
@@ -37,7 +38,7 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 	if data.Meta.Collection == nil {
 		errs = append(errs, FieldError{
 			Path:    "meta.collection",
-			Message: "is required for ingest v2",
+			Message: "is required for ingest v3",
 		})
 	} else {
 		if !validOutcomeState(data.Meta.Collection.State) {
@@ -208,6 +209,18 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 	if data.Meta.ScanID == "" {
 		errs = append(errs, FieldError{Path: "meta.scan_id", Message: "must not be empty"})
 	}
+	if err := ingest.ValidateOriginID("host_id", data.Meta.Origin.HostID); err != nil {
+		errs = append(errs, FieldError{Path: "meta.origin.host_id", Message: err.Error()})
+	}
+	if err := ingest.ValidateOriginID(
+		"network_realm_id",
+		data.Meta.Origin.NetworkRealmID,
+	); err != nil {
+		errs = append(errs, FieldError{
+			Path:    "meta.origin.network_realm_id",
+			Message: err.Error(),
+		})
+	}
 	errs = append(errs, validateRuleset(data.Meta.Ruleset)...)
 	errs = append(errs, validateIdentitySchemes(data.Meta.IdentitySchemes)...)
 	if data.Graph.Nodes == nil {
@@ -294,13 +307,13 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 		if edge.SourceKind == "" {
 			errs = append(errs, FieldError{
 				Path:    fmt.Sprintf("graph.edges[%d].source_kind", i),
-				Message: "must not be empty in ingest v2",
+				Message: "must not be empty in ingest v3",
 			})
 		}
 		if edge.TargetKind == "" {
 			errs = append(errs, FieldError{
 				Path:    fmt.Sprintf("graph.edges[%d].target_kind", i),
-				Message: "must not be empty in ingest v2",
+				Message: "must not be empty in ingest v3",
 			})
 		}
 		errs = append(errs, validateObservationDomains(
@@ -504,7 +517,7 @@ func validateObservationDomains(
 	if len(domains) == 0 {
 		return []FieldError{{
 			Path:    path,
-			Message: "must contain at least one declared domain in ingest v2",
+			Message: "must contain at least one declared domain in ingest v3",
 		}}
 	}
 	seen := make(map[string]bool, len(domains))
@@ -597,7 +610,7 @@ func validOutcomeState(state ingest.OutcomeState) bool {
 
 func validateRuleset(ruleset *ingest.RulesetManifest) []FieldError {
 	if ruleset == nil {
-		return []FieldError{{Path: "meta.ruleset", Message: "is required for ingest v2"}}
+		return []FieldError{{Path: "meta.ruleset", Message: "is required for ingest v3"}}
 	}
 	var errs []FieldError
 	if strings.TrimSpace(ruleset.Digest) == "" {
@@ -648,10 +661,10 @@ func validateIdentitySchemes(schemes []ingest.IdentityScheme) []FieldError {
 			errs = append(errs, FieldError{Path: path + ".version", Message: "must be positive"})
 		}
 		if scheme.EntityKind == "MCPServer" && scheme.Transport == "stdio" &&
-			(scheme.Scheme != ingest.MCPStdioIdentitySchemeV2 || scheme.Version != 2) {
+			(scheme.Scheme != ingest.MCPStdioIdentitySchemeV3 || scheme.Version != 3) {
 			errs = append(errs, FieldError{
 				Path:    path,
-				Message: "stdio MCPServer identity must use mcp_stdio_v2_ordered version 2",
+				Message: "stdio MCPServer identity must use mcp_stdio_v3_hashed_argv version 3",
 			})
 		}
 	}
@@ -742,40 +755,117 @@ func validateCanonicalNodeProperties(node ingest.Node, index int) []FieldError {
 			})
 		}
 	}
+	if hasKind(node.Kinds, "MCPServer") {
+		transport, transportOK := node.Properties["transport"].(string)
+		if !transportOK || (transport != "http" && transport != "stdio") {
+			errs = append(errs, FieldError{
+				Path:    fmt.Sprintf("graph.nodes[%d].properties.transport", index),
+				Message: "authoritative MCPServer transport must be the canonical string http or stdio",
+			})
+		}
+
+		// Transport configuration is executable, credential-bearing input and must
+		// never cross the ingest boundary. Enforce this independently of the
+		// declared transport so an omitted or malformed discriminator cannot bypass
+		// the artifact privacy contract.
+		for _, property := range []string{"args", "env", "headers", "url"} {
+			if _, exists := node.Properties[property]; exists {
+				errs = append(errs, FieldError{
+					Path: fmt.Sprintf(
+						"graph.nodes[%d].properties.%s",
+						index,
+						property,
+					),
+					Message: "raw MCP transport configuration is prohibited",
+				})
+			}
+		}
+
+		endpointValue, endpointPresent := node.Properties["endpoint"]
+		if endpointPresent {
+			endpoint, endpointOK := endpointValue.(string)
+			sanitized := ingest.SanitizeHTTPEndpoint(endpoint)
+			if !endpointOK || !sanitized.Valid || endpoint != sanitized.Display {
+				errs = append(errs, FieldError{
+					Path:    fmt.Sprintf("graph.nodes[%d].properties.endpoint", index),
+					Message: "MCPServer endpoint must be its valid canonical sanitized display value",
+				})
+			}
+		} else if transport == "http" {
+			errs = append(errs, FieldError{
+				Path:    fmt.Sprintf("graph.nodes[%d].properties.endpoint", index),
+				Message: "HTTP MCPServer nodes require a canonical sanitized endpoint",
+			})
+		}
+	}
 	if hasKind(node.Kinds, "MCPServer") && node.Properties["transport"] == "stdio" {
-		if scheme, _ := node.Properties["id_scheme"].(string); scheme != ingest.MCPStdioIdentitySchemeV2 {
+		if scheme, _ := node.Properties["id_scheme"].(string); scheme != ingest.MCPStdioIdentitySchemeV3 {
 			errs = append(errs, FieldError{
 				Path:    fmt.Sprintf("graph.nodes[%d].properties.id_scheme", index),
-				Message: "stdio MCPServer nodes require mcp_stdio_v2_ordered",
+				Message: "stdio MCPServer nodes require mcp_stdio_v3_hashed_argv",
 			})
 		}
 		command, _ := node.Properties["command"].(string)
-		if strings.TrimSpace(command) == "" {
-			command, _ = node.Properties["endpoint"].(string)
+		rawHashes, hashesPresent := node.Properties["arg_hashes"]
+		argumentHashes, hashesOK := stringSlice(rawHashes)
+		hashesOK = hashesOK && rawHashes != nil
+		hashesCanonical := hashesOK
+		if hashesOK {
+			for i, argumentHash := range argumentHashes {
+				if ingest.IsCanonicalSHA256(argumentHash) {
+					continue
+				}
+				hashesCanonical = false
+				errs = append(errs, FieldError{
+					Path: fmt.Sprintf(
+						"graph.nodes[%d].properties.arg_hashes[%d]",
+						index,
+						i,
+					),
+					Message: "must be a canonical sha256 digest",
+				})
+			}
 		}
-		args, argsOK := stringSlice(node.Properties["args"])
+
+		argCount, countOK := nonNegativeWholeNumber(node.Properties["arg_count"])
 		switch {
 		case strings.TrimSpace(command) == "":
 			errs = append(errs, FieldError{
 				Path:    fmt.Sprintf("graph.nodes[%d].properties.command", index),
 				Message: "stdio MCPServer nodes require command identity input",
 			})
-		case !argsOK:
+		case !hashesPresent || !hashesOK:
 			errs = append(errs, FieldError{
-				Path:    fmt.Sprintf("graph.nodes[%d].properties.args", index),
-				Message: "stdio MCPServer args must be an array of strings",
+				Path:    fmt.Sprintf("graph.nodes[%d].properties.arg_hashes", index),
+				Message: "stdio MCPServer arg_hashes must be an explicit array of strings",
 			})
-		case node.ID != ingest.ComputeMCPServerID("stdio", command, args...):
+		case hashesCanonical && node.ID != ingest.ComputeMCPServerIDFromArgumentHashes(command, argumentHashes...):
 			errs = append(errs, FieldError{
 				Path:    fmt.Sprintf("graph.nodes[%d].id", index),
-				Message: "must match the ordered, length-framed stdio identity",
+				Message: "must match the ordered hashed-argv stdio identity",
+			})
+		}
+		switch {
+		case !countOK:
+			errs = append(errs, FieldError{
+				Path:    fmt.Sprintf("graph.nodes[%d].properties.arg_count", index),
+				Message: "stdio MCPServer arg_count must be a non-negative integer",
+			})
+		case hashesPresent && hashesOK && argCount != float64(len(argumentHashes)):
+			errs = append(errs, FieldError{
+				Path:    fmt.Sprintf("graph.nodes[%d].properties.arg_count", index),
+				Message: "must equal the number of ordered arg_hashes",
 			})
 		}
 	}
 	if hasKind(node.Kinds, "MCPServer") || hasKind(node.Kinds, "A2AAgent") {
 		errs = append(errs, validateAuthProperties(node.Properties, index)...)
 	}
+	if hasKind(node.Kinds, "MCPServer") {
+		errs = append(errs, validateObservedMCPAuthProperties(node.Properties, index)...)
+	}
 	if hasKind(node.Kinds, "A2AAgent") {
+		errs = append(errs, validateObservedA2AAuthProperties(node.Properties, index)...)
 		status, _ := node.Properties["signature_verification_status"].(string)
 		switch status {
 		case "unknown",
@@ -977,6 +1067,14 @@ func numericFloat(value any) (float64, bool) {
 	}
 }
 
+func nonNegativeWholeNumber(value any) (float64, bool) {
+	number, ok := numericFloat(value)
+	if !ok || math.IsNaN(number) || math.IsInf(number, 0) || number < 0 || number != math.Trunc(number) {
+		return 0, false
+	}
+	return number, true
+}
+
 func stringSlice(value any) ([]string, bool) {
 	switch typed := value.(type) {
 	case nil:
@@ -1001,8 +1099,10 @@ func stringSlice(value any) ([]string, bool) {
 func validateAuthProperties(properties map[string]any, index int) []FieldError {
 	var errs []FieldError
 	method, _ := properties["auth_method"].(string)
+	methodCanonical := false
 	switch method {
 	case "unknown", "none", "basic", "apiKey", "bearer", "oauth", "oidc", "mtls", "custom":
+		methodCanonical = true
 	default:
 		errs = append(errs, FieldError{
 			Path:    fmt.Sprintf("graph.nodes[%d].properties.auth_method", index),
@@ -1010,32 +1110,393 @@ func validateAuthProperties(properties map[string]any, index int) []FieldError {
 		})
 	}
 	assurance, _ := properties["auth_assurance"].(string)
+	assuranceCanonical := false
 	switch assurance {
 	case "unknown", "unauthenticated", "weak", "moderate", "strong":
+		assuranceCanonical = true
 	default:
 		errs = append(errs, FieldError{
 			Path:    fmt.Sprintf("graph.nodes[%d].properties.auth_assurance", index),
 			Message: fmt.Sprintf("invalid canonical auth assurance %q", assurance),
 		})
 	}
+	if methodCanonical && assuranceCanonical {
+		expectedAssurance := string(common.AssessAuth(method).Assurance)
+		if assurance != expectedAssurance {
+			errs = append(errs, FieldError{
+				Path: fmt.Sprintf("graph.nodes[%d].properties.auth_assurance", index),
+				Message: fmt.Sprintf(
+					"must be %q for auth method %q",
+					expectedAssurance,
+					method,
+				),
+			})
+		}
+	}
 	evidence, _ := properties["auth_evidence"].(string)
+	evidenceCanonical := false
 	switch evidence {
 	case "unknown", "declared_security_scheme", "configured_credential",
 		"anonymous_probe_succeeded", "local_process":
+		evidenceCanonical = true
 	default:
 		errs = append(errs, FieldError{
 			Path:    fmt.Sprintf("graph.nodes[%d].properties.auth_evidence", index),
 			Message: fmt.Sprintf("invalid canonical auth evidence %q", evidence),
 		})
 	}
-	if evidence == "local_process" &&
-		(method != "unknown" || assurance != "unknown") {
+
+	if methodCanonical && assuranceCanonical && evidenceCanonical &&
+		!configuredAuthEvidenceCompatible(method, evidence) {
 		errs = append(errs, FieldError{
-			Path:    fmt.Sprintf("graph.nodes[%d].properties.auth_evidence", index),
-			Message: "local_process evidence requires the canonical unknown/unknown/local_process auth tuple",
+			Path: fmt.Sprintf("graph.nodes[%d].properties.auth_evidence", index),
+			Message: fmt.Sprintf(
+				"auth evidence %q is incompatible with configured auth method %q",
+				evidence,
+				method,
+			),
 		})
 	}
 	return errs
+}
+
+// configuredAuthEvidenceCompatible encodes the tuples emitted by the
+// first-party Config, MCP discovery, protocol-scan, and A2A collectors, plus
+// the explicit anonymous-probe tuple accepted from affirmative runtime
+// evidence imports. "none" paired with unknown or declared evidence remains
+// valid but fail-closed during analysis: only anonymous_probe_succeeded proves
+// unauthenticated access. Unknown can legitimately describe no observation, an
+// ambiguous declaration, a configured query credential whose scheme cannot be
+// inferred, or a local stdio process.
+func configuredAuthEvidenceCompatible(method, evidence string) bool {
+	switch method {
+	case string(common.AuthNone):
+		return evidence == common.AuthEvidenceUnknown ||
+			evidence == common.AuthEvidenceDeclaredScheme ||
+			evidence == common.AuthEvidenceAnonymousProbeSucceeded
+	case string(common.AuthUnknown):
+		return evidence == common.AuthEvidenceUnknown ||
+			evidence == common.AuthEvidenceDeclaredScheme ||
+			evidence == common.AuthEvidenceConfiguredCredential ||
+			evidence == common.AuthEvidenceLocalProcess
+	case string(common.AuthBasic), string(common.AuthAPIKey),
+		string(common.AuthBearer), string(common.AuthOAuth),
+		string(common.AuthOIDC), string(common.AuthMTLS), string(common.AuthCustom):
+		return evidence == common.AuthEvidenceConfiguredCredential ||
+			evidence == common.AuthEvidenceDeclaredScheme
+	default:
+		return false
+	}
+}
+
+// validateObservedMCPAuthProperties treats runtime authentication as one
+// indivisible evidence tuple. A collector may omit the tuple entirely (for
+// example, Config collection), but it may not publish a partially populated or
+// internally contradictory tuple. This prevents a single forged observed field
+// from overriding the separately retained configured posture during analysis.
+func validateObservedMCPAuthProperties(properties map[string]any, index int) []FieldError {
+	const (
+		methodKey    = "observed_auth_method"
+		assuranceKey = "observed_auth_assurance"
+		evidenceKey  = "observed_auth_evidence"
+	)
+	_, methodPresent := properties[methodKey]
+	_, assurancePresent := properties[assuranceKey]
+	_, evidencePresent := properties[evidenceKey]
+	if !methodPresent && !assurancePresent && !evidencePresent {
+		return nil
+	}
+
+	basePath := fmt.Sprintf("graph.nodes[%d].properties.", index)
+	var errs []FieldError
+	method, methodOK := properties[methodKey].(string)
+	assurance, assuranceOK := properties[assuranceKey].(string)
+	evidence, evidenceOK := properties[evidenceKey].(string)
+	for _, field := range []struct {
+		key     string
+		present bool
+		valid   bool
+	}{
+		{key: methodKey, present: methodPresent, valid: methodOK},
+		{key: assuranceKey, present: assurancePresent, valid: assuranceOK},
+		{key: evidenceKey, present: evidencePresent, valid: evidenceOK},
+	} {
+		switch {
+		case !field.present:
+			errs = append(errs, FieldError{
+				Path:    basePath + field.key,
+				Message: "is required when any observed authentication field is present",
+			})
+		case !field.valid:
+			errs = append(errs, FieldError{
+				Path:    basePath + field.key,
+				Message: "must be a canonical string",
+			})
+		}
+	}
+	if !methodOK || !assuranceOK || !evidenceOK {
+		return errs
+	}
+
+	methodCanonical := false
+	switch method {
+	case "unknown", "none", "basic", "apiKey", "bearer", "oauth", "oidc", "mtls", "custom":
+		methodCanonical = true
+	default:
+		errs = append(errs, FieldError{
+			Path:    basePath + methodKey,
+			Message: fmt.Sprintf("invalid canonical observed auth method %q", method),
+		})
+	}
+	assuranceCanonical := false
+	switch assurance {
+	case "unknown", "unauthenticated", "weak", "moderate", "strong":
+		assuranceCanonical = true
+	default:
+		errs = append(errs, FieldError{
+			Path:    basePath + assuranceKey,
+			Message: fmt.Sprintf("invalid canonical observed auth assurance %q", assurance),
+		})
+	}
+	evidenceCanonical := false
+	switch evidence {
+	case common.AuthEvidenceUnknown,
+		common.AuthEvidenceConfiguredCredential,
+		common.AuthEvidenceAnonymousProbeSucceeded,
+		common.AuthEvidenceLocalProcess:
+		evidenceCanonical = true
+	default:
+		errs = append(errs, FieldError{
+			Path:    basePath + evidenceKey,
+			Message: fmt.Sprintf("invalid canonical observed auth evidence %q", evidence),
+		})
+	}
+	if !methodCanonical || !assuranceCanonical || !evidenceCanonical {
+		return errs
+	}
+
+	expectedAssurance := string(common.AssessAuth(method).Assurance)
+	if assurance != expectedAssurance {
+		errs = append(errs, FieldError{
+			Path: basePath + assuranceKey,
+			Message: fmt.Sprintf(
+				"must be %q for observed auth method %q",
+				expectedAssurance,
+				method,
+			),
+		})
+	}
+
+	status, _ := properties["status"].(string)
+	transport, _ := properties["transport"].(string)
+	switch evidence {
+	case common.AuthEvidenceAnonymousProbeSucceeded:
+		if method != string(common.AuthNone) ||
+			assurance != string(common.AuthAssuranceUnauthenticated) ||
+			status != "reachable" || transport != "http" {
+			errs = append(errs, FieldError{
+				Path:    basePath + evidenceKey,
+				Message: "anonymous_probe_succeeded requires the exact reachable HTTP none/unauthenticated tuple",
+			})
+		}
+	case common.AuthEvidenceLocalProcess:
+		if method != string(common.AuthUnknown) ||
+			assurance != string(common.AuthAssuranceUnknown) ||
+			status != "reachable" || transport != "stdio" {
+			errs = append(errs, FieldError{
+				Path:    basePath + evidenceKey,
+				Message: "local_process requires the exact reachable stdio unknown/unknown tuple",
+			})
+		}
+	case common.AuthEvidenceUnknown:
+		if method != string(common.AuthUnknown) ||
+			assurance != string(common.AuthAssuranceUnknown) ||
+			(status != "reachable" && status != "unreachable") {
+			errs = append(errs, FieldError{
+				Path:    basePath + evidenceKey,
+				Message: "unknown observed evidence requires a reachable or unreachable unknown/unknown tuple",
+			})
+		}
+	case common.AuthEvidenceConfiguredCredential:
+		if method == string(common.AuthNone) || status != "reachable" || transport != "http" {
+			errs = append(errs, FieldError{
+				Path:    basePath + evidenceKey,
+				Message: "credential observation requires a reachable HTTP non-none auth tuple",
+			})
+		}
+	}
+	return errs
+}
+
+// validateObservedA2AAuthProperties accepts only the bounded, read-only task
+// lookup observation that proves anonymous access to an A2A protocol handler.
+// Reading a public Agent Card is declaration discovery, not runtime auth
+// evidence, and no other observed tuple is permitted to claim otherwise.
+func validateObservedA2AAuthProperties(properties map[string]any, index int) []FieldError {
+	const (
+		methodKey      = "observed_auth_method"
+		assuranceKey   = "observed_auth_assurance"
+		evidenceKey    = "observed_auth_evidence"
+		probeMethodKey = "auth_probe_method"
+		probeStatusKey = "auth_probe_status"
+		probeDetailKey = "auth_probe_detail"
+	)
+	_, methodPresent := properties[methodKey]
+	_, assurancePresent := properties[assuranceKey]
+	_, evidencePresent := properties[evidenceKey]
+	_, probeMethodPresent := properties[probeMethodKey]
+	_, probeStatusPresent := properties[probeStatusKey]
+	_, probeDetailPresent := properties[probeDetailKey]
+	if !methodPresent && !assurancePresent && !evidencePresent &&
+		!probeMethodPresent && !probeStatusPresent && !probeDetailPresent {
+		return nil
+	}
+
+	basePath := fmt.Sprintf("graph.nodes[%d].properties.", index)
+	var errs []FieldError
+	probeMethod, probeMethodOK := properties[probeMethodKey].(string)
+	probeStatus, probeStatusOK := properties[probeStatusKey].(string)
+	probeDetail, probeDetailOK := properties[probeDetailKey].(string)
+	for _, field := range []struct {
+		key     string
+		present bool
+		valid   bool
+	}{
+		{key: probeMethodKey, present: probeMethodPresent, valid: probeMethodOK},
+		{key: probeStatusKey, present: probeStatusPresent, valid: probeStatusOK},
+		{key: probeDetailKey, present: probeDetailPresent, valid: probeDetailOK},
+	} {
+		switch {
+		case !field.present:
+			errs = append(errs, FieldError{
+				Path:    basePath + field.key,
+				Message: "is required when any A2A authentication probe field is present",
+			})
+		case !field.valid:
+			errs = append(errs, FieldError{
+				Path:    basePath + field.key,
+				Message: "must be a canonical string",
+			})
+		}
+	}
+	if !probeMethodOK || !probeStatusOK || !probeDetailOK {
+		return errs
+	}
+	if probeMethod != "get_task_nonexistent" {
+		errs = append(errs, FieldError{
+			Path:    basePath + probeMethodKey,
+			Message: "must be the canonical bounded method get_task_nonexistent",
+		})
+	}
+	statusCanonical := false
+	switch probeStatus {
+	case "anonymous_protocol_access", "authentication_required", "unknown":
+		statusCanonical = true
+	default:
+		errs = append(errs, FieldError{
+			Path:    basePath + probeStatusKey,
+			Message: fmt.Sprintf("invalid canonical A2A auth probe status %q", probeStatus),
+		})
+	}
+	if statusCanonical && !validA2AAuthProbeDetail(probeStatus, probeDetail) {
+		errs = append(errs, FieldError{
+			Path: basePath + probeDetailKey,
+			Message: fmt.Sprintf(
+				"invalid bounded detail %q for A2A auth probe status %q",
+				probeDetail,
+				probeStatus,
+			),
+		})
+	}
+
+	switch probeStatus {
+	case "anonymous_protocol_access":
+		observedMethod, observedMethodOK := properties[methodKey].(string)
+		observedAssurance, observedAssuranceOK := properties[assuranceKey].(string)
+		observedEvidence, observedEvidenceOK := properties[evidenceKey].(string)
+		for _, field := range []struct {
+			key     string
+			present bool
+			valid   bool
+			value   string
+			want    string
+		}{
+			{key: methodKey, present: methodPresent, value: observedMethod, valid: observedMethodOK, want: string(common.AuthNone)},
+			{key: assuranceKey, present: assurancePresent, value: observedAssurance, valid: observedAssuranceOK, want: string(common.AuthAssuranceUnauthenticated)},
+			{key: evidenceKey, present: evidencePresent, value: observedEvidence, valid: observedEvidenceOK, want: common.AuthEvidenceAnonymousProbeSucceeded},
+		} {
+			switch {
+			case !field.present:
+				errs = append(errs, FieldError{
+					Path:    basePath + field.key,
+					Message: "is required for anonymous_protocol_access",
+				})
+			case !field.valid:
+				errs = append(errs, FieldError{
+					Path:    basePath + field.key,
+					Message: "must be a canonical string",
+				})
+			case field.value != field.want:
+				errs = append(errs, FieldError{
+					Path:    basePath + field.key,
+					Message: fmt.Sprintf("must be %q for anonymous_protocol_access", field.want),
+				})
+			}
+		}
+	case "authentication_required", "unknown":
+		for _, field := range []struct {
+			key     string
+			present bool
+		}{
+			{key: methodKey, present: methodPresent},
+			{key: assuranceKey, present: assurancePresent},
+			{key: evidenceKey, present: evidencePresent},
+		} {
+			if field.present {
+				errs = append(errs, FieldError{
+					Path:    basePath + field.key,
+					Message: "must be omitted for a non-positive A2A authentication probe",
+				})
+			}
+		}
+	}
+	return errs
+}
+
+func validA2AAuthProbeDetail(status, detail string) bool {
+	switch status {
+	case "anonymous_protocol_access":
+		return detail == "task_not_found_v1" || detail == "task_not_found_v0_3"
+	case "authentication_required":
+		return detail == "http_unauthorized" || detail == "http_forbidden"
+	case "unknown":
+		switch detail {
+		case "no_preferred_interface",
+			"nonconformant_preferred_interface",
+			"unsupported_protocol_binding",
+			"unsupported_protocol_version",
+			"invalid_preferred_interface_url",
+			"query_interface_not_probeable",
+			"cross_origin_interface",
+			"random_id_generation_failed",
+			"request_encoding_failed",
+			"request_creation_failed",
+			"transport_unavailable",
+			"timeout",
+			"context_canceled",
+			"transport_error",
+			"redirect_response",
+			"unexpected_http_status",
+			"non_json_response",
+			"response_too_large",
+			"malformed_jsonrpc_response",
+			"unexpected_jsonrpc_response",
+			"response_id_mismatch",
+			"non_task_not_found_error":
+			return true
+		}
+	}
+	return false
 }
 
 func validateCredentialProperties(properties map[string]any, index int) []FieldError {

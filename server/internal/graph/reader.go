@@ -206,6 +206,16 @@ func publicNodeKind(value any) string {
 	return ""
 }
 
+// PublicFactProperties returns a shallow copy without the writer's internal
+// stable-observation fingerprint. Structured graph and analysis responses use
+// this boundary; the intentional raw Cypher surface continues to return
+// exactly what the query selected.
+func PublicFactProperties(properties map[string]any) map[string]any {
+	public := cloneProperties(properties)
+	delete(public, observationFactFingerprintsKey)
+	return public
+}
+
 func (r *Reader) GetNode(ctx context.Context, objectID string) (*ingest.Node, []ingest.Edge, error) {
 	session := r.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
 	defer session.Close(ctx)
@@ -246,7 +256,7 @@ RETURN n, labels(n) AS kinds`, map[string]any{
 		node := &ingest.Node{
 			ID:         objectID,
 			Kinds:      kindStrs,
-			Properties: neoNode.Props,
+			Properties: PublicFactProperties(neoNode.Props),
 		}
 
 		// Get connected edges
@@ -271,7 +281,7 @@ RETURN type(r) AS kind, properties(r) AS props,
 				Kind: kindStr,
 			}
 			if p, ok := props.(map[string]any); ok {
-				e.Properties = p
+				e.Properties = PublicFactProperties(p)
 			}
 			if out, ok := outgoing.(bool); ok && out {
 				e.Source = objectID
@@ -397,7 +407,7 @@ func (r *Reader) ListNodesPage(
 			nodes = append(nodes, ingest.Node{
 				ID:         objectID,
 				Kinds:      kindStrs,
-				Properties: neoNode.Props,
+				Properties: PublicFactProperties(neoNode.Props),
 			})
 		}
 		if err := res.Err(); err != nil {
@@ -545,7 +555,7 @@ func (r *Reader) ListEdgesPage(
 			e.SourceKind = publicNodeKind(srcKinds)
 			e.TargetKind = publicNodeKind(tgtKinds)
 			if p, ok := props.(map[string]any); ok {
-				e.Properties = p
+				e.Properties = PublicFactProperties(p)
 			}
 			edges = append(edges, e)
 		}
@@ -724,7 +734,7 @@ RETURN a.objectid AS source, b.objectid AS target, type(r) AS kind, properties(r
 			nodes = append(nodes, ingest.Node{
 				ID:         oid,
 				Kinds:      kindStrs,
-				Properties: neoNode.Props,
+				Properties: PublicFactProperties(neoNode.Props),
 			})
 		}
 		if err := res.Err(); err != nil {
@@ -775,7 +785,7 @@ RETURN a.objectid AS source, b.objectid AS target, type(r) AS kind, properties(r
 				e.TargetKind = tk
 			}
 			if p, ok := propsVal.(map[string]any); ok {
-				e.Properties = p
+				e.Properties = PublicFactProperties(p)
 			}
 			edges = append(edges, e)
 		}
@@ -907,7 +917,7 @@ RETURN DISTINCT b`, arrow)
 				nodes = append(nodes, ingest.Node{
 					ID:         oid,
 					Kinds:      kinds,
-					Properties: neoNode.Props,
+					Properties: PublicFactProperties(neoNode.Props),
 				})
 			}
 			return nodes, res.Err()
@@ -958,7 +968,7 @@ RETURN DISTINCT b`, arrow)
 		return ingest.Node{
 			ID:         objectID,
 			Kinds:      kindStrs,
-			Properties: neoNode.Props,
+			Properties: PublicFactProperties(neoNode.Props),
 		}, res.Err()
 	})
 	if err != nil {
@@ -1023,7 +1033,7 @@ RETURN a.objectid AS source, b.objectid AS target, type(r) AS kind, properties(r
 				e.TargetKind = tk
 			}
 			if p, ok := propsVal.(map[string]any); ok {
-				e.Properties = p
+				e.Properties = PublicFactProperties(p)
 			}
 			edges = append(edges, e)
 		}

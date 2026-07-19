@@ -66,10 +66,23 @@ func init() {
 
 func runExtract(cmd *cobra.Command, args []string) error {
 	sourceNodeID := args[0]
+	if !ingest.IsCanonicalNodeID(sourceNodeID) {
+		return errors.New(
+			"extract: <source-node-id> must be sha256: followed by 64 lowercase hexadecimal characters",
+		)
+	}
 	kind, _ := cmd.Flags().GetString("type")
 	artifactPath, _ := cmd.Flags().GetString("artifact")
 	commit, _ := cmd.Flags().GetBool("commit")
 	engagementID, _ := cmd.Flags().GetString("engagement-id")
+	var origin ingest.CollectionOrigin
+	if commit {
+		var err error
+		origin, err = requireCollectionOrigin()
+		if err != nil {
+			return err
+		}
+	}
 
 	if artifactPath == "" {
 		return errors.New("extract: --artifact <path> is required")
@@ -114,7 +127,7 @@ func runExtract(cmd *cobra.Command, args []string) error {
 				output = v
 			}
 		}
-		envelope := buildExtractEnvelope(sourceNodeID, kind, engagementID, res)
+		envelope := buildExtractEnvelope(origin, sourceNodeID, kind, engagementID, res)
 		if output == "" {
 			output = fmt.Sprintf("extract-%s.json", envelope.Meta.ScanID)
 		}
@@ -136,10 +149,10 @@ func runExtract(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func buildExtractEnvelope(sourceNodeID, kind, engagementID string, res *action.ExtractResult) *ingest.IngestData {
+func buildExtractEnvelope(origin ingest.CollectionOrigin, sourceNodeID, kind, engagementID string, res *action.ExtractResult) *ingest.IngestData {
 	scanID := uuid.New().String()
 	env := common.NewIngestData("scan", scanID)
-	env.Meta.CollectorVersion = "0.5.0-dev"
+	env.Meta.Origin = origin
 	env.Meta.Extra = map[string]any{
 		"extract_type":   kind,
 		"source_node_id": sourceNodeID,

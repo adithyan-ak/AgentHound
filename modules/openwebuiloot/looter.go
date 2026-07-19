@@ -130,11 +130,11 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		ID:    openwebuiID,
 		Kinds: []string{"OpenWebUIInstance", "AIService"},
 		Properties: map[string]any{
-			"objectid":       openwebuiID,
-			"endpoint":       baseURL,
-			"name":           host,
-			"discovered_via": "openwebui_loot",
-			"service_kind":   "openwebui",
+			"objectid":      openwebuiID,
+			"endpoint":      baseURL,
+			"name":          host,
+			"loot_observed": true,
+			"service_kind":  "openwebui",
 		},
 	})
 	res.Summary.EndpointsProbed++
@@ -418,12 +418,10 @@ func runOllamaConfig(
 			Properties: map[string]any{
 				"objectid":               ollamaID,
 				"endpoint":               canon,
-				"discovered_via":         "openwebui_ollama_config",
 				"service_kind":           "ollama",
 				"configuration_observed": true,
 				"configured_via":         "openwebui",
 				"configured_auth_method": string(common.AuthUnknown),
-				"probe_status":           string(common.VerificationConfiguredUnverified),
 			},
 		})
 		res.IngestData.Graph.Edges = append(res.IngestData.Graph.Edges, ingest.Edge{

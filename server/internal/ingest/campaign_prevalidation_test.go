@@ -70,6 +70,7 @@ func pipelineCampaignEvidence(outcome campaign.Outcome) campaign.Evidence {
 
 func pipelineCampaignEnvelope(scanID string, evidence campaign.Evidence) *sdkingest.IngestData {
 	data := common.NewIngestData("scan", scanID)
+	data.Meta.Origin = testCollectionOrigin
 	data.Meta.Extra = map[string]any{
 		campaign.EvidenceArtifactMetadataKey: evidence.Artifact(),
 	}

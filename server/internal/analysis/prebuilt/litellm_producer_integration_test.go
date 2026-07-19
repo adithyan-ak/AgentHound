@@ -28,7 +28,13 @@ import (
 
 const integrationHashedVirtualKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
-func TestLiteLLMProductionLootArtifactIsStrictV2(t *testing.T) {
+type allowOriginAdmitter struct{}
+
+func (allowOriginAdmitter) Admit(context.Context, sdkingest.CollectionOrigin) error {
+	return nil
+}
+
+func TestLiteLLMProductionLootArtifactIsStrictV3(t *testing.T) {
 	fixture := newLiteLLMFixture(t)
 	defer fixture.Close()
 
@@ -44,7 +50,7 @@ func TestIntegrationLiteLLMFingerprintThenLootPreservesGatewayProperties(t *test
 
 	fingerprintData := runAgentHoundLiteLLMScan(t)
 	if err := serveringest.NewValidator().Validate(&fingerprintData); err != nil {
-		t.Fatalf("strict ingest-v2 validation rejected agenthound scan output: %v", err)
+		t.Fatalf("strict ingest-v3 validation rejected agenthound scan output: %v", err)
 	}
 	gatewayID := sdkingest.ComputeNodeID("LiteLLMGateway", fixture.URL)
 	fingerprintGateway := findLiteLLMGateway(t, &fingerprintData, gatewayID)
@@ -250,7 +256,7 @@ func assertStrictLiteLLMArtifact(
 ) {
 	t.Helper()
 	if err := serveringest.NewValidator().Validate(data); err != nil {
-		t.Fatalf("strict ingest-v2 validation rejected agenthound loot output: %v", err)
+		t.Fatalf("strict ingest-v3 validation rejected agenthound loot output: %v", err)
 	}
 
 	gatewayID := sdkingest.ComputeNodeID("LiteLLMGateway", fixtureURL)
@@ -509,7 +515,7 @@ func runAgentHoundArtifactCommand(
 }
 
 func integrationCommandEnv(home string) []string {
-	env := make([]string, 0, len(os.Environ())+2)
+	env := make([]string, 0, len(os.Environ())+4)
 	for _, entry := range os.Environ() {
 		if strings.HasPrefix(entry, "HOME=") ||
 			strings.HasPrefix(entry, "AGENTHOUND_QUIET=") {
@@ -517,7 +523,13 @@ func integrationCommandEnv(home string) []string {
 		}
 		env = append(env, entry)
 	}
-	return append(env, "HOME="+home, "AGENTHOUND_QUIET=1")
+	return append(
+		env,
+		"HOME="+home,
+		"AGENTHOUND_QUIET=1",
+		"AGENTHOUND_HOST_ID=fixture-host",
+		"AGENTHOUND_NETWORK_REALM_ID=fixture-realm",
+	)
 }
 
 func freshLiteLLMIntegrationHarness(
@@ -596,5 +608,6 @@ func freshLiteLLMIntegrationHarness(
 		db,
 		scanStore,
 		findingStore,
+		allowOriginAdmitter{},
 	), db, findingStore
 }

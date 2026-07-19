@@ -50,7 +50,8 @@ All errors return a structured JSON response:
 
 Error codes: `VALIDATION_ERROR` (400), `FORBIDDEN` (403), `NOT_FOUND`
 (404), `REVISION_CONFLICT` (409), `PROJECTION_CONFLICT` (409),
-`SERVICE_UNAVAILABLE` (503), `INTERNAL_ERROR` (500). Graph-backed reads
+`COLLECTION_REALM_MISMATCH` (409), `SERVICE_UNAVAILABLE` (503),
+`STORAGE_BINDING_UNAVAILABLE` (503), `INTERNAL_ERROR` (500). Graph-backed reads
 return `PROJECTION_CONFLICT` unless one stable, complete published projection
 is available for the entire read. `error.details.reason` is `absent`,
 `updating`, `incomplete`, or `changed`; clients must retry the whole read
@@ -192,13 +193,65 @@ Returns reachable nodes grouped by ring (1-hop, 2-hop, ...). Useful for "what ca
 
 **Max body:** 100 MB.
 
-Upload strict ingest-v2 collector JSON. Unknown structural fields, v1
-artifacts, missing collection/rules/identity metadata, unscoped facts, omitted
+Upload strict ingest-v3 collector JSON. Unknown structural fields, v1/v2
+artifacts, missing origin/collection/rules/identity metadata, unscoped facts, omitted
 edge endpoint kinds, legacy property aliases, and incomplete canonical
 credential/host/auth evidence are rejected before any write. Runs the
-serialized lifecycle: validate →
+serialized lifecycle: verify both database binding markers and admit the exact
+configured `meta.origin` → validate →
 normalize → freeze pre-write totals → write → reconcile complete observation
 domains → post-process → freeze post-analysis totals → snapshot → publish.
+
+Origin admission is deliberately first. A host/realm mismatch returns
+`409 COLLECTION_REALM_MISMATCH`; a database marker that cannot be verified
+returns sanitized `503 STORAGE_BINDING_UNAVAILABLE`. Neither case creates a
+scan-audit row, records a campaign rejection, starts lifecycle state, or writes
+the graph. Origin fields are non-secret provenance, not authentication or a
+signature.
+
+For `MCPServer` and `A2AAgent`, configured method, assurance, and evidence must
+form a producer-compatible tuple. Method-to-assurance mapping is fixed;
+anonymous-probe evidence requires `none/unauthenticated`, local-process
+evidence requires `unknown/unknown`, known authenticated/custom methods require
+configured-credential or declared-scheme evidence, and the documented
+unknown/query/declaration/local cases remain accepted. A configured
+`none/unauthenticated` declaration with `unknown` or declared-scheme evidence
+is accepted as provenance but remains fail-closed during analysis.
+Even an exact raw configured anonymous-probe tuple remains fail-closed unless
+it is selected through validated observed provenance; it does not independently
+produce an unauthenticated effective assurance or exact weakness score.
+
+For `MCPServer`, if any `observed_auth_*` field is present,
+method/assurance/evidence are required as one canonical tuple. Runtime
+declaration-only evidence is rejected because the MCP collector does not emit
+it as an observation. The anonymous tuple is valid only for a reachable HTTP
+server and must be exactly
+`none/unauthenticated/anonymous_probe_succeeded`; partial, unreachable, or
+contradictory anonymous claims return `400 VALIDATION_ERROR`. Current
+unreachable (`unknown/unknown/unknown`), stdio
+(`unknown/unknown/local_process`), and unknown configured-request-material
+(`unknown/unknown/configured_credential`) tuples remain valid.
+
+For `A2AAgent`, observed authentication is accepted only as the atomic exact
+tuple `none/unauthenticated/anonymous_probe_succeeded` with
+`auth_probe_method=get_task_nonexistent` and
+`auth_probe_status=anonymous_protocol_access`, with `auth_probe_detail` equal
+to `task_not_found_v1` or `task_not_found_v0_3`. The lookup is read-only and
+must return the protocol's exact nonexistent-task result. Method, status, and
+bounded fixed detail are required together. Card access, protected responses,
+and inconclusive results may publish the canonical diagnostic triple but must
+omit `observed_auth_*`; orphan positive status, partial/wrongly typed metadata,
+arbitrary status/detail, generic observed tuples, and observed fields on a
+non-positive status return `400 VALIDATION_ERROR`.
+
+Normalization preserves pre-v1 direct-URL MCP artifacts that predate the
+configured/observed split. Only an envelope with `meta.collector=mcp` and a
+concrete reachable HTTP `MCPServer` whose raw tuple is exactly
+`none/unauthenticated/anonymous_probe_succeeded` and whose three
+`observed_auth_*` fields are all absent is migrated. The tuple is copied to
+`observed_auth_*` and marked `auth_observation_compat=pre_v1_raw_mcp`; Config,
+A2A, declaration-only, unknown, unreachable, stdio, reference-only, and partial
+observed near-misses are never migrated.
 
 Campaign submissions add a scenario-specific prevalidation stage immediately
 after generic validation and before normalization, `BeginScan`, graph writes, or
@@ -214,12 +267,16 @@ credential material.
 // Request body (abridged; see graph-model.md for the complete schema)
 {
   "meta": {
-    "version": 2,
+    "version": 3,
     "type": "agenthound-ingest",
     "collector": "mcp",
     "collector_version": "0.1.0",
     "timestamp": "2026-07-11T00:00:00Z",
     "scan_id": "scan-abc123",
+    "origin": {
+      "host_id": "security-laptop",
+      "network_realm_id": "corp-lab"
+    },
     "collection": {
       "state": "complete",
       "coverage_keys": ["mcp:target:sha256:..."],
@@ -281,8 +338,10 @@ a stable root `coverage_key` and the complete `child_coverage_keys` active set.
 The server reconciles prior children omitted from that set as complete-empty.
 Targeted and non-exhaustive runs omit this field and cannot retire siblings.
 
-`submitted` counts input facts, `write_rows` counts Neo4j write-result rows
-(including matches of existing facts), and `graph_totals` freezes public
+`submitted` counts literal input contributions. `write_rows` counts unique
+logical nodes and relationships affected by successful Neo4j writes (including
+matches of existing facts); multiple owner or property-semantics contributions
+to the same database fact are counted once. `graph_totals` freezes public
 inventory before and after processing. A batch failure returns
 `500 INGEST_FAILED` with the same typed partial result under `error.details`,
 including committed write rows. The scan and global projection state are
@@ -356,7 +415,12 @@ Find the bounded minimum-risk-weight path with one deployment-independent
 algorithm. APOC availability does not change results. Missing `risk_weight`
 fails the request; negative or non-finite values also fail. The response
 includes `metadata.algorithm: "bounded-min-weight"` and traversal completeness
-metadata.
+metadata. On a `TRUSTS_SERVER` hop, the returned edge `risk_weight` is the
+derived effective trust weight (falling back to the raw configured weight only
+for a pre-materialization legacy relationship), and the path `weight` sums
+that same returned value. Exact finding-detail path costs follow the same rule
+while retaining both raw `risk_weight` and `effective_risk_weight` in edge
+properties for provenance.
 
 ### Explicit topology traversal *(Origin-gated)*
 
@@ -521,6 +585,12 @@ Like findings, pre-built queries carry an optional `atlas_map` (`[]string`) of [
 `projection` is required on every result. The `shortest-to-database` result
 also requires traversal `metadata`; other pre-built results omit it. An
 unavailable or changing projection returns `409 PROJECTION_CONFLICT`.
+
+Authentication columns in `agents-shell-access`, `no-auth-servers`,
+`no-auth-a2a`, and `chokepoint-servers` are effective post-analysis values.
+Where returned, `auth_source` is `observed` or `configured`; configured and
+observed node properties remain separately available through graph endpoints
+and raw Cypher.
 
 ---
 

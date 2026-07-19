@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/url"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/sdk/common"
@@ -84,6 +85,109 @@ func TestExtractCredentials_Headers(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected Authorization credential to be extracted (contains AUTH)")
+	}
+}
+
+func TestExtractCredentialsSkipsTrimEmptyEnvAndHeaderValues(t *testing.T) {
+	engine := testCredEngine(t)
+	const (
+		envMaterial    = "  env-secret-with-space  "
+		headerMaterial = "\theader-secret-with-space \n"
+	)
+	creds := ExtractCredentials(
+		map[string]string{
+			"EMPTY_API_KEY":        "",
+			"WHITESPACE_TOKEN":     " \t\n ",
+			"PRESERVED_ENV_SECRET": envMaterial,
+		},
+		map[string]string{
+			"X-Empty-API-Key":    "",
+			"X-Whitespace-Token": " \t\n ",
+			"X-Preserved-Secret": headerMaterial,
+		},
+		"/test/config.json",
+		true,
+		engine,
+	)
+	if len(creds) != 2 {
+		t.Fatalf("credentials = %d, want only two non-empty values: %+v", len(creds), creds)
+	}
+	byName := make(map[string]CredentialInfo, len(creds))
+	for _, credential := range creds {
+		byName[credential.Name] = credential
+	}
+	for _, test := range []struct {
+		name, location, material string
+	}{
+		{name: "PRESERVED_ENV_SECRET", location: "env", material: envMaterial},
+		{name: "X-Preserved-Secret", location: "header", material: headerMaterial},
+	} {
+		credential, ok := byName[test.name]
+		if !ok {
+			t.Errorf("missing non-empty credential %q: %+v", test.name, creds)
+			continue
+		}
+		if credential.Location != test.location || credential.Value != test.material {
+			t.Errorf(
+				"%s = location %q value %q, want %q and exact raw material %q",
+				test.name,
+				credential.Location,
+				credential.Value,
+				test.location,
+				test.material,
+			)
+		}
+		if credential.ValueHash != common.HashCredentialValue(test.material) {
+			t.Errorf("%s value_hash did not preserve surrounding whitespace", test.name)
+		}
+	}
+}
+
+func TestExtractArgumentCredentialsSkipsTrimEmptyValues(t *testing.T) {
+	engine := testCredEngine(t)
+	const material = "  argument-secret-with-space  "
+	creds := extractArgumentCredentials([]string{
+		"--api-key=",
+		"--token", " \t ",
+		"--client-secret=" + material,
+	}, "test", true, engine)
+	if len(creds) != 1 {
+		t.Fatalf("argument credentials = %d, want one non-empty value: %+v", len(creds), creds)
+	}
+	if creds[0].Name != "CLIENT_SECRET" || creds[0].Location != "arg:3" ||
+		creds[0].Value != material ||
+		creds[0].ValueHash != common.HashCredentialValue(material) {
+		t.Fatalf("non-empty argument material was not byte-preserved: %+v", creds[0])
+	}
+}
+
+func TestExtractURLCredentialsSkipsTrimEmptyValues(t *testing.T) {
+	engine := testCredEngine(t)
+	const material = " query-secret-with-space "
+	rawURL := "https://mcp.example/mcp?api_key=&token=%20%09&client_secret=" +
+		url.QueryEscape(material)
+	creds := extractURLCredentials(rawURL, "test", "url", true, engine)
+	if len(creds) != 1 {
+		t.Fatalf("URL credentials = %d, want one non-empty value: %+v", len(creds), creds)
+	}
+	if creds[0].Name != "CLIENT_SECRET" || creds[0].Location != "url:query:0" ||
+		creds[0].Value != material ||
+		creds[0].ValueHash != common.HashCredentialValue(material) {
+		t.Fatalf("non-empty URL material was not byte-preserved: %+v", creds[0])
+	}
+}
+
+func TestExtractURLCredentialsFallsBackToNonEmptyUsername(t *testing.T) {
+	engine := testCredEngine(t)
+	creds := extractURLCredentials(
+		"https://user:%20%20@mcp.example/mcp",
+		"test",
+		"url",
+		true,
+		engine,
+	)
+	if len(creds) != 1 || creds[0].Name != "URL_USERINFO" || creds[0].Value != "user" {
+		t.Fatalf("whitespace password hid non-empty userinfo: %+v", creds)
 	}
 }
 

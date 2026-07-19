@@ -8,10 +8,14 @@ import (
 	"testing"
 	"time"
 
+	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
+	"github.com/adithyan-ak/agenthound/server/internal/binding"
 	"github.com/adithyan-ak/agenthound/server/model"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+const integrationStoragePairID = "7bc1f56e-c890-4de5-9cc5-921797176fa6"
 
 func skipIfNoPG(t *testing.T) {
 	t.Helper()
@@ -90,6 +94,7 @@ func TestIntegrationMigrations(t *testing.T) {
 		"posture_state",
 		"scans",
 		"schema_migrations",
+		"storage_binding",
 	}
 	if !reflect.DeepEqual(tables, wantTables) {
 		t.Fatalf("fresh schema tables = %v, want %v", tables, wantTables)
@@ -124,6 +129,88 @@ func TestIntegrationMigrations(t *testing.T) {
 	}
 	if postureRows != 1 {
 		t.Fatalf("posture singleton rows = %d, want 1", postureRows)
+	}
+}
+
+func TestIntegrationStorageBindingLifecycle(t *testing.T) {
+	skipIfNoPG(t)
+	ctx := context.Background()
+
+	admin, err := NewPool(os.Getenv("AGENTHOUND_PG_URI"))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer admin.Close()
+
+	schema := fmt.Sprintf("agenthound_binding_test_%d", time.Now().UnixNano())
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create isolated schema: %v", err)
+	}
+	defer func() {
+		if _, err := admin.Exec(ctx, "DROP SCHEMA "+quotedSchema+" CASCADE"); err != nil {
+			t.Errorf("drop isolated schema: %v", err)
+		}
+	}()
+
+	config, err := pgxpool.ParseConfig(os.Getenv("AGENTHOUND_PG_URI"))
+	if err != nil {
+		t.Fatalf("parse connection config: %v", err)
+	}
+	config.ConnConfig.RuntimeParams["search_path"] = schema
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatalf("connect isolated schema: %v", err)
+	}
+	defer pool.Close()
+	store := NewStorageBindingStore(pool)
+
+	inspection, err := store.Inspect(ctx)
+	if err != nil {
+		t.Fatalf("inspect pristine schema: %v", err)
+	}
+	if inspection.Marker != nil || !inspection.ProductEmpty {
+		t.Fatalf("pristine inspection = %+v, want unbound and product-empty", inspection)
+	}
+	if err := RunMigrations(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	origin := sdkingest.CollectionOrigin{HostID: "host-a", NetworkRealmID: "realm-a"}
+	marker, err := binding.NewMarker(origin, integrationStoragePairID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Install(ctx, marker); err != nil {
+		t.Fatalf("install marker: %v", err)
+	}
+	if err := store.Install(ctx, marker); err != nil {
+		t.Fatalf("idempotent marker install: %v", err)
+	}
+	actual, err := store.ReadStorageBinding(ctx)
+	if err != nil || !actual.Equal(marker) {
+		t.Fatalf("read marker = %+v, %v", actual, err)
+	}
+	other, err := binding.NewMarker(origin, "ee2f3afe-209e-42fb-8685-af55caa7e58d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Install(ctx, other); err == nil {
+		t.Fatal("conflicting storage pair unexpectedly replaced immutable marker")
+	}
+
+	if _, err := pool.Exec(ctx, "INSERT INTO scans (id, collector) VALUES ('binding-product-row', 'scan')"); err != nil {
+		t.Fatalf("insert product row: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "DELETE FROM storage_binding"); err != nil {
+		t.Fatalf("remove marker for legacy-state proof: %v", err)
+	}
+	inspection, err = store.Inspect(ctx)
+	if err != nil {
+		t.Fatalf("inspect legacy state: %v", err)
+	}
+	if inspection.Marker != nil || inspection.ProductEmpty {
+		t.Fatalf("legacy inspection = %+v, want unbound and nonempty", inspection)
 	}
 }
 

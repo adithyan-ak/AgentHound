@@ -7,11 +7,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/adithyan-ak/agenthound/modules/mlflowfp"
 	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/common"
 )
 
 const experimentsBody = `{"experiments":[{"experiment_id":"0","name":"Default"},{"experiment_id":"1","name":"Fine-tune-v3"}],"next_page_token":""}`
@@ -36,6 +39,40 @@ func mlflowStub(t *testing.T) *httptest.Server {
 	}))
 }
 
+func TestFingerprintAndLootPropertiesComposeOnSameEndpoint(t *testing.T) {
+	srv := mlflowStub(t)
+	defer srv.Close()
+	target := action.Target{Kind: "host", Address: strings.TrimPrefix(srv.URL, "http://")}
+
+	fingerprinter, err := mlflowfp.New()
+	if err != nil {
+		t.Fatalf("new fingerprinter: %v", err)
+	}
+	fingerprint, err := fingerprinter.Fingerprint(context.Background(), target)
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+	loot, err := (&Looter{}).Loot(context.Background(), target, action.LootOptions{})
+	if err != nil {
+		t.Fatalf("loot: %v", err)
+	}
+	fingerprintNode := fingerprint.IngestData.Graph.Nodes[0]
+	lootNode := loot.IngestData.Graph.Nodes[0]
+	if fingerprintNode.ID != lootNode.ID {
+		t.Fatalf("same endpoint IDs differ: %q != %q", fingerprintNode.ID, lootNode.ID)
+	}
+	for key, fingerprintValue := range fingerprintNode.Properties {
+		if lootValue, shared := lootNode.Properties[key]; shared &&
+			!reflect.DeepEqual(fingerprintValue, lootValue) {
+			t.Errorf("shared property %q conflicts: fingerprint=%#v loot=%#v", key, fingerprintValue, lootValue)
+		}
+	}
+	if fingerprintNode.Properties["discovered_via"] != "network_scan" ||
+		lootNode.Properties["loot_observed"] != true {
+		t.Errorf("action provenance not separated: fingerprint=%+v loot=%+v", fingerprintNode.Properties, lootNode.Properties)
+	}
+}
+
 func TestLoot_MLflowHappy(t *testing.T) {
 	srv := mlflowStub(t)
 	defer srv.Close()
@@ -55,6 +92,12 @@ func TestLoot_MLflowHappy(t *testing.T) {
 	if node.Kinds[0] != "MLflowServer" {
 		t.Errorf("kind = %v, want MLflowServer", node.Kinds)
 	}
+	if node.Properties["loot_observed"] != true {
+		t.Errorf("MLflowServer missing loot_observed: %+v", node.Properties)
+	}
+	if _, exists := node.Properties["discovered_via"]; exists {
+		t.Errorf("direct loot claimed discovery provenance: %+v", node.Properties)
+	}
 	if ec, _ := node.Properties["experiment_count"].(int); ec != 2 {
 		t.Errorf("experiment_count = %v, want 2", node.Properties["experiment_count"])
 	}
@@ -71,6 +114,7 @@ func TestLoot_MLflowHappy(t *testing.T) {
 	if res.Summary.CredentialsFound != 0 {
 		t.Errorf("CredentialsFound = %d, want 0 for metadata-only discoveries", res.Summary.CredentialsFound)
 	}
+	assertAnonymousInventoryClaim(t, node.Properties)
 }
 
 func TestLoot_MLflow_FetchRunsUsesPOST(t *testing.T) {
@@ -139,6 +183,65 @@ func TestLoot_MLflow_ExperimentsFail(t *testing.T) {
 	// registered-models, model-versions).
 	if res.Summary.PartialFailures < 1 {
 		t.Errorf("partial failures: got %d, want at least 1", res.Summary.PartialFailures)
+	}
+	assertNoAnonymousInventoryClaim(t, res.IngestData.Graph.Nodes[0].Properties)
+}
+
+func TestLoot_MLflow_ExperimentsMalformedOrUnavailableDoesNotClaimAnonymousAccess(t *testing.T) {
+	t.Run("malformed success shape", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{}`))
+		}))
+		defer srv.Close()
+
+		res, err := (&Looter{}).Loot(context.Background(), action.Target{
+			Kind: "host", Address: strings.TrimPrefix(srv.URL, "http://"),
+		}, action.LootOptions{})
+		if err != nil {
+			t.Fatalf("Loot: %v", err)
+		}
+		assertNoAnonymousInventoryClaim(t, res.IngestData.Graph.Nodes[0].Properties)
+	})
+
+	t.Run("transport failure", func(t *testing.T) {
+		srv := httptest.NewServer(http.NotFoundHandler())
+		address := strings.TrimPrefix(srv.URL, "http://")
+		srv.Close()
+
+		res, err := (&Looter{}).Loot(context.Background(), action.Target{
+			Kind: "host", Address: address,
+		}, action.LootOptions{})
+		if err != nil {
+			t.Fatalf("Loot: %v", err)
+		}
+		assertNoAnonymousInventoryClaim(t, res.IngestData.Graph.Nodes[0].Properties)
+	})
+}
+
+func assertAnonymousInventoryClaim(t *testing.T, props map[string]any) {
+	t.Helper()
+	if props["auth_method"] != string(common.AuthNone) ||
+		props["auth_assurance"] != string(common.AuthAssuranceUnauthenticated) ||
+		props["auth_evidence"] != common.AuthEvidenceAnonymousProbeSucceeded ||
+		props["probe_status"] != string(common.VerificationVerified) ||
+		props["is_anonymous_loot"] != "true" {
+		t.Fatalf("anonymous inventory evidence = %+v", props)
+	}
+	if _, ok := props["last_verified_at"].(string); !ok {
+		t.Fatalf("last_verified_at missing from anonymous inventory evidence: %+v", props)
+	}
+}
+
+func assertNoAnonymousInventoryClaim(t *testing.T, props map[string]any) {
+	t.Helper()
+	for _, key := range []string{
+		"auth_method", "auth_assurance", "auth_evidence", "probe_status",
+		"last_verified_at", "is_anonymous_loot",
+	} {
+		if value, present := props[key]; present {
+			t.Errorf("failed inventory fabricated %s=%v: %+v", key, value, props)
+		}
 	}
 }
 

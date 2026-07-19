@@ -66,6 +66,95 @@ func TestNormalizerDoesNotRepairLocalProcessAuth(t *testing.T) {
 	}
 }
 
+func TestNormalizerMigratesPreV1RawMCPAnonymousObservation(t *testing.T) {
+	data := preV1RawMCPAnonymousData()
+	originalID := data.Graph.Nodes[0].ID
+
+	warnings := NewNormalizer().Normalize(data)
+	props := data.Graph.Nodes[0].Properties
+	if data.Graph.Nodes[0].ID != originalID {
+		t.Fatalf("compatibility migration changed identity: got %q want %q", data.Graph.Nodes[0].ID, originalID)
+	}
+	for key, want := range map[string]any{
+		"observed_auth_method":    "none",
+		"observed_auth_assurance": "unauthenticated",
+		"observed_auth_evidence":  "anonymous_probe_succeeded",
+		"auth_observation_compat": "pre_v1_raw_mcp",
+	} {
+		if got := props[key]; got != want {
+			t.Fatalf("%s = %v, want %v; properties=%+v", key, got, want, props)
+		}
+	}
+	if len(warnings) != 1 ||
+		warnings[0].Code != "pre_v1_mcp_auth_observation_migrated" ||
+		warnings[0].Status != ingest.NormalizationStatusWarning ||
+		warnings[0].PublicationUnsafe {
+		t.Fatalf("compatibility warnings = %+v", warnings)
+	}
+}
+
+func TestNormalizerDoesNotMigrateNearMissRawAuth(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*ingest.IngestData)
+	}{
+		{name: "config envelope", mutate: func(data *ingest.IngestData) { data.Meta.Collector = "config" }},
+		{name: "A2A kind", mutate: func(data *ingest.IngestData) { data.Graph.Nodes[0].Kinds = []string{"A2AAgent"} }},
+		{name: "reference only", mutate: func(data *ingest.IngestData) {
+			data.Graph.Nodes[0].PropertySemantics = ingest.NodePropertySemanticsReferenceOnly
+		}},
+		{name: "declaration only", mutate: func(data *ingest.IngestData) {
+			data.Graph.Nodes[0].Properties["auth_evidence"] = "declared_security_scheme"
+		}},
+		{name: "unknown posture", mutate: func(data *ingest.IngestData) {
+			data.Graph.Nodes[0].Properties["auth_method"] = "unknown"
+			data.Graph.Nodes[0].Properties["auth_assurance"] = "unknown"
+			data.Graph.Nodes[0].Properties["auth_evidence"] = "unknown"
+		}},
+		{name: "unreachable", mutate: func(data *ingest.IngestData) { data.Graph.Nodes[0].Properties["status"] = "unreachable" }},
+		{name: "stdio", mutate: func(data *ingest.IngestData) { data.Graph.Nodes[0].Properties["transport"] = "stdio" }},
+		{name: "partial observed tuple", mutate: func(data *ingest.IngestData) {
+			data.Graph.Nodes[0].Properties["observed_auth_method"] = "none"
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data := preV1RawMCPAnonymousData()
+			test.mutate(data)
+			warnings := NewNormalizer().Normalize(data)
+			props := data.Graph.Nodes[0].Properties
+			if _, migrated := props["auth_observation_compat"]; migrated {
+				t.Fatalf("near miss migrated: %+v", props)
+			}
+			if _, migrated := props["observed_auth_assurance"]; migrated {
+				t.Fatalf("near miss gained observed assurance: %+v", props)
+			}
+			if _, migrated := props["observed_auth_evidence"]; migrated {
+				t.Fatalf("near miss gained observed evidence: %+v", props)
+			}
+			for _, warning := range warnings {
+				if warning.Code == "pre_v1_mcp_auth_observation_migrated" {
+					t.Fatalf("near miss emitted migration warning: %+v", warnings)
+				}
+			}
+		})
+	}
+}
+
+func preV1RawMCPAnonymousData() *ingest.IngestData {
+	return &ingest.IngestData{
+		Meta: ingest.IngestMeta{Collector: "mcp", ScanID: "pre-v1"},
+		Graph: ingest.GraphData{Nodes: []ingest.Node{{
+			ID:    "pre-v1-mcp-server",
+			Kinds: []string{"MCPServer"},
+			Properties: map[string]any{
+				"name": "legacy direct URL", "transport": "http", "status": "reachable",
+				"auth_method": "none", "auth_assurance": "unauthenticated",
+				"auth_evidence": "anonymous_probe_succeeded",
+			},
+		}}},
+	}
+}
+
 func TestNormalizerSerializesComplexValues(t *testing.T) {
 	n := NewNormalizer()
 	data := &ingest.IngestData{

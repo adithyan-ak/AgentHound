@@ -3,6 +3,8 @@ FROM node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca440
 
 WORKDIR /opt/mcp-everything
 COPY package.json package-lock.json ./
+COPY credential-gate.mjs ./credential-gate.mjs
+COPY bearer-gate.mjs ./bearer-gate.mjs
 RUN npm ci --omit=dev --ignore-scripts=false \
     && npm cache clean --force
 

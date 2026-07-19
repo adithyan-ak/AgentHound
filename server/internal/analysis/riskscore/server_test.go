@@ -41,7 +41,13 @@ func TestServerRiskScore_AuthStrength(t *testing.T) {
 			mock := &graph.MockGraphDB{
 				QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
 					if containsSubstring(cypher, "auth_method") {
-						return []map[string]any{{"am": tt.method}}, nil
+						row := map[string]any{"am": tt.method}
+						if tt.method == "none" {
+							row["auth_assurance"] = "unauthenticated"
+							row["auth_evidence"] = "anonymous_probe_succeeded"
+							row["auth_source"] = "observed"
+						}
+						return []map[string]any{row}, nil
 					}
 					return nil, nil
 				},
@@ -73,7 +79,8 @@ func TestServerAuthAssessmentRequiresExplicitAnonymousEvidence(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			db := &graph.MockGraphDB{QueryResult: []map[string]any{{
-				"am": "none", "auth_evidence": tt.evidence,
+				"am": "none", "auth_assurance": "unauthenticated",
+				"auth_evidence": tt.evidence, "auth_source": "observed",
 			}}}
 			assessment, err := serverAuthAssessment(context.Background(), db, "server")
 			if err != nil {
@@ -83,6 +90,49 @@ func TestServerAuthAssessmentRequiresExplicitAnonymousEvidence(t *testing.T) {
 				t.Fatalf("assessment = %+v, want complete=%v", assessment, tt.complete)
 			}
 		})
+	}
+}
+
+func TestServerAuthAssessmentUsesPairedEffectiveTuple(t *testing.T) {
+	var captured string
+	db := &graph.MockGraphDB{
+		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
+			captured = cypher
+			return []map[string]any{{
+				"am": "none", "auth_assurance": "unauthenticated",
+				"auth_evidence": "anonymous_probe_succeeded", "auth_source": "observed",
+			}}, nil
+		},
+	}
+	assessment, err := serverAuthAssessment(context.Background(), db, "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !assessment.Complete || assessment.Score != 100 ||
+		assessment.Min != 100 || assessment.Max != 100 {
+		t.Fatalf("confirmed effective anonymous assessment = %+v", assessment)
+	}
+	if !containsSubstring(captured, "s.effective_auth_method AS am") ||
+		!containsSubstring(captured, "s.effective_auth_assurance AS auth_assurance") ||
+		!containsSubstring(captured, "s.effective_auth_evidence AS auth_evidence") ||
+		!containsSubstring(captured, "s.effective_auth_source AS auth_source") ||
+		containsSubstring(captured, "RETURN s.auth_method AS am") {
+		t.Fatalf("server risk did not consume the effective tuple:\n%s", captured)
+	}
+}
+
+func TestServerAuthAssessmentRejectsConfiguredAnonymousClaim(t *testing.T) {
+	db := &graph.MockGraphDB{QueryResult: []map[string]any{{
+		"am": "none", "auth_assurance": "unknown",
+		"auth_evidence": "anonymous_probe_succeeded", "auth_source": "configured",
+	}}}
+	assessment, err := serverAuthAssessment(context.Background(), db, "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assessment.Complete || len(assessment.UnknownFactors) != 1 ||
+		assessment.UnknownFactors[0] != "auth_source" {
+		t.Fatalf("configured anonymous claim was treated as observed: %+v", assessment)
 	}
 }
 
@@ -181,7 +231,7 @@ func TestServerRiskScore_CredentialHandling(t *testing.T) {
 					if containsSubstring(cypher, "auth_method") {
 						return []map[string]any{{"am": "mtls"}}, nil
 					}
-					if containsSubstring(cypher, "HAS_ENV_VAR") {
+					if containsSubstring(cypher, "USES_CREDENTIAL") {
 						return []map[string]any{tt.row}, nil
 					}
 					return nil, nil
@@ -228,7 +278,7 @@ func TestServerRiskScoreIgnoresUnobservedCredentialMaterial(t *testing.T) {
 				return []map[string]any{{"am": "mtls"}}, nil
 			case containsSubstring(cypher, "RUNS_ON"):
 				return []map[string]any{{"scope": "local"}}, nil
-			case containsSubstring(cypher, "HAS_ENV_VAR"):
+			case containsSubstring(cypher, "USES_CREDENTIAL"):
 				return []map[string]any{{
 					"material_status": "masked",
 					"exposure_status": "not_observed",
@@ -247,6 +297,54 @@ func TestServerRiskScoreIgnoresUnobservedCredentialMaterial(t *testing.T) {
 	}
 	if score != 7.5 { // 0.35*10 auth + 0.20*20 local exposure
 		t.Fatalf("masked identity affected credential risk: score=%v, want 7.5", score)
+	}
+}
+
+func TestServerCredentialHandlingUsesCanonicalTopologyForEveryConfigLocation(t *testing.T) {
+	for _, location := range []string{"header", "arg:1", "url_userinfo:password"} {
+		t.Run(location, func(t *testing.T) {
+			var captured string
+			mock := &graph.MockGraphDB{
+				QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
+					captured = cypher
+					return []map[string]any{{
+						"location": location, "high_entropy": true, "cred_type": "hardcoded",
+						"merge_key": "value_hash", "material_status": "observed",
+						"exposure_status": "exposed",
+					}}, nil
+				},
+			}
+
+			assessment, err := serverCredentialHandlingAssessment(context.Background(), mock, "server-1")
+			if err != nil {
+				t.Fatalf("serverCredentialHandlingAssessment: %v", err)
+			}
+			if assessment.Score != 100 || !assessment.Complete {
+				t.Fatalf("assessment = %+v, want exact 100 for %s credential", assessment, location)
+			}
+			assertCanonicalServerCredentialRiskQuery(t, captured)
+		})
+	}
+}
+
+func assertCanonicalServerCredentialRiskQuery(t *testing.T, cypher string) {
+	t.Helper()
+	for _, clause := range []string{
+		"-[:AUTHENTICATES_WITH]->(:Identity)-[:USES_CREDENTIAL]->(c:Credential)",
+		"WITH DISTINCT c",
+		"c.value_hash IS NOT NULL",
+		"c.value_hash <> ''",
+		"c.merge_key = 'value_hash'",
+		"c.identity_basis = 'value_hash'",
+		"c.material_status = 'observed'",
+		"c.exposure_status = 'exposed'",
+	} {
+		if !containsSubstring(cypher, clause) {
+			t.Errorf("server credential-handling query missing %q:\n%s", clause, cypher)
+		}
+	}
+	if containsSubstring(cypher, "HAS_ENV_VAR") || containsSubstring(cypher, "location") {
+		t.Fatalf("server credential-handling query still depends on config location:\n%s", cypher)
 	}
 }
 

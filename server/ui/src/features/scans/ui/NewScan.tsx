@@ -17,39 +17,43 @@ interface NewScanProps {
 // ./scan-<id>.json); it does NOT update the server graph on its own. The graph
 // and analysis are updated only by ingesting that artifact — either
 // `agenthound-server ingest <file>` or Import on the Scans page (AH-UI-23).
+const ORIGIN_FLAGS =
+  "--host-id <host-id> --network-realm-id <network-realm-id>";
+
 const COMMANDS = [
   {
     label: "Default Local Workflow",
-    command:
-      "agenthound scan --output agenthound-scan.json && agenthound-server ingest agenthound-scan.json",
+    command: `agenthound scan ${ORIGIN_FLAGS} --output agenthound-scan.json && agenthound-server ingest agenthound-scan.json`,
     description:
       "Collect config and MCP evidence, then ingest only if collection succeeds; A2A requires the separate targeted command",
   },
   {
     label: "Default Local Scan",
-    command: "agenthound scan",
+    command: `agenthound scan ${ORIGIN_FLAGS}`,
     description:
       "Collection only: discover configs and enumerate MCP servers; then import the JSON artifact",
   },
   {
     label: "Config Discovery",
-    command: "agenthound scan --config",
-    description: "Discover all MCP client configs on this machine; writes a JSON artifact",
+    command: `agenthound scan ${ORIGIN_FLAGS} --config`,
+    description:
+      "Discover all MCP client configs on this machine; writes a JSON artifact",
   },
   {
     label: "MCP Enumeration",
-    command: "agenthound scan --mcp",
+    command: `agenthound scan ${ORIGIN_FLAGS} --mcp`,
     description: "Enumerate all discovered MCP servers; writes a JSON artifact",
   },
   {
     label: "A2A Agent Card",
-    command: "agenthound scan --a2a --target <url>",
+    command: `agenthound scan ${ORIGIN_FLAGS} --a2a --target <url>`,
     description: "Fetch an A2A agent card; writes a JSON artifact",
   },
   {
     label: "Ingest Artifact",
     command: "agenthound-server ingest scan-<id>.json",
-    description: "Load a scan artifact into the graph and run analysis (or use Import on this page)",
+    description:
+      "Load a scan artifact into the graph and run analysis (or use Import on this page)",
   },
 ];
 
@@ -73,7 +77,10 @@ export function NewScan({ open, onClose }: NewScanProps) {
           <DialogDescription>
             A collector scan alone writes JSON and does not update the server.
             Use the complete local workflow, or collect first and then ingest
-            the artifact with the final command or Import on this page.
+            the artifact with the final command or Import on this page. Replace
+            the origin placeholders with the stable host and private-network
+            realm admitted by this database pair. They are provenance labels,
+            not credentials.
           </DialogDescription>
         </DialogHeader>
 
@@ -99,7 +106,7 @@ export function NewScan({ open, onClose }: NewScanProps) {
                   )}
                 </button>
               </div>
-              <code className="flex items-center gap-1.5 rounded-[2px] border border-border/70 bg-black/50 px-2 py-1.5 font-mono text-xs text-foreground">
+              <code className="flex items-start gap-1.5 whitespace-pre-wrap break-all rounded-[2px] border border-border/70 bg-black/50 px-2 py-1.5 font-mono text-xs text-foreground">
                 <span className="select-none text-primary/70">$</span>
                 {cmd.command}
               </code>

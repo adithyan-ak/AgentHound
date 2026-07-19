@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -30,20 +31,42 @@ type ServerResult struct {
 const defaultMaxItems = 10000
 
 func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, scanID string) *ServerResult {
+	if spec.Transport == "http" {
+		canonicalHeaders, conflictingHeaders := canonicalMCPHeaders(spec.Headers)
+		spec.Headers = canonicalHeaders
+		if conflictingHeaders {
+			spec.Ambiguity = ambiguousServerProfileError
+		}
+	}
 	result := &ServerResult{
 		Target:      serverTarget(spec),
 		CoverageKey: mcpCoverageKey(spec),
 	}
 	serverID := computeServerID(spec)
-
-	transport, err := buildTransport(spec, c.insecure)
-	if err != nil {
-		result.Error = fmt.Errorf("build transport for %s: %w", spec.Name, err)
-		result.Nodes = append(result.Nodes, buildUnreachableServerNode(serverID, spec, err.Error(), c.engine))
-		result.Outcomes = append(result.Outcomes, methodOutcome(spec, "initialize", ingest.OutcomeFailed, 0, err))
+	if spec.Ambiguity != "" {
+		err := errors.New(ambiguousServerProfileError)
+		result.Error = err
+		result.Outcomes = append(result.Outcomes, methodOutcome(
+			spec,
+			"initialize",
+			ingest.OutcomeFailed,
+			0,
+			err,
+		))
 		result.State = ingest.OutcomeFailed
 		return result
 	}
+
+	transport, err := buildTransport(spec, c.insecure)
+	if err != nil {
+		safeErr := safeInitializationError("transport setup", err)
+		result.Error = safeErr
+		result.Nodes = append(result.Nodes, buildUnreachableServerNode(serverID, spec, safeErr.Error(), c.engine))
+		result.Outcomes = append(result.Outcomes, methodOutcome(spec, "initialize", ingest.OutcomeFailed, 0, safeErr))
+		result.State = ingest.OutcomeFailed
+		return result
+	}
+	transport, initializeObserver := withInitializeWireObserver(transport)
 
 	client := mcpsdk.NewClient(
 		&mcpsdk.Implementation{Name: "AgentHound", Version: common.CollectorVersion()},
@@ -56,11 +79,12 @@ func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, sca
 	session, err := client.Connect(initCtx, transport, nil)
 	if err != nil {
 		if spec.Transport == "http" {
-			return c.retryWithSSE(ctx, spec, scanID, serverID, err)
+			return c.retryWithSSE(ctx, spec, scanID, serverID)
 		}
-		result.Error = fmt.Errorf("connect to %s: %w", spec.Name, err)
-		result.Nodes = append(result.Nodes, buildUnreachableServerNode(serverID, spec, err.Error(), c.engine))
-		result.Outcomes = append(result.Outcomes, methodOutcome(spec, "initialize", ingest.OutcomeFailed, 0, err))
+		safeErr := safeInitializationError("connection", err)
+		result.Error = safeErr
+		result.Nodes = append(result.Nodes, buildUnreachableServerNode(serverID, spec, safeErr.Error(), c.engine))
+		result.Outcomes = append(result.Outcomes, methodOutcome(spec, "initialize", ingest.OutcomeFailed, 0, safeErr))
 		result.State = ingest.OutcomeFailed
 		return result
 	}
@@ -69,6 +93,7 @@ func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, sca
 	initResult := session.InitializeResult()
 
 	serverNode := buildServerNode(serverID, spec, initResult, c.engine)
+	applyInitializeWireObservation(&serverNode, initializeObserver)
 	result.Nodes = append(result.Nodes, serverNode)
 	result.Outcomes = append(result.Outcomes, methodOutcome(spec, "initialize", ingest.OutcomeComplete, 1, nil))
 
@@ -137,13 +162,13 @@ func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, sca
 	return result
 }
 
-func (c *MCPCollector) retryWithSSE(ctx context.Context, spec ServerSpec, scanID, serverID string, origErr error) *ServerResult {
+func (c *MCPCollector) retryWithSSE(ctx context.Context, spec ServerSpec, scanID, serverID string) *ServerResult {
 	result := &ServerResult{
 		Target:      serverTarget(spec),
 		CoverageKey: mcpCoverageKey(spec),
 	}
 
-	sseTransport := buildSSETransport(spec, c.insecure)
+	sseTransport, initializeObserver := withInitializeWireObserver(buildSSETransport(spec, c.insecure))
 
 	client := mcpsdk.NewClient(
 		&mcpsdk.Implementation{Name: "AgentHound", Version: common.CollectorVersion()},
@@ -155,9 +180,10 @@ func (c *MCPCollector) retryWithSSE(ctx context.Context, spec ServerSpec, scanID
 
 	session, err := client.Connect(initCtx, sseTransport, nil)
 	if err != nil {
-		result.Error = fmt.Errorf("connect to %s (streamable failed: %v, SSE failed: %v)", spec.Name, origErr, err)
-		result.Nodes = append(result.Nodes, buildUnreachableServerNode(serverID, spec, err.Error(), c.engine))
-		result.Outcomes = append(result.Outcomes, methodOutcome(spec, "initialize", ingest.OutcomeFailed, 0, result.Error))
+		safeErr := safeInitializationError("streamable HTTP and SSE connection", err)
+		result.Error = safeErr
+		result.Nodes = append(result.Nodes, buildUnreachableServerNode(serverID, spec, safeErr.Error(), c.engine))
+		result.Outcomes = append(result.Outcomes, methodOutcome(spec, "initialize", ingest.OutcomeFailed, 0, safeErr))
 		result.State = ingest.OutcomeFailed
 		return result
 	}
@@ -166,6 +192,7 @@ func (c *MCPCollector) retryWithSSE(ctx context.Context, spec ServerSpec, scanID
 	initResult := session.InitializeResult()
 
 	serverNode := buildServerNode(serverID, spec, initResult, c.engine)
+	applyInitializeWireObservation(&serverNode, initializeObserver)
 	result.Nodes = append(result.Nodes, serverNode)
 	result.Outcomes = append(result.Outcomes, methodOutcome(spec, "initialize", ingest.OutcomeComplete, 1, nil))
 
@@ -325,17 +352,22 @@ func (c *MCPCollector) enumerateResources(ctx context.Context, session *mcpsdk.C
 		signals := computeResourceSignals(res.URI, c.engine)
 		resID := ingest.ComputeNodeID("MCPResource", serverID, res.URI)
 
-		result.nodes = append(result.nodes, common.NewNode(resID, []string{"MCPResource"}, map[string]any{
+		props := map[string]any{
 			"uri":                  res.URI,
 			"name":                 res.Name,
 			"mime_type":            res.MIMEType,
-			"size":                 res.Size,
 			"description":          res.Description,
 			"uri_scheme":           signals.URIScheme,
 			"sensitivity":          signals.Sensitivity,
 			"sensitivity_rule_id":  signals.SensitivityRuleID,
 			"sensitivity_evidence": signals.SensitivityEvidence,
-		}))
+		}
+		// The SDK represents both an omitted wire size and an explicit zero as
+		// int64(0). Do not turn that ambiguity into a fabricated observed size.
+		if res.Size != 0 {
+			props["size"] = res.Size
+		}
+		result.nodes = append(result.nodes, common.NewNode(resID, []string{"MCPResource"}, props))
 		result.edges = append(result.edges, common.NewEdge(serverID, resID, "PROVIDES_RESOURCE", "MCPServer", "MCPResource",
 			common.NewEdgeProps(scanID, 1.0, 0.2)))
 	}
@@ -449,11 +481,6 @@ func serverIdentityForSpec(spec ServerSpec) ingest.MCPServerIdentity {
 }
 
 func buildServerNode(serverID string, spec ServerSpec, initResult *mcpsdk.InitializeResult, engine *rules.Engine) ingest.Node {
-	endpoint := spec.Command
-	if spec.Transport == "http" {
-		endpoint = spec.URL
-	}
-
 	var capabilities []string
 	if initResult.Capabilities != nil {
 		if initResult.Capabilities.Tools != nil {
@@ -473,7 +500,7 @@ func buildServerNode(serverID string, spec ServerSpec, initResult *mcpsdk.Initia
 		}
 	}
 
-	serverName := spec.Name
+	serverName := ""
 	if initResult.ServerInfo != nil && initResult.ServerInfo.Name != "" {
 		serverName = initResult.ServerInfo.Name
 	}
@@ -485,36 +512,20 @@ func buildServerNode(serverID string, spec ServerSpec, initResult *mcpsdk.Initia
 
 	authMethod, authEvidence := observedServerAuth(spec)
 	authAssessment := common.AssessAuth(string(authMethod))
-	identity := serverIdentityForSpec(spec)
-	props := map[string]any{
-		"name":             serverName,
-		"endpoint":         endpoint,
-		"transport":        spec.Transport,
-		"protocol_version": initResult.ProtocolVersion,
-		"instructions":     initResult.Instructions,
-		"capabilities":     capabilities,
-		"server_version":   serverVersion,
-		"status":           "reachable",
-		"auth_method":      string(authMethod),
-		"auth_assurance":   string(authAssessment.Assurance),
-		"auth_evidence":    authEvidence,
-		"id_scheme":        identity.Scheme,
-	}
-	if spec.Configured {
-		props = config.ServerNodeProperties(serverDefForSpec(spec), engine)
+	props := config.ServerNodeProperties(serverDefForSpec(spec), engine)
+	if serverName != "" {
 		props["server_name"] = serverName
-		props["protocol_version"] = initResult.ProtocolVersion
-		props["instructions"] = initResult.Instructions
-		props["capabilities"] = capabilities
-		props["server_version"] = serverVersion
-		props["status"] = "reachable"
-		props["observed_auth_method"] = string(authMethod)
-		props["observed_auth_assurance"] = string(authAssessment.Assurance)
-		props["observed_auth_evidence"] = authEvidence
 	}
-	if spec.Transport == "stdio" {
-		props["command"] = spec.Command
-		props["args"] = append([]string(nil), spec.Args...)
+	props["protocol_version"] = initResult.ProtocolVersion
+	props["instructions"] = initResult.Instructions
+	props["capabilities"] = capabilities
+	props["server_version"] = serverVersion
+	props["status"] = "reachable"
+	props["observed_auth_method"] = string(authMethod)
+	props["observed_auth_assurance"] = string(authAssessment.Assurance)
+	props["observed_auth_evidence"] = authEvidence
+	if len(spec.ConfiguredNames) > 0 {
+		props["configured_names"] = append([]string(nil), spec.ConfiguredNames...)
 	}
 
 	if initResult.Instructions != "" {
@@ -541,36 +552,25 @@ func buildUnreachableServerNode(
 	errMsg string,
 	engine *rules.Engine,
 ) ingest.Node {
-	endpoint := spec.Command
-	if spec.Transport == "http" {
-		endpoint = spec.URL
-	}
-
-	identity := serverIdentityForSpec(spec)
-	props := map[string]any{
-		"name":           spec.Name,
-		"endpoint":       endpoint,
-		"transport":      spec.Transport,
-		"status":         "unreachable",
-		"error":          errMsg,
-		"auth_method":    string(common.AuthUnknown),
-		"auth_assurance": string(common.AuthAssuranceUnknown),
-		"auth_evidence":  common.AuthEvidenceUnknown,
-		"id_scheme":      identity.Scheme,
-	}
-	if spec.Configured {
-		props = config.ServerNodeProperties(serverDefForSpec(spec), engine)
-		props["status"] = "unreachable"
-		props["error"] = errMsg
-		props["observed_auth_method"] = string(common.AuthUnknown)
-		props["observed_auth_assurance"] = string(common.AuthAssuranceUnknown)
-		props["observed_auth_evidence"] = common.AuthEvidenceUnknown
-	}
-	if spec.Transport == "stdio" {
-		props["command"] = spec.Command
-		props["args"] = append([]string(nil), spec.Args...)
+	props := config.ServerNodeProperties(serverDefForSpec(spec), engine)
+	props["status"] = "unreachable"
+	props["error"] = safeStoredMCPError(errMsg)
+	props["observed_auth_method"] = string(common.AuthUnknown)
+	props["observed_auth_assurance"] = string(common.AuthAssuranceUnknown)
+	props["observed_auth_evidence"] = common.AuthEvidenceUnknown
+	if len(spec.ConfiguredNames) > 0 {
+		props["configured_names"] = append([]string(nil), spec.ConfiguredNames...)
 	}
 	return common.NewNode(serverID, []string{"MCPServer"}, props)
+}
+
+func safeStoredMCPError(message string) string {
+	message = strings.TrimSpace(message)
+	if message == ambiguousServerProfileError ||
+		(strings.HasPrefix(message, "MCP ") && strings.HasSuffix(message, "raw transport details omitted from artifact")) {
+		return message
+	}
+	return "MCP operation failed; raw transport details omitted from artifact"
 }
 
 func serverDefForSpec(spec ServerSpec) config.ServerDef {
@@ -657,10 +657,11 @@ func observedServerAuth(spec ServerSpec) (common.AuthMethod, string) {
 		// anonymous network access.
 		return common.AuthUnknown, common.AuthEvidenceLocalProcess
 	}
-	for name, value := range spec.Headers {
-		if !strings.EqualFold(name, "Authorization") || strings.TrimSpace(value) == "" {
-			continue
-		}
+	canonicalHeaders, conflictingHeaders := canonicalMCPHeaders(spec.Headers)
+	if conflictingHeaders {
+		return common.AuthUnknown, common.AuthEvidenceUnknown
+	}
+	if value := strings.TrimSpace(canonicalHeaders["Authorization"]); value != "" {
 		fields := strings.Fields(value)
 		if len(fields) > 0 {
 			if method, ok := common.RecognizeAuthMethod(fields[0]); ok &&
@@ -670,27 +671,64 @@ func observedServerAuth(spec ServerSpec) (common.AuthMethod, string) {
 		}
 		return common.AuthCustom, common.AuthEvidenceConfiguredCredential
 	}
-	for name, value := range spec.Headers {
+	hasOpaqueConfiguredHeader := false
+	for name, value := range canonicalHeaders {
+		if strings.EqualFold(name, "Authorization") || strings.TrimSpace(value) == "" {
+			continue
+		}
+		hasOpaqueConfiguredHeader = true
 		upper := strings.ToUpper(name)
-		if strings.TrimSpace(value) != "" &&
-			(strings.Contains(upper, "KEY") || strings.Contains(upper, "TOKEN") ||
-				strings.Contains(upper, "SECRET") || strings.Contains(upper, "AUTH")) {
+		if strings.Contains(upper, "KEY") || strings.Contains(upper, "TOKEN") ||
+			strings.Contains(upper, "SECRET") || strings.Contains(upper, "AUTH") {
 			return common.AuthAPIKey, common.AuthEvidenceConfiguredCredential
 		}
 	}
-	// A successful MCP initialize without credential-bearing headers is direct
-	// positive evidence that this access path is anonymous.
+	safeEndpoint := ingest.SanitizeHTTPEndpoint(spec.URL)
+	if safeEndpoint.UserinfoRedacted {
+		return common.AuthBasic, common.AuthEvidenceConfiguredCredential
+	}
+	if safeEndpoint.QueryRedacted {
+		// A successful request that included a configured query cannot prove the
+		// same endpoint is anonymously reachable without that query. Keep the
+		// method unknown unless a recognized header supplies stronger evidence.
+		return common.AuthUnknown, common.AuthEvidenceConfiguredCredential
+	}
+	if hasOpaqueConfiguredHeader {
+		// Every non-empty caller-configured header is placed on the Initialize
+		// request. Even conventionally benign fields can be compared by an
+		// arbitrary server as an access token, so one successful request cannot
+		// prove that the same endpoint works without that material. Do not run a
+		// second Initialize: it adds protocol/session side effects and would not
+		// prove that the first response was independent of the configured value.
+		return common.AuthUnknown, common.AuthEvidenceConfiguredCredential
+	}
+	// A successful MCP initialize without URL credential components or any
+	// non-empty caller-configured header is direct positive evidence that this
+	// access path is anonymous. Protocol headers authored by the MCP SDK are not
+	// caller credentials and remain necessary for a conformant Initialize.
 	return common.AuthNone, common.AuthEvidenceAnonymousProbeSucceeded
+}
+
+func safeInitializationError(stage string, err error) error {
+	reason := "transport error"
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		reason = "deadline exceeded"
+	case errors.Is(err, context.Canceled):
+		reason = "canceled"
+	}
+	return fmt.Errorf(
+		"MCP %s failed (%s); raw transport details omitted from artifact",
+		stage,
+		reason,
+	)
 }
 
 func serverTarget(spec ServerSpec) string {
 	if spec.Transport == "http" {
-		return spec.URL
+		return ingest.SanitizeHTTPEndpoint(spec.URL).Display
 	}
-	if len(spec.Args) == 0 {
-		return spec.Command
-	}
-	return spec.Command + " " + strings.Join(spec.Args, " ")
+	return fmt.Sprintf("%s (%d argv entries redacted)", spec.Command, len(spec.Args))
 }
 
 func methodOutcome(
@@ -709,7 +747,7 @@ func methodOutcome(
 		Items:       items,
 	}
 	if err != nil {
-		outcome.Error = err.Error()
+		outcome.Error = safeStoredMCPError(err.Error())
 	}
 	return outcome
 }
@@ -729,7 +767,7 @@ func enumerationOutcome(
 		Items:       items,
 	}
 	if err != nil {
-		outcome.Error = err.Error()
+		outcome.Error = safeStoredMCPError(err.Error())
 	}
 	return outcome
 }
@@ -765,7 +803,12 @@ func logEnumerationError(kind, serverID string, err error) {
 		slog.Debug("server does not support optional method", "method", methodForKind(kind), "server", serverID)
 		return
 	}
-	log.Printf("[mcp] %s enumeration error for server %s: %v", kind, serverID, err)
+	log.Printf(
+		"[mcp] %s enumeration error for server %s (%T); raw details omitted",
+		kind,
+		serverID,
+		err,
+	)
 }
 
 // methodForKind maps an enumeration kind to the real MCP JSON-RPC method name

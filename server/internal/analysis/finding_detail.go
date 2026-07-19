@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/adithyan-ak/agenthound/server/internal/graph"
 	"github.com/adithyan-ak/agenthound/server/model"
 )
 
@@ -164,10 +165,7 @@ func AttackPathFromExactEvidence(f *model.Finding) *AttackPath {
 	for _, node := range exact.Nodes {
 		kinds := make([]string, len(node.Kinds))
 		copy(kinds, node.Kinds)
-		properties := node.Properties
-		if properties == nil {
-			properties = map[string]any{}
-		}
+		properties := graph.PublicFactProperties(node.Properties)
 		path.Nodes = append(path.Nodes, PathNode{
 			ID:         node.ID,
 			Kinds:      kinds,
@@ -175,10 +173,7 @@ func AttackPathFromExactEvidence(f *model.Finding) *AttackPath {
 		})
 	}
 	for _, edge := range exact.Edges {
-		properties := edge.Properties
-		if properties == nil {
-			properties = map[string]any{}
-		}
+		properties := graph.PublicFactProperties(edge.Properties)
 		pathEdge := PathEdge{
 			Source:     edge.Source,
 			Target:     edge.Target,

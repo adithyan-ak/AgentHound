@@ -10,14 +10,14 @@ Lower weight = easier to exploit = attacker prefers this path.
 
 | Edge Kind | Condition | Weight |
 |-----------|-----------|--------|
-| `TRUSTS_SERVER` | `auth_method = none` with explicit `anonymous_probe_succeeded` evidence | 0.1 |
-| `TRUSTS_SERVER` | `auth_method = basic` | 0.25 |
-| `TRUSTS_SERVER` | `auth_method = apiKey` | 0.3 |
-| `TRUSTS_SERVER` | `auth_method = bearer` | 0.5 |
-| `TRUSTS_SERVER` | `auth_method = oauth` | 0.7 |
-| `TRUSTS_SERVER` | `auth_method = oidc` | 0.75 |
-| `TRUSTS_SERVER` | `auth_method = mtls` | 0.9 |
-| `TRUSTS_SERVER` | `auth_method = unknown/custom` | 0.5 (ranking only; assessment incomplete) |
+| `TRUSTS_SERVER` | effective observed `none/unauthenticated/anonymous_probe_succeeded` | 0.1 |
+| `TRUSTS_SERVER` | configured `auth_method = basic` (when no observed anonymous override exists) | 0.25 |
+| `TRUSTS_SERVER` | configured `auth_method = apiKey` (when no observed anonymous override exists) | 0.3 |
+| `TRUSTS_SERVER` | configured `auth_method = bearer` (when no observed anonymous override exists) | 0.5 |
+| `TRUSTS_SERVER` | configured `auth_method = oauth` (when no observed anonymous override exists) | 0.7 |
+| `TRUSTS_SERVER` | configured `auth_method = oidc` (when no observed anonymous override exists) | 0.75 |
+| `TRUSTS_SERVER` | configured `auth_method = mtls` (when no observed anonymous override exists) | 0.9 |
+| `TRUSTS_SERVER` | configured `auth_method = unknown/custom` (when no observed anonymous override exists) | 0.5 (ranking only; assessment incomplete) |
 | `DELEGATES_TO` | unauthenticated | 0.1 |
 | `DELEGATES_TO` | authenticated | 0.5 |
 | `PROVIDES_TOOL` | _(always)_ | 0.1 |
@@ -29,6 +29,19 @@ Lower weight = easier to exploit = attacker prefers this path.
 | `CAN_IMPERSONATE` | _(always)_ | 0.6 |
 
 Unknown edge kinds default to 0.5 (mid-range, conservative assumption).
+
+The Config Collector owns the raw `TRUSTS_SERVER.risk_weight` and
+`auth_assessment_complete`. Before other analysis, `auth_strength` derives
+`effective_risk_weight`, `effective_auth_assessment_complete`, and
+`effective_auth_source`. Exact reachable MCP runtime evidence
+`none/unauthenticated/anonymous_probe_succeeded` lowers every incoming edge to
+`0.1` and complete because the server accepted an anonymous request regardless
+of that client's configured credential. For every authenticated, unknown, or
+unavailable runtime posture, the effective fields copy that individual edge's
+configured fields. This avoids applying one observed authenticated access path
+to every agent. Weighted traversal, direct `CAN_REACH` confidence, exact
+finding-path cost, and AgentInstance auth risk consume the effective fields;
+raw configured values remain available as provenance.
 
 ### Campaign verification evidence
 
@@ -58,9 +71,9 @@ score = 0.30 * credential + 0.25 * blast_radius + 0.20 * auth_risk
 
 | Component | Computation |
 |-----------|-------------|
-| `credential` | 100 if any trusted server has high-entropy or hardcoded credentials; 60 if credentials exist but are vault-referenced; 0 otherwise |
+| `credential` | For observed/exposed value-hash material used by any trusted server: 100 if any credential is high-entropy or hardcoded, 60 if another eligible credential exists, and 0 otherwise. Config location (environment, header, argument, or URL component) does not change eligibility. |
 | `blast_radius` | `min(reachable_resource_count * 10, 100)` |
-| `auth_risk` | `(1 - avg_trust_edge_weight) * 100` (weak auth = high score) |
+| `auth_risk` | `(1 - avg_effective_trust_edge_weight) * 100` over complete effective assessments (weak auth = high score); incomplete edges contribute a bounded unknown factor |
 | `tool_surface` | `min(trusted_tool_count * 5, 100)` |
 | `poisoning` | 100 if any loaded instruction file is suspicious; 0 otherwise |
 
@@ -73,15 +86,16 @@ score = 0.30 * auth_strength + 0.30 * blast_radius + 0.25 * delegation_surface
 
 | Component | Computation |
 |-----------|-------------|
-| `auth_strength` | none=100 only with explicit anonymous-probe evidence; basic=85, apiKey=70, bearer=50, oauth=25, oidc=20, mtls=10; unknown/custom/unsupported-none have no numeric weakness |
+| `auth_strength` | From the paired `effective_auth_*` tuple: none=100 only with explicit anonymous-probe evidence and `effective_auth_source=observed`; basic=85, apiKey=70, bearer=50, oauth=25, oidc=20, mtls=10; unknown/custom/configured-or-unsupported-none have no numeric weakness |
 | `blast_radius` | `min(reachable_mcp_resource_count * 10, 100)` |
 | `delegation_surface` | `min(delegated_a2a_agent_count * 20, 100)` |
 | `impersonation` | `min(can_impersonate_peer_count * 25, 100)` |
 
-For A2A imports, `auth_method=none` without
-`auth_evidence=anonymous_probe_succeeded` contributes an incomplete 0–100 auth
-bound (`auth_evidence` is listed as unknown) instead of an exact
-unauthenticated weakness score.
+For A2A imports, `auth_method=none` without the exact validated observed probe
+tuple contributes an incomplete 0–100 auth bound instead of an exact
+unauthenticated weakness score. Missing evidence reports `auth_evidence` as
+unknown; a raw anonymous claim without observed provenance reports
+`auth_source` as unknown.
 
 ### MCPServer
 
@@ -92,12 +106,17 @@ score = 0.35 * auth_strength + 0.25 * tool_risk + 0.20 * exposure
 
 | Component | Computation |
 |-----------|-------------|
-| `auth_strength` | none=100 only with explicit anonymous-probe evidence; basic=85, apiKey=70, bearer=50, oauth=25, oidc=20, mtls=10; unknown/custom/unsupported-none have no numeric weakness |
+| `auth_strength` | From the paired `effective_auth_*` tuple: none=100 only with explicit anonymous-probe evidence and `effective_auth_source=observed`; basic=85, apiKey=70, bearer=50, oauth=25, oidc=20, mtls=10; unknown/custom/configured-or-unsupported-none have no numeric weakness |
 | `tool_risk` | max `capability_risk` across all provided tools |
 | `exposure` | public host=100, private network=50, localhost=20; unknown contributes a 0-100 bound and marks assessment incomplete |
-| `credential_handling` | Observed/exposed material only: `max(base, blast)` where `base` = 100 if high-entropy or hardcoded creds else 50, and `blast` = `min(Credential.blast_radius * 10, 100)`. Masked, hashed, unobserved, and identity-only references do not count. |
+| `credential_handling` | Observed/exposed value-hash material used for server authentication, independent of config location: `max(base, blast)` where `base` = 100 if high-entropy or hardcoded creds else 50, and `blast` = `min(Credential.blast_radius * 10, 100)`. Masked, hashed, unobserved, and identity-only references do not count. |
 
-`Credential.blast_radius` (distinct agents that can reach a value_hash-merged secret) is materialized by the `cross_service_credential_chain` post-processor, so a widely-shared secret amplifies its server's credential-handling risk even when the secret itself is not high-entropy.
+Both credential components follow the canonical
+`MCPServer-[:AUTHENTICATES_WITH]->Identity-[:USES_CREDENTIAL]->Credential`
+topology. `HAS_ENV_VAR` records optional environment-location evidence only; it
+is not the server-to-credential ownership path.
+
+`Credential.blast_radius` (distinct agents that can reach a value-hash-correlated secret) is materialized by the `cross_service_credential_chain` post-processor, so a widely-shared secret amplifies its server's credential-handling risk even when the secret itself is not high-entropy.
 
 ### MCPTool
 

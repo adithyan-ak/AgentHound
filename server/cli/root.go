@@ -50,6 +50,9 @@ func init() {
 	rootCmd.PersistentFlags().String("neo4j-user", "", "Neo4j username (env: AGENTHOUND_NEO4J_USER)")
 	rootCmd.PersistentFlags().String("neo4j-password", "", "Neo4j password (env: AGENTHOUND_NEO4J_PASSWORD)")
 	rootCmd.PersistentFlags().String("pg-uri", "", "PostgreSQL connection URI (env: AGENTHOUND_PG_URI)")
+	rootCmd.PersistentFlags().String("host-id", "", "Stable lowercase ID for the one collection host admitted by this database (env: AGENTHOUND_HOST_ID)")
+	rootCmd.PersistentFlags().String("network-realm-id", "", "Stable lowercase ID for the one private-network realm admitted by this database (env: AGENTHOUND_NETWORK_REALM_ID)")
+	rootCmd.PersistentFlags().String("storage-pair-id", "", "Canonical UUID permanently pairing this PostgreSQL and Neo4j volume set (env: AGENTHOUND_STORAGE_PAIR_ID)")
 	rootCmd.PersistentFlags().String("cors-origins", "", "Comma-separated CORS origins (env: AGENTHOUND_CORS_ORIGINS)")
 }
 

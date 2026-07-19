@@ -3,13 +3,15 @@ package embeddinginvert
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
 func TestExtract_UpstreamFixtureExactInventory(t *testing.T) {
-	const sourceID = "sha256:upstream-model"
+	sourceID := ingest.ComputeNodeID("AIModel", "upstream-instance", "upstream-model")
 	res, err := (&Extractor{}).Extract(context.Background(), action.Target{
 		Kind: "node", Address: sourceID,
 	}, action.ExtractOptions{
@@ -19,14 +21,19 @@ func TestExtract_UpstreamFixtureExactInventory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Extract upstream fixture: %v", err)
 	}
-	if res.Summary.ArtifactsProduced != 2 || len(res.IngestData.Graph.Nodes) != 2 || len(res.IngestData.Graph.Edges) != 2 {
-		t.Fatalf("inventory = summary:%d nodes:%d edges:%d, want 2/2/2",
+	if res.Summary.ArtifactsProduced != 2 || len(res.IngestData.Graph.Nodes) != 3 || len(res.IngestData.Graph.Edges) != 2 {
+		t.Fatalf("inventory = summary:%d nodes:%d edges:%d, want 2/3/2",
 			res.Summary.ArtifactsProduced, len(res.IngestData.Graph.Nodes), len(res.IngestData.Graph.Edges))
+	}
+	ref := res.IngestData.Graph.Nodes[0]
+	if ref.ID != sourceID || len(ref.Kinds) != 1 || ref.Kinds[0] != "AIModel" ||
+		ref.PropertySemantics != ingest.NodePropertySemanticsReferenceOnly || len(ref.Properties) != 0 {
+		t.Fatalf("source reference = %+v, want empty reference_only AIModel", ref)
 	}
 	wantTokens := []string{"[upstream_signal]", "[upstream_tool]"}
 	wantIndices := []int{4, 5}
 	wantMagnitudes := []float64{6.303967005, 8.303011503}
-	for i, node := range res.IngestData.Graph.Nodes {
+	for i, node := range res.IngestData.Graph.Nodes[1:] {
 		if node.Properties["source_model_id"] != sourceID || node.Properties["engagement_id"] != "UPSTREAM-TEST" || node.Properties["method"] != "embedding-outlier" {
 			t.Errorf("node %d provenance = %+v", i, node.Properties)
 		}
@@ -45,11 +52,12 @@ func TestExtract_UpstreamFixtureExactInventory(t *testing.T) {
 
 func TestExtract_DetectsOutliers(t *testing.T) {
 	e := &Extractor{}
+	sourceID := ingest.ComputeNodeID("AIModel", "test-instance", "test-model")
 	res, err := e.Extract(context.Background(), action.Target{
 		Kind:    "node",
-		Address: "sha256:test-model-id",
+		Address: sourceID,
 	}, action.ExtractOptions{
-		SourceNodeID: "sha256:test-model-id",
+		SourceNodeID: sourceID,
 		ArtifactPath: fixturePath(),
 		EngagementID: "TEST-001",
 		DryRun:       false,
@@ -97,11 +105,12 @@ func TestExtract_DetectsOutliers(t *testing.T) {
 
 func TestExtract_DryRunEmitsNoData(t *testing.T) {
 	e := &Extractor{}
+	sourceID := ingest.ComputeNodeID("AIModel", "test-instance", "test-model")
 	res, err := e.Extract(context.Background(), action.Target{
 		Kind:    "node",
-		Address: "sha256:test-model-id",
+		Address: sourceID,
 	}, action.ExtractOptions{
-		SourceNodeID: "sha256:test-model-id",
+		SourceNodeID: sourceID,
 		ArtifactPath: fixturePath(),
 		EngagementID: "TEST-002",
 		DryRun:       true,
@@ -142,13 +151,29 @@ func TestExtract_RequiresArtifactPath(t *testing.T) {
 	}
 }
 
+func TestExtract_RejectsNonCanonicalSourceNodeID(t *testing.T) {
+	e := &Extractor{}
+	_, err := e.Extract(context.Background(), action.Target{
+		Kind:    "node",
+		Address: "hf://example/model.gguf",
+	}, action.ExtractOptions{
+		SourceNodeID: "hf://example/model.gguf",
+		ArtifactPath: fixturePath(),
+		EngagementID: "TEST-NODE-ID",
+	})
+	if err == nil || !strings.Contains(err.Error(), "source node ID must be sha256:") {
+		t.Fatalf("invalid source node ID error = %v", err)
+	}
+}
+
 func TestExtract_Q8_0_DetectsOutliers(t *testing.T) {
 	e := &Extractor{}
+	sourceID := ingest.ComputeNodeID("AIModel", "q8-instance", "q8-model")
 	res, err := e.Extract(context.Background(), action.Target{
 		Kind:    "node",
-		Address: "sha256:q8-model",
+		Address: sourceID,
 	}, action.ExtractOptions{
-		SourceNodeID: "sha256:q8-model",
+		SourceNodeID: sourceID,
 		ArtifactPath: q8FixturePath(),
 		EngagementID: "Q8-TEST",
 		DryRun:       false,

@@ -30,6 +30,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -82,13 +83,11 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		ID:    mlflowID,
 		Kinds: []string{"MLflowServer", "AIService"},
 		Properties: map[string]any{
-			"objectid":          mlflowID,
-			"endpoint":          baseURL,
-			"name":              host,
-			"discovered_via":    "mlflow_loot",
-			"service_kind":      "mlflow",
-			"auth_method":       "none",
-			"is_anonymous_loot": "true",
+			"objectid":      mlflowID,
+			"endpoint":      baseURL,
+			"name":          host,
+			"loot_observed": true,
+			"service_kind":  "mlflow",
 		},
 	})
 	res.Summary.EndpointsProbed++
@@ -101,7 +100,9 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		res.PartialErrors = append(res.PartialErrors, fmt.Sprintf("experiments/search: %v", err))
 		res.Summary.PartialFailures++
 	} else {
-		res.IngestData.Graph.Nodes[0].Properties["experiment_count"] = len(experiments)
+		props := res.IngestData.Graph.Nodes[0].Properties
+		props["experiment_count"] = len(experiments)
+		markAnonymousInventorySuccess(props)
 	}
 
 	// 2. /runs/search per experiment (paginated).
@@ -242,14 +243,22 @@ func fetchExperiments(ctx context.Context, client *http.Client, baseURL string, 
 			return out, fmt.Errorf("page: %w", err)
 		}
 		var parsed struct {
-			Experiments   []experiment `json:"experiments"`
-			NextPageToken string       `json:"next_page_token"`
+			Experiments   json.RawMessage `json:"experiments"`
+			NextPageToken string          `json:"next_page_token"`
 		}
 		if err := json.Unmarshal(body, &parsed); err != nil {
 			return nil, fmt.Errorf("decode experiments: %w", err)
 		}
-		out = append(out, parsed.Experiments...)
-		if parsed.NextPageToken == "" || len(parsed.Experiments) == 0 {
+		experimentsJSON := bytes.TrimSpace(parsed.Experiments)
+		if len(experimentsJSON) == 0 || experimentsJSON[0] != '[' {
+			return nil, errors.New("decode experiments: expected an experiments array")
+		}
+		var pageExperiments []experiment
+		if err := json.Unmarshal(experimentsJSON, &pageExperiments); err != nil {
+			return nil, fmt.Errorf("decode experiments array: %w", err)
+		}
+		out = append(out, pageExperiments...)
+		if parsed.NextPageToken == "" || len(pageExperiments) == 0 {
 			break
 		}
 		pageToken = parsed.NextPageToken
@@ -258,6 +267,15 @@ func fetchExperiments(ctx context.Context, client *http.Client, baseURL string, 
 		out = out[:maxItems]
 	}
 	return out, nil
+}
+
+func markAnonymousInventorySuccess(props map[string]any) {
+	props["auth_method"] = string(common.AuthNone)
+	props["auth_assurance"] = string(common.AuthAssuranceUnauthenticated)
+	props["auth_evidence"] = common.AuthEvidenceAnonymousProbeSucceeded
+	props["probe_status"] = string(common.VerificationVerified)
+	props["last_verified_at"] = time.Now().UTC().Format(time.RFC3339)
+	props["is_anonymous_loot"] = "true"
 }
 
 type run struct {

@@ -4,6 +4,12 @@ and ([.graph.nodes[] | select(.kinds | index("OllamaInstance")) | .properties.en
   == ["http://ollama:11434"]
 and ([.graph.nodes[] | select(.kinds | index("OllamaInstance")) | .properties.embedding_capability_confirmed])
   == [true]
+and (.graph.nodes | any(
+  (.kinds | index("OllamaInstance")) and
+  .properties.endpoint == "http://ollama:11434" and
+  .properties.loot_observed == true and
+  (.properties | has("discovered_via") | not)
+))
 and ([.graph.nodes[] | select(.kinds | index("AIModel")) | .properties.name])
   == ["qwen2:0.5b"]
 and ([.graph.edges[] | select(.kind == "PROVIDES_MODEL")] | length) == 1

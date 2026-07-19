@@ -36,6 +36,7 @@ type AgentCardData struct {
 	SignatureKeyTrust    string
 	IsHTTPS              bool
 	CardHash             string
+	AuthProbe            AuthProbeResult
 }
 
 type SkillData struct {

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/common"
 )
 
 const owuiVersionBody = `{"version":"0.6.5"}`
@@ -62,6 +63,75 @@ func TestFingerprint_OpenWebUI_HappyPath(t *testing.T) {
 	}
 	if len(res.IngestData.Graph.Edges) != 0 {
 		t.Fatalf("expected 0 EXPOSES edges (dead capture removed in v3), got %d", len(res.IngestData.Graph.Edges))
+	}
+	props := res.IngestData.Graph.Nodes[0].Properties
+	if got := props["version"]; got != "0.6.5" {
+		t.Errorf("version = %v, want 0.6.5", got)
+	}
+	for _, key := range []string{"auth_method", "auth_assurance", "auth_evidence", "is_anonymous_loot"} {
+		if _, exists := props[key]; exists {
+			t.Errorf("public identity probe emitted %s: %+v", key, props)
+		}
+	}
+}
+
+// TestFingerprint_OpenWebUI_PublicIdentityDoesNotImplyAnonymousAccess covers
+// the production posture where WEBUI_AUTH=true still leaves the identity
+// endpoints public while privileged endpoints reject anonymous callers.
+func TestFingerprint_OpenWebUI_PublicIdentityDoesNotImplyAnonymousAccess(t *testing.T) {
+	protectedRequests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/version":
+			_, _ = w.Write([]byte(owuiVersionBody))
+		case "/api/config":
+			_, _ = w.Write([]byte(`{"name":"Open WebUI","status":true,"features":{"auth":true,"enable_signup":false}}`))
+		case "/ollama/config":
+			protectedRequests++
+			w.WriteHeader(http.StatusUnauthorized)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	f, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	res, err := f.Fingerprint(context.Background(), action.Target{
+		Kind:    "host",
+		Address: strings.TrimPrefix(srv.URL, "http://"),
+	})
+	if err != nil {
+		t.Fatalf("Fingerprint: %v", err)
+	}
+	if !res.Matched {
+		t.Fatal("expected public Open WebUI identity probes to match")
+	}
+	props := res.IngestData.Graph.Nodes[0].Properties
+	if got := props["version"]; got != "0.6.5" {
+		t.Errorf("version = %v, want 0.6.5", got)
+	}
+	for _, key := range []string{"auth_method", "auth_assurance", "auth_evidence", "is_anonymous_loot"} {
+		if _, exists := props[key]; exists {
+			t.Errorf("public identity probe emitted %s: %+v", key, props)
+		}
+	}
+	if res.AuthMethod != string(common.AuthUnknown) {
+		t.Errorf("AuthMethod = %q, want unknown", res.AuthMethod)
+	}
+	if protectedRequests != 0 {
+		t.Errorf("fingerprinter unexpectedly probed protected endpoint %d times", protectedRequests)
+	}
+	protected, err := http.Get(srv.URL + "/ollama/config")
+	if err != nil {
+		t.Fatalf("GET protected endpoint: %v", err)
+	}
+	defer protected.Body.Close()
+	if protected.StatusCode != http.StatusUnauthorized {
+		t.Errorf("protected endpoint status = %d, want %d", protected.StatusCode, http.StatusUnauthorized)
 	}
 }
 

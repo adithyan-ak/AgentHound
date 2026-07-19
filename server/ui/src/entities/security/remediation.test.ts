@@ -53,17 +53,38 @@ describe("deriveRemediations evidence states", () => {
       true,
     );
 
-    const observed = deriveRemediations(
+    const unprovenRawClaim = deriveRemediations(
       node("MCPServer", {
         auth_method: "none",
+        auth_assurance: "unauthenticated",
         auth_evidence: "anonymous_probe_succeeded",
       }),
       "MCPServer",
       [],
     );
-    expect(observed.some((item) => item.title === "Add an authentication method")).toBe(
-      true,
+    expect(unprovenRawClaim.some((item) => item.title === "Add an authentication method")).toBe(
+      false,
     );
+
+    const observedRuntime = deriveRemediations(
+      node("MCPServer", {
+        auth_method: "unknown",
+        auth_evidence: "unknown",
+        transport: "http",
+        status: "reachable",
+        observed_auth_method: "none",
+        observed_auth_assurance: "unauthenticated",
+        observed_auth_evidence: "anonymous_probe_succeeded",
+      }),
+      "MCPServer",
+      [],
+    );
+    expect(
+      observedRuntime.some((item) => item.title === "Add an authentication method"),
+    ).toBe(true);
+    expect(
+      observedRuntime.some((item) => item.title === "Verify authentication posture"),
+    ).toBe(false);
   });
 
   it("requires explicit exposure evidence and retains the recorded source", () => {

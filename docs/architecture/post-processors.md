@@ -7,9 +7,11 @@ All composite edges carry: `scan_id`, `last_seen`, `confidence` (0.0-1.0), `risk
 ## Dependency DAG
 
 ```
-has_access_to ─────┬─── can_reach ────┬── cross_service_credential_chain
-                   │                  └── can_exfiltrate
-                   └─── cross_protocol
+auth_strength ──┬── can_reach ─────┬── cross_service_credential_chain
+                 ├── cross_protocol      └── can_exfiltrate
+                 └── confused_deputy
+has_access_to ───┬── can_reach
+                 └── cross_protocol
 can_execute
 shadows
 poisoned_description
@@ -29,13 +31,13 @@ can_impersonate
 | 5 | poisoned_description | none |
 | 6 | poisoned_instructions | none |
 | 7 | taints | none (reads INGESTS_UNTRUSTED + schema_keys) |
-| 8 | can_reach | has_access_to |
+| 8 | can_reach | auth_strength, has_access_to |
 | 9 | cross_service_credential_chain | has_access_to, can_reach |
 | 10 | ifc_violation | has_access_to (reads INGESTS_UNTRUSTED) |
 | 11 | can_exfiltrate | can_reach |
 | 12 | can_impersonate | none |
 | 13 | confused_deputy | auth_strength, can_reach |
-| 14 | cross_protocol | has_access_to |
+| 14 | cross_protocol | auth_strength, has_access_to |
 | 15 | risk_score | all of 1-14 |
 
 ## Processor Interface
@@ -59,15 +61,42 @@ type PostProcessor interface {
 
 ## auth_strength (pre-pass)
 
-**Computes:** canonical `auth_assurance` on every assessed node and numeric `auth_strength` only for known methods (`MCPServer`, `A2AAgent`).
+**Computes:** a paired effective authentication tuple and numeric
+`auth_strength` on `MCPServer` / `A2AAgent`, plus derived effective assessment
+properties on incoming `TRUSTS_SERVER` edges.
 
-A pre-pass with no dependencies that materializes the shared SDK auth policy:
-none=100/unauthenticated, basic=85/weak, apiKey=70/weak,
+Configured `auth_method` / `auth_assurance` / `auth_evidence` and protocol
+runtime `observed_auth_*` remain immutable provenance. For MCP, a reachable
+HTTP, internally valid observed tuple with a method other than `unknown`
+becomes
+`effective_auth_method`, `effective_auth_assurance`, and
+`effective_auth_evidence`, with `effective_auth_source=observed`. An unknown,
+unavailable, partial, or contradictory observation falls back atomically to
+the configured tuple (`effective_auth_source=configured`); fields are never
+coalesced independently. A2A runtime evidence wins only for the exact bounded
+read-only observation `auth_probe_method=get_task_nonexistent`,
+`auth_probe_status=anonymous_protocol_access`, and observed
+`none/unauthenticated/anonymous_probe_succeeded`, with bounded detail
+`task_not_found_v1` or `task_not_found_v0_3`. Card retrieval, protected or
+inconclusive probe diagnostics, missing metadata, and every other A2A observed
+tuple retain configured-derived behavior.
+
+The evidence-aware policy is none=100/unauthenticated only for an
+`effective_auth_source=observed` tuple carrying
+`anonymous_probe_succeeded`, basic=85/weak, apiKey=70/weak,
 bearer=50/moderate, oauth=25/strong, oidc=20/strong, and mtls=10/strong.
-Unknown/custom methods receive `auth_assurance=unknown` and a null numeric
-property, removing any stale score. It writes only node properties — no
-composite edges — so it needs no `source_collector` and is untouched by
-composite epoch retirement.
+Unknown/custom and configured/unconfirmed-none methods receive
+`effective_auth_assurance=unknown` and a null numeric property.
+
+For each `TRUSTS_SERVER`, the pass writes `effective_risk_weight`,
+`effective_auth_assessment_complete`, and `effective_auth_source`. Exact
+reachable observed `none/unauthenticated/anonymous_probe_succeeded` sets every
+incoming trust edge to `0.1`, complete, source `observed`: anonymous runtime
+access bypasses every configured client credential. Every other runtime
+posture preserves each relationship's own configured `risk_weight` and
+`auth_assessment_complete`, source `configured`; one observed authenticated
+access path cannot rewrite unrelated configured paths. The raw fields are not
+overwritten.
 
 ---
 
@@ -152,23 +181,31 @@ The inferred transitive-access summary edge. Two passes:
 ```
 AgentInstance -[TRUSTS_SERVER]-> MCPServer -[PROVIDES_TOOL]-> MCPTool -[HAS_ACCESS_TO]-> MCPResource
 ```
-Confidence scales inversely with trust edge risk_weight (no-auth trust = 1.0, static-key = 0.8, OAuth = 0.5).
+Confidence scales inversely with the trust edge's `effective_risk_weight`
+(confirmed observed no-auth trust = 1.0, static-key = 0.8, OAuth = 0.5).
 
 **Credential chain (6 hops):**
 ```
 AgentInstance -> MCPServer(s1) -> MCPTool(file_read|credential_access)
-MCPServer(s2) -[HAS_ENV_VAR]-> Credential -> Identity -> MCPServer(s2) -> MCPTool -> MCPResource
+MCPServer(s2) -[AUTHENTICATES_WITH]-> Identity -[USES_CREDENTIAL]-> Credential
+MCPServer(s2) -> MCPTool -> MCPResource
 ```
-Requires explicit unauthenticated/weak evidence for s1. Live MCP initialize
-evidence takes precedence over configuration posture when present; missing
-auth evidence does not match. Confidence: 0.6.
+Requires `effective_auth_assurance` to be explicitly unauthenticated or weak
+for s1. Unauthenticated is eligible only when
+`effective_auth_source=observed`; configured weak authentication remains
+eligible. The paired effective tuple applies valid live MCP initialize evidence
+as described above; missing/unknown auth evidence does not match. The credential
+may come from any supported config location; it must have non-empty observed, exposed material with
+`merge_key=value_hash` and `identity_basis=value_hash`. Confidence: 0.6.
 
 When multiple credential paths connect the same `(agent, resource)`, the
 processor orders candidates by the complete stable object-ID tuple
-`(a, s1, t1, s2, c, i, t2, r)` and selects the first before `MERGE`.
+`(a, s1, t1, s2, i, c, t2, r)` and selects the first before `MERGE`.
 Neo4j relationship IDs are retained only as post-selection evidence and never
 participate in winner selection, so witness topology cannot flip with
-relationship recreation order.
+relationship recreation order. Evidence nodes follow that tuple, and evidence
+relationships follow `(TRUSTS_SERVER, PROVIDES_TOOL, AUTHENTICATES_WITH,
+USES_CREDENTIAL, PROVIDES_TOOL, HAS_ACCESS_TO)`.
 
 **Verified-reach upgrade (3rd pass):** after building the CAN_REACH edges,
 `can_reach` re-correlates any persisted per-agent raw
@@ -207,19 +244,40 @@ credential material or references)
 Joins Config Collector and LiteLLM Looter emissions on `Credential.value_hash`:
 
 ```
-AgentInstance -> MCPServer -[HAS_ENV_VAR]-> Credential(c1)
+AgentInstance -> MCPServer -[AUTHENTICATES_WITH]-> Identity
+    -[USES_CREDENTIAL]-> Credential(c1)
     where c1.value_hash matches...
 LiteLLMGateway -[EXPOSES_CREDENTIAL]-> Credential(c1master)
 LiteLLMGateway -[EXPOSES_CREDENTIAL]-> Credential(c2, type IN [apiKey, virtual_key])
 ```
 
+Both `c1` and `c1master` must have a non-empty hash and explicit
+`merge_key=value_hash`, `identity_basis=value_hash`, `material_status=observed`,
+and `exposure_status=exposed`. Optional `HAS_ENV_VAR` location evidence is not
+part of the correlation path.
+
+Evidence nodes are ordered `(agent, server, identity, c1, c1master, gateway,
+c2)`. Raw relationship evidence is ordered `(TRUSTS_SERVER,
+AUTHENTICATES_WITH, USES_CREDENTIAL, EXPOSES_CREDENTIAL(master),
+EXPOSES_CREDENTIAL(upstream))`; the `c1`/`c1master` value-hash correlation is
+recorded separately as synthetic evidence.
+
 Emits: `(AgentInstance)-[:CAN_REACH]->(c2)` with evidence including
 `merge_value_hash`, `via_gateway`, `upstream_provider`. The resulting finding
 variant is `credential_chain_observed_material` only when c2 explicitly carries
 observed, exposed, non-identity material; masked/hashed targets are
-`credential_chain_reference`. Confidence: 0.95, hops metadata: 5.
+`credential_chain_reference`. Confidence: 0.95, hops metadata: 6.
 
-The same single query also computes **credential blast radius**: `count(DISTINCT agent)` reaching the merged secret, written as `blast_radius` on both `c1` (the env-var credential) and `c1master` (its value_hash twin). The agents are collected for the count and re-UNWOUND so the CAN_REACH MERGE stays one edge per (agent, upstream-credential). `blast_radius` then amplifies the server credential-handling risk term (see risk-scoring.md).
+The same single query also computes **credential blast radius** at the canonical
+`value_hash` grain: `count(DISTINCT agent)` across every configured credential
+node representing that secret. The global count is written to every matching
+`c1` and `c1master`; two config nodes with the same secret therefore cannot
+race to leave a smaller per-node count on the shared master. Candidate paths
+are then ordered by their stable seven-node object-ID tuple and reduced to one
+winner per `(agent, upstream credential)` before `MERGE`, so repeated runs and
+multiple config paths cannot overwrite evidence nondeterministically.
+`blast_radius` then amplifies the server credential-handling risk term (see
+risk-scoring.md).
 
 The `value_hash` is the cross-collector merge primitive -- same secret value regardless of how each collector derives its objectid.
 
@@ -273,12 +331,14 @@ cannot express:
 MATCH (ext:A2AAgent)-[:DELEGATES_TO*1..3]->(int:A2AAgent)
 MATCH (int)-[:RUNS_ON]->(h:Host)<-[:RUNS_ON]-(s:MCPServer)
 MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(s)-[:PROVIDES_TOOL]->(t:MCPTool)-[:HAS_ACCESS_TO]->(r:MCPResource)
-WHERE ext.auth_assurance = 'unauthenticated'
-  AND ext.auth_evidence = 'anonymous_probe_succeeded'
+WHERE ext.effective_auth_assurance = 'unauthenticated'
+  AND ext.effective_auth_source = 'observed'
+  AND ext.effective_auth_evidence = 'anonymous_probe_succeeded'
 ```
 
-Requires explicit unauthenticated evidence for the external A2A agent; missing
-auth is unknown and does not match. The pivot is host co-location: an A2A
+Requires exact, observed unauthenticated evidence for the external A2A agent;
+configured no-auth claims and missing auth are not runtime proof and do not
+match. The pivot is host co-location: an A2A
 agent delegates to another agent recorded on the same host as an MCP server.
 The edge carries `cross_protocol=true` and confidence 0.5. Finding and pre-built
 query output label it a `shared_host` hypothesis, not proven A2A-to-MCP
@@ -288,9 +348,11 @@ invocation.
 
 **Computes:** `A2AAgent -[CONFUSED_DEPUTY]-> A2AAgent`
 
-Flags a confused-deputy escalation when an unauthenticated/weak A2A agent
-`DELEGATES_TO` a strong one. Unknown/custom methods are excluded. The low-trust
-caller effectively borrows the callee's privileges. Depends on the
+Flags a confused-deputy escalation when an unauthenticated or weak A2A agent
+`DELEGATES_TO` a strong one. Unauthenticated callers require
+`effective_auth_source=observed`; configured weak callers remain eligible.
+Unknown/custom methods are excluded. The low-trust caller effectively borrows
+the callee's privileges. Depends on the
 `auth_strength` pre-pass and `can_reach` (ordering).
 `source_collector='a2a'`; confidence 0.8, risk weight 0.3.
 

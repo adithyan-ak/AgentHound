@@ -1,6 +1,9 @@
 package config
 
 import (
+	"fmt"
+	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/adithyan-ak/agenthound/sdk/common"
@@ -10,7 +13,7 @@ import (
 type CredentialInfo struct {
 	Type       string // "envVar", "hardcoded", "vaultRef", "inputPrompt"
 	Name       string
-	Location   string // "env" or "header"
+	Location   string // "env", "header", or a stable argv position
 	AuthMethod common.AuthMethod
 	Value      string // SHA-256 hash by default, actual value only if includeValues=true
 	ValueHash  string // SHA-256 hash of the original raw value, ALWAYS populated.
@@ -33,21 +36,222 @@ type CredentialInfo struct {
 func ExtractCredentials(env map[string]string, headers map[string]string, source string, includeValues bool, engine *rules.Engine) []CredentialInfo {
 	var creds []CredentialInfo
 
-	for name, value := range env {
-		if !isCredentialName(name, engine) {
+	for _, name := range sortedMapKeys(env) {
+		value := env[name]
+		if strings.TrimSpace(value) == "" || !isCredentialName(name, engine) {
 			continue
 		}
 		creds = append(creds, classifyAndBuild(name, value, source, "env", includeValues, engine))
 	}
 
-	for name, value := range headers {
-		if !isCredentialName(name, engine) {
+	for _, name := range sortedMapKeys(headers) {
+		value := headers[name]
+		if strings.TrimSpace(value) == "" || !isCredentialName(name, engine) {
 			continue
 		}
 		creds = append(creds, classifyAndBuild(name, value, source, "header", includeValues, engine))
 	}
 
 	return creds
+}
+
+// ExtractServerCredentials covers every configuration surface that can carry
+// authentication material. Raw argv stays in memory; only classified
+// Credential evidence (hashes unless explicitly opted in) may enter an ingest
+// artifact.
+func ExtractServerCredentials(
+	server ServerDef,
+	includeValues bool,
+	engine *rules.Engine,
+) []CredentialInfo {
+	creds := ExtractCredentials(
+		server.Env,
+		server.Headers,
+		server.Name,
+		includeValues,
+		engine,
+	)
+	creds = append(creds, extractArgumentCredentials(
+		server.Args,
+		server.Name,
+		includeValues,
+		engine,
+	)...)
+	if server.Transport == "http" {
+		creds = append(creds, extractURLCredentials(
+			server.URL,
+			server.Name,
+			"url",
+			includeValues,
+			engine,
+		)...)
+	}
+	sort.Slice(creds, func(i, j int) bool {
+		if creds[i].Source != creds[j].Source {
+			return creds[i].Source < creds[j].Source
+		}
+		if creds[i].Location != creds[j].Location {
+			return creds[i].Location < creds[j].Location
+		}
+		if creds[i].Name != creds[j].Name {
+			return creds[i].Name < creds[j].Name
+		}
+		return creds[i].ValueHash < creds[j].ValueHash
+	})
+	return creds
+}
+
+func extractURLCredentials(
+	rawURL string,
+	source string,
+	locationPrefix string,
+	includeValues bool,
+	engine *rules.Engine,
+) []CredentialInfo {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme == "" {
+		return nil
+	}
+	var credentials []CredentialInfo
+	appendCredential := func(name, value, location string) {
+		if strings.TrimSpace(value) == "" {
+			return
+		}
+		credentials = append(credentials, classifyAndBuild(
+			normalizeArgumentCredentialName(name),
+			value,
+			source,
+			location,
+			includeValues,
+			engine,
+		))
+	}
+	if parsed.User != nil {
+		if password, present := parsed.User.Password(); present && strings.TrimSpace(password) != "" {
+			appendCredential("URL_PASSWORD", password, locationPrefix+":userinfo")
+		} else if username := parsed.User.Username(); strings.TrimSpace(username) != "" {
+			appendCredential("URL_USERINFO", username, locationPrefix+":userinfo")
+		}
+	}
+	query := parsed.Query()
+	for _, name := range sortedMapKeys(query) {
+		normalized := normalizeArgumentCredentialName(name)
+		if !isCredentialName(normalized, engine) {
+			continue
+		}
+		for valueIndex, value := range query[name] {
+			appendCredential(
+				normalized,
+				value,
+				fmt.Sprintf("%s:query:%d", locationPrefix, valueIndex),
+			)
+		}
+	}
+	if fragment := parsed.Fragment; common.IsLikelySecret(fragment) {
+		appendCredential("URL_FRAGMENT", fragment, locationPrefix+":fragment")
+	}
+	return credentials
+}
+
+func extractArgumentCredentials(
+	args []string,
+	source string,
+	includeValues bool,
+	engine *rules.Engine,
+) []CredentialInfo {
+	var creds []CredentialInfo
+	seen := make(map[string]bool)
+	appendCredential := func(name, value, location string) {
+		name = normalizeArgumentCredentialName(name)
+		if name == "" || strings.TrimSpace(value) == "" {
+			return
+		}
+		credential := classifyAndBuild(name, value, source, location, includeValues, engine)
+		key := credential.Name + "\x00" + credential.Location + "\x00" + credential.ValueHash
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		creds = append(creds, credential)
+	}
+
+	consumedAsFlagValue := make(map[int]bool)
+	for index, argument := range args {
+		name, value, hasValue := strings.Cut(argument, "=")
+		normalizedName := normalizeArgumentCredentialName(name)
+		if hasValue && isCredentialName(normalizedName, engine) {
+			appendCredential(normalizedName, value, argumentLocation(index))
+			consumedAsFlagValue[index] = true
+			continue
+		}
+		if !hasValue && strings.HasPrefix(strings.TrimSpace(argument), "-") &&
+			isCredentialName(normalizedName, engine) && index+1 < len(args) {
+			appendCredential(normalizedName, args[index+1], argumentLocation(index+1))
+			consumedAsFlagValue[index+1] = true
+		}
+	}
+
+	for index, argument := range args {
+		parsed, err := url.Parse(argument)
+		if err == nil && parsed.Scheme != "" {
+			if parsed.User != nil {
+				if password, present := parsed.User.Password(); present && strings.TrimSpace(password) != "" {
+					appendCredential("URL_PASSWORD", password, argumentLocation(index)+":userinfo")
+				} else if username := parsed.User.Username(); strings.TrimSpace(username) != "" {
+					appendCredential("URL_USERINFO", username, argumentLocation(index)+":userinfo")
+				}
+			}
+			query := parsed.Query()
+			for _, name := range sortedMapKeys(query) {
+				if !isCredentialName(normalizeArgumentCredentialName(name), engine) {
+					continue
+				}
+				for valueIndex, value := range query[name] {
+					appendCredential(name, value, fmt.Sprintf("%s:query:%d", argumentLocation(index), valueIndex))
+				}
+			}
+		}
+		if !consumedAsFlagValue[index] && common.IsLikelySecret(argument) {
+			appendCredential(
+				fmt.Sprintf("ARGV_%d", index),
+				argument,
+				argumentLocation(index),
+			)
+		}
+	}
+	return creds
+}
+
+func argumentLocation(index int) string {
+	return fmt.Sprintf("arg:%d", index)
+}
+
+func normalizeArgumentCredentialName(name string) string {
+	name = strings.TrimLeft(strings.TrimSpace(name), "-")
+	if name == "" {
+		return ""
+	}
+	var normalized strings.Builder
+	for _, char := range name {
+		switch {
+		case char >= 'a' && char <= 'z':
+			normalized.WriteRune(char - ('a' - 'A'))
+		case char >= 'A' && char <= 'Z', char >= '0' && char <= '9':
+			normalized.WriteRune(char)
+		default:
+			normalized.WriteByte('_')
+		}
+	}
+	return strings.Trim(normalized.String(), "_")
+}
+
+func sortedMapKeys[T any](values map[string]T) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func classifyCredentialType(name, value string, engine *rules.Engine) string {
@@ -122,6 +326,9 @@ func credentialMaterial(name, value, location string) string {
 
 func credentialAuthMethod(name, value, location string) common.AuthMethod {
 	upperName := strings.ToUpper(name)
+	if strings.Contains(location, "userinfo") {
+		return common.AuthBasic
+	}
 	if strings.Contains(upperName, "OAUTH") || strings.Contains(upperName, "CLIENT_ID") {
 		return common.AuthOAuth
 	}

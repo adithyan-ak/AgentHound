@@ -57,7 +57,8 @@ Example: a local MCP config exposes a LiteLLM master key, and the LiteLLM looter
 
 ```text
 (:AgentInstance)-[:TRUSTS_SERVER]->(:MCPServer)
-  -[:HAS_ENV_VAR]->(:Credential {value_hash: H1})
+  -[:AUTHENTICATES_WITH]->(:Identity)
+  -[:USES_CREDENTIAL]->(:Credential {value_hash: H1})
 
 (:LiteLLMGateway)-[:EXPOSES_CREDENTIAL]->(:Credential {value_hash: H1})
 (:LiteLLMGateway)-[:EXPOSES_CREDENTIAL]->(:Credential {type: "apiKey"})
@@ -71,7 +72,7 @@ The `cross_service_credential_chain` processor joins on `value_hash` and emits:
   via_gateway,
   merge_value_hash,
   upstream_provider,
-  hops: 5
+  hops: 6
 }]->(:Credential)
 ```
 
@@ -257,18 +258,25 @@ The `can_impersonate` processor computes TF-IDF cosine similarity over A2A skill
 
 ### `CONFUSED_DEPUTY`
 
-The `auth_strength` pre-pass writes canonical categorical `auth_assurance` and,
-when supported by evidence, a numeric weakness score. An explicit
-`auth_method=none` is unauthenticated only when
-`auth_evidence=anonymous_probe_succeeded`; unknown/custom methods remain
-unknown.
+The `auth_strength` pre-pass preserves collector-owned configured and observed
+fields, then writes one paired `effective_auth_*` tuple and, when supported by
+evidence, a numeric weakness score. An effective `auth_method=none` is
+unauthenticated only when paired with
+`auth_evidence=anonymous_probe_succeeded` and
+`effective_auth_source=observed`; configured none claims and unknown/custom
+methods remain
+unknown. A2A card enumeration alone does not prove anonymous protocol access.
+Only an exact task-not-found result from the bounded read-only nonexistent-task
+lookup authors A2A observed anonymous evidence; protected and inconclusive
+outcomes retain configured card posture. This observation does not claim
+anonymous task creation or message execution.
 
 The `confused_deputy` processor emits `CONFUSED_DEPUTY` when a weakly authenticated A2A agent delegates to a strongly authenticated one:
 
 ```text
-(:A2AAgent {auth_assurance: "unauthenticated|weak"})
+(:A2AAgent {effective_auth_assurance: "unauthenticated|weak"})
   -[:CONFUSED_DEPUTY]->
-(:A2AAgent {auth_assurance: "strong"})
+(:A2AAgent {effective_auth_assurance: "strong"})
 ```
 
 This models a low-trust caller borrowing the privileges of a higher-trust callee.
@@ -324,20 +332,20 @@ Processors run in dependency order. A processor may only read edges or propertie
 
 | # | Processor | Produces | Dependencies |
 |---|-----------|----------|--------------|
-| 1 | `auth_strength` | `auth_strength` node property | None |
+| 1 | `auth_strength` | paired node `effective_auth_*`, `auth_strength`, and effective `TRUSTS_SERVER` assessment properties | None |
 | 2 | `has_access_to` | `HAS_ACCESS_TO` | Raw edges |
 | 3 | `can_execute` | `CAN_EXECUTE` | Raw edges |
 | 4 | `shadows` | `SHADOWS`, `POISONS_CONTEXT` | Raw edges |
 | 5 | `poisoned_description` | `POISONED_DESCRIPTION` | Raw edges |
 | 6 | `poisoned_instructions` | `POISONED_INSTRUCTIONS` | Raw edges |
 | 7 | `taints` | `TAINTS` | `INGESTS_UNTRUSTED`, `schema_keys` |
-| 8 | `can_reach` | `CAN_REACH` | `HAS_ACCESS_TO` |
+| 8 | `can_reach` | `CAN_REACH` | `auth_strength`, `HAS_ACCESS_TO` |
 | 9 | `cross_service_credential_chain` | `CAN_REACH` to upstream credentials, `Credential.blast_radius` | `HAS_ACCESS_TO`, `CAN_REACH`, `value_hash` |
 | 10 | `ifc_violation` | `IFC_VIOLATION` | `HAS_ACCESS_TO`, `INGESTS_UNTRUSTED` |
 | 11 | `can_exfiltrate` | `CAN_EXFILTRATE_VIA` | `CAN_REACH` |
 | 12 | `can_impersonate` | `CAN_IMPERSONATE` | Raw edges |
 | 13 | `confused_deputy` | `CONFUSED_DEPUTY` | `auth_strength`, `CAN_REACH` |
-| 14 | `cross_protocol` | Cross-protocol `CAN_REACH` | `HAS_ACCESS_TO`, `DELEGATES_TO` |
+| 14 | `cross_protocol` | Cross-protocol `CAN_REACH` | `auth_strength`, `HAS_ACCESS_TO`, `DELEGATES_TO` |
 | 15 | `risk_score` | `risk_score` node property | Prior processors |
 
 Each post-processor is idempotent. Promoting any complete raw scope retires the
