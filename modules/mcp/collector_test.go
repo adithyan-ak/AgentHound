@@ -1,14 +1,132 @@
 package mcp
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/adithyan-ak/agenthound/sdk/collector"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
+
+func TestMCPCollectorOfficialStreamableHandlerUsesCanonicalScope(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "contract-server", Version: "1.0.0"}, nil)
+	httpServer := httptest.NewServer(mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return server },
+		&mcp.StreamableHTTPOptions{JSONResponse: true},
+	))
+	defer httpServer.Close()
+
+	result, err := NewMCPCollector().Collect(context.Background(), collector.CollectOptions{
+		TargetURL: httpServer.URL, ScanID: "canonical-contract",
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	wantKey := mcpCoverageKey(ServerSpec{Transport: "http", URL: httpServer.URL})
+	if len(result.Meta.Collection.CoverageKeys) != 1 || result.Meta.Collection.CoverageKeys[0] != wantKey {
+		t.Fatalf("coverage keys = %v, want [%s]", result.Meta.Collection.CoverageKeys, wantKey)
+	}
+	methods := make(map[string]bool)
+	for _, outcome := range result.Meta.Collection.Outcomes {
+		if outcome.CoverageKey != wantKey || outcome.Target != httpServer.URL {
+			t.Fatalf("non-canonical outcome = %+v", outcome)
+		}
+		if methods[outcome.Method] {
+			t.Fatalf("duplicate method outcome %q", outcome.Method)
+		}
+		methods[outcome.Method] = true
+	}
+	for _, node := range result.Graph.Nodes {
+		if len(node.ObservationDomains) != 1 || node.ObservationDomains[0] != wantKey {
+			t.Fatalf("node %s domains = %v, want [%s]", node.ID, node.ObservationDomains, wantKey)
+		}
+	}
+}
+
+func TestMCPSharedDiscoveryFailureStates(t *testing.T) {
+	home, project := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	valid := filepath.Join(project, ".cursor", "mcp.json")
+	malformed := filepath.Join(project, ".vscode", "mcp.json")
+	for _, path := range []string{valid, malformed} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(valid, []byte(`{"mcpServers":{"retained":{"command":"retained-mcp"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(malformed, []byte(`{"servers":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	collector := NewMCPCollector()
+	specs, discovery, err := collector.buildServerList(context.Background(), collectoropts(true, project))
+	if err != nil {
+		t.Fatalf("buildServerList: %v", err)
+	}
+	if len(specs) != 1 || specs[0].Name != "retained" {
+		t.Fatalf("retained specs = %+v", specs)
+	}
+	state, items, _ := summarizeConfigDiscovery(discovery)
+	if state != ingest.OutcomePartial || items == 0 {
+		t.Fatalf("mixed discovery = state:%s items:%d", state, items)
+	}
+
+	if err := os.Remove(valid); err != nil {
+		t.Fatal(err)
+	}
+	specs, discovery, err = collector.buildServerList(context.Background(), collectoropts(true, project))
+	if err != nil {
+		t.Fatalf("failed-only buildServerList: %v", err)
+	}
+	state, items, _ = summarizeConfigDiscovery(discovery)
+	if len(specs) != 0 || state != ingest.OutcomeFailed || items != 0 {
+		t.Fatalf("failed-only discovery = specs:%v state:%s items:%d", specs, state, items)
+	}
+}
+
+func TestMCPSharedDiscoveryCompleteEmptyAndInvalidRoot(t *testing.T) {
+	home, project := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	collector := NewMCPCollector()
+	specs, discovery, err := collector.buildServerList(context.Background(), collectoropts(true, project))
+	if err != nil {
+		t.Fatalf("complete-empty discovery: %v", err)
+	}
+	state, items, _ := summarizeConfigDiscovery(discovery)
+	if len(specs) != 0 || state != ingest.OutcomeComplete || items != 0 {
+		t.Fatalf("complete-empty = specs:%v state:%s items:%d", specs, state, items)
+	}
+	if _, _, err := collector.buildServerList(context.Background(), collectoropts(true, filepath.Join(project, "missing"))); err == nil {
+		t.Fatal("invalid project root became complete-empty MCP discovery")
+	}
+}
+
+func TestMCPExplicitMissingConfigRetainsDiscoveryOutcome(t *testing.T) {
+	project := t.TempDir()
+	result, err := NewMCPCollector().Collect(context.Background(), collector.CollectOptions{
+		ConfigPath: filepath.Join(project, "missing.json"), ProjectDir: project, ScanID: "missing-config",
+	})
+	if err != nil {
+		t.Fatalf("Collect missing explicit config: %v", err)
+	}
+	if result.Meta.Collection == nil || result.Meta.Collection.State != ingest.OutcomeComplete || len(result.Graph.Nodes) != 0 {
+		t.Fatalf("missing config result = %+v graph=%+v", result.Meta.Collection, result.Graph)
+	}
+}
+
+func collectoropts(discover bool, project string) collector.CollectOptions {
+	return collector.CollectOptions{Discover: discover, ProjectDir: project, ScanID: "discovery-state"}
+}
 
 func TestNewMCPCollectorDefaults(t *testing.T) {
 	c := NewMCPCollector()
@@ -397,9 +515,9 @@ func TestParseConfigForSpecsComments(t *testing.T) {
 }
 
 func TestParseConfigForSpecsInvalidFile(t *testing.T) {
-	_, err := parseConfigForSpecs("/nonexistent/path.json")
-	if err == nil {
-		t.Fatal("expected error for nonexistent file")
+	specs, err := parseConfigForSpecs("/nonexistent/path.json")
+	if err != nil || len(specs) != 0 {
+		t.Fatalf("missing explicit path should be complete-empty, got specs=%v err=%v", specs, err)
 	}
 }
 

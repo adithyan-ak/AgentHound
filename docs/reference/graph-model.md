@@ -20,7 +20,7 @@ These are the node kinds accepted in ingest input (`sdk/ingest.AllowedNodeKinds`
 
 | Label | Source | Key Properties |
 |-------|--------|----------------|
-| `MCPServer` | Config + MCP | `name`, `endpoint`, `transport` (stdio/http), `auth_method`, `auth_assurance`, `auth_strength` (numeric weakness only when known, post-processor), `auth_evidence`, `protocol_version`, `instructions`, `instructions_hash` (SHA-256), `capabilities`, `pinning_status`, `is_pinned` (only when known), `id_scheme`, `has_tasks_capability` |
+| `MCPServer` | Config + MCP | configured `name`, live `server_name`, `endpoint`, `transport` (stdio/http), configured `auth_method`/`auth_assurance`/`auth_evidence`, live `observed_auth_method`/`observed_auth_assurance`/`observed_auth_evidence`, `auth_strength` (numeric weakness only when known, post-processor), `protocol_version`, `instructions`, `instructions_hash` (SHA-256), `capabilities`, `pinning_status`, `is_pinned` (only when known), `id_scheme`, `has_tasks_capability` |
 | `MCPTool` | MCP | `name`, `description`, `input_schema`, `output_schema`, `annotations`, `description_hash` (SHA-256), `input_schema_hash` (SHA-256), `schema_keys[]`, `capability_surface[]`, `source_trust` (untrusted_web/email/fileshare), `has_injection_patterns`, `has_cross_references` |
 | `MCPResource` | MCP | `uri`, `name`, `mime_type`, `size`, `uri_scheme`, `sensitivity` (`critical`/`high`/`medium`/`low`/`none`/`unknown`), `sensitivity_rule_id`, `sensitivity_evidence` |
 | `MCPPrompt` | MCP | `name`, `description`, `arguments` |
@@ -30,10 +30,10 @@ These are the node kinds accepted in ingest input (`sdk/ingest.AllowedNodeKinds`
 | `Identity` | Config + MCP | `type` (none/apiKey/oauth/bearer/mtls), `scope`, `is_static` |
 | `Credential` | Config + LiteLLM/Open WebUI Looters | `type`, `name`, `source`, required `merge_key` (`value_hash`/`identity`), `identity_basis` (`value_hash`/`provider_name`/`metadata`/`unknown`), `material_status` (`observed`/`masked`/`hashed`/`unobserved`/`unknown`), `exposure_status` (`exposed`/`not_observed`/`unknown`), `high_entropy`, `format`, `value_hash`, `blast_radius` |
 | `Host` | Config + A2A + MCP | `hostname`, `ip`, `scope` (`local`/`private`/`public`/`unknown`) |
-| `ConfigFile` | Config | `path`, `client`, `server_count` |
-| `InstructionFile` | Config | `path`, `type` (agents.md/claude.md/cursorrules/copilot-instructions/memory.md), `hash`, `is_suspicious` |
+| `ConfigFile` | Config | `path`, sorted `clients`, singular `client` only for one applicable client, unique enabled `server_count` |
+| `InstructionFile` | Config | `path`, `type` (agents.md/claude.md/cursorrules/copilot-instructions/memory.md/cursor-rule), `hash`, `is_suspicious` |
 | `OllamaInstance` | Network scan + Ollama fingerprinter + Open WebUI config | `endpoint`, `version`, observed `auth_method`, `probe_status` (`configured_unverified`/`verified`/`failed`/`unknown`), `last_verified_at`, `configuration_observed`, `configured_via`, `configured_auth_method`, `is_anonymous_loot`, `discovered_via` |
-| `VLLMInstance` | Network scan + vLLM fingerprinter | `endpoint`, `version`, `auth_method`, `is_anonymous_loot` |
+| `VLLMInstance` | Network scan + vLLM fingerprinter | `endpoint`, upstream `version`, `auth_method` (`unknown` from fingerprinting) |
 | `QdrantInstance` | Network scan + Qdrant fingerprinter + Qdrant Looter | `endpoint`, `version`, `collection_count`, `collections` (sorted names), `total_points`, `anonymous_listing` (Looter-enriched) |
 | `MLflowServer` | Network scan + MLflow fingerprinter | `endpoint`, `version`, `experiment_count` |
 | `LiteLLMGateway` | Network scan + LiteLLM fingerprinter | `endpoint`, `auth_method`, `is_anonymous_loot`, `docs_enabled` |
@@ -138,7 +138,7 @@ This enables queries like `MATCH (n:AIService)` to find all AI infrastructure re
 | `RUNS_ON` | MCPServer / A2AAgent | Host | Config / A2A / MCP | Entity runs on this host. A2A requires a conformant preferred interface; later interfaces do not replace entry zero. |
 | `CONFIGURED_IN` | MCPServer | ConfigFile | Config | Server defined in this config file |
 | `HAS_ENV_VAR` | MCPServer | Credential | Config | Server has access to this env var |
-| `LOADS_INSTRUCTIONS` | AgentInstance | InstructionFile | Config | Agent loads this instruction file; validity depends on both the agent config scope and instruction-file scope |
+| `LOADS_INSTRUCTIONS` | AgentInstance | InstructionFile | Future evidence-backed collectors | Agent loads this instruction file. Static path discovery does not emit this edge because path presence alone cannot prove client/scope applicability. |
 | `SAME_AUTH_DOMAIN` | A2AAgent | A2AAgent | A2A | Agents share an authentication domain |
 | `EXPOSES` | AIService | AIService | Fingerprinters / Looters | Service relationship. Open WebUI backend references carry `assertion_type=configured_reference` and `confidence_scope=configuration_presence`; they do not prove backend availability or authentication until a direct probe sets `probe_status=verified`. |
 | `EXPOSES_CREDENTIAL` | AIService | Credential | LiteLLM Looter, Open WebUI Looter | Credential evidence relationship. Inspect `exposure_status`/`assertion_type`: masked provider references and returned hashes remain reference edges but are not usable secret exposure. |
@@ -229,14 +229,20 @@ properties or lowering a complete authoritative observation. If the last
 authoritative owner retires while a reference owner remains, the writer removes
 the stale managed properties and retains only truthful node identity,
 ownership, and lifecycle metadata.
-`LOADS_INSTRUCTIONS` uses `all_dependencies`: completing either its config or
-instruction scope without re-observing the relationship retires it.
+If an evidence-backed collector emits `LOADS_INSTRUCTIONS`, it must declare the
+actual client and applicability scopes needed to reconcile that relationship;
+the static config collector does not infer them.
 
 A complete exact re-observation replaces stale managed properties. Observation
 completeness considers only public collector-produced nodes and managed raw
 relationships, so internal graph state such as `SchemaVersion` and derived
 relationships cannot block publication. Internal ownership and completeness
 properties are reserved and stripped from imported `properties` maps.
+When a previously unseen complete domain adds only properties compatible with
+an already complete fact, the union remains complete. Any overlapping conflict
+still makes it incomplete. If one of those authoritative co-owner domains later
+retires without replacement, the retained fact is downgraded to incomplete so
+properties unique to the missing owner can never be published as current.
 Public nodes with no observation token, and raw relationships incident to one,
 are publication-unsafe even when their managed properties are otherwise
 complete.
@@ -291,7 +297,10 @@ The `value_hash` property on `Credential` nodes is the cross-collector merge pri
 
 1. Config Collector emits a Credential node via `HAS_ENV_VAR` (MCP server → credential)
 2. LiteLLM Looter emits a Credential node via `EXPOSES_CREDENTIAL` (gateway → master/upstream/virtual keys)
-3. Both compute `value_hash = SHA-256(credential_value)` via `sdk/common.HashCredentialValue`
+3. Both compute `value_hash = SHA-256(credential_material)` via
+   `sdk/common.HashCredentialValue`. For a recognized HTTP `Authorization`
+   scheme, the material is the value after `Bearer`, `Basic`, or the other
+   recognized scheme; protocol syntax is not part of the reusable secret.
 4. Same secret value → same `value_hash` → nodes merge on `objectid` regardless of how each collector derives it
 
 This enables evidence graphs like `AgentInstance → MCPServer → Credential ← LiteLLMGateway → upstream provider`. An observed `value_hash` match correlates the local and gateway credential records; the upstream target is classified separately as observed material or a reference.

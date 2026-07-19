@@ -35,6 +35,12 @@ func TestFingerprintRequiresPublicAPICandidate(t *testing.T) {
 			body:        `{}`,
 		},
 		{
+			name:        "proxy authentication challenge",
+			status:      http.StatusProxyAuthRequired,
+			contentType: "text/html",
+			body:        `proxy login required`,
+		},
+		{
 			name:        "malformed JSON",
 			status:      http.StatusOK,
 			contentType: "application/json",
@@ -72,7 +78,25 @@ func TestFingerprintRequiresPublicAPICandidate(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			res := fingerprintTarget(t, srv)
+			fingerprinter, err := New()
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			res, err := fingerprinter.Fingerprint(context.Background(), action.Target{
+				Kind: "host", Address: strings.TrimPrefix(srv.URL, "http://"),
+			})
+			if tt.name == "authentication denial" || tt.name == "proxy authentication challenge" {
+				if err == nil {
+					t.Fatal("authentication challenge must be operationally indeterminate")
+				}
+				if statusProbes != 0 {
+					t.Fatalf("status probes = %d, want 0 after authentication challenge", statusProbes)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Fingerprint: %v", err)
+			}
 			if tt.name == "canonical" {
 				if !res.Matched {
 					t.Fatal("canonical public /api evidence should permit the status decision")

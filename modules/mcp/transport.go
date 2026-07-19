@@ -20,6 +20,10 @@ type ServerSpec struct {
 	Env       map[string]string
 	URL       string
 	Headers   map[string]string
+	// Configured records that the target came from a real client config. It
+	// lets the projection retain configuration-backed claims separately from
+	// live initialize evidence.
+	Configured bool
 }
 
 func buildTransport(spec ServerSpec, insecure bool) (mcpsdk.Transport, error) {

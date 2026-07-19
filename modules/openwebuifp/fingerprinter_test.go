@@ -65,10 +65,9 @@ func TestFingerprint_OpenWebUI_HappyPath(t *testing.T) {
 	}
 }
 
-// TestFingerprint_OpenWebUI_ConfigMissingNameField — response with a
-// different name field is not Open WebUI, so the conjunctive match
-// fails on probe 2. The single-probe fallback on /api/version alone
-// still fires because /api/version returned a valid version.
+// TestFingerprint_OpenWebUI_ConfigMissingNameField — /api/version is not
+// implementation-specific (Ollama exposes the same shape), so both canonical
+// probes are required.
 func TestFingerprint_OpenWebUI_ConfigMissingNameField(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -94,19 +93,14 @@ func TestFingerprint_OpenWebUI_ConfigMissingNameField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Fingerprint: %v", err)
 	}
-	if !res.Matched {
-		t.Fatal("expected Matched=true via /api/version fallback")
-	}
-	if len(res.IngestData.Graph.Nodes) != 1 {
-		t.Errorf("expected 1 node, got %d", len(res.IngestData.Graph.Nodes))
-	}
-	if len(res.IngestData.Graph.Edges) != 0 {
-		t.Errorf("expected 0 edges, got %d", len(res.IngestData.Graph.Edges))
+	if res.Matched {
+		t.Fatal("generic /api/version response must not bypass the Open WebUI shape guard")
 	}
 }
 
 func TestFingerprint_OpenWebUI_ConfigLockedFallback(t *testing.T) {
-	// /api/config 401 — fingerprinter must still match on /api/version alone.
+	// A locked required probe is not a definitive mismatch. The dispatcher must
+	// retain prior observations rather than reconciling the service away.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/version":
@@ -124,18 +118,12 @@ func TestFingerprint_OpenWebUI_ConfigLockedFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	res, err := f.Fingerprint(context.Background(), action.Target{
+	_, err = f.Fingerprint(context.Background(), action.Target{
 		Kind:    "host",
 		Address: strings.TrimPrefix(srv.URL, "http://"),
 	})
-	if err != nil {
-		t.Fatalf("Fingerprint: %v", err)
-	}
-	if !res.Matched {
-		t.Fatal("expected Matched=true even when /api/config is locked")
-	}
-	if len(res.IngestData.Graph.Edges) != 0 {
-		t.Errorf("expected 0 EXPOSES edges when config locked, got %d", len(res.IngestData.Graph.Edges))
+	if err == nil {
+		t.Fatal("authentication challenge must be operationally indeterminate")
 	}
 }
 

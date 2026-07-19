@@ -21,8 +21,8 @@
 # captured field.
 id: openwebui
 name: Open WebUI chat frontend
-description: 'Identifies Open WebUI by GET /api/version returning {"version": "X.Y.Z"}'
-version: 3
+description: 'Identifies Open WebUI from its version and application-config response shapes'
+version: 4
 service_kind: openwebui
 probes:
   - method: GET
@@ -39,9 +39,8 @@ probes:
   # shaped like Open WebUI's get_app_config output. Verified across
   # 14 tags + main: {"name": "Open WebUI", ...} is always present. This
   # strengthens the primary fingerprint without capturing any field
-  # that changed across versions. If /api/config is locked (401), the
-  # fingerprinter's fallback single-probe path still lands on
-  # /api/version.
+  # that changed across versions. Both probes are required because Ollama also
+  # exposes the generic {"version":"X.Y.Z"} shape at /api/version.
   - method: GET
     path: /api/config
     matchers:

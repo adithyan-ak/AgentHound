@@ -61,14 +61,15 @@ func classifyCredentialType(name, value string, engine *rules.Engine) string {
 }
 
 func classifyAndBuild(name, value, source, location string, includeValues bool, engine *rules.Engine) CredentialInfo {
+	material := credentialMaterial(name, value, location)
 	ci := CredentialInfo{
 		Name:          name,
 		Location:      location,
 		AuthMethod:    credentialAuthMethod(name, value, location),
 		Source:        source,
-		Format:        detectFormat(value, engine),
-		Type:          classifyCredentialType(name, value, engine),
-		ValueHash:     common.HashCredentialValue(value),
+		Format:        detectFormat(material, engine),
+		Type:          classifyCredentialType(name, material, engine),
+		ValueHash:     common.HashCredentialValue(material),
 		IdentityBasis: common.CredentialIdentityValueHash,
 	}
 
@@ -83,18 +84,40 @@ func classifyAndBuild(name, value, source, location string, includeValues bool, 
 		ci.ExposureStatus = common.CredentialExposureNotObserved
 	default:
 		ci.IsExposed = true
-		ci.HighEntropy = common.IsLikelySecret(value)
+		ci.HighEntropy = common.IsLikelySecret(material)
 		ci.MaterialStatus = common.CredentialMaterialObserved
 		ci.ExposureStatus = common.CredentialExposureExposed
 	}
 
 	if includeValues {
-		ci.Value = value
+		ci.Value = material
 	} else {
 		ci.Value = ci.ValueHash
 	}
 
 	return ci
+}
+
+// credentialMaterial removes a recognized HTTP Authorization scheme from the
+// credential identity. "Bearer <token>" and "Basic <value>" describe the
+// authentication mechanism plus credential material; the scheme is not part
+// of the reusable secret and must not poison cross-collector value_hash joins.
+// Unknown/custom schemes remain byte-for-byte intact because stripping an
+// unrecognized prefix would invent a credential boundary.
+func credentialMaterial(name, value, location string) string {
+	if location != "header" || !strings.EqualFold(name, "Authorization") {
+		return value
+	}
+	trimmed := strings.TrimSpace(value)
+	fields := strings.Fields(trimmed)
+	if len(fields) < 2 {
+		return value
+	}
+	method, recognized := common.RecognizeAuthMethod(fields[0])
+	if !recognized || method == common.AuthNone || method == common.AuthUnknown {
+		return value
+	}
+	return strings.TrimSpace(trimmed[len(fields[0]):])
 }
 
 func credentialAuthMethod(name, value, location string) common.AuthMethod {

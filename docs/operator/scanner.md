@@ -23,7 +23,7 @@ agenthound scan 10.0.0.42
 # Public IP space requires explicit override AND interactive AUTHORIZED prompt.
 agenthound scan 1.1.1.1 --allow-public-targets --authorization-file ./engagement-2026-DC34.pdf
 
-# Custom port set (skip ports we don't have fingerprinters for).
+# Custom port set. Every registered fingerprinter still evaluates each open port.
 agenthound scan 10.0.0.0/24 --ports 11434,4000
 
 # Tune probe concurrency.
@@ -46,9 +46,12 @@ The scanner probes seven ports by default. Every port in this set now has a ship
 | 8888 | Jupyter | shipped |
 | 3000 | Open WebUI | shipped |
 
-Hosts with open ports for which no fingerprinter ships in your binary version emit no node. The open-port set is captured in `Target.Meta["open_ports"]` so a future re-fingerprint against the same scan output can populate the missing services without a fresh scan.
-
-Override with `--ports 11434,4000` to probe a custom subset. The fingerprint dispatcher only runs against ports the scanner observed open, so an unfingerprintable port produces no false positives.
+Port assignments are ordering hints, not dispatch gates. At every open
+`(host, port)` endpoint, the hinted fingerprinters run first and every remaining
+registered fingerprinter follows exactly once. Override with
+`--ports 11434,4000` to choose which ports receive the TCP-open check; a LiteLLM
+gateway or vLLM instance on either port is still evaluated by both relevant
+fingerprinters.
 
 ---
 
@@ -113,7 +116,10 @@ The envelope contains:
 
 - `meta` — scan-id, timestamp, collector identity, plus the authorization watermark when applicable.
 - `graph.nodes` — `:Host` nodes for every host with at least one open port, plus per-service nodes for every fingerprint match (e.g. `:OllamaInstance:AIService`, `:LiteLLMGateway:AIService`).
-- `graph.edges` — `RUNS_ON` edges from each service node to its host, plus any edges the fingerprinters chose to emit (the v0.3 Open WebUI fingerprinter emits an `EXPOSES` edge to its discovered backend Ollama).
+- `graph.edges` — any evidence-backed relationships emitted by a
+  fingerprinter. The current network fingerprints identify service nodes; they
+  do not infer backend `EXPOSES` relationships from unauthenticated version or
+  application-shape probes.
 
 ---
 
@@ -121,11 +127,19 @@ The envelope contains:
 
 **Progress and output volume.** By default the scanner prints a single summary line — `[scan] <spec>: N host(s) with at least one open port` — followed by the per-match fingerprint lines and a fingerprint summary. The full per-host listing (open ports + candidate kinds for every host) is gated behind `--verbose`, because a `/24` sweep over a bridge or VPN can otherwise emit hundreds of near-identical lines. When stderr is an interactive terminal, a single rewriting progress line tracks the port sweep and the fingerprint phase; it is omitted automatically when output is piped or redirected (so logs stay clean) and when `--quiet` / `AGENTHOUND_QUIET=1` is set. Progress and summaries go to stderr and never affect the JSON written to `--output`.
 
-**Cancellation.** Ctrl-C (SIGINT) or SIGTERM cancels the worker pool cleanly. The producer stops queueing tasks before the next port probe; in-flight probes drain to completion (per-probe timeout, 3 s by default). On interrupt the scan skips the fingerprint phase and writes the partial port-sweep envelope to `--output`; `discover` writes the endpoints found so far. Either way an interrupted run still produces useful JSON rather than dying mid-write.
+**Cancellation.** Ctrl-C (SIGINT) or SIGTERM cancels scheduling and active probes. On interrupt the scan skips any unstarted fingerprint work and writes a partial envelope to `--output`; `discover` writes the endpoints found so far. Partial coverage is intentionally non-destructive during ingest.
 
 **False positives on private networks with weird routing.** If your dev machine runs Tailscale / a corporate VPN / CGNAT routing, TCP connect probes against unrouted private IPs can return success because the kernel's connect path catches the SYN locally. The scanner reports what it sees at the TCP layer; the fingerprinters in the next step are the actual correctness layer (an open port that doesn't speak Ollama produces no `OllamaInstance` node).
 
-**Concurrency.** Default `--network-scan-concurrency` is 50 — tuned for laptop-class machines. Increase on dedicated lab infrastructure; back off if the target subnet has rate-limiting devices.
+**Concurrency.** Default `--network-scan-concurrency` is 50 — tuned for laptop-class machines. Non-positive values normalize to 50. TCP workers clamp at 4096; the more expensive HTTP fingerprint phase clamps at 64 workers and keeps only a bounded reorder window in flight. Increase on dedicated lab infrastructure; back off if the target subnet has rate-limiting devices.
+
+**Fingerprint completeness.** A bounded, fully read response whose matcher
+finishes and does not match is a real negative. Connection/DNS/TLS failures,
+timeouts, cancellation, redirects (which remain unfollowed), authentication challenges,
+transient statuses, oversized/incomplete bodies, and matcher errors are
+indeterminate. The artifact records a partial `fingerprint` outcome on the same
+network coverage domain, so production ingestion cannot reconcile away a
+service merely because a transient probe failed.
 
 **Concurrency vs. `--scan-concurrency`.** Two separate knobs. `--scan-concurrency` (default 5) controls MCP/A2A enumeration worker count when running the legacy `agenthound scan` (no positional arg) flow. `--network-scan-concurrency` (default 50) controls the network probe pool. Different cost profiles — MCP/A2A do JSON-RPC handshakes; network probes do raw TCP connects.
 

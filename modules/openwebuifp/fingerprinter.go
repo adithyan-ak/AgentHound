@@ -66,23 +66,10 @@ func (f *Fingerprinter) Fingerprint(ctx context.Context, t action.Target) (*acti
 	if err != nil {
 		slog.Debug("openwebui fingerprint probe error",
 			"target", t.Address, "error", err)
-		return &action.FingerprintResult{Matched: false}, nil
+		return &action.FingerprintResult{Matched: false}, err
 	}
-	// The /api/config probe is conjunctive in v0.2 RunFingerprint — if
-	// /api/config returns non-200 (e.g. auth-locked), RunFingerprint
-	// reports Matched=false even though /api/version matched. Re-probe
-	// /api/version alone to disambiguate (Open WebUI with a locked
-	// /api/config is still Open WebUI).
 	if !res.Matched {
-		fallback := *f.rule
-		if len(fallback.Probes) > 0 {
-			fallback.Probes = []rules.FingerprintProbe{fallback.Probes[0]}
-		}
-		res2, err2 := rules.RunFingerprint(ctx, client, baseURL, fallback)
-		if err2 != nil || res2 == nil || !res2.Matched {
-			return &action.FingerprintResult{Matched: false}, nil
-		}
-		res = res2
+		return &action.FingerprintResult{Matched: false}, nil
 	}
 
 	endpoint := baseURL

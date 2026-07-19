@@ -1,41 +1,27 @@
-# vLLM fingerprint rule (v0.3).
-#
-# vLLM is a high-throughput LLM inference server speaking the OpenAI-compatible
-# API. Default port 8000, no auth by default — this is the loud-and-public
-# substrate that operators leave running on a GPU box and forget about. The
-# `/v1/models` endpoint returns OpenAI-shaped JSON:
-#   {"object":"list","data":[{"id":"meta-llama/Llama-3.1-8B","object":"model",...}]}
-#
-# Disambiguating from a real OpenAI proxy / LiteLLM / Open WebUI: vLLM's
-# response carries `object: "list"` at top level AND a non-empty `data` array.
-# That's the canonical OpenAI list shape — every OpenAI-compatible server
-# returns it. We disambiguate later by checking that the model ids look like
-# HF repo paths (`org/model`) which is vLLM's hosting convention. The
-# stronger signal would be a `/version` endpoint, but vLLM doesn't expose
-# one — the `/v1/models` shape + default port is the practical fingerprint.
+# vLLM exposes a service-specific /version endpoint. Unlike /v1/models, this
+# signal is not shared by every OpenAI-compatible gateway and does not depend
+# on the operator's arbitrary --served-model-name alias.
 id: vllm
 name: vLLM inference server
-description: 'Identifies vLLM by GET /v1/models returning OpenAI-shaped {object: list, data: [...]}'
-version: 2
+description: 'Identifies vLLM by its service-specific GET /version response'
+version: 3
 service_kind: vllm
 probes:
   - method: GET
-    path: /v1/models
+    path: /version
     matchers:
       - type: http_status
         status_code: 200
       - type: json_path
-        path: "$.object"
-        equals: "list"
-      # Body must contain "data": JSON-path on arrays is unsupported in v0.2,
-      # so we check the body shape directly.
-      - type: body_contains
-        value: '"data"'
+        path: "$.version"
+        regex: '^.+$'
+    captures:
+      version: "$.version"
 emit:
   node_kinds:
     - VLLMInstance
     - AIService
   properties:
     service_kind: vllm
-    auth_method: none
-    is_anonymous_loot: "true"
+    auth_method: unknown
+    version: "{capture:version}"

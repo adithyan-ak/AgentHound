@@ -356,7 +356,7 @@ export const LENS_LIST: LensDefinition[] = [
       {
         id: "POISONED_INSTRUCTIONS",
         label: "Poisoned instructions",
-        description: "CLAUDE.md / .cursorrules imperative overrides",
+        description: "CLAUDE.md / .cursorrules / Cursor rule imperative overrides",
         defaultEnabled: true,
       },
       {

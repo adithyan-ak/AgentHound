@@ -99,14 +99,22 @@ func (f *Fingerprinter) Fingerprint(
 	}
 
 	client := common.NoRedirectClient(DefaultProbeTimeout)
+	if _, hasDeadline := ctx.Deadline(); hasDeadline {
+		client.Timeout = 0
+	}
 
 	apiStatus, apiBody, apiContentType, err := probe(
 		ctx,
 		client,
 		baseURL+"/api",
 	)
-	if err != nil ||
-		apiStatus != http.StatusOK ||
+	if err != nil {
+		return &action.FingerprintResult{Matched: false}, err
+	}
+	if err := indeterminateHTTPStatus(apiStatus, false); err != nil {
+		return &action.FingerprintResult{Matched: false}, err
+	}
+	if apiStatus != http.StatusOK ||
 		!isJSONContentType(apiContentType) {
 		return &action.FingerprintResult{Matched: false}, nil
 	}
@@ -124,7 +132,10 @@ func (f *Fingerprinter) Fingerprint(
 		baseURL+"/api/status",
 	)
 	if err != nil {
-		return &action.FingerprintResult{Matched: false}, nil
+		return &action.FingerprintResult{Matched: false}, err
+	}
+	if err := indeterminateHTTPStatus(statusCode, true); err != nil {
+		return &action.FingerprintResult{Matched: false}, err
 	}
 	statusAccess := ""
 	statusAnonymous := false
@@ -315,6 +326,23 @@ func probe(
 		)
 	}
 	return resp.StatusCode, body, resp.Header.Get("Content-Type"), nil
+}
+
+func indeterminateHTTPStatus(status int, allowAuthChallenge bool) error {
+	switch {
+	case status >= 300 && status < 400:
+		return fmt.Errorf("redirect response status %d", status)
+	case status == http.StatusProxyAuthRequired:
+		return fmt.Errorf("authentication challenge status %d", status)
+	case status == http.StatusRequestTimeout || status == http.StatusTooEarly ||
+		status == http.StatusTooManyRequests || status >= 500:
+		return fmt.Errorf("transient response status %d", status)
+	case !allowAuthChallenge &&
+		(status == http.StatusUnauthorized || status == http.StatusForbidden):
+		return fmt.Errorf("authentication challenge status %d", status)
+	default:
+		return nil
+	}
 }
 
 func isJSONContentType(value string) bool {

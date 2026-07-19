@@ -58,6 +58,12 @@ func TestHasAccessTo_ProcessSuccess(t *testing.T) {
 			t.Errorf("inferred access metadata is not refreshed on MERGE:\n%s", cypher)
 		}
 	}
+	descriptionQuery, _ := calls[2].Args[0].(string)
+	if !strings.Contains(descriptionQuery, "size(token) >= 4") ||
+		!strings.Contains(descriptionQuery, "NOT token IN matched") ||
+		!strings.Contains(descriptionQuery, ")) >= 2") {
+		t.Fatalf("description access must require two distinct meaningful resource-name tokens:\n%s", descriptionQuery)
+	}
 }
 
 func TestHasAccessTo_ProcessPartialError(t *testing.T) {

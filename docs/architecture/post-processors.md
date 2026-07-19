@@ -80,7 +80,10 @@ Links tools to resources on the same server when capability or description indic
 Three Cypher passes:
 - **Capability-DB:** Tool has `database_access` capability AND resource URI scheme is postgres/mysql/mongodb/redis. Confidence: 0.7.
 - **Capability-File:** Tool has `file_read` or `file_write` AND resource URI scheme is `file`. Confidence: 0.7.
-- **Description match:** Tool description contains the resource name (case-insensitive substring). Confidence: 0.9.
+- **Description match:** Tool description contains the complete resource name,
+  or at least two distinct meaningful (four-or-more-character) tokens from a
+  hyphen/underscore-normalized resource name. Requiring two tokens avoids
+  inferring access from generic one-word overlap. Confidence: 0.9.
 
 All edges: `risk_weight=0.2`, `match_type` recorded for evidence. Confidence,
 match type, weight, collector, and scan metadata are refreshed on MERGE so a
@@ -156,8 +159,9 @@ Confidence scales inversely with trust edge risk_weight (no-auth trust = 1.0, st
 AgentInstance -> MCPServer(s1) -> MCPTool(file_read|credential_access)
 MCPServer(s2) -[HAS_ENV_VAR]-> Credential -> Identity -> MCPServer(s2) -> MCPTool -> MCPResource
 ```
-Requires explicit unauthenticated/weak evidence for s1; missing auth evidence
-does not match. Confidence: 0.6.
+Requires explicit unauthenticated/weak evidence for s1. Live MCP initialize
+evidence takes precedence over configuration posture when present; missing
+auth evidence does not match. Confidence: 0.6.
 
 When multiple credential paths connect the same `(agent, resource)`, the
 processor orders candidates by the complete stable object-ID tuple

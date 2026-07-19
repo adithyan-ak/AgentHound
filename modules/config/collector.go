@@ -61,6 +61,9 @@ func (c *ConfigCollector) DiscoveryPaths(homeDir string) []string {
 }
 
 func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOptions) (*ingest.IngestData, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	engine := opts.RulesEngine
 	if engine == nil {
 		var engineErr error
@@ -88,39 +91,28 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 		return nil, fmt.Errorf("get home dir: %w", err)
 	}
 
-	configs, err := c.discoverConfigs(ctx, opts, homeDir)
+	projectRoot, err := ResolveProjectRoot(opts.ProjectDir)
 	if err != nil {
 		return nil, err
 	}
-	coveragePaths, instructionPaths := c.coveragePaths(opts, homeDir)
-	data.Meta.Collection = &ingest.CollectionReport{
-		State: ingest.OutcomeComplete,
+	paths := append([]string(nil), opts.ConfigPaths...)
+	if opts.ConfigPath != "" {
+		paths = append([]string{opts.ConfigPath}, paths...)
 	}
-	observedPaths := make(map[string]bool, len(configs))
-	for _, cfg := range configs {
-		observedPaths[canonicalConfigPath(cfg.Path)] = true
-	}
-	for _, path := range coveragePaths {
-		key := configCoverageKey(path)
+	discovery := c.DiscoverConfigs(ctx, homeDir, projectRoot, opts.Discover, paths)
+	instructions := DiscoverInstructions(ctx, homeDir, projectRoot, engine)
+	data.Meta.Collection = &ingest.CollectionReport{}
+	for _, file := range discovery.Files {
+		key := configCoverageKey(file.Path)
 		data.Meta.Collection.CoverageKeys = append(data.Meta.Collection.CoverageKeys, key)
-		method := "config_discovery"
-		if instructionPaths[canonicalConfigPath(path)] {
-			method = "instruction_discovery"
-		}
-		items := 0
-		if observedPaths[canonicalConfigPath(path)] {
-			items = 1
-		}
-		data.Meta.Collection.Outcomes = append(data.Meta.Collection.Outcomes, ingest.CollectionOutcome{
-			Collector:   "config",
-			CoverageKey: key,
-			Target:      canonicalConfigPath(path),
-			Method:      method,
-			State:       ingest.OutcomeComplete,
-			Items:       items,
-		})
+		data.Meta.Collection.Outcomes = append(data.Meta.Collection.Outcomes, collectionOutcome(
+			key, file.Path, "config_discovery", file.State, file.Items, file.Error,
+		))
 	}
-	sort.Strings(data.Meta.Collection.CoverageKeys)
+	data.Meta.Collection.CoverageKeys = append(data.Meta.Collection.CoverageKeys, instructions.CoverageKeys...)
+	data.Meta.Collection.Outcomes = append(data.Meta.Collection.Outcomes, instructions.Outcomes...)
+	data.Meta.Collection.CoverageKeys = uniqueSorted(data.Meta.Collection.CoverageKeys)
+	data.Meta.Collection.State = ingest.AggregateOutcomeState(data.Meta.Collection.Outcomes)
 
 	nodeIndex := make(map[string]int)
 	addNode := func(n ingest.Node, domains ...string) {
@@ -144,37 +136,61 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 		nodeIndex[n.ID] = len(data.Graph.Nodes)
 		data.Graph.Nodes = append(data.Graph.Nodes, n)
 	}
+	edgeIndex := make(map[string]int)
 	addEdge := func(e ingest.Edge, domains ...string) {
 		e.ObservationDomains = ingest.MergeObservationDomains(
 			e.ObservationDomains,
 			domains,
 		)
+		key := e.Kind + "\x00" + e.Source + "\x00" + e.Target
+		if index, seen := edgeIndex[key]; seen {
+			data.Graph.Edges[index].ObservationDomains = ingest.MergeObservationDomains(
+				data.Graph.Edges[index].ObservationDomains,
+				e.ObservationDomains,
+			)
+			return
+		}
+		edgeIndex[key] = len(data.Graph.Edges)
 		data.Graph.Edges = append(data.Graph.Edges, e)
 	}
 
-	type observedAgent struct {
-		id    string
-		scope string
+	configs := discovery.ParsedConfigs()
+	configsByPath := make(map[string][]ParsedConfig)
+	for _, cfg := range configs {
+		path := canonicalConfigPath(cfg.Path)
+		configsByPath[path] = append(configsByPath[path], cfg)
 	}
-	var agents []observedAgent
+	configPaths := make([]string, 0, len(configsByPath))
+	for path := range configsByPath {
+		configPaths = append(configPaths, path)
+	}
+	sort.Strings(configPaths)
+	for _, path := range configPaths {
+		views := configsByPath[path]
+		clients := make([]string, 0, len(views))
+		servers := make(map[string]bool)
+		for _, view := range views {
+			clients = append(clients, view.Client)
+			for _, server := range view.Servers {
+				if !server.Disabled {
+					servers[serverIdentityFor(server).ObjectID] = true
+				}
+			}
+		}
+		clients = uniqueSorted(clients)
+		props := map[string]any{
+			"path": path, "clients": clients, "server_count": len(servers),
+		}
+		if len(clients) == 1 {
+			props["client"] = clients[0]
+		}
+		addNode(common.NewNode(ingest.ComputeNodeID("ConfigFile", path), []string{"ConfigFile"}, props), configCoverageKey(path))
+	}
 
 	for _, cfg := range configs {
 		absPath := canonicalConfigPath(cfg.Path)
 		scopeKey := configCoverageKey(absPath)
 		configFileID := ingest.ComputeNodeID("ConfigFile", absPath)
-
-		activeCount := 0
-		for _, s := range cfg.Servers {
-			if !s.Disabled {
-				activeCount++
-			}
-		}
-
-		addNode(common.NewNode(configFileID, []string{"ConfigFile"}, map[string]any{
-			"path":         absPath,
-			"client":       cfg.Client,
-			"server_count": activeCount,
-		}), scopeKey)
 
 		agentID := ingest.ComputeNodeID("AgentInstance", configFileID, cfg.Client)
 		addNode(common.NewNode(agentID, []string{"AgentInstance"}, map[string]any{
@@ -182,7 +198,6 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 			"framework":   cfg.Client,
 			"config_path": absPath,
 		}), scopeKey)
-		agents = append(agents, observedAgent{id: agentID, scope: scopeKey})
 
 		for _, srv := range cfg.Servers {
 			if srv.Disabled {
@@ -191,46 +206,10 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 
 			serverIdentity := serverIdentityFor(srv)
 			serverID := serverIdentity.ObjectID
-			endpoint := srv.Command
-			if srv.Transport == "http" {
-				endpoint = srv.URL
-			}
-
 			creds := ExtractCredentials(srv.Env, srv.Headers, srv.Name, opts.IncludeCredentialValues, engine)
 			authMethod := deriveAuthMethod(srv.Transport, creds)
 			authAssessment := common.AssessAuth(string(authMethod))
-			authEvidence := common.AuthEvidenceConfiguredCredential
-			if len(creds) == 0 {
-				authEvidence = common.AuthEvidenceUnknown
-				if srv.Transport == "stdio" {
-					authEvidence = common.AuthEvidenceLocalProcess
-				}
-			}
-			pinningStatus := common.PinningNotApplicable
-			if srv.Transport == "stdio" {
-				pinningStatus = AssessPinning(srv.Command, srv.Args)
-			}
-
-			serverProps := map[string]any{
-				"name":           srv.Name,
-				"endpoint":       endpoint,
-				"transport":      srv.Transport,
-				"auth_method":    string(authMethod),
-				"auth_assurance": string(authAssessment.Assurance),
-				"auth_evidence":  authEvidence,
-				"pinning_status": string(pinningStatus),
-				"id_scheme":      serverIdentity.Scheme,
-			}
-			if srv.Transport == "stdio" {
-				serverProps["command"] = srv.Command
-				serverProps["args"] = append([]string(nil), srv.Args...)
-			}
-			switch pinningStatus {
-			case common.PinningPinned:
-				serverProps["is_pinned"] = true
-			case common.PinningUnpinned:
-				serverProps["is_pinned"] = false
-			}
+			serverProps := serverNodeProperties(srv, creds)
 			addNode(common.NewNode(serverID, []string{"MCPServer"}, serverProps), scopeKey)
 
 			trustWeight := authRiskWeight(string(authMethod))
@@ -310,89 +289,19 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 		}
 	}
 
-	instructions := DiscoverInstructionFiles(homeDir, opts.ProjectDir, engine)
-	for _, inst := range instructions {
+	for _, observation := range instructions.Observations {
+		inst := observation.Info
 		absPath := canonicalConfigPath(inst.Path)
-		scopeKey := configCoverageKey(absPath)
 		instrID := ingest.ComputeNodeID("InstructionFile", absPath)
 		addNode(common.NewNode(instrID, []string{"InstructionFile"}, map[string]any{
 			"path":          absPath,
 			"type":          inst.Type,
 			"hash":          inst.Hash,
 			"is_suspicious": inst.IsSuspicious,
-		}), scopeKey)
-
-		riskWeight := 0.0
-		if inst.IsSuspicious {
-			riskWeight = 0.5
-		}
-		for _, agent := range agents {
-			edge := common.NewEdge(
-				agent.id,
-				instrID,
-				"LOADS_INSTRUCTIONS",
-				"AgentInstance",
-				"InstructionFile",
-				common.NewEdgeProps(scanID, 1.0, riskWeight),
-			)
-			edge.ObservationDomains = ingest.MergeObservationDomains(
-				[]string{agent.scope},
-				[]string{scopeKey},
-			)
-			if len(edge.ObservationDomains) > 1 {
-				edge.ObservationSemantics = ingest.ObservationSemanticsAllDependencies
-			}
-			addEdge(edge)
-		}
+		}), observation.OwnerKey)
 	}
 
 	return data, nil
-}
-
-func (c *ConfigCollector) coveragePaths(
-	opts collector.CollectOptions,
-	homeDir string,
-) ([]string, map[string]bool) {
-	seen := make(map[string]bool)
-	instructionPaths := make(map[string]bool)
-	var paths []string
-	add := func(raw string, instruction bool) {
-		path := canonicalConfigPath(raw)
-		if path == "" {
-			return
-		}
-		if instruction {
-			instructionPaths[path] = true
-		}
-		if seen[path] {
-			return
-		}
-		seen[path] = true
-		paths = append(paths, path)
-	}
-
-	if opts.Discover {
-		for _, path := range c.DiscoveryPaths(homeDir) {
-			add(path, false)
-		}
-	} else {
-		add(opts.ConfigPath, false)
-		for _, path := range opts.ConfigPaths {
-			add(path, false)
-		}
-	}
-	if homeDir != "" {
-		for _, target := range userTargets {
-			add(filepath.Join(homeDir, target.relPath), true)
-		}
-	}
-	if opts.ProjectDir != "" {
-		for _, target := range projectTargets {
-			add(filepath.Join(opts.ProjectDir, target.relPath), true)
-		}
-	}
-	sort.Strings(paths)
-	return paths, instructionPaths
 }
 
 func canonicalConfigPath(path string) string {
@@ -410,70 +319,64 @@ func configCoverageKey(path string) string {
 	return ingest.CanonicalCoverageKey("config", "path", canonicalConfigPath(path))
 }
 
-func (c *ConfigCollector) discoverConfigs(ctx context.Context, opts collector.CollectOptions, homeDir string) ([]ParsedConfig, error) {
-	var configs []ParsedConfig
-
-	if opts.Discover {
-		for _, p := range c.parsers {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			for _, path := range p.ConfigPaths(homeDir) {
-				data, err := os.ReadFile(path)
-				if err != nil {
-					continue
-				}
-				cfg, err := p.Parse(path, data)
-				if err != nil {
-					continue
-				}
-				configs = append(configs, *cfg)
-			}
-		}
-		return configs, nil
-	}
-
-	var paths []string
-	if opts.ConfigPath != "" {
-		paths = append(paths, opts.ConfigPath)
-	}
-	paths = append(paths, opts.ConfigPaths...)
-
-	for _, path := range paths {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("read config %s: %w", path, err)
-		}
-		cfg := c.tryParsers(path, data)
-		if cfg != nil {
-			configs = append(configs, *cfg)
-		}
-	}
-
-	return configs, nil
-}
-
-func (c *ConfigCollector) tryParsers(path string, data []byte) *ParsedConfig {
-	for _, p := range c.parsers {
-		cfg, err := p.Parse(path, data)
-		if err != nil || cfg == nil {
-			continue
-		}
-		if len(cfg.Servers) > 0 {
-			return cfg
-		}
-	}
-	return nil
-}
-
 func serverIdentityFor(srv ServerDef) ingest.MCPServerIdentity {
 	if srv.Transport == "http" {
 		return ingest.ResolveMCPServerIdentity("http", srv.URL)
 	}
 	return ingest.ResolveMCPServerIdentity("stdio", srv.Command, srv.Args...)
+}
+
+// ServerNodeProperties returns the configuration-backed MCPServer facts shared
+// by config collection and MCP auto-discovery. Values are derived without
+// retaining raw credential material so the live MCP projection can preserve
+// configuration and runtime evidence without semantic last-writer conflicts.
+func ServerNodeProperties(srv ServerDef, engine *rules.Engine) map[string]any {
+	return serverNodeProperties(
+		srv,
+		ExtractCredentials(srv.Env, srv.Headers, srv.Name, false, engine),
+	)
+}
+
+func serverNodeProperties(srv ServerDef, creds []CredentialInfo) map[string]any {
+	endpoint := srv.Command
+	if srv.Transport == "http" {
+		endpoint = srv.URL
+	}
+	authMethod := deriveAuthMethod(srv.Transport, creds)
+	authAssessment := common.AssessAuth(string(authMethod))
+	authEvidence := common.AuthEvidenceConfiguredCredential
+	if len(creds) == 0 {
+		authEvidence = common.AuthEvidenceUnknown
+		if srv.Transport == "stdio" {
+			authEvidence = common.AuthEvidenceLocalProcess
+		}
+	}
+	pinningStatus := common.PinningNotApplicable
+	if srv.Transport == "stdio" {
+		pinningStatus = AssessPinning(srv.Command, srv.Args)
+	}
+
+	props := map[string]any{
+		"name":           srv.Name,
+		"endpoint":       endpoint,
+		"transport":      srv.Transport,
+		"auth_method":    string(authMethod),
+		"auth_assurance": string(authAssessment.Assurance),
+		"auth_evidence":  authEvidence,
+		"pinning_status": string(pinningStatus),
+		"id_scheme":      serverIdentityFor(srv).Scheme,
+	}
+	if srv.Transport == "stdio" {
+		props["command"] = srv.Command
+		props["args"] = append([]string(nil), srv.Args...)
+	}
+	switch pinningStatus {
+	case common.PinningPinned:
+		props["is_pinned"] = true
+	case common.PinningUnpinned:
+		props["is_pinned"] = false
+	}
+	return props
 }
 
 func hostForServer(srv ServerDef) string {

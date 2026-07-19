@@ -51,7 +51,7 @@ func (f *Fingerprinter) Fingerprint(ctx context.Context, t action.Target) (*acti
 	res, err := rules.RunFingerprint(ctx, client, baseURL, *f.rule)
 	if err != nil {
 		slog.Debug("qdrant fingerprint probe error", "target", t.Address, "error", err)
-		return &action.FingerprintResult{Matched: false}, nil
+		return &action.FingerprintResult{Matched: false}, err
 	}
 	if !res.Matched {
 		return &action.FingerprintResult{Matched: false}, nil

@@ -300,9 +300,11 @@ func validateFingerprintMatcher(prefix string, m FingerprintMatch) []ValidationE
 // RunFingerprint executes the rule's probes against baseURL (e.g.
 // "http://10.0.0.42:11434") and returns the result. The returned
 // FingerprintResult.Matched is true only when every probe and every
-// matcher succeeds. Network errors, non-OK status codes, and matcher
-// mismatches all yield Matched=false (with a nil error in most cases —
-// "this is not the expected service" is not a system error).
+// matcher succeeds. A complete, bounded response whose matcher does not
+// match yields Matched=false with a nil error. Operational failures,
+// redirects, authentication challenges, and transient responses return an
+// error so lifecycle-aware callers do not turn an unevaluated endpoint into
+// authoritative absence.
 //
 // Captures are accumulated across probes; later captures with the same
 // name overwrite earlier ones. The Properties map on the result merges
@@ -313,7 +315,15 @@ func validateFingerprintMatcher(prefix string, m FingerprintMatch) []ValidationE
 // servers; real callers should use a *http.Client with a sane Timeout.
 func RunFingerprint(ctx context.Context, client *http.Client, baseURL string, rule FingerprintRule) (*FingerprintResult, error) {
 	if client == nil {
-		return nil, errors.New("RunFingerprint: nil http client")
+		client = DefaultFingerprintHTTPClient(5 * time.Second)
+	}
+	// A dispatcher-supplied context deadline is authoritative, including when
+	// it is longer than a module's ordinary five-second direct-call default.
+	// Clone the client so concurrent probes never mutate shared client state.
+	if _, hasDeadline := ctx.Deadline(); hasDeadline && client.Timeout > 0 {
+		clone := *client
+		clone.Timeout = 0
+		client = &clone
 	}
 	// Fingerprinter modules are registered during package init, before Cobra's
 	// persistent pre-run resolves --rules-bundle. Resolve a same-ID override at
@@ -359,9 +369,10 @@ func RunFingerprint(ctx context.Context, client *http.Client, baseURL string, ru
 }
 
 // runProbe issues one HTTP request, applies its matchers, and returns
-// (matched, captures, err). A non-nil err is reserved for unexpected
-// runtime issues (request build failure, etc.) — a non-2xx status that
-// fails the http_status matcher returns (false, nil, nil).
+// (matched, captures, err). A non-nil error means the endpoint was not
+// definitively evaluated (transport, redirect, authentication challenge,
+// transient status, incomplete body, or matcher runtime failure). A complete
+// response that simply fails a matcher returns (false, nil, nil).
 func runProbe(ctx context.Context, client *http.Client, baseURL string, probe FingerprintProbe) (bool, map[string]string, error) {
 	// Concatenate baseURL and probe.Path with exactly one "/" between them.
 	url := strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(probe.Path, "/")
@@ -375,18 +386,29 @@ func runProbe(ctx context.Context, client *http.Client, baseURL string, probe Fi
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		// Network-level failures are normal for fingerprinting (closed
-		// port, TLS handshake fail, etc.) — surface as no-match, not an
-		// error, so the scanner can move on.
-		return false, nil, nil
+		return false, nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return false, nil, fmt.Errorf("redirect response status %d", resp.StatusCode)
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden ||
+		resp.StatusCode == http.StatusProxyAuthRequired {
+		return false, nil, fmt.Errorf("authentication challenge status %d", resp.StatusCode)
+	}
+	if resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooEarly ||
+		resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		return false, nil, fmt.Errorf("transient response status %d", resp.StatusCode)
+	}
 
-	// Cap body read at 1 MiB. Fingerprint targets like Ollama return
-	// tiny JSON; an attacker-controlled large body shouldn't hang us.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	// Read one byte beyond the 1 MiB cap so truncation cannot be evaluated as
+	// if it were a complete negative response.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
 	if err != nil {
-		return false, nil, nil
+		return false, nil, fmt.Errorf("read response body: %w", err)
+	}
+	if len(body) > 1<<20 {
+		return false, nil, fmt.Errorf("response body exceeds 1048576 byte limit")
 	}
 
 	for _, m := range probe.Matchers {

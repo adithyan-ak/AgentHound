@@ -58,7 +58,20 @@ MATCH (s:MCPServer)-[provides_tool:PROVIDES_TOOL]->(t:MCPTool),
       (s)-[provides_resource:PROVIDES_RESOURCE]->(r:MCPResource)
 WHERE t.description IS NOT NULL
   AND r.name IS NOT NULL
-  AND toLower(t.description) CONTAINS toLower(r.name)
+  AND (
+    toLower(t.description) CONTAINS toLower(r.name)
+    OR size(reduce(
+      matched = [],
+      token IN split(replace(replace(toLower(r.name), '-', ' '), '_', ' '), ' ') |
+      CASE
+        WHEN size(token) >= 4
+         AND toLower(t.description) CONTAINS token
+         AND NOT token IN matched
+        THEN matched + token
+        ELSE matched
+      END
+    )) >= 2
+  )
 MERGE (t)-[e:HAS_ACCESS_TO]->(r)
 SET e.confidence = 0.9,
     e.is_composite = true,

@@ -60,7 +60,7 @@ func TestCanReach_ProcessSuccess(t *testing.T) {
 		t.Fatalf("credential pass must use Neo4j-4.4-compatible EXISTS subquery:\n%s", credential)
 	}
 	if strings.Contains(credential, "s1.auth_method IS NULL OR") ||
-		!strings.Contains(credential, "s1.auth_assurance IN ['unauthenticated', 'weak']") {
+		!strings.Contains(credential, "coalesce(s1.observed_auth_assurance, s1.auth_assurance) IN ['unauthenticated', 'weak']") {
 		t.Fatalf("unknown auth must not satisfy credential delegation:\n%s", credential)
 	}
 	if !strings.Contains(

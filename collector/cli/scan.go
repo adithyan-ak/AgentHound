@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	a2acollector "github.com/adithyan-ak/agenthound/modules/a2a"
@@ -264,10 +265,27 @@ func resolveScanConcurrency(scanConcurrency int, scanConcurrencyChanged bool, cf
 // sweeps for minutes against drop-policy ports. So an explicit --timeout wins;
 // otherwise we fall back to networkscan.DefaultProbeTimeout.
 func resolveProbeTimeout(timeout time.Duration, timeoutChanged bool) time.Duration {
-	if timeoutChanged {
+	if timeoutChanged && timeout > 0 {
 		return timeout
 	}
 	return networkscan.DefaultProbeTimeout
+}
+
+func resolveFingerprintTimeout(timeout time.Duration, timeoutChanged bool) time.Duration {
+	if timeoutChanged && timeout > 0 {
+		return timeout
+	}
+	return 5 * time.Second
+}
+
+func normalizeNetworkConcurrency(value int) int {
+	if value <= 0 {
+		return networkscan.DefaultConcurrency
+	}
+	if value > networkscan.MaxConcurrency {
+		return networkscan.MaxConcurrency
+	}
+	return value
 }
 
 // collectAll runs each enabled collector and merges its output. It returns
@@ -307,7 +325,7 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 
 	if runMCP {
 		enabled++
-		data, err := collectMCP(ctx, url, concurrency, timeout, insecure, merged.Meta.ScanID, rulesEngine)
+		data, err := collectMCP(ctx, url, projectDir, concurrency, timeout, insecure, merged.Meta.ScanID, rulesEngine)
 		if err != nil {
 			failed++
 			slog.Error("mcp collector failed", "error", err)
@@ -513,7 +531,7 @@ func collectConfig(
 
 func collectMCP(
 	ctx context.Context,
-	url string,
+	url, projectDir string,
 	concurrency int,
 	timeout time.Duration,
 	insecure bool,
@@ -532,6 +550,7 @@ func collectMCP(
 	opts := icollector.CollectOptions{
 		Discover:    url == "",
 		TargetURL:   url,
+		ProjectDir:  projectDir,
 		Insecure:    insecure,
 		ScanID:      scanID,
 		RulesEngine: engine,
@@ -598,6 +617,10 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 	timeout, _ := cmd.Flags().GetDuration("timeout")
 	verbose, _ := cmd.Flags().GetBool("verbose")
 	quiet := quietEnabled(cmd)
+	concurrency = normalizeNetworkConcurrency(concurrency)
+	timeoutChanged := cmd.Flags().Changed("timeout")
+	tcpTimeout := resolveProbeTimeout(timeout, timeoutChanged)
+	fingerprintTimeout := resolveFingerprintTimeout(timeout, timeoutChanged)
 
 	// AUTHORIZED prompt — required whenever --allow-public-targets is set,
 	// before any network IO. This keys solely on the flag, NOT on the spec:
@@ -657,7 +680,7 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 			AllowLargeCIDR:     allowLarge,
 			AllowPublicTargets: allowPublic,
 		}
-		ns.Timeout = resolveProbeTimeout(timeout, cmd.Flags().Changed("timeout"))
+		ns.Timeout = tcpTimeout
 		ns.Progress = reporter.update
 	}
 
@@ -691,13 +714,10 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 		}
 	}
 
-	// Phase 2: fingerprint each target against its candidate kinds. The
-	// scanner already classified open ports into candidate service kinds
-	// (e.g. 11434 → "ollama"); we look up the registered fingerprinter
-	// per kind, dispatch, and merge any matched ingest data into the
-	// envelope. Targets with no fingerprinter (vLLM, Qdrant, MLflow,
-	// Jupyter, LangServe, OpenWebUI in v0.2 — fingerprinters land in
-	// v0.3/v0.4) emit no node; this is intentional per design F.
+	// Phase 2 evaluates every registered fingerprinter on every open endpoint.
+	// PortToKind is an ordering hint only, so a real service on a custom port is
+	// still discoverable. Operationally indeterminate probes make this domain
+	// partial and therefore cannot retire a previously observed service.
 	envelope := buildNetworkScanEnvelope(spec, targets, authzFile, authzHash, allowPublic)
 	_, ruleset := loadEffectiveRules()
 	envelope.Meta.Ruleset = ruleset
@@ -725,9 +745,18 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 			_, _ = fmt.Fprintf(cmd.OutOrStderr(),
 				"[scan] interrupted; skipping fingerprint dispatch and writing partial results\n")
 		}
+		envelope.Meta.Collection.Outcomes = append(envelope.Meta.Collection.Outcomes, ingest.CollectionOutcome{
+			Collector: "scan", CoverageKey: envelope.Meta.Collection.CoverageKeys[0],
+			Target: spec, Method: "fingerprint", State: ingest.OutcomePartial,
+			Error: "fingerprint phase canceled before dispatch",
+		})
 	} else {
-		dispatchFingerprints(ctx, cmd.OutOrStderr(), targets, envelope, quiet)
+		dispatchFingerprints(
+			ctx, cmd.OutOrStderr(), targets, envelope, quiet,
+			normalizeFingerprintWorkers(concurrency), fingerprintTimeout, spec,
+		)
 	}
+	envelope.Meta.Collection.State = ingest.AggregateOutcomeState(envelope.Meta.Collection.Outcomes)
 	ingest.TagObservationDomain(&envelope.Graph, envelope.Meta.Collection.CoverageKeys[0])
 
 	if output == "" {
@@ -813,133 +842,262 @@ func sha256OfFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// dispatchFingerprints walks the scanner's per-host targets, dispatches
-// to each registered fingerprinter for the candidate kinds the scanner
-// identified, and appends matched nodes/edges into envelope.Graph.
-//
-// Address for the fingerprinter is constructed as host:port — the
-// scanner records open ports in t.Meta["open_ports"] and the candidate
-// kind set in t.Meta["candidate_kinds"]. For each (host, port) where
-// the kind has a registered fingerprinter, we run one probe.
-//
-// Failures are logged but never fatal: a misbehaving fingerprinter
-// against one target should not block the rest of the scan.
-func dispatchFingerprints(ctx context.Context, stderr io.Writer, targets []action.Target, envelope *ingest.IngestData, quiet bool) {
-	// Pre-count the probes we will actually attempt (open port → candidate
-	// kind → registered fingerprinter) so the progress line has an exact
-	// denominator. This walks the same decision tree as the dispatch loop
-	// below but does no network IO.
-	total := countFingerprintProbes(targets)
-	reporter := newProgressReporter(stderr, "[scan] fingerprinting", quiet)
-
-	matched := 0
-	probed := 0
-	for _, t := range targets {
-		host := t.Address
-		// open_ports is the authoritative per-host port list. We derive
-		// the candidate kinds per port here via networkscan.PortToKind
-		// rather than trusting candidate_kinds, which only lists ports
-		// that HAVE a kind mapping — for custom --ports with unmapped
-		// ports the two lists desync by index, which would dispatch a
-		// fingerprinter at the wrong port.
-		ports := splitCSV(t.Meta["open_ports"])
-
-		// Fingerprint each open port against every candidate kind that has
-		// a registered fingerprinter. Ports with no PortToKind mapping
-		// (custom --ports) or whose kinds have no registered fingerprinter
-		// silently skip.
-		for _, portStr := range ports {
-			port, err := strconv.Atoi(portStr)
-			if err != nil {
-				continue
-			}
-			kinds, ok := networkscan.PortToKind[port]
-			if !ok {
-				continue
-			}
-			// A port may map to multiple candidate kinds (e.g. 8000 →
-			// vLLM AND LangServe). Try each registered fingerprinter in
-			// turn; the rules are mutually exclusive so at most one matches,
-			// but we attempt all so no candidate is silently dead code.
-			for _, kind := range kinds {
-				mod, ok := module.GetByTarget(kind, action.Fingerprint)
-				if !ok {
-					continue
-				}
-				fp, ok := mod.(action.Fingerprinter)
-				if !ok {
-					continue
-				}
-				probed++
-				reporter.update(probed, total)
-				result, err := fp.Fingerprint(ctx, action.Target{
-					Kind:    "host",
-					Address: fmt.Sprintf("%s:%s", host, portStr),
-					// Pass a per-probe copy so a fingerprinter that mutates Meta
-					// cannot cross-contaminate sibling probes or the recorded
-					// target. maps.Clone(nil) is nil, which fingerprinters
-					// already tolerate.
-					Meta: maps.Clone(t.Meta),
-				})
-				if err != nil {
-					slog.Debug("fingerprint error", "kind", kind, "host", host, "port", portStr, "error", err)
-					continue
-				}
-				if !result.Matched || result.IngestData == nil {
-					continue
-				}
-				matched++
-				if !quiet {
-					// Clear the progress line so the match prints cleanly,
-					// then let the next update() redraw it.
-					reporter.clear()
-					_, _ = fmt.Fprintf(stderr,
-						"[fingerprint] %s:%s → %s (version=%s, auth=%s)\n",
-						host, portStr, result.ServiceKind, result.Version, result.AuthMethod)
-				}
-				envelope.Graph.Nodes = append(envelope.Graph.Nodes, result.IngestData.Graph.Nodes...)
-				envelope.Graph.Edges = append(envelope.Graph.Edges, result.IngestData.Graph.Edges...)
-			}
-		}
-	}
-	reporter.clear()
-	if !quiet {
-		_, _ = fmt.Fprintf(stderr,
-			"[scan] fingerprint summary: %d probe(s), %d match(es)\n", probed, matched)
-	}
+// dispatchFingerprints evaluates every registered fingerprinter once per open
+// endpoint. Port mappings only prioritize likely matches. Failures are
+// retained as partial fingerprint coverage rather than authoritative absence.
+type fingerprintCandidate struct {
+	id     string
+	target string
+	fp     action.Fingerprinter
 }
 
-// countFingerprintProbes returns the exact number of fingerprint probes
-// dispatchFingerprints will attempt for the given targets — one per
-// (open port, candidate kind) pair that has a registered fingerprinter.
-// It performs no network IO; it only consults the module registry.
-func countFingerprintProbes(targets []action.Target) int {
-	total := 0
-	for _, t := range targets {
-		for _, portStr := range splitCSV(t.Meta["open_ports"]) {
-			port, err := strconv.Atoi(portStr)
-			if err != nil {
-				continue
-			}
-			kinds, ok := networkscan.PortToKind[port]
-			if !ok {
-				continue
-			}
-			for _, kind := range kinds {
-				mod, ok := module.GetByTarget(kind, action.Fingerprint)
-				if !ok {
-					continue
-				}
-				// Mirror dispatchFingerprints exactly: a module registered for
-				// the Fingerprint action that does not implement Fingerprinter
-				// is skipped there, so it must not inflate the count here.
-				if _, ok := mod.(action.Fingerprinter); ok {
-					total++
-				}
+type fingerprintTask struct {
+	sequence  int
+	host      string
+	port      int
+	meta      map[string]string
+	candidate fingerprintCandidate
+}
+
+type fingerprintTaskResult struct {
+	task   fingerprintTask
+	result *action.FingerprintResult
+	err    error
+}
+
+const maxFingerprintWorkers = 64
+
+func normalizeFingerprintWorkers(value int) int {
+	if value <= 0 {
+		return min(networkscan.DefaultConcurrency, maxFingerprintWorkers)
+	}
+	return min(value, maxFingerprintWorkers)
+}
+
+func registeredFingerprinters() []fingerprintCandidate {
+	var candidates []fingerprintCandidate
+	for _, mod := range module.ListByAction(action.Fingerprint) {
+		fp, ok := mod.(action.Fingerprinter)
+		if !ok {
+			continue
+		}
+		candidates = append(candidates, fingerprintCandidate{id: mod.ID(), target: mod.Target(), fp: fp})
+	}
+	return candidates
+}
+
+func orderedFingerprinters(port int, candidates []fingerprintCandidate) []fingerprintCandidate {
+	var ordered []fingerprintCandidate
+	used := make(map[string]bool)
+	for _, hint := range networkscan.PortToKind[port] {
+		for _, candidate := range candidates {
+			if candidate.target == hint && !used[candidate.id] {
+				ordered = append(ordered, candidate)
+				used[candidate.id] = true
 			}
 		}
 	}
-	return total
+	for _, candidate := range candidates {
+		if !used[candidate.id] {
+			ordered = append(ordered, candidate)
+		}
+	}
+	return ordered
+}
+
+type fingerprintEndpoint struct {
+	host string
+	port int
+	meta map[string]string
+}
+
+func fingerprintEndpoints(targets []action.Target) []fingerprintEndpoint {
+	var endpoints []fingerprintEndpoint
+	seen := make(map[string]bool)
+	for _, target := range targets {
+		for _, rawPort := range splitCSV(target.Meta["open_ports"]) {
+			port, err := strconv.Atoi(rawPort)
+			if err != nil || port < 1 || port > 65535 {
+				continue
+			}
+			key := target.Address + "\x00" + strconv.Itoa(port)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			endpoints = append(endpoints, fingerprintEndpoint{
+				host: target.Address, port: port, meta: target.Meta,
+			})
+		}
+	}
+	return endpoints
+}
+
+func dispatchFingerprints(
+	ctx context.Context,
+	stderr io.Writer,
+	targets []action.Target,
+	envelope *ingest.IngestData,
+	quiet bool,
+	workers int,
+	timeout time.Duration,
+	scopeTarget string,
+) {
+	dispatchFingerprintCandidates(ctx, stderr, targets, envelope, quiet, workers, timeout, scopeTarget, registeredFingerprinters())
+}
+
+func dispatchFingerprintCandidates(
+	ctx context.Context,
+	stderr io.Writer,
+	targets []action.Target,
+	envelope *ingest.IngestData,
+	quiet bool,
+	workers int,
+	timeout time.Duration,
+	scopeTarget string,
+	candidates []fingerprintCandidate,
+) {
+	workers = normalizeFingerprintWorkers(workers)
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	endpoints := fingerprintEndpoints(targets)
+	total := len(endpoints) * len(candidates)
+	reporter := newProgressReporter(stderr, "[scan] fingerprinting", quiet)
+	coverageKey := envelope.Meta.Collection.CoverageKeys[0]
+	if total == 0 {
+		envelope.Meta.Collection.Outcomes = append(envelope.Meta.Collection.Outcomes, ingest.CollectionOutcome{
+			Collector: "scan", CoverageKey: coverageKey, Target: scopeTarget,
+			Method: "fingerprint", State: ingest.OutcomeComplete,
+		})
+		return
+	}
+
+	window := max(1, workers*2)
+	jobs := make(chan fingerprintTask, workers)
+	results := make(chan fingerprintTaskResult, workers)
+	slots := make(chan struct{}, window)
+	var workerWG sync.WaitGroup
+	for range workers {
+		workerWG.Add(1)
+		go func() {
+			defer workerWG.Done()
+			for task := range jobs {
+				if err := ctx.Err(); err != nil {
+					results <- fingerprintTaskResult{task: task, err: err}
+					continue
+				}
+				probeCtx, cancel := context.WithTimeout(ctx, timeout)
+				result, err := task.candidate.fp.Fingerprint(probeCtx, action.Target{
+					Kind: "host", Address: fmt.Sprintf("%s:%d", task.host, task.port),
+					Meta: maps.Clone(task.meta),
+				})
+				cancel()
+				results <- fingerprintTaskResult{task: task, result: result, err: err}
+			}
+		}()
+	}
+
+	producerDone := make(chan int, 1)
+	go func() {
+		sequence := 0
+	producer:
+		for _, endpoint := range endpoints {
+			for _, candidate := range orderedFingerprinters(endpoint.port, candidates) {
+				select {
+				case slots <- struct{}{}:
+				case <-ctx.Done():
+					break producer
+				}
+				task := fingerprintTask{
+					sequence: sequence, host: endpoint.host, port: endpoint.port,
+					meta: endpoint.meta, candidate: candidate,
+				}
+				select {
+				case jobs <- task:
+					sequence++
+				case <-ctx.Done():
+					<-slots
+					break producer
+				}
+			}
+		}
+		close(jobs)
+		producerDone <- sequence
+	}()
+	go func() {
+		workerWG.Wait()
+		close(results)
+	}()
+
+	next := 0
+	completed := 0
+	matched := 0
+	failures := 0
+	pending := make(map[int]fingerprintTaskResult)
+	flush := func(item fingerprintTaskResult) {
+		completed++
+		reporter.update(completed, total)
+		if item.err != nil {
+			failures++
+			slog.Debug("fingerprint error", "module", item.task.candidate.id,
+				"host", item.task.host, "port", item.task.port, "error", item.err)
+			return
+		}
+		if item.result == nil {
+			failures++
+			slog.Debug("fingerprint returned nil result", "module", item.task.candidate.id,
+				"host", item.task.host, "port", item.task.port)
+			return
+		}
+		if !item.result.Matched {
+			return
+		}
+		if item.result.IngestData == nil {
+			failures++
+			slog.Debug("matched fingerprint returned no ingest data", "module", item.task.candidate.id,
+				"host", item.task.host, "port", item.task.port)
+			return
+		}
+		matched++
+		if !quiet {
+			reporter.clear()
+			_, _ = fmt.Fprintf(stderr, "[fingerprint] %s:%d → %s (version=%s, auth=%s)\n",
+				item.task.host, item.task.port, item.result.ServiceKind,
+				item.result.Version, item.result.AuthMethod)
+		}
+		envelope.Graph.Nodes = append(envelope.Graph.Nodes, item.result.IngestData.Graph.Nodes...)
+		envelope.Graph.Edges = append(envelope.Graph.Edges, item.result.IngestData.Graph.Edges...)
+	}
+	for item := range results {
+		pending[item.task.sequence] = item
+		for {
+			ready, ok := pending[next]
+			if !ok {
+				break
+			}
+			delete(pending, next)
+			flush(ready)
+			next++
+			<-slots
+		}
+	}
+	scheduled := <-producerDone
+	unstarted := total - scheduled
+	state := ingest.OutcomeComplete
+	errorText := ""
+	if failures > 0 || unstarted > 0 || ctx.Err() != nil {
+		state = ingest.OutcomePartial
+		errorText = fmt.Sprintf("%d probe(s) failed, %d not started", failures, max(0, unstarted))
+	}
+	envelope.Meta.Collection.Outcomes = append(envelope.Meta.Collection.Outcomes, ingest.CollectionOutcome{
+		Collector: "scan", CoverageKey: coverageKey, Target: scopeTarget,
+		Method: "fingerprint", State: state, Items: completed - failures, Error: errorText,
+	})
+	reporter.clear()
+	if !quiet {
+		_, _ = fmt.Fprintf(stderr, "[scan] fingerprint summary: %d probe(s), %d match(es)\n", completed, matched)
+	}
 }
 
 // splitCSV is the no-op-on-empty companion of strings.Split. Returns nil

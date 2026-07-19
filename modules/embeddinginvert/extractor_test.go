@@ -2,10 +2,46 @@ package embeddinginvert
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
 )
+
+func TestExtract_UpstreamFixtureExactInventory(t *testing.T) {
+	const sourceID = "sha256:upstream-model"
+	res, err := (&Extractor{}).Extract(context.Background(), action.Target{
+		Kind: "node", Address: sourceID,
+	}, action.ExtractOptions{
+		SourceNodeID: sourceID, ArtifactPath: upstreamFixturePath(), EngagementID: "UPSTREAM-TEST",
+		Extras: map[string]any{"confidence-threshold": 1.0},
+	})
+	if err != nil {
+		t.Fatalf("Extract upstream fixture: %v", err)
+	}
+	if res.Summary.ArtifactsProduced != 2 || len(res.IngestData.Graph.Nodes) != 2 || len(res.IngestData.Graph.Edges) != 2 {
+		t.Fatalf("inventory = summary:%d nodes:%d edges:%d, want 2/2/2",
+			res.Summary.ArtifactsProduced, len(res.IngestData.Graph.Nodes), len(res.IngestData.Graph.Edges))
+	}
+	wantTokens := []string{"[upstream_signal]", "[upstream_tool]"}
+	wantIndices := []int{4, 5}
+	wantMagnitudes := []float64{6.303967005, 8.303011503}
+	for i, node := range res.IngestData.Graph.Nodes {
+		if node.Properties["source_model_id"] != sourceID || node.Properties["engagement_id"] != "UPSTREAM-TEST" || node.Properties["method"] != "embedding-outlier" {
+			t.Errorf("node %d provenance = %+v", i, node.Properties)
+		}
+		if node.Properties["token_index"] != wantIndices[i] || node.Properties["token_string"] != wantTokens[i] {
+			t.Errorf("node %d signal = index:%v token:%v", i, node.Properties["token_index"], node.Properties["token_string"])
+		}
+		if got, _ := node.Properties["magnitude"].(float64); math.Abs(got-wantMagnitudes[i]) > 1e-5 {
+			t.Errorf("node %d magnitude = %.9f, want %.9f", i, got, wantMagnitudes[i])
+		}
+		edge := res.IngestData.Graph.Edges[i]
+		if edge.Source != sourceID || edge.Target != node.ID || edge.Kind != "EXTRACTED_FROM" || edge.Properties["method"] != "embedding-outlier" {
+			t.Errorf("edge %d = %+v", i, edge)
+		}
+	}
+}
 
 func TestExtract_DetectsOutliers(t *testing.T) {
 	e := &Extractor{}

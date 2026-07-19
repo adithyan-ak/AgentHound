@@ -27,7 +27,7 @@ func (p *ZedParser) Parse(path string, data []byte) (*ParsedConfig, error) {
 
 	raw, ok := m["context_servers"]
 	if !ok {
-		return &ParsedConfig{Client: p.ClientName(), Path: path}, nil
+		return nil, nil
 	}
 
 	serversMap, ok := raw.(map[string]any)
@@ -36,27 +36,33 @@ func (p *ZedParser) Parse(path string, data []byte) (*ParsedConfig, error) {
 	}
 
 	var servers []ServerDef
+	malformed := 0
 	for name, entry := range serversMap {
 		obj, ok := entry.(map[string]any)
 		if !ok {
+			malformed++
 			continue
 		}
-
-		sd := ServerDef{Name: name}
-
-		if urlVal, ok := obj["url"].(string); ok && urlVal != "" {
-			sd.Transport = "http"
-			sd.URL = urlVal
-		} else if cmd, ok := obj["command"].(string); ok && cmd != "" {
-			sd.Transport = "stdio"
-			sd.Command = cmd
-			sd.Args = toStringSlice(obj["args"])
-		} else {
+		if settings, present := obj["settings"]; present {
+			var valid bool
+			obj, valid = settings.(map[string]any)
+			if !valid {
+				malformed++
+				continue
+			}
+		}
+		sd, usable, entryMalformed := parseServerObject(name, obj, "url")
+		if entryMalformed {
+			malformed++
+		}
+		if !usable {
 			continue
 		}
-
 		servers = append(servers, sd)
 	}
-
-	return &ParsedConfig{Client: p.ClientName(), Path: path, Servers: servers}, nil
+	var parseErr error
+	if malformed > 0 {
+		parseErr = malformedServerEntriesError("context_servers", malformed)
+	}
+	return &ParsedConfig{Client: p.ClientName(), Path: path, Servers: servers}, parseErr
 }

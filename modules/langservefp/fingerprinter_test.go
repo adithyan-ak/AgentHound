@@ -10,13 +10,13 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/action"
 )
 
-const langserveOpenAPI = `{"openapi":"3.1.0","info":{"title":"LangServe","version":"0.0.51"},"paths":{}}`
+const langserveDocs = `<!doctype html><html><head><title>LangServe</title></head></html>`
 
 func TestFingerprint_LangServeHappy(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/openapi.json" {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(langserveOpenAPI))
+		if r.URL.Path == "/docs" {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte(langserveDocs))
 			return
 		}
 		w.WriteHeader(404)
@@ -44,8 +44,8 @@ func TestFingerprint_LangServeHappy(t *testing.T) {
 func TestFingerprint_NotLangServe(t *testing.T) {
 	// vLLM-shaped body (also FastAPI under the hood) — must NOT match.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/openapi.json" {
-			_, _ = w.Write([]byte(`{"openapi":"3.0.0","info":{"title":"vLLM API"}}`))
+		if r.URL.Path == "/docs" {
+			_, _ = w.Write([]byte(`<!doctype html><title>Swagger UI</title>`))
 			return
 		}
 		w.WriteHeader(404)

@@ -39,7 +39,7 @@ MATCH (s2:MCPServer)-[environment:HAS_ENV_VAR]->(c:Credential)
 MATCH (c)<-[uses:USES_CREDENTIAL]-(i:Identity)<-[authenticates:AUTHENTICATES_WITH]-(s2)
 MATCH (s2)-[provides2:PROVIDES_TOOL]->(t2:MCPTool)-[access:HAS_ACCESS_TO]->(r:MCPResource)
 WHERE s1 <> s2
-  AND s1.auth_assurance IN ['unauthenticated', 'weak']
+  AND coalesce(s1.observed_auth_assurance, s1.auth_assurance) IN ['unauthenticated', 'weak']
 WITH a, s1, t1, s2, c, i, t2, r,
      trust1, provides1, environment, uses, authenticates, provides2, access
 ORDER BY a.objectid, s1.objectid, t1.objectid, s2.objectid,

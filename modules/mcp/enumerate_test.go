@@ -156,3 +156,29 @@ func TestBuildServerNodeInstructionSignals(t *testing.T) {
 		}
 	})
 }
+
+func TestBuildConfiguredServerNodeSeparatesConfiguredAndObservedClaims(t *testing.T) {
+	engine := testEnumerateEngine(t)
+	spec := ServerSpec{
+		Name: "configured-alias", Transport: "http",
+		URL: "http://mcp.example/mcp", Configured: true,
+	}
+	initResult := &mcpsdk.InitializeResult{
+		ProtocolVersion: "2025-06-18",
+		ServerInfo:      &mcpsdk.Implementation{Name: "upstream-server", Version: "1.2.3"},
+	}
+
+	node := buildServerNode("sha256:configured", spec, initResult, engine)
+	if node.Properties["name"] != "configured-alias" ||
+		node.Properties["server_name"] != "upstream-server" {
+		t.Fatalf("configured and observed names were conflated: %+v", node.Properties)
+	}
+	if node.Properties["auth_method"] != "unknown" ||
+		node.Properties["observed_auth_method"] != "none" {
+		t.Fatalf("configured and observed auth were conflated: %+v", node.Properties)
+	}
+	if node.Properties["pinning_status"] != "not_applicable" ||
+		node.Properties["protocol_version"] != "2025-06-18" {
+		t.Fatalf("configured/live property union is incomplete: %+v", node.Properties)
+	}
+}

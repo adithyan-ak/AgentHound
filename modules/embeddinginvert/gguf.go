@@ -19,8 +19,7 @@ import (
 )
 
 const (
-	ggufMagic   = 0x46475547 // "GGUF" little-endian
-	ggufVersion = 3          // GGUF v3 (current as of llama.cpp b3000+)
+	ggufVersion = 3 // GGUF v3 (current as of llama.cpp b3000+)
 
 	// GGML tensor types we support for the embedding layer.
 	ggmlTypeF32  = 0
@@ -58,12 +57,12 @@ func ParseGGUF(path string) (*GGUFFile, error) {
 	}
 	fileSize := st.Size()
 
-	var magic uint32
-	if err := binary.Read(f, binary.LittleEndian, &magic); err != nil {
+	var magic [4]byte
+	if _, err := io.ReadFull(f, magic[:]); err != nil {
 		return nil, fmt.Errorf("read magic: %w", err)
 	}
-	if magic != ggufMagic {
-		return nil, fmt.Errorf("not a GGUF file (magic %08x, want %08x)", magic, ggufMagic)
+	if magic != [4]byte{'G', 'G', 'U', 'F'} {
+		return nil, fmt.Errorf("not a GGUF file (magic %x, want 47475546)", magic)
 	}
 
 	var version uint32

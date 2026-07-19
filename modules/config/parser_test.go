@@ -175,7 +175,7 @@ func TestParseMCPServersMap_MultipleServers(t *testing.T) {
 	}
 }
 
-func TestParseMCPServersMap_SkipsEntryWithNoTransport(t *testing.T) {
+func TestParseMCPServersMap_ReportsEntryWithNoTransport(t *testing.T) {
 	data := map[string]any{
 		"mcpServers": map[string]any{
 			"empty": map[string]any{
@@ -185,8 +185,8 @@ func TestParseMCPServersMap_SkipsEntryWithNoTransport(t *testing.T) {
 	}
 
 	servers, err := parseMCPServersMap(data, "mcpServers", "url")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatal("entry without a transport must make the applicable view incomplete")
 	}
 	if len(servers) != 0 {
 		t.Fatalf("expected 0 servers (skipped), got %d", len(servers))
