@@ -77,6 +77,32 @@ func TestMergeInstructionMatchesHighVolume(t *testing.T) {
 	}
 }
 
+func TestMergeInstructionMatchesEmptyShadowReturnsRaw(t *testing.T) {
+	raw := []evaluatedMatch{{
+		match:    Match{RuleID: "raw-only"},
+		rawStart: 4,
+		rawEnd:   8,
+	}}
+	got := mergeInstructionMatches(raw, nil)
+	if len(got) != 1 || &got[0] != &raw[0] {
+		t.Fatal("empty shadow should return the raw slice without copying or indexing it")
+	}
+}
+
+func TestMergeInstructionMatchesIndexesOnlyShadowRuleIDs(t *testing.T) {
+	raw := []evaluatedMatch{
+		{match: Match{RuleID: "raw-only"}, rawStart: 0, rawEnd: 1},
+		{match: Match{RuleID: "shadowed"}, rawStart: 2, rawEnd: 3},
+	}
+	shadow := []evaluatedMatch{
+		{match: Match{RuleID: "shadowed"}, rawStart: 2, rawEnd: 3},
+	}
+	got := mergeInstructionMatches(raw, shadow)
+	if len(got) != len(raw) || got[0].match.RuleID != "raw-only" || got[1].match.RuleID != "shadowed" {
+		t.Fatalf("rule-filtered dedup changed raw results: %+v", got)
+	}
+}
+
 // TestShadowExcludeExitsCanonicalizationEligibility pins that a shadow-excluded
 // rule is not treated as canonicalization-eligible, so the digest/RunTests gate
 // mirrors the engine's actual shadow gate (which skips excluded rules).

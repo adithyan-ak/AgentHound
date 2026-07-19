@@ -319,12 +319,23 @@ func asciiInstructionIdentity(raw string) bool {
 			i++
 			continue
 		}
+		// A multi-letter word cannot start a collapsible spaced run. Skip the
+		// whole word so neither of its boundary letters is counted as an
+		// isolated token adjacent to a real run.
+		if i+1 < len(raw) && asciiInstructionLetter(raw[i+1]) {
+			i += 2
+			for i < len(raw) && asciiInstructionLetter(raw[i]) {
+				i++
+			}
+			continue
+		}
 
 		letters := 1
 		end := i
 		for end+2 < len(raw) &&
 			raw[end+1] == ' ' &&
-			asciiInstructionLetter(raw[end+2]) {
+			asciiInstructionLetter(raw[end+2]) &&
+			(end+3 >= len(raw) || !asciiInstructionLetter(raw[end+3])) {
 			letters++
 			end += 2
 		}
@@ -551,10 +562,11 @@ func nextRuneIsLetter(text string, off int) bool {
 // multiple explicit folds in one word are allowed. Pure Greek/Cyrillic,
 // accented/other-script letters, and unmapped runes are left unchanged.
 //
-// Pass 2 rebuilds the view once with a forward span cursor (O(S+N)). Mapped
-// confusables are NFKC-stable, so they always live in affine spans and fold to a
-// single ASCII byte mapped back to the confusable rune's exact raw bytes; opaque
-// and non-affine spans (e.g. NFKC decompositions) are copied verbatim.
+// Pass 2 rebuilds the view once with a forward span cursor (O(S+N)). A mapped
+// confusable in an affine span folds to one ASCII byte mapped back to the
+// confusable rune's exact raw bytes. NFKC can also produce a mapped confusable
+// in a non-affine span; that span is rewritten atomically so the output retains
+// the whole source unit as its provenance. Opaque spans are copied verbatim.
 func foldInstructionConfusables(view canonicalView) canonicalView {
 	text := view.text
 	type runRange struct{ start, end int }
@@ -600,13 +612,49 @@ func foldInstructionConfusables(view canonicalView) canonicalView {
 	}
 	ri := 0
 	for _, span := range view.spans {
-		if span.opaque || !span.affine {
+		if span.opaque {
 			if !b.appendSegment(
 				[]byte(text[span.shadowStart:span.shadowEnd]),
 				span.rawStart,
 				span.rawEnd,
 				span.affine,
 				span.opaque,
+			) {
+				return b.view()
+			}
+			continue
+		}
+		if !span.affine {
+			keepStart := span.shadowStart
+			var replacement []byte
+			for o := span.shadowStart; o < span.shadowEnd; {
+				r, size := utf8.DecodeRuneInString(text[o:])
+				for ri < len(eligible) && eligible[ri].end <= o {
+					ri++
+				}
+				inRun := ri < len(eligible) &&
+					o >= eligible[ri].start && o < eligible[ri].end
+				if target := instructionConfusables[r]; inRun && target != 0 {
+					if replacement == nil {
+						replacement = make([]byte, 0, span.shadowEnd-span.shadowStart)
+					}
+					replacement = append(replacement, text[keepStart:o]...)
+					replacement = append(replacement, target)
+					keepStart = o + size
+				}
+				o += size
+			}
+			if replacement == nil {
+				replacement = []byte(text[span.shadowStart:span.shadowEnd])
+			} else {
+				replacement = append(replacement, text[keepStart:span.shadowEnd]...)
+			}
+			if !b.appendSegment(
+				replacement,
+				span.rawStart,
+				span.rawEnd,
+				false,
+				false,
 			) {
 				return b.view()
 			}
@@ -879,12 +927,12 @@ func ruleUsesInstructionCanonicalization(rule Rule) bool {
 }
 
 // hasInstructionCanonicalCandidate reports whether any already scope-resolved
-// candidate emits the injection finding type. Candidates reaching this check
-// are only produced for an eligible request, so the finding-type gate mirrors
-// the per-rule shadow gate exactly.
+// candidate participates in the canonical shadow. Candidates reaching this
+// check are only produced for an eligible request; the shared rule predicate
+// keeps shadow exclusion, digesting, tests, and engine evaluation aligned.
 func hasInstructionCanonicalCandidate(candidates []compiledRule) bool {
 	for _, cr := range candidates {
-		if cr.rule.Emit.FindingType == "has_injection_patterns" {
+		if ruleUsesInstructionCanonicalization(cr.rule) {
 			return true
 		}
 	}

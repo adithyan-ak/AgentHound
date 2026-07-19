@@ -90,12 +90,13 @@ alone. For a rule that participates in the config instruction canonical shadow
 `instruction.content`), the digest payload additionally binds the canonicalizer
 version string `instruction-shadow-v1+unicode-15.0.0`, built as
 `"instruction-shadow-v1+unicode-" + norm.Version` (currently Unicode 15.0.0). An
-eligible rule's semantic identity therefore changes if and only if the frozen V1
-transform contract or its Unicode edition changes, while ineligible rules are
-unaffected. The version string is a digest-payload boundary only: it is never
-serialized into the manifest JSON, does not alter the manifest's field shape,
-and does not change `authenticity`, which remains `unverified` because a digest
-attests content identity, not source trust.
+eligible rule's semantic identity changes when its canonicalized rule shape
+changes and additionally when the frozen V1 transform contract or its Unicode
+edition changes. Ineligible rules do not bind the canonicalizer version. The
+version string is a digest-payload boundary only: it is never serialized into
+the manifest JSON, does not alter the manifest's field shape, and does not
+change `authenticity`, which remains `unverified` because a digest attests
+content identity, not source trust.
 
 Dynamic exhaustive collectors also declare `authoritative_roots`, pairing the
 stable collector-root key with the complete current child-key set. After a

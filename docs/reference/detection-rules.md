@@ -164,7 +164,9 @@ canonical shadow is deliberately narrow:
   raw pass did not already find. Those shadow-only matches are stable-sorted by
   rule ID, then full raw start offset, then full raw end offset, then matcher
   ordinal, and appended after the raw matches; a raw match always wins a dedup
-  contest against an identical shadow span.
+  contest against an identical or properly overlapping shadow span from the
+  same rule. Zero-length matches remain raw-only because a transformed view has
+  no source bytes with which to ground a newly synthesized boundary.
 - **Exact transforms.** The frozen V1 pipeline runs once, with no recursion:
   NFKC normalization, enumerated control-character removal and whitespace
   mapping, restricted mixed-script confusable folding, then bounded
@@ -174,8 +176,8 @@ canonical shadow is deliberately narrow:
   bounded by a non-letter on both sides, so a neighbouring multi-letter word is
   never absorbed: `i g n o r e previous` becomes `ignore previous` (not
   `ignoreprevious`), and `vitamins a b c d e together` becomes
-  `vitamins abcde together`. An ASCII-only input takes an identity fast path and
-  is never transformed.
+  `vitamins abcde together`. ASCII input takes an identity fast path only when
+  it contains no mapped whitespace and no collapsible letter-spacing run.
 - **Structural rules stay raw-only.** A rule may set `shadow_exclude: true` to
   opt out of the shadow pass. Bare charset-run detectors (the base64 payload
   rule, `[A-Za-z0-9+/]{20,}`) set it, because NFKC folding and letter-spacing

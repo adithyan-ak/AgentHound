@@ -245,6 +245,12 @@ func evaluateRuleShadow(
 	shadowSpans := cr.matcher.matchSpans(view.text)
 	shadowMatches := make([]evaluatedMatch, 0, len(shadowSpans))
 	for ordinal, span := range shadowSpans {
+		// A zero-length shadow match has no source bytes to ground it. Canonical
+		// deletions can move or create boundaries, so projecting such a match can
+		// fabricate a raw offset. Keep the authoritative raw-pass matches only.
+		if span.start == span.end {
+			continue
+		}
 		// On a shadow truncated at the canonical cap, a match ending exactly at
 		// the cut is untrustworthy: an end-anchored ($) or boundary-sensitive
 		// pattern may be firing against a boundary that only exists because the
@@ -278,6 +284,17 @@ func mergeInstructionMatches(
 	rawMatches []evaluatedMatch,
 	shadowMatches []evaluatedMatch,
 ) []evaluatedMatch {
+	if len(shadowMatches) == 0 {
+		return rawMatches
+	}
+
+	// Match cardinality can be very high while rule cardinality stays tiny, so
+	// do not size this map from the number of matches.
+	shadowRuleIDs := make(map[string]struct{})
+	for _, match := range shadowMatches {
+		shadowRuleIDs[match.match.RuleID] = struct{}{}
+	}
+
 	merged := append([]evaluatedMatch(nil), rawMatches...)
 	// A shadow match is dropped when it exactly duplicates or properly overlaps
 	// an already-accepted span of the same rule (raw seeds the accepted set, so
@@ -289,9 +306,12 @@ func mergeInstructionMatches(
 	// overlap uses a forward pointer over each rule's start-sorted raw ranges plus
 	// a running max end of accepted shadow spans. A per-match linear scan here was
 	// O(matches^2) and a DoS surface for single-token custom rules on 1 MiB input.
-	exact := make(map[matchIdentity]struct{}, len(rawMatches))
-	rawByRule := make(map[string][]matcherSpan, len(rawMatches))
+	exact := make(map[matchIdentity]struct{}, len(shadowMatches))
+	rawByRule := make(map[string][]matcherSpan, len(shadowRuleIDs))
 	for _, match := range rawMatches {
+		if _, needed := shadowRuleIDs[match.match.RuleID]; !needed {
+			continue
+		}
 		exact[matchIdentity{match.match.RuleID, match.rawStart, match.rawEnd}] = struct{}{}
 		rawByRule[match.match.RuleID] = append(
 			rawByRule[match.match.RuleID],

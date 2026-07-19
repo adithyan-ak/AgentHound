@@ -193,6 +193,7 @@ func TestCanonicalizeInstructionASCIIIdentityFastPath(t *testing.T) {
 		{"four letter spacing", "w x y z", false},
 		{"three letter spacing", "x y z", true},
 		{"sixtyfive letter spacing", spacedLetters(65), true},
+		{"sixtyfour between words", "prefix " + spacedLetters(64) + " suffix", false},
 		{"non-ascii byte", "café", false},
 	}
 	for _, tc := range identityCases {
@@ -212,6 +213,11 @@ func TestCanonicalizeInstructionASCIIIdentityFastPath(t *testing.T) {
 	view := canonicalizeInstruction("plain ascii instructions")
 	if view.changed {
 		t.Fatal("expected changed == false for ascii identity input")
+	}
+	boundaryRun := "prefix " + spacedLetters(64) + " suffix"
+	if got, want := canonicalizeInstruction(boundaryRun).text,
+		"prefix "+strings.ReplaceAll(spacedLetters(64), " ", "")+" suffix"; got != want {
+		t.Fatalf("64-letter boundary run = %q, want %q", got, want)
 	}
 	if view.text != "plain ascii instructions" {
 		t.Fatalf("identity text = %q", view.text)
@@ -299,6 +305,11 @@ func TestInstructionCanonicalEligibilityPredicates(t *testing.T) {
 	}
 	if hasInstructionCanonicalCandidate([]compiledRule{{rule: nonInjection}}) {
 		t.Fatal("non-injection candidates should not be eligible")
+	}
+	excluded := injAll
+	excluded.ShadowExclude = true
+	if hasInstructionCanonicalCandidate([]compiledRule{{rule: excluded}}) {
+		t.Fatal("shadow-excluded candidates should not trigger canonicalization")
 	}
 	if !hasInstructionCanonicalCandidate(
 		[]compiledRule{{rule: nonInjection}, {rule: injAll}},

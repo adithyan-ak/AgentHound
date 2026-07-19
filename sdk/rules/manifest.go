@@ -213,10 +213,10 @@ func semanticDigest(v any) string {
 }
 
 // instructionRuleDigest wraps a rule that participates in config instruction
-// canonicalization together with the semantic canonicalizer version, so the
-// eligible rule's semantic digest changes if and only if the frozen transform
-// contract or its Unicode edition changes. It is a digest-payload shape only
-// and is never serialized into the manifest JSON.
+// canonicalization together with the semantic canonicalizer version. The rule
+// shape remains part of the digest; this wrapper additionally changes it when
+// the frozen transform contract or its Unicode edition changes. It is a
+// digest-payload shape only and is never serialized into the manifest JSON.
 type instructionRuleDigest struct {
 	Rule                 Rule   `json:"rule"`
 	CanonicalizerVersion string `json:"canonicalizer_version"`
