@@ -19,8 +19,6 @@ import (
 )
 
 const (
-	ggufVersion = 3 // GGUF v3 (current as of llama.cpp b3000+)
-
 	// GGML tensor types we support for the embedding layer.
 	ggmlTypeF32  = 0
 	ggmlTypeQ8_0 = 8

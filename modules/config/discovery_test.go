@@ -57,7 +57,11 @@ func TestSharedDiscoveryMultiClientPhysicalFile(t *testing.T) {
 			files = append(files, node)
 		}
 		if hasNodeKind(node, "AgentInstance") && node.Properties["config_path"] == settings {
-			agents = append(agents, node.Properties["framework"].(string))
+			framework, ok := node.Properties["framework"].(string)
+			if !ok {
+				t.Fatalf("AgentInstance framework = %#v, want string", node.Properties["framework"])
+			}
+			agents = append(agents, framework)
 		}
 	}
 	if len(files) != 1 {

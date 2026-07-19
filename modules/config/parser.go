@@ -211,20 +211,6 @@ func toStringSlice(v any) []string {
 	return result
 }
 
-func toStringMap(v any) map[string]string {
-	raw, ok := v.(map[string]any)
-	if !ok {
-		return nil
-	}
-	result := make(map[string]string, len(raw))
-	for key, value := range raw {
-		if text, ok := value.(string); ok {
-			result[key] = text
-		}
-	}
-	return result
-}
-
 func getString(m map[string]any, key string) string {
 	if v, ok := m[key].(string); ok {
 		return strings.TrimSpace(v)

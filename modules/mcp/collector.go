@@ -228,10 +228,6 @@ func (c *MCPCollector) buildServerList(
 		})
 	}
 
-	if opts.ConfigPath != "" {
-		// Parsed below through the shared bounded config discovery path.
-	}
-
 	var discovery *config.DiscoveryResult
 	if opts.Discover || opts.ConfigPath != "" || len(opts.ConfigPaths) > 0 {
 		homeDir, err := os.UserHomeDir()
