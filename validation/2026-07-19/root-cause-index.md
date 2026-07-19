@@ -6,6 +6,10 @@ This document reduces the 47 numbered entries in the final-test ledger into the 
 
 The next validation stage must prove each product root cause against the untouched baseline and the checkpointed candidate using the same input and appropriate negative controls.
 
+That stage is now complete. See `root-cause-verdicts.md` for the independent
+before/after verdicts. Its final accounting supersedes this index's provisional
+classification while preserving the same exact issue-to-group mapping.
+
 ## Frozen inputs
 
 - Untouched baseline commit: `1e45601c4d004247da60c0f0e796debfb3cc37fc`
@@ -21,13 +25,18 @@ The next validation stage must prove each product root cause against the untouch
 
 The ledger contains 47 numbered issues, but they are not 47 independent root causes:
 
-- 42 entries describe provisional runtime, security-semantic, CLI, API, or UI product defects.
+- 35 entries are confirmed baseline product-defect records.
+- 7 entries are valid candidate-integration or hardening corrections introduced
+  while composing the temporary fixes: Issues 10, 12, 19, 20, 41, 43, and 47.
 - 3 entries are documentation-only contract defects: Issues 17, 34, and 42.
 - 2 entries are validation-oracle defects where the current product was not shown to be wrong: Issues 38 and 39.
 - Several additional unnumbered entries document invalid/contained test attempts or test-infrastructure corrections. They are excluded from the product-defect count.
-- The 47 numbered entries map exactly once into 12 root-cause groups below.
+- The 47 numbered entries map exactly once into 12 confirmed root-cause groups below.
 
-“Provisional product defect” means the campaign recorded a reproduction and patch. It remains provisional for merge purposes until the independent before/after validation stage accepts it.
+The 35 baseline product records are symptoms or boundary cases within ten
+product root-cause groups; they are not 35 independent bugs. The seven
+candidate-integration corrections are real and necessary, but must not be
+marketed as defects independently reproduced in the untouched baseline.
 
 ## Root-cause groups
 
