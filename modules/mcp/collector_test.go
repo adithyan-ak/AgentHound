@@ -12,6 +12,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	configmodule "github.com/adithyan-ak/agenthound/modules/config"
 	"github.com/adithyan-ak/agenthound/sdk/collector"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
@@ -108,6 +109,36 @@ func TestMCPSharedDiscoveryCompleteEmptyAndInvalidRoot(t *testing.T) {
 	}
 	if _, _, err := collector.buildServerList(context.Background(), collectoropts(true, filepath.Join(project, "missing"))); err == nil {
 		t.Fatal("invalid project root became complete-empty MCP discovery")
+	}
+}
+
+func TestMCPDiscoveryRootDisappearsAfterValidation(t *testing.T) {
+	home, project := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	originalResolve := resolveMCPProjectRoot
+	resolveMCPProjectRoot = func(path string) (*configmodule.ValidatedProjectRoot, error) {
+		root, err := originalResolve(path)
+		if err == nil {
+			err = os.RemoveAll(root.Path())
+		}
+		return root, err
+	}
+	t.Cleanup(func() { resolveMCPProjectRoot = originalResolve })
+
+	result, err := NewMCPCollector().Collect(context.Background(), collectoropts(true, project))
+	if err != nil {
+		t.Fatalf("Collect after root disappearance: %v", err)
+	}
+	if result.Meta.Collection == nil || result.Meta.Collection.State != ingest.OutcomeFailed {
+		t.Fatalf("collection = %+v, want failed non-authoritative discovery", result.Meta.Collection)
+	}
+	if len(result.Graph.Nodes) != 0 || len(result.Graph.Edges) != 0 {
+		t.Fatalf("unexpected graph after root disappearance: %+v", result.Graph)
+	}
+	if len(result.Meta.Collection.Outcomes) != 1 ||
+		result.Meta.Collection.Outcomes[0].Method != "discover_configs" ||
+		result.Meta.Collection.Outcomes[0].State != ingest.OutcomeFailed {
+		t.Fatalf("discovery outcomes = %+v", result.Meta.Collection.Outcomes)
 	}
 }
 

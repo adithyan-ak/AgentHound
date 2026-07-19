@@ -37,8 +37,60 @@ type FileDiscovery struct {
 // DiscoveryResult is shared by the config and MCP collectors so both use the
 // same paths, parsers, bounds, and failure semantics.
 type DiscoveryResult struct {
-	ProjectRoot string
-	Files       []FileDiscovery
+	ProjectRoot      string
+	ProjectRootState ingest.OutcomeState
+	ProjectRootError string
+	Files            []FileDiscovery
+}
+
+// ValidatedProjectRoot keeps the directory identity that was approved as the
+// effective project boundary alive until discovery finishes. This prevents a
+// removed, renamed, or replaced root from turning project-relative ENOENTs
+// into authoritative absence.
+type ValidatedProjectRoot struct {
+	path string
+	dir  *os.File
+	info os.FileInfo
+}
+
+func (r *ValidatedProjectRoot) Path() string {
+	if r == nil {
+		return ""
+	}
+	return r.path
+}
+
+func (r *ValidatedProjectRoot) Close() error {
+	if r == nil || r.dir == nil {
+		return nil
+	}
+	err := r.dir.Close()
+	r.dir = nil
+	return err
+}
+
+// Validate verifies that the project path still resolves to the same readable
+// directory whose handle has remained open since ResolveProjectRoot.
+func (r *ValidatedProjectRoot) Validate() error {
+	if r == nil || r.dir == nil || r.info == nil {
+		return errors.New("project root is not open")
+	}
+	dir, err := openProjectRoot(r.path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	info, err := dir.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || !os.SameFile(r.info, info) {
+		return errors.New("project root identity changed")
+	}
+	if _, err := dir.Readdirnames(1); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
 }
 
 func (r *DiscoveryResult) ParsedConfigs() []ParsedConfig {
@@ -55,39 +107,45 @@ func (r *DiscoveryResult) ParsedConfigs() []ParsedConfig {
 // ResolveProjectRoot establishes the project boundary used by every local
 // collector. An explicitly invalid root is an operator error; it must never be
 // treated as an authoritative empty project.
-func ResolveProjectRoot(projectDir string) (string, error) {
+func ResolveProjectRoot(projectDir string) (*ValidatedProjectRoot, error) {
 	root := strings.TrimSpace(projectDir)
 	if root == "" {
 		cwd, err := getWorkingDirectory()
 		if err != nil {
-			return "", fmt.Errorf("resolve current project directory: %w", err)
+			return nil, fmt.Errorf("resolve current project directory: %w", err)
 		}
 		root = cwd
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
-		return "", fmt.Errorf("resolve project directory: %w", err)
+		return nil, fmt.Errorf("resolve project directory: %w", err)
 	}
 	abs = filepath.Clean(abs)
 	info, err := statProjectRoot(abs)
 	if err != nil {
-		return "", fmt.Errorf("access project directory %s: %w", abs, err)
+		return nil, fmt.Errorf("access project directory %s: %w", abs, err)
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("project directory %s is not a directory", abs)
+		return nil, fmt.Errorf("project directory %s is not a directory", abs)
 	}
 	dir, err := openProjectRoot(abs)
 	if err != nil {
-		return "", fmt.Errorf("open project directory %s: %w", abs, err)
+		return nil, fmt.Errorf("open project directory %s: %w", abs, err)
+	}
+	openedInfo, err := dir.Stat()
+	if err != nil {
+		_ = dir.Close()
+		return nil, fmt.Errorf("inspect project directory %s: %w", abs, err)
+	}
+	if !openedInfo.IsDir() || !os.SameFile(info, openedInfo) {
+		_ = dir.Close()
+		return nil, fmt.Errorf("project directory %s changed during validation", abs)
 	}
 	if _, err := dir.Readdirnames(1); err != nil && !errors.Is(err, io.EOF) {
 		_ = dir.Close()
-		return "", fmt.Errorf("read project directory %s: %w", abs, err)
+		return nil, fmt.Errorf("read project directory %s: %w", abs, err)
 	}
-	if err := dir.Close(); err != nil {
-		return "", fmt.Errorf("close project directory %s: %w", abs, err)
-	}
-	return abs, nil
+	return &ValidatedProjectRoot{path: abs, dir: dir, info: openedInfo}, nil
 }
 
 // DiscoveryPathsForRoot returns the de-duplicated physical path inventory for
@@ -141,12 +199,16 @@ func (c *ConfigCollector) discoveryRegistry(homeDir, projectRoot string) map[str
 // silently discarded.
 func (c *ConfigCollector) DiscoverConfigs(
 	ctx context.Context,
-	homeDir, projectRoot string,
+	homeDir string,
+	projectRoot *ValidatedProjectRoot,
 	discover bool,
 	paths []string,
 ) *DiscoveryResult {
-	result := &DiscoveryResult{ProjectRoot: projectRoot}
-	registry := c.discoveryRegistry(homeDir, projectRoot)
+	rootPath := projectRoot.Path()
+	result := &DiscoveryResult{
+		ProjectRoot: rootPath, ProjectRootState: ingest.OutcomeComplete,
+	}
+	registry := c.discoveryRegistry(homeDir, rootPath)
 
 	targets := make(map[string][]ConfigParser)
 	preferredClients := make(map[string]map[string]bool)
@@ -193,6 +255,10 @@ func (c *ConfigCollector) DiscoverConfigs(
 			break
 		}
 		result.Files = append(result.Files, discoverPhysicalFile(path, targets[path], preferredClients[path]))
+	}
+	if err := projectRoot.Validate(); err != nil {
+		result.ProjectRootState = ingest.OutcomeFailed
+		result.ProjectRootError = "project root changed or became unavailable during discovery"
 	}
 	return result
 }

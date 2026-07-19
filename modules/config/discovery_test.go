@@ -142,11 +142,16 @@ func TestSharedDiscoveryRetainsValidEntriesButMarksMalformedSiblingPartial(t *te
 
 func TestExplicitConfigRunsAllParsersWithoutInventingAClient(t *testing.T) {
 	home, project := t.TempDir(), t.TempDir()
+	projectRoot, err := ResolveProjectRoot(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = projectRoot.Close() }()
 	path := filepath.Join(t.TempDir(), "exported-config.json")
 	if err := os.WriteFile(path, []byte(`{"mcpServers":{"real":{"command":"real-mcp"}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	discovery := NewConfigCollector().DiscoverConfigs(context.Background(), home, project, false, []string{path})
+	discovery := NewConfigCollector().DiscoverConfigs(context.Background(), home, projectRoot, false, []string{path})
 	if len(discovery.Files) != 1 || len(discovery.Files[0].Configs) != 1 {
 		t.Fatalf("explicit discovery = %+v", discovery.Files)
 	}
@@ -164,7 +169,7 @@ func TestExplicitConfigRunsAllParsersWithoutInventingAClient(t *testing.T) {
 	if err := os.WriteFile(known, []byte(`{"mcpServers":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	discovery = NewConfigCollector().DiscoverConfigs(context.Background(), home, project, false, []string{known})
+	discovery = NewConfigCollector().DiscoverConfigs(context.Background(), home, projectRoot, false, []string{known})
 	if len(discovery.Files[0].Configs) != 1 || discovery.Files[0].Configs[0].Client != "cursor" {
 		t.Fatalf("known path ownership = %+v, want cursor", discovery.Files[0].Configs)
 	}
@@ -365,6 +370,35 @@ func TestResolveProjectRootRejectsInvalidPaths(t *testing.T) {
 	}
 	if _, err := ResolveProjectRoot(file); err == nil {
 		t.Fatal("non-directory project root accepted")
+	}
+}
+
+func TestConfigDiscoveryRetainsResultsWhenProjectRootDisappearsAfterValidation(t *testing.T) {
+	home, project := t.TempDir(), t.TempDir()
+	globalConfig := filepath.Join(home, ".cursor", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(globalConfig), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(globalConfig, []byte(`{"mcpServers":{"retained":{"command":"retained-mcp"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	projectRoot, err := ResolveProjectRoot(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = projectRoot.Close() }()
+	if err := os.RemoveAll(project); err != nil {
+		t.Fatal(err)
+	}
+
+	discovery := NewConfigCollector().DiscoverConfigs(context.Background(), home, projectRoot, true, nil)
+	if discovery.ProjectRootState != ingest.OutcomeFailed || discovery.ProjectRootError == "" {
+		t.Fatalf("project root result = state:%s error:%q, want failed boundary", discovery.ProjectRootState, discovery.ProjectRootError)
+	}
+	configs := discovery.ParsedConfigs()
+	if len(configs) != 1 || len(configs[0].Servers) != 1 || configs[0].Servers[0].Name != "retained" {
+		t.Fatalf("retained global config = %+v", configs)
 	}
 }
 

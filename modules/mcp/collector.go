@@ -25,6 +25,8 @@ type MCPCollector struct {
 	engine      *rules.Engine
 }
 
+var resolveMCPProjectRoot = config.ResolveProjectRoot
+
 type Option func(*MCPCollector)
 
 func WithConcurrency(n int) Option {
@@ -234,10 +236,11 @@ func (c *MCPCollector) buildServerList(
 		if err != nil {
 			return nil, nil, fmt.Errorf("get home directory: %w", err)
 		}
-		projectRoot, err := config.ResolveProjectRoot(opts.ProjectDir)
+		projectRoot, err := resolveMCPProjectRoot(opts.ProjectDir)
 		if err != nil {
 			return nil, nil, err
 		}
+		defer func() { _ = projectRoot.Close() }()
 		paths := append([]string(nil), opts.ConfigPaths...)
 		if opts.ConfigPath != "" {
 			paths = append([]string{opts.ConfigPath}, paths...)
@@ -285,6 +288,17 @@ func summarizeConfigDiscovery(result *config.DiscoveryResult) (ingest.OutcomeSta
 	hasFailed := false
 	hasPartial := false
 	hasTruncated := false
+	switch result.ProjectRootState {
+	case ingest.OutcomeFailed:
+		hasFailed = true
+		failures++
+	case ingest.OutcomePartial:
+		hasPartial = true
+		failures++
+	case ingest.OutcomeTruncated:
+		hasTruncated = true
+		failures++
+	}
 	for _, file := range result.Files {
 		items += file.Items
 		if file.State != ingest.OutcomeComplete {
@@ -326,6 +340,7 @@ func parseConfigForSpecs(path string) ([]ServerSpec, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = root.Close() }()
 	discovery := config.NewConfigCollector().DiscoverConfigs(context.Background(), homeDir, root, false, []string{path})
 	specs := specsFromDiscovery(discovery)
 	// This compatibility helper predates lifecycle-aware collection and cannot
@@ -350,7 +365,8 @@ func discoveryCandidatePaths(homeDir string) []string {
 	if err != nil {
 		return nil
 	}
-	return config.NewConfigCollector().DiscoveryPathsForRoot(homeDir, root)
+	defer func() { _ = root.Close() }()
+	return config.NewConfigCollector().DiscoveryPathsForRoot(homeDir, root.Path())
 }
 
 func discoverAllConfigs() ([]ServerSpec, error) {
@@ -382,6 +398,7 @@ func discoverRawConfigSpecs() ([]ServerSpec, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = root.Close() }()
 	discovery := config.NewConfigCollector().DiscoverConfigs(context.Background(), homeDir, root, true, nil)
 	if err := discoveryError(discovery); err != nil {
 		return nil, err
@@ -403,6 +420,9 @@ func specsFromDiscovery(discovery *config.DiscoveryResult) []ServerSpec {
 }
 
 func discoveryError(discovery *config.DiscoveryResult) error {
+	if discovery.ProjectRootState != "" && discovery.ProjectRootState != ingest.OutcomeComplete {
+		return fmt.Errorf("project root discovery incomplete: %s", discovery.ProjectRootState)
+	}
 	for _, file := range discovery.Files {
 		if file.State != ingest.OutcomeComplete {
 			return fmt.Errorf("configuration discovery incomplete at %s: %s", file.Path, file.State)

@@ -95,13 +95,23 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = projectRoot.Close() }()
 	paths := append([]string(nil), opts.ConfigPaths...)
 	if opts.ConfigPath != "" {
 		paths = append([]string{opts.ConfigPath}, paths...)
 	}
 	discovery := c.DiscoverConfigs(ctx, homeDir, projectRoot, opts.Discover, paths)
-	instructions := DiscoverInstructions(ctx, homeDir, projectRoot, engine)
+	instructions := DiscoverInstructions(ctx, homeDir, projectRoot.Path(), engine)
+	if err := projectRoot.Validate(); err != nil {
+		discovery.ProjectRootState = ingest.OutcomeFailed
+		discovery.ProjectRootError = "project root changed or became unavailable during discovery"
+	}
 	data.Meta.Collection = &ingest.CollectionReport{}
+	projectRootKey := configProjectRootCoverageKey(discovery.ProjectRoot)
+	data.Meta.Collection.CoverageKeys = append(data.Meta.Collection.CoverageKeys, projectRootKey)
+	data.Meta.Collection.Outcomes = append(data.Meta.Collection.Outcomes, collectionOutcome(
+		projectRootKey, discovery.ProjectRoot, "project_root", discovery.ProjectRootState, 0, discovery.ProjectRootError,
+	))
 	for _, file := range discovery.Files {
 		key := configCoverageKey(file.Path)
 		data.Meta.Collection.CoverageKeys = append(data.Meta.Collection.CoverageKeys, key)
@@ -317,6 +327,10 @@ func canonicalConfigPath(path string) string {
 
 func configCoverageKey(path string) string {
 	return ingest.CanonicalCoverageKey("config", "path", canonicalConfigPath(path))
+}
+
+func configProjectRootCoverageKey(path string) string {
+	return ingest.CanonicalCoverageKey("config", "project_root", canonicalConfigPath(path))
 }
 
 func serverIdentityFor(srv ServerDef) ingest.MCPServerIdentity {
