@@ -8,9 +8,30 @@
 // Behavior. Walks every registered module that exposes a
 // StatefulModule via the standard `Stateful() module.StatefulModule`
 // shape, reads the engagement's receipt file, and dispatches per-module
-// Revert for each receipt. Idempotent — already-reverted receipts
-// surface as no-ops (the Poisoner's Revert checks current state before
-// writing). Receipts with DryRun=true are also no-ops.
+// Revert for each receipt.
+//
+// Per-file LIFO. Each module's receipt file is append-ordered (oldest
+// first), and revert walks it newest-first. Individual reverters still
+// enforce their own ownership and stacking contracts; ContextForge rejects
+// a new same-row mutation while an earlier forward operation remains live
+// because immutable provider version attribution cannot safely unwind such a
+// chain. Ordering is per
+// (module, engagement) — the same scope as the receipt file's advisory lock —
+// not a global sequence across modules.
+//
+// Conflict-aware partial retries use each receipt's live-state checks. A fully
+// completed stacked rollback is not universally replay-idempotent because
+// immutable receipts carry no completion state; an older restored state may
+// correctly conflict with the newest receipt on a later full replay.
+//
+// Failure handling. Reverters must never blind-write: a Revert that
+// cannot confirm the current state (re-read failure) or finds a
+// third-party change returns an error rather than overwriting. Any such
+// error is collected, the receipts are RETAINED (never deleted), and the
+// command exits nonzero. We report a clean rollback only when every receipt
+// reverted or was already clean. A partial rollback is INCOMPLETE; a provider-
+// permitted management-only restoration is PARTIALLY VERIFIED so reduced
+// observation is visible without misclassifying the completed recovery write.
 //
 // The CLI does NOT delete receipts after a successful revert — they
 // are the durable audit trail for the engagement. Operators clean up
@@ -21,23 +42,33 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/campaign"
 	"github.com/adithyan-ak/agenthound/sdk/module"
 )
 
+// perReceiptRevertTimeout bounds each individual Revert dispatch so one
+// unresponsive target cannot wedge the whole cleanup. Reverters that talk
+// HTTP (mcppoison) may issue a tools/list read plus a write, each under
+// their own ~30s client timeout, so 90s leaves headroom; file-scoped
+// reverters return near-instantly and never approach it.
+const perReceiptRevertTimeout = 90 * time.Second
+
 var revertCmd = &cobra.Command{
 	Use:   "revert <engagement-id>",
-	Short: "Roll back every destructive action recorded for an engagement",
+	Short: "Attempt recovery for destructive actions recorded for an engagement",
 	Long: `Walk every module's state directory, read receipts whose engagement-id
 matches the argument, and dispatch per-module Revert.
 
-Idempotent: re-running 'agenthound revert <id>' against an already-
-reverted engagement is safe — Reverters check current target state
-before writing.
+Retries are conflict-aware: Reverters check current target state before writing.
+Receipts remain immutable, so replaying an already-completed stacked rollback is
+not guaranteed to be a no-op and may conservatively report a conflict.
 
 Dry-run receipts (poison without --commit) are no-ops.
 
@@ -52,8 +83,8 @@ and are NOT deleted after revert — they are the audit trail.`,
 }
 
 func init() {
-	revertCmd.Flags().String("auth-token", "",
-		"Bearer token for authenticated targets. Passed to Reverter via context (not stored on disk).")
+	revertCmd.Flags().Bool("insecure", false,
+		"Skip TLS certificate verification for receipt recovery. Default: verify.")
 	rootCmd.AddCommand(revertCmd)
 }
 
@@ -72,10 +103,17 @@ func runRevert(cmd *cobra.Command, args []string) error {
 		return errors.New("revert: engagement-id is required")
 	}
 
-	authToken, _ := cmd.Flags().GetString("auth-token")
-	ctx := context.Background()
-	if authToken != "" {
-		ctx = context.WithValue(ctx, action.RevertAuthTokenKey{}, authToken)
+	insecure, _ := cmd.Flags().GetBool("insecure")
+
+	// Cleanup runs on a non-cancellable base context: derive from
+	// context.Background() (NEVER cmd.Context()) so a Ctrl-C that cancels
+	// the command's own context does not tear down an in-flight rollback
+	// and strand a half-reverted target. Each Revert call is bounded
+	// individually (perReceiptRevertTimeout) so the run still cannot hang
+	// forever on an unresponsive endpoint.
+	baseCtx := context.Background()
+	if insecure {
+		baseCtx = context.WithValue(baseCtx, action.RevertInsecureKey{}, true)
 	}
 	mods := module.List()
 
@@ -83,6 +121,7 @@ func runRevert(cmd *cobra.Command, args []string) error {
 		totalRead     int
 		totalReverted int
 		totalSkipped  int
+		totalPartial  int
 		errs          []string
 	)
 
@@ -111,10 +150,14 @@ func runRevert(cmd *cobra.Command, args []string) error {
 		}
 
 		_, _ = fmt.Fprintf(cmd.OutOrStderr(),
-			"[revert] %s — %d receipt(s) for engagement %s\n",
+			"[revert] %s — %d receipt(s) for engagement %s (newest first)\n",
 			mod.ID(), len(receipts), engagementID)
 
-		for i, r := range receipts {
+		// Walk this module's append-ordered receipts newest-first. #N is
+		// the receipt's position in the file, so the printed order counts
+		// down (visibly LIFO).
+		for i := len(receipts) - 1; i >= 0; i-- {
+			r := receipts[i]
 			totalRead++
 			// Skip dry-run receipts to keep the operator-facing output
 			// honest about what actually rolled back.
@@ -124,7 +167,14 @@ func runRevert(cmd *cobra.Command, args []string) error {
 					"[revert]   #%d: dry-run receipt — no-op\n", i+1)
 				continue
 			}
-			if err := reverter.Revert(ctx, r); err != nil {
+			if err := revertReceipt(baseCtx, reverter, r); err != nil {
+				if errors.Is(err, action.ErrRevertPartiallyVerified) {
+					totalReverted++
+					totalPartial++
+					_, _ = fmt.Fprintf(cmd.OutOrStderr(),
+						"[revert]   #%d: PARTIALLY VERIFIED — %v\n", i+1, err)
+					continue
+				}
 				errs = append(errs, fmt.Sprintf("%s receipt #%d: %v", mod.ID(), i+1, err))
 				_, _ = fmt.Fprintf(cmd.OutOrStderr(),
 					"[revert]   #%d: FAILED — %v\n", i+1, err)
@@ -136,14 +186,36 @@ func runRevert(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	_, _ = fmt.Fprintf(cmd.OutOrStderr(),
-		"[revert] complete — %d reverted, %d dry-run skipped, %d errored (of %d total receipts)\n",
-		totalReverted, totalSkipped, len(errs), totalRead)
-
+	// A conflict or indeterminate re-read surfaces as an error; receipts stay
+	// on disk so the operator can investigate and re-run. A partially verified
+	// result completed its provider-authorized recovery write but remains
+	// explicitly qualified because a secondary observation was unavailable.
 	if len(errs) > 0 {
+		_, _ = fmt.Fprintf(cmd.OutOrStderr(),
+			"[revert] INCOMPLETE — %d reverted, %d dry-run skipped, %d failed (of %d total receipts); receipts retained for retry\n",
+			totalReverted, totalSkipped, len(errs), totalRead)
 		return fmt.Errorf("revert had %d error(s):\n  %s", len(errs), strings.Join(errs, "\n  "))
 	}
+	if totalPartial > 0 {
+		_, _ = fmt.Fprintf(cmd.OutOrStderr(),
+			"[revert] PARTIALLY VERIFIED — %d reverted, %d dry-run skipped, %d recovery outcome(s) require qualification (of %d total receipts)\n",
+			totalReverted, totalSkipped, totalPartial, totalRead)
+		return nil
+	}
+	_, _ = fmt.Fprintf(cmd.OutOrStderr(),
+		"[revert] complete — %d reverted, %d dry-run skipped, 0 failed (of %d total receipts)\n",
+		totalReverted, totalSkipped, totalRead)
 	return nil
+}
+
+// revertReceipt dispatches a single rollback under a bounded context.
+// The per-call timeout is the only cancellation source, so a rollback in
+// progress runs to completion or times out cleanly rather than being
+// interrupted mid-write.
+func revertReceipt(baseCtx context.Context, reverter action.Reverter, r action.Receipt) error {
+	ctx, cancel := context.WithTimeout(baseCtx, perReceiptRevertTimeout)
+	defer cancel()
+	return reverter.Revert(ctx, r)
 }
 
 // isDryRun checks both pointer and value forms of the known receipt
@@ -162,4 +234,133 @@ func isDryRun(r action.Receipt) bool {
 		return v.DryRun
 	}
 	return false
+}
+
+type runScopedReceipt struct {
+	sequence uint64
+	receipt  action.Receipt
+	reverter action.Reverter
+}
+
+// cleanupCampaignRun is the authoritative campaign cleanup path. It selects
+// one exact engagement+run across every registered stateful module, validates
+// globally unique positive invocation sequences before writing anything, then
+// fail-stops in descending sequence order. Receipts are never changed or
+// removed.
+func cleanupCampaignRun(
+	ctx context.Context,
+	engagementID string,
+	campaignRunID string,
+) campaign.CleanupExecution {
+	if strings.TrimSpace(engagementID) == "" || strings.TrimSpace(campaignRunID) == "" {
+		return campaign.CleanupExecution{
+			Status: campaign.CleanupIndeterminate, FailureCode: "scope_missing",
+		}
+	}
+
+	selected := make([]runScopedReceipt, 0)
+	sequences := make(map[uint64]bool)
+	for _, mod := range module.List() {
+		stateful, ok := mod.(statefulModule)
+		if !ok || stateful.Stateful() == nil {
+			continue
+		}
+		receipts, err := stateful.Stateful().ReadReceipts(engagementID)
+		if err != nil {
+			return campaign.CleanupExecution{
+				Status: campaign.CleanupIndeterminate, ReceiptsRetained: true,
+				FailureCode: "receipt_read_failed",
+			}
+		}
+		for _, receipt := range receipts {
+			receiptEngagement, runID, sequence, known := receiptRunMetadata(receipt)
+			if !known || runID != campaignRunID {
+				continue
+			}
+			if receiptEngagement != engagementID || sequence == 0 || sequences[sequence] {
+				return campaign.CleanupExecution{
+					Status: campaign.CleanupIndeterminate, ReceiptsRetained: true,
+					FailureCode: "invalid_sequence_metadata",
+				}
+			}
+			reverter, ok := mod.(action.Reverter)
+			if !ok {
+				return campaign.CleanupExecution{
+					Status: campaign.CleanupIndeterminate, ReceiptsRetained: true,
+					FailureCode: "reverter_missing",
+				}
+			}
+			sequences[sequence] = true
+			selected = append(selected, runScopedReceipt{
+				sequence: sequence, receipt: receipt, reverter: reverter,
+			})
+		}
+	}
+	if len(selected) == 0 {
+		return campaign.CleanupExecution{
+			Status: campaign.CleanupIndeterminate, FailureCode: "receipt_missing",
+		}
+	}
+	sort.Slice(selected, func(i, j int) bool {
+		return selected[i].sequence > selected[j].sequence
+	})
+	for _, item := range selected {
+		if !isDryRun(item.receipt) {
+			if err := campaign.ConsumeMutation(ctx); err != nil {
+				return campaign.CleanupExecution{
+					Status:           campaign.CleanupIndeterminate,
+					ReceiptsSelected: len(selected), ReceiptsRetained: true,
+					FailureCode: "mutation_budget",
+				}
+			}
+		}
+		if err := item.reverter.Revert(ctx, item.receipt); err != nil {
+			if errors.Is(err, action.ErrRevertPartiallyVerified) {
+				continue
+			}
+			status := campaign.CleanupFailed
+			switch {
+			case errors.Is(err, action.ErrRevertConflict):
+				status = campaign.CleanupConflict
+			case errors.Is(err, action.ErrRevertIndeterminate),
+				errors.Is(err, context.DeadlineExceeded),
+				errors.Is(err, context.Canceled):
+				status = campaign.CleanupIndeterminate
+			}
+			return campaign.CleanupExecution{
+				Status: status, ReceiptsSelected: len(selected), ReceiptsRetained: true,
+				FailureCode: "revert_failed",
+			}
+		}
+	}
+	return campaign.CleanupExecution{
+		Status:           campaign.CleanupRestored,
+		ReceiptsSelected: len(selected), ReceiptsRetained: true,
+	}
+}
+
+func receiptRunMetadata(receipt action.Receipt) (
+	engagementID string,
+	campaignRunID string,
+	stepSequence uint64,
+	known bool,
+) {
+	switch value := receipt.(type) {
+	case *action.PoisonReceipt:
+		if value == nil {
+			return "", "", 0, false
+		}
+		return value.EngagementID, value.CampaignRunID, value.StepSequence, true
+	case action.PoisonReceipt:
+		return value.EngagementID, value.CampaignRunID, value.StepSequence, true
+	case *action.ImplantReceipt:
+		if value == nil {
+			return "", "", 0, false
+		}
+		return value.EngagementID, value.CampaignRunID, value.StepSequence, true
+	case action.ImplantReceipt:
+		return value.EngagementID, value.CampaignRunID, value.StepSequence, true
+	default:
+		return "", "", 0, false
+	}
 }

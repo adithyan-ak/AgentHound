@@ -360,6 +360,167 @@ emit:
 	}
 }
 
+func TestLoadEffectiveRulesRecordsNativeJupyterDetector(t *testing.T) {
+	rules.SetBundleOverridePath("")
+	t.Cleanup(func() { rules.SetBundleOverridePath("") })
+
+	_, manifest := loadEffectiveRules()
+	var foundNative bool
+	for _, entry := range manifest.Entries {
+		if entry.Type == "fingerprint" &&
+			(entry.ID == "jupyter" || strings.Contains(string(entry.EffectiveMatcher), `"service_kind":"jupyter"`)) {
+			t.Fatalf("Jupyter YAML was recorded as executed semantics: %+v", entry)
+		}
+		if entry.Type == "detector" && entry.ID == "jupyter-http-native" {
+			foundNative = entry.Version == 1 &&
+				entry.Source == "builtin" &&
+				strings.Contains(string(entry.EffectiveMatcher), `"path":"/api/status"`) &&
+				strings.Contains(string(entry.EffectiveMatcher), `"status_codes":[401,403]`)
+		}
+	}
+	if !foundNative {
+		t.Fatalf("native Jupyter detector semantics absent: %+v", manifest.Entries)
+	}
+}
+
+func TestLoadEffectiveRulesRecordsExecutedJupyterBundleOverride(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "jupyter.yaml"), []byte(`
+id: jupyter
+name: Jupyter override
+version: 9
+service_kind: jupyter
+probes:
+  - method: GET
+    path: /bundle-jupyter
+    matchers:
+      - type: http_status
+        status_code: 200
+emit:
+  node_kinds: [JupyterServer, AIService]
+  properties:
+    service_kind: jupyter
+`), 0o600); err != nil {
+		t.Fatalf("write Jupyter override: %v", err)
+	}
+	rules.SetBundleOverridePath(dir)
+	t.Cleanup(func() { rules.SetBundleOverridePath("") })
+
+	_, manifest := loadEffectiveRules()
+	var foundOverride bool
+	for _, entry := range manifest.Entries {
+		if entry.Type == "detector" && entry.ID == "jupyter-http-native" {
+			t.Fatalf("native detector recorded while bundle override is effective: %+v", entry)
+		}
+		if entry.Type == "fingerprint" && entry.ID == "jupyter" {
+			foundOverride = entry.Version == 9 && entry.Source == "bundle" &&
+				strings.Contains(string(entry.EffectiveMatcher), `"path":"/bundle-jupyter"`)
+		}
+	}
+	if !foundOverride {
+		t.Fatalf("executed Jupyter override absent: %+v", manifest.Entries)
+	}
+}
+
+func TestLoadEffectiveRulesRejectsUnexecutableJupyterBundleRule(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "alternate.yaml"), []byte(`
+id: alternate-jupyter
+name: Unsupported alternate Jupyter rule
+version: 1
+service_kind: jupyter
+probes:
+  - method: GET
+    path: /alternate
+    matchers:
+      - type: http_status
+        status_code: 200
+emit:
+  node_kinds: [JupyterServer, AIService]
+`), 0o600); err != nil {
+		t.Fatalf("write alternate Jupyter rule: %v", err)
+	}
+	rules.SetBundleOverridePath(dir)
+	t.Cleanup(func() { rules.SetBundleOverridePath("") })
+
+	_, manifest := loadEffectiveRules()
+	if manifest.LoadState != ingest.OutcomePartial ||
+		!strings.Contains(strings.Join(manifest.Errors, "\n"), "alternate-jupyter") {
+		t.Fatalf("unsupported Jupyter rule was not reported: %+v", manifest)
+	}
+	for _, entry := range manifest.Entries {
+		if entry.ID == "alternate-jupyter" {
+			t.Fatalf("unexecutable Jupyter rule was recorded as effective: %+v", entry)
+		}
+	}
+}
+
+func TestLoadEffectiveRulesRejectsWrongKindJupyterOverrideWithoutNativeFallback(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "jupyter.yaml"), []byte(`
+id: jupyter
+name: Misdirected Jupyter override
+version: 2
+service_kind: ollama
+probes:
+  - method: GET
+    path: /wrong-kind
+    matchers:
+      - type: http_status
+        status_code: 200
+emit:
+  node_kinds: [JupyterServer, AIService]
+`), 0o600); err != nil {
+		t.Fatalf("write wrong-kind Jupyter override: %v", err)
+	}
+	rules.SetBundleOverridePath(dir)
+	t.Cleanup(func() { rules.SetBundleOverridePath("") })
+
+	_, manifest := loadEffectiveRules()
+	if manifest.LoadState != ingest.OutcomePartial ||
+		!strings.Contains(strings.Join(manifest.Errors, "\n"), "service_kind") {
+		t.Fatalf("wrong-kind Jupyter override was not reported: %+v", manifest)
+	}
+	for _, entry := range manifest.Entries {
+		if entry.ID == "jupyter" || entry.ID == "jupyter-http-native" {
+			t.Fatalf("non-executed Jupyter semantics recorded: %+v", entry)
+		}
+	}
+}
+
+func TestLoadEffectiveRulesRejectsJupyterOverrideWithoutRequiredLabels(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "jupyter.yaml"), []byte(`
+id: jupyter
+name: Structurally invalid Jupyter override
+version: 2
+service_kind: jupyter
+probes:
+  - method: GET
+    path: /jupyter
+    matchers:
+      - type: http_status
+        status_code: 200
+emit:
+  node_kinds: [AIService]
+`), 0o600); err != nil {
+		t.Fatalf("write invalid-label Jupyter override: %v", err)
+	}
+	rules.SetBundleOverridePath(dir)
+	t.Cleanup(func() { rules.SetBundleOverridePath("") })
+
+	_, manifest := loadEffectiveRules()
+	if manifest.LoadState != ingest.OutcomePartial ||
+		!strings.Contains(strings.Join(manifest.Errors, "\n"), "JupyterServer") {
+		t.Fatalf("invalid-label Jupyter override was not reported: %+v", manifest)
+	}
+	for _, entry := range manifest.Entries {
+		if entry.ID == "jupyter" || entry.ID == "jupyter-http-native" {
+			t.Fatalf("non-executed Jupyter semantics recorded: %+v", entry)
+		}
+	}
+}
+
 // writeEmptyConfig writes a JSON file that exists and parses cleanly but
 // declares zero MCP servers, so the config collector returns an empty graph
 // without error. A non-existent --path is now a hard error (scan exits

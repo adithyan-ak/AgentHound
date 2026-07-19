@@ -164,17 +164,103 @@ func TestRunFingerprint_NoMatch_WrongStatusOrShape(t *testing.T) {
 		}
 	})
 
-	t.Run("network error returns no-match no-error", func(t *testing.T) {
+	t.Run("network error is operationally indeterminate", func(t *testing.T) {
 		// Use a port we know is closed.
 		rule := minimalOllamaRule()
-		res, err := RunFingerprint(context.Background(),
+		_, err := RunFingerprint(context.Background(),
 			DefaultFingerprintHTTPClient(500*time.Millisecond),
 			"http://127.0.0.1:1", rule)
-		if err != nil {
-			t.Fatalf("err: %v", err)
+		if err == nil {
+			t.Fatal("expected an operational error for a failed connection")
 		}
-		if res.Matched {
-			t.Error("expected no match on network failure")
+	})
+}
+
+func TestRunFingerprint_OperationallyIndeterminateResponses(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+	}{
+		{"login redirect", http.StatusFound},
+		{"temporary redirect", http.StatusTemporaryRedirect},
+		{"unauthorized", http.StatusUnauthorized},
+		{"forbidden", http.StatusForbidden},
+		{"proxy authentication required", http.StatusProxyAuthRequired},
+		{"request timeout", http.StatusRequestTimeout},
+		{"too early", http.StatusTooEarly},
+		{"rate limited", http.StatusTooManyRequests},
+		{"server failure", http.StatusServiceUnavailable},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Location", "https://login.example/secret-location")
+				w.WriteHeader(tt.status)
+			}))
+			defer srv.Close()
+			_, err := RunFingerprint(context.Background(), DefaultFingerprintHTTPClient(time.Second), srv.URL, minimalOllamaRule())
+			if err == nil {
+				t.Fatalf("status %d returned definitive no-match", tt.status)
+			}
+			if strings.Contains(err.Error(), "secret-location") {
+				t.Fatalf("redirect Location leaked into error: %v", err)
+			}
+		})
+	}
+
+	t.Run("oversized body", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(strings.Repeat("x", (1<<20)+1)))
+		}))
+		defer srv.Close()
+		if _, err := RunFingerprint(context.Background(), srv.Client(), srv.URL, minimalOllamaRule()); err == nil {
+			t.Fatal("oversized body returned definitive no-match")
+		}
+	})
+
+	t.Run("incomplete body", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "128")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"version":"1.0.0"}`))
+		}))
+		defer srv.Close()
+		if _, err := RunFingerprint(context.Background(), srv.Client(), srv.URL, minimalOllamaRule()); err == nil {
+			t.Fatal("incomplete body returned definitive no-match")
+		}
+	})
+
+	t.Run("caller deadline", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			<-r.Context().Done()
+		}))
+		defer srv.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+		defer cancel()
+		if _, err := RunFingerprint(ctx, DefaultFingerprintHTTPClient(5*time.Second), srv.URL, minimalOllamaRule()); err == nil {
+			t.Fatal("caller timeout returned definitive no-match")
+		}
+	})
+
+	t.Run("caller cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := RunFingerprint(ctx, DefaultFingerprintHTTPClient(time.Second), "http://127.0.0.1:1", minimalOllamaRule()); err == nil {
+			t.Fatal("caller cancellation returned definitive no-match")
+		}
+	})
+
+	t.Run("matcher runtime failure", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"version":"1.0.0"}`))
+		}))
+		defer srv.Close()
+		rule := minimalOllamaRule()
+		rule.Probes[0].Matchers[1].Regex = "["
+		if _, err := RunFingerprint(context.Background(), srv.Client(), srv.URL, rule); err == nil {
+			t.Fatal("matcher runtime failure returned definitive no-match")
 		}
 	})
 }
@@ -396,10 +482,10 @@ func TestLoadFingerprints_EmbeddedRulesValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFingerprints: %v", err)
 	}
-	if len(rules) < 8 {
-		t.Errorf("expected at least 8 embedded fingerprint rules, got %d", len(rules))
+	if len(rules) < 7 {
+		t.Errorf("expected at least 7 embedded fingerprint rules, got %d", len(rules))
 	}
-	wantKinds := []string{"ollama", "litellm", "vllm", "openwebui", "jupyter", "qdrant", "mlflow", "langserve"}
+	wantKinds := []string{"ollama", "litellm", "vllm", "openwebui", "qdrant", "mlflow", "langserve"}
 	found := make(map[string]bool)
 	for _, r := range rules {
 		found[r.ServiceKind] = true

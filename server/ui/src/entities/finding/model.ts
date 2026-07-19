@@ -45,13 +45,31 @@ export interface FindingEvidence {
     | "observed_signal"
     | "inferred"
     | "hypothesis"
-    | "reference_only";
+    | "reference_only"
+    | "verified";
   detector?: string;
   match_type?: string;
   channels?: string[];
   material_status?: string;
   exposure_status?: string;
   correlation?: string;
+  verification?: FindingVerification;
+}
+
+export interface FindingVerification {
+  scenario_id: string;
+  scenario_version: number;
+  campaign_run_id: string;
+  verified_at: string;
+  oracle_type: string;
+  outcome: string;
+  control_stage: "initialize" | "resource_read";
+  control_status: string;
+  control_resource_addressed: boolean;
+  authed_stage: "initialize" | "resource_read";
+  authed_status: string;
+  authed_resource_addressed: boolean;
+  cleanup_status: "not_applicable" | "restored" | "conflict" | "indeterminate" | "failed";
 }
 
 export interface PublishedFindingScope {

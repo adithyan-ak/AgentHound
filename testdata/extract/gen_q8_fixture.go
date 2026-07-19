@@ -21,10 +21,10 @@ func main() {
 	defer f.Close()
 
 	// Header
-	binary.Write(f, binary.LittleEndian, uint32(0x46475547)) // GGUF magic
-	binary.Write(f, binary.LittleEndian, uint32(3))          // version 3
-	binary.Write(f, binary.LittleEndian, uint64(1))          // 1 tensor
-	binary.Write(f, binary.LittleEndian, uint64(3))          // 3 metadata KVs
+	f.Write([]byte("GGUF"))
+	binary.Write(f, binary.LittleEndian, uint32(3)) // version 3
+	binary.Write(f, binary.LittleEndian, uint64(1)) // 1 tensor
+	binary.Write(f, binary.LittleEndian, uint64(3)) // 3 metadata KVs
 
 	// Metadata KV 1: "general.architecture" = string "llama"
 	writeString(f, "general.architecture")

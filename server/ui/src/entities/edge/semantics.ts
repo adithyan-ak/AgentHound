@@ -84,6 +84,16 @@ export const EDGE_EXPLOIT = {
     detail:
       "This tool ingests content classified as untrusted. Treat downstream use as an observed input-flow boundary, not proof that exploitation occurred.",
   },
+  CREDENTIAL_REACH_VERIFIED: {
+    title: "Verified credential-gated reach",
+    detail:
+      "A read-only differential probe confirmed that this credential — and not anonymous access — grants read access to the exact predicted resource (unauth denied, authed allowed). This is observed evidence that upgrades the predicted CAN_REACH finding; it does not prove agent invocation or downstream impact.",
+  },
+  PUBLIC_ACCESS_OBSERVED: {
+    title: "Anonymous resource access",
+    detail:
+      "A read-only probe read this resource without any credential. This is a recorded fact, not an automatic finding: it is only a policy concern where authentication was expected.",
+  },
   CONFUSED_DEPUTY: {
     title: "Confused-deputy route",
     detail:
@@ -130,6 +140,8 @@ export const EDGE_DESCRIPTION = {
   PROVIDES_MODEL: "Serves model artifact",
   EXTRACTED_FROM: "Extracted from model",
   INGESTS_UNTRUSTED: "Tool ingests untrusted resource",
+  CREDENTIAL_REACH_VERIFIED: "Credential verified to reach resource",
+  PUBLIC_ACCESS_OBSERVED: "Resource observed publicly accessible",
   HAS_ACCESS_TO: "Tool can access resource",
   CAN_EXECUTE: "Tool can execute on host",
   SHADOWS: "Tool shadows another tool",

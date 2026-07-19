@@ -274,6 +274,7 @@ type fakeScanStore struct {
 	mu            sync.Mutex
 	creates       []*model.Scan
 	updates       []scanUpdate
+	rejections    []appdb.CampaignRejectionAudit
 	dirtyCoverage []string
 	retired       []string
 	resolvedRoots []sdkingest.CoverageRoot
@@ -348,6 +349,17 @@ func (s *fakeScanStore) BeginScan(
 	s.dirtyCoverage = append([]string(nil), merged...)
 	s.mu.Unlock()
 	return merged, s.CreateScan(ctx, scan)
+}
+
+func (s *fakeScanStore) RecordCampaignRejection(
+	_ context.Context,
+	audit appdb.CampaignRejectionAudit,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	audit.ReasonCodes = append([]string(nil), audit.ReasonCodes...)
+	s.rejections = append(s.rejections, audit)
+	return nil
 }
 
 func (s *fakeScanStore) ResolveRetiredCoverage(

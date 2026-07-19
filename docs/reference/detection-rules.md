@@ -13,16 +13,29 @@ AgentHound surfaces findings through two complementary layers:
 
 The two layers feed each other: the rules engine emits structured signals (`capability_surface`, `exposure_status`, `material_status`, `high_entropy`, `has_injection_patterns`, `source_trust`, sensitivity classifications) on collected nodes; the post-processors and pre-built queries consume those signals to compute composite edges (`HAS_ACCESS_TO`, `CAN_REACH`, `POISONED_DESCRIPTION`, `TAINTS`, `IFC_VIOLATION`, `CONFUSED_DEPUTY`, `POISONS_CONTEXT`, etc.) and enumerate attack paths.
 
+The credential-access capability treats tools that return environment
+variables as credential-reading surfaces: real environment inventories commonly
+contain tokens and secrets even when a tool description calls the feature
+"debugging." This is capability classification, not a claim that any specific
+secret was returned.
+
 The detections summarized below are the **pre-built-query** layer. The 35 underlying YAML rules are not enumerated here individually — read them directly in `sdk/rules/builtin/` for the canonical truth. Composite-edge detections (`TAINTS`, `IFC_VIOLATION`, `CONFUSED_DEPUTY`, `POISONS_CONTEXT`) surface through `GET /api/v1/analysis/findings` rather than a named pre-built query.
 
 ## Scan-specific ruleset provenance
 
-Each scan artifact records the effective text and fingerprint rules that
-actually ran. Every manifest entry includes the rule ID/version/source class,
-a semantic SHA-256 content identifier, and a canonical
-`effective_matcher` JSON definition. Text entries preserve the compiled matcher
-shape; fingerprint entries preserve the effective probe and response-matcher
-sequence, including same-ID bundle overrides.
+Each scan artifact records the effective text rules, fingerprint rules, and
+versioned native detectors that actually ran. Every manifest entry includes
+the rule or detector ID/version/source class, a semantic SHA-256 content
+identifier, and a canonical `effective_matcher` JSON definition. Text entries
+preserve the compiled matcher shape; fingerprint entries preserve the effective
+probe and response-matcher sequence, including same-ID bundle overrides.
+Jupyter's default two-step `/api` + `/api/status` decision is code-backed
+because the rule DSL cannot express its conditional 200-or-401/403 status
+semantics; it is recorded as detector `jupyter-http-native` version 1. An exact
+bundle rule with `id: jupyter` and `service_kind: jupyter` replaces both its
+runtime behavior and manifest entry when it emits exactly the ingest-valid
+ordered tuple `[JupyterServer, AIService]`. Other Jupyter rule IDs or node-kind
+tuples are rejected as unexecutable instead of being recorded as effective.
 
 Files that cannot be read, parsed, validated, or compiled are not silently
 treated as loaded. Their failures are persisted in `ruleset.errors` and make
@@ -219,7 +232,13 @@ does not support.
 
 **How detected:** The query requires
 `signature_verification_status=unsigned`. Missing verification status is
-unknown and does not match.
+unknown and does not match. An absent, ProtoJSON `null`, or empty
+`signatures` field is normalized to `unsigned`; a non-null wrong-shaped field
+remains `malformed`. `malformed`, `key_unavailable`, `invalid`,
+`valid_untrusted`, `valid_trusted`, and v0.3 `unsupported_version` are distinct
+evidence states and do not match the unsigned-card rule.
+Ingest rejects contradictory signature status, key-source, trust, and
+`is_signed` combinations before they can influence this rule.
 
 ## Shell access paths (MCP01)
 
@@ -346,3 +365,10 @@ same host. The correlation is represented as `CAN_REACH`, but carries
 **How detected:** The `chokepoint-servers` query finds MCP servers trusted by multiple agents. The `chokepoint-tools` query finds tools with access to many resources.
 
 **Risk:** Chokepoints are high-value targets. Compromising one chokepoint server may grant access to every agent that trusts it.
+
+## Campaign verification (evidence, not a new detection)
+
+The [campaign runner](../operator/offensive-actions.md#campaign-runner-verify-and-validate) does not add a detection layer. It **upgrades** or **records evidence** against existing detections:
+
+- **`cred-reach`** verifies a *predicted* credential-gated `CAN_REACH` finding for one explicit source agent. `CREDENTIAL_REACH_VERIFIED` is per-agent raw supporting evidence; exact current identity/topology re-correlation upgrades only that existing finding and persists the complete structured verification basis. It does not claim the agent invoked the resource, create a second finding, or double-count risk. `PUBLIC_ACCESS_OBSERVED` remains an independent raw fact.
+- **`mcp-poison-roundtrip`** is a STANDALONE reversible-mutation validation. It produces **no** graph edge, finding, or detection; its bounded CLI `RunReport` keeps oracle and cleanup separate.

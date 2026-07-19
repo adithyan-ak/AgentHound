@@ -614,33 +614,8 @@ func TestConfigCollector_InstructionFiles(t *testing.T) {
 	}
 
 	edgesByKind := countEdgesByKind(result)
-	if edgesByKind["LOADS_INSTRUCTIONS"] < 1 {
-		t.Errorf("LOADS_INSTRUCTIONS edges = %d, want >= 1", edgesByKind["LOADS_INSTRUCTIONS"])
-	}
-	configScope := configCoverageKey(configPath)
-	instructionScope := configCoverageKey(claudeMD)
-	foundDependencyEdge := false
-	for _, edge := range result.Graph.Edges {
-		if edge.Kind != "LOADS_INSTRUCTIONS" {
-			continue
-		}
-		hasConfigScope := false
-		hasInstructionScope := false
-		for _, domain := range edge.ObservationDomains {
-			hasConfigScope = hasConfigScope || domain == configScope
-			hasInstructionScope = hasInstructionScope || domain == instructionScope
-		}
-		if hasConfigScope && hasInstructionScope &&
-			edge.ObservationSemantics == ingest.ObservationSemanticsAllDependencies {
-			foundDependencyEdge = true
-			break
-		}
-	}
-	if !foundDependencyEdge {
-		t.Fatalf(
-			"LOADS_INSTRUCTIONS missing config/instruction dependency scopes: %+v",
-			result.Graph.Edges,
-		)
+	if edgesByKind["LOADS_INSTRUCTIONS"] != 0 {
+		t.Errorf("LOADS_INSTRUCTIONS edges = %d, want 0 without evidence of client applicability", edgesByKind["LOADS_INSTRUCTIONS"])
 	}
 }
 
@@ -651,9 +626,8 @@ func TestConfigCollector_InstructionFiles(t *testing.T) {
 //   - the node ID scheme ComputeNodeID("InstructionFile", canonicalPath) and
 //     objectid==ID mirror;
 //   - hash is the FULL RAW SHA-256 and is_suspicious is the boolean true;
-//   - the LOADS_INSTRUCTIONS edge keeps confidence 1.0, risk_weight 0.5 for a
-//     suspicious target, all_dependencies semantics, and both the config and
-//     instruction coverage domains.
+//   - no LOADS_INSTRUCTIONS edge is fabricated without evidence that a
+//     collected agent/client actually loads this instruction file.
 func TestConfigCollectorInstructionCanonicalGraphContract(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	tmp := t.TempDir()
@@ -740,39 +714,11 @@ func TestConfigCollectorInstructionCanonicalGraphContract(t *testing.T) {
 		t.Fatalf("is_suspicious = %v, want boolean true", instr.Properties["is_suspicious"])
 	}
 
-	// LOADS_INSTRUCTIONS edge contract.
-	configScope := configCoverageKey(configPath)
-	instructionScope := configCoverageKey(canonicalPath)
-	var loads *ingest.Edge
 	for i := range result.Graph.Edges {
-		e := &result.Graph.Edges[i]
+		e := result.Graph.Edges[i]
 		if e.Kind == "LOADS_INSTRUCTIONS" && e.Target == wantID {
-			loads = e
-			break
+			t.Fatalf("fabricated LOADS_INSTRUCTIONS edge without client applicability: %+v", e)
 		}
-	}
-	if loads == nil {
-		t.Fatalf("LOADS_INSTRUCTIONS edge to %q not found", wantID)
-	}
-	if conf, _ := loads.Properties["confidence"].(float64); conf != 1.0 {
-		t.Fatalf("confidence = %v, want 1.0", loads.Properties["confidence"])
-	}
-	if rw, _ := loads.Properties["risk_weight"].(float64); rw != 0.5 {
-		t.Fatalf("risk_weight = %v, want 0.5 (suspicious target)", loads.Properties["risk_weight"])
-	}
-	if loads.ObservationSemantics != ingest.ObservationSemanticsAllDependencies {
-		t.Fatalf("semantics = %v, want all_dependencies", loads.ObservationSemantics)
-	}
-	hasConfig, hasInstr := false, false
-	for _, d := range loads.ObservationDomains {
-		hasConfig = hasConfig || d == configScope
-		hasInstr = hasInstr || d == instructionScope
-	}
-	if !hasConfig || !hasInstr {
-		t.Fatalf(
-			"domains = %v, want both config %q and instruction %q",
-			loads.ObservationDomains, configScope, instructionScope,
-		)
 	}
 }
 

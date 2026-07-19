@@ -1,8 +1,8 @@
 // Package vllmfp implements the v0.3 vLLM fingerprinter module.
 //
 // vLLM is a high-throughput LLM inference server speaking the OpenAI-compatible
-// API. Default port 8000, no auth by default — anonymous /v1/models is the
-// canonical fingerprint. The probe semantics live in
+// API. Its service-specific /version endpoint is the canonical fingerprint.
+// The probe semantics live in
 // sdk/rules/builtin/fingerprints/vllm.yaml; this package is just the
 // dispatcher that loads the rule and runs it via sdk/rules.RunFingerprint.
 package vllmfp
@@ -24,7 +24,7 @@ import (
 // port set; this constant is used only when Target.Address is a bare host.
 const DefaultPort = 8000
 
-// DefaultProbeTimeout caps a single fingerprint dispatch. /v1/models on a
+// DefaultProbeTimeout caps a single fingerprint dispatch. /version on a
 // vLLM box returns within milliseconds; 5s is generous and matches the rest
 // of the v0.2 fingerprinters.
 const DefaultProbeTimeout = 5 * time.Second
@@ -68,7 +68,7 @@ func (f *Fingerprinter) Fingerprint(ctx context.Context, t action.Target) (*acti
 	if err != nil {
 		slog.Debug("vllm fingerprint probe error",
 			"target", t.Address, "error", err)
-		return &action.FingerprintResult{Matched: false}, nil
+		return &action.FingerprintResult{Matched: false}, err
 	}
 	if !res.Matched {
 		return &action.FingerprintResult{Matched: false}, nil
@@ -86,9 +86,6 @@ func (f *Fingerprinter) Fingerprint(ctx context.Context, t action.Target) (*acti
 	}
 	for k, v := range res.Properties {
 		props[k] = v
-	}
-	if _, ok := props["auth_method"]; !ok {
-		props["auth_method"] = "none"
 	}
 
 	node := ingest.Node{

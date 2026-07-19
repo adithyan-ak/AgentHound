@@ -78,16 +78,6 @@ func init() {
 	if err := lootCmd.MarkFlagRequired("type"); err != nil {
 		panic(err)
 	}
-	// v0.3: Looters that satisfy module.FlagsModule contribute per-module
-	// flags. Resolution at command-construction time (here, via every
-	// registered Looter) keeps `loot --help` listing all per-module flags
-	// regardless of --type, so the operator discovers them. Dispatch-time
-	// (runLoot) resolution would require --type before --help, which is
-	// unfriendly. Per-module flag namespaces don't collide today; if they
-	// ever do, we'll add a per-target prefix.
-	for _, mod := range module.ListByAction(action.Loot) {
-		module.RegisterFlagsFor(lootCmd, mod)
-	}
 	rootCmd.AddCommand(lootCmd)
 }
 
@@ -327,6 +317,11 @@ func collectModuleExtras(cmd *cobra.Command, m module.Module) map[string]any {
 			i, err := cmd.Flags().GetInt(f.Name)
 			if err == nil {
 				out[f.Name] = i
+			}
+		case "float64":
+			fl, err := cmd.Flags().GetFloat64(f.Name)
+			if err == nil {
+				out[f.Name] = fl
 			}
 		default:
 			out[f.Name] = live.Value.String()

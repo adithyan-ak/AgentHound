@@ -78,7 +78,7 @@ func (f *Fingerprinter) Fingerprint(ctx context.Context, t action.Target) (*acti
 	if err != nil {
 		slog.Debug("ollama fingerprint probe error",
 			"target", t.Address, "error", err)
-		return &action.FingerprintResult{Matched: false}, nil
+		return &action.FingerprintResult{Matched: false}, err
 	}
 	if !res.Matched {
 		return &action.FingerprintResult{Matched: false}, nil

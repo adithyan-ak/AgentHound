@@ -165,6 +165,20 @@ WITH n, node, observation_created,
       AND incoming_complete
       AND all(token IN old_authoritative_tokens WHERE
           any(prefix IN node.observation_domain_prefixes WHERE token STARTS WITH prefix))) AS replace_properties
+WITH n, node, observation_created,
+     old_description_hash, old_input_schema_hash, old_instructions_hash,
+     old_first_seen, old_tokens, old_reference_tokens, old_properties_complete,
+     old_authoritative_tokens, incoming_complete, replace_properties,
+     (NOT observation_created
+      AND NOT node.reference_only
+      AND incoming_complete
+      AND old_properties_complete
+      AND size(old_authoritative_tokens) > 0
+      AND none(token IN old_authoritative_tokens WHERE
+          any(prefix IN node.observation_domain_prefixes WHERE token STARTS WITH prefix))
+      AND all(key IN keys(node.properties) WHERE
+          key IN ['scan_id', 'first_seen', 'last_seen']
+          OR n[key] IS NULL OR n[key] = node.properties[key])) AS compatible_new_owner
 FOREACH (_ IN CASE
   WHEN (observation_created AND NOT node.reference_only) OR replace_properties
   THEN [1] ELSE [] END |
@@ -199,6 +213,7 @@ SET n.objectid = node.id,
         old_properties_complete OR
         (incoming_complete AND size(old_authoritative_tokens) = 0)
       WHEN replace_properties THEN true
+      WHEN compatible_new_owner THEN true
       ELSE false
     END`)
 	incomingLabels := make(map[string]bool, len(extraLabels)+1)
@@ -295,19 +310,31 @@ CALL apoc.merge.relationship(a, $kind, {}, edge.create_properties, b, {}) YIELD 
 WITH rel, edge, coalesce(rel.__agenthound_observation_created, false) AS observation_created
 WITH rel, edge, observation_created,
      coalesce(rel.observation_tokens, []) AS old_tokens,
-     coalesce(rel.observation_dependency_tokens, []) AS old_dependency_tokens
-WITH rel, edge, observation_created, old_tokens, old_dependency_tokens,
+     coalesce(rel.observation_dependency_tokens, []) AS old_dependency_tokens,
+     coalesce(rel.observation_properties_complete, false) AS old_properties_complete
+WITH rel, edge, observation_created, old_tokens, old_dependency_tokens, old_properties_complete,
      CASE WHEN edge.observation_semantics = 'all_dependencies'
           THEN old_dependency_tokens ELSE old_tokens END AS old_ownership_tokens
-WITH rel, edge, observation_created, old_tokens, old_dependency_tokens, old_ownership_tokens,
+WITH rel, edge, observation_created, old_tokens, old_dependency_tokens, old_properties_complete, old_ownership_tokens,
      (size(edge.ownership_tokens) > 0
       AND all(token IN edge.ownership_tokens WHERE
           any(prefix IN edge.complete_domain_prefixes WHERE token STARTS WITH prefix))) AS incoming_complete
-WITH rel, edge, observation_created, old_tokens, old_dependency_tokens, old_ownership_tokens, incoming_complete,
+WITH rel, edge, observation_created, old_tokens, old_dependency_tokens, old_properties_complete, old_ownership_tokens, incoming_complete,
      (NOT observation_created
       AND incoming_complete
       AND all(token IN old_ownership_tokens WHERE
           any(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix))) AS replace_properties
+WITH rel, edge, observation_created, old_tokens, old_dependency_tokens,
+     old_properties_complete, old_ownership_tokens, incoming_complete, replace_properties,
+     (NOT observation_created
+      AND incoming_complete
+      AND old_properties_complete
+      AND size(old_ownership_tokens) > 0
+      AND none(token IN old_ownership_tokens WHERE
+          any(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix))
+      AND all(key IN keys(edge.properties) WHERE
+          key IN ['scan_id', 'first_seen', 'last_seen']
+          OR rel[key] IS NULL OR rel[key] = edge.properties[key])) AS compatible_new_owner
 FOREACH (_ IN CASE WHEN NOT observation_created AND replace_properties THEN [1] ELSE [] END |
   SET rel = edge.properties)
 FOREACH (_ IN CASE WHEN NOT observation_created AND NOT replace_properties THEN [1] ELSE [] END |
@@ -315,6 +342,7 @@ FOREACH (_ IN CASE WHEN NOT observation_created AND NOT replace_properties THEN 
 SET rel.observation_properties_complete = CASE
       WHEN observation_created THEN incoming_complete
       WHEN replace_properties THEN true
+      WHEN compatible_new_owner THEN true
       ELSE false
     END,
     rel.observation_tokens = reduce(tokens = old_tokens, token IN edge.observation_tokens |
@@ -434,17 +462,29 @@ WITH r, edge,
      coalesce(r.observation_tokens, []) AS old_tokens,
      coalesce(r.observation_dependency_tokens, []) AS old_dependency_tokens
 WITH r, edge, observation_created, old_tokens, old_dependency_tokens,
+     coalesce(r.observation_properties_complete, false) AS old_properties_complete,
      CASE WHEN edge.observation_semantics = 'all_dependencies'
           THEN old_dependency_tokens ELSE old_tokens END AS old_ownership_tokens
-WITH r, edge, observation_created, old_tokens, old_dependency_tokens, old_ownership_tokens,
+WITH r, edge, observation_created, old_tokens, old_dependency_tokens, old_properties_complete, old_ownership_tokens,
      (size(edge.ownership_tokens) > 0
       AND all(token IN edge.ownership_tokens WHERE
           any(prefix IN edge.complete_domain_prefixes WHERE token STARTS WITH prefix))) AS incoming_complete
-WITH r, edge, observation_created, old_tokens, old_dependency_tokens, old_ownership_tokens, incoming_complete,
+WITH r, edge, observation_created, old_tokens, old_dependency_tokens, old_properties_complete, old_ownership_tokens, incoming_complete,
      (NOT observation_created
       AND incoming_complete
       AND all(token IN old_ownership_tokens WHERE
           any(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix))) AS replace_properties
+WITH r, edge, observation_created, old_tokens, old_dependency_tokens,
+     old_properties_complete, old_ownership_tokens, incoming_complete, replace_properties,
+     (NOT observation_created
+      AND incoming_complete
+      AND old_properties_complete
+      AND size(old_ownership_tokens) > 0
+      AND none(token IN old_ownership_tokens WHERE
+          any(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix))
+      AND all(key IN keys(edge.properties) WHERE
+          key IN ['scan_id', 'first_seen', 'last_seen']
+          OR r[key] IS NULL OR r[key] = edge.properties[key])) AS compatible_new_owner
 FOREACH (_ IN CASE WHEN observation_created OR replace_properties THEN [1] ELSE [] END |
   SET r = edge.properties)
 FOREACH (_ IN CASE WHEN NOT observation_created AND NOT replace_properties THEN [1] ELSE [] END |
@@ -459,6 +499,7 @@ SET r.scan_id = $scan_id,
     r.observation_properties_complete = CASE
       WHEN observation_created THEN incoming_complete
       WHEN replace_properties THEN true
+      WHEN compatible_new_owner THEN true
       ELSE false
     END
 REMOVE r.__agenthound_observation_created

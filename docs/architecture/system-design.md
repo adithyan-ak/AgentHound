@@ -35,7 +35,7 @@ scan --config         scan --mcp --url <url>           scan --a2a --target <url>
         |                               |                               |
         v                               v                               v
   Parse 12 client configs      Connect via Go MCP SDK         HTTP GET agent cards
-  (no network required)        (stdio / Streamable HTTP)      (JWS signature verify)
+  (no network required)        (stdio / Streamable HTTP)      (versioned conformance + v1 JWS)
         |                               |                               |
         +---------------+---------------+-------------------------------+
                         |
@@ -74,8 +74,8 @@ scan --config         scan --mcp --url <url>           scan --a2a --target <url>
 | MCPTool | MCP | Tool with capability surface, injection signals |
 | MCPResource | MCP | URI-addressable resource with sensitivity level |
 | MCPPrompt | MCP | Prompt template with arguments |
-| A2AAgent | A2A | Agent card: skills, auth, delegation, signature |
-| A2ASkill | A2A | Individual skill with input/output modes |
+| A2AAgent | A2A | Agent card: versioned conformance, ordered interfaces, OR-of-AND auth, delegation, signature validity/key trust |
+| A2ASkill | A2A | Individual skill with input/output modes and independent conformance |
 | AgentInstance | Config | Client instance (Claude, Cursor, etc.) |
 | Identity | Config + MCP | Auth identity (none/apiKey/oauth/bearer/mtls) |
 | Credential | Config | Credential reference with entropy analysis |
@@ -87,7 +87,7 @@ scan --config         scan --mcp --url <url>           scan --a2a --target <url>
 | QdrantInstance | Network scan + Qdrant fingerprinter | Qdrant endpoint and collection metadata |
 | MLflowServer | Network scan + MLflow fingerprinter | MLflow endpoint, experiments, and run metadata |
 | LiteLLMGateway | Network scan + LiteLLM fingerprinter | LiteLLM gateway endpoint and credential exposure |
-| JupyterServer | Network scan + Jupyter fingerprinter | Jupyter endpoint and token posture |
+| JupyterServer | Network scan + Jupyter fingerprinter + Looter | Public `/api` + canonical status identity; protected-operation auth/anonymous evidence |
 | LangServeApp | Network scan + LangServe fingerprinter | LangServe endpoint and chain metadata |
 | OpenWebUIInstance | Network scan + Open WebUI fingerprinter | Open WebUI endpoint and auth posture |
 | AIService | Multi-label umbrella | Companion label shared by AI service nodes |
@@ -129,7 +129,7 @@ All edges carry: `scan_id`, `last_seen`, `confidence`, `risk_weight`, `is_compos
 |-----------|---------|-------|-------------|-------------|
 | **Config** | None | 12 MCP client config formats (Claude Desktop, Cursor, VS Code, Windsurf, Zed, Cline, Continue, JetBrains, Kiro, Amazon Q, Augment, Claude Code) | ConfigFile, AgentInstance, MCPServer, Identity, Credential, Host, InstructionFile | Unpinned packages, high-entropy secrets, instruction poisoning |
 | **MCP** | stdio / HTTP | Live MCP servers via Go SDK v1.6.1 | MCPServer, MCPTool, MCPResource, MCPPrompt | Capability surface (8 categories), injection patterns, description hashes, cross-references |
-| **A2A** | HTTP | Agent Card JSON (v0.3.0 + v1.0) | A2AAgent, A2ASkill, Host | JWS signature verification, auth posture scoring, delegation chains |
+| **A2A** | HTTP | Agent Card JSON (v0.3.0 + v1.0.1) | A2AAgent, A2ASkill, Host | Required-field conformance without dropping invalid observations, ordered interfaces, versioned security requirements, v1 ProtoJSON/JCS/JWS validity and key trust, delegation hypotheses |
 
 All collectors produce the same JSON ingest format. The Config and MCP collectors share
 MCPServer node IDs so their outputs merge cleanly on ingest.
@@ -141,7 +141,7 @@ Single-user posture. The server has **no application-layer authentication, no RB
 | Layer | Implementation |
 |-------|---------------|
 | Network scope | `agenthound-server` binds `127.0.0.1:8080` by default. Override with `--bind 0.0.0.0:8080` only inside a trusted network. |
-| TLS (collector outbound) | Strict cert verification by default. Use `--insecure` only against self-signed targets. |
+| TLS (collector outbound) | Strict cert verification by default. Use `--insecure` only against self-signed collection targets; card-controlled A2A `jku` remains HTTPS-only with identity validation. |
 | Credential safety | Config Collector hashes credential values by default (SHA-256). `--include-credential-values` for audit mode. |
 | Output files | Written `0o600` on POSIX; NTFS ACLs apply on Windows. |
 | Supply chain | Cosign-signed `checksums.txt` per release; SBOM per archive (syft); pinned action SHAs; `govulncheck` blocking; collector dependency allowlist. |

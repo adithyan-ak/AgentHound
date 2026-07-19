@@ -22,7 +22,7 @@ func (*Fingerprinter) ID() string            { return "jupyter.fingerprint" }
 func (*Fingerprinter) Action() action.Action { return action.Fingerprint }
 func (*Fingerprinter) Target() string        { return "jupyter" }
 func (*Fingerprinter) Description() string {
-	return "Identify Jupyter Server by GET /api/status returning the canonical Jupyter status JSON"
+	return "Identify Jupyter Server by public /api evidence plus canonical /api/status success or authentication denial"
 }
 func (*Fingerprinter) Version() string     { return "0.3.0-dev" }
 func (*Fingerprinter) IsDestructive() bool { return false }

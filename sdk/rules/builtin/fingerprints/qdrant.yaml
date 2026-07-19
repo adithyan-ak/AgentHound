@@ -1,31 +1,31 @@
-# Qdrant fingerprint rule (v0.4).
+# Qdrant fingerprint rule (v0.5).
 #
 # Qdrant is a vector database commonly fronted by LLM/RAG systems.
-# Default port 6333 (REST API). The root endpoint returns:
-#   {"title":"qdrant - vector search engine","version":"X.Y.Z"}
+# Default port 6333 (REST API). The telemetry endpoint returns an
+# implementation-specific app identity and version under result.app.
 #
 # Auth: by default, Qdrant has no auth. Setting a service key is opt-in.
 # A successful match flags is_anonymous_loot=true so v0.5+ Looters can
 # treat it as anonymous-data-leak surface.
 id: qdrant
 name: Qdrant vector database
-description: 'Identifies Qdrant by GET / returning the canonical title + version JSON'
-version: 2
+description: 'Identifies Qdrant by GET /telemetry returning its canonical app identity'
+version: 3
 service_kind: qdrant
 probes:
   - method: GET
-    path: /
+    path: /telemetry
     matchers:
       - type: http_status
         status_code: 200
       - type: json_path
-        path: "$.title"
-        regex: 'qdrant'
+        path: "$.result.app.name"
+        regex: '^qdrant$'
       - type: json_path
-        path: "$.version"
+        path: "$.result.app.version"
         regex: '^\d+\.\d+'
     captures:
-      version: "$.version"
+      version: "$.result.app.version"
 emit:
   node_kinds:
     - QdrantInstance

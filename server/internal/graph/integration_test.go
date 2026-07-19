@@ -874,6 +874,133 @@ func TestIntegrationReferenceOwnerPreservesThenRetiresAuthoritativeProperties(t 
 	}
 }
 
+func TestIntegrationCompatibleDistinctOwnersRemainCompleteUntilOneRetires(t *testing.T) {
+	ctx := testDriver(t)
+	driver, err := NewDriver(
+		os.Getenv("AGENTHOUND_NEO4J_URI"),
+		os.Getenv("AGENTHOUND_NEO4J_USER"),
+		os.Getenv("AGENTHOUND_NEO4J_PASSWORD"),
+	)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer driver.Close(ctx)
+
+	writer := NewWriter(driver)
+	db := NewDB(NewReader(driver), writer)
+	const (
+		nodeID      = "compatible-shared-owner"
+		targetID    = "compatible-shared-target"
+		configScope = "config:path:sha256:compatible-owner"
+		mcpScope    = "mcp:target:sha256:compatible-owner"
+	)
+	cleanup := func() {
+		_, _ = db.ExecuteWrite(
+			ctx,
+			"MATCH (n) WHERE n.objectid IN $ids DETACH DELETE n",
+			map[string]any{"ids": []string{nodeID, targetID}},
+		)
+	}
+	cleanup()
+	defer cleanup()
+
+	configNodes := []ingest.Node{
+		{
+			ID: nodeID, Kinds: []string{"MCPServer"},
+			ObservationDomains: []string{configScope},
+			Properties: map[string]any{
+				"endpoint": "http://mcp.example/mcp", "transport": "http",
+			},
+		},
+		{
+			ID: targetID, Kinds: []string{"Host"},
+			ObservationDomains: []string{configScope},
+			Properties:         map[string]any{"hostname": "mcp.example"},
+		},
+	}
+	configEdge := ingest.Edge{
+		Source: nodeID, Target: targetID, Kind: "RUNS_ON",
+		SourceKind: "MCPServer", TargetKind: "Host",
+		ObservationDomains: []string{configScope},
+		Properties: map[string]any{
+			"scan_id": "config-scan", "last_seen": "old",
+			"confidence": 1.0, "risk_weight": 0.0, "is_composite": false,
+		},
+	}
+	if _, err := writer.WriteObservationNodes(ctx, configNodes, "config-scan", []string{configScope}); err != nil {
+		t.Fatalf("write config nodes: %v", err)
+	}
+	if _, err := writer.WriteObservationEdges(ctx, []ingest.Edge{configEdge}, "config-scan", []string{configScope}); err != nil {
+		t.Fatalf("write config edge: %v", err)
+	}
+
+	mcpNodes := []ingest.Node{
+		{
+			ID: nodeID, Kinds: []string{"MCPServer"},
+			ObservationDomains: []string{mcpScope},
+			Properties: map[string]any{
+				"endpoint": "http://mcp.example/mcp", "transport": "http",
+				"protocol_version": "2025-06-18",
+			},
+		},
+		{
+			ID: targetID, Kinds: []string{"Host"},
+			ObservationDomains: []string{mcpScope},
+			Properties: map[string]any{
+				"hostname": "mcp.example", "scope": "public",
+			},
+		},
+	}
+	mcpEdge := configEdge
+	mcpEdge.ObservationDomains = []string{mcpScope}
+	mcpEdge.Properties = map[string]any{
+		"scan_id": "mcp-scan", "last_seen": "new",
+		"confidence": 1.0, "risk_weight": 0.0, "is_composite": false,
+	}
+	if _, err := writer.WriteObservationNodes(ctx, mcpNodes, "mcp-scan", []string{mcpScope}); err != nil {
+		t.Fatalf("write MCP nodes: %v", err)
+	}
+	if _, err := writer.WriteObservationEdges(ctx, []ingest.Edge{mcpEdge}, "mcp-scan", []string{mcpScope}); err != nil {
+		t.Fatalf("write MCP edge: %v", err)
+	}
+	if _, err := ReconcileObservations(ctx, db, "mcp-scan", []string{mcpScope}); err != nil {
+		t.Fatalf("reconcile MCP owner: %v", err)
+	}
+
+	rows, err := db.Query(ctx, `
+		MATCH (server:MCPServer {objectid: $server})-[r:RUNS_ON]->(host:Host {objectid: $host})
+		RETURN server.observation_properties_complete AS server_complete,
+		       host.observation_properties_complete AS host_complete,
+		       r.observation_properties_complete AS edge_complete,
+		       server.protocol_version AS protocol_version`,
+		map[string]any{"server": nodeID, "host": targetID})
+	if err != nil {
+		t.Fatalf("query compatible merge: %v", err)
+	}
+	if len(rows) != 1 || rows[0]["server_complete"] != true ||
+		rows[0]["host_complete"] != true || rows[0]["edge_complete"] != true ||
+		rows[0]["protocol_version"] != "2025-06-18" {
+		t.Fatalf("compatible owners did not form a complete union: %+v", rows)
+	}
+
+	if _, err := ReconcileObservations(ctx, db, "mcp-absent", []string{mcpScope}); err != nil {
+		t.Fatalf("retire MCP owner: %v", err)
+	}
+	rows, err = db.Query(ctx, `
+		MATCH (server:MCPServer {objectid: $server})-[r:RUNS_ON]->(host:Host {objectid: $host})
+		RETURN server.observation_properties_complete AS server_complete,
+		       host.observation_properties_complete AS host_complete,
+		       r.observation_properties_complete AS edge_complete`,
+		map[string]any{"server": nodeID, "host": targetID})
+	if err != nil {
+		t.Fatalf("query retired owner: %v", err)
+	}
+	if len(rows) != 1 || rows[0]["server_complete"] != false ||
+		rows[0]["host_complete"] != false || rows[0]["edge_complete"] != false {
+		t.Fatalf("retiring a co-owner must downgrade merged properties: %+v", rows)
+	}
+}
+
 func TestIntegrationCompleteObservationReplacesOnlyManagedLabels(t *testing.T) {
 	ctx := testDriver(t)
 	driver, err := NewDriver(

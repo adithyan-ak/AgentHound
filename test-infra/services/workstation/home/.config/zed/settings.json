@@ -1,0 +1,8 @@
+{
+  "context_servers": {
+    "everything-stdio": {
+      "command": "/usr/local/bin/mcp-server-everything",
+      "args": ["stdio"]
+    }
+  }
+}

@@ -104,7 +104,7 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 
 	verifyOpts := VerifyOptions{TrustedKeys: c.trustedKeys}
 	if c.jwksFetchEnabled {
-		verifyOpts.Fetcher = NewJWKSFetcher(insecure, c.timeout)
+		verifyOpts.Fetcher = NewJWKSFetcher(c.timeout)
 	}
 
 	type cardResult struct {
@@ -129,8 +129,6 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 				results[idx] = cardResult{url: tgt, err: err}
 				return
 			}
-			raw.URL = tgt
-
 			card, err := ParseAgentCard(ctx, raw, engine, verifyOpts)
 			if err != nil {
 				results[idx] = cardResult{url: tgt, err: err}
@@ -333,8 +331,18 @@ func buildGraph(card *AgentCardData, scanID string) ([]ingest.Node, []ingest.Edg
 	if signatureStatus == "" {
 		signatureStatus = "unknown"
 	}
+	signatureKeySource := card.SignatureKeySource
+	if signatureKeySource == "" {
+		signatureKeySource = SigKeySourceNone
+	}
+	signatureKeyTrust := card.SignatureKeyTrust
+	if signatureKeyTrust == "" {
+		signatureKeyTrust = SigKeyTrustUnknown
+	}
 	authEvidence := common.AuthEvidenceUnknown
-	if len(card.SecuritySchemes) > 0 {
+	if len(card.SecurityRequirements) > 0 && card.SecurityValid {
+		authEvidence = common.AuthEvidenceDeclaredScheme
+	} else if len(card.SecuritySchemes) > 0 {
 		authEvidence = common.AuthEvidenceDeclaredScheme
 	}
 
@@ -344,6 +352,10 @@ func buildGraph(card *AgentCardData, scanID string) ([]ingest.Node, []ingest.Edg
 		"url":                           card.URL,
 		"provider":                      card.Provider,
 		"version":                       card.Version,
+		"card_schema_version":           card.SchemaVersion,
+		"card_present_fields":           card.PresentFields,
+		"card_conformant":               card.Conformant,
+		"card_conformance_errors":       card.ConformanceErrors,
 		"protocol_versions":             card.ProtocolVersions,
 		"capabilities":                  card.Capabilities,
 		"auth_method":                   string(authAssessment.Method),
@@ -351,19 +363,43 @@ func buildGraph(card *AgentCardData, scanID string) ([]ingest.Node, []ingest.Edg
 		"auth_evidence":                 authEvidence,
 		"is_signed":                     card.IsSigned,
 		"signature_verification_status": signatureStatus,
+		"signature_key_source":          signatureKeySource,
+		"signature_key_trust":           signatureKeyTrust,
 		"is_https":                      card.IsHTTPS,
 		"card_hash":                     card.CardHash,
 		"collection_state":              string(ingest.OutcomeComplete),
 	}
-	schemesData := make([]map[string]string, len(card.SecuritySchemes))
+	interfacesData := make([]map[string]any, len(card.Interfaces))
+	for index, iface := range card.Interfaces {
+		interfacesData[index] = map[string]any{
+			"url":              iface.URL,
+			"protocol_binding": iface.ProtocolBinding,
+			"protocol_version": iface.ProtocolVersion,
+			"tenant":           iface.Tenant,
+			"preferred":        iface.Preferred,
+			"conformant":       iface.Conformant,
+		}
+	}
+	agentProps["interfaces"] = interfacesData
+
+	schemesData := make([]map[string]any, len(card.SecuritySchemes))
 	for i, s := range card.SecuritySchemes {
-		schemesData[i] = map[string]string{"name": s.Name, "type": s.Type, "scheme": s.Scheme}
+		schemesData[i] = map[string]any{
+			"name":       s.Name,
+			"type":       s.Type,
+			"scheme":     s.Scheme,
+			"conformant": s.Conformant,
+		}
 	}
 	agentProps["security_schemes"] = schemesData
+	agentProps["security_requirements"] = securityRequirementsProperty(card.SecurityRequirements)
 
 	nodes = append(nodes, common.NewNode(agentID, []string{"A2AAgent"}, agentProps))
 
 	for _, skill := range card.Skills {
+		if skill.ID == "" {
+			continue
+		}
 		skillID := ingest.ComputeNodeID("A2ASkill", agentID, skill.ID)
 		skillProps := map[string]any{
 			"id":                     skill.ID,
@@ -373,32 +409,39 @@ func buildGraph(card *AgentCardData, scanID string) ([]ingest.Node, []ingest.Edg
 			"output_modes":           skill.OutputModes,
 			"description_hash":       skill.DescriptionHash,
 			"has_injection_patterns": skill.HasInjection,
+			"conformant":             skill.Conformant,
+			"conformance_errors":     skill.ConformanceErrors,
+			"security_requirements":  securityRequirementsProperty(skill.SecurityRequirements),
 		}
 		nodes = append(nodes, common.NewNode(skillID, []string{"A2ASkill"}, skillProps))
 
-		edgeProps := common.NewEdgeProps(scanID, 1.0, 0.1)
-		edges = append(edges, common.NewEdge(agentID, skillID, "ADVERTISES_SKILL", "A2AAgent", "A2ASkill", edgeProps))
-	}
-
-	hostInfo := common.ClassifyHost(card.URL)
-	hostname := hostInfo.Hostname
-	if hostname == "" {
-		hostname = hostInfo.IP
-	}
-	if hostname != "" {
-		hostID := common.HostNodeID(hostname)
-		hostProps := map[string]any{
-			"hostname": hostInfo.Hostname,
-			"ip":       hostInfo.IP,
-			"scope":    hostInfo.Scope,
+		if skill.Conformant {
+			edgeProps := common.NewEdgeProps(scanID, 1.0, 0.1)
+			edges = append(edges, common.NewEdge(agentID, skillID, "ADVERTISES_SKILL", "A2AAgent", "A2ASkill", edgeProps))
 		}
-		nodes = append(nodes, common.NewNode(hostID, []string{"Host"}, hostProps))
-
-		edgeProps := common.NewEdgeProps(scanID, 1.0, 0.0)
-		edges = append(edges, common.NewEdge(agentID, hostID, "RUNS_ON", "A2AAgent", "Host", edgeProps))
 	}
 
-	if common.IsExplicitlyAuthenticated(card.AuthMethod) {
+	if card.PreferredURLValid {
+		hostInfo := common.ClassifyHost(card.URL)
+		hostname := hostInfo.Hostname
+		if hostname == "" {
+			hostname = hostInfo.IP
+		}
+		if hostname != "" {
+			hostID := common.HostNodeID(hostname)
+			hostProps := map[string]any{
+				"hostname": hostInfo.Hostname,
+				"ip":       hostInfo.IP,
+				"scope":    hostInfo.Scope,
+			}
+			nodes = append(nodes, common.NewNode(hostID, []string{"Host"}, hostProps))
+
+			edgeProps := common.NewEdgeProps(scanID, 1.0, 0.0)
+			edges = append(edges, common.NewEdge(agentID, hostID, "RUNS_ON", "A2AAgent", "Host", edgeProps))
+		}
+	}
+
+	if card.SecurityValid && common.IsExplicitlyAuthenticated(card.AuthMethod) {
 		identityID := ingest.ComputeNodeID("Identity", agentID, card.AuthMethod)
 		identityProps := map[string]any{
 			"type":           card.AuthMethod,
@@ -412,6 +455,26 @@ func buildGraph(card *AgentCardData, scanID string) ([]ingest.Node, []ingest.Edg
 	}
 
 	return nodes, edges
+}
+
+func securityRequirementsProperty(
+	requirements []SecurityRequirement,
+) []map[string]any {
+	result := make([]map[string]any, len(requirements))
+	for index, requirement := range requirements {
+		schemes := make([]map[string]any, len(requirement.Schemes))
+		for schemeIndex, scheme := range requirement.Schemes {
+			schemes[schemeIndex] = map[string]any{
+				"name":   scheme.Name,
+				"scopes": scheme.Scopes,
+			}
+		}
+		result[index] = map[string]any{
+			"schemes":    schemes,
+			"conformant": requirement.Conformant,
+		}
+	}
+	return result
 }
 
 func agentNodeID(card *AgentCardData) string {

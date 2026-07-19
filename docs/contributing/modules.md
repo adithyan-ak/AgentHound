@@ -16,7 +16,7 @@ Choose the interface that matches your module's purpose:
 | `Poisoner` | `poison` | Inject content into upstream artifacts | **Yes** — requires `Reverter` |
 | `Implanter` | `implant` | Plant persistent backdoors in target config | **Yes** — requires `Reverter` |
 
-`Reverter` (`sdk/action/reverter.go`) is not an action of its own — it is a compile-time-mandatory super-interface every `Poisoner` and `Implanter` embeds, so any change made on-target can be undone via `agenthound revert`.
+`Reverter` (`sdk/action/reverter.go`) is not an action of its own — it is a compile-time-mandatory super-interface every `Poisoner` and `Implanter` embeds, so every destructive module ships an explicit `agenthound revert` recovery path. Runtime restoration must be verified and may still be blocked by provider policy, conflicts, deletion, or loss of access.
 
 All interfaces are defined in `sdk/action/`. Every module also implements `sdk/module.Module`:
 
@@ -203,7 +203,7 @@ func (p *YourPoisoner) ReadReceipts(engagementID string) ([]action.Receipt, erro
 }
 ```
 
-Receipts are stored at `~/.agenthound/state/<module-id>/<engagement-id>.json` with mode 0o600. The CLI persists the receipt AFTER the poison succeeds but BEFORE reporting success -- crash between mutation and receipt write is the one unrecoverable failure mode.
+Receipts are stored at `~/.agenthound/state/<module-id>/<engagement-id>.json` with mode 0o600. A committing module persists the receipt BEFORE it issues the mutating write -- and the receipt is written exactly once, with no post-mutation re-write -- so a crash after the mutation still leaves a revert path. Dry-run receipts (which mutate nothing) are persisted by the CLI after the module returns.
 
 ## Registry Lookup
 

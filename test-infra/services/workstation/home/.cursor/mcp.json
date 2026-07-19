@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "everything-http": {
+      "url": "http://mcp-streamable:3001/mcp"
+    },
+    "everything-disabled": {
+      "command": "/usr/local/bin/mcp-server-everything",
+      "args": ["stdio"],
+      "disabled": true
+    }
+  }
+}

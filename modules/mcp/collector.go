@@ -2,11 +2,9 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -16,7 +14,6 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
-	"gopkg.in/yaml.v3"
 )
 
 type MCPCollector struct {
@@ -27,6 +24,8 @@ type MCPCollector struct {
 	insecure    bool
 	engine      *rules.Engine
 }
+
+var resolveMCPProjectRoot = config.ResolveProjectRoot
 
 type Option func(*MCPCollector)
 
@@ -92,11 +91,11 @@ func (c *MCPCollector) Collect(ctx context.Context, opts collector.CollectOption
 		}
 	}
 
-	specs, err := c.buildServerList(opts)
+	specs, configDiscovery, err := c.buildServerList(ctx, opts)
 	if err != nil {
 		return nil, fmt.Errorf("build server list: %w", err)
 	}
-	if len(specs) == 0 {
+	if len(specs) == 0 && configDiscovery == nil {
 		return nil, fmt.Errorf("no MCP servers to enumerate")
 	}
 
@@ -119,6 +118,15 @@ func (c *MCPCollector) Collect(ctx context.Context, opts collector.CollectOption
 	seen := make(map[string]bool)
 	coverage := make(map[string]bool, len(results))
 	report := &ingest.CollectionReport{}
+	if configDiscovery != nil {
+		rootKey := ingest.CollectorRootCoverageKey("mcp")
+		state, items, errorText := summarizeConfigDiscovery(configDiscovery)
+		report.CoverageKeys = append(report.CoverageKeys, rootKey)
+		report.Outcomes = append(report.Outcomes, ingest.CollectionOutcome{
+			Collector: "mcp", CoverageKey: rootKey, Target: "mcp",
+			Method: "discover_configs", State: state, Items: items, Error: errorText,
+		})
+	}
 	for _, r := range results {
 		if r.Error != nil {
 			log.Printf("[mcp] server error: %v", r.Error)
@@ -194,10 +202,16 @@ func (c *MCPCollector) enumerateAll(ctx context.Context, specs []ServerSpec, sca
 	}
 
 	wg.Wait()
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].CoverageKey < results[j].CoverageKey
+	})
 	return results
 }
 
-func (c *MCPCollector) buildServerList(opts collector.CollectOptions) ([]ServerSpec, error) {
+func (c *MCPCollector) buildServerList(
+	ctx context.Context,
+	opts collector.CollectOptions,
+) ([]ServerSpec, *config.DiscoveryResult, error) {
 	var specs []ServerSpec
 
 	if opts.TargetURL != "" {
@@ -216,195 +230,130 @@ func (c *MCPCollector) buildServerList(opts collector.CollectOptions) ([]ServerS
 		})
 	}
 
-	if opts.ConfigPath != "" {
-		parsed, err := parseConfigForSpecs(opts.ConfigPath)
+	var discovery *config.DiscoveryResult
+	if opts.Discover || opts.ConfigPath != "" || len(opts.ConfigPaths) > 0 {
+		homeDir, err := os.UserHomeDir()
 		if err != nil {
-			return nil, fmt.Errorf("parse config %s: %w", opts.ConfigPath, err)
+			return nil, nil, fmt.Errorf("get home directory: %w", err)
 		}
-		specs = append(specs, parsed...)
+		projectRoot, err := resolveMCPProjectRoot(opts.ProjectDir)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer func() { _ = projectRoot.Close() }()
+		paths := append([]string(nil), opts.ConfigPaths...)
+		if opts.ConfigPath != "" {
+			paths = append([]string{opts.ConfigPath}, paths...)
+		}
+		discovery = config.NewConfigCollector().DiscoverConfigs(
+			ctx, homeDir, projectRoot, opts.Discover, paths,
+		)
+		for _, parsed := range discovery.ParsedConfigs() {
+			for _, server := range parsed.Servers {
+				if server.Disabled {
+					continue
+				}
+				specs = append(specs, serverDefToSpec(server))
+			}
+		}
 	}
 
-	for _, p := range opts.ConfigPaths {
-		parsed, err := parseConfigForSpecs(p)
-		if err != nil {
-			log.Printf("[mcp] failed to parse config %s: %v", p, err)
+	unique := make([]ServerSpec, 0, len(specs))
+	seen := make(map[string]bool)
+	for _, spec := range specs {
+		key := computeServerID(spec)
+		if seen[key] {
 			continue
 		}
-		specs = append(specs, parsed...)
+		seen[key] = true
+		unique = append(unique, spec)
 	}
+	return unique, discovery, nil
+}
 
-	if opts.Discover {
-		discovered, err := discoverAllConfigs()
-		if err != nil {
-			return nil, fmt.Errorf("discover configs: %w", err)
+func serverDefToSpec(server config.ServerDef) ServerSpec {
+	return ServerSpec{
+		Name: server.Name, Transport: server.Transport, Command: server.Command,
+		Args: append([]string(nil), server.Args...), Env: server.Env, URL: server.URL,
+		Headers: server.Headers, Configured: true,
+	}
+}
+
+func summarizeConfigDiscovery(result *config.DiscoveryResult) (ingest.OutcomeState, int, string) {
+	if result == nil {
+		return ingest.OutcomeNotApplicable, 0, ""
+	}
+	items := 0
+	failures := 0
+	hasFailed := false
+	hasPartial := false
+	hasTruncated := false
+	switch result.ProjectRootState {
+	case ingest.OutcomeFailed:
+		hasFailed = true
+		failures++
+	case ingest.OutcomePartial:
+		hasPartial = true
+		failures++
+	case ingest.OutcomeTruncated:
+		hasTruncated = true
+		failures++
+	}
+	for _, file := range result.Files {
+		items += file.Items
+		if file.State != ingest.OutcomeComplete {
+			failures++
 		}
-		specs = append(specs, discovered...)
+		switch file.State {
+		case ingest.OutcomeFailed:
+			hasFailed = true
+		case ingest.OutcomePartial:
+			hasPartial = true
+		case ingest.OutcomeTruncated:
+			hasTruncated = true
+		}
 	}
-
-	return specs, nil
+	state := ingest.OutcomeComplete
+	switch {
+	case hasPartial:
+		state = ingest.OutcomePartial
+	case hasFailed && items > 0:
+		state = ingest.OutcomePartial
+	case hasFailed:
+		state = ingest.OutcomeFailed
+	case hasTruncated:
+		state = ingest.OutcomeTruncated
+	}
+	errorText := ""
+	if failures > 0 {
+		errorText = fmt.Sprintf("%d configuration path(s) incomplete", failures)
+	}
+	return state, items, errorText
 }
 
 func parseConfigForSpecs(path string) ([]ServerSpec, error) {
-	data, err := os.ReadFile(path)
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
-
-	if ext := filepath.Ext(path); ext == ".yaml" || ext == ".yml" {
-		return parseContinueYAMLForSpecs(path, data)
+	root, err := config.ResolveProjectRoot("")
+	if err != nil {
+		return nil, err
 	}
-
-	var raw map[string]any
-	if err := json.Unmarshal(common.StripJSONComments(data), &raw); err != nil {
-		return nil, fmt.Errorf("invalid JSON in %s: %w", path, err)
+	defer func() { _ = root.Close() }()
+	discovery := config.NewConfigCollector().DiscoverConfigs(context.Background(), homeDir, root, false, []string{path})
+	specs := specsFromDiscovery(discovery)
+	// This compatibility helper predates lifecycle-aware collection and cannot
+	// return a partial outcome. Preserve usable parsed specs for its callers;
+	// production collection consumes DiscoveryResult directly and retains the
+	// incomplete state.
+	if len(specs) > 0 {
+		return specs, nil
 	}
-
-	var specs []ServerSpec
-	for _, rootKey := range []string{"mcpServers", "servers"} {
-		serversRaw, ok := raw[rootKey]
-		if !ok {
-			continue
-		}
-		specs = append(specs, specsFromServerMap(serversRaw)...)
-	}
-
-	if serversRaw, ok := raw["mcp.servers"]; ok {
-		specs = append(specs, specsFromServerMap(serversRaw)...)
-	}
-	if mcpRaw, ok := raw["mcp"].(map[string]any); ok {
-		if serversRaw, ok := mcpRaw["servers"]; ok {
-			specs = append(specs, specsFromServerMap(serversRaw)...)
-		}
-	}
-
-	if cs, ok := raw["context_servers"].(map[string]any); ok {
-		for name, entry := range cs {
-			obj, ok := entry.(map[string]any)
-			if !ok {
-				continue
-			}
-			settingsRaw, ok := obj["settings"]
-			if !ok {
-				spec := specFromServerObj(name, obj)
-				if spec != nil {
-					specs = append(specs, *spec)
-				}
-				continue
-			}
-			settings, ok := settingsRaw.(map[string]any)
-			if !ok {
-				continue
-			}
-			spec := specFromServerObj(name, settings)
-			if spec != nil {
-				specs = append(specs, *spec)
-			}
-		}
-	}
-
-	return specs, nil
-}
-
-func specsFromServerMap(raw any) []ServerSpec {
-	servers, ok := raw.(map[string]any)
-	if !ok {
-		return nil
-	}
-	var specs []ServerSpec
-	for name, entry := range servers {
-		obj, ok := entry.(map[string]any)
-		if !ok {
-			continue
-		}
-		if disabled, ok := obj["disabled"].(bool); ok && disabled {
-			continue
-		}
-		spec := specFromServerObj(name, obj)
-		if spec != nil {
-			specs = append(specs, *spec)
-		}
-	}
-	return specs
-}
-
-func parseContinueYAMLForSpecs(path string, data []byte) ([]ServerSpec, error) {
-	var cfg struct {
-		MCPServers []struct {
-			Name    string            `yaml:"name"`
-			Command string            `yaml:"command"`
-			Args    []string          `yaml:"args"`
-			Env     map[string]string `yaml:"env"`
-			URL     string            `yaml:"url"`
-			Headers map[string]string `yaml:"headers"`
-		} `yaml:"mcpServers"`
-	}
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("invalid YAML in %s: %w", path, err)
-	}
-	var specs []ServerSpec
-	for _, s := range cfg.MCPServers {
-		spec := ServerSpec{
-			Name:    s.Name,
-			Args:    append([]string(nil), s.Args...),
-			Env:     s.Env,
-			Headers: s.Headers,
-		}
-		if s.URL != "" {
-			spec.Transport = "http"
-			spec.URL = s.URL
-		} else if s.Command != "" {
-			spec.Transport = "stdio"
-			spec.Command = s.Command
-		} else {
-			continue
-		}
-		specs = append(specs, spec)
+	if err := discoveryError(discovery); err != nil {
+		return nil, err
 	}
 	return specs, nil
-}
-
-func specFromServerObj(name string, obj map[string]any) *ServerSpec {
-	spec := &ServerSpec{Name: name}
-
-	for _, urlKey := range []string{"url", "serverUrl"} {
-		if u, ok := obj[urlKey].(string); ok && u != "" {
-			spec.Transport = "http"
-			spec.URL = u
-			spec.Env = extractStringMap(obj, "env")
-			spec.Headers = extractStringMap(obj, "headers")
-			return spec
-		}
-	}
-
-	if cmd, ok := obj["command"].(string); ok && cmd != "" {
-		spec.Transport = "stdio"
-		spec.Command = cmd
-		if args, ok := obj["args"].([]any); ok {
-			for _, a := range args {
-				if s, ok := a.(string); ok {
-					spec.Args = append(spec.Args, s)
-				}
-			}
-		}
-		spec.Env = extractStringMap(obj, "env")
-		return spec
-	}
-
-	return nil
-}
-
-func extractStringMap(obj map[string]any, key string) map[string]string {
-	raw, ok := obj[key].(map[string]any)
-	if !ok {
-		return nil
-	}
-	m := make(map[string]string, len(raw))
-	for k, v := range raw {
-		if s, ok := v.(string); ok {
-			m[k] = s
-		}
-	}
-	return m
 }
 
 // discoveryCandidatePaths returns the client config paths to scan during
@@ -412,35 +361,72 @@ func extractStringMap(obj map[string]any, key string) map[string]string {
 // discover and the config collector cover an identical set of paths (Finding
 // 18). The shared parser ConfigPaths() are the single source of truth.
 func discoveryCandidatePaths(homeDir string) []string {
-	return config.NewConfigCollector().DiscoveryPaths(homeDir)
+	root, err := config.ResolveProjectRoot("")
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = root.Close() }()
+	return config.NewConfigCollector().DiscoveryPathsForRoot(homeDir, root.Path())
 }
 
 func discoverAllConfigs() ([]ServerSpec, error) {
+	allSpecs, err := discoverRawConfigSpecs()
+	if err != nil {
+		return nil, err
+	}
+
+	uniqueSpecs := make([]ServerSpec, 0, len(allSpecs))
+	seen := make(map[string]bool)
+	for _, spec := range allSpecs {
+		key := computeServerID(spec)
+		if !seen[key] {
+			seen[key] = true
+			uniqueSpecs = append(uniqueSpecs, spec)
+		}
+	}
+
+	return uniqueSpecs, nil
+}
+
+func discoverRawConfigSpecs() ([]ServerSpec, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
 
-	var allSpecs []ServerSpec
-	seen := make(map[string]bool)
+	root, err := config.ResolveProjectRoot("")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	discovery := config.NewConfigCollector().DiscoverConfigs(context.Background(), homeDir, root, true, nil)
+	if err := discoveryError(discovery); err != nil {
+		return nil, err
+	}
+	return specsFromDiscovery(discovery), nil
+}
 
-	for _, path := range discoveryCandidatePaths(homeDir) {
-		if _, err := os.Stat(path); err != nil {
-			continue
-		}
-		specs, err := parseConfigForSpecs(path)
-		if err != nil {
-			log.Printf("[mcp] failed to parse %s: %v", path, err)
-			continue
-		}
-		for _, s := range specs {
-			key := computeServerID(s)
-			if !seen[key] {
-				seen[key] = true
-				allSpecs = append(allSpecs, s)
+func specsFromDiscovery(discovery *config.DiscoveryResult) []ServerSpec {
+	var specs []ServerSpec
+	for _, parsed := range discovery.ParsedConfigs() {
+		for _, server := range parsed.Servers {
+			if server.Disabled {
+				continue
 			}
+			specs = append(specs, serverDefToSpec(server))
 		}
 	}
+	return specs
+}
 
-	return allSpecs, nil
+func discoveryError(discovery *config.DiscoveryResult) error {
+	if discovery.ProjectRootState != "" && discovery.ProjectRootState != ingest.OutcomeComplete {
+		return fmt.Errorf("project root discovery incomplete: %s", discovery.ProjectRootState)
+	}
+	for _, file := range discovery.Files {
+		if file.State != ingest.OutcomeComplete {
+			return fmt.Errorf("configuration discovery incomplete at %s: %s", file.Path, file.State)
+		}
+	}
+	return nil
 }

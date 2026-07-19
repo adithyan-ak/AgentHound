@@ -12,12 +12,12 @@
 # "title": "LangServe" — we match on body_contains for that string.
 id: langserve
 name: LangServe (LangChain HTTP API)
-description: 'Identifies LangServe by GET /openapi.json containing the LangServe title'
-version: 2
+description: 'Identifies LangServe by its canonical documentation page title'
+version: 3
 service_kind: langserve
 probes:
   - method: GET
-    path: /openapi.json
+    path: /docs
     matchers:
       - type: http_status
         status_code: 200

@@ -1,0 +1,5 @@
+fastapi==0.139.0
+langchain-core==1.4.9
+langserve[server]==0.3.3
+sse-starlette==1.8.2
+uvicorn==0.51.0

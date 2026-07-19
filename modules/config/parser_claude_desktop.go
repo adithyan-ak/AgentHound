@@ -27,11 +27,10 @@ func (p *ClaudeDesktopParser) Parse(path string, data []byte) (*ParsedConfig, er
 	if err != nil {
 		return nil, err
 	}
-
-	servers, err := parseMCPServersMap(m, "mcpServers", "url")
-	if err != nil {
-		return nil, err
+	if _, ok := m["mcpServers"]; !ok {
+		return nil, nil
 	}
 
-	return &ParsedConfig{Client: p.ClientName(), Path: path, Servers: servers}, nil
+	servers, err := parseMCPServersMap(m, "mcpServers", "url")
+	return &ParsedConfig{Client: p.ClientName(), Path: path, Servers: servers}, err
 }

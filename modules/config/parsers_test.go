@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"testing"
@@ -544,7 +545,13 @@ func TestAmazonQParser(t *testing.T) {
 	}
 
 	paths := p.ConfigPaths("/home/user")
-	if len(paths) != 1 || paths[0] != "/home/user/.aws/amazonq/mcp.json" {
+	wantPaths := []string{
+		"/home/user/.aws/amazonq/default.json",
+		"/home/user/.aws/amazonq/mcp.json",
+		filepath.Join(".amazonq", "default.json"),
+		filepath.Join(".amazonq", "mcp.json"),
+	}
+	if !reflect.DeepEqual(paths, wantPaths) {
 		t.Fatalf("ConfigPaths = %v", paths)
 	}
 
@@ -712,11 +719,14 @@ func TestParseInvalidJSON(t *testing.T) {
 
 func TestParseEmptyServers(t *testing.T) {
 	p := &ClaudeDesktopParser{}
-	cfg, err := p.Parse("/fake", []byte(`{}`))
+	cfg, err := p.Parse("/fake", []byte(`{"mcpServers":{}}`))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
 	if len(cfg.Servers) != 0 {
 		t.Errorf("got %d servers from empty config, want 0", len(cfg.Servers))
+	}
+	if cfg, err = p.Parse("/fake", []byte(`{}`)); err != nil || cfg != nil {
+		t.Fatalf("shape without mcpServers should be inapplicable, got cfg=%+v err=%v", cfg, err)
 	}
 }

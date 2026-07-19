@@ -4,11 +4,12 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/adithyan-ak/agenthound/sdk/campaign"
 )
 
 type ServerSpec struct {
@@ -19,6 +20,10 @@ type ServerSpec struct {
 	Env       map[string]string
 	URL       string
 	Headers   map[string]string
+	// Configured records that the target came from a real client config. It
+	// lets the projection retain configuration-backed claims separately from
+	// live initialize evidence.
+	Configured bool
 }
 
 func buildTransport(spec ServerSpec, insecure bool) (mcpsdk.Transport, error) {
@@ -50,6 +55,10 @@ func buildHTTPTransport(spec ServerSpec, insecure bool) (mcpsdk.Transport, error
 	if spec.URL == "" {
 		return nil, fmt.Errorf("http transport requires a URL")
 	}
+	origin, err := campaign.ParseHTTPOrigin(spec.URL)
+	if err != nil {
+		return nil, fmt.Errorf("http transport requires a valid absolute HTTP(S) URL")
+	}
 
 	transport := &mcpsdk.StreamableClientTransport{
 		Endpoint: spec.URL,
@@ -63,7 +72,7 @@ func buildHTTPTransport(spec ServerSpec, insecure bool) (mcpsdk.Transport, error
 		transport.HTTPClient = &http.Client{Transport: headerRoundTripper{
 			base:    httpTransport,
 			headers: spec.Headers,
-			host:    endpointHost(spec.URL),
+			origin:  origin,
 		}}
 	}
 
@@ -74,6 +83,7 @@ func buildSSETransport(spec ServerSpec, insecure bool) mcpsdk.Transport {
 	transport := &mcpsdk.SSEClientTransport{
 		Endpoint: spec.URL,
 	}
+	origin, _ := campaign.ParseHTTPOrigin(spec.URL)
 
 	if insecure || len(spec.Headers) > 0 {
 		httpTransport := &http.Transport{}
@@ -83,7 +93,7 @@ func buildSSETransport(spec ServerSpec, insecure bool) mcpsdk.Transport {
 		transport.HTTPClient = &http.Client{Transport: headerRoundTripper{
 			base:    httpTransport,
 			headers: spec.Headers,
-			host:    endpointHost(spec.URL),
+			origin:  origin,
 		}}
 	}
 
@@ -93,7 +103,7 @@ func buildSSETransport(spec ServerSpec, insecure bool) mcpsdk.Transport {
 type headerRoundTripper struct {
 	base    http.RoundTripper
 	headers map[string]string
-	host    string
+	origin  campaign.HTTPOrigin
 }
 
 // RoundTrip injects caller-supplied headers only when the request targets the
@@ -102,18 +112,20 @@ type headerRoundTripper struct {
 // leak credentials to the redirect target. Scoping to the original host
 // preserves that protection while keeping same-host behavior unchanged.
 func (h headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	if h.host == "" || req.URL.Host == h.host {
+	cloned := req.Clone(req.Context())
+	cloned.Header = req.Header.Clone()
+	if h.origin.Matches(req.URL) {
 		for k, v := range h.headers {
-			req.Header.Set(k, v)
+			cloned.Header.Set(k, v)
+		}
+	} else {
+		for k := range h.headers {
+			cloned.Header.Del(k)
 		}
 	}
-	return h.base.RoundTrip(req)
-}
-
-func endpointHost(endpoint string) string {
-	u, err := url.Parse(endpoint)
-	if err != nil {
-		return ""
+	base := h.base
+	if base == nil {
+		base = http.DefaultTransport
 	}
-	return u.Host
+	return base.RoundTrip(cloned)
 }

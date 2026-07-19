@@ -20,6 +20,11 @@ func TestFingerprint_OllamaHappy(t *testing.T) {
 			_, _ = w.Write([]byte(`{"version":"0.5.1"}`))
 			return
 		}
+		if r.Method == "GET" && r.URL.Path == "/api/tags" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"models":[]}`))
+			return
+		}
 		w.WriteHeader(404)
 	}))
 	defer srv.Close()
@@ -94,21 +99,48 @@ func TestFingerprint_NotOllama(t *testing.T) {
 	}
 }
 
+func TestFingerprint_OpenWebUINearMiss(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/version":
+			_, _ = w.Write([]byte(`{"version":"0.6.5"}`))
+		case "/api/tags":
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte(`<!doctype html><title>Open WebUI</title>`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	f, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	res, err := f.Fingerprint(context.Background(), action.Target{
+		Kind: "host", Address: strings.TrimPrefix(srv.URL, "http://"),
+	})
+	if err != nil {
+		t.Fatalf("Fingerprint: %v", err)
+	}
+	if res.Matched {
+		t.Fatal("Open WebUI's generic version endpoint must not identify it as Ollama")
+	}
+}
+
 func TestFingerprint_NetworkError(t *testing.T) {
 	f, err := New()
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	// Use a port that's surely closed on loopback.
-	res, err := f.Fingerprint(context.Background(), action.Target{
+	_, err = f.Fingerprint(context.Background(), action.Target{
 		Kind:    "host",
 		Address: "127.0.0.1:1",
 	})
-	if err != nil {
-		t.Fatalf("Fingerprint should not error on a closed port; got %v", err)
-	}
-	if res.Matched {
-		t.Error("expected no match on closed port")
+	if err == nil {
+		t.Fatal("closed-port transport failure must be operationally indeterminate")
 	}
 }
 

@@ -1,18 +1,17 @@
-# Ollama fingerprint rule (v0.2).
+# Ollama fingerprint rule (v0.3).
 #
 # Identifies an Ollama LLM inference server. Default port 11434, no
 # authentication by default — see docs/plans/sprint3-offensive-primitives.md
-# 2.1 for the protocol context. The fingerprint is a single GET to
-# /api/version that returns deterministic JSON of the form
-# {"version": "X.Y.Z"}; this is the minimum probe set that distinguishes
-# Ollama from anything else listening on 11434.
+# 2.1 for the protocol context. /api/version returns deterministic version
+# JSON, while /api/tags supplies the Ollama-specific model inventory shape.
+# Both are required because Open WebUI also exposes /api/version.
 #
 # Captures the version into the emitted node so downstream queries can
 # pivot on Ollama version (CVE-2024-37032 affects < 0.1.34).
 id: ollama
 name: Ollama LLM inference server
-description: 'Identifies Ollama by GET /api/version returning {"version": "X.Y.Z"}'
-version: 2
+description: 'Identifies Ollama from its version and model-inventory response shapes'
+version: 3
 service_kind: ollama
 probes:
   - method: GET
@@ -25,6 +24,14 @@ probes:
         regex: '^\d+\.\d+\.\d+'
     captures:
       version: "$.version"
+  - method: GET
+    path: /api/tags
+    matchers:
+      - type: http_status
+        status_code: 200
+      - type: json_path
+        path: "$.models"
+        exists: true
 emit:
   node_kinds:
     - OllamaInstance

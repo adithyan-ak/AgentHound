@@ -1,0 +1,8 @@
+name: AgentHound harness
+version: 1.0.0
+schema: v1
+mcpServers:
+  - name: everything-stdio
+    command: /usr/local/bin/mcp-server-everything
+    args:
+      - stdio

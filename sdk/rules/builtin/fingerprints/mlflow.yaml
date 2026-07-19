@@ -6,17 +6,25 @@
 # which on a default deployment returns:
 #   {"experiments":[...]}  (200 OK, possibly with empty list)
 #
-# Auth: MLflow has no built-in auth. Network-perimeter or a reverse
-# proxy is the deployment-time control; default deployments expose the
-# API anonymously, which is what this rule catches.
+# max_results is required: modern MLflow (2.22.x+) rejects the bare
+# path with INVALID_PARAMETER_VALUE (HTTP 400). Match the looter and
+# the documented probe: ?max_results=1.
+#
+# Auth: MLflow ships an optional built-in basic-auth plugin
+# (`mlflow server --app-name basic-auth`) that is OFF by default; a
+# reverse proxy or network perimeter is the other common control. This
+# rule does not assert MLflow universally lacks authentication — it only
+# catches an instance that served the experiment search without
+# credentials, and records that scoped observation as
+# auth_evidence=anonymous_probe_succeeded.
 id: mlflow
 name: MLflow Tracking Server
-description: 'Identifies MLflow by GET /api/2.0/mlflow/experiments/search returning the canonical experiments JSON'
-version: 2
+description: 'Identifies MLflow by GET /api/2.0/mlflow/experiments/search?max_results=1 returning the canonical experiments JSON'
+version: 3
 service_kind: mlflow
 probes:
   - method: GET
-    path: /api/2.0/mlflow/experiments/search
+    path: /api/2.0/mlflow/experiments/search?max_results=1
     matchers:
       - type: http_status
         status_code: 200
@@ -29,4 +37,5 @@ emit:
   properties:
     service_kind: mlflow
     auth_method: none
+    auth_evidence: anonymous_probe_succeeded
     is_anonymous_loot: "true"

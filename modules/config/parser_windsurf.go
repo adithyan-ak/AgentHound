@@ -23,11 +23,10 @@ func (p *WindsurfParser) Parse(path string, data []byte) (*ParsedConfig, error) 
 	if err != nil {
 		return nil, err
 	}
-
-	servers, err := parseMCPServersMap(m, "mcpServers", "serverUrl")
-	if err != nil {
-		return nil, err
+	if _, ok := m["mcpServers"]; !ok {
+		return nil, nil
 	}
 
-	return &ParsedConfig{Client: p.ClientName(), Path: path, Servers: servers}, nil
+	servers, err := parseMCPServersMap(m, "mcpServers", "serverUrl")
+	return &ParsedConfig{Client: p.ClientName(), Path: path, Servers: servers}, err
 }

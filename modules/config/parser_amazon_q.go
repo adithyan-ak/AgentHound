@@ -7,7 +7,12 @@ type AmazonQParser struct{}
 func (p *AmazonQParser) ClientName() string { return "amazon-q" }
 
 func (p *AmazonQParser) ConfigPaths(homeDir string) []string {
-	return []string{filepath.Join(homeDir, ".aws", "amazonq", "mcp.json")}
+	return []string{
+		filepath.Join(homeDir, ".aws", "amazonq", "default.json"),
+		filepath.Join(homeDir, ".aws", "amazonq", "mcp.json"),
+		filepath.Join(".amazonq", "default.json"),
+		filepath.Join(".amazonq", "mcp.json"),
+	}
 }
 
 func (p *AmazonQParser) Parse(path string, data []byte) (*ParsedConfig, error) {
@@ -15,11 +20,10 @@ func (p *AmazonQParser) Parse(path string, data []byte) (*ParsedConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	servers, err := parseMCPServersMap(m, "mcpServers", "url")
-	if err != nil {
-		return nil, err
+	if _, ok := m["mcpServers"]; !ok {
+		return nil, nil
 	}
 
-	return &ParsedConfig{Client: p.ClientName(), Path: path, Servers: servers}, nil
+	servers, err := parseMCPServersMap(m, "mcpServers", "url")
+	return &ParsedConfig{Client: p.ClientName(), Path: path, Servers: servers}, err
 }

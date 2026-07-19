@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "everything-http": {
+      "url": "http://mcp-streamable:3001/mcp"
+    }
+  }
+}

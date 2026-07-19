@@ -6,9 +6,11 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	collectorcli "github.com/adithyan-ak/agenthound/collector/cli"
+	"github.com/adithyan-ak/agenthound/sdk/campaign"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
@@ -69,6 +71,101 @@ func TestValidatorAcceptsValid(t *testing.T) {
 	v := NewValidator()
 	if err := v.Validate(validIngestData()); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+// campaignEvidenceIngest builds a "scan"-collector envelope carrying a
+// CREDENTIAL_REACH_VERIFIED edge with both reference_only endpoint nodes, exactly
+// as the campaign runner emits it.
+func campaignEvidenceIngest() *ingest.IngestData {
+	serverID := "sha256:camp-srv"
+	uri := "postgres://prod/customers"
+	resID := ingest.ComputeNodeID("MCPResource", serverID, uri)
+	credID := "sha256:camp-cred"
+	agentID := "sha256:camp-agent"
+	ev := campaign.Evidence{
+		ScenarioID: "cred-reach", ScenarioVersion: 1, RunID: "run-1",
+		EngagementID: "ENG", OracleType: campaign.OracleTypeDifferentialCredentialReach,
+		Outcome:      campaign.OutcomeCredentialGatedReachVerified,
+		ControlStage: campaign.ProbeStageResourceRead, ControlStatus: campaign.ProbeDenied, ControlAddressed: true,
+		AuthedStage: campaign.ProbeStageResourceRead, AuthedStatus: campaign.ProbeAllowed, AuthedAddressed: true,
+		VerifiedAt: "2026-07-12T00:00:00Z",
+		Witness: campaign.Witness{
+			SchemaVersion:                campaign.WitnessSchemaVersion,
+			TopologyNormalizationVersion: campaign.WitnessTopologyNormalizationVersion,
+			PublicationRevision:          1,
+			PredictedEdgeKind:            campaign.PredictedEdgeKindCanReach,
+			AgentID:                      agentID, AgentKind: "AgentInstance",
+			CredentialID: credID, CredentialValueHash: "deadbeef",
+			CredentialKind:     "Credential",
+			CredentialMergeKey: campaign.CredentialMergeKeyValueHash,
+			ServerID:           serverID, ServerKind: "MCPServer",
+			ResourceID: resID, ResourceKind: "MCPResource", ResourceIdentityInput: uri,
+			EvidenceNodeIDs:   []string{agentID, serverID, credID, resID},
+			EvidenceNodeKinds: []string{"AgentInstance", "MCPServer", "Credential", "MCPResource"},
+		},
+	}
+	scanID := "scan-camp-001"
+	nodes, edges := ev.EvidenceGraph(scanID)
+	scope := ingest.CanonicalCoverageKey("scan", "campaign", "cred-reach\x001\x00"+agentID+"\x00"+credID+"\x00"+serverID+"\x00"+resID)
+	data := &ingest.IngestData{
+		Meta: ingest.IngestMeta{
+			Version: ingest.CurrentVersion, Type: ingest.IngestType,
+			Collector: "scan", CollectorVersion: "0.9.0-dev",
+			Timestamp: "2026-07-12T00:00:00Z", ScanID: scanID,
+			Collection: &ingest.CollectionReport{
+				State: ingest.OutcomeComplete, CoverageKeys: []string{scope},
+				Outcomes: []ingest.CollectionOutcome{{
+					Collector: "scan", CoverageKey: scope, Target: serverID,
+					Method: "campaign:cred-reach", State: ingest.OutcomeComplete, Items: len(edges),
+				}},
+			},
+			Ruleset: ingest.EmptyRulesetManifest(), IdentitySchemes: ingest.CurrentIdentitySchemes(),
+		},
+		Graph: ingest.GraphData{Nodes: nodes, Edges: edges},
+	}
+	ingest.TagObservationDomain(&data.Graph, scope)
+	return data
+}
+
+// TestValidatorAcceptsCampaignEvidence: the emitted CREDENTIAL_REACH_VERIFIED
+// edge with reference_only endpoint nodes must pass ingest validation.
+func TestValidatorAcceptsCampaignEvidence(t *testing.T) {
+	data := campaignEvidenceIngest()
+	if err := NewValidator().Validate(data); err != nil {
+		t.Fatalf("campaign evidence envelope rejected: %v", err)
+	}
+}
+
+// TestValidatorRejectsCampaignMissingEndpoint: dropping a reference_only endpoint
+// node must fail validation (the validator requires both edge endpoints present).
+func TestValidatorRejectsCampaignMissingEndpoint(t *testing.T) {
+	data := campaignEvidenceIngest()
+	// Drop the source-agent endpoint node, keep the edge.
+	var kept []ingest.Node
+	for _, n := range data.Graph.Nodes {
+		if !hasKind(n.Kinds, "AgentInstance") {
+			kept = append(kept, n)
+		}
+	}
+	data.Graph.Nodes = kept
+	err := NewValidator().Validate(data)
+	if err == nil {
+		t.Fatal("edge with a missing endpoint node must be rejected")
+	}
+	var verr *ValidationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("expected *ValidationError, got %T: %v", err, err)
+	}
+	found := false
+	for _, fe := range verr.Errors {
+		if strings.Contains(fe.Message, "not present in graph.nodes") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected a missing-endpoint field error, got: %+v", verr.Errors)
 	}
 }
 

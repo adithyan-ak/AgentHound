@@ -86,6 +86,40 @@ func TestBuildManifestIncludesFingerprintRules(t *testing.T) {
 	}
 }
 
+func TestBuildManifestIncludesNativeDetectorSemantics(t *testing.T) {
+	detector := CodeDetector{
+		ID:      "native-test-detector",
+		Version: 3,
+		Source:  BundleSourceBuiltin,
+		EffectiveMatcher: json.RawMessage(
+			`{"probes":[{"method":"GET","path":"/status"}]}`,
+		),
+	}
+	manifest := BuildManifestWithDetectors(nil, nil, []CodeDetector{detector})
+	if manifest.LoadState != sdkingest.OutcomeComplete || len(manifest.Entries) != 1 {
+		t.Fatalf("native detector manifest = %+v", manifest)
+	}
+	entry := manifest.Entries[0]
+	if entry.Type != "detector" ||
+		entry.ID != detector.ID ||
+		entry.Version != detector.Version ||
+		entry.Source != BundleSourceBuiltin ||
+		entry.SemanticSHA256 == "" ||
+		!strings.Contains(string(entry.EffectiveMatcher), `"path":"/status"`) {
+		t.Fatalf("native detector entry = %+v", entry)
+	}
+
+	changed := detector
+	changed.EffectiveMatcher = json.RawMessage(
+		`{"probes":[{"method":"GET","path":"/different"}]}`,
+	)
+	changedManifest := BuildManifestWithDetectors(nil, nil, []CodeDetector{changed})
+	if manifest.Digest == changedManifest.Digest ||
+		entry.SemanticSHA256 == changedManifest.Entries[0].SemanticSHA256 {
+		t.Fatal("native detector semantic change did not change manifest digest")
+	}
+}
+
 func TestBuildManifestPersistsCanonicalTextMatcher(t *testing.T) {
 	rule := manifestTextRule("rule-a", "builtin")
 	rule.Matcher = MatcherSpec{

@@ -9,6 +9,18 @@ func TestEndpointBaseURLPreservesURLScheme(t *testing.T) {
 	}
 }
 
+func TestEndpointBaseURLPreservesURLPathAndImplicitPort(t *testing.T) {
+	target := Target{Address: "https://example.com/jupyter/"}
+	got := EndpointBaseURL(target, 8888, "http")
+	if got != "https://example.com/jupyter" {
+		t.Fatalf("EndpointBaseURL = %q, want exact URL base path", got)
+	}
+	_, _, port := EndpointParts(target, 8888, "http")
+	if port != 443 {
+		t.Fatalf("EndpointParts port = %d, want HTTPS default 443", port)
+	}
+}
+
 func TestEndpointBaseURLUsesMetadataSchemeOverride(t *testing.T) {
 	got := EndpointBaseURL(Target{
 		Address: "https://example.com:443",

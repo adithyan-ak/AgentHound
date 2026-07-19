@@ -107,7 +107,6 @@ type mockPoisoner struct {
 	revertErr error
 
 	revertCalls int
-	authToken   string
 }
 
 func newMockPoisoner(id, targetKind string) *mockPoisoner {
@@ -134,7 +133,7 @@ func (m *mockPoisoner) Poison(ctx context.Context, t action.Target, payload acti
 	if m.err != nil {
 		return nil, m.err
 	}
-	return &action.PoisonReceipt{
+	receipt := &action.PoisonReceipt{
 		ModuleID:        m.id,
 		EngagementID:    payload.EngagementID,
 		Target:          t,
@@ -143,13 +142,16 @@ func (m *mockPoisoner) Poison(ctx context.Context, t action.Target, payload acti
 		InjectedContent: payload.InjectionContent,
 		Mode:            payload.Mode,
 		DryRun:          payload.DryRun,
-	}, nil
+	}
+	if !payload.DryRun {
+		if _, err := m.state.WriteReceipt(payload.EngagementID, receipt); err != nil {
+			return nil, err
+		}
+	}
+	return receipt, nil
 }
 func (m *mockPoisoner) Revert(ctx context.Context, receipt action.Receipt) error {
 	m.revertCalls++
-	if token, ok := ctx.Value(action.RevertAuthTokenKey{}).(string); ok {
-		m.authToken = token
-	}
 	return m.revertErr
 }
 
@@ -162,6 +164,7 @@ func newPoisonTestCmd(input string, out *bytes.Buffer) *cobra.Command {
 	cmd.Flags().String("mode", "replace", "")
 	cmd.Flags().Bool("commit", false, "")
 	cmd.Flags().String("engagement-id", "", "")
+	cmd.Flags().Bool("insecure", false, "")
 	cmd.SetIn(strings.NewReader(input))
 	cmd.SetOut(out)
 	cmd.SetErr(out)
@@ -170,7 +173,7 @@ func newPoisonTestCmd(input string, out *bytes.Buffer) *cobra.Command {
 
 func newRevertTestCmd(out *bytes.Buffer) *cobra.Command {
 	cmd := &cobra.Command{Use: "revert"}
-	cmd.Flags().String("auth-token", "", "")
+	cmd.Flags().Bool("insecure", false, "")
 	cmd.SetOut(out)
 	cmd.SetErr(out)
 	return cmd
@@ -309,8 +312,17 @@ func TestRunPoison_DryRunPromptsAndPersistsReceipt(t *testing.T) {
 	if !strings.Contains(out.String(), "authorization confirmed") || !strings.Contains(out.String(), "DRY-RUN") {
 		t.Errorf("expected authorization and DRY-RUN output, got: %s", out.String())
 	}
-	if _, err := os.Stat(filepath.Join(home, ".agenthound", "poison-acknowledged")); err != nil {
+	sentinelPath := filepath.Join(home, ".agenthound", "poison-acknowledged")
+	if _, err := os.Stat(sentinelPath); err != nil {
 		t.Fatalf("poison sentinel was not written: %v", err)
+	}
+	sentinel, err := os.ReadFile(sentinelPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(sentinel, []byte("records a recovery path")) ||
+		bytes.Contains(sentinel, []byte("Every change is reversible")) {
+		t.Fatalf("poison sentinel overstates recovery: %s", sentinel)
 	}
 
 	receipts, err := mock.state.ReadReceipts("ENG-CLI-POISON")
@@ -349,6 +361,31 @@ func TestRunPoison_AuthorizationRejected(t *testing.T) {
 	}
 }
 
+func TestRunPoisonAppliedHintPreservesExplicitInsecureFlag(t *testing.T) {
+	setupSentinels(t)
+	t.Setenv("AGENTHOUND_STATE_DIR", filepath.Join(t.TempDir(), "state"))
+
+	mock := newMockPoisoner("mock.poison.applied.insecure", "mock-poison-applied-insecure")
+	module.Register(mock)
+	defer deregisterModule(t, mock.ID())
+
+	out := &bytes.Buffer{}
+	cmd := newPoisonTestCmd("", out)
+	mustSetFlag(t, cmd, "type", mock.Target())
+	mustSetFlag(t, cmd, "target-id", "tool-1")
+	mustSetFlag(t, cmd, "inject", "replace me")
+	mustSetFlag(t, cmd, "engagement-id", "ENG-APPLIED-INSECURE")
+	mustSetFlag(t, cmd, "commit", "true")
+	mustSetFlag(t, cmd, "insecure", "true")
+
+	if err := runPoison(cmd, []string{"127.0.0.1:8080"}); err != nil {
+		t.Fatalf("runPoison: %v", err)
+	}
+	if !strings.Contains(out.String(), "agenthound revert ENG-APPLIED-INSECURE --insecure") {
+		t.Fatalf("applied hint dropped explicit --insecure: %s", out.String())
+	}
+}
+
 func TestRunRevert_DispatchesNonDryRunAndSkipsDryRun(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("AGENTHOUND_STATE_DIR", filepath.Join(t.TempDir(), "state"))
@@ -375,16 +412,12 @@ func TestRunRevert_DispatchesNonDryRunAndSkipsDryRun(t *testing.T) {
 
 	out := &bytes.Buffer{}
 	cmd := newRevertTestCmd(out)
-	mustSetFlag(t, cmd, "auth-token", "test-token")
 
 	if err := runRevert(cmd, []string{"ENG-CLI-REVERT"}); err != nil {
 		t.Fatalf("runRevert: %v", err)
 	}
 	if mock.revertCalls != 1 {
 		t.Fatalf("revert calls = %d, want 1", mock.revertCalls)
-	}
-	if mock.authToken != "test-token" {
-		t.Errorf("auth token = %q, want test-token", mock.authToken)
 	}
 	if !strings.Contains(out.String(), "dry-run receipt") || !strings.Contains(out.String(), "1 reverted") {
 		t.Errorf("unexpected revert output: %s", out.String())

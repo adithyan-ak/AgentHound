@@ -21,8 +21,8 @@ func TestNewIngestData(t *testing.T) {
 		if data.Meta.Collector != "mcp" {
 			t.Errorf("collector = %q, want %q", data.Meta.Collector, "mcp")
 		}
-		if data.Meta.CollectorVersion != CollectorVersion {
-			t.Errorf("collector_version = %q, want %q", data.Meta.CollectorVersion, CollectorVersion)
+		if data.Meta.CollectorVersion != CollectorVersion() {
+			t.Errorf("collector_version = %q, want %q", data.Meta.CollectorVersion, CollectorVersion())
 		}
 		if data.Meta.ScanID != "scan-mcp-123" {
 			t.Errorf("scan_id = %q, want %q", data.Meta.ScanID, "scan-mcp-123")

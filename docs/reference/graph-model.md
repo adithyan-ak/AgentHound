@@ -20,24 +20,24 @@ These are the node kinds accepted in ingest input (`sdk/ingest.AllowedNodeKinds`
 
 | Label | Source | Key Properties |
 |-------|--------|----------------|
-| `MCPServer` | Config + MCP | `name`, `endpoint`, `transport` (stdio/http), `auth_method`, `auth_assurance`, `auth_strength` (numeric weakness only when known, post-processor), `auth_evidence`, `protocol_version`, `instructions`, `instructions_hash` (SHA-256), `capabilities`, `pinning_status`, `is_pinned` (only when known), `id_scheme`, `has_tasks_capability` |
+| `MCPServer` | Config + MCP | configured `name`, live `server_name`, `endpoint`, `transport` (stdio/http), configured `auth_method`/`auth_assurance`/`auth_evidence`, live `observed_auth_method`/`observed_auth_assurance`/`observed_auth_evidence`, `auth_strength` (numeric weakness only when known, post-processor), `protocol_version`, `instructions`, `instructions_hash` (SHA-256), `capabilities`, `pinning_status`, `is_pinned` (only when known), `id_scheme`, `has_tasks_capability` |
 | `MCPTool` | MCP | `name`, `description`, `input_schema`, `output_schema`, `annotations`, `description_hash` (SHA-256), `input_schema_hash` (SHA-256), `schema_keys[]`, `capability_surface[]`, `source_trust` (untrusted_web/email/fileshare), `has_injection_patterns`, `has_cross_references` |
 | `MCPResource` | MCP | `uri`, `name`, `mime_type`, `size`, `uri_scheme`, `sensitivity` (`critical`/`high`/`medium`/`low`/`none`/`unknown`), `sensitivity_rule_id`, `sensitivity_evidence` |
 | `MCPPrompt` | MCP | `name`, `description`, `arguments` |
-| `A2AAgent` | A2A | `name`, `description`, `url`, `provider`, `version`, `protocol_versions`, `capabilities`, `security_schemes`, `auth_method`, `auth_assurance`, `auth_evidence`, `auth_strength` (numeric only when known), `is_https`, `is_signed`, `signature_verification_status`, `card_hash` |
-| `A2ASkill` | A2A | `id`, `name`, `description`, `input_modes`, `output_modes`, `description_hash`, `has_injection_patterns` |
+| `A2AAgent` | A2A | `name`, `description`, `url`, `provider`, `version`, `card_schema_version`, `card_present_fields`, `card_conformant`, `card_conformance_errors`, ordered `interfaces`, `protocol_versions`, `capabilities`, `security_schemes`, OR-of-AND `security_requirements`, `auth_method`, `auth_assurance`, `auth_evidence`, `auth_strength` (numeric only when known), `is_https`, `is_signed`, `signature_verification_status`, `signature_key_source`, `signature_key_trust`, `card_hash` |
+| `A2ASkill` | A2A | `id`, `name`, `description`, `input_modes`, `output_modes`, `security_requirements`, `conformant`, `conformance_errors`, `description_hash`, `has_injection_patterns` |
 | `AgentInstance` | Config | `name`, `framework`, `config_path` |
 | `Identity` | Config + MCP | `type` (none/apiKey/oauth/bearer/mtls), `scope`, `is_static` |
 | `Credential` | Config + LiteLLM/Open WebUI Looters | `type`, `name`, `source`, required `merge_key` (`value_hash`/`identity`), `identity_basis` (`value_hash`/`provider_name`/`metadata`/`unknown`), `material_status` (`observed`/`masked`/`hashed`/`unobserved`/`unknown`), `exposure_status` (`exposed`/`not_observed`/`unknown`), `high_entropy`, `format`, `value_hash`, `blast_radius` |
 | `Host` | Config + A2A + MCP | `hostname`, `ip`, `scope` (`local`/`private`/`public`/`unknown`) |
-| `ConfigFile` | Config | `path`, `client`, `server_count` |
-| `InstructionFile` | Config | `path`, `type` (agents.md/claude.md/cursorrules/copilot-instructions/memory.md), `hash`, `is_suspicious` |
+| `ConfigFile` | Config | `path`, sorted `clients`, singular `client` only for one applicable client, unique enabled `server_count` |
+| `InstructionFile` | Config | `path`, `type` (agents.md/claude.md/cursorrules/copilot-instructions/memory.md/cursor-rule), `hash`, `is_suspicious` |
 | `OllamaInstance` | Network scan + Ollama fingerprinter + Open WebUI config | `endpoint`, `version`, observed `auth_method`, `probe_status` (`configured_unverified`/`verified`/`failed`/`unknown`), `last_verified_at`, `configuration_observed`, `configured_via`, `configured_auth_method`, `is_anonymous_loot`, `discovered_via` |
-| `VLLMInstance` | Network scan + vLLM fingerprinter | `endpoint`, `version`, `auth_method`, `is_anonymous_loot` |
+| `VLLMInstance` | Network scan + vLLM fingerprinter | `endpoint`, upstream `version`, `auth_method` (`unknown` from fingerprinting) |
 | `QdrantInstance` | Network scan + Qdrant fingerprinter + Qdrant Looter | `endpoint`, `version`, `collection_count`, `collections` (sorted names), `total_points`, `anonymous_listing` (Looter-enriched) |
 | `MLflowServer` | Network scan + MLflow fingerprinter | `endpoint`, `version`, `experiment_count` |
 | `LiteLLMGateway` | Network scan + LiteLLM fingerprinter | `endpoint`, `auth_method`, `is_anonymous_loot`, `docs_enabled` |
-| `JupyterServer` | Network scan + Jupyter fingerprinter | `endpoint`, `version`, `token_required` |
+| `JupyterServer` | Network scan + Jupyter fingerprinter + Jupyter Looter | `endpoint`, fingerprint-owned `version`, `status_access`, `status_anonymous_access`, `fingerprint_detector_id`, `fingerprint_detector_version`, `fingerprint_detector_source`; Looter-owned `sessions_access`, `contents_access`, `auth_required` (only when known), observed `auth_method`, `auth_assurance`, `auth_evidence`, `anonymous_access_observed`, `is_anonymous_loot` |
 | `LangServeApp` | Network scan + LangServe fingerprinter | `endpoint`, `chains` |
 | `OpenWebUIInstance` | Network scan + Open WebUI fingerprinter + Open WebUI Looter | `endpoint`, `version`, `signup_enabled`, `auth_required`, `ollama_backend_urls` (canonicalized list, Looter-enriched from admin `/ollama/config`) |
 | `AIService` | Multi-label umbrella (see below) | _(no unique properties — carried as companion label)_ |
@@ -53,24 +53,61 @@ explicit pinned/unpinned evidence.
 Neo4j's internal `SchemaVersion` node is excluded from every public inventory
 count and node collection.
 
-### A2AAgent Signature Verification (`is_signed`, `signature_verification_status`)
+### A2A conformance, interfaces, and signatures
 
-`A2AAgent` carries two signature properties:
+The A2A collector treats discovery and protocol conformance as separate facts.
+`card_schema_version` is pinned to v0.3.0 or v1.0.1,
+`card_present_fields` records raw top-level presence, and
+`card_conformant`/`card_conformance_errors` record versioned required-field
+validation. Nonconformant cards remain observable. `interfaces` preserves wire
+order and marks entry zero `preferred=true`; later JSON-RPC entries never
+replace it. Invalid skills and interfaces remain properties/nodes where they
+have stable identity, but do not produce `ADVERTISES_SKILL` or `RUNS_ON`.
+Optional skill `examples`, `inputModes`, and `outputModes` accept absent/null
+ProtoJSON fields or arrays of strings; another JSON shape makes that skill
+nonconformant and suppresses its functional edge.
 
-- **`is_signed`** — `true` when the agent card has a non-empty `signatures[]` array, regardless of cryptographic validity.
-- **`signature_verification_status`** — the authoritative outcome:
-  - `unsigned` — no `signatures[]`.
-  - `verified` — every signature verified.
-  - `partially_verified` — at least one, but not all, signatures verified.
-  - `failed` — signatures were checked against resolvable keys but none verified (tampered card, wrong key, unsupported algorithm).
-  - `unverifiable` — no key could be resolved for any signature, so verification could not be attempted.
+`security_requirements` preserves alternatives in array order. Each alternative
+contains the schemes that must be used together plus their scopes. Scheme
+declarations alone are inactive. `auth_method` and `AUTHENTICATES_WITH` are
+emitted only when active conformant requirements reduce unambiguously to one
+scalar method; AND combinations or distinct OR methods remain `unknown`. In
+v1.0.1, an empty requirement (`{}`, including ProtoJSON's omitted empty
+`schemes` map) is a conformant anonymous alternative. Omitted/null `list`
+inside a `StringList` is likewise an empty scope list. These forms preserve the
+skill's `ADVERTISES_SKILL` edge and record declared `auth_method=none` where the
+requirements reduce to anonymous access; they are not runtime proof of
+anonymous access.
 
-**Key resolution** (per signature, in order): the card's inline `jwks`; operator-supplied trusted keys (`--a2a-trusted-keys`, a JWKS file); then — unless `--no-verify-jwks` is set — the JWS protected-header **`jku`** URL (the A2A spec §8.4 mechanism) and, as a fallback, a top-level `jwks_uri`. Remote resolution is **on by default** via an SSRF-hardened fetcher: it validates the resolved IP at dial time (refusing link-local/cloud-metadata `169.254.0.0/16`, `fe80::/10`, and unspecified addresses; loopback and RFC1918 remain allowed for internal engagements), caps redirects and response size, honors `--insecure` for TLS, and never forwards `--auth-token` to the `jku` host.
+`is_signed` records a non-empty signature declaration.
+`signature_verification_status` is:
 
-The collector accepts both JWS serializations a card may use:
+- `unsigned` — absent, ProtoJSON `null`, or empty `signatures[]`.
+- `unsupported_version` — a v0.3 signature is structurally observed, but v0.3
+  has no v1 canonicalization contract.
+- `malformed` — the object signature, protected header, required `alg`/`kid`,
+  bounds, ProtoJSON normalization, or JCS input is invalid.
+- `key_unavailable` — the signature is structurally usable but no permitted,
+  current key resolved.
+- `invalid` — a permitted key resolved but did not verify the canonical card.
+- `valid_untrusted` — verification succeeded with an HTTPS `jku` key.
+- `valid_trusted` — verification succeeded with an operator-pinned key.
 
-- **Compact** — each `signatures[]` entry is a compact JWS string.
-- **Flattened JSON (object form)** — each entry is `{ "protected": "<b64url>", "signature": "<b64url>" }`, the spec-conformant A2A shape. The signed payload is the agent card with the `signatures` member removed and JCS-canonicalized (key ordering, no insignificant whitespace); it is embedded base64url-encoded as the JWS payload and verified per RFC 7515. Tampering with any other card field invalidates the signature.
+`signature_key_source` (`none`/`trusted_store`/`jku`) and
+`signature_key_trust` (`unknown`/`untrusted`/`trusted`) keep cryptographic
+validity separate from identity trust. Ingest rejects contradictory
+status/source/trust/`is_signed` tuples. v1.0.1 verification applies pinned
+ProtoJSON presence/default metadata, removes `signatures`, bounds signed-card
+size/depth/object width, then uses RFC 8785 JCS and object-form JWS. Compact
+strings, duplicate protected/unprotected JOSE parameters, inline `jwks`, and
+top-level `jwks_uri` are not accepted inputs; a JWK `alg` constraint must match.
+An absent or ProtoJSON `null` unprotected `header` is equivalent to no header;
+a non-null non-object header is malformed.
+Remote `jku` is HTTPS-only across redirects, always validates TLS server
+identity (independent of target `--insecure`), refuses link-local/metadata
+addresses, rejects fragments, and filters explicitly expired or revoked keys.
+Each card is limited to 16 signatures and four unique remote key sources under
+one aggregate verification deadline.
 
 ---
 
@@ -86,7 +123,7 @@ This enables queries like `MATCH (n:AIService)` to find all AI infrastructure re
 
 ## 3. Edge Types
 
-### Raw Edges (18 collector-produced)
+### Raw Edges (20 collector-produced)
 
 | Edge | Source | Target | Collector | Meaning |
 |------|--------|--------|-----------|---------|
@@ -94,20 +131,29 @@ This enables queries like `MATCH (n:AIService)` to find all AI infrastructure re
 | `PROVIDES_TOOL` | MCPServer | MCPTool | MCP | Server exposes this tool |
 | `PROVIDES_RESOURCE` | MCPServer / JupyterServer / MLflowServer / QdrantInstance | MCPResource | MCP / Jupyter Looter / MLflow Looter (Model Registry storage URIs) / Qdrant Looter (scrolled point payloads under `--include-points`) | Server exposes this resource. MLflow URIs are plain `storage_location or source` (s3://, gs://, dbfs:/, file:///), NOT presigned credentials. Qdrant point resources are per-collection payload samples. |
 | `PROVIDES_PROMPT` | MCPServer | MCPPrompt | MCP | Server exposes this prompt template |
-| `ADVERTISES_SKILL` | A2AAgent | A2ASkill | A2A | Agent advertises this skill |
+| `ADVERTISES_SKILL` | A2AAgent | A2ASkill | A2A | A conformant skill declaration advertises this skill; invalid skill observations do not emit the edge |
 | `DELEGATES_TO` | A2AAgent | A2AAgent | A2A | Lexical possible-delegation hypothesis. `match_type`, `match_field`, and `matched_reference` preserve the boundary/context witness; not proof of runtime delegation. |
-| `AUTHENTICATES_WITH` | MCPServer / A2AAgent | Identity | Config / A2A | Entity uses this auth identity |
+| `AUTHENTICATES_WITH` | MCPServer / A2AAgent | Identity | Config / A2A | Entity uses this auth identity. A2A emits it only for conformant, active, scalar-unambiguous security requirements. |
 | `USES_CREDENTIAL` | Identity | Credential | Config | Identity backed by this credential material |
-| `RUNS_ON` | MCPServer / A2AAgent | Host | Config / A2A / MCP | Entity runs on this host |
+| `RUNS_ON` | MCPServer / A2AAgent | Host | Config / A2A / MCP | Entity runs on this host. A2A requires a conformant preferred interface; later interfaces do not replace entry zero. |
 | `CONFIGURED_IN` | MCPServer | ConfigFile | Config | Server defined in this config file |
 | `HAS_ENV_VAR` | MCPServer | Credential | Config | Server has access to this env var |
-| `LOADS_INSTRUCTIONS` | AgentInstance | InstructionFile | Config | Agent loads this instruction file; validity depends on both the agent config scope and instruction-file scope |
+| `LOADS_INSTRUCTIONS` | AgentInstance | InstructionFile | Future evidence-backed collectors | Agent loads this instruction file. Static path discovery does not emit this edge because path presence alone cannot prove client/scope applicability. |
 | `SAME_AUTH_DOMAIN` | A2AAgent | A2AAgent | A2A | Agents share an authentication domain |
 | `EXPOSES` | AIService | AIService | Fingerprinters / Looters | Service relationship. Open WebUI backend references carry `assertion_type=configured_reference` and `confidence_scope=configuration_presence`; they do not prove backend availability or authentication until a direct probe sets `probe_status=verified`. |
 | `EXPOSES_CREDENTIAL` | AIService | Credential | LiteLLM Looter, Open WebUI Looter | Credential evidence relationship. Inspect `exposure_status`/`assertion_type`: masked provider references and returned hashes remain reference edges but are not usable secret exposure. |
 | `PROVIDES_MODEL` | OllamaInstance | AIModel | Ollama Looter | Instance serves this model |
 | `EXTRACTED_FROM` | AIModel | ExtractedTrainingSignal | Extractors | Extracted signal was derived from this model |
 | `INGESTS_UNTRUSTED` | MCPTool | MCPResource | MCP | Tool with rule-derived `source_trust` (web/email/fileshare) ingests untrusted input that taints same-server resources. **Raw edge** — not swept by composite cleanup (see post-processors doc) |
+| `CREDENTIAL_REACH_VERIFIED` | AgentInstance | MCPResource | scan (campaign runner) | Per-agent campaign evidence that a supplied credential enabled a read of the exact predicted resource. It means “campaign verification associated with this source agent,” **not** observed agent invocation. Carries witness-v2 identity/topology, staged status, and credential hash metadata; NEVER the endpoint or raw credential. On ingest the server validates the complete contract and upgrades only the matching source-agent `CAN_REACH` finding. **Raw edge.** |
+| `PUBLIC_ACCESS_OBSERVED` | MCPServer | MCPResource | scan (campaign runner) | A campaign probe read this resource with no credential. A recorded fact, not an auto-finding (findings derive only from composite edges) — only a policy concern where authentication was expected. **Raw edge.** |
+
+> The campaign runner's second scenario, `mcp-poison-roundtrip` (a STANDALONE reversible-mutation validation), deliberately emits **no** graph edge. Its oracle/cleanup evidence stays in the bounded CLI `campaign.RunReport` rather than a scored edge, so a finding-free validation never pollutes the graph. See [offensive-actions.md](../operator/offensive-actions.md#mcp-poison-roundtrip-standalone-target-mutation-validation).
+
+Campaign artifacts are prevalidated against their bounded public envelope and
+the current graph before normalization, scan lifecycle creation, canonical
+`MERGE`, or coverage retirement. Invalid positives therefore cannot overwrite a
+valid per-agent campaign edge, and invalid negatives cannot retire it.
 
 ### Composite Edges (12 post-processor computed)
 
@@ -119,7 +165,7 @@ This enables queries like `MATCH (n:AIService)` to find all AI infrastructure re
 | `POISONED_DESCRIPTION` | MCPTool | MCPTool (self-edge) | Raw edges | Tool description contains injection patterns |
 | `POISONED_INSTRUCTIONS` | InstructionFile | InstructionFile (self-edge) | Raw edges | Suspicious patterns: imperative overrides, exfiltration commands, hidden Unicode |
 | `TAINTS` | MCPTool | MCPTool | INGESTS_UNTRUSTED + `schema_keys` | Untrusted-input tool shares ≥2 schema keys with a tool on another server, so attacker data can flow between them |
-| `CAN_REACH` | AgentInstance / A2AAgent | MCPResource / Credential | HAS_ACCESS_TO and correlation joins | Inferred transitive access. Credential variants distinguish observed material from references; cross-protocol shared-host variants are 50%-confidence hypotheses, not proven invocation paths. |
+| `CAN_REACH` | AgentInstance / A2AAgent | MCPResource / Credential | HAS_ACCESS_TO and correlation joins | Inferred transitive access. Credential variants distinguish observed material from references; cross-protocol shared-host variants are 50%-confidence hypotheses, not proven invocation paths. Credential-path candidates for one `(agent, resource)` are reduced deterministically by the complete object-ID tuple `(agent, entry server, entry tool, resource server, credential, identity, resource tool, resource)`; relationship IDs never choose the witness path. When per-agent `CREDENTIAL_REACH_VERIFIED` evidence exactly re-correlates on ingest, only that source agent's credential-chain edge is upgraded in place (`reach_evidence_state=verified`, confidence 1.0), with structured verification metadata persisted on the finding. |
 | `CAN_EXFILTRATE_VIA` | AgentInstance | MCPTool | CAN_REACH | Inferred sensitive-data access plus a matched output-channel capability (incl. `auto_fetch_render` / `allowlisted_proxy`); not observed exfiltration |
 | `IFC_VIOLATION` | MCPTool | MCPTool | INGESTS_UNTRUSTED + HAS_ACCESS_TO (≤3 hops) | Untrusted source shares a resource with a high-impact sink (credential_access/file_write/email_send) |
 | `CAN_IMPERSONATE` | A2AAgent | A2AAgent | Raw edges | TF-IDF cosine similarity > 0.8 on skill descriptions |
@@ -183,14 +229,20 @@ properties or lowering a complete authoritative observation. If the last
 authoritative owner retires while a reference owner remains, the writer removes
 the stale managed properties and retains only truthful node identity,
 ownership, and lifecycle metadata.
-`LOADS_INSTRUCTIONS` uses `all_dependencies`: completing either its config or
-instruction scope without re-observing the relationship retires it.
+If an evidence-backed collector emits `LOADS_INSTRUCTIONS`, it must declare the
+actual client and applicability scopes needed to reconcile that relationship;
+the static config collector does not infer them.
 
 A complete exact re-observation replaces stale managed properties. Observation
 completeness considers only public collector-produced nodes and managed raw
 relationships, so internal graph state such as `SchemaVersion` and derived
 relationships cannot block publication. Internal ownership and completeness
 properties are reserved and stripped from imported `properties` maps.
+When a previously unseen complete domain adds only properties compatible with
+an already complete fact, the union remains complete. Any overlapping conflict
+still makes it incomplete. If one of those authoritative co-owner domains later
+retires without replacement, the retained fact is downgraded to incomplete so
+properties unique to the missing owner can never be published as current.
 Public nodes with no observation token, and raw relationships incident to one,
 are publication-unsafe even when their managed properties are otherwise
 complete.
@@ -245,7 +297,10 @@ The `value_hash` property on `Credential` nodes is the cross-collector merge pri
 
 1. Config Collector emits a Credential node via `HAS_ENV_VAR` (MCP server → credential)
 2. LiteLLM Looter emits a Credential node via `EXPOSES_CREDENTIAL` (gateway → master/upstream/virtual keys)
-3. Both compute `value_hash = SHA-256(credential_value)` via `sdk/common.HashCredentialValue`
+3. Both compute `value_hash = SHA-256(credential_material)` via
+   `sdk/common.HashCredentialValue`. For a recognized HTTP `Authorization`
+   scheme, the material is the value after `Bearer`, `Basic`, or the other
+   recognized scheme; protocol syntax is not part of the reusable secret.
 4. Same secret value → same `value_hash` → nodes merge on `objectid` regardless of how each collector derives it
 
 This enables evidence graphs like `AgentInstance → MCPServer → Credential ← LiteLLMGateway → upstream provider`. An observed `value_hash` match correlates the local and gateway credential records; the upstream target is classified separately as observed material or a reference.

@@ -155,6 +155,44 @@ func TestHandleFindings_PublishedScopeIsExactAndAttributed(t *testing.T) {
 	}
 }
 
+func TestHandleFindingsSerializesVerificationMetadata(t *testing.T) {
+	store := &fakePublishedFindingStore{
+		recordingFindingLister: recordingFindingLister{findings: []model.Finding{{
+			ID: "aaaaaaaaaaaaaaaa",
+			Evidence: model.FindingEvidence{
+				State: model.FindingEvidenceVerified,
+				Verification: &model.FindingVerification{
+					ScenarioID: "cred-reach", ScenarioVersion: 1,
+					CampaignRunID: "run-api", VerifiedAt: "2026-07-13T12:00:00Z",
+					OracleType:   "differential_credential_reach",
+					Outcome:      "credential_gated_reach_verified",
+					ControlStage: "initialize", ControlStatus: "denied",
+					AuthedStage: "resource_read", AuthedStatus: "allowed",
+					AuthedResourceAddressed: true, CleanupStatus: "not_applicable",
+				},
+			},
+		}}},
+	}
+	h := &AnalysisHandler{findingStore: store}
+	w := httptest.NewRecorder()
+	h.HandleFindings(w, newTestRequest(http.MethodGet, "/api/v1/analysis/findings", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	var response struct {
+		Findings []model.Finding `json:"findings"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Findings) != 1 ||
+		response.Findings[0].Evidence.Verification == nil ||
+		response.Findings[0].Evidence.Verification.CampaignRunID != "run-api" ||
+		response.Findings[0].Evidence.Verification.CleanupStatus != "not_applicable" {
+		t.Fatalf("verification API round-trip = %+v", response.Findings)
+	}
+}
+
 func TestHandleShortestPath_MissingSource(t *testing.T) {
 	h := NewAnalysisHandler(&mockGraphDB{}, nil)
 	w := httptest.NewRecorder()

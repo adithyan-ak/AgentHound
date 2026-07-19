@@ -80,7 +80,10 @@ Links tools to resources on the same server when capability or description indic
 Three Cypher passes:
 - **Capability-DB:** Tool has `database_access` capability AND resource URI scheme is postgres/mysql/mongodb/redis. Confidence: 0.7.
 - **Capability-File:** Tool has `file_read` or `file_write` AND resource URI scheme is `file`. Confidence: 0.7.
-- **Description match:** Tool description contains the resource name (case-insensitive substring). Confidence: 0.9.
+- **Description match:** Tool description contains the complete resource name,
+  or at least two distinct meaningful (four-or-more-character) tokens from a
+  hyphen/underscore-normalized resource name. Requiring two tokens avoids
+  inferring access from generic one-word overlap. Confidence: 0.9.
 
 All edges: `risk_weight=0.2`, `match_type` recorded for evidence. Confidence,
 match type, weight, collector, and scan metadata are refreshed on MERGE so a
@@ -156,8 +159,45 @@ Confidence scales inversely with trust edge risk_weight (no-auth trust = 1.0, st
 AgentInstance -> MCPServer(s1) -> MCPTool(file_read|credential_access)
 MCPServer(s2) -[HAS_ENV_VAR]-> Credential -> Identity -> MCPServer(s2) -> MCPTool -> MCPResource
 ```
-Requires explicit unauthenticated/weak evidence for s1; missing auth evidence
-does not match. Confidence: 0.6.
+Requires explicit unauthenticated/weak evidence for s1. Live MCP initialize
+evidence takes precedence over configuration posture when present; missing
+auth evidence does not match. Confidence: 0.6.
+
+When multiple credential paths connect the same `(agent, resource)`, the
+processor orders candidates by the complete stable object-ID tuple
+`(a, s1, t1, s2, c, i, t2, r)` and selects the first before `MERGE`.
+Neo4j relationship IDs are retained only as post-selection evidence and never
+participate in winner selection, so witness topology cannot flip with
+relationship recreation order.
+
+**Verified-reach upgrade (3rd pass):** after building the CAN_REACH edges,
+`can_reach` re-correlates any persisted per-agent raw
+`CREDENTIAL_REACH_VERIFIED` edge
+(emitted by the campaign runner's `cred-reach` scenario) against the freshly
+rebuilt edges. On a full match it **upgrades the CAN_REACH edge in place** —
+`reach_evidence_state='verified'`, `confidence=1.0`, plus the verified
+scenario/run/oracle/staged-observation/cleanup metadata. It creates **no** new edge and no second finding,
+so risk is never double-counted; `findings.go` reads `reach_evidence_state` and
+raises the finding's evidence state to `verified`.
+
+The ingest pipeline admits that raw campaign edge only after generic validation
+and campaign-specific envelope/current-topology prevalidation, all before
+normalization, `BeginScan`, canonical writes, and reconciliation. Rejected
+positive or negative submissions leave canonical edges and coverage untouched;
+diagnostics are limited to a sanitized Postgres rejection audit.
+
+Before the Cypher upgrade, Go reconstructs witness v2 from each raw edge and
+recomputes its unkeyed fingerprint; invalid evidence remains stored for
+diagnosis but is excluded from the validated relationship-ID allowlist.
+Re-correlation then requires `a.objectid = witness.agent_id`, exact live
+credential hash/merge key, the exact providing server/resource identity, the
+fixed scenario/oracle/stage/outcome contract, and equality between the complete
+ordered witness topology and the current `CAN_REACH.evidence_node_ids`; every
+normalized kind must still label its corresponding node. Only a positive
+publication revision is required—revision equality is deliberately not a gate.
+Because evidence identity is `AgentInstance -> MCPResource` and coverage also
+includes the agent, two agents sharing one credential/resource cannot overwrite
+or over-upgrade each other.
 
 ## 7. cross_service_credential_chain
 

@@ -105,11 +105,19 @@ WHERE type(r) IN $raw_edge_kinds
   AND coalesce(r.observation_semantics, '') <> $all_dependencies_semantics
   AND any(token IN coalesce(r.observation_tokens, [])
           WHERE any(prefix IN $domain_prefixes WHERE token STARTS WITH prefix))
-SET r.observation_tokens = [
-  token IN coalesce(r.observation_tokens, [])
-  WHERE none(prefix IN $domain_prefixes WHERE token STARTS WITH prefix)
-     OR token IN $current_tokens
-]
+WITH r, coalesce(r.observation_tokens, []) AS old_tokens,
+     [token IN coalesce(r.observation_tokens, [])
+      WHERE none(prefix IN $domain_prefixes WHERE token STARTS WITH prefix)
+         OR token IN $current_tokens] AS remaining_tokens
+SET r.observation_tokens = remaining_tokens,
+    r.observation_properties_complete = CASE
+      WHEN size(remaining_tokens) > 0
+       AND any(prefix IN $domain_prefixes WHERE
+             any(token IN old_tokens WHERE token STARTS WITH prefix)
+             AND none(token IN remaining_tokens WHERE token STARTS WITH prefix))
+      THEN false
+      ELSE coalesce(r.observation_properties_complete, false)
+    END
 RETURN count(r) AS retired`
 
 const deleteUnownedRelationshipsCypher = `
@@ -131,9 +139,10 @@ WITH n,
      n.objectid AS objectid,
      n.scan_id AS scan_id,
      n.first_seen AS first_seen,
-     n.last_seen AS last_seen
+     n.last_seen AS last_seen,
+     coalesce(n.observation_properties_complete, false) AS old_properties_complete
 WITH n, old_tokens, old_reference_tokens,
-     objectid, scan_id, first_seen, last_seen,
+     objectid, scan_id, first_seen, last_seen, old_properties_complete,
      [token IN old_tokens
       WHERE none(prefix IN $domain_prefixes WHERE token STARTS WITH prefix)
          OR token IN $current_tokens] AS remaining_tokens,
@@ -141,13 +150,21 @@ WITH n, old_tokens, old_reference_tokens,
       WHERE none(prefix IN $domain_prefixes WHERE token STARTS WITH prefix)
          OR token IN $current_tokens] AS remaining_reference_tokens
 WITH n, remaining_tokens, remaining_reference_tokens,
-     objectid, scan_id, first_seen, last_seen,
+     objectid, scan_id, first_seen, last_seen, old_properties_complete,
      [token IN old_tokens
       WHERE NOT token IN old_reference_tokens] AS old_authoritative_tokens,
      [token IN remaining_tokens
       WHERE NOT token IN remaining_reference_tokens] AS remaining_authoritative_tokens
 SET n.observation_tokens = remaining_tokens,
-    n.observation_reference_tokens = remaining_reference_tokens
+    n.observation_reference_tokens = remaining_reference_tokens,
+    n.observation_properties_complete = CASE
+      WHEN size(remaining_authoritative_tokens) > 0
+       AND any(prefix IN $domain_prefixes WHERE
+             any(token IN old_authoritative_tokens WHERE token STARTS WITH prefix)
+             AND none(token IN remaining_authoritative_tokens WHERE token STARTS WITH prefix))
+      THEN false
+      ELSE old_properties_complete
+    END
 FOREACH (_ IN CASE
   WHEN size(old_authoritative_tokens) > 0
    AND size(remaining_authoritative_tokens) = 0
