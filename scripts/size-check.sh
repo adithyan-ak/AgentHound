@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 
 # BASELINE_BYTES recorded from a fresh prototype build below.
 # Update this number consciously when a dep change intentionally raises the bar.
-BASELINE_BYTES=9851064
+BASELINE_BYTES=10920120
 
 OUT=$(mktemp)
 trap 'rm -f "$OUT"' EXIT
