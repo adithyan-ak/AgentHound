@@ -21,10 +21,10 @@ func main() {
 	defer f.Close()
 
 	// GGUF header: magic + version + tensor_count + metadata_kv_count
-	binary.Write(f, binary.LittleEndian, uint32(0x46475547)) // GGUF magic
-	binary.Write(f, binary.LittleEndian, uint32(3))          // version 3
-	binary.Write(f, binary.LittleEndian, uint64(1))          // 1 tensor
-	binary.Write(f, binary.LittleEndian, uint64(1))          // 1 metadata KV
+	f.Write([]byte("GGUF"))
+	binary.Write(f, binary.LittleEndian, uint32(3)) // version 3
+	binary.Write(f, binary.LittleEndian, uint64(1)) // 1 tensor
+	binary.Write(f, binary.LittleEndian, uint64(1)) // 1 metadata KV
 
 	// Metadata KV: "tokenizer.ggml.tokens" = array of strings
 	writeString(f, "tokenizer.ggml.tokens")

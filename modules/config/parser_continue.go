@@ -16,6 +16,13 @@ func (p *ContinueParser) ConfigPaths(homeDir string) []string {
 }
 
 func (p *ContinueParser) Parse(path string, data []byte) (*ParsedConfig, error) {
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("invalid YAML: %w", err)
+	}
+	if _, ok := raw["mcpServers"]; !ok {
+		return nil, nil
+	}
 	var cfg struct {
 		MCPServers []struct {
 			Name    string            `yaml:"name"`
@@ -23,6 +30,7 @@ func (p *ContinueParser) Parse(path string, data []byte) (*ParsedConfig, error) 
 			Args    []string          `yaml:"args"`
 			Env     map[string]string `yaml:"env"`
 			URL     string            `yaml:"url"`
+			Headers map[string]string `yaml:"headers"`
 		} `yaml:"mcpServers"`
 	}
 
@@ -31,12 +39,18 @@ func (p *ContinueParser) Parse(path string, data []byte) (*ParsedConfig, error) 
 	}
 
 	var servers []ServerDef
+	malformed := 0
 	for _, s := range cfg.MCPServers {
 		sd := ServerDef{
-			Name: s.Name,
-			Env:  s.Env,
+			Name:    s.Name,
+			Env:     s.Env,
+			Headers: s.Headers,
 		}
 
+		if s.Name == "" {
+			malformed++
+			continue
+		}
 		if s.URL != "" {
 			sd.Transport = "http"
 			sd.URL = s.URL
@@ -45,11 +59,16 @@ func (p *ContinueParser) Parse(path string, data []byte) (*ParsedConfig, error) 
 			sd.Command = s.Command
 			sd.Args = s.Args
 		} else {
+			malformed++
 			continue
 		}
 
 		servers = append(servers, sd)
 	}
 
-	return &ParsedConfig{Client: p.ClientName(), Path: path, Servers: servers}, nil
+	var parseErr error
+	if malformed > 0 {
+		parseErr = malformedServerEntriesError("mcpServers", malformed)
+	}
+	return &ParsedConfig{Client: p.ClientName(), Path: path, Servers: servers}, parseErr
 }

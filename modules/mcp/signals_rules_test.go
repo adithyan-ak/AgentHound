@@ -102,6 +102,12 @@ func TestToolSignals_RulesEngineCapabilities(t *testing.T) {
 			wantCaps:    []string{"network_outbound"},
 		},
 		{
+			name:        "environment disclosure",
+			toolName:    "get-env",
+			description: "Returns all environment variables, helpful for debugging MCP server configuration",
+			wantCaps:    []string{"credential_access"},
+		},
+		{
 			name:        "no capabilities",
 			toolName:    "format_text",
 			description: "Formats the input text nicely",

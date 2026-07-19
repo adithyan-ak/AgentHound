@@ -59,16 +59,40 @@ When none specified, defaults to config + MCP.
 |------|---------|-------------|
 | `--path` | | Single config file path (overrides auto-discovery). |
 | `--paths` | | Comma-separated paths to multiple config files. |
-| `--project-dir` | | Directory for instruction file discovery. |
+| `--project-dir` | current working directory | Authoritative project root for project config, instruction, and MCP auto-discovery. Missing, inaccessible, or non-directory roots fail closed; they are never treated as an empty project. |
 | `--include-credential-values` | `false` | Emit raw credential values instead of SHA-256 hashes. |
 
 Supported clients (12): Claude Desktop, Claude Code, Cursor, VS Code, Windsurf, Continue, Zed, Cline, JetBrains, Kiro, Amazon Q, Augment.
+
+Auto-discovery reads each physical configuration file once and applies every
+client format registered for that path. A shared settings file is represented
+by one `ConfigFile` with sorted `clients` and one `AgentInstance` per applicable
+client. Recognized empty server maps are valid empty configurations; malformed,
+unreadable, or oversized files produce non-authoritative failure states while
+valid views from the same file are retained. For an explicitly supplied export
+whose generic shape is shared by several clients and whose path proves none of
+them, the servers are retained under client `unknown` instead of inventing a
+specific application.
+
+Instruction discovery covers the root project files plus every nested
+`<component>/.cursor/rules/**/*.mdc` tree beneath the effective project root.
+It does not follow directory symlinks or enter `.git`, and bounds traversal at
+100,000 entries, 10,000 Cursor rules, and 4 MiB per file. Static discovery emits
+instruction evidence and poisoning findings, but does not claim that every
+discovered agent loads every instruction file; `LOADS_INSTRUCTIONS` is reserved
+for future evidence that proves client and scope applicability.
 
 #### MCP Collector Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--url` | | URL of a single HTTP MCP server (skips auto-discovery). |
+
+MCP auto-discovery uses the same validated project root, bounded physical-file
+reads, parser registry, and failure distinctions as config collection. Usable
+servers are retained when another config is malformed or unreadable, but the
+MCP authoritative root completes only when discovery and every active server
+scope are complete.
 
 Read-only: calls `tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`. Never calls `tools/call` or `resources/read`.
 
@@ -112,7 +136,7 @@ separate `signature_key_source` and `signature_key_trust` properties.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--ports` | `11434,8000,6333,5000,4000,8888,3000` | Override the default AI-service port set. |
-| `--network-scan-concurrency` | `50` | Max parallel TCP connect probes. |
+| `--network-scan-concurrency` | `50` | Max parallel TCP connect probes (internally clamped to 4096). HTTP fingerprinting uses at most 64 workers. |
 | `--allow-public-targets` | `false` | Allow scanning non-RFC1918 IPs. Requires interactive `AUTHORIZED` prompt. |
 | `--allow-large-cidr` | `false` | Allow CIDRs larger than /16 (IPv4) or /112 (IPv6), up to an absolute ceiling of 1,048,576 hosts (exactly /12 IPv4, /108 IPv6) that applies even with this flag. |
 | `--authorization-file` | | Path to a written-authorization document. Path + SHA-256 recorded in scan watermark. |
@@ -122,12 +146,20 @@ Link-local and multicast addresses are refused unconditionally.
 
 By default network-mode `scan` prints a one-line summary (`N host(s) with at least one open port`) plus a final fingerprint summary; pass `--verbose` to list every host, which can run to thousands of lines on a large sweep. On an interactive terminal a single rewriting progress line is shown during the port sweep and fingerprint phase. `--quiet` (or `AGENTHOUND_QUIET=1`) suppresses the progress line, the per-host summary, and the fingerprint output, leaving only errors. None of this affects the JSON written to `--output`.
 
+Every registered fingerprinter runs once against every open endpoint. Port
+mappings prioritize likely candidates but are not eligibility gates, so a real
+service on a custom port remains discoverable. A complete response that fails
+its matcher is a definitive no-match. Transport/TLS/timeouts, redirects,
+authentication challenges, transient statuses, incomplete or oversized bodies,
+and matcher runtime failures are indeterminate and make fingerprint coverage
+partial, preventing lifecycle reconciliation from deleting prior service facts.
+
 #### Shared Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--scan-concurrency` | `5` | Max parallel connections (local mode). When not set explicitly, falls back to the root `--concurrency` / `AGENTHOUND_CONCURRENCY` value if that is positive. |
-| `--timeout` | `120s` | Timeout per server/agent (local MCP/A2A mode). In **network mode** this is the per-TCP-connect-probe timeout; when not set explicitly there it defaults to `3s`, not `120s`. |
+| `--timeout` | `120s` | Timeout per server/agent (local MCP/A2A mode). In **network mode**, an explicit positive value applies independently to each TCP probe and HTTP fingerprint task. When omitted/non-positive, TCP defaults to `3s` and HTTP fingerprinting to `5s`; queue wait does not consume the task deadline. |
 | `--insecure` | `false` | Skip TLS verification (both MCP and A2A). |
 | `--scan-output` | | Explicit output path (overrides `--output`). |
 

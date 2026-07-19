@@ -11,6 +11,7 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/adithyan-ak/agenthound/modules/config"
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
@@ -38,7 +39,7 @@ func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, sca
 	transport, err := buildTransport(spec, c.insecure)
 	if err != nil {
 		result.Error = fmt.Errorf("build transport for %s: %w", spec.Name, err)
-		result.Nodes = append(result.Nodes, buildUnreachableServerNode(serverID, spec, err.Error()))
+		result.Nodes = append(result.Nodes, buildUnreachableServerNode(serverID, spec, err.Error(), c.engine))
 		result.Outcomes = append(result.Outcomes, methodOutcome(spec, "initialize", ingest.OutcomeFailed, 0, err))
 		result.State = ingest.OutcomeFailed
 		return result
@@ -58,7 +59,7 @@ func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, sca
 			return c.retryWithSSE(ctx, spec, scanID, serverID, err)
 		}
 		result.Error = fmt.Errorf("connect to %s: %w", spec.Name, err)
-		result.Nodes = append(result.Nodes, buildUnreachableServerNode(serverID, spec, err.Error()))
+		result.Nodes = append(result.Nodes, buildUnreachableServerNode(serverID, spec, err.Error(), c.engine))
 		result.Outcomes = append(result.Outcomes, methodOutcome(spec, "initialize", ingest.OutcomeFailed, 0, err))
 		result.State = ingest.OutcomeFailed
 		return result
@@ -155,7 +156,7 @@ func (c *MCPCollector) retryWithSSE(ctx context.Context, spec ServerSpec, scanID
 	session, err := client.Connect(initCtx, sseTransport, nil)
 	if err != nil {
 		result.Error = fmt.Errorf("connect to %s (streamable failed: %v, SSE failed: %v)", spec.Name, origErr, err)
-		result.Nodes = append(result.Nodes, buildUnreachableServerNode(serverID, spec, err.Error()))
+		result.Nodes = append(result.Nodes, buildUnreachableServerNode(serverID, spec, err.Error(), c.engine))
 		result.Outcomes = append(result.Outcomes, methodOutcome(spec, "initialize", ingest.OutcomeFailed, 0, result.Error))
 		result.State = ingest.OutcomeFailed
 		return result
@@ -499,6 +500,18 @@ func buildServerNode(serverID string, spec ServerSpec, initResult *mcpsdk.Initia
 		"auth_evidence":    authEvidence,
 		"id_scheme":        identity.Scheme,
 	}
+	if spec.Configured {
+		props = config.ServerNodeProperties(serverDefForSpec(spec), engine)
+		props["server_name"] = serverName
+		props["protocol_version"] = initResult.ProtocolVersion
+		props["instructions"] = initResult.Instructions
+		props["capabilities"] = capabilities
+		props["server_version"] = serverVersion
+		props["status"] = "reachable"
+		props["observed_auth_method"] = string(authMethod)
+		props["observed_auth_assurance"] = string(authAssessment.Assurance)
+		props["observed_auth_evidence"] = authEvidence
+	}
 	if spec.Transport == "stdio" {
 		props["command"] = spec.Command
 		props["args"] = append([]string(nil), spec.Args...)
@@ -522,7 +535,12 @@ func buildServerNode(serverID string, spec ServerSpec, initResult *mcpsdk.Initia
 	return common.NewNode(serverID, []string{"MCPServer"}, props)
 }
 
-func buildUnreachableServerNode(serverID string, spec ServerSpec, errMsg string) ingest.Node {
+func buildUnreachableServerNode(
+	serverID string,
+	spec ServerSpec,
+	errMsg string,
+	engine *rules.Engine,
+) ingest.Node {
 	endpoint := spec.Command
 	if spec.Transport == "http" {
 		endpoint = spec.URL
@@ -540,11 +558,27 @@ func buildUnreachableServerNode(serverID string, spec ServerSpec, errMsg string)
 		"auth_evidence":  common.AuthEvidenceUnknown,
 		"id_scheme":      identity.Scheme,
 	}
+	if spec.Configured {
+		props = config.ServerNodeProperties(serverDefForSpec(spec), engine)
+		props["status"] = "unreachable"
+		props["error"] = errMsg
+		props["observed_auth_method"] = string(common.AuthUnknown)
+		props["observed_auth_assurance"] = string(common.AuthAssuranceUnknown)
+		props["observed_auth_evidence"] = common.AuthEvidenceUnknown
+	}
 	if spec.Transport == "stdio" {
 		props["command"] = spec.Command
 		props["args"] = append([]string(nil), spec.Args...)
 	}
 	return common.NewNode(serverID, []string{"MCPServer"}, props)
+}
+
+func serverDefForSpec(spec ServerSpec) config.ServerDef {
+	return config.ServerDef{
+		Name: spec.Name, Transport: spec.Transport, Command: spec.Command,
+		Args: append([]string(nil), spec.Args...), Env: spec.Env, URL: spec.URL,
+		Headers: spec.Headers,
+	}
 }
 
 type hostResult struct {
@@ -701,6 +735,10 @@ func enumerationOutcome(
 }
 
 func finalizeServerResult(result *ServerResult, serverID string) {
+	for i := range result.Outcomes {
+		result.Outcomes[i].CoverageKey = result.CoverageKey
+		result.Outcomes[i].Target = result.Target
+	}
 	result.State = ingest.AggregateOutcomeState(result.Outcomes)
 	for i := range result.Nodes {
 		node := &result.Nodes[i]

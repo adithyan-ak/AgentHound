@@ -2,10 +2,13 @@ package embeddinginvert
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 )
@@ -13,6 +16,11 @@ import (
 func fixturePath() string {
 	_, file, _, _ := runtime.Caller(0)
 	return filepath.Join(filepath.Dir(file), "..", "..", "testdata", "extract", "synthetic.gguf")
+}
+
+func upstreamFixturePath() string {
+	_, file, _, _ := runtime.Caller(0)
+	return filepath.Join(filepath.Dir(file), "..", "..", "testdata", "extract", "gguf-py-0.17.1.gguf")
 }
 
 func TestParseGGUF_SyntheticFixture(t *testing.T) {
@@ -50,6 +58,48 @@ func TestParseGGUF_InvalidMagic(t *testing.T) {
 	_, err := ParseGGUF("/dev/null")
 	if err == nil {
 		t.Error("expected error on /dev/null")
+	}
+}
+
+func TestParseGGUF_LiteralSignature(t *testing.T) {
+	valid := ggufHeader(t, 0, 0).Bytes()
+	if !bytes.Equal(valid[:4], []byte("GGUF")) {
+		t.Fatalf("fixture signature = %q, want literal GGUF", valid[:4])
+	}
+	for _, signature := range []string{"GUGF", "FGUG", "FUGG", "gguf"} {
+		t.Run(signature, func(t *testing.T) {
+			candidate := append([]byte(nil), valid...)
+			copy(candidate[:4], signature)
+			if _, err := ParseGGUF(writeTempGGUF(t, candidate)); err == nil {
+				t.Fatalf("signature %q must be rejected", signature)
+			}
+		})
+	}
+}
+
+func TestParseGGUF_UpstreamWriterFixture(t *testing.T) {
+	path := upstreamFixturePath()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read upstream fixture: %v", err)
+	}
+	if got, want := fmt.Sprintf("%x", sha256.Sum256(raw)), "53d7aa99b07c460e6d9785173c45ae65bd38ae0180d61d66e586bfb4549b5e12"; got != want {
+		t.Fatalf("upstream fixture checksum = %s, want %s", got, want)
+	}
+	gguf, err := ParseGGUF(path)
+	if err != nil {
+		t.Fatalf("ParseGGUF upstream fixture: %v", err)
+	}
+	if gguf.Version != 3 || gguf.TensorType != ggmlTypeF32 || gguf.VocabSize != 6 || gguf.EmbedDim != 4 {
+		t.Fatalf("upstream inventory = version:%d type:%d shape:%dx%d", gguf.Version, gguf.TensorType, gguf.VocabSize, gguf.EmbedDim)
+	}
+	wantTokens := []string{"<pad>", "<eos>", "alpha", "beta", "[upstream_signal]", "[upstream_tool]"}
+	if !reflect.DeepEqual(gguf.Tokens, wantTokens) {
+		t.Fatalf("tokens = %v, want %v", gguf.Tokens, wantTokens)
+	}
+	wantFirst := []float32{0.1, 0.2, 0.3, 0.4}
+	if !reflect.DeepEqual(gguf.Embeddings[0], wantFirst) {
+		t.Fatalf("first embedding = %v, want %v", gguf.Embeddings[0], wantFirst)
 	}
 }
 
@@ -110,7 +160,8 @@ func TestParseGGUF_NotFound(t *testing.T) {
 func ggufHeader(t *testing.T, tensorCount, metadataKVCount uint64) *bytes.Buffer {
 	t.Helper()
 	var b bytes.Buffer
-	for _, v := range []any{uint32(ggufMagic), uint32(3), tensorCount, metadataKVCount} {
+	b.WriteString("GGUF")
+	for _, v := range []any{uint32(3), tensorCount, metadataKVCount} {
 		if err := binary.Write(&b, binary.LittleEndian, v); err != nil {
 			t.Fatal(err)
 		}

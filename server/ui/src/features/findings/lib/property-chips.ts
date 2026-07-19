@@ -88,6 +88,12 @@ export function getPropertyChips(kind: string, properties: Record<string, unknow
     case "ConfigFile": {
       const client = properties.client;
       if (typeof client === "string") chips.push(client);
+      else if (Array.isArray(properties.clients)) {
+        const clients = properties.clients.filter(
+          (value): value is string => typeof value === "string",
+        );
+        if (clients.length > 0) chips.push(clients.join(", "));
+      }
       break;
     }
   }

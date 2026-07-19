@@ -16,11 +16,8 @@ import (
 // DefaultPorts is the v0.2 fixed AI-service port set. Order does not matter;
 // the scanner probes each independently.
 //
-// v0.2 only has fingerprinters for 11434 (Ollama) and 4000 (LiteLLM), but
-// the remaining ports are surveyed so v0.3/v0.4 can slot fingerprinters
-// in without changing the default-port flag semantics. Hosts with open
-// ports we don't yet recognize emit no node — the open-port set is
-// captured in Target.Meta so v0.3 can re-fingerprint without a fresh scan.
+// Every open endpoint is evaluated by every registered fingerprinter. These
+// defaults remain useful ordering hints and avoid sweeping all 65,535 ports.
 var DefaultPorts = []int{
 	11434, // Ollama
 	8000,  // vLLM AND LangServe (port collision is intentional; fingerprint dispatch resolves)
@@ -44,10 +41,8 @@ const (
 
 // PortToKind maps each AI-service default port to its candidate service-kind
 // tags. Port 8000 is shared between vLLM and LangServe, so it maps to BOTH
-// kinds; dispatch tries each registered fingerprinter in turn. The two rules
-// are mutually exclusive (vLLM matches the OpenAI list shape at /v1/models;
-// LangServe matches "LangServe" in /openapi.json), so at most one matches.
-// Operators can override the port set entirely via --ports.
+// kinds; dispatch tries hinted fingerprinters first, then every remaining
+// fingerprinter. Operators can override the port set entirely via --ports.
 var PortToKind = map[int][]string{
 	11434: {"ollama"},
 	8000:  {"vllm", "langserve"},

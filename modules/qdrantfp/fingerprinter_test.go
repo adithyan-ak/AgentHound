@@ -10,11 +10,11 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/action"
 )
 
-const qdrantBody = `{"title":"qdrant - vector search engine","version":"1.7.4"}`
+const qdrantBody = `{"result":{"app":{"name":"qdrant","version":"1.7.4"}}}`
 
 func TestFingerprint_QdrantHappy(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
+		if r.URL.Path == "/telemetry" {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(qdrantBody))
 			return
@@ -45,7 +45,7 @@ func TestFingerprint_QdrantHappy(t *testing.T) {
 
 func TestFingerprint_NotQdrant(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"title":"something else","version":"1"}`))
+		_, _ = w.Write([]byte(`{"result":{"app":{"name":"jupyter","version":"1.0"}}}`))
 	}))
 	defer srv.Close()
 	f, err := New()
@@ -59,6 +59,6 @@ func TestFingerprint_NotQdrant(t *testing.T) {
 		t.Fatalf("Fingerprint err: %v", err)
 	}
 	if res.Matched {
-		t.Error("expected no match — title doesn't contain 'qdrant'")
+		t.Error("expected no match — telemetry app identity is not qdrant")
 	}
 }

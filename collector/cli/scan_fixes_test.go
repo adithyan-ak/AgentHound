@@ -2,10 +2,13 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,8 +55,6 @@ func (m *mockFingerprinter) Fingerprint(ctx context.Context, t action.Target) (*
 // dispatched against :4000, not :9999.
 func TestDispatchFingerprints_DerivesKindFromPort(t *testing.T) {
 	fp := &mockFingerprinter{targetKind: "litellm", matchedNode: "sha256:litellm-node"}
-	module.Register(fp)
-	defer deregisterModule(t, fp.ID())
 
 	// open_ports lists the unmapped port FIRST; candidate_kinds lists only
 	// the mapped kind (mirrors hostResultToTarget's real output).
@@ -66,16 +67,18 @@ func TestDispatchFingerprints_DerivesKindFromPort(t *testing.T) {
 		},
 	}}
 
-	envelope := &ingest.IngestData{}
-	dispatchFingerprints(context.Background(), io.Discard, targets, envelope, false)
+	envelope := fingerprintTestEnvelope()
+	dispatchFingerprintCandidates(context.Background(), io.Discard, targets, envelope, false, 1, time.Second, "test", []fingerprintCandidate{{
+		id: fp.ID(), target: fp.Target(), fp: fp,
+	}})
 
-	if fp.probeCount != 1 {
-		t.Fatalf("fingerprinter probed %d time(s), want exactly 1", fp.probeCount)
+	if fp.probeCount != 2 {
+		t.Fatalf("fingerprinter probed %d time(s), want once per open endpoint", fp.probeCount)
 	}
 	if fp.gotAddress != "10.0.0.7:4000" {
 		t.Errorf("fingerprinter probed %q, want 10.0.0.7:4000 (port derived from PortToKind)", fp.gotAddress)
 	}
-	if len(envelope.Graph.Nodes) != 1 || envelope.Graph.Nodes[0].ID != "sha256:litellm-node" {
+	if len(envelope.Graph.Nodes) != 2 || envelope.Graph.Nodes[0].ID != "sha256:litellm-node" || envelope.Graph.Nodes[1].ID != "sha256:litellm-node" {
 		t.Errorf("matched node not merged into envelope: %+v", envelope.Graph.Nodes)
 	}
 }
@@ -89,6 +92,42 @@ type conditionalFingerprinter struct {
 	probeCount  int
 	gotAddress  string
 	matchedNode string
+}
+
+type failingFingerprinter struct{ targetKind string }
+
+type deadlineWitnessFingerprinter struct {
+	calls           atomic.Int32
+	secondRemaining chan time.Duration
+}
+
+func (m *failingFingerprinter) ID() string            { return "failing.fingerprint." + m.targetKind }
+func (m *failingFingerprinter) Action() action.Action { return action.Fingerprint }
+func (m *failingFingerprinter) Target() string        { return m.targetKind }
+func (m *failingFingerprinter) Description() string   { return "failing fingerprinter" }
+func (m *failingFingerprinter) Version() string       { return "0.0.0" }
+func (m *failingFingerprinter) IsDestructive() bool   { return false }
+func (m *failingFingerprinter) Fingerprint(context.Context, action.Target) (*action.FingerprintResult, error) {
+	return &action.FingerprintResult{Matched: false}, errors.New("transport failure")
+}
+
+func (m *deadlineWitnessFingerprinter) ID() string            { return "deadline-witness" }
+func (m *deadlineWitnessFingerprinter) Action() action.Action { return action.Fingerprint }
+func (m *deadlineWitnessFingerprinter) Target() string        { return "deadline" }
+func (m *deadlineWitnessFingerprinter) Description() string   { return "deadline witness" }
+func (m *deadlineWitnessFingerprinter) Version() string       { return "0.0.0" }
+func (m *deadlineWitnessFingerprinter) IsDestructive() bool   { return false }
+func (m *deadlineWitnessFingerprinter) Fingerprint(ctx context.Context, _ action.Target) (*action.FingerprintResult, error) {
+	if m.calls.Add(1) == 1 {
+		<-ctx.Done()
+		return &action.FingerprintResult{Matched: false}, ctx.Err()
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return nil, errors.New("missing task deadline")
+	}
+	m.secondRemaining <- time.Until(deadline)
+	return &action.FingerprintResult{Matched: false}, nil
 }
 
 func (m *conditionalFingerprinter) ID() string            { return "cond.fingerprint." + m.targetKind }
@@ -140,10 +179,6 @@ func TestPortToKind_8000IsMultiKind(t *testing.T) {
 func TestDispatchFingerprints_TriesAllCandidateKinds(t *testing.T) {
 	vllm := &conditionalFingerprinter{targetKind: "vllm", shouldMatch: false}
 	langserve := &conditionalFingerprinter{targetKind: "langserve", shouldMatch: true, matchedNode: "sha256:langserve-node"}
-	module.Register(vllm)
-	module.Register(langserve)
-	defer deregisterModule(t, vllm.ID())
-	defer deregisterModule(t, langserve.ID())
 
 	targets := []action.Target{{
 		Kind:    "host",
@@ -154,8 +189,11 @@ func TestDispatchFingerprints_TriesAllCandidateKinds(t *testing.T) {
 		},
 	}}
 
-	envelope := &ingest.IngestData{}
-	dispatchFingerprints(context.Background(), io.Discard, targets, envelope, false)
+	envelope := fingerprintTestEnvelope()
+	dispatchFingerprintCandidates(context.Background(), io.Discard, targets, envelope, false, 1, time.Second, "test", []fingerprintCandidate{
+		{id: vllm.ID(), target: vllm.Target(), fp: vllm},
+		{id: langserve.ID(), target: langserve.Target(), fp: langserve},
+	})
 
 	if vllm.probeCount != 1 {
 		t.Errorf("vllm probed %d time(s), want exactly 1", vllm.probeCount)
@@ -168,6 +206,87 @@ func TestDispatchFingerprints_TriesAllCandidateKinds(t *testing.T) {
 	}
 	if len(envelope.Graph.Nodes) != 1 || envelope.Graph.Nodes[0].ID != "sha256:langserve-node" {
 		t.Errorf("LangServe node not merged into envelope: %+v", envelope.Graph.Nodes)
+	}
+}
+
+func TestFingerprintCoverageDistinguishesFailureFromNoMatch(t *testing.T) {
+	targets := []action.Target{{Kind: "host", Address: "10.0.0.9", Meta: map[string]string{"open_ports": "9999"}}}
+	noMatch := &conditionalFingerprinter{targetKind: "nomatch"}
+	envelope := fingerprintTestEnvelope()
+	dispatchFingerprintCandidates(context.Background(), io.Discard, targets, envelope, true, 1, time.Second, "test", []fingerprintCandidate{{
+		id: noMatch.ID(), target: noMatch.Target(), fp: noMatch,
+	}})
+	outcome := envelope.Meta.Collection.Outcomes[len(envelope.Meta.Collection.Outcomes)-1]
+	if outcome.State != ingest.OutcomeComplete || outcome.Items != 1 {
+		t.Fatalf("definitive no-match outcome = %+v", outcome)
+	}
+	if len(ingest.CompleteCoverageDomains(envelope.Meta.Collection)) != 1 {
+		t.Fatalf("definitive no-match did not permit reconciliation: %+v", envelope.Meta.Collection)
+	}
+
+	failure := &failingFingerprinter{targetKind: "failure"}
+	envelope = fingerprintTestEnvelope()
+	dispatchFingerprintCandidates(context.Background(), io.Discard, targets, envelope, true, 1, time.Second, "test", []fingerprintCandidate{{
+		id: failure.ID(), target: failure.Target(), fp: failure,
+	}})
+	outcome = envelope.Meta.Collection.Outcomes[len(envelope.Meta.Collection.Outcomes)-1]
+	if outcome.State != ingest.OutcomePartial || outcome.Items != 0 {
+		t.Fatalf("operational failure outcome = %+v", outcome)
+	}
+	if len(ingest.CompleteCoverageDomains(envelope.Meta.Collection)) != 0 {
+		t.Fatalf("indeterminate fingerprint could reconcile prior services: %+v", envelope.Meta.Collection)
+	}
+}
+
+func TestFingerprintDeadlineStartsWhenWorkerDequeues(t *testing.T) {
+	targets := []action.Target{
+		{Kind: "host", Address: "10.0.0.10", Meta: map[string]string{"open_ports": "9998"}},
+		{Kind: "host", Address: "10.0.0.11", Meta: map[string]string{"open_ports": "9999"}},
+	}
+	fp := &deadlineWitnessFingerprinter{secondRemaining: make(chan time.Duration, 1)}
+	envelope := fingerprintTestEnvelope()
+	dispatchFingerprintCandidates(context.Background(), io.Discard, targets, envelope, true, 1, 80*time.Millisecond, "test", []fingerprintCandidate{{
+		id: fp.ID(), target: fp.Target(), fp: fp,
+	}})
+	remaining := <-fp.secondRemaining
+	if remaining < 50*time.Millisecond {
+		t.Fatalf("queued task inherited queue delay; remaining deadline = %v", remaining)
+	}
+	outcome := envelope.Meta.Collection.Outcomes[len(envelope.Meta.Collection.Outcomes)-1]
+	if outcome.State != ingest.OutcomePartial || outcome.Items != 1 {
+		t.Fatalf("deadline outcome = %+v", outcome)
+	}
+}
+
+func TestFingerprintEndpointsAndWorkersAreClamped(t *testing.T) {
+	if got := normalizeFingerprintWorkers(4096); got != maxFingerprintWorkers {
+		t.Fatalf("HTTP workers = %d, want cap %d", got, maxFingerprintWorkers)
+	}
+	fp := &conditionalFingerprinter{targetKind: "dedupe"}
+	targets := []action.Target{
+		{Kind: "host", Address: "10.0.0.12", Meta: map[string]string{"open_ports": "9999,9999,0,70000,invalid"}},
+		{Kind: "host", Address: "10.0.0.12", Meta: map[string]string{"open_ports": "9999"}},
+	}
+	dispatchFingerprintCandidates(context.Background(), io.Discard, targets, fingerprintTestEnvelope(), true, 4096, 0, "test", []fingerprintCandidate{{
+		id: fp.ID(), target: fp.Target(), fp: fp,
+	}})
+	if fp.probeCount != 1 {
+		t.Fatalf("duplicate endpoint probed %d times, want once", fp.probeCount)
+	}
+}
+
+func TestOrderedFingerprintersUsesPortHintsOnlyForPriority(t *testing.T) {
+	candidates := []fingerprintCandidate{
+		{id: "a-unmapped", target: "custom"},
+		{id: "b-langserve", target: "langserve"},
+		{id: "c-vllm", target: "vllm"},
+	}
+	got := orderedFingerprinters(8000, candidates)
+	want := []string{"c-vllm", "b-langserve", "a-unmapped"}
+	for i := range want {
+		if got[i].id != want[i] {
+			t.Fatalf("candidate order = %v, want %v", []string{got[0].id, got[1].id, got[2].id}, want)
+		}
 	}
 }
 
@@ -244,6 +363,20 @@ func TestResolveProbeTimeout(t *testing.T) {
 	if got := resolveProbeTimeout(10*time.Second, true); got != 10*time.Second {
 		t.Errorf("explicit --timeout: got %v, want 10s", got)
 	}
+	if got := resolveProbeTimeout(0, true); got != networkscan.DefaultProbeTimeout {
+		t.Errorf("non-positive TCP timeout: got %v, want %v", got, networkscan.DefaultProbeTimeout)
+	}
+	if got := resolveFingerprintTimeout(120*time.Second, false); got != 5*time.Second {
+		t.Errorf("default HTTP timeout: got %v, want 5s", got)
+	}
+	if got := resolveFingerprintTimeout(-time.Second, true); got != 5*time.Second {
+		t.Errorf("non-positive HTTP timeout: got %v, want 5s", got)
+	}
+	for _, test := range []struct{ input, want int }{{0, 50}, {-1, 50}, {63, 63}, {5000, networkscan.MaxConcurrency}} {
+		if got := normalizeNetworkConcurrency(test.input); got != test.want {
+			t.Errorf("normalizeNetworkConcurrency(%d) = %d, want %d", test.input, got, test.want)
+		}
+	}
 }
 
 // TestRequireAuthorizedPrompt locks in the fail-closed behavior referenced by
@@ -295,13 +428,10 @@ func TestCountFingerprintProbes_RequiresFingerprinter(t *testing.T) {
 	module.Register(m)
 	defer deregisterModule(t, m.ID())
 
-	targets := []action.Target{{
-		Kind:    "host",
-		Address: "10.0.0.1",
-		Meta:    map[string]string{"open_ports": "11434", "candidate_kinds": "ollama"},
-	}}
-	if got := countFingerprintProbes(targets); got != 0 {
-		t.Errorf("countFingerprintProbes = %d, want 0 (module is not a Fingerprinter)", got)
+	for _, candidate := range registeredFingerprinters() {
+		if candidate.id == m.ID() {
+			t.Fatalf("non-Fingerprinter %q was included in the candidate list", m.ID())
+		}
 	}
 }
 
@@ -324,13 +454,13 @@ func (m *metaMutatingFingerprinter) Fingerprint(_ context.Context, t action.Targ
 // back into the shared target map (or sibling probes).
 func TestDispatchFingerprints_MetaCopyIsolatesProbes(t *testing.T) {
 	fp := &metaMutatingFingerprinter{kind: "ollama"}
-	module.Register(fp)
-	defer deregisterModule(t, fp.ID())
 
 	orig := map[string]string{"open_ports": "11434", "candidate_kinds": "ollama"}
 	targets := []action.Target{{Kind: "host", Address: "10.0.0.1", Meta: orig}}
 
-	dispatchFingerprints(context.Background(), io.Discard, targets, &ingest.IngestData{}, true)
+	dispatchFingerprintCandidates(context.Background(), io.Discard, targets, fingerprintTestEnvelope(), true, 1, time.Second, "test", []fingerprintCandidate{{
+		id: fp.ID(), target: fp.Target(), fp: fp,
+	}})
 
 	if _, leaked := orig["mutated"]; leaked {
 		t.Errorf("fingerprinter mutation leaked into the shared target Meta: %v", orig)
@@ -386,16 +516,16 @@ func TestRunScan_EmptySuccessExitsZero(t *testing.T) {
 }
 
 // TestRunScan_AllCollectorsFailExitsNonZero drives runScan end-to-end into
-// total failure: --config with a non-existent --path makes the (only enabled)
-// config collector error, so runScan must return non-zero AFTER still writing
-// the artifact, so the operator keeps the envelope and logs.
+// total failure: --config with an invalid effective project root makes the
+// only enabled collector fail closed. runScan returns non-zero only AFTER
+// writing the failed artifact so invalid discovery never looks complete-empty.
 func TestRunScan_AllCollectorsFailExitsNonZero(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "all-fail.json")
 
 	cmd := newScanCmdForTest()
 	mustSetFlag(t, cmd, "config", "true")
-	mustSetFlag(t, cmd, "path", filepath.Join(dir, "no-such-config.json"))
+	mustSetFlag(t, cmd, "project-dir", filepath.Join(dir, "no-such-project"))
 	mustSetFlag(t, cmd, "scan-output", out)
 
 	err := runScan(cmd, nil)
@@ -405,4 +535,26 @@ func TestRunScan_AllCollectorsFailExitsNonZero(t *testing.T) {
 	if _, statErr := os.Stat(out); statErr != nil {
 		t.Fatalf("artifact must still be written on total failure: %v", statErr)
 	}
+	raw, readErr := os.ReadFile(out)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	var artifact ingest.IngestData
+	if decodeErr := json.Unmarshal(raw, &artifact); decodeErr != nil {
+		t.Fatalf("decode failed artifact: %v", decodeErr)
+	}
+	root := ingest.CollectorRootCoverageKey("config")
+	if ingest.CoverageStates(artifact.Meta.Collection)[root] != ingest.OutcomeFailed {
+		t.Fatalf("invalid root coverage = %+v", artifact.Meta.Collection)
+	}
+	if len(ingest.CompleteAuthoritativeRoots(artifact.Meta.Collection)) != 0 {
+		t.Fatalf("invalid root became authoritative: %+v", artifact.Meta.Collection.AuthoritativeRoots)
+	}
+}
+
+func fingerprintTestEnvelope() *ingest.IngestData {
+	key := ingest.CanonicalCoverageKey("scan", "network", "test")
+	return &ingest.IngestData{Meta: ingest.IngestMeta{Collection: &ingest.CollectionReport{
+		State: ingest.OutcomeComplete, CoverageKeys: []string{key},
+	}}}
 }

@@ -70,8 +70,11 @@ func TestExtractCredentials_Headers(t *testing.T) {
 	for _, c := range creds {
 		if c.Name == "Authorization" {
 			found = true
-			if c.Value != "Bearer ghp_abc123def456" {
-				t.Error("expected raw value when includeValues=true")
+			if c.Value != "ghp_abc123def456" {
+				t.Error("expected credential material without the Authorization scheme")
+			}
+			if c.ValueHash != common.HashCredentialValue("ghp_abc123def456") {
+				t.Error("Authorization value_hash must identify the reusable credential material")
 			}
 			if c.AuthMethod != common.AuthBearer || c.Location != "header" {
 				t.Errorf("authorization evidence = method %q location %q, want bearer/header",
@@ -81,6 +84,16 @@ func TestExtractCredentials_Headers(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected Authorization credential to be extracted (contains AUTH)")
+	}
+}
+
+func TestCredentialMaterialPreservesUnknownAuthorizationScheme(t *testing.T) {
+	const value = "Token custom-material"
+	if got := credentialMaterial("Authorization", value, "header"); got != value {
+		t.Fatalf("custom authorization material = %q, want exact %q", got, value)
+	}
+	if got := credentialMaterial("Authorization", "  Bearer   abc123  ", "header"); got != "abc123" {
+		t.Fatalf("Bearer material = %q, want abc123", got)
 	}
 }
 
