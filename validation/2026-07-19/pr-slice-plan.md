@@ -623,3 +623,151 @@ when:
 This procedure changes only isolated Git index/branch state. It does not modify
 the validated snapshot branch, the retained release databases, or the public
 remote.
+
+## Stack 06 construction and final integrated acceptance
+
+Stack 06 was constructed in the isolated worktree
+`/tmp/agenthound-pr-split.2RQh1n` on
+`codex/release-stack-06-ui-docs-oracles`. Commit
+`4fe862a243329332a84ae5df03ac6cfb6fda0942` has parent
+`2232e05829313b05b772e84ca85254b65d4c6bd6` and tree
+`4ea66f8627e2a2be557b5ed011f7a5a7ea573645`. Its parent-relative manifest is
+37 files, 2,163 insertions, and 176 deletions. The recovered deferred source
+was audited before modification: all 26 tracked and 11 untracked expected
+paths matched the checkpoint copies, with no missing or extra path.
+
+The Stack 06 parent-relative content contains only its responsive UI, public
+documentation, pinned real-infrastructure fixtures, and release-oracle work.
+The final assembled tree was also compared directly with product checkpoint
+`6428f13`. Its only runtime/test deltas are:
+
+- S5-F1's compiled campaign vertical origin fixture in
+  `server/internal/ingest/campaign_vertical_integration_test.go`;
+- S5-F2's gateway name -> endpoint -> immutable-object-ID fallback, regression
+  tests, and the two corresponding operator/architecture documentation notes;
+- Stack 06's matching non-empty/truthful `via_gateway` real-infrastructure
+  assertion and README note.
+
+The comparison also shows deletion of
+`test-infra/artifacts/release-validation-working/ledger.md`. This is deliberate:
+the chronological audit document remains preserved on this validation snapshot
+branch and is excluded from every product PR commit. It is not a product-source
+change. Untracked user-owned `AGENTS.md` is likewise absent from all six stack
+commits.
+
+### Fresh integrated real-infrastructure run
+
+One clean `bash test-infra/run-tests.sh --keep` execution completed with exit
+zero as run `20260720T020219Z-77074`. Old Compose services and data volumes were
+removed before the run so neither previous seeds nor previous Neo4j/PostgreSQL
+state could satisfy an oracle. The clean run rebuilt the collector/server,
+downloaded and checksum-verified the immutable GGUF fixture, seeded every
+pinned service through its real API, independently verified upstream truth,
+and then ran the collector.
+
+`summary.json` reports:
+
+- `harness_status=valid` and `collector_status=compatible`;
+- 24 planned scenarios, 24 result records, and 24 passes;
+- zero collector failures and zero diagnostic records;
+- no missing, duplicate, unexpected, malformed, or invalid-status result;
+- a matching zero failure counter and zero failure rows;
+- `coverage.valid=true` and `coverage.green_eligible=true`.
+
+The production cross-service lane published exactly three reference-only
+findings at confidence 0.95. Public findings, current Neo4j edges, and exact
+PostgreSQL evidence agree on the three targets. Every witness contains the
+canonical seven nodes, five raw relationships, and one synthetic
+`VALUE_HASH_MATCH`; all three current edges report six hops and the same
+truthful gateway identifier
+`sha256:aa81457487b98b942fa4a29d4354237fd4e5827622b7cd6eb3dd8558f2ce3a14`.
+The independently computed gateway value and stored edge value match on every
+row. The high-entropy query also attributes the enforced header credential to
+the exact MCP server.
+
+The prior RC-12 mutation matrix remains applicable because Stack 06 recovered
+that oracle byte-for-byte before adding the gateway guard: missing, duplicate,
+unexpected, malformed, bad-status, counter-mismatch, diagnostic, and
+one-of-three-target projections are rejected while the exact valid set is
+green. A new negative control queried the retained pre-S5-F2 database: its
+three edges had `via_gateway=null` while the independently resolved gateway was
+the object ID above, and the tightened Stack 06 predicate rejected all three.
+The fresh run then passed the positive control with all three values populated
+and equal.
+
+Credential disclosure defense ran for each scenario and once across every
+retained artifact. None of the enumerated raw fixture credentials, runtime
+tokens, transport sentinels, or cross-service proof material appears in the
+artifact corpus. The A2A proof records exactly one additional official-handler
+`GetTask` request in each v1, v0.3, protected, and ambiguous lane, with zero
+credential-header requests, non-GetTask requests, executor calls, task saves,
+or task deletes.
+
+Key artifact hashes:
+
+- `summary.json`:
+  `2e0061de16c7aa8f1c6bb7d30095578c9b06e1f77b59aa9ca230a3e9772ddfe9`
+- `results.ndjson`:
+  `88cc50162a7d50d11d537caf71fe58a14de7bf9839c47a2efcd8167b05cfe7e1`
+- `scan-a2a-probe-proof.json`:
+  `86f92d4fb17853d7d14d91c65c1c329ae1579baf47833dbe6ebdd409b7d97ace`
+- `cross-service-credential-chain.json`:
+  `db96727d75441a0de1bb7df8177f44c0700f123d4bf2153fbda0170d81645528`
+- `cross-service-credential-chain-graph.json`:
+  `433c5467d178759808908092bdc6023bfcd8454c89570e0a9b879b73b18cf138`
+- `cross-service-credential-chain-persisted-evidence.json`:
+  `5dc644002905a045a33dc3d344ccea7b9f1e0eab40be98bd84a67a5976dbe1ab`
+- sorted SHA-256 manifest of every retained run file:
+  `46847a9f04e83dbcb8b23bbeea651a44e3ef2aa0d06fe9ec120020ada9d203a9`
+
+### Final production API/browser reconciliation
+
+A statically linked Linux/arm64 server was rebuilt from the Stack 06 tree with
+SHA-256
+`b5ba4cbaf7a8ee15a2c088cf80d4f971ab00298ccf5e44341a371515bad5228b`
+and served the production-embedded UI against the fresh revision-5 databases.
+An intentionally incomplete first launch omitted the storage-pair UUID and was
+rejected before serving with the canonical binding error. Supplying the exact
+host, realm, and storage-pair triplet produced a healthy server with both
+Neo4j and PostgreSQL `ok`.
+
+The structured API and browser agreed on 170 nodes, 190 edges, and 25 findings.
+Inventory was 17 AgentInstances, five MCPServers, zero A2AAgents, 57 MCPTools,
+and seven Credentials. Findings were exactly 12 high and 13 medium. The
+Explorer reported 170 nodes, 190 edges, and 25 findings. A live
+cross-service-finding detail displayed reference-only/hashed semantics, 95%
+confidence, six continuous relationships, the five raw relationships plus the
+synthetic value-hash join, and the immutable LiteLLM gateway identifier; it did
+not describe the reference as usable credential material. Browser diagnostic
+logs were empty.
+
+The earlier responsive browser matrix on the same Stack 06 production bundle
+also remains green: at 484x779 every compact navigation control was in bounds
+and accessible, the 745px-tall New Scan dialog scrolled through all commands,
+and the lens bar scrolled without body overflow; at 1440x900 full navigation
+labels and the full lens bar were in bounds. Every advertised collection
+command except the intentionally ingest-only command carried both required
+origin flags.
+
+### Final mandatory gates and cleanup
+
+Before commit, the complete `go test ./... -race` suite passed. The full UI
+suite passed 52 files / 232 tests, ESLint, TypeScript, and production Vite
+build; strict MkDocs passed and stale-claim searches returned no match.
+`make prerelease` then passed all 13 gates: version consistency, gofmt,
+golangci-lint, vet, current govulncheck, license allowlist, build, fresh short
+race tests, dependency boundary, collector size, slop check, UI build, and both
+cross-compiles. The stripped linux/amd64 collector was 11,047,096 bytes against
+a 12,012,132-byte blocking limit. The only diagnostics were the established
+nonfatal license-tool assembly notices and Vite IIFE/chunk-size advisories.
+
+After hashing evidence, the temporary production server and every
+`agenthound-test` container, named volume, and network were removed. The ignored
+1.2 MiB run artifacts remain in the isolated split worktree for inspection.
+No tag, remote push, or PR was created. Per the user's product decision, the
+tree remains the unreleased development line at v0.9.0; release/version
+promotion is explicitly deferred.
+
+**Stack 06 verdict: ACCEPTED.** No unresolved release-blocking functional,
+security-semantic, data-integrity, representation, or release-oracle defect was
+found within the tested feature set and pinned infrastructure.

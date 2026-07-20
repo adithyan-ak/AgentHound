@@ -510,3 +510,26 @@ Each slice should carry the relevant baseline reproduction, candidate regression
 and the exact documentation update. Run the full integrated harness and
 `make prerelease` once again only after the accepted slices are assembled into
 the intended release branch.
+
+## Final stacked-candidate conclusion
+
+The six accepted slices are now assembled through
+`codex/release-stack-06-ui-docs-oracles` commit `4fe862a`. The required final
+fresh 24-scenario real-infrastructure run, production database/API/browser
+reconciliation, complete Go race suite, UI/docs gates, and `make prerelease`
+all pass. The final run contains exactly 24 unique primary passes and zero
+diagnostics/failures; its cross-service projection contains exactly three
+truthful findings with complete persisted evidence and a non-null gateway
+identifier on every current edge.
+
+No new release-blocking true-positive defect surfaced in this final integrated
+pass. S5-F1 and S5-F2 remain correctly classified as post-checkpoint composition
+findings rather than additional untouched-baseline bugs. Stack 06's tightened
+gateway oracle rejects the retained pre-fix null projection and accepts the new
+truthful projection, closing that regression path.
+
+This is an evidence-bounded conclusion, not a claim that future upstream
+releases or novel offensive techniques can never expose another issue. The
+current supported feature set works as represented against the pinned real
+infrastructure tested here. No release tag or remote push was performed; the
+user explicitly deferred promotion of the unreleased v0.9.0 development tree.
