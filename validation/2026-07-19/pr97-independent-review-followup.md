@@ -226,6 +226,32 @@ The license scanner repeated its established informational inability to inspect
 some assembly files. Vite repeated its established IIFE-name and large-chunk
 advisories. Neither is caused by or functionally related to these changes.
 
+## Remote review state
+
+After local acceptance, the five draft product branches were updated with
+explicit force-with-lease expectations against their previously observed remote
+SHAs. The validation branch was fast-forwarded. No unexpected remote movement
+was overwritten.
+
+GitHub then reported the complete stack as linear and mergeable:
+
+- PR 97: `4d61d0f -> 6171b8e`;
+- PR 98: `6171b8e -> a189060`;
+- PR 99: `a189060 -> 5f34f4c`;
+- PR 100: `5f34f4c -> 32b0482`; and
+- PR 101: `32b0482 -> 3fac021`.
+
+PR 97's description no longer claims Audit issue 25 and now documents the
+session-DELETE reproduction and negative control. PR 98 now owns Audit issue 25
+and describes the single-group product invariant, collector correction, and
+atomic lifecycle validation. PRs 99-101 were updated only for their rebased
+commit/scope metadata; the moved A2A code disappeared from PR 99's delta.
+
+The post-push Docs builds succeeded for all five PR heads. GitGuardian reported
+success for all five. PR 101's Version Check also succeeded. Superseded duplicate
+workflow runs were canceled by workflow concurrency; the corresponding latest
+head runs succeeded and no failing required check was observed.
+
 ## Real-infrastructure qualification
 
 The earlier clean 24/24 infrastructure run is not represented as a new run.
