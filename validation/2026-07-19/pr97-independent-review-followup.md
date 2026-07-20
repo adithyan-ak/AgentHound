@@ -264,3 +264,33 @@ condition and was intentionally avoided.
 
 No release tag, version promotion, database mutation, external credential use,
 or production deployment was performed during this follow-up.
+
+## Subsequent strict-v3 fixture ownership correction
+
+After PR 97 was retargeted to `main`, database-enabled CI exposed invalid HTTP
+MCPServer fixtures in two stages. The first correction moved three campaign
+fixture endpoints from Stack 5 into PR 97. CI run `29721175181` then proved the
+campaign passed but both Neo4j lanes failed the serialized
+`TestIntegrationFreshSchemaCompleteIngestPublishes` step with one validation
+error.
+
+A complete opt-in package run identified the same strict-v3 drift in the
+publication integrations: one fresh-schema server, two exhaustive-root
+servers, and one tokenless control server omitted their canonical endpoints.
+The 1/2/1 validation-error counts matched those four rows exactly. The endpoint
+values already existed in Stack 4, so the change was moved into PR 97 instead
+of weakening the strict validator or adding a later duplicate repair.
+
+Final test-only PR 97 head: `5629ee4ee4a308c4b2c1e2fc17dd5beab73a9faa`.
+Validation completed on that tree:
+
+- complete `AGENTHOUND_FRESH_DB_INTEGRATION=1` ingest package under `-race`
+  against Neo4j 4.4 and PostgreSQL 16: pass;
+- the same complete package against Neo4j 5.26 and PostgreSQL 16: pass;
+- gofmt, build, vet, full repository race suite, and diff check: pass.
+
+PRs 98-101 were replayed atomically with force-with-lease. `git range-diff`
+shows the PR 98, PR 100, and PR 101 commits unchanged; PR 99 simply loses the
+fixture hunk now owned by the parent. Final Stack 6 head
+`bd10acd77e7ce370a5c9ade470bda7a0106c7b65` is byte-for-byte identical to
+pre-restack head `8af65f1c950b8e960ec5df8f7f32be5ce0978ef9`.

@@ -18,10 +18,15 @@ Initial corrected PR head:
 
 - `d2590ed441449a234de30ba2d819ab5be80b6d87`
 
-Final restacked PR snapshot:
+First restacked PR snapshot:
 
 - base `99f712bd0df98f178810508fbd319089df558e10`
 - head `090f763238f870c12a83a17d74e689f1878f1f61`
+
+Final fixture-corrected snapshot:
+
+- base `5629ee4ee4a308c4b2c1e2fc17dd5beab73a9faa`
+- head `864b8d50d6a02c30c052f2555d0cb17f466b143a`
 
 The distinction matters because the live head already contained an A2A
 contribution-preservation correction added during the PR 97 follow-up/restack.
@@ -76,27 +81,28 @@ The analysis regressions inject internal fingerprints into traversal rows and
 exact finding evidence, assert absence from structured results, and assert that
 the original raw maps remain unchanged.
 
-## Inherited opt-in integration fixture gap
+## Resolved inherited opt-in integration fixture drift
 
 The independent reviewer reported strict-v3 failures in the opt-in fresh
 database ingest suite. The first adjudication run against dedicated Neo4j
 5.26.28 and PostgreSQL 16 containers reproduced four failures. PR 97 then
 moved three already-existing canonical HTTP endpoint properties into the
-strict-ingest parent, where that fixture contract belongs. A new run at final
-PR 98 head `090f763` proved the campaign integration now passes and exactly
-three destructive opt-in tests still fail validation:
+strict-ingest parent, where that fixture contract belongs. A new run at PR 98
+head `090f763` proved the campaign integration passed and isolated the remaining
+drift to exactly three destructive opt-in tests:
 
 - `TestIntegrationFreshSchemaCompleteIngestPublishes`
 - `TestIntegrationExhaustiveRootRemovesMissingChildAcrossGraphAndPublication`
 - `TestIntegrationTokenlessAgentWithholdsPublication`
 
-The remaining affected fixture file is unchanged between final PR 98 base
-`99f712b` and head `090f763`. This is inherited strict-v3 test-fixture drift,
-not a regression in the Stack 3 lifecycle implementation. It was not hidden
-inside PR 98 or mixed into its product correction. The dedicated containers
-were removed after each run and no volumes were created.
+Their 1/2/1 validation-error counts matched four HTTP MCPServer fixture rows
+that omitted the canonical endpoint required by the Stack 2 validator. Those
+endpoint values already existed later in Stack 4, so they were moved into PR 97
+rather than weakening validation or adding a Stack 3 workaround.
 
-Until that separate fixture maintenance is completed, PR 98 does not claim
-that the repository-wide opt-in `AGENTHOUND_FRESH_DB_INTEGRATION=1` ingest
-suite passes. Its focused Neo4j lifecycle matrix and mandatory repository
-checks remain independently green.
+At final head `864b8d5`, the complete repository-wide opt-in ingest package
+passes under `-race` against both Neo4j 4.4 and 5.26 with PostgreSQL 16. PR 98's
+two-commit delta is unchanged according to `git range-diff`; the fixture-only
+parent correction did not alter Stack 3 lifecycle behavior. Final Stack 6 tree
+`bd10acd` is byte-for-byte identical to pre-restack tree `8af65f1`. The
+dedicated containers were removed after validation and no volumes were created.
