@@ -72,7 +72,7 @@ func campTestEvidence(outcome campaign.Outcome) *campaign.Evidence {
 }
 
 func TestBuildCampaignEnvelopeVerified(t *testing.T) {
-	env := buildCampaignEnvelope("cred-reach", 1, "ENG-CAMP", campTestEvidence(campaign.OutcomeCredentialGatedReachVerified))
+	env := buildCampaignEnvelope(testCollectionOrigin, "cred-reach", 1, "ENG-CAMP", campTestEvidence(campaign.OutcomeCredentialGatedReachVerified))
 	if env.Meta.Collector != "scan" {
 		t.Fatalf("collector = %q, want scan", env.Meta.Collector)
 	}
@@ -101,8 +101,8 @@ func TestBuildCampaignEnvelopeVerified(t *testing.T) {
 // COMPLETE coverage domain with an empty graph so ingest reconciliation retires
 // the prior verification under the SAME deterministic domain.
 func TestBuildCampaignEnvelopeRetireOnValidNegative(t *testing.T) {
-	verified := buildCampaignEnvelope("cred-reach", 1, "ENG", campTestEvidence(campaign.OutcomeCredentialGatedReachVerified))
-	negative := buildCampaignEnvelope("cred-reach", 1, "ENG", campTestEvidence(campaign.OutcomeNotObserved))
+	verified := buildCampaignEnvelope(testCollectionOrigin, "cred-reach", 1, "ENG", campTestEvidence(campaign.OutcomeCredentialGatedReachVerified))
+	negative := buildCampaignEnvelope(testCollectionOrigin, "cred-reach", 1, "ENG", campTestEvidence(campaign.OutcomeNotObserved))
 
 	if negative.Meta.Collection.State != ingest.OutcomeComplete {
 		t.Fatalf("not_observed must be COMPLETE coverage to retire prior, got %q", negative.Meta.Collection.State)
@@ -129,7 +129,7 @@ func TestBuildCampaignEnvelopeRetireOnValidNegative(t *testing.T) {
 // TestBuildCampaignEnvelopeIndeterminatePreserves: indeterminate is PARTIAL so
 // the domain is not promoted and prior evidence is preserved.
 func TestBuildCampaignEnvelopeIndeterminatePreserves(t *testing.T) {
-	env := buildCampaignEnvelope("cred-reach", 1, "ENG", campTestEvidence(campaign.OutcomeIndeterminate))
+	env := buildCampaignEnvelope(testCollectionOrigin, "cred-reach", 1, "ENG", campTestEvidence(campaign.OutcomeIndeterminate))
 	if env.Meta.Collection.State != ingest.OutcomePartial {
 		t.Fatalf("indeterminate must be PARTIAL coverage, got %q", env.Meta.Collection.State)
 	}

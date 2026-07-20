@@ -144,6 +144,7 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 	wg.Wait()
 
 	data := common.NewIngestData("a2a", scanID)
+	data.Meta.Origin = opts.Origin
 	data.Meta.Ruleset = rules.ManifestForEngine(engine)
 	nodeIndex := make(map[string]int)
 	addNode := func(node ingest.Node) {

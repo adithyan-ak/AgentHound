@@ -15,10 +15,40 @@ The shipped `docker/docker-compose.yml` runs three containers:
 | `agenthound` | `agenthound-server` | `127.0.0.1:8080` |
 
 ```bash
+export AGENTHOUND_HOST_ID=security-laptop
+export AGENTHOUND_NETWORK_REALM_ID=corp-lab
+export AGENTHOUND_STORAGE_PAIR_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 cd docker && docker compose up -d
 ```
 
 All ports bind to loopback. No external exposure. Suitable for single-operator use on a laptop or jump box.
+
+Generate the storage UUID only for a new empty pair, then persist all three
+values in the deployment configuration. `host-id` is the one collector machine
+whose artifacts this pair accepts; `network-realm-id` identifies the private
+network visible from it. Each ID must match
+`[a-z0-9][a-z0-9._-]{0,127}`. Do not infer them from a container hostname or
+IP address, which can change across restarts.
+
+### One collection realm per database pair
+
+The host/realm restriction prevents false graph merges between filesystem
+paths, loopback services, RFC1918 endpoints, host identities, and lifecycle
+coverage observed from different vantage points. The server compares every v3
+artifact with its configured tuple before generic validation or any scan/graph
+write. A mismatch returns `409 COLLECTION_REALM_MISMATCH`.
+
+The storage UUID binds PostgreSQL and Neo4j to each other. Startup reads both
+markers before migrations or schema writes. Crossed pairs, future marker
+versions, mismatches, and unbound non-empty databases fail closed. A one-sided
+missing marker is repaired only while both stores are product-empty, covering
+an interrupted first initialization. A runtime verification failure returns a
+sanitized `503 STORAGE_BINDING_UNAVAILABLE` and writes nothing.
+
+These identifiers are admission provenance, not authentication or signatures.
+Keep the server behind its documented network boundary and protect artifacts
+in transit. To move to another host or realm, reset both databases and recollect
+rather than editing provenance on retained artifacts.
 
 ---
 
@@ -111,9 +141,10 @@ docker compose -f docker/docker-compose.yml cp graph-db:/tmp/neo4j.dump ./backup
 docker compose -f docker/docker-compose.yml exec app-db pg_dump -U agenthound agenthound > ./backups/pg.sql
 ```
 
-Schedule both via cron. Neo4j contains the mutable graph projection; Postgres
+Schedule both as one coordinated backup set. Neo4j contains the mutable graph projection; Postgres
 contains publication history and analyst triage that re-ingestion does not
-reconstruct.
+reconstruct. The immutable storage-pair marker deliberately makes a PostgreSQL
+backup from one deployment incompatible with a Neo4j backup from another.
 
 ---
 
@@ -140,6 +171,8 @@ fresh baseline is idempotent after creation. The server still detects Neo4j
 
 - [ ] All ports bound to `127.0.0.1` (or behind VPN/mesh)
 - [ ] `AGENTHOUND_CORS_ORIGINS` matches the operator-facing URL(s); foreign-origin browser POSTs are rejected
+- [ ] Stable `AGENTHOUND_HOST_ID` and `AGENTHOUND_NETWORK_REALM_ID` name the one admitted collection vantage point
+- [ ] One canonical `AGENTHOUND_STORAGE_PAIR_ID` is retained with the paired PostgreSQL and Neo4j volumes/backups
 - [ ] Neo4j credentials changed from default `agenthound`
 - [ ] Postgres credentials changed from default
 - [ ] If exposed via reverse proxy: mTLS or equivalent client auth enabled

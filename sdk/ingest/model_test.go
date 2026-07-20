@@ -88,12 +88,13 @@ func TestEdgeJSONRoundTrip(t *testing.T) {
 func TestIngestDataJSONRoundTrip(t *testing.T) {
 	input := `{
 		"meta": {
-			"version": 2,
+			"version": 3,
 			"type": "agenthound-ingest",
 			"collector": "mcp",
 			"collector_version": "0.1.0",
 			"timestamp": "2026-04-06T10:30:00Z",
 			"scan_id": "scan-001",
+			"origin": {"host_id":"host-a","network_realm_id":"realm-a"},
 			"collection": {
 				"state": "complete",
 				"coverage_keys": ["mcp:target:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],

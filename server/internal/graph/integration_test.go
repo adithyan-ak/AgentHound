@@ -8,8 +8,11 @@ import (
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
+	"github.com/adithyan-ak/agenthound/server/internal/binding"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 )
+
+const integrationStoragePairID = "7bc1f56e-c890-4de5-9cc5-921797176fa6"
 
 func skipIfNoNeo4j(t *testing.T) {
 	t.Helper()
@@ -35,6 +38,83 @@ func integrationWrite(
 		cypher,
 		params,
 	)
+}
+
+func TestIntegrationStorageBindingLifecycle(t *testing.T) {
+	if os.Getenv("AGENTHOUND_FRESH_DB_INTEGRATION") != "1" {
+		t.Skip("set AGENTHOUND_FRESH_DB_INTEGRATION=1 for fresh-database storage binding integration")
+	}
+	ctx := testDriver(t)
+	driver, err := NewDriver(
+		os.Getenv("AGENTHOUND_NEO4J_URI"),
+		os.Getenv("AGENTHOUND_NEO4J_USER"),
+		os.Getenv("AGENTHOUND_NEO4J_PASSWORD"),
+	)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer driver.Close(ctx)
+
+	cleanup := func() {
+		_, _ = integrationWrite(ctx, driver, `
+MATCH (n)
+WHERE n:AgentHoundStorageBinding OR n:BindingProductFixture
+DETACH DELETE n`, nil)
+	}
+	cleanup()
+	defer cleanup()
+
+	store := NewStorageBindingStore(driver)
+	inspection, err := store.Inspect(ctx)
+	if err != nil {
+		t.Fatalf("inspect pristine graph: %v", err)
+	}
+	if inspection.Marker != nil || !inspection.ProductEmpty {
+		t.Fatalf("pristine inspection = %+v, want unbound and product-empty", inspection)
+	}
+	if err := store.EnsureConstraint(ctx); err != nil {
+		t.Fatalf("ensure binding constraint: %v", err)
+	}
+	if err := store.EnsureConstraint(ctx); err != nil {
+		t.Fatalf("ensure binding constraint idempotently: %v", err)
+	}
+
+	origin := ingest.CollectionOrigin{HostID: "host-a", NetworkRealmID: "realm-a"}
+	marker, err := binding.NewMarker(origin, integrationStoragePairID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Install(ctx, marker); err != nil {
+		t.Fatalf("install marker: %v", err)
+	}
+	if err := store.Install(ctx, marker); err != nil {
+		t.Fatalf("idempotent marker install: %v", err)
+	}
+	actual, err := store.ReadStorageBinding(ctx)
+	if err != nil || !actual.Equal(marker) {
+		t.Fatalf("read marker = %+v, %v", actual, err)
+	}
+	other, err := binding.NewMarker(origin, "ee2f3afe-209e-42fb-8685-af55caa7e58d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Install(ctx, other); err == nil {
+		t.Fatal("conflicting storage pair unexpectedly replaced immutable marker")
+	}
+
+	if _, err := integrationWrite(ctx, driver, "CREATE (:BindingProductFixture)", nil); err != nil {
+		t.Fatalf("create product fixture: %v", err)
+	}
+	if _, err := integrationWrite(ctx, driver, "MATCH (b:AgentHoundStorageBinding) DELETE b", nil); err != nil {
+		t.Fatalf("remove marker for legacy-state proof: %v", err)
+	}
+	inspection, err = store.Inspect(ctx)
+	if err != nil {
+		t.Fatalf("inspect legacy graph: %v", err)
+	}
+	if inspection.Marker != nil || inspection.ProductEmpty {
+		t.Fatalf("legacy inspection = %+v, want unbound and nonempty", inspection)
+	}
 }
 
 func TestIntegrationSchemaInit(t *testing.T) {

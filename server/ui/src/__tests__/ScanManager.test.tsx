@@ -294,18 +294,41 @@ describe("ScanManager", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/agenthound scan --config/i),
+        screen.getByText(
+          /agenthound scan --host-id <host-id> --network-realm-id <network-realm-id> --config/i,
+        ),
       ).toBeInTheDocument();
     });
     expect(
       screen.getByText(
-        /agenthound scan --output agenthound-scan\.json && agenthound-server ingest agenthound-scan\.json/i,
+        /agenthound scan --host-id <host-id> --network-realm-id <network-realm-id> --output agenthound-scan\.json && agenthound-server ingest agenthound-scan\.json/i,
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/\| agenthound-server ingest/)).not.toBeInTheDocument();
+    const collectorCommands = screen
+      .getAllByText(/^agenthound scan /i)
+      .map((element) => element.textContent ?? "");
+    expect(collectorCommands).toHaveLength(5);
+    for (const command of collectorCommands) {
+      expect(command).toContain("--host-id <host-id>");
+      expect(command).toContain("--network-realm-id <network-realm-id>");
+    }
+    expect(
+      screen.getByText(/They are provenance labels, not credentials\./i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/\| agenthound-server ingest/),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByText(/A2A requires the separate targeted command/i),
     ).toBeInTheDocument();
     expect(screen.queryByText(/fetch A2A cards/i)).not.toBeInTheDocument();
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveClass("max-h-[calc(100vh-2rem)]", "overflow-y-auto");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
   });
 });

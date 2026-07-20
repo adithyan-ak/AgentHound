@@ -12,6 +12,8 @@ AgentHound ships as **two binaries**: `agenthound` (collector) and `agenthound-s
 |------|-----|---------|-------------|
 | `--output` | `AGENTHOUND_OUTPUT` | `./scan-<scan_id>.json` | Write output JSON to this path. `-` for stdout. |
 | `--concurrency` | `AGENTHOUND_CONCURRENCY` | `5` | Max parallel collector workers. Used by `scan` as the fallback for `--scan-concurrency` when the latter is not set explicitly. |
+| `--host-id` | `AGENTHOUND_HOST_ID` | _(required for artifact-emitting operations)_ | Stable lowercase ID for this collector machine. |
+| `--network-realm-id` | `AGENTHOUND_NETWORK_REALM_ID` | _(required for artifact-emitting operations)_ | Stable lowercase ID for the private network visible from this machine. |
 | `--log-level` | `AGENTHOUND_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
 | `--quiet` | `AGENTHOUND_QUIET=1` | `false` | Suppress non-error log output. |
 | `--log-json` | `AGENTHOUND_LOG_JSON=1` | `false` | Emit structured JSON logs. |
@@ -21,13 +23,21 @@ Priority: CLI flag > env var > default.
 
 The collector is offline-by-default. No outbound HTTP, no DB clients, no phone-home. Move the resulting JSON to the analysis box via file copy, SSH pipe, or the UI's drag-drop import.
 
+Both origin IDs must match `[a-z0-9][a-z0-9._-]{0,127}` and remain stable.
+They are required whenever the command emits an ingest artifact (`scan`,
+`discover`, `loot`, committed `extract`, or a witness-backed committed
+`campaign`). They scope local paths, loopback/private endpoints, and lifecycle
+coverage to one collection vantage point; they are provenance, not secrets or
+an authentication mechanism.
+
 ---
 
 ### `agenthound scan`
 
 Enumerate MCP servers, A2A agents, and client configs, then write the merged trust graph as JSON.
 
-Scan artifacts use strict ingest wire version `2` with required evidence
+Scan artifacts use strict ingest wire version `3` with required `origin`
+(`host_id` plus `network_realm_id`) and evidence
 metadata: constituent `collection` coverage/outcomes, the effective text and
 fingerprint `ruleset` semantic digest/entries with canonical matcher
 definitions and load failures, and canonical identity-scheme metadata. A
@@ -612,6 +622,9 @@ Print version string and commit hash.
 | `--neo4j-user` | `AGENTHOUND_NEO4J_USER` | `neo4j` | Neo4j username. |
 | `--neo4j-password` | `AGENTHOUND_NEO4J_PASSWORD` | `agenthound` | Neo4j password. |
 | `--pg-uri` | `AGENTHOUND_PG_URI` | `postgres://agenthound:agenthound@localhost:5432/agenthound?sslmode=disable` | PostgreSQL URI. |
+| `--host-id` | `AGENTHOUND_HOST_ID` | _(required for DB commands)_ | Exact collector host admitted by this database pair. |
+| `--network-realm-id` | `AGENTHOUND_NETWORK_REALM_ID` | _(required for DB commands)_ | Exact private-network realm admitted by this database pair. |
+| `--storage-pair-id` | `AGENTHOUND_STORAGE_PAIR_ID` | _(required for DB commands)_ | Canonical lowercase UUID permanently pairing these PostgreSQL and Neo4j volumes. |
 | `--cors-origins` | `AGENTHOUND_CORS_ORIGINS` | `http://localhost:8080,http://127.0.0.1:8080` | Comma-separated CORS origins. |
 | `--log-level` | `AGENTHOUND_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
 
@@ -627,7 +640,14 @@ Start the API server, embedded React UI, and initialize databases.
 agenthound-server serve
 ```
 
-Auto-initializes Neo4j schema (constraints + indexes) and PostgreSQL migrations on first start. Mutating HTTP endpoints are gated by `OriginGuard` (Origin allowlist, configured via `--cors-origins`). Graceful shutdown on SIGINT/SIGTERM (10s drain).
+Before any schema mutation, reads immutable binding markers from both databases
+and requires the configured host, realm, and storage-pair UUID to match. A
+one-sided missing marker is repaired only when both stores are product-empty;
+crossed pairs, legacy non-empty stores, future marker versions, and realm
+mismatches fail closed. It then initializes Neo4j schema (constraints +
+indexes) and PostgreSQL migrations on first start. Mutating HTTP endpoints are
+gated by `OriginGuard` (Origin allowlist, configured via `--cors-origins`).
+Graceful shutdown on SIGINT/SIGTERM (10s drain).
 
 **No application-layer authentication.** Default loopback bind is the security boundary. Expose remotely only over VPN/SSH tunnel. The server logs a `WARN` if bound to a non-loopback address.
 
@@ -642,7 +662,9 @@ agenthound-server ingest <file.json>
 agenthound-server ingest -
 ```
 
-Pipeline stages: validate the strict v2 contract, normalize supported values, deduplicate (MERGE by objectid), batch write (1000 ops/txn), post-process (composite edges + risk scores).
+Pipeline stages: admit the strict v3 artifact origin and reverify both storage
+markers, validate/normalize supported values, deduplicate (MERGE by objectid),
+batch write (1000 ops/txn), and post-process (composite edges + risk scores).
 
 All three ingest entry points (CLI, `POST /api/v1/ingest`, UI drag-drop) run the same pipeline.
 

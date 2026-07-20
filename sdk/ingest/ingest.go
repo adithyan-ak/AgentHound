@@ -1,7 +1,7 @@
 package ingest
 
 const (
-	CurrentVersion = 2
+	CurrentVersion = 3
 	IngestType     = "agenthound-ingest"
 )
 
@@ -17,6 +17,7 @@ type IngestMeta struct {
 	CollectorVersion string            `json:"collector_version"`
 	Timestamp        string            `json:"timestamp"`
 	ScanID           string            `json:"scan_id"`
+	Origin           CollectionOrigin  `json:"origin"`
 	Collection       *CollectionReport `json:"collection,omitempty"`
 	Ruleset          *RulesetManifest  `json:"ruleset,omitempty"`
 	IdentitySchemes  []IdentityScheme  `json:"identity_schemes,omitempty"`

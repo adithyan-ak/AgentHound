@@ -37,7 +37,7 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 	if data.Meta.Collection == nil {
 		errs = append(errs, FieldError{
 			Path:    "meta.collection",
-			Message: "is required for ingest v2",
+			Message: "is required for ingest v3",
 		})
 	} else {
 		if !validOutcomeState(data.Meta.Collection.State) {
@@ -208,6 +208,18 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 	if data.Meta.ScanID == "" {
 		errs = append(errs, FieldError{Path: "meta.scan_id", Message: "must not be empty"})
 	}
+	if err := ingest.ValidateOriginID("host_id", data.Meta.Origin.HostID); err != nil {
+		errs = append(errs, FieldError{Path: "meta.origin.host_id", Message: err.Error()})
+	}
+	if err := ingest.ValidateOriginID(
+		"network_realm_id",
+		data.Meta.Origin.NetworkRealmID,
+	); err != nil {
+		errs = append(errs, FieldError{
+			Path:    "meta.origin.network_realm_id",
+			Message: err.Error(),
+		})
+	}
 	errs = append(errs, validateRuleset(data.Meta.Ruleset)...)
 	errs = append(errs, validateIdentitySchemes(data.Meta.IdentitySchemes)...)
 	if data.Graph.Nodes == nil {
@@ -294,13 +306,13 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 		if edge.SourceKind == "" {
 			errs = append(errs, FieldError{
 				Path:    fmt.Sprintf("graph.edges[%d].source_kind", i),
-				Message: "must not be empty in ingest v2",
+				Message: "must not be empty in ingest v3",
 			})
 		}
 		if edge.TargetKind == "" {
 			errs = append(errs, FieldError{
 				Path:    fmt.Sprintf("graph.edges[%d].target_kind", i),
-				Message: "must not be empty in ingest v2",
+				Message: "must not be empty in ingest v3",
 			})
 		}
 		errs = append(errs, validateObservationDomains(
@@ -504,7 +516,7 @@ func validateObservationDomains(
 	if len(domains) == 0 {
 		return []FieldError{{
 			Path:    path,
-			Message: "must contain at least one declared domain in ingest v2",
+			Message: "must contain at least one declared domain in ingest v3",
 		}}
 	}
 	seen := make(map[string]bool, len(domains))
@@ -597,7 +609,7 @@ func validOutcomeState(state ingest.OutcomeState) bool {
 
 func validateRuleset(ruleset *ingest.RulesetManifest) []FieldError {
 	if ruleset == nil {
-		return []FieldError{{Path: "meta.ruleset", Message: "is required for ingest v2"}}
+		return []FieldError{{Path: "meta.ruleset", Message: "is required for ingest v3"}}
 	}
 	var errs []FieldError
 	if strings.TrimSpace(ruleset.Digest) == "" {

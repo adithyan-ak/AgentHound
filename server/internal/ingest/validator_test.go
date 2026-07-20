@@ -14,12 +14,18 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
+var testCollectionOrigin = ingest.CollectionOrigin{
+	HostID:         "agenthound-test-workstation",
+	NetworkRealmID: "agenthound-test-lab",
+}
+
 func validIngestData() *ingest.IngestData {
 	scope := ingest.CanonicalCoverageKey("mcp", "target", "https://mcp.example")
 	return &ingest.IngestData{
 		Meta: ingest.IngestMeta{
 			Version:          ingest.CurrentVersion,
 			Type:             ingest.IngestType,
+			Origin:           testCollectionOrigin,
 			Collector:        "mcp",
 			CollectorVersion: "0.1.0",
 			Timestamp:        "2026-04-06T10:30:00Z",
@@ -74,6 +80,50 @@ func TestValidatorAcceptsValid(t *testing.T) {
 	}
 }
 
+func TestValidatorRejectsNoncanonicalCollectionOrigin(t *testing.T) {
+	tests := []struct {
+		name     string
+		origin   ingest.CollectionOrigin
+		wantPath string
+	}{
+		{
+			name:     "missing host",
+			origin:   ingest.CollectionOrigin{NetworkRealmID: "realm-a"},
+			wantPath: "meta.origin.host_id",
+		},
+		{
+			name:     "missing realm",
+			origin:   ingest.CollectionOrigin{HostID: "host-a"},
+			wantPath: "meta.origin.network_realm_id",
+		},
+		{
+			name:     "uppercase host",
+			origin:   ingest.CollectionOrigin{HostID: "Host-a", NetworkRealmID: "realm-a"},
+			wantPath: "meta.origin.host_id",
+		},
+		{
+			name:     "whitespace realm",
+			origin:   ingest.CollectionOrigin{HostID: "host-a", NetworkRealmID: "realm-a "},
+			wantPath: "meta.origin.network_realm_id",
+		},
+		{
+			name: "oversized host",
+			origin: ingest.CollectionOrigin{
+				HostID:         strings.Repeat("a", ingest.MaxOriginIDLength+1),
+				NetworkRealmID: "realm-a",
+			},
+			wantPath: "meta.origin.host_id",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data := validIngestData()
+			data.Meta.Origin = test.origin
+			assertValidationError(t, NewValidator().Validate(data), test.wantPath)
+		})
+	}
+}
+
 // campaignEvidenceIngest builds a "scan"-collector envelope carrying a
 // CREDENTIAL_REACH_VERIFIED edge with both reference_only endpoint nodes, exactly
 // as the campaign runner emits it.
@@ -111,6 +161,7 @@ func campaignEvidenceIngest() *ingest.IngestData {
 	data := &ingest.IngestData{
 		Meta: ingest.IngestMeta{
 			Version: ingest.CurrentVersion, Type: ingest.IngestType,
+			Origin:    testCollectionOrigin,
 			Collector: "scan", CollectorVersion: "0.9.0-dev",
 			Timestamp: "2026-07-12T00:00:00Z", ScanID: scanID,
 			Collection: &ingest.CollectionReport{
@@ -172,6 +223,8 @@ func TestValidatorRejectsCampaignMissingEndpoint(t *testing.T) {
 func TestValidatorAcceptsCollectorProducedRootCoverage(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
+	t.Setenv("AGENTHOUND_HOST_ID", testCollectionOrigin.HostID)
+	t.Setenv("AGENTHOUND_NETWORK_REALM_ID", testCollectionOrigin.NetworkRealmID)
 	configPath := filepath.Join(dir, "config.json")
 	outputPath := filepath.Join(dir, "scan.json")
 	if err := os.WriteFile(
