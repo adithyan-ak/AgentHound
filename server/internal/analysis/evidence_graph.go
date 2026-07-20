@@ -170,7 +170,13 @@ func calculateAttackCost(edges []PathEdge) AttackCost {
 
 	var total float64
 	for i, edge := range edges {
-		weight, ok := evidenceFloat(edge.Properties["risk_weight"])
+		rawWeight := edge.Properties["risk_weight"]
+		if edge.Kind == "TRUSTS_SERVER" {
+			if effective, exists := edge.Properties["effective_risk_weight"]; exists {
+				rawWeight = effective
+			}
+		}
+		weight, ok := evidenceFloat(rawWeight)
 		if !ok || weight < 0 || math.IsNaN(weight) || math.IsInf(weight, 0) {
 			cost.MissingWeightEdgeIndexes = append(cost.MissingWeightEdgeIndexes, i)
 			continue

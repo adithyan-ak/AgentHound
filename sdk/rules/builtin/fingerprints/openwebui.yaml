@@ -15,10 +15,9 @@
 # the backend URL is now captured by the openwebuiloot Looter via the
 # admin-gated /ollama/config endpoint (which does return OLLAMA_BASE_URLS).
 #
-# The second probe is retained as an anonymous shape guard: /api/config
-# is expected to return {"name": "Open WebUI", ...} on every version.
-# The soft matcher strengthens the fingerprint without depending on any
-# captured field.
+# The second probe is a public shape guard: /api/config is expected to return
+# {"name": "Open WebUI", ...} on every version. These public endpoints prove
+# service identity, not anonymous access to chat or admin surfaces.
 id: openwebui
 name: Open WebUI chat frontend
 description: 'Identifies Open WebUI from its version and application-config response shapes'
@@ -55,6 +54,4 @@ emit:
     - AIService
   properties:
     service_kind: openwebui
-    auth_method: none
-    is_anonymous_loot: "true"
     version: "{capture:version}"

@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/adithyan-ak/agenthound/modules/openwebuifp"
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/common"
 )
@@ -65,6 +67,8 @@ func openwebuiStub(t *testing.T, opts openwebuiStubOptions) *httptest.Server {
 			}
 		}
 		switch r.URL.Path {
+		case "/api/version":
+			_, _ = w.Write([]byte(`{"version":"0.6.32"}`))
 		case "/api/config":
 			body := opts.config
 			if body == "" {
@@ -101,6 +105,83 @@ func openwebuiStub(t *testing.T, opts openwebuiStubOptions) *httptest.Server {
 	}))
 }
 
+func TestFingerprintAndLootPropertiesComposeOnSameEndpoint(t *testing.T) {
+	srv := openwebuiStub(t, openwebuiStubOptions{})
+	defer srv.Close()
+	target := action.Target{Kind: "host", Address: addrOf(srv)}
+
+	fingerprinter, err := openwebuifp.New()
+	if err != nil {
+		t.Fatalf("new fingerprinter: %v", err)
+	}
+	fingerprint, err := fingerprinter.Fingerprint(context.Background(), target)
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+	loot, err := (&Looter{}).Loot(context.Background(), target, action.LootOptions{})
+	if err != nil {
+		t.Fatalf("loot: %v", err)
+	}
+	fingerprintNode := fingerprint.IngestData.Graph.Nodes[0]
+	lootNode := loot.IngestData.Graph.Nodes[0]
+	if fingerprintNode.ID != lootNode.ID {
+		t.Fatalf("same endpoint IDs differ: %q != %q", fingerprintNode.ID, lootNode.ID)
+	}
+	for key, fingerprintValue := range fingerprintNode.Properties {
+		if key == "last_verified_at" {
+			continue
+		}
+		if lootValue, shared := lootNode.Properties[key]; shared &&
+			!reflect.DeepEqual(fingerprintValue, lootValue) {
+			t.Errorf("shared property %q conflicts: fingerprint=%#v loot=%#v", key, fingerprintValue, lootValue)
+		}
+	}
+	if _, exists := fingerprintNode.Properties["auth_method"]; exists {
+		t.Errorf("fingerprint authored auth_method: %+v", fingerprintNode.Properties)
+	}
+	if lootNode.Properties["auth_method"] != string(common.AuthNone) ||
+		lootNode.Properties["auth_evidence"] != common.AuthEvidenceAnonymousProbeSucceeded {
+		t.Errorf("looter lost affirmative anonymous evidence: %+v", lootNode.Properties)
+	}
+	if fingerprintNode.Properties["discovered_via"] != "network_scan" ||
+		lootNode.Properties["loot_observed"] != true {
+		t.Errorf("action provenance not separated: fingerprint=%+v loot=%+v", fingerprintNode.Properties, lootNode.Properties)
+	}
+}
+
+func TestProtectedFingerprintLeavesAuthOwnershipToLooter(t *testing.T) {
+	srv := openwebuiStub(t, openwebuiStubOptions{
+		config: `{"status":true,"name":"Open WebUI","version":"0.6.32","features":{"auth":true,"enable_signup":false}}`,
+	})
+	defer srv.Close()
+	target := action.Target{Kind: "host", Address: addrOf(srv)}
+
+	fingerprinter, err := openwebuifp.New()
+	if err != nil {
+		t.Fatalf("new fingerprinter: %v", err)
+	}
+	fingerprint, err := fingerprinter.Fingerprint(context.Background(), target)
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+	loot, err := (&Looter{}).Loot(context.Background(), target, action.LootOptions{})
+	if err != nil {
+		t.Fatalf("loot: %v", err)
+	}
+	fingerprintProps := fingerprint.IngestData.Graph.Nodes[0].Properties
+	lootProps := loot.IngestData.Graph.Nodes[0].Properties
+	for _, key := range []string{"auth_method", "auth_assurance", "auth_evidence"} {
+		if _, exists := fingerprintProps[key]; exists {
+			t.Errorf("protected public fingerprint authored %s: %+v", key, fingerprintProps)
+		}
+	}
+	if lootProps["auth_required"] != true ||
+		lootProps["auth_method"] != string(common.AuthUnknown) ||
+		lootProps["auth_evidence"] != common.AuthEvidenceUnknown {
+		t.Errorf("protected looter evidence = %+v", lootProps)
+	}
+}
+
 func addrOf(srv *httptest.Server) string {
 	return strings.TrimPrefix(srv.URL, "http://")
 }
@@ -124,6 +205,12 @@ func TestLoot_OpenWebUI_AnonymousPosture(t *testing.T) {
 	node := res.IngestData.Graph.Nodes[0]
 	if node.Kinds[0] != "OpenWebUIInstance" {
 		t.Errorf("kind = %v, want OpenWebUIInstance", node.Kinds)
+	}
+	if node.Properties["loot_observed"] != true {
+		t.Errorf("OpenWebUIInstance missing loot_observed: %+v", node.Properties)
+	}
+	if _, exists := node.Properties["discovered_via"]; exists {
+		t.Errorf("direct loot claimed discovery provenance: %+v", node.Properties)
 	}
 	if se, _ := node.Properties["signup_enabled"].(bool); !se {
 		t.Errorf("signup_enabled = %v, want true", node.Properties["signup_enabled"])
@@ -344,9 +431,14 @@ func TestLoot_OpenWebUI_OllamaConfig_KeyField(t *testing.T) {
 			if _, claimed := n.Properties["auth_method"]; claimed {
 				t.Errorf("configured backend claimed observed auth: %+v", n.Properties)
 			}
+			if _, claimed := n.Properties["probe_status"]; claimed {
+				t.Errorf("configured backend claimed a probe result: %+v", n.Properties)
+			}
+			if _, claimed := n.Properties["discovered_via"]; claimed {
+				t.Errorf("configured backend overwrote active discovery provenance: %+v", n.Properties)
+			}
 			if n.Properties["configuration_observed"] != true ||
-				n.Properties["configured_auth_method"] != "apiKey" ||
-				n.Properties["probe_status"] != string(common.VerificationConfiguredUnverified) {
+				n.Properties["configured_auth_method"] != "apiKey" {
 				t.Errorf("configured backend evidence missing: %+v", n.Properties)
 			}
 		}

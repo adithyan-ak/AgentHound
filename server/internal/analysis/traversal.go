@@ -508,7 +508,10 @@ UNWIND $ids AS current_id
         startNode(r).objectid AS source,
         endNode(r).objectid AS target,
         type(r) AS kind,
-        r.risk_weight AS risk_weight
+        CASE WHEN type(r) = 'TRUSTS_SERVER'
+          THEN coalesce(r.effective_risk_weight, r.risk_weight)
+          ELSE r.risk_weight
+        END AS risk_weight
  ORDER BY traversal_source, kind, source, target, traversal_target`
 		rows, err := db.Query(ctx, cypher, params)
 		if err != nil {

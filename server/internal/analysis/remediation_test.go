@@ -183,10 +183,11 @@ func TestBuildRemediation_AuthenticationAdviceUsesTargetEvidence(t *testing.T) {
 		notWant      string
 	}{
 		{
-			name:         "explicit none",
+			name:         "raw anonymous claim lacks observed provenance",
 			authMethod:   "none",
 			authEvidence: "anonymous_probe_succeeded",
-			want:         "explicitly reports no authentication",
+			want:         "explicit anonymous-access evidence is unavailable",
+			notWant:      "explicitly reports no authentication",
 		},
 		{
 			name:       "none without explicit evidence remains unverified",
@@ -237,6 +238,52 @@ func TestBuildRemediation_AuthenticationAdviceUsesTargetEvidence(t *testing.T) {
 				t.Fatalf("typed actors = %+v -> %+v", steps[0].Source, steps[0].Target)
 			}
 		})
+	}
+}
+
+func TestBuildRemediation_AuthenticationAdviceUsesPairedEffectiveSource(t *testing.T) {
+	path := &AttackPath{
+		Nodes: []PathNode{
+			{ID: "agent", Kinds: []string{"AgentInstance"}, Properties: map[string]any{"name": "Agent"}},
+			{ID: "server", Kinds: []string{"MCPServer"}, Properties: map[string]any{
+				"name":        "Server",
+				"auth_method": "bearer", "auth_assurance": "moderate",
+				"auth_evidence":         "configured_credential",
+				"effective_auth_method": "none", "effective_auth_assurance": "unauthenticated",
+				"effective_auth_evidence": "anonymous_probe_succeeded",
+				"effective_auth_source":   "observed",
+			}},
+		},
+		Edges: []PathEdge{{Source: "agent", Target: "server", Kind: "TRUSTS_SERVER"}},
+	}
+	steps := BuildRemediation(path, &model.Finding{EdgeKind: "CAN_REACH"})
+	if len(steps) != 1 {
+		t.Fatalf("steps = %+v", steps)
+	}
+	description := steps[0].Description
+	for _, want := range []string{
+		"Runtime observation",
+		"explicitly reports no authentication",
+		"effective source: observed",
+	} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("description %q missing %q", description, want)
+		}
+	}
+	if strings.Contains(description, "reports bearer authentication") {
+		t.Fatalf("configured method overrode the paired effective tuple: %q", description)
+	}
+}
+
+func TestPathNodeEffectiveAuthRejectsPartialTupleMixing(t *testing.T) {
+	method, evidence, source := pathNodeEffectiveAuth(map[string]any{
+		"auth_method": "oauth", "auth_evidence": "configured_credential",
+		"effective_auth_method":   "none",
+		"effective_auth_evidence": "anonymous_probe_succeeded",
+		// Deliberately omit effective assurance/source.
+	})
+	if method != "oauth" || evidence != "configured_credential" || source != "configured" {
+		t.Fatalf("partial tuple was mixed: %s/%s source=%s", method, evidence, source)
 	}
 }
 

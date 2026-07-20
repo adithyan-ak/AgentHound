@@ -12,8 +12,9 @@ import (
 // escalation: the anonymous/low-trust caller borrows the high-trust agent's
 // privileges through the DELEGATES_TO edge.
 //
-// auth_assurance is materialized by the auth_strength pre-pass. Unknown and
-// custom methods are deliberately excluded rather than treated as weak.
+// effective_auth_assurance is materialized by the auth_strength pre-pass.
+// Unknown and custom methods are deliberately excluded rather than treated as
+// weak, while configured provenance remains intact on auth_assurance.
 type ConfusedDeputy struct{}
 
 func (p *ConfusedDeputy) Name() string { return "confused_deputy" }
@@ -32,13 +33,17 @@ func (p *ConfusedDeputy) Process(ctx context.Context, db graph.GraphDB, scanID s
 	// managed by the global derived epoch.
 	cypher := `
 MATCH (low:A2AAgent)-[delegation:DELEGATES_TO]->(high:A2AAgent)
-WHERE low.auth_assurance IN ['unauthenticated', 'weak']
-  AND high.auth_assurance = 'strong'
+WHERE (
+    (low.effective_auth_assurance = 'unauthenticated'
+      AND low.effective_auth_source = 'observed')
+    OR low.effective_auth_assurance = 'weak'
+  )
+  AND high.effective_auth_assurance = 'strong'
 MERGE (low)-[e:CONFUSED_DEPUTY]->(high)
 SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true,
     e.source_collector = 'a2a',
-    e.low_auth_method = low.auth_method,
-    e.high_auth_method = high.auth_method,
+    e.low_auth_method = low.effective_auth_method,
+    e.high_auth_method = high.effective_auth_method,
     e.confidence = 0.8, e.risk_weight = 0.3,
     e.evidence_version = 1,
     e.evidence_node_ids = [low.objectid, high.objectid],

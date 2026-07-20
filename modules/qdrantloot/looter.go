@@ -28,6 +28,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -130,13 +131,11 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		ID:    qdrantID,
 		Kinds: []string{"QdrantInstance", "AIService"},
 		Properties: map[string]any{
-			"objectid":          qdrantID,
-			"endpoint":          baseURL,
-			"name":              host,
-			"discovered_via":    "qdrant_loot",
-			"service_kind":      "qdrant",
-			"auth_method":       "none",
-			"is_anonymous_loot": "true",
+			"objectid":      qdrantID,
+			"endpoint":      baseURL,
+			"name":          host,
+			"loot_observed": true,
+			"service_kind":  "qdrant",
 		},
 	})
 	res.Summary.EndpointsProbed++
@@ -152,6 +151,7 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 		res.Summary.PartialFailures++
 		return res, nil
 	}
+	markAnonymousInventorySuccess(res.IngestData.Graph.Nodes[0].Properties)
 
 	sort.Strings(names)
 
@@ -246,18 +246,35 @@ func fetchCollections(ctx context.Context, client *http.Client, baseURL string, 
 	if err != nil {
 		return nil, err
 	}
-	var parsed struct {
-		Result struct {
-			Collections []struct {
-				Name string `json:"name"`
-			} `json:"collections"`
-		} `json:"result"`
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+		Status string          `json:"status"`
 	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
+	if err := json.Unmarshal(body, &envelope); err != nil {
 		return nil, fmt.Errorf("decode /collections: %w", err)
 	}
-	out := make([]string, 0, len(parsed.Result.Collections))
-	for _, c := range parsed.Result.Collections {
+	resultJSON := bytes.TrimSpace(envelope.Result)
+	if envelope.Status != "ok" || len(resultJSON) == 0 || resultJSON[0] != '{' {
+		return nil, errors.New("decode /collections: expected an ok result object")
+	}
+	var result struct {
+		Collections json.RawMessage `json:"collections"`
+	}
+	if err := json.Unmarshal(resultJSON, &result); err != nil {
+		return nil, fmt.Errorf("decode /collections result: %w", err)
+	}
+	collectionsJSON := bytes.TrimSpace(result.Collections)
+	if len(collectionsJSON) == 0 || collectionsJSON[0] != '[' {
+		return nil, errors.New("decode /collections: expected a collections array")
+	}
+	var collections []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(collectionsJSON, &collections); err != nil {
+		return nil, fmt.Errorf("decode /collections array: %w", err)
+	}
+	out := make([]string, 0, len(collections))
+	for _, c := range collections {
 		if c.Name == "" {
 			continue
 		}
@@ -267,6 +284,15 @@ func fetchCollections(ctx context.Context, client *http.Client, baseURL string, 
 		}
 	}
 	return out, nil
+}
+
+func markAnonymousInventorySuccess(props map[string]any) {
+	props["auth_method"] = string(common.AuthNone)
+	props["auth_assurance"] = string(common.AuthAssuranceUnauthenticated)
+	props["auth_evidence"] = common.AuthEvidenceAnonymousProbeSucceeded
+	props["probe_status"] = string(common.VerificationVerified)
+	props["last_verified_at"] = time.Now().UTC().Format(time.RFC3339)
+	props["is_anonymous_loot"] = "true"
 }
 
 // fetchCollectionPoints reads /collections/{name} and returns the

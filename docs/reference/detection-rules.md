@@ -141,9 +141,35 @@ MCPTool:dangerous-tool has injection pattern: "ignore all previous instructions"
 **What:** Network MCP servers that accepted a probe without credentials.
 
 **How detected:** Direct probes emit canonical auth evidence. A no-auth query
-requires both `auth_method: none` and
-`auth_evidence: anonymous_probe_succeeded`; configuration with no credential,
-local stdio transport, missing evidence, and `unknown` posture do not match.
+requires the paired effective tuple
+`effective_auth_method: none`, `effective_auth_assurance: unauthenticated`,
+`effective_auth_evidence: anonymous_probe_succeeded`, and (for MCP)
+`effective_auth_source: observed`. Configuration with no credential, local
+stdio transport, missing evidence, and `unknown` posture do not match. The
+server rejects partial/mismatched observed tuples before graph writes. A
+successful MCP Initialize is anonymous evidence only when its URL has no
+userinfo/query and it used no non-empty caller-configured header. Recognized
+auth headers retain their method; every other non-empty header is fail-closed
+as unknown configured request material, including cookies, opaque session
+headers, and conventionally benign header names. No second Initialize is sent.
+
+`no-auth-a2a` is fail-closed under the same evidence rule. Card retrieval alone
+records only declared or unknown authentication posture. The collector then
+performs one bounded read-only lookup for a cryptographically random
+nonexistent task. Only the protocol's exact task-not-found result emits
+`auth_probe_method=get_task_nonexistent`,
+`auth_probe_status=anonymous_protocol_access`, and observed
+`none/unauthenticated/anonymous_probe_succeeded`, with a version-specific fixed
+task-not-found detail. The request is credential-free, redirect-free, bounded
+to 64 KiB and at most five seconds, and restricted to a preferred conformant
+HTTP(S) JSON-RPC interface on the exact origin of a requested target. Canonical
+endpoint deduplication makes aliases share one result; interface userinfo,
+query, and fragment bytes fail closed so the request cannot inherit embedded
+credentials. HTTP 401/403 and every
+inconclusive transport/protocol result omit the observed tuple and do not
+match. This proves anonymous access to the A2A protocol handler; it does not
+claim that message submission, task creation, or every advertised skill is
+anonymously executable.
 
 **Risk:** Confirmed anonymous network access removes an authentication boundary
 for reachable clients. A local stdio child process is a separate process-local
@@ -288,7 +314,13 @@ Keyword sets are kept deliberately narrow — universal taint destroys signal.
 
 **What:** A weakly-authenticated A2A agent can drive a strongly-authenticated one through delegation, borrowing its privileges.
 
-**How detected:** The `auth_strength` pre-pass materializes both canonical `auth_assurance` and a numeric weakness only for known methods. The `confused_deputy` post-processor requires an unauthenticated/weak caller and a strong callee. Unknown/custom methods have no numeric weakness and cannot satisfy either side.
+**How detected:** The `auth_strength` pre-pass preserves configured auth
+provenance and materializes a paired `effective_auth_*` tuple plus a numeric
+weakness only for supported evidence. The `confused_deputy` post-processor
+requires a strong effective callee and either a weak effective caller or an
+unauthenticated effective caller with `effective_auth_source=observed`.
+Configured no-auth claims without accepted runtime evidence, unknown methods,
+and custom methods cannot satisfy the low-trust side.
 
 **Risk:** The anonymous or low-trust caller effectively escalates to the callee's privilege level — a classic confused-deputy escalation across an agent trust boundary.
 
@@ -362,7 +394,11 @@ same host. The correlation is represented as `CAN_REACH`, but carries
 
 **What:** Servers or tools that, if compromised, would impact a disproportionately large number of agents or resources.
 
-**How detected:** The `chokepoint-servers` query finds MCP servers trusted by multiple agents. The `chokepoint-tools` query finds tools with access to many resources.
+**How detected:** The `chokepoint-servers` query finds MCP servers trusted by
+multiple agents and returns their effective auth method, assurance, evidence,
+and source so configured posture cannot mask a confirmed runtime anonymous
+observation. The `chokepoint-tools` query finds tools with access to many
+resources.
 
 **Risk:** Chokepoints are high-value targets. Compromising one chokepoint server may grant access to every agent that trusts it.
 

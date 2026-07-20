@@ -41,7 +41,13 @@ func TestServerRiskScore_AuthStrength(t *testing.T) {
 			mock := &graph.MockGraphDB{
 				QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
 					if containsSubstring(cypher, "auth_method") {
-						return []map[string]any{{"am": tt.method}}, nil
+						row := map[string]any{"am": tt.method}
+						if tt.method == "none" {
+							row["auth_assurance"] = "unauthenticated"
+							row["auth_evidence"] = "anonymous_probe_succeeded"
+							row["auth_source"] = "observed"
+						}
+						return []map[string]any{row}, nil
 					}
 					return nil, nil
 				},
@@ -73,7 +79,8 @@ func TestServerAuthAssessmentRequiresExplicitAnonymousEvidence(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			db := &graph.MockGraphDB{QueryResult: []map[string]any{{
-				"am": "none", "auth_evidence": tt.evidence,
+				"am": "none", "auth_assurance": "unauthenticated",
+				"auth_evidence": tt.evidence, "auth_source": "observed",
 			}}}
 			assessment, err := serverAuthAssessment(context.Background(), db, "server")
 			if err != nil {
@@ -83,6 +90,49 @@ func TestServerAuthAssessmentRequiresExplicitAnonymousEvidence(t *testing.T) {
 				t.Fatalf("assessment = %+v, want complete=%v", assessment, tt.complete)
 			}
 		})
+	}
+}
+
+func TestServerAuthAssessmentUsesPairedEffectiveTuple(t *testing.T) {
+	var captured string
+	db := &graph.MockGraphDB{
+		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
+			captured = cypher
+			return []map[string]any{{
+				"am": "none", "auth_assurance": "unauthenticated",
+				"auth_evidence": "anonymous_probe_succeeded", "auth_source": "observed",
+			}}, nil
+		},
+	}
+	assessment, err := serverAuthAssessment(context.Background(), db, "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !assessment.Complete || assessment.Score != 100 ||
+		assessment.Min != 100 || assessment.Max != 100 {
+		t.Fatalf("confirmed effective anonymous assessment = %+v", assessment)
+	}
+	if !containsSubstring(captured, "s.effective_auth_method AS am") ||
+		!containsSubstring(captured, "s.effective_auth_assurance AS auth_assurance") ||
+		!containsSubstring(captured, "s.effective_auth_evidence AS auth_evidence") ||
+		!containsSubstring(captured, "s.effective_auth_source AS auth_source") ||
+		containsSubstring(captured, "RETURN s.auth_method AS am") {
+		t.Fatalf("server risk did not consume the effective tuple:\n%s", captured)
+	}
+}
+
+func TestServerAuthAssessmentRejectsConfiguredAnonymousClaim(t *testing.T) {
+	db := &graph.MockGraphDB{QueryResult: []map[string]any{{
+		"am": "none", "auth_assurance": "unknown",
+		"auth_evidence": "anonymous_probe_succeeded", "auth_source": "configured",
+	}}}
+	assessment, err := serverAuthAssessment(context.Background(), db, "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assessment.Complete || len(assessment.UnknownFactors) != 1 ||
+		assessment.UnknownFactors[0] != "auth_source" {
+		t.Fatalf("configured anonymous claim was treated as observed: %+v", assessment)
 	}
 }
 

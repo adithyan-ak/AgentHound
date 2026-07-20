@@ -145,6 +145,20 @@ retain their OR-of-AND structure and scopes; a declared scheme is inactive until
 referenced by a requirement, and `auth_method` remains `unknown` when a scalar
 method would be ambiguous.
 
+After parsing, the collector performs at most one anonymous, read-only
+nonexistent-task lookup per canonical preferred protocol endpoint. It uses v1
+`GetTask` with the advertised `A2A-Version` header or v0.3 `tasks/get`, never
+`message/send`, cancellation, or push-configuration methods. The probe sends
+neither `--auth-token` nor any other credential, rejects redirects, reads at
+most 64 KiB, and runs for at most five seconds (or the shorter collector
+timeout). A card cannot expand scan scope: the preferred interface must be a
+conformant HTTP(S) JSON-RPC URL whose exact scheme/host/effective-port origin
+matches at least one requested target and contains no userinfo, query, or
+fragment bytes. Query-bearing interfaces fail closed because even an
+innocently named parameter could carry authentication material. Aliases sharing that canonical endpoint
+reuse one result. Cross-origin, non-preferred, unsupported, malformed, or
+otherwise ambiguous interfaces remain diagnostic `unknown` observations.
+
 Only v1.0.1 cards have a defined signing algorithm. Their ProtoJSON
 presence/default rules are applied before RFC 8785 JCS and object-form JWS
 verification. Keys resolve first from `--a2a-trusted-keys`, then from the
@@ -272,6 +286,11 @@ agenthound loot <host:port> --type <kind> [flags]
 |------|---------|-------------|
 | `--include-embeddings` | `false` | Issue one test embedding call via `POST /api/embeddings` with `keep_alive: 0` (evicts the runner immediately after the probe per Ollama `server/sched.go:389-398`; consumes compute). |
 
+The Ollama Looter records verified anonymous access only after credential-free
+`GET /api/tags` returns a JSON object with a `models` array. HTTP denial,
+transport failure, malformed JSON, or a 2xx body without that array leaves only
+the neutral service identity and `loot_observed` attempt fact.
+
 > Ollama's HTTP API does not expose a raw-weight download endpoint. See [Ollama loot](../operator/loot/ollama.md#getting-raw-weights-out-of-band) for how to obtain the GGUF weight file out-of-band when the engagement needs it.
 
 #### Per-Module Flags: `--type openwebui`
@@ -288,7 +307,7 @@ agenthound loot <host:port> --type <kind> [flags]
 | `--points-per-collection` | `100` | Cap on payloads sampled per collection when `--include-points` is set. |
 | `--max-total-resources` | `5000` | Global cap on `:MCPResource` nodes emitted across all collections (prevents runaway on large deployments). |
 
-Without `--include-points` the Qdrant Looter is pure-GET (`GET /collections` + `GET /collections/{name}`), folding `collection_count`, `collections`, `total_points`, `points_count_unknown`, and `anonymous_listing` onto the `QdrantInstance` node with no Credential nodes.
+Without `--include-points` the Qdrant Looter is pure-GET (`GET /collections` + `GET /collections/{name}`), folding `collection_count`, `collections`, `total_points`, `points_count_unknown`, and `anonymous_listing` onto the `QdrantInstance` node with no Credential nodes. Those inventory and verified-anonymous properties are added only after credential-free `/collections` returns `status=ok` with a `result.collections` array; denial, transport failure, malformed JSON, and wrong-shaped 2xx responses leave a neutral attempt node.
 
 #### Per-Module Flags: `--type jupyter`
 
@@ -300,7 +319,7 @@ The Jupyter Looter is pure-GET. It first tries `GET /api/sessions` and root `GET
 
 #### `--type mlflow` — coverage note
 
-The MLflow Looter enumerates experiments + runs (paginated via `max_results` / `next_page_token` — modern MLflow rejects `experiments/search` without `max_results`) plus the Model Registry: `registered-models/search`, `model-versions/search`, and per-version `get-download-uri`. Each returned artifact URI is emitted as an `:MCPResource` joined to `MLflowServer` via `PROVIDES_RESOURCE`, with `sensitivity` auto-classified by scheme + path (see the [artifact sensitivity heuristic in graph-model.md](graph-model.md)). No new flag; the Model Registry probes are anonymous-readable on stock MLflow deployments.
+The MLflow Looter enumerates experiments + runs (paginated via `max_results` / `next_page_token` — modern MLflow rejects `experiments/search` without `max_results`) plus the Model Registry: `registered-models/search`, `model-versions/search`, and per-version `get-download-uri`. Each returned artifact URI is emitted as an `:MCPResource` joined to `MLflowServer` via `PROVIDES_RESOURCE`, with `sensitivity` auto-classified by scheme + path (see the [artifact sensitivity heuristic in graph-model.md](graph-model.md)). No new flag; the Model Registry probes are anonymous-readable on stock MLflow deployments. Verified anonymous evidence is added only after the credential-free experiments-search response contains an `experiments` array; denial, transport failure, malformed JSON, and wrong-shaped 2xx responses retain only neutral attempt facts.
 
 #### Example
 

@@ -14,10 +14,29 @@ const EVIDENCE_KEYS = [
   "annotations",
   "security_schemes",
   "signatures",
+  "status",
   "probe_status",
+  "auth_probe_method",
+  "auth_probe_status",
+  "auth_probe_detail",
+  "collection_state",
+  "error",
   "configuration_observed",
   "configured_via",
   "configured_auth_method",
+  "auth_method",
+  "auth_assurance",
+  "auth_evidence",
+  "observed_auth_method",
+  "observed_auth_assurance",
+  "observed_auth_evidence",
+  "effective_auth_method",
+  "effective_auth_assurance",
+  "effective_auth_evidence",
+  "effective_auth_source",
+  "signature_verification_status",
+  "signature_key_source",
+  "signature_key_trust",
   "assertion_type",
   "confidence_scope",
 ];
@@ -37,23 +56,47 @@ export function EvidenceTab({ node }: { node: APINode }) {
   const lastSeen = String(props.last_seen ?? "");
   const createdAt = String(props.created_at ?? "");
   const objectId = node.id;
+  const exactAnonymousA2AProbe =
+    props.auth_probe_method === "get_task_nonexistent" &&
+    props.auth_probe_status === "anonymous_protocol_access" &&
+    (props.auth_probe_detail === "task_not_found_v1" ||
+      props.auth_probe_detail === "task_not_found_v0_3") &&
+    props.observed_auth_method === "none" &&
+    props.observed_auth_assurance === "unauthenticated" &&
+    props.observed_auth_evidence === "anonymous_probe_succeeded";
+  const exactProtectedA2AProbe =
+    props.auth_probe_method === "get_task_nonexistent" &&
+    props.auth_probe_status === "authentication_required" &&
+    (props.auth_probe_detail === "http_unauthorized" ||
+      props.auth_probe_detail === "http_forbidden") &&
+    props.observed_auth_method == null &&
+    props.observed_auth_assurance == null &&
+    props.observed_auth_evidence == null;
   const observation =
-    props.probe_status === "verified"
+    exactAnonymousA2AProbe
       ? {
           title: "Directly verified",
           detail:
-            "A direct probe verified this entity at collection time.",
+            "A bounded read-only request reached the A2A protocol handler without credentials and returned the exact nonexistent-task result. This verifies anonymous protocol-handler access, not message submission or skill execution.",
           className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
         }
-      : props.configuration_observed === true ||
-          props.probe_status === "configured_unverified"
+      : exactProtectedA2AProbe
         ? {
-            title: "Configured, not verified",
+            title: "Authentication required",
             detail:
-              "AgentHound observed a configuration reference. Service availability and authentication were not directly verified.",
-            className: "border-amber-400/30 bg-amber-400/10 text-amber-200",
+              "The A2A protocol handler rejected the credential-free read-only probe with HTTP 401 or 403. Public Agent Card access does not imply anonymous operational access.",
+            className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
           }
-        : props.probe_status === "failed"
+        : props.probe_status === "verified" || props.status === "reachable"
+      ? {
+          title: "Directly verified",
+          detail:
+            props.status === "reachable"
+              ? "A successful protocol interaction reached and enumerated this entity at collection time. Authentication evidence below describes the access path that succeeded."
+              : "A direct probe verified this entity at collection time.",
+          className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
+        }
+        : props.probe_status === "failed" || props.status === "unreachable"
           ? {
               title: "Verification failed",
               detail:
@@ -61,12 +104,20 @@ export function EvidenceTab({ node }: { node: APINode }) {
               className:
                 "border-destructive/30 bg-destructive/10 text-destructive",
             }
-          : {
-              title: "Verification status unknown",
-              detail:
-                "No direct verification status was recorded. Do not infer availability or absence from this node alone.",
-              className: "border-border bg-black/30 text-muted-foreground",
-            };
+          : props.configuration_observed === true ||
+              props.probe_status === "configured_unverified"
+            ? {
+                title: "Configured, not verified",
+                detail:
+                  "AgentHound observed a configuration reference. Service availability and authentication were not directly verified.",
+                className: "border-amber-400/30 bg-amber-400/10 text-amber-200",
+              }
+            : {
+                title: "Verification status unknown",
+                detail:
+                  "No conclusive direct verification status was recorded. Do not infer availability, authentication, or absence from this node alone.",
+                className: "border-border bg-black/30 text-muted-foreground",
+              };
 
   return (
     <div className="space-y-5">

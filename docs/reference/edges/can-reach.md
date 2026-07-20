@@ -16,20 +16,20 @@ Meaning: the source agent has a viable path through trusted servers and their to
 
 ## Computation
 
-The `can_reach` post-processor runs after `has_access_to` (its only dependency) and produces two variants:
+The `can_reach` post-processor runs after `auth_strength` and `has_access_to`
+and produces two variants:
 
 ### Direct Path (3 hops)
 
 ```cypher
 MATCH (a:AgentInstance)-[ts:TRUSTS_SERVER]->(s:MCPServer)
       -[:PROVIDES_TOOL]->(t:MCPTool)-[:HAS_ACCESS_TO]->(r:MCPResource)
-WHERE NOT EXISTS((a)-[:CAN_REACH]->(r))
 MERGE (a)-[e:CAN_REACH]->(r)
 SET e.hops = 3,
     e.via_server = s.name,
     e.via_tool = t.name,
-    e.confidence = CASE WHEN ts.risk_weight <= 0.1 THEN 1.0
-                        WHEN ts.risk_weight <= 0.3 THEN 0.8
+    e.confidence = CASE WHEN ts.effective_risk_weight <= 0.1 THEN 1.0
+                        WHEN ts.effective_risk_weight <= 0.3 THEN 0.8
                         ELSE 0.5 END
 ```
 
@@ -40,14 +40,29 @@ Confidence decreases as the trust edge auth strengthens — a server behind mTLS
 ```cypher
 MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(s1:MCPServer)-[:PROVIDES_TOOL]->(t1:MCPTool)
 WHERE ANY(cap IN t1.capability_surface WHERE cap IN ['file_read', 'credential_access'])
-MATCH (s2:MCPServer)-[:HAS_ENV_VAR]->(c:Credential)
-MATCH (c)<-[:USES_CREDENTIAL]-(i:Identity)<-[:AUTHENTICATES_WITH]-(s2)
+MATCH (s2:MCPServer)-[:AUTHENTICATES_WITH]->(i:Identity)-[:USES_CREDENTIAL]->(c:Credential)
 MATCH (s2)-[:PROVIDES_TOOL]->(t2:MCPTool)-[:HAS_ACCESS_TO]->(r:MCPResource)
 WHERE s1 <> s2
-      AND (s1.auth_method IS NULL OR s1.auth_method IN ['none', 'apiKey'])
+  AND (
+    (s1.effective_auth_assurance = 'unauthenticated'
+      AND s1.effective_auth_source = 'observed')
+    OR s1.effective_auth_assurance = 'weak'
+  )
+  AND c.value_hash IS NOT NULL AND c.value_hash <> ''
+  AND c.merge_key = 'value_hash'
+  AND c.identity_basis = 'value_hash'
+  AND c.material_status = 'observed'
+  AND c.exposure_status = 'exposed'
 ```
 
-This variant models: "agent has a tool that can read credentials, and those credentials authenticate to a second server with access to additional resources." Fixed confidence: 0.6.
+This variant models: "agent has a tool that can read credentials, and observed,
+exposed credential material authenticates to a second server with access to
+additional resources." The canonical identity topology applies to every config
+location; `HAS_ENV_VAR` is only optional location evidence and is not required.
+An unauthenticated first server is eligible only when its effective auth source
+is an accepted runtime observation. Configured weak authentication remains
+eligible, while a configured no-auth claim without runtime proof does not.
+Fixed confidence: 0.6.
 
 ---
 
@@ -60,10 +75,16 @@ MATCH (ext:A2AAgent)-[:DELEGATES_TO*1..3]->(int:A2AAgent)
 MATCH (int)-[:RUNS_ON]->(h:Host)<-[:RUNS_ON]-(s:MCPServer)
 MATCH (a:AgentInstance)-[:TRUSTS_SERVER]->(s)
       -[:PROVIDES_TOOL]->(t:MCPTool)-[:HAS_ACCESS_TO]->(r:MCPResource)
-WHERE (ext.auth_method = 'none' OR ext.auth_method IS NULL)
+WHERE ext.effective_auth_assurance = 'unauthenticated'
+  AND ext.effective_auth_source = 'observed'
+  AND ext.effective_auth_evidence = 'anonymous_probe_succeeded'
 ```
 
-This models an unauthenticated A2A agent delegating through a chain that lands on the same host as an MCP server — host correlation bridges the protocol boundary. This is the path class that no single-protocol scanner can find.
+This models a runtime-confirmed anonymous A2A agent delegating through a chain
+that lands on the same host as an MCP server — host correlation bridges the
+protocol boundary. A missing auth tuple or configured no-auth claim alone does
+not satisfy the correlation. This is the path class that no single-protocol
+scanner can find.
 
 ---
 
@@ -88,7 +109,8 @@ This models an unauthenticated A2A agent delegating through a chain that lands o
 ## Operator Guidance
 
 1. Sort CAN_REACH findings by target resource sensitivity (critical > high > medium).
-2. Prioritize paths where the agent's trust edge has `risk_weight <= 0.1` (no auth).
+2. Prioritize paths where the agent's trust edge has
+   `effective_risk_weight <= 0.1` (runtime-confirmed no auth).
 3. Cross-protocol paths (`cross_protocol = true`) represent novel attack surface — review host co-location.
 4. Credential chain paths indicate lateral movement potential — rotate exposed credentials.
 

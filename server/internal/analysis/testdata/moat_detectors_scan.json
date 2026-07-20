@@ -1,7 +1,8 @@
 {
   "meta": {
-    "version": 2,
+    "version": 3,
     "type": "agenthound-ingest",
+    "origin": {"host_id": "fixture-host", "network_realm_id": "fixture-realm"},
     "collector": "mcp",
     "collector_version": "0.1.0",
     "timestamp": "2026-06-19T10:00:00Z",
@@ -28,8 +29,8 @@
     "identity_schemes": [{
       "entity_kind": "MCPServer",
       "transport": "stdio",
-      "scheme": "mcp_stdio_v2_ordered",
-      "version": 2
+      "scheme": "mcp_stdio_v3_hashed_argv",
+      "version": 3
     }]
   },
   "graph": {

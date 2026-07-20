@@ -215,6 +215,55 @@ func TestBoundedMinimumWeightChoosesLongerCheaperPath(t *testing.T) {
 	}
 }
 
+func TestWeightedTraversalProjectsEffectiveTrustWeightIntoPathAndSum(t *testing.T) {
+	var adjacencyQuery string
+	db := &graph.MockGraphDB{
+		QueryFunc: func(_ context.Context, cypher string, params map[string]any) ([]map[string]any, error) {
+			if !strings.Contains(cypher, "traversal:adjacency") {
+				t.Fatalf("unexpected query: %s", cypher)
+			}
+			adjacencyQuery = cypher
+			ids, _ := params["ids"].([]string)
+			if len(ids) != 1 || ids[0] != "A" {
+				return nil, nil
+			}
+			return []map[string]any{{
+				"traversal_source": "A", "traversal_target": "S",
+				"next_id": "S", "next_name": "Server", "next_kinds": []any{"MCPServer"},
+				"next_properties": map[string]any{"objectid": "S", "name": "Server"},
+				"source":          "A", "target": "S", "kind": "TRUSTS_SERVER",
+				// This is the projected effective weight, not the configured 0.7.
+				"risk_weight": 0.1,
+			}}, nil
+		},
+	}
+	result, err := FindBoundedTraversalPaths(
+		context.Background(), db,
+		[]TraversalNode{traversalNode("A")},
+		[]TraversalNode{traversalNode("S")},
+		TraversalOptions{Scope: TraversalScopeSecurity, Cost: TraversalCostRisk, MaxHops: 1, Limit: 1},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, clause := range []string{
+		"type(r) = 'TRUSTS_SERVER'",
+		"coalesce(r.effective_risk_weight, r.risk_weight)",
+		"END AS risk_weight",
+	} {
+		if !strings.Contains(adjacencyQuery, clause) {
+			t.Fatalf("adjacency query missing %q:\n%s", clause, adjacencyQuery)
+		}
+	}
+	if len(result.Paths) != 1 || len(result.Paths[0].Edges) != 1 {
+		t.Fatalf("result = %+v", result)
+	}
+	edgeWeight := result.Paths[0].Edges[0].RiskWeight
+	if edgeWeight == nil || *edgeWeight != 0.1 || result.Paths[0].Weight != 0.1 {
+		t.Fatalf("effective edge/sum diverged: path=%+v", result.Paths[0])
+	}
+}
+
 func TestBoundedMinimumWeightHonorsHopLimit(t *testing.T) {
 	db := traversalFixtureDB(t, []traversalFixtureEdge{
 		{source: "A", target: "T", kind: "HAS_ACCESS_TO", weight: fixtureWeight(0.9)},

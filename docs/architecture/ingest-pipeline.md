@@ -173,6 +173,10 @@ replacement/reconciliation/publication for that attempt.
 
 Transformations:
 - Sets `objectid` property to match node `id`
+- Migrates only exact pre-v1 direct-URL MCP anonymous observations (MCP
+  envelope, concrete reachable HTTP server, exact raw anonymous tuple, and no
+  observed fields) into `observed_auth_*`, retaining
+  `auth_observation_compat=pre_v1_raw_mcp` provenance and a typed warning
 - Strips nil values
 - Serializes complex values (nested maps, heterogeneous arrays) to JSON strings
 - Preserves homogeneous arrays (all-string, all-number, all-bool) as native Neo4j lists
@@ -285,7 +289,8 @@ previous immutable PostgreSQL publication.
 The annotations below are each processor's declared `Dependencies() []string` return — the *processor-level* ordering contract enforced by the pipeline. Raw collector edges (`INGESTS_UNTRUSTED`, `DELEGATES_TO`, `HAS_ENV_VAR`, etc.) and pre-existing node properties (`schema_keys`, `auth_method`, …) are Cypher traversal inputs, not processor dependencies — they are present from ingest, so they do not appear here.
 
 ```
- 1. auth_strength                    (deps: none; pre-pass, sets node property)
+ 1. auth_strength                    (deps: none; pre-pass, sets paired effective
+                                     node auth + effective trust-edge assessment)
  2. has_access_to                    (deps: none)
  3. can_execute                      (deps: none)
  4. shadows                          (deps: none; also emits POISONS_CONTEXT)
@@ -293,13 +298,13 @@ The annotations below are each processor's declared `Dependencies() []string` re
  6. poisoned_instructions            (deps: none)
  7. taints                           (deps: none; runs before can_reach so its cross-tool
                                      edges influence transitive reachability)
- 8. can_reach                        (deps: has_access_to)
+ 8. can_reach                        (deps: auth_strength, has_access_to)
  9. cross_service_credential_chain   (deps: has_access_to, can_reach)
 10. ifc_violation                    (deps: has_access_to)
 11. can_exfiltrate                   (deps: can_reach)
 12. can_impersonate                  (deps: none)
 13. confused_deputy                  (deps: auth_strength, can_reach)
-14. cross_protocol                   (deps: has_access_to)
+14. cross_protocol                   (deps: auth_strength, has_access_to)
 15. risk_score                       (deps: has_access_to, can_execute, shadows,
                                      poisoned_description, poisoned_instructions,
                                      can_reach, can_exfiltrate, can_impersonate,

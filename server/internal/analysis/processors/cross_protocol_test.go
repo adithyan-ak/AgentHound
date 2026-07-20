@@ -19,8 +19,8 @@ func TestCrossProtocol_Name(t *testing.T) {
 func TestCrossProtocol_Dependencies(t *testing.T) {
 	p := &CrossProtocol{}
 	deps := p.Dependencies()
-	if len(deps) != 1 || deps[0] != "has_access_to" {
-		t.Errorf("Dependencies() = %v, want [has_access_to]", deps)
+	if len(deps) != 2 || deps[0] != "auth_strength" || deps[1] != "has_access_to" {
+		t.Errorf("Dependencies() = %v, want [auth_strength has_access_to]", deps)
 	}
 }
 
@@ -49,7 +49,9 @@ func TestCrossProtocol_ProcessSuccess(t *testing.T) {
 	}
 	cypher, _ := calls[0].Args[0].(string)
 	if strings.Contains(cypher, "ext.auth_method IS NULL)") ||
-		!strings.Contains(cypher, "ext.auth_assurance = 'unauthenticated'") {
+		!strings.Contains(cypher, "ext.effective_auth_assurance = 'unauthenticated'") ||
+		!strings.Contains(cypher, "ext.effective_auth_source = 'observed'") ||
+		!strings.Contains(cypher, "ext.effective_auth_evidence = 'anonymous_probe_succeeded'") {
 		t.Fatalf("unknown auth must not satisfy cross-protocol detection:\n%s", cypher)
 	}
 	if !strings.Contains(cypher, "e.confidence = 0.5") {
