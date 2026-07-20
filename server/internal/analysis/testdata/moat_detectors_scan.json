@@ -128,9 +128,15 @@
         "properties": {
           "objectid": "moat-agent-weak",
           "name": "anon_agent",
-          "auth_method": "none",
-          "auth_assurance": "unauthenticated",
-          "auth_evidence": "anonymous_probe_succeeded",
+          "auth_method": "apiKey",
+          "auth_assurance": "weak",
+          "auth_evidence": "declared_security_scheme",
+          "auth_probe_method": "get_task_nonexistent",
+          "auth_probe_status": "anonymous_protocol_access",
+          "auth_probe_detail": "task_not_found_v1",
+          "observed_auth_method": "none",
+          "observed_auth_assurance": "unauthenticated",
+          "observed_auth_evidence": "anonymous_probe_succeeded",
           "is_signed": false,
           "signature_verification_status": "unsigned"
         },

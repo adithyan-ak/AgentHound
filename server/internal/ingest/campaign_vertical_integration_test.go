@@ -190,7 +190,7 @@ func TestIntegrationCompiledCampaignExportProbeIngestPromotesOnlySourceAgent(t *
 	}
 	wantTopology := []string{
 		agentA, entryServer, entryTool, serverID,
-		credentialID, identityID, resourceTool, resourceID,
+		identityID, credentialID, resourceTool, resourceID,
 	}
 	if !reflect.DeepEqual(witness.EvidenceNodeIDs, wantTopology) {
 		t.Fatalf(
