@@ -90,8 +90,12 @@ func strictV2A2AImport(authEvidence string) *sdkingest.IngestData {
 	)
 	return &sdkingest.IngestData{
 		Meta: sdkingest.IngestMeta{
-			Version:          sdkingest.CurrentVersion,
-			Type:             sdkingest.IngestType,
+			Version: sdkingest.CurrentVersion,
+			Type:    sdkingest.IngestType,
+			Origin: sdkingest.CollectionOrigin{
+				HostID:         "fixture-host",
+				NetworkRealmID: "fixture-realm",
+			},
 			Collector:        "a2a",
 			CollectorVersion: "import-test",
 			Timestamp:        "2026-07-12T00:00:00Z",

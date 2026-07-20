@@ -167,13 +167,13 @@ components:
         page:
           $ref: "#/components/schemas/PageMetadata"
 
-    IngestV2:
+    IngestV3:
       type: object
       additionalProperties: false
       required: [meta, graph]
       properties:
         meta:
-          $ref: "#/components/schemas/IngestMetaV2"
+          $ref: "#/components/schemas/IngestMetaV3"
         graph:
           type: object
           additionalProperties: false
@@ -182,18 +182,19 @@ components:
             nodes:
               type: array
               items:
-                $ref: "#/components/schemas/IngestNodeV2"
+                $ref: "#/components/schemas/IngestNodeV3"
             edges:
               type: array
               items:
-                $ref: "#/components/schemas/IngestEdgeV2"
+                $ref: "#/components/schemas/IngestEdgeV3"
 
-    IngestMetaV2:
+    IngestMetaV3:
       type: object
       additionalProperties: false
       required:
         - version
         - type
+        - origin
         - collector
         - collector_version
         - timestamp
@@ -204,10 +205,12 @@ components:
       properties:
         version:
           type: integer
-          enum: [2]
+          enum: [3]
         type:
           type: string
           enum: [agenthound-ingest]
+        origin:
+          $ref: "#/components/schemas/IngestOriginV3"
         collector:
           type: string
           enum: [mcp, a2a, config, scan]
@@ -221,19 +224,35 @@ components:
           type: string
           minLength: 1
         collection:
-          $ref: "#/components/schemas/IngestCollectionV2"
+          $ref: "#/components/schemas/IngestCollectionV3"
         ruleset:
-          $ref: "#/components/schemas/IngestRulesetV2"
+          $ref: "#/components/schemas/IngestRulesetV3"
         identity_schemes:
           type: array
           minItems: 1
           items:
-            $ref: "#/components/schemas/IngestIdentitySchemeV2"
+            $ref: "#/components/schemas/IngestIdentitySchemeV3"
         extra:
           type: object
           additionalProperties: true
 
-    IngestCollectionV2:
+    IngestOriginV3:
+      type: object
+      additionalProperties: false
+      required: [host_id, network_realm_id]
+      properties:
+        host_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: "^[a-z0-9][a-z0-9._-]{0,127}$"
+        network_realm_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: "^[a-z0-9][a-z0-9._-]{0,127}$"
+
+    IngestCollectionV3:
       type: object
       additionalProperties: false
       required: [state, coverage_keys, outcomes]
@@ -285,7 +304,7 @@ components:
               items: { type: integer, minimum: 0 }
               error: { type: string }
 
-    IngestRulesetV2:
+    IngestRulesetV3:
       type: object
       additionalProperties: false
       required: [digest, load_state, authenticity]
@@ -314,7 +333,7 @@ components:
           items: { type: string }
         authenticity: { type: string, minLength: 1 }
 
-    IngestIdentitySchemeV2:
+    IngestIdentitySchemeV3:
       type: object
       additionalProperties: false
       required: [entity_kind, scheme, version]
@@ -324,7 +343,7 @@ components:
         scheme: { type: string, minLength: 1 }
         version: { type: integer, minimum: 1 }
 
-    IngestNodeV2:
+    IngestNodeV3:
       type: object
       additionalProperties: false
       required: [id, kinds, properties, observation_domains]
@@ -347,7 +366,7 @@ components:
           enum: [reference_only]
           description: Omit for an authoritative property observation. reference_only asserts only id and kinds and requires an empty properties object.
 
-    IngestEdgeV2:
+    IngestEdgeV3:
       type: object
       additionalProperties: false
       required:
@@ -1210,7 +1229,7 @@ components:
           items:
             $ref: "#/components/schemas/NormalizationWarning"
         collection:
-          $ref: "#/components/schemas/IngestCollectionV2"
+          $ref: "#/components/schemas/IngestCollectionV3"
         post_processing_stats:
           type: array
           items:
@@ -1754,11 +1773,14 @@ paths:
     post:
       summary: Ingest collector output
       description: >-
-        Upload strict ingest-v2 collector JSON. V1, unknown structural fields,
-        unscoped facts, legacy property aliases, and incomplete canonical
-        evidence metadata are rejected before writes. Runs the full pipeline:
-        validate, normalize, deduplicate, write to Neo4j, and post-process
-        composite edges. Max body 100 MB.
+        Upload strict ingest-v3 collector JSON. Before generic validation or
+        lifecycle/audit writes, the server reverifies both immutable database
+        markers and admits only the configured exact host/network realm.
+        V1/V2, missing or mismatched collection origin, unknown structural
+        fields, unscoped facts, legacy property aliases, and incomplete
+        canonical evidence metadata are rejected before graph writes. Runs the
+        full pipeline: admission, validation, normalization, deduplication,
+        Neo4j write, and composite-edge post-processing. Max body 100 MB.
       operationId: ingest
       tags: [Ingest]
       requestBody:
@@ -1766,7 +1788,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/IngestV2"
+              $ref: "#/components/schemas/IngestV3"
       responses:
         "200":
           description: Ingest successful
@@ -1778,6 +1800,18 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Artifact host/network realm does not match this database.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: PostgreSQL/Neo4j immutable storage binding could not be verified.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /analysis/shortest-path:
     post:

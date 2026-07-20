@@ -413,12 +413,16 @@ New modules emit nodes and edges via the `sdk/ingest` wire format:
 ```json
 {
   "meta": {
-    "version": 2,
+    "version": 3,
     "type": "agenthound-ingest",
     "collector": "mcp|a2a|config|scan",
     "collector_version": "0.1.0",
     "timestamp": "2025-01-15T10:30:00Z",
     "scan_id": "scan-abc123",
+    "origin": {
+      "host_id": "security-laptop",
+      "network_realm_id": "corp-lab"
+    },
     "collection": {
       "state": "complete",
       "coverage_keys": [
@@ -453,8 +457,10 @@ New modules emit nodes and edges via the `sdk/ingest` wire format:
 }
 ```
 
-Wire version `2` is strict: collection, ruleset, current identity metadata,
-explicit edge endpoint kinds, and per-fact observation domains are required.
+Wire version `3` is strict: collection origin, collection, ruleset, current
+identity metadata, explicit edge endpoint kinds, and per-fact observation
+domains are required. One database pair admits one exact host/realm origin;
+these non-secret fields scope graph meaning and do not authenticate an artifact.
 Ruleset digests identify effective text/fingerprint semantics but do not claim
 cryptographic authenticity.
 

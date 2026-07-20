@@ -83,8 +83,12 @@ function makeOversizeFile(name: string): File {
 const configCoverageKey = `config:target:sha256:${"a".repeat(64)}`;
 const validScanJSON = JSON.stringify({
   meta: {
-    version: 2,
+    version: 3,
     type: "agenthound-ingest",
+    origin: {
+      host_id: "fixture-host",
+      network_realm_id: "fixture-realm",
+    },
     collector: "config",
     collector_version: "0.1.0",
     timestamp: "2026-04-23T12:00:00Z",
@@ -115,8 +119,8 @@ const validScanJSON = JSON.stringify({
       {
         entity_kind: "MCPServer",
         transport: "stdio",
-        scheme: "mcp_stdio_v2_ordered",
-        version: 2,
+        scheme: "mcp_stdio_v3_hashed_argv",
+        version: 3,
       },
     ],
   },
@@ -219,6 +223,31 @@ describe("ScanImport", () => {
       screen.getByText(/server error \(500\): check server logs/i),
     ).toBeInTheDocument();
     expect(onSuccess).not.toHaveBeenCalled();
+  });
+
+  it("shows the server's collection-realm mismatch without treating it as a partial import", async () => {
+    mockedUploadScan.mockRejectedValue(
+      new IngestRequestError(
+        'collection realm mismatch: artifact host_id="field-laptop" network_realm_id="lab-a"; database admits host_id="analysis-laptop" network_realm_id="lab-a"',
+      ),
+    );
+    const onSuccess = vi.fn();
+
+    render(<ScanImport open={true} onClose={() => {}} onSuccess={onSuccess} />, {
+      wrapper: createWrapper(),
+    });
+    fireEvent.drop(screen.getByTestId("dropzone"), {
+      dataTransfer: { files: [makeJSONFile("wrong-realm.json", validScanJSON)] },
+    });
+
+    expect(await screen.findByText(/import failed/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/artifact host_id="field-laptop".*database admits host_id="analysis-laptop"/i),
+    ).toBeInTheDocument();
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(
+      screen.queryByText(/imported wrong-realm\.json/i),
+    ).not.toBeInTheDocument();
   });
 
   it("renders partial-write details returned with a failed ingest", async () => {

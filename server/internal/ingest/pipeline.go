@@ -62,6 +62,10 @@ type findingPublisher interface {
 	FinalizeScan(ctx context.Context, params appdb.FinalizeScanParams) (*appdb.PublicationResult, error)
 }
 
+type originAdmitter interface {
+	Admit(context.Context, sdkingest.CollectionOrigin) error
+}
+
 // Pipeline serializes ingests through a single mutex.
 //
 // Raw-observation promotion and composite epoch replacement both mutate the
@@ -76,14 +80,22 @@ type Pipeline struct {
 	scanStore    scanLifecycleRecorder
 	findingStore findingPublisher
 	runPP        postProcessFunc
+	originGuard  originAdmitter
 }
 
-func NewPipeline(writer *graph.Writer, graphDB graph.GraphDB, scanStore *appdb.ScanStore, findingStore *appdb.FindingStore) *Pipeline {
+func NewPipeline(
+	writer *graph.Writer,
+	graphDB graph.GraphDB,
+	scanStore *appdb.ScanStore,
+	findingStore *appdb.FindingStore,
+	originGuard originAdmitter,
+) *Pipeline {
 	p := &Pipeline{
-		validator:  NewValidator(),
-		normalizer: NewNormalizer(),
-		graphDB:    graphDB,
-		runPP:      analysis.RunPostProcessors,
+		validator:   NewValidator(),
+		normalizer:  NewNormalizer(),
+		graphDB:     graphDB,
+		runPP:       analysis.RunPostProcessors,
+		originGuard: originGuard,
 	}
 	// Avoid the typed-nil-into-interface trap: assign only if the
 	// concrete pointer is non-nil so `p.writer != nil` checks behave
@@ -108,6 +120,15 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	start := time.Now()
 	if data == nil {
 		return nil, fmt.Errorf("ingest data is nil")
+	}
+	// Realm/storage admission is the first operation after the nil check. It is
+	// read-only and deliberately precedes generic validation because invalid
+	// campaign handling writes a PostgreSQL audit row.
+	if p.originGuard == nil {
+		return nil, fmt.Errorf("storage binding admission guard unavailable")
+	}
+	if err := p.originGuard.Admit(ctx, data.Meta.Origin); err != nil {
+		return nil, err
 	}
 	result := &sdkingest.IngestResult{
 		ScanID:  data.Meta.ScanID,

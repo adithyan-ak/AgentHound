@@ -65,6 +65,10 @@ func init() {
 }
 
 func runDiscover(cmd *cobra.Command, args []string) error {
+	origin, err := requireCollectionOrigin()
+	if err != nil {
+		return err
+	}
 	spec := args[0]
 	probeMCP, _ := cmd.Flags().GetBool("mcp")
 	probeA2A, _ := cmd.Flags().GetBool("a2a")
@@ -161,7 +165,7 @@ func runDiscover(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	envelope := buildDiscoverEnvelope(spec, targets, authzFile, authzHash, allowPublic)
+	envelope := buildDiscoverEnvelope(origin, spec, targets, authzFile, authzHash, allowPublic)
 	if output == "" {
 		output = fmt.Sprintf("discover-%s.json", envelope.Meta.ScanID)
 	}
@@ -171,10 +175,10 @@ func runDiscover(cmd *cobra.Command, args []string) error {
 	return writeCollectorOutput(envelope, output)
 }
 
-func buildDiscoverEnvelope(spec string, targets []action.Target, authzFile, authzHash string, allowPublic bool) *ingest.IngestData {
+func buildDiscoverEnvelope(origin ingest.CollectionOrigin, spec string, targets []action.Target, authzFile, authzHash string, allowPublic bool) *ingest.IngestData {
 	scanID := uuid.New().String()
 	env := common.NewIngestData("scan", scanID)
-	env.Meta.CollectorVersion = "0.3.0-dev"
+	env.Meta.Origin = origin
 	env.Meta.Extra = map[string]any{
 		"discover_spec":        spec,
 		"discover_targets":     len(targets),

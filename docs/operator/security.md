@@ -99,6 +99,30 @@ interprets last-writer `scan_id` as ownership. The API rejects pending/running
 scans, scans referenced by active coverage heads, and the currently published
 posture revision with `409`.
 
+## Collection realm and storage-pair admission
+
+Every ingest-v3 artifact declares an exact `host_id` and
+`network_realm_id`. The server accepts only the tuple configured for its one
+PostgreSQL/Neo4j database pair. This prevents accidental cross-vantage merges
+of local filesystem paths, loopback services, RFC1918 endpoints, host facts,
+and lifecycle coverage. PostgreSQL and Neo4j also carry the same immutable
+`storage_pair_id`, so combining volumes from different deployments fails
+closed.
+
+Admission is the first pipeline operation, before generic validation,
+campaign-rejection auditing, scan lifecycle writes, coverage retirement, or
+graph mutation. The server rereads both storage markers for every ingest.
+Wrong-realm artifacts receive `409 COLLECTION_REALM_MISMATCH`; unverifiable
+storage receives sanitized `503 STORAGE_BINDING_UNAVAILABLE`. Startup inspects
+both stores before migrations or graph-schema changes and repairs a one-sided
+marker only when both stores are product-empty.
+
+This is an integrity guard against operator mistakes, not a hostile-artifact
+authentication scheme. The identifiers are non-secret and unsigned; a party
+that can modify an artifact can replace them. Continue to protect the local
+server boundary and artifact transport. Never use realm admission as a
+substitute for mTLS, VPN/SSH isolation, checksums, or trusted custody.
+
 ## Collector network behaviour
 
 The collector makes outbound network calls to:

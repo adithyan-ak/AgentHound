@@ -96,6 +96,7 @@ func publicationIntegrationHarness(
 		db,
 		appdb.NewScanStore(pool),
 		appdb.NewFindingStore(pool),
+		allowOriginAdmitter{},
 	), db, writer, pool
 }
 
@@ -179,6 +180,7 @@ INSERT INTO posture_state (singleton) VALUES (TRUE);`); err != nil {
 		graph.NewDB(graph.NewReader(driver), writer),
 		appdb.NewScanStore(pool),
 		appdb.NewFindingStore(pool),
+		allowOriginAdmitter{},
 	)
 	scope := sdkingest.CanonicalCoverageKey(
 		"mcp",
@@ -366,6 +368,7 @@ func TestIntegrationCompleteEmptyRootRecoversFailedUnheadedChildAfterRestart(t *
 		db,
 		appdb.NewScanStore(pool),
 		appdb.NewFindingStore(pool),
+		allowOriginAdmitter{},
 	)
 	completeEmpty := common.NewIngestData("mcp", "complete-empty-after-restart")
 	completeEmpty.Meta.Collection = authoritativeMCPReport(root)

@@ -157,7 +157,15 @@ Docker Compose runs three containers:
 | agenthound | golang:1.25-alpine (multi-stage) | API server + embedded UI | 127.0.0.1:8080 |
 
 ```bash
+export AGENTHOUND_HOST_ID=security-laptop
+export AGENTHOUND_NETWORK_REALM_ID=corp-lab
+export AGENTHOUND_STORAGE_PAIR_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 docker compose -f docker/docker-compose.yml up -d
 ```
 
-Configuration is env-based: `AGENTHOUND_NEO4J_URI`, `AGENTHOUND_PG_URI`, `AGENTHOUND_BIND` (default `127.0.0.1:8080`), `AGENTHOUND_CORS_ORIGINS`.
+Configuration is env-based: `AGENTHOUND_NEO4J_URI`, `AGENTHOUND_PG_URI`,
+`AGENTHOUND_BIND` (default `127.0.0.1:8080`),
+`AGENTHOUND_CORS_ORIGINS`, plus mandatory `AGENTHOUND_HOST_ID`,
+`AGENTHOUND_NETWORK_REALM_ID`, and `AGENTHOUND_STORAGE_PAIR_ID`. The last
+three bind one collector host/private-network realm to one paired PostgreSQL
+and Neo4j deployment and must remain stable for the lifetime of both volumes.

@@ -50,7 +50,8 @@ All errors return a structured JSON response:
 
 Error codes: `VALIDATION_ERROR` (400), `FORBIDDEN` (403), `NOT_FOUND`
 (404), `REVISION_CONFLICT` (409), `PROJECTION_CONFLICT` (409),
-`SERVICE_UNAVAILABLE` (503), `INTERNAL_ERROR` (500). Graph-backed reads
+`COLLECTION_REALM_MISMATCH` (409), `SERVICE_UNAVAILABLE` (503),
+`STORAGE_BINDING_UNAVAILABLE` (503), `INTERNAL_ERROR` (500). Graph-backed reads
 return `PROJECTION_CONFLICT` unless one stable, complete published projection
 is available for the entire read. `error.details.reason` is `absent`,
 `updating`, `incomplete`, or `changed`; clients must retry the whole read
@@ -192,11 +193,12 @@ Returns reachable nodes grouped by ring (1-hop, 2-hop, ...). Useful for "what ca
 
 **Max body:** 100 MB.
 
-Upload strict ingest-v2 collector JSON. Unknown structural fields, v1
-artifacts, missing collection/rules/identity metadata, unscoped facts, omitted
+Upload strict ingest-v3 collector JSON. Unknown structural fields, v1/v2
+artifacts, missing origin/collection/rules/identity metadata, unscoped facts, omitted
 edge endpoint kinds, legacy property aliases, and incomplete canonical
 credential/host/auth evidence are rejected before any write. Runs the
-serialized lifecycle: validate →
+serialized lifecycle: verify both database binding markers and admit the exact
+configured `meta.origin` → validate →
 normalize → freeze pre-write totals → write → reconcile complete observation
 domains → post-process → freeze post-analysis totals → snapshot → publish.
 
@@ -214,12 +216,16 @@ credential material.
 // Request body (abridged; see graph-model.md for the complete schema)
 {
   "meta": {
-    "version": 2,
+    "version": 3,
     "type": "agenthound-ingest",
     "collector": "mcp",
     "collector_version": "0.1.0",
     "timestamp": "2026-07-11T00:00:00Z",
     "scan_id": "scan-abc123",
+    "origin": {
+      "host_id": "security-laptop",
+      "network_realm_id": "corp-lab"
+    },
     "collection": {
       "state": "complete",
       "coverage_keys": ["mcp:target:sha256:..."],

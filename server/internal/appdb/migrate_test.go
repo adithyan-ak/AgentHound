@@ -38,6 +38,9 @@ func TestMigrationsContainOnlyCurrentInitialSchema(t *testing.T) {
 		"root_key",
 		"CREATE TABLE IF NOT EXISTS posture_publications",
 		"CREATE TABLE IF NOT EXISTS posture_state",
+		"CREATE TABLE storage_binding",
+		"storage_pair_id",
+		"network_realm_id",
 		"ON CONFLICT (singleton) DO NOTHING",
 	} {
 		if !strings.Contains(sql, expected) {

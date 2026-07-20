@@ -9,8 +9,9 @@ func TestDecodeStrictRejectsUnknownStructuralField(t *testing.T) {
 	var data IngestData
 	err := DecodeStrict(strings.NewReader(`{
 		"meta": {
-			"version": 2,
+			"version": 3,
 			"type": "agenthound-ingest",
+			"origin": {"host_id": "fixture-host", "network_realm_id": "fixture-realm"},
 			"collector": "mcp",
 			"collector_version": "0.1.0",
 			"timestamp": "2026-04-06T10:30:00Z",
@@ -28,8 +29,9 @@ func TestDecodeStrictAllowsCollectorProperties(t *testing.T) {
 	var data IngestData
 	err := DecodeStrict(strings.NewReader(`{
 		"meta": {
-			"version": 2,
+			"version": 3,
 			"type": "agenthound-ingest",
+			"origin": {"host_id": "fixture-host", "network_realm_id": "fixture-realm"},
 			"collector": "mcp",
 			"collector_version": "0.1.0",
 			"timestamp": "2026-04-06T10:30:00Z",

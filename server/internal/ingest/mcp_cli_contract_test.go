@@ -47,7 +47,12 @@ func TestProductionCLIComposesValidatorCompatibleMCPEnvelope(t *testing.T) {
 	artifact := filepath.Join(t.TempDir(), "mcp.json")
 	command := exec.Command(bin, "scan", "--mcp", "--project-dir", project, "--scan-output", artifact, "--quiet")
 	command.Dir = repoRoot
-	command.Env = append(os.Environ(), "HOME="+home)
+	command.Env = append(
+		os.Environ(),
+		"HOME="+home,
+		"AGENTHOUND_HOST_ID="+testCollectionOrigin.HostID,
+		"AGENTHOUND_NETWORK_REALM_ID="+testCollectionOrigin.NetworkRealmID,
+	)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("run collector: %v\n%s", err, output)
 	}

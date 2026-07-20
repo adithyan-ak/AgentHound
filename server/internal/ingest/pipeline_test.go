@@ -284,6 +284,22 @@ type fakeScanStore struct {
 	updateErr  error
 }
 
+type allowOriginAdmitter struct{}
+
+func (allowOriginAdmitter) Admit(context.Context, sdkingest.CollectionOrigin) error {
+	return nil
+}
+
+type rejectOriginAdmitter struct {
+	err   error
+	calls int
+}
+
+func (a *rejectOriginAdmitter) Admit(context.Context, sdkingest.CollectionOrigin) error {
+	a.calls++
+	return a.err
+}
+
 type fakeLifecycleScanStore struct {
 	*fakeScanStore
 	dirtyCoverage []string
@@ -491,7 +507,8 @@ func newTestPipeline(w nodeEdgeWriter, db graph.GraphDB, ss scanLifecycleRecorde
 		findingStore: &fakePublisher{
 			scanStore: scanStore,
 		},
-		runPP: runPP,
+		runPP:       runPP,
+		originGuard: allowOriginAdmitter{},
 	}
 }
 
@@ -501,6 +518,54 @@ func validIngestDataFor(scanID string) *sdkingest.IngestData {
 	data := validIngestData()
 	data.Meta.ScanID = scanID
 	return data
+}
+
+func TestPipelineOriginAdmissionPrecedesEveryMutationAndValidationAudit(t *testing.T) {
+	sentinel := errors.New("realm rejected")
+	guard := &rejectOriginAdmitter{err: sentinel}
+	writer := &fakeWriter{}
+	scans := &fakeScanStore{}
+	db := &graph.MockGraphDB{}
+	pipeline := newTestPipeline(writer, db, scans, noOpRunPP)
+	pipeline.originGuard = guard
+
+	// Deliberately make this a generic-invalid campaign submission. If the
+	// validator ran first, it would persist a campaign-rejection audit.
+	data := campaignEvidenceIngest()
+	data.Meta.Origin.HostID = "wrong-host"
+	data.Graph.Edges[0].ObservationDomains = nil
+
+	result, err := pipeline.Ingest(context.Background(), data)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("error = %v, want admission sentinel", err)
+	}
+	if result != nil {
+		t.Fatalf("admission failure returned result: %+v", result)
+	}
+	if guard.calls != 1 {
+		t.Fatalf("admission calls = %d, want 1", guard.calls)
+	}
+	if len(scans.rejections) != 0 || len(scans.creates) != 0 || len(scans.updates) != 0 ||
+		len(writer.nodeCalls) != 0 || len(writer.edgeCalls) != 0 ||
+		len(db.CallsTo("Query")) != 0 || len(db.CallsTo("ExecuteWrite")) != 0 {
+		t.Fatalf(
+			"rejected realm mutated or queried state: rejections=%d creates=%d updates=%d nodes=%d edges=%d",
+			len(scans.rejections), len(scans.creates), len(scans.updates),
+			len(writer.nodeCalls), len(writer.edgeCalls),
+		)
+	}
+}
+
+func TestPipelineFailsClosedWithoutOriginGuard(t *testing.T) {
+	pipeline := newTestPipeline(&fakeWriter{}, &graph.MockGraphDB{}, &fakeScanStore{}, noOpRunPP)
+	pipeline.originGuard = nil
+	result, err := pipeline.Ingest(context.Background(), validIngestDataFor("missing-origin-guard"))
+	if err == nil || !strings.Contains(err.Error(), "admission guard unavailable") {
+		t.Fatalf("error = %v, want unavailable admission guard", err)
+	}
+	if result != nil {
+		t.Fatalf("missing guard returned result: %+v", result)
+	}
 }
 
 func noOpRunPP(_ context.Context, _ graph.GraphDB, _ string, _ []string) ([]graph.ProcessingStats, error) {
@@ -1462,6 +1527,7 @@ func TestPipeline_MissingLifecycleStoreStopsBeforeGraphMutation(t *testing.T) {
 		scanStore:    nil,
 		findingStore: &fakePublisher{},
 		runPP:        noOpRunPP,
+		originGuard:  allowOriginAdmitter{},
 	}
 
 	res, err := p.Ingest(context.Background(), validIngestDataFor("scan-nil-store"))
@@ -1479,12 +1545,13 @@ func TestPipeline_MissingLifecycleStoreStopsBeforeGraphMutation(t *testing.T) {
 func TestPipeline_MissingPublicationStoreStopsBeforeGraphMutation(t *testing.T) {
 	w := &fakeWriter{}
 	p := &Pipeline{
-		validator:  NewValidator(),
-		normalizer: NewNormalizer(),
-		writer:     w,
-		graphDB:    &graph.MockGraphDB{},
-		scanStore:  &fakeScanStore{},
-		runPP:      noOpRunPP,
+		validator:   NewValidator(),
+		normalizer:  NewNormalizer(),
+		writer:      w,
+		graphDB:     &graph.MockGraphDB{},
+		scanStore:   &fakeScanStore{},
+		runPP:       noOpRunPP,
+		originGuard: allowOriginAdmitter{},
 	}
 
 	res, err := p.Ingest(context.Background(), validIngestDataFor("scan-no-publisher"))
@@ -1806,7 +1873,7 @@ func TestPipeline_TokenlessPublicObservationWithholdsPublication(t *testing.T) {
 // runner. We pass nil for the unit-testable types we don't have here
 // (Writer, GraphDB, ScanStore) — the constructor is purely structural.
 func TestNewPipeline_ConstructsWithDefaults(t *testing.T) {
-	p := NewPipeline(nil, nil, nil, nil)
+	p := NewPipeline(nil, nil, nil, nil, allowOriginAdmitter{})
 	if p.validator == nil {
 		t.Error("validator should be initialized")
 	}
@@ -1815,6 +1882,9 @@ func TestNewPipeline_ConstructsWithDefaults(t *testing.T) {
 	}
 	if p.runPP == nil {
 		t.Error("runPP should default to analysis.RunPostProcessors")
+	}
+	if p.originGuard == nil {
+		t.Error("origin guard should be retained")
 	}
 	// Nil concrete pointers must NOT become non-nil interface values
 	// (that would defeat the existing `if p.scanStore != nil` guard).
@@ -1836,7 +1906,7 @@ func TestNewPipeline_PassesConcreteThrough(t *testing.T) {
 	// only validate the Writer path here. The ScanStore path is
 	// exercised in production by bootstrap.go and indirectly covered
 	// by integration tests.
-	p := NewPipeline(w, nil, nil, nil)
+	p := NewPipeline(w, nil, nil, nil, allowOriginAdmitter{})
 	if p.writer == nil {
 		t.Error("non-nil *graph.Writer should be stored as interface")
 	}
