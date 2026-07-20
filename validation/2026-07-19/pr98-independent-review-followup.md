@@ -14,9 +14,14 @@ Live PR snapshot at adjudication start:
 - base `6171b8eccf9c9d82935c931c43c887d1d5e9cb34`
 - head `a1890607d390d8d662594d88f945ef17a011a0ab`
 
-Corrected PR head:
+Initial corrected PR head:
 
 - `d2590ed441449a234de30ba2d819ab5be80b6d87`
+
+Final restacked PR snapshot:
+
+- base `99f712bd0df98f178810508fbd319089df558e10`
+- head `090f763238f870c12a83a17d74e689f1878f1f61`
 
 The distinction matters because the live head already contained an A2A
 contribution-preservation correction added during the PR 97 follow-up/restack.
@@ -74,19 +79,22 @@ the original raw maps remain unchanged.
 ## Inherited opt-in integration fixture gap
 
 The independent reviewer reported strict-v3 failures in the opt-in fresh
-database ingest suite. A new run against dedicated Neo4j 5.26.28 and PostgreSQL
-16 containers reproduced four failures on the current PR 98 head:
+database ingest suite. The first adjudication run against dedicated Neo4j
+5.26.28 and PostgreSQL 16 containers reproduced four failures. PR 97 then
+moved three already-existing canonical HTTP endpoint properties into the
+strict-ingest parent, where that fixture contract belongs. A new run at final
+PR 98 head `090f763` proved the campaign integration now passes and exactly
+three destructive opt-in tests still fail validation:
 
-- `TestIntegrationCompiledCampaignExportProbeIngestPromotesOnlySourceAgent`
 - `TestIntegrationFreshSchemaCompleteIngestPublishes`
 - `TestIntegrationExhaustiveRootRemovesMissingChildAcrossGraphAndPublication`
 - `TestIntegrationTokenlessAgentWithholdsPublication`
 
-The affected fixture files are unchanged between PR 98's current base and
-head. This is inherited strict-v3 test-fixture drift, not a regression in the
-Stack 3 lifecycle implementation. It belongs to the strict-ingest producer
-boundary in PR 97 and was not hidden inside PR 98. The dedicated containers
-were removed after the run and no volumes were created.
+The remaining affected fixture file is unchanged between final PR 98 base
+`99f712b` and head `090f763`. This is inherited strict-v3 test-fixture drift,
+not a regression in the Stack 3 lifecycle implementation. It was not hidden
+inside PR 98 or mixed into its product correction. The dedicated containers
+were removed after each run and no volumes were created.
 
 Until that separate fixture maintenance is completed, PR 98 does not claim
 that the repository-wide opt-in `AGENTHOUND_FRESH_DB_INTEGRATION=1` ingest
