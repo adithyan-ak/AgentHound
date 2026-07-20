@@ -174,10 +174,14 @@ export function LensBar() {
   const setActiveLens = useExplorerStore((s) => s.setActiveLens);
 
   return (
-    <div className="pointer-events-auto absolute left-1/2 top-4 z-30 -translate-x-1/2">
+    <div
+      data-testid="lens-bar"
+      className="pointer-events-auto absolute left-1/2 top-4 z-30 w-max max-w-[calc(100vw-2rem)] -translate-x-1/2"
+    >
       <div
+        data-testid="lens-bar-scroll"
         className={cn(
-          "relative flex items-center gap-1.5 overflow-hidden rounded-md border border-border bg-card/95 px-2 py-1.5 backdrop-blur-md",
+          "relative flex max-w-full items-center gap-1.5 overflow-x-auto rounded-md border border-border bg-card/95 px-2 py-1.5 backdrop-blur-md",
           "elev-2",
         )}
       >

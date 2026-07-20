@@ -66,7 +66,7 @@ scan --config         scan --mcp --url <url>           scan --a2a --target <url>
 
 **Core direction:** `Agent -> Server -> Tool -> Resource`. Edges represent exploitable relationships.
 
-### Node Types (25 total)
+### Node Types (23 total)
 
 | Label | Source | Description |
 |-------|--------|-------------|
@@ -97,12 +97,13 @@ scan --config         scan --mcp --url <url>           scan --a2a --target <url>
 Node IDs are deterministic SHA-256 hashes of `Kind:` + identifying properties. MCPServer IDs
 match across Config and MCP collectors -- this is the merge point connecting trust to capabilities.
 
-### Edge Types (30 total)
+### Edge Types (32 total)
 
-**18 raw edges** (from collectors): TRUSTS_SERVER, PROVIDES_TOOL, PROVIDES_RESOURCE,
+**20 raw edges** (from collectors): TRUSTS_SERVER, PROVIDES_TOOL, PROVIDES_RESOURCE,
 PROVIDES_PROMPT, ADVERTISES_SKILL, DELEGATES_TO, AUTHENTICATES_WITH, USES_CREDENTIAL,
 RUNS_ON, CONFIGURED_IN, HAS_ENV_VAR, LOADS_INSTRUCTIONS, SAME_AUTH_DOMAIN, EXPOSES,
-EXPOSES_CREDENTIAL, PROVIDES_MODEL, EXTRACTED_FROM, INGESTS_UNTRUSTED.
+EXPOSES_CREDENTIAL, PROVIDES_MODEL, EXTRACTED_FROM, INGESTS_UNTRUSTED,
+CREDENTIAL_REACH_VERIFIED, PUBLIC_ACCESS_OBSERVED.
 
 **12 composite edges** (computed by post-processors in dependency order):
 

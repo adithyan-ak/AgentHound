@@ -5,6 +5,14 @@
 # official SDKs. See UPSTREAMS.md for source revisions and refresh policy.
 name: agenthound-test
 
+# A single YAML scalar feeds the real LiteLLM process, the enforcing MCP
+# bearer gate, and the runtime-rendered client header. Keeping one anchor is a
+# hard guarantee that the cross-service lane correlates the same material; the
+# collector artifacts retain only its SHA-256 value_hash.
+x-litellm-master-key: &litellm-master-key sk-local-agenthound-master-key-not-production
+x-cross-service-proof: &cross-service-proof 4a8f2c1d9e3b7a0f5c6d8e2b1a4f7c3d
+x-a2a-protected-api-key: &a2a-protected-api-key agenthound-a2a-api-key-not-production
+
 networks:
   agenthound-test:
     name: agenthound-test
@@ -171,7 +179,7 @@ services:
     command: ["--config", "/app/config.yaml", "--host", "0.0.0.0", "--port", "4000"]
     environment:
       DATABASE_URL: postgresql://litellm:litellm-local-password@litellm-postgres:5432/litellm
-      LITELLM_MASTER_KEY: sk-local-agenthound-master-key-not-production
+      LITELLM_MASTER_KEY: *litellm-master-key
       LITELLM_URL: http://localhost:4000
     volumes:
       - ./services/litellm/config.yaml:/app/config.yaml:ro
@@ -290,6 +298,61 @@ services:
       retries: 18
       start_period: 20s
 
+  # Enforcing reverse proxy for the credential-bearing URL privacy lane. A
+  # complete MCP session proves the real HTTP client preserved both URL
+  # userinfo (as Basic auth) and the exact query value; the proxy returns 401
+  # before forwarding if either is absent or changed.
+  mcp-credential-gate:
+    build:
+      context: ./services/mcp-everything
+    entrypoint: ["node", "/opt/mcp-everything/credential-gate.mjs"]
+    environment:
+      LISTEN_PORT: "3002"
+      UPSTREAM_URL: http://mcp-streamable:3001
+      EXPECTED_BASIC_USER: agenthound-user
+      EXPECTED_BASIC_PASSWORD: agenthound-userinfo-secret-sentinel-20260719
+      EXPECTED_QUERY_VALUE: agenthound-query-secret-sentinel-20260719
+    depends_on:
+      mcp-streamable:
+        condition: service_healthy
+    networks:
+      agenthound-test:
+        ipv4_address: 10.20.30.25
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3002/healthz').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))\""]
+      interval: 5s
+      timeout: 5s
+      retries: 18
+      start_period: 10s
+
+  # Independent enforcing proxy for the cross-service credential-chain lane.
+  # The Authorization bearer is the exact master material used by the real
+  # LiteLLM process. A second high-entropy header is also required so the same
+  # real config exercises server attribution for high-entropy credentials.
+  # Only an authenticated request is forwarded to the official MCP Everything
+  # implementation; the proxy never logs either credential.
+  mcp-cross-service-gate:
+    build:
+      context: ./services/mcp-everything
+    entrypoint: ["node", "/opt/mcp-everything/bearer-gate.mjs"]
+    environment:
+      LISTEN_PORT: "3003"
+      UPSTREAM_URL: http://mcp-streamable:3001
+      EXPECTED_BEARER_TOKEN: *litellm-master-key
+      EXPECTED_PROOF_HEADER: *cross-service-proof
+    depends_on:
+      mcp-streamable:
+        condition: service_healthy
+    networks:
+      agenthound-test:
+        ipv4_address: 10.20.30.26
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3003/healthz').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))\""]
+      interval: 5s
+      timeout: 5s
+      retries: 18
+      start_period: 10s
+
   a2a-static:
     build:
       context: ./services/a2a-static
@@ -306,11 +369,13 @@ services:
   a2a-dynamic:
     build:
       context: ./services/a2a-dynamic
+    environment:
+      A2A_PROTECTED_API_KEY: *a2a-protected-api-key
     networks:
       agenthound-test:
         ipv4_address: 10.20.30.22
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/.well-known/agent-card.json')\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; base='http://127.0.0.1:9000'; [urllib.request.urlopen(base+p) for p in ('/.well-known/agent-card.json','/legacy/.well-known/agent.json','/protected/.well-known/agent-card.json','/ambiguous/.well-known/agent-card.json','/probe-state')]\""]
       interval: 10s
       timeout: 5s
       retries: 18
@@ -410,10 +475,15 @@ services:
     volumes:
       - ./fixtures:/root/fixtures
     environment:
+      AGENTHOUND_HOST_ID: agenthound-test-workstation
+      AGENTHOUND_NETWORK_REALM_ID: agenthound-test-lab
+      AGENTHOUND_STORAGE_PAIR_ID: 7bc1f56e-c890-4de5-9cc5-921797176fa6
       AGENTHOUND_NEO4J_URI: bolt://analysis-neo4j:7687
       AGENTHOUND_NEO4J_USER: neo4j
       AGENTHOUND_NEO4J_PASSWORD: agenthound-analysis-local
       AGENTHOUND_PG_URI: postgres://agenthound:agenthound-analysis-local@analysis-postgres:5432/agenthound?sslmode=disable
+      AGENTHOUND_LITELLM_MASTER_KEY: *litellm-master-key
+      AGENTHOUND_CROSS_SERVICE_PROOF: *cross-service-proof
     depends_on:
       ollama:
         condition: service_healthy
@@ -434,6 +504,10 @@ services:
       openai-decoy:
         condition: service_healthy
       mcp-streamable:
+        condition: service_healthy
+      mcp-credential-gate:
+        condition: service_healthy
+      mcp-cross-service-gate:
         condition: service_healthy
       mcp-sse:
         condition: service_healthy

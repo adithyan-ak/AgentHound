@@ -1,10 +1,20 @@
 .meta.collection.state == "complete"
 and ([.meta.collection.outcomes[].state] | unique) == ["complete"]
-and ([.graph.nodes[] | select(.kinds | index("MCPServer")) | .properties.server_name]
-  == ["mcp-servers/everything"])
-and ([.graph.nodes[] | select(.kinds | index("MCPServer"))] | all(
-  .properties.has_tasks_capability == true and
-  (.properties.capabilities | index("tasks")) != null
+and ([.meta.collection.outcomes[] | select(.collector == "mcp" and .target != "mcp") | .target] | unique)
+  == ["http://mcp-credential-gate:3002/mcp"]
+and ([.graph.nodes[] | select(.kinds | index("MCPServer"))] | length) == 1
+and ([.graph.nodes[] | select(.kinds | index("MCPServer"))][0].properties | (
+  .server_name == "mcp-servers/everything" and
+  .endpoint == "http://mcp-credential-gate:3002/mcp" and
+  .endpoint_userinfo_redacted == true and
+  .endpoint_query_redacted == true and
+  .endpoint_fragment_redacted == true and
+  .auth_method == "basic" and
+  .auth_evidence == "configured_credential" and
+  .observed_auth_method == "basic" and
+  .observed_auth_evidence == "configured_credential" and
+  .has_tasks_capability == true and
+  (.capabilities | index("tasks")) != null
 ))
 and ([.graph.nodes[] | select(.kinds | index("MCPTool")) | .properties.name] | sort)
   == ([
