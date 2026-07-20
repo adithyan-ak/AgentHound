@@ -23,10 +23,15 @@ causes. The seven integration corrections are valuable findings from testing
 the candidate as a composed system, but they must not be presented as defects
 that existed in the untouched baseline.
 
+Stack construction later found two additional post-checkpoint composition
+issues, S5-F1 and S5-F2. They are documented below but deliberately do not
+change the frozen 47-record accounting above.
+
 ## Frozen comparison
 
 - Untouched baseline: `1e45601c4d004247da60c0f0e796debfb3cc37fc`
 - Candidate product checkpoint: `6428f13`
+- Stack 05 corrective commit: `2232e05829313b05b772e84ca85254b65d4c6bd6`
 - Validation-index checkpoint: `ed2ac62`
 - Local branch: `codex/validation-snapshot-20260719`
 - Detailed chronological evidence: `test-infra/artifacts/release-validation-working/ledger.md`
@@ -429,6 +434,50 @@ records 24 planned, 24 results, 24 passes, and zero collector failures.
 **Verdict: CONFIRMED as validation-infrastructure defects.** Issues 38 and 39
 must not be counted as product bugs; retained product data already contained all
 three credential-chain targets.
+
+## Post-checkpoint Stack 05 composition findings
+
+These records were found while isolating and revalidating RC-09. They are true
+findings against the composed candidate, but neither is a newly demonstrated
+defect in untouched baseline `1e45601`; adding them to the baseline totals would
+be misleading.
+
+### S5-F1 — v3 origin migration missed a compiled live-test fixture
+
+With live Neo4j and PostgreSQL enabled, the compiled campaign vertical failed
+strict ingest because both required `meta.origin` fields were absent. Adding
+origin only to its hand-built base graph then proved the spawned collector also
+lacked the public host/realm environment contract. The correction supplies one
+stable synthetic host/realm pair to both layers; validation remains strict.
+
+This is a coverage defect, not evidence of an originless production path. Before
+the correction, the skipped integration could not reach the behavior its name
+claimed to test. Afterward the complete compiled collector → credential gate →
+ingest → source-agent-only path passed three race-enabled repetitions on Neo4j
+4.4.48/PostgreSQL 16 and three on Neo4j 5.26/PostgreSQL 16.
+
+### S5-F2 — property-neutral LiteLLM output produced null `via_gateway`
+
+The retained real projection had all three expected credential-chain targets
+and exact seven-node/five-raw-edge-plus-synthetic witnesses, but every
+cross-service `CAN_REACH` edge omitted `via_gateway`. The looter correctly owns
+only a property-neutral gateway reference; the processor incorrectly assumed
+that reference always had `name`. A synthetic integration gateway with a name
+masked the real producer shape.
+
+The correction uses gateway name, endpoint, then immutable object ID, in that
+order. It preserves the looter's ownership boundary while guaranteeing a
+truthful traceable value. The live integration fixture now omits both display
+properties and requires the object-ID fallback. The processor passed ten
+race-enabled repetitions and the exact database integration passed five on
+Neo4j 4.4.48 and five on Neo4j 5.26. Detection targets, confidence, graph
+topology, exact evidence, and blast radius were already correct; this was a
+real explanatory-metadata defect, not a false finding.
+
+Both corrections are included in Stack 05 commit `2232e05`. The exact file and
+hunk inventory, reproduction errors, and cleanup record are in
+`pr-slice-plan.md`. Stack 06 owns the matching real-infrastructure oracle guard
+for non-null truthful `via_gateway`.
 
 ## Step 3 conclusion: findings and fixes are independently credible
 

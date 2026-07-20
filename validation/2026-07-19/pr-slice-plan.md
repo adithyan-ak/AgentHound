@@ -5,8 +5,10 @@
 Convert the validated 221-file candidate checkpoint into reviewable changes
 without losing cross-component invariants or pretending coupled fixes are
 independent. The stack is constructed from the untouched baseline
-`1e45601c4d004247da60c0f0e796debfb3cc37fc`; its final tree must be byte-equal
-to product checkpoint `6428f13` for every tracked product file.
+`1e45601c4d004247da60c0f0e796debfb3cc37fc`. Its final tree must be byte-equal
+to product checkpoint `6428f13` except for post-checkpoint corrections that are
+independently reproduced, minimally patched, and called out by exact diff in
+this ledger.
 
 The configured `origin` is public. No review branch is pushed until the user
 explicitly authorizes the exact branch and remote.
@@ -260,6 +262,121 @@ After deferred changes were restored, a full file-by-file comparison against
 checkpoint `6428f13` was empty for all product files. No new release-blocking
 defect was found in stack 04.
 
+### Stack 05 — complete
+
+- Branch: `codex/release-stack-05-credential-analysis`
+- Commit: `2232e05` (`fix(analysis): correlate credential evidence at value-hash grain`)
+- Parent: stack 04 commit `e6a6af7`
+- Scope: 16 files, 715 insertions, 129 deletions
+- Staged/commit tree: `a04b7d1bc1777d3aa012eb0c21f06fb405e22b37`
+- Public remote: not pushed
+
+The staged-only tree passed `gofmt -l .`, `go build ./...`, `go vet ./...`, and
+`go test ./... -race` before the last correction and again immediately before
+commit. Changed analysis, processor, risk-score, and ingest packages passed 10
+consecutive race-enabled repetitions; after S5-F2, the processor package alone
+passed another 10. Strict MkDocs passed after the documentation correction.
+
+The retained real projection independently reconciled collector and server
+outputs rather than trusting one summary counter:
+
+- The findings API contained exactly three
+  `credential_chain_reference` findings for the Cursor source agent: masked
+  Anthropic and OpenAI provider references plus one hashed virtual-key
+  reference. Each had confidence 0.95 and explicit `reference_only` evidence;
+  none was mislabeled as observed upstream secret material.
+- Each finding detail contained the exact continuous seven-node witness:
+  AgentInstance → MCPServer → Identity → configured header Credential →
+  LiteLLM master Credential → LiteLLMGateway → target Credential.
+- Each witness contained exactly five ordered raw relationships
+  (`TRUSTS_SERVER`, `AUTHENTICATES_WITH`, `USES_CREDENTIAL`, and two
+  `EXPOSES_CREDENTIAL`) plus one synthetic `VALUE_HASH_MATCH` from the
+  configured Authorization credential to the LiteLLM master credential.
+- The graph API contained exactly three cross-service `CAN_REACH` edges with
+  six hops, confidence 0.95, risk weight 0.1, one common merge hash, seven
+  evidence node IDs, five raw relationship IDs, and the exact synthetic tuple.
+  Both observed join credentials had blast radius one, which agrees with the
+  one-agent retained corpus.
+
+Disposable database verification exercised the global aggregation and exact
+witness logic on Neo4j 4.4.48 and 5.26. Each version passed five race-enabled
+repetitions with two same-hash agents, a duplicate path, and an identity-only
+decoy. Every eligible credential received global blast radius two, the decoy
+remained unenriched, and repeat execution preserved one deterministic edge per
+agent/target. The compiled collector → credential-gated MCP probe → production
+ingest → source-agent-only campaign vertical passed three race-enabled
+repetitions on each Neo4j version with PostgreSQL 16. The three disposable
+Stack 05 containers were then removed; the retained release databases and
+server were not mutated by these controls.
+
+Two true post-checkpoint composition findings were reproduced and corrected.
+They are intentionally outside the frozen 47-issue baseline accounting:
+
+#### S5-F1 — compiled campaign live test could not emit valid ingest v3 origin
+
+**Reproduction.** Activating
+`TestIntegrationCompiledCampaignExportProbeIngestPromotesOnlySourceAgent`
+against fresh Neo4j/PostgreSQL first failed strict ingest with
+`meta.origin.host_id: host_id is required` and
+`meta.origin.network_realm_id: network_realm_id is required`. Supplying origin
+only on the hand-built base artifact exposed the second boundary: the compiled
+collector subprocess still failed because its environment lacked
+`AGENTHOUND_HOST_ID` and `AGENTHOUND_NETWORK_REALM_ID`.
+
+**Classification and impact.** This is a valid test-fixture defect introduced
+when v3 made origin mandatory. It is not evidence that production ingest
+accepts an originless artifact; the opposite is true. The defect meant this
+normally skipped live integration could never exercise the compiled vertical
+path against real databases and therefore created a coverage blind spot.
+
+**Minimal correction.** The base fixture now carries stable synthetic
+`campaign-fixture-host` / `campaign-fixture-realm` origin values, and the
+compiled collector receives the same values through its public environment
+contract. No validator or production admission rule was weakened.
+
+**Verification.** The complete vertical passed `-race -count=3` on Neo4j 4.4.48
+with PostgreSQL 16 and again on Neo4j 5.26 with PostgreSQL 16. This is an intentional
+two-hunk delta from checkpoint `6428f13` in
+`server/internal/ingest/campaign_vertical_integration_test.go`.
+
+#### S5-F2 — real cross-service edges omitted the promised gateway identifier
+
+**Reproduction.** The retained graph had the exact three expected
+cross-service edges and complete canonical witnesses, but `via_gateway` was
+null on all three. The processor assigned only `winner.gateway.name`; the
+LiteLLM looter intentionally emits a property-neutral gateway reference so it
+does not overwrite fingerprint-owned name/auth properties. A standalone loot
+collection therefore guarantees the gateway object ID, not a name or endpoint.
+The integration fixture hid this by supplying both a synthetic name and
+endpoint, while the operator and architecture docs promised `via_gateway` as
+edge evidence.
+
+**Classification and impact.** This is a candidate-integration
+evidence-fidelity bug, not a false-positive finding or broken topology.
+Detection targets, confidence, exact evidence nodes/edges, blast radius, and
+publication were all correct, but one promised explanatory field disappeared
+on real producer output. It must not be advertised as an untouched-baseline
+defect.
+
+**Minimal correction.** The processor now chooses the first truthful stable
+identifier from gateway name, endpoint, and immutable object ID. It does not
+make the looter claim fingerprint-owned properties. The integration fixture
+now matches the real property-neutral node and requires the object-ID fallback;
+a unit guard pins the Cypher fallback, and both operator and architecture docs
+state the precedence.
+
+**Verification.** The corrected fixture passed the processor suite under
+`-race -count=10`, then the exact live-database integration under
+`-race -count=5` on Neo4j 4.4.48 and separately on Neo4j 5.26. Stack 06 must add
+`via_gateway` to the exact real-infrastructure oracle so this representation
+regression cannot return silently. The code/test/doc changes are intentional
+post-checkpoint deltas from `6428f13`.
+
+No unresolved release-blocking defect remains from Stack 05. The evidence-field
+correction changes explanatory metadata only; the retained revision-5 database
+was intentionally left untouched rather than rewritten merely to make old
+evidence display the patched fallback.
+
 ## Why this is a stack, not parallel PRs
 
 The final fixes share several contract files:
@@ -420,7 +537,7 @@ Neo4j/query/risk projection.
 blast radius, and downstream risk/query results.
 
 **Issues:** remaining cross-service portion of RC-09 Issue 32, plus Issues 33
-and 37.
+and 37; post-checkpoint composition findings S5-F1 and S5-F2.
 
 **Owns:**
 
@@ -453,7 +570,7 @@ Issues 38 and 39.
   controls.
 - Extraction-field, credential-chain topology, and 23/20/12 cardinality docs.
 - Exact 24-record harness reconciliation and exact three-target cross-service
-  oracle.
+  oracle, including a non-null truthful `via_gateway` value.
 - Remaining real-infrastructure fixtures/gates and final validation ledger.
 
 **Acceptance:** full UI tests/lint/build; baseline/candidate narrow and desktop
@@ -484,7 +601,8 @@ Each stack commit records a path/hunk manifest. The final stack is accepted only
 when:
 
 1. every parent branch passes its stated gates;
-2. `git diff 6428f13 --` is empty for product files at stack 06;
+2. `git diff 6428f13 --` contains only the exact reviewed post-checkpoint
+   corrections documented above;
 3. the validation documents remain on the separate snapshot branch rather than
    entering product PRs accidentally; and
 4. unrelated untracked `AGENTS.md` is absent from every commit.
@@ -498,7 +616,8 @@ when:
 3. Stage exclusive files plus reviewed shared hunks for stack 01, run its gates,
    and commit.
 4. Repeat for stacks 02–06. Every commit is reviewed as the diff from its parent.
-5. Prove the final split tree is product-byte-equal to `6428f13`.
+5. Prove the final split tree differs from `6428f13` only by the exact reviewed
+   post-checkpoint corrections documented above.
 6. Create branch refs at each commit. Do not push until explicitly authorized.
 
 This procedure changes only isolated Git index/branch state. It does not modify
