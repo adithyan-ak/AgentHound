@@ -53,6 +53,57 @@ removed them:
 
 No new release-blocking defect was found in stack 01.
 
+### Stack 02 — complete
+
+- Branch: `codex/release-stack-02-collector-truth`
+- Commit: `acad077` (`fix(collector): preserve MCP truth without leaking transport secrets`)
+- Parent: stack 01 commit `ee070b7`
+- Scope: 44 files, 4,748 insertions, 392 deletions
+- Public remote: not pushed
+
+The staged-only tree passed `gofmt -l .`, `go build ./...`, `go vet ./...`, and
+`go test ./... -race`. Focused collector, CLI, Config, embedding, MCP,
+MCP-poison, SDK-ingest, and strict-ingest race suites passed. The alias and
+ambiguous-profile controls passed 30 consecutive race-enabled repetitions.
+Dependency-boundary and collector-size gates passed; the stripped linux/amd64
+collector was 11,006,136 bytes against a 12,012,132-byte limit. Strict MkDocs
+also passed.
+
+Slicing proved two trust-boundary dependencies that belong in this stack:
+
+- Config's canonical `Identity`/`Credential` topology is emitted in the same
+  privacy-sensitive extraction functions as argv, inline environment, URL
+  query, and URL-password discovery. Stack 02 therefore owns producer topology;
+  stack 05 owns only the downstream reachability, grouping, and risk analysis.
+- Strict configured/observed authentication tuple validation and MCP opaque
+  header authentication truth share the collector and validator hunks already
+  required for transport-secret closure. They remain here; stack 04 owns A2A
+  active observation and every effective-auth consumer.
+
+Real verification used the retained release fixture network with a staged-only
+linux/arm64 collector (SHA-256
+`67963eefc4f1d845bcf2823d4bac979de130f152ead56182633bb20113886647`):
+
+- An enforcing MCP credential gate returned 401 for missing and wrong
+  credentials and advanced to protocol negotiation only for the exact secret.
+- A URL-secret MCP scan completed with 29 nodes and 28 edges: 14 tools, nine
+  resources, four prompts, and task capability. The public endpoint was
+  `http://mcp-credential-gate:3002/mcp`; all URL credential components were
+  marked redacted; authentication was reported as configured Basic evidence;
+  absent resource sizes stayed absent.
+- The artifact, stdout, and stderr contained zero occurrences of every secret
+  sentinel.
+- A Config fixture produced a three-argument stdio identity with only argument
+  hashes, a sanitized HTTP endpoint, and four canonical credential nodes for
+  argv, inline-environment, URL-query, and URL-password sources. No raw
+  argument, environment, header, URL credential, or credential value survived
+  in the artifact or process output.
+
+After the deferred candidate changes were restored, the reconstructed product
+tree was byte-identical to checkpoint `6428f13` with only the private working
+ledger intentionally excluded. No new release-blocking defect was found in
+stack 02.
+
 ## Why this is a stack, not parallel PRs
 
 The final fixes share several contract files:
@@ -129,6 +180,9 @@ secret-safe before the server reasons over them.
   streamable HTTP, and zero-network ambiguity controls.
 - Sanitized HTTP endpoints, stdio hashed-argv identity v3, credential extraction,
   fixed diagnostic categories, and matching strict-ingest privacy checks.
+- Canonical Config `Identity`/`Credential` producer topology, strict
+  configured/observed authentication tuple validation, and MCP opaque-header
+  authentication truth required by those same privacy-boundary hunks.
 - Canonical embedding source IDs and reference-only endpoint closure.
 - Collector-focused tests and corresponding CLI/graph/security documentation.
 
@@ -182,9 +236,8 @@ Issues 43 and 41; RC-10 Issue 36.
 **Owns:**
 
 - Open WebUI fingerprint/loot composition.
-- MCP custom-header/credential observation truth.
-- Bounded official-protocol A2A nonexistent-task observer and strict evidence
-  validation.
+- Bounded official-protocol A2A nonexistent-task observer and its strict
+  positive/diagnostic evidence validation.
 - Ollama/MLflow/Qdrant proof-before-affirmation and empty-credential rejection.
 - Effective-auth materialization and all query/risk/traversal/remediation/UI
   consumers.
@@ -211,7 +264,8 @@ blast radius, and downstream risk/query results.
 
 **Owns:**
 
-- Location-independent Agent→Server→Identity→Credential reachability.
+- Location-independent downstream Agent→Server→Identity→Credential
+  reachability over the producer topology established in stack 02.
 - Exact observed-material/value-hash gates and identity-hash exclusion.
 - Deterministic seven-node/five-relationship plus synthetic witness.
 - Global distinct-agent blast radius at canonical value-hash grain.
