@@ -11,6 +11,48 @@ to product checkpoint `6428f13` for every tracked product file.
 The configured `origin` is public. No review branch is pushed until the user
 explicitly authorizes the exact branch and remote.
 
+## Construction status
+
+### Stack 01 — complete
+
+- Branch: `codex/release-stack-01-realm-v3`
+- Commit: `ee070b7` (`feat(storage): bind ingest v3 to one collection realm`)
+- Parent: untouched baseline `1e45601`
+- Scope: 73 files, 2,346 insertions, 147 deletions
+- Public remote: not pushed
+
+The staged-only tree passed `gofmt -l .`, `go build ./...`, `go vet ./...`, and
+`go test ./... -race`. The focused Scan Manager and Scan Import suite passed
+28/28 tests, followed by UI lint and production build. `make docs-check` passed
+with a strict MkDocs build.
+
+Slicing exposed one genuine dependency rather than a product defect: the
+existing strict A2A risk-score import fixture became invalid when v3 made
+`meta.origin` mandatory. Stack 01 adds only a canonical fixture origin; the
+later configured-versus-observed auth rewrite remains in stack 04. The first
+focused UI run likewise proved that the longer origin-bearing commands require
+the candidate's viewport-bounded shared dialog class, so that two-token class
+change is retained with Issue 47 instead of being deferred as unrelated UI.
+
+Real database verification used disposable loopback-only stores and then
+removed them:
+
+- Neo4j 4.4 + PostgreSQL 16 accepted a collector-generated v3 artifact with the
+  exact configured origin and published a complete projection.
+- Changing only `host_id` returned `409 COLLECTION_REALM_MISMATCH`; PostgreSQL
+  still contained exactly the one accepted scan row.
+- With Neo4j unavailable, ingest returned the sanitized
+  `503 STORAGE_BINDING_UNAVAILABLE` after the driver's 30-second retry budget;
+  no scan row was added.
+- Neo4j 5.26 + PostgreSQL 16 initialized a fresh pair and restarted with the
+  same markers successfully.
+- A second independently initialized pair used a different UUID and realm.
+  Starting against pair A's PostgreSQL and pair B's Neo4j exited 1 before
+  serving, reported the marker mismatch, and left both original markers
+  unchanged.
+
+No new release-blocking defect was found in stack 01.
+
 ## Why this is a stack, not parallel PRs
 
 The final fixes share several contract files:
@@ -41,12 +83,17 @@ contract below it.
 **Purpose:** establish the selected one-host/private-realm-per-database boundary
 and wire v3 before later fixes add more v3 evidence.
 
-**Issues:** RC-08 / Issue 18, plus candidate-integration Issue 47 because the UI
-must not advertise commands that cannot create v3 artifacts.
+**Issues:** RC-08 / Issue 18, RC-01's release-version single-writer cleanup,
+plus candidate-integration Issue 47 because the UI must not advertise commands
+that cannot create v3 artifacts. RC-01 is included here because every artifact
+writer already had to be replaced to add v3 origin; splitting the stale
+version assignment from those exact functions would create artificial shared
+hunks without an independently reviewable intermediate behavior.
 
 **Owns:**
 
 - `sdk/ingest/origin.go`, origin metadata, and v2→v3 wire version.
+- Release-version single-writer behavior in the artifact-producing CLI paths.
 - Collector host/realm flag and environment resolution, explicit origin
   propagation through every artifact-producing verb/action.
 - PostgreSQL and Neo4j storage markers, pre-migration bootstrap admission,
@@ -62,8 +109,8 @@ oracle tightening.
 
 **Acceptance:** focused SDK/config/binding/appdb/graph/API/ingest tests under
 `-race`; Go format/build/vet; UI Scan Manager/Import tests; Compose rendering;
-strict docs; live fresh/restart/mismatch/cross-wire/no-mutation matrix on Neo4j
-4.4 and 5.x.
+strict docs; live fresh/restart/mismatch/cross-wire/no-mutation controls across
+Neo4j 4.4 and 5.x.
 
 ### 02 — `codex/release-stack-02-collector-truth`
 
@@ -72,12 +119,11 @@ strict docs; live fresh/restart/mismatch/cross-wire/no-mutation matrix on Neo4j
 **Purpose:** make collector artifacts deterministic, closed, bounded, and
 secret-safe before the server reasons over them.
 
-**Issues:** RC-01; RC-03 Issues 3, 4, 24, 25, 27, 28, 31; RC-04 Issues 23,
-26, 29, 30; RC-06 Issues 8 and 13.
+**Issues:** RC-03 Issues 3, 4, 24, 25, 27, 28, 31; RC-04 Issues 23, 26, 29,
+30; RC-06 Issues 8 and 13.
 
 **Owns:**
 
-- Release-version single-writer behavior.
 - Raw MCP Initialize observation, tasks capability, absent resource-size
   semantics, alias/profile determinism, case-normalized headers, bounded
   streamable HTTP, and zero-network ambiguity controls.
