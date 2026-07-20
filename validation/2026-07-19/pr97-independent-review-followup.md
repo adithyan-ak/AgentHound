@@ -290,6 +290,10 @@ Validation completed on that tree:
 - gofmt, build, vet, full repository race suite, and diff check: pass; and
 - exact final Stack 6 head `bd10acd` passed all 13 `make prerelease` gates.
 
+GitHub then completed the current-head database matrix successfully on both
+Neo4j 4 and Neo4j 5. Every PR 97 check at `5629ee4` is green or intentionally
+skipped, and GitHub reports the PR cleanly mergeable.
+
 PRs 98-101 were replayed atomically with force-with-lease. `git range-diff`
 shows the PR 98, PR 100, and PR 101 commits unchanged; PR 99 simply loses the
 fixture hunk now owned by the parent. Final Stack 6 head
