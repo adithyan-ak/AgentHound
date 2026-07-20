@@ -41,6 +41,9 @@ func integrationWrite(
 }
 
 func TestIntegrationStorageBindingLifecycle(t *testing.T) {
+	if os.Getenv("AGENTHOUND_FRESH_DB_INTEGRATION") != "1" {
+		t.Skip("set AGENTHOUND_FRESH_DB_INTEGRATION=1 for fresh-database storage binding integration")
+	}
 	ctx := testDriver(t)
 	driver, err := NewDriver(
 		os.Getenv("AGENTHOUND_NEO4J_URI"),

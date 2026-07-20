@@ -76,6 +76,10 @@ func TestIntegrationCompiledCampaignExportProbeIngestPromotesOnlySourceAgent(t *
 		"mcp", "target", sdkingest.CanonicalURLScope(httpServer.URL),
 	)
 	base := common.NewIngestData("mcp", "campaign-vertical-base")
+	base.Meta.Origin = sdkingest.CollectionOrigin{
+		HostID:         "campaign-fixture-host",
+		NetworkRealmID: "campaign-fixture-realm",
+	}
 	base.Meta.Collection = &sdkingest.CollectionReport{
 		State:        sdkingest.OutcomeComplete,
 		CoverageKeys: []string{scope},
@@ -358,6 +362,8 @@ func runCompiledCampaign(
 	run.Dir = repoRoot
 	run.Env = environmentWithOverrides(map[string]string{
 		"HOME":                           homeDir,
+		"AGENTHOUND_HOST_ID":             "campaign-fixture-host",
+		"AGENTHOUND_NETWORK_REALM_ID":    "campaign-fixture-realm",
 		"AGENTHOUND_CAMPAIGN_AUTHORIZED": "AUTHORIZED",
 		"AGENTHOUND_CAMPAIGN_CREDENTIAL": credentialMaterial,
 	})
