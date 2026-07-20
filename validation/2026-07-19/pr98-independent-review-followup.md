@@ -105,4 +105,5 @@ passes under `-race` against both Neo4j 4.4 and 5.26 with PostgreSQL 16. PR 98's
 two-commit delta is unchanged according to `git range-diff`; the fixture-only
 parent correction did not alter Stack 3 lifecycle behavior. Final Stack 6 tree
 `bd10acd` is byte-for-byte identical to pre-restack tree `8af65f1`. The
-dedicated containers were removed after validation and no volumes were created.
+exact final head also passed all 13 `make prerelease` gates. The dedicated
+containers were removed after validation and no volumes were created.

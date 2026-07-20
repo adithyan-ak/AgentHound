@@ -287,7 +287,8 @@ Validation completed on that tree:
 - complete `AGENTHOUND_FRESH_DB_INTEGRATION=1` ingest package under `-race`
   against Neo4j 4.4 and PostgreSQL 16: pass;
 - the same complete package against Neo4j 5.26 and PostgreSQL 16: pass;
-- gofmt, build, vet, full repository race suite, and diff check: pass.
+- gofmt, build, vet, full repository race suite, and diff check: pass; and
+- exact final Stack 6 head `bd10acd` passed all 13 `make prerelease` gates.
 
 PRs 98-101 were replayed atomically with force-with-lease. `git range-diff`
 shows the PR 98, PR 100, and PR 101 commits unchanged; PR 99 simply loses the
