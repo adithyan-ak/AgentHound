@@ -104,6 +104,62 @@ tree was byte-identical to checkpoint `6428f13` with only the private working
 ledger intentionally excluded. No new release-blocking defect was found in
 stack 02.
 
+### Stack 03 — complete
+
+- Branch: `codex/release-stack-03-graph-lifecycle-cli`
+- Commit: `2084a63` (`fix(graph): preserve owner-scoped publication truth`)
+- Parent: stack 02 commit `acad077`
+- Scope: 22 files, 2,959 insertions, 350 deletions
+- Public remote: not pushed
+
+The staged-only tree passed `gofmt -l .`, `go build ./...`, `go vet ./...`, and
+`go test ./... -race`. Graph, ingest, and server-CLI race suites then passed 10
+consecutive repetitions. Strict MkDocs passed using a fresh disposable
+virtualenv populated only from `docs/requirements.txt`; the first invocation
+had stopped before build because the isolated worktree correctly lacked an
+ignored local virtualenv.
+
+Live graph verification used three disposable loopback-only databases and
+removed them afterward:
+
+- Neo4j 4.4.48 without APOC exercised the fallback relationship writer.
+- Neo4j 4.4.48 with APOC 4.4.0.40 exercised `apoc.merge.relationship`.
+- Neo4j 5.26.28 exercised the 5.x schema syntax and fallback writer.
+- The complete integration suite passed on all three. A concise second pass of
+  the new future/legacy schema guard, dependency-group rotation, exact owner
+  transfer, and compatible co-owner lifecycle tests also passed under `-race`
+  on every target.
+
+An independent staged collector/server control used binaries with SHA-256
+`d03abf1c2a307b9914ff5cef5b8d54991ece399d8eb4dfa3c097847a235eb247`
+and `b082e03291e7d5797b1d02fe78c7e5d1832b7787cda7eebee650b6e5b6be87b4`:
+
+- The collector produced a v3 Config artifact with seven nodes and three raw
+  edges. The CLI ingested it into fresh Neo4j 5.26/PostgreSQL 16 stores, exited
+  0, and reported complete/complete, published revision 1, and exactly 7/3
+  write rows.
+- PostgreSQL independently recorded every lifecycle stage complete and
+  published at revision 1. Neo4j contained seven public nodes and four public
+  edges after the one derived `POISONED_INSTRUCTIONS` edge. The structured API
+  reported the same 7/4 projection at revision 1.
+- Neo4j contained internal per-owner fingerprints on all seven raw nodes and
+  three raw edges. Node lists, edge lists, node detail, and a three-hop
+  neighborhood returned zero fingerprint properties.
+- An internally consistent partial artifact wrote 7/3 rows but withheld
+  publication. The CLI printed the typed partial outcome, incomplete
+  projection, unavailable revision, exact row counts, and the first unhealthy
+  required stage, then exited 1. PostgreSQL retained published revision 1 and
+  marked the attempt `completed_with_errors`/unpublished; structured reads
+  returned `409 PROJECTION_CONFLICT` instead of exposing the mutable graph.
+- A deliberately inconsistent partial test envelope was rejected during
+  validation before this control, confirming aggregate-state validation. It
+  was corrected once by making one concrete child outcome partial; no product
+  patch was needed.
+
+After deferred changes were restored, the reconstructed product tree again
+matched checkpoint `6428f13` byte-for-byte except for the intentionally omitted
+private ledger. No new release-blocking defect was found in stack 03.
+
 ## Why this is a stack, not parallel PRs
 
 The final fixes share several contract files:
