@@ -8,6 +8,62 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=assertions.sh
 source "${SCRIPT_DIR}/assertions.sh"
 
+require_exact_cross_service_pairs() {
+  local source_id="$1"
+  local target_ids="$2"
+  local label="$3"
+
+  jq -cer \
+    --arg source "${source_id}" \
+    --argjson target_ids "${target_ids}" \
+    --arg label "${label}" '
+    (sort_by(.source_id, .target_id)) as $rows |
+    ($target_ids | map({source_id:$source,target_id:.}) |
+      sort_by(.source_id, .target_id)) as $expected |
+    if ($rows | map({source_id,target_id})) == $expected
+    then $rows
+    else error($label + " rows do not exactly match the expected source/target set") end
+  '
+}
+
+cross_service_pair_oracle_self_test() {
+  local source_id=expected-agent
+  local target_ids='["target-1","target-2","target-3"]'
+  local exact_rows extra_source_rows
+
+  exact_rows="$(jq -nc \
+    --arg source "${source_id}" \
+    --argjson targets "${target_ids}" '
+    $targets | map({source_id:$source,target_id:.})
+  ')"
+  printf '%s' "${exact_rows}" |
+    require_exact_cross_service_pairs \
+      "${source_id}" "${target_ids}" self-test >/dev/null ||
+    fail 'cross-service exact-set oracle rejected the expected source/target set'
+
+  extra_source_rows="$(jq -nc \
+    --argjson rows "${exact_rows}" '
+    $rows + [{source_id:"unexpected-agent",target_id:"target-1"}]
+  ')"
+  if printf '%s' "${extra_source_rows}" |
+    require_exact_cross_service_pairs \
+      "${source_id}" "${target_ids}" self-test >/dev/null 2>&1; then
+    fail 'cross-service exact-set oracle accepted an unexpected source'
+    return 1
+  fi
+}
+
+if [[ "${1:-}" == --self-test ]]; then
+  cross_service_pair_oracle_self_test
+  pass 'cross-service exact-set oracle rejects unexpected sources'
+  exit 0
+fi
+
+if (($# != 6)); then
+  printf 'Usage: %s COMPOSE CONFIG MCP LITELLM ARTIFACTS RESULT\n' "$0" >&2
+  exit 2
+fi
+
 COMPOSE_FILE="$1"
 CONFIG_OUTPUT="$2"
 MCP_OUTPUT="$3"
@@ -15,6 +71,10 @@ LITELLM_OUTPUT="$4"
 ARTIFACTS_DIR="$5"
 RESULT_PATH="$6"
 GATE_URL=http://mcp-cross-service-gate:3003/mcp
+
+# Keep the fail-closed set matcher independently executable and exercise the
+# same helper on every real-infrastructure run.
+cross_service_pair_oracle_self_test
 
 compose() {
   docker compose -f "${COMPOSE_FILE}" "$@"
@@ -203,22 +263,27 @@ ws agenthound-server --log-level error query --prebuilt high-entropy-secrets --f
   2>"${ARTIFACTS_DIR}/cross-service-credential-chain-high-entropy.stderr"
 
 # Public findings intentionally omit the larger exact-evidence object. Verify
-# both public publication and the production-persisted exact evidence below.
-public_matches="$(jq -cer \
-  --arg source "${agent_id}" \
-  --argjson targets "${target_descriptors}" '
-  ($targets | map(.id) | sort) as $target_ids |
-  ([.findings[] | select(
-    .source_id == $source and
+# detector-global exactness before checking the expected source's evidence, so
+# an unexpected source cannot be hidden by fixture-scoped filtering.
+public_detector_rows="$(jq -cer '
+  [.findings[] | select(
     .evidence.detector == "cross_service_credential_chain"
-  )] | sort_by(.target_id)) as $matches |
-  if
+  )]
+' "${ARTIFACTS_DIR}/cross-service-credential-chain-findings.json")" ||
+  fail 'published cross-service detector rows are malformed'
+public_matches="$(printf '%s' "${public_detector_rows}" |
+  require_exact_cross_service_pairs \
+    "${agent_id}" "${target_ids}" published)" ||
+  fail 'published cross-service findings do not exactly cover the closed fixture'
+jq -e '
   .scope.available == true and
   .scope.stale == false and
-  (.scope.revision | type == "number" and . > 0) and
-  ($matches | map(.target_id) | sort) == $target_ids and
-  ($matches | length) == ($targets | length) and
-  ($matches | all(
+  (.scope.revision | type == "number" and . > 0)
+' "${ARTIFACTS_DIR}/cross-service-credential-chain-findings.json" >/dev/null ||
+  fail 'published cross-service finding scope is unavailable or stale'
+printf '%s' "${public_matches}" | jq -e \
+  --argjson targets "${target_descriptors}" '
+  all(
     . as $finding |
     ($targets[] | select(.id == $finding.target_id)) as $target |
     $finding.edge_kind == "CAN_REACH" and
@@ -230,11 +295,9 @@ public_matches="$(jq -cer \
     $finding.evidence.detector == "cross_service_credential_chain" and
     $finding.evidence.material_status == $target.material_status and
     $finding.evidence.exposure_status == $target.exposure_status
-  ))
-  then $matches
-  else error("published cross-service finding target set or evidence is incomplete") end
-' "${ARTIFACTS_DIR}/cross-service-credential-chain-findings.json")" ||
-  fail 'published cross-service findings do not exactly cover every real LiteLLM processor target'
+  )
+' >/dev/null ||
+  fail 'published cross-service findings do not preserve expected evidence'
 jq -e \
   --arg credential "${proof_credential_id}" \
   --arg server "${config_server_id}" \
@@ -275,16 +338,10 @@ expected_synthetic="$(jq -nc \
   --arg master "${master_credential_id}" '
   [$configured,$master,"VALUE_HASH_MATCH","identity_correlation","value_hash","cross_service_credential_chain"]
 ')"
-graph_matches="$(jq -cer \
-  --arg source "${agent_id}" \
-  --argjson target_ids "${target_ids}" '
-  ([.[] | select(.source_id == $source)] | sort_by(.target_id)) as $matches |
-  if
-    ($matches | length) == ($target_ids | length) and
-    ($matches | map(.target_id) | sort) == $target_ids
-  then $matches
-  else error("current cross-service graph target set is incomplete or contains extras") end
-' "${ARTIFACTS_DIR}/cross-service-credential-chain-graph.json")"
+graph_matches="$(require_exact_cross_service_pairs \
+  "${agent_id}" "${target_ids}" graph \
+  <"${ARTIFACTS_DIR}/cross-service-credential-chain-graph.json")" ||
+  fail 'current graph has missing or unexpected cross-service detector rows'
 printf '%s' "${graph_matches}" | jq -e \
   --arg hash "${master_hash}" \
   --arg agent "${agent_id}" \
@@ -335,16 +392,10 @@ compose exec -T analysis-postgres \
 jq -s '.' "${ARTIFACTS_DIR}/cross-service-credential-chain-persisted-evidence.ndjson" \
   >"${ARTIFACTS_DIR}/cross-service-credential-chain-persisted-evidence.json"
 
-persisted_matches="$(jq -cer \
-  --arg source "${agent_id}" \
-  --argjson target_ids "${target_ids}" '
-  ([.[] | select(.source_id == $source)] | sort_by(.target_id)) as $matches |
-  if
-    ($matches | length) == ($target_ids | length) and
-    ($matches | map(.target_id) | sort) == $target_ids
-  then $matches
-  else error("persisted cross-service finding target set is incomplete or contains extras") end
-' "${ARTIFACTS_DIR}/cross-service-credential-chain-persisted-evidence.json")"
+persisted_matches="$(require_exact_cross_service_pairs \
+  "${agent_id}" "${target_ids}" persisted \
+  <"${ARTIFACTS_DIR}/cross-service-credential-chain-persisted-evidence.json")" ||
+  fail 'persisted findings have missing or unexpected cross-service detector rows'
 printf '%s' "${persisted_matches}" | jq -e \
   --arg hash "${master_hash}" \
   --arg agent "${agent_id}" \

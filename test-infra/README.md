@@ -141,9 +141,12 @@ The collector phase covers:
   the real LiteLLM looter master material, through production ingest to a
   published finding for every pinned LiteLLM processor target (two masked
   provider-key references and one hashed virtual-key reference), each with its
-  exact 7-node, 5-raw-edge, and synthetic `VALUE_HASH_MATCH` evidence; the same
-  gate independently requires a second high-entropy header and proves its
-  server attribution in the published `high-entropy-secrets` query;
+  exact 7-node, 5-raw-edge, and synthetic `VALUE_HASH_MATCH` evidence. Public,
+  Neo4j, and PostgreSQL checks compare the detector-global result set against
+  the exact three expected source/target pairs, so an additional source or
+  target fails the lane. The same gate independently requires a second
+  high-entropy header and proves its server attribution in the published
+  `high-entropy-secrets` query;
 - ContextForge tool-description poison/revert and campaign round-trip against
   the actual GA management API;
 - instruction poison/revert and MCP config implant/revert using a launchable
