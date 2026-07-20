@@ -132,6 +132,15 @@ func authoritativeMCPReport(
 	return report
 }
 
+func newPublicationIntegrationData(collector, scanID string) *sdkingest.IngestData {
+	data := common.NewIngestData(collector, scanID)
+	data.Meta.Origin = sdkingest.CollectionOrigin{
+		HostID:         "publication-fixture-host",
+		NetworkRealmID: "publication-fixture-realm",
+	}
+	return data
+}
+
 func TestIntegrationFreshSchemaCompleteIngestPublishes(t *testing.T) {
 	if os.Getenv("AGENTHOUND_FRESH_DB_INTEGRATION") != "1" {
 		t.Skip("set AGENTHOUND_FRESH_DB_INTEGRATION=1 for destructive fresh-database integration")
@@ -187,7 +196,7 @@ INSERT INTO posture_state (singleton) VALUES (TRUE);`); err != nil {
 		"target",
 		sdkingest.CanonicalURLScope("http://127.0.0.1:18080/mcp"),
 	)
-	data := common.NewIngestData("mcp", "fresh-publication")
+	data := newPublicationIntegrationData("mcp", "fresh-publication")
 	data.Meta.Collection = &sdkingest.CollectionReport{
 		State:        sdkingest.OutcomeComplete,
 		CoverageKeys: []string{scope},
@@ -253,7 +262,7 @@ func TestIntegrationExhaustiveRootRemovesMissingChildAcrossGraphAndPublication(t
 		}
 	}
 
-	first := common.NewIngestData("scan", "removed-child-first")
+	first := newPublicationIntegrationData("scan", "removed-child-first")
 	first.Meta.Collection = authoritativeMCPReport(root, childA, childB)
 	first.Graph.Nodes = []sdkingest.Node{
 		node("removed-child-a", "server-a", childA),
@@ -267,7 +276,7 @@ func TestIntegrationExhaustiveRootRemovesMissingChildAcrossGraphAndPublication(t
 		t.Fatalf("first active set did not publish: %+v", firstResult)
 	}
 
-	second := common.NewIngestData("scan", "removed-child-second")
+	second := newPublicationIntegrationData("scan", "removed-child-second")
 	second.Meta.Collection = authoritativeMCPReport(root, childB)
 	second.Graph.Nodes = []sdkingest.Node{
 		node("removed-child-b", "server-b", childB),
@@ -323,7 +332,7 @@ func TestIntegrationCompleteEmptyRootRecoversFailedUnheadedChildAfterRestart(t *
 		sdkingest.CanonicalURLScope("http://127.0.0.1:18084/mcp"),
 	)
 
-	failed := common.NewIngestData("mcp", "failed-unheaded-child")
+	failed := newPublicationIntegrationData("mcp", "failed-unheaded-child")
 	failed.Meta.Collection = &sdkingest.CollectionReport{
 		State:        sdkingest.OutcomeFailed,
 		CoverageKeys: []string{failedChild},
@@ -370,7 +379,7 @@ func TestIntegrationCompleteEmptyRootRecoversFailedUnheadedChildAfterRestart(t *
 		appdb.NewFindingStore(pool),
 		allowOriginAdmitter{},
 	)
-	completeEmpty := common.NewIngestData("mcp", "complete-empty-after-restart")
+	completeEmpty := newPublicationIntegrationData("mcp", "complete-empty-after-restart")
 	completeEmpty.Meta.Collection = authoritativeMCPReport(root)
 	recovered, err := restarted.Ingest(ctx, completeEmpty)
 	if err != nil {
@@ -452,7 +461,7 @@ func TestIntegrationTokenlessAgentWithholdsPublication(t *testing.T) {
 		"target",
 		sdkingest.CanonicalURLScope("http://127.0.0.1:18083/mcp"),
 	)
-	data := common.NewIngestData("mcp", "tokenless-publication")
+	data := newPublicationIntegrationData("mcp", "tokenless-publication")
 	data.Meta.Collection = &sdkingest.CollectionReport{
 		State:        sdkingest.OutcomeComplete,
 		CoverageKeys: []string{scope},
