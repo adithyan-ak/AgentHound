@@ -114,8 +114,8 @@ func TestIngestDataJSONRoundTrip(t *testing.T) {
 			"identity_schemes": [{
 				"entity_kind": "MCPServer",
 				"transport": "stdio",
-				"scheme": "mcp_stdio_v2_ordered",
-				"version": 2
+				"scheme": "mcp_stdio_v3_hashed_argv",
+				"version": 3
 			}]
 		},
 		"graph": {
@@ -145,7 +145,19 @@ func TestIngestDataJSONRoundTrip(t *testing.T) {
 		t.Errorf("edges count: got %d, want 1", len(d.Graph.Edges))
 	}
 	if d.Meta.Collection == nil || d.Meta.Ruleset == nil || len(d.Meta.IdentitySchemes) == 0 {
-		t.Fatal("strict v2 metadata was not preserved")
+		t.Fatal("strict v3 metadata was not preserved")
+	}
+	if d.Meta.Origin.HostID != "host-a" || d.Meta.Origin.NetworkRealmID != "realm-a" {
+		t.Fatalf("origin = %+v", d.Meta.Origin)
+	}
+}
+
+func TestCurrentIdentitySchemesUsesHashedArgvV3(t *testing.T) {
+	schemes := CurrentIdentitySchemes()
+	if len(schemes) != 1 || schemes[0].EntityKind != "MCPServer" ||
+		schemes[0].Transport != "stdio" ||
+		schemes[0].Scheme != MCPStdioIdentitySchemeV3 || schemes[0].Version != 3 {
+		t.Fatalf("current identity schemes = %+v, want stdio MCPServer hashed-argv v3", schemes)
 	}
 }
 
@@ -184,8 +196,8 @@ func TestIngestEvidenceMetadataJSONRoundTrip(t *testing.T) {
 			IdentitySchemes: []IdentityScheme{{
 				EntityKind: "MCPServer",
 				Transport:  "stdio",
-				Scheme:     MCPStdioIdentitySchemeV2,
-				Version:    2,
+				Scheme:     MCPStdioIdentitySchemeV3,
+				Version:    3,
 			}},
 		},
 		Graph: GraphData{Nodes: []Node{}, Edges: []Edge{}},
@@ -211,7 +223,7 @@ func TestIngestEvidenceMetadataJSONRoundTrip(t *testing.T) {
 		t.Fatalf("effective matcher metadata lost: %+v", got.Meta.Ruleset)
 	}
 	if len(got.Meta.IdentitySchemes) != 1 ||
-		got.Meta.IdentitySchemes[0].Scheme != MCPStdioIdentitySchemeV2 {
+		got.Meta.IdentitySchemes[0].Scheme != MCPStdioIdentitySchemeV3 {
 		t.Fatalf("identity metadata lost: %+v", got.Meta.IdentitySchemes)
 	}
 }

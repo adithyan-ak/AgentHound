@@ -2,10 +2,13 @@ package config
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/sdk/collector"
@@ -153,6 +156,94 @@ func TestConfigCollectorScopesTwoTargetedFilesIndependently(t *testing.T) {
 	}
 }
 
+func TestConfigCollectorPreservesSharedFactsPerOwnerDomain(t *testing.T) {
+	tmp := t.TempDir()
+	firstPath := filepath.Join(tmp, "first.json")
+	secondPath := filepath.Join(tmp, "second.json")
+	contents := `{
+		"mcpServers": {
+			"shared": {"command": "node", "args": ["shared.js"]}
+		}
+	}`
+	writeJSON(t, firstPath, contents)
+	writeJSON(t, secondPath, contents)
+
+	result, err := NewConfigCollector().Collect(
+		context.Background(),
+		collector.CollectOptions{
+			ConfigPaths: []string{firstPath, secondPath},
+			ScanID:      "shared-owner-configs",
+		},
+	)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	wantDomains := map[string]bool{
+		configCoverageKey(firstPath):  true,
+		configCoverageKey(secondPath): true,
+	}
+
+	serverDomains := make(map[string]bool)
+	hostDomains := make(map[string]bool)
+	for _, node := range result.Graph.Nodes {
+		if len(node.ObservationDomains) != 1 {
+			continue
+		}
+		domain := node.ObservationDomains[0]
+		if !wantDomains[domain] {
+			continue
+		}
+		switch ingest.ConcreteNodeKind(node.Kinds) {
+		case "MCPServer":
+			serverDomains[domain] = true
+		case "Host":
+			hostDomains[domain] = true
+		}
+	}
+	if len(serverDomains) != 2 {
+		t.Fatalf("shared MCP server contributions = %v, want one per config owner", serverDomains)
+	}
+	if len(hostDomains) != 2 {
+		t.Fatalf("shared host contributions = %v, want one per config owner", hostDomains)
+	}
+
+	runsOnDomains := make(map[string]bool)
+	for _, edge := range result.Graph.Edges {
+		if edge.Kind != "RUNS_ON" || len(edge.ObservationDomains) != 1 {
+			continue
+		}
+		domain := edge.ObservationDomains[0]
+		if wantDomains[domain] {
+			runsOnDomains[domain] = true
+		}
+	}
+	if len(runsOnDomains) != 2 {
+		t.Fatalf("shared RUNS_ON contributions = %v, want one per config owner", runsOnDomains)
+	}
+}
+
+func TestConfigContributionDedupPreservesDistinctSameOwnerFragments(t *testing.T) {
+	base := ingest.Node{
+		ID: "shared", Kinds: []string{"MCPServer"},
+		ObservationDomains: []string{"config:path:sha256:owner"},
+		Properties:         map[string]any{"name": "first"},
+	}
+	exactKey, exactComparable := nodeContributionDedupKey(base)
+	duplicateKey, duplicateComparable := nodeContributionDedupKey(base)
+	changed := base
+	changed.Properties = map[string]any{"name": "second"}
+	changedKey, changedComparable := nodeContributionDedupKey(changed)
+	if !exactComparable || !duplicateComparable || !changedComparable {
+		t.Fatal("canonical collector contributions were not comparable")
+	}
+	if exactKey != duplicateKey {
+		t.Fatal("exact same-owner contribution was not deduplicated")
+	}
+	if exactKey == changedKey {
+		t.Fatal("conflicting same-owner fragment would be collapsed before writer validation")
+	}
+}
+
 func TestConfigCollector_DeterministicServerIDs(t *testing.T) {
 	tmp := t.TempDir()
 	configPath := filepath.Join(tmp, "config.json")
@@ -253,6 +344,69 @@ func TestConfigCollector_CredentialExtraction(t *testing.T) {
 	}
 	if edgesByKind["HAS_ENV_VAR"] < 1 {
 		t.Errorf("HAS_ENV_VAR edges = %d, want >= 1", edgesByKind["HAS_ENV_VAR"])
+	}
+}
+
+func TestConfigCollector_TrimEmptyCredentialSurfacesStayUnknown(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	writeJSON(t, configPath, `{
+		"mcpServers": {
+			"empty-placeholders": {
+				"url": "https://mcp.example.com/mcp?api_key=&token=%20%20",
+				"env": {
+					"API_KEY": "",
+					"SESSION_TOKEN": " \t "
+				},
+				"headers": {
+					"Authorization": "",
+					"X-API-Key": " \t "
+				},
+				"args": ["--client-secret=", "--token", " \t "]
+			}
+		}
+	}`)
+
+	result, err := NewConfigCollector().Collect(context.Background(), collector.CollectOptions{
+		ConfigPath: configPath,
+		ScanID:     "trim-empty-credential-surfaces",
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	server := findNodeByKind(result, "MCPServer")
+	if server == nil {
+		t.Fatal("MCPServer not found")
+	}
+	for property, want := range map[string]any{
+		"auth_method":    string(common.AuthUnknown),
+		"auth_assurance": string(common.AuthAssuranceUnknown),
+		"auth_evidence":  common.AuthEvidenceUnknown,
+	} {
+		if got := server.Properties[property]; got != want {
+			t.Errorf("%s = %v, want %v", property, got, want)
+		}
+	}
+
+	nodesByKind := countNodesByKind(result)
+	if nodesByKind["Credential"] != 0 || nodesByKind["Identity"] != 0 {
+		t.Fatalf(
+			"empty placeholders emitted auth topology: credentials=%d identities=%d graph=%+v",
+			nodesByKind["Credential"],
+			nodesByKind["Identity"],
+			result.Graph,
+		)
+	}
+	edgesByKind := countEdgesByKind(result)
+	if edgesByKind["AUTHENTICATES_WITH"] != 0 || edgesByKind["USES_CREDENTIAL"] != 0 ||
+		edgesByKind["HAS_ENV_VAR"] != 0 {
+		t.Fatalf("empty placeholders emitted credential edges: %+v", edgesByKind)
+	}
+	trust := findEdgeByKind(result, "TRUSTS_SERVER")
+	if trust == nil {
+		t.Fatal("TRUSTS_SERVER edge not found")
+	}
+	if got := trust.Properties["auth_assessment_complete"]; got != false {
+		t.Errorf("auth_assessment_complete = %v, want false", got)
 	}
 }
 
@@ -378,14 +532,14 @@ func TestConfigCollector_UnpinnedPackageDetection(t *testing.T) {
 		t.Fatalf("expected 2 MCPServer nodes, got %d", len(servers))
 	}
 
-	byName := map[string]ingest.Node{}
+	byID := map[string]ingest.Node{}
 	for _, n := range servers {
-		if name, ok := n.Properties["name"].(string); ok {
-			byName[name] = n
-		}
+		byID[n.ID] = n
 	}
 
-	unpinned, ok := byName["unpinned"]
+	unpinned, ok := byID[ingest.ComputeMCPServerID(
+		"stdio", "npx", "-y", "@modelcontextprotocol/server-postgres",
+	)]
 	if !ok {
 		t.Fatal("unpinned server not found")
 	}
@@ -393,7 +547,9 @@ func TestConfigCollector_UnpinnedPackageDetection(t *testing.T) {
 		t.Errorf("unpinned server is_pinned = %v, want false", unpinned.Properties["is_pinned"])
 	}
 
-	pinned, ok := byName["pinned"]
+	pinned, ok := byID[ingest.ComputeMCPServerID(
+		"stdio", "npx", "-y", "@modelcontextprotocol/server-postgres@1.2.3",
+	)]
 	if !ok {
 		t.Fatal("pinned server not found")
 	}
@@ -837,11 +993,152 @@ func TestConfigCollector_PreservesOrderedStdioIdentity(t *testing.T) {
 		t.Fatalf("ordered stdio definitions collapsed: %v", serverIDs)
 	}
 	for _, node := range findNodesByKind(result, "MCPServer") {
-		if node.Properties["id_scheme"] != ingest.MCPStdioIdentitySchemeV2 {
-			t.Fatalf("stdio identity scheme = %v, want v2", node.Properties["id_scheme"])
+		if node.Properties["id_scheme"] != ingest.MCPStdioIdentitySchemeV3 {
+			t.Fatalf("stdio identity scheme = %v, want v3", node.Properties["id_scheme"])
 		}
 		if _, exists := node.Properties["legacy_objectid"]; exists {
 			t.Fatalf("stdio server exposed removed legacy identity: %+v", node.Properties)
+		}
+	}
+}
+
+func TestConfigCollector_RedactsMCPArgvAndURLSecretsFromEntireEnvelope(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "claude_desktop_config.json")
+	const (
+		argvSecret     = "sk-RAW-ARG-SECRET-123456789"
+		inlineSecret   = "ghp_RAW_INLINE_SECRET_123456789"
+		userinfoSecret = "RAW-USERINFO-SECRET-123456789"
+		querySecret    = "sk-RAW-QUERY-SECRET-123456789"
+		fragmentSecret = "RAW-FRAGMENT-SECRET-123456789"
+	)
+	writeJSON(t, path, `{
+		"mcpServers": {
+			"stdio-secret": {
+				"command": "demo-server",
+				"args": [
+					"--api-key", "`+argvSecret+`",
+					"--token=`+inlineSecret+`",
+					"postgres://dbuser:RAW-DSN-SECRET-123456789@db.example/prod"
+				]
+			},
+			"http-secret": {
+				"url": "https://alice:`+userinfoSecret+`@mcp.example/mcp?api_key=`+querySecret+`#`+fragmentSecret+`"
+			}
+		}
+	}`)
+
+	result, err := NewConfigCollector().Collect(context.Background(), collector.CollectOptions{
+		ConfigPath: path,
+		ScanID:     "redacted-config",
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	serialized, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	for _, forbidden := range []string{
+		"--api-key", argvSecret, inlineSecret, userinfoSecret, querySecret,
+		fragmentSecret, "RAW-DSN-SECRET-123456789",
+	} {
+		if strings.Contains(string(serialized), forbidden) {
+			t.Fatalf("serialized envelope leaked %q: %s", forbidden, serialized)
+		}
+	}
+
+	stdioIdentity := ingest.ResolveMCPServerIdentity(
+		"stdio",
+		"demo-server",
+		"--api-key",
+		argvSecret,
+		"--token="+inlineSecret,
+		"postgres://dbuser:RAW-DSN-SECRET-123456789@db.example/prod",
+	)
+	var stdioNode, httpNode *ingest.Node
+	for i := range result.Graph.Nodes {
+		node := &result.Graph.Nodes[i]
+		if node.ID == stdioIdentity.ObjectID {
+			stdioNode = node
+		}
+		if node.ID == ingest.ComputeMCPServerID(
+			"http",
+			"https://alice:"+userinfoSecret+"@mcp.example/mcp?api_key="+querySecret+"#"+fragmentSecret,
+		) {
+			httpNode = node
+		}
+	}
+	if stdioNode == nil || httpNode == nil {
+		t.Fatalf("redacted servers missing: stdio=%v http=%v", stdioNode != nil, httpNode != nil)
+	}
+	if _, exists := stdioNode.Properties["args"]; exists {
+		t.Fatalf("stdio node retained raw args property: %+v", stdioNode.Properties)
+	}
+	if got := stdioNode.Properties["arg_count"]; got != len(stdioIdentity.ArgumentHashes) {
+		t.Fatalf("arg_count = %v, want %d", got, len(stdioIdentity.ArgumentHashes))
+	}
+	if got, ok := stdioNode.Properties["arg_hashes"].([]string); !ok || len(got) != len(stdioIdentity.ArgumentHashes) {
+		t.Fatalf("arg_hashes = %#v, want %d safe hashes", stdioNode.Properties["arg_hashes"], len(stdioIdentity.ArgumentHashes))
+	}
+	if got := httpNode.Properties["endpoint"]; got != "https://mcp.example/mcp" {
+		t.Fatalf("sanitized endpoint = %v", got)
+	}
+	for _, marker := range []string{
+		"endpoint_userinfo_redacted", "endpoint_query_redacted", "endpoint_fragment_redacted",
+	} {
+		if httpNode.Properties[marker] != true {
+			t.Fatalf("%s = %v, want true", marker, httpNode.Properties[marker])
+		}
+	}
+
+	credentialHashes := make(map[string]bool)
+	for _, node := range findNodesByKind(result, "Credential") {
+		if hash, ok := node.Properties["value_hash"].(string); ok {
+			credentialHashes[hash] = true
+		}
+		if _, exposesRaw := node.Properties["value"]; exposesRaw {
+			t.Fatalf("credential exposed raw value without opt-in: %+v", node.Properties)
+		}
+	}
+	for _, secret := range []string{argvSecret, inlineSecret, userinfoSecret, querySecret} {
+		if !credentialHashes[common.HashCredentialValue(secret)] {
+			t.Fatalf("credential hash for redacted material %q was not retained", secret)
+		}
+	}
+	if edge := findEdgeByKind(result, "HAS_ENV_VAR"); edge != nil {
+		t.Fatalf("argv/URL credential was fabricated as an environment variable: %+v", edge)
+	}
+}
+
+func TestConfigCollector_CollapsesSameIdentityAliasesDeterministically(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "claude_desktop_config.json")
+	writeJSON(t, path, `{
+		"mcpServers": {
+			"beta": {"command": "node", "args": ["server.js"]},
+			"alpha": {"command": "node", "args": ["server.js"]}
+		}
+	}`)
+
+	result, err := NewConfigCollector().Collect(context.Background(), collector.CollectOptions{
+		ConfigPath: path,
+		ScanID:     "alias-config",
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	servers := findNodesByKind(result, "MCPServer")
+	if len(servers) != 1 {
+		t.Fatalf("same-identity aliases emitted %d MCPServer contributions: %+v", len(servers), servers)
+	}
+	wantNames := []string{"alpha", "beta"}
+	for _, kind := range []string{"TRUSTS_SERVER", "CONFIGURED_IN"} {
+		edge := findEdgeByKind(result, kind)
+		if edge == nil {
+			t.Fatalf("%s edge missing", kind)
+		}
+		got, ok := edge.Properties["configured_names"].([]string)
+		if !ok || !reflect.DeepEqual(got, wantNames) {
+			t.Fatalf("%s configured_names = %#v, want %#v", kind, edge.Properties["configured_names"], wantNames)
 		}
 	}
 }
@@ -1091,7 +1388,7 @@ func TestConfigCollector_HTTPServerEndpoint(t *testing.T) {
 	}
 }
 
-func TestConfigCollector_StdioServerEndpoint(t *testing.T) {
+func TestConfigCollector_StdioServerOmitsEndpoint(t *testing.T) {
 	tmp := t.TempDir()
 	configPath := filepath.Join(tmp, "config.json")
 	writeJSON(t, configPath, `{
@@ -1116,8 +1413,8 @@ func TestConfigCollector_StdioServerEndpoint(t *testing.T) {
 	if server == nil {
 		t.Fatal("MCPServer not found")
 	}
-	if server.Properties["endpoint"] != "npx" {
-		t.Errorf("endpoint = %q, want command name", server.Properties["endpoint"])
+	if _, exists := server.Properties["endpoint"]; exists {
+		t.Errorf("stdio endpoint must be omitted, got %q", server.Properties["endpoint"])
 	}
 }
 

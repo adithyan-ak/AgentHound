@@ -29,22 +29,22 @@
     "identity_schemes": [{
       "entity_kind": "MCPServer",
       "transport": "stdio",
-      "scheme": "mcp_stdio_v2_ordered",
-      "version": 2
+      "scheme": "mcp_stdio_v3_hashed_argv",
+      "version": 3
     }]
   },
   "graph": {
     "nodes": [
       {
-        "id": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
+        "id": "sha256:01982d9064e7f525724523ad5890b3bd394982612b36b47f3dac06e74612eb7a",
         "kinds": ["MCPServer"],
         "properties": {
           "name": "postgres-server",
-          "endpoint": "npx",
           "transport": "stdio",
           "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-postgres"],
-          "id_scheme": "mcp_stdio_v2_ordered",
+          "arg_hashes": ["sha256:a01cf5b8e65799111f549b4245b226642e4fb78561e4a7bb738dab94f812c68a", "sha256:64274e858605926f9602c5b5a75dd19cc222cfb50c7101ab56bfeed597b6e023"],
+          "arg_count": 2,
+          "id_scheme": "mcp_stdio_v3_hashed_argv",
           "protocol_version": "2025-03-26",
           "instructions": "PostgreSQL database access server",
           "capabilities": ["tools", "resources"],
@@ -52,12 +52,12 @@
           "auth_assurance": "unknown",
           "auth_evidence": "unknown",
           "is_pinned": false,
-          "objectid": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6"
+          "objectid": "sha256:01982d9064e7f525724523ad5890b3bd394982612b36b47f3dac06e74612eb7a"
         },
         "observation_domains": ["mcp:fixture:sha256:b45789dcd85e58b98e62ebc088142e4d53ffdc72f5e065fa12c4f9423db48267"]
       },
       {
-        "id": "sha256:16b9d71dc29ae9b0a08dfce28111f94ac4822b9c332c1b098a69605a61280075",
+        "id": "sha256:94fe82c7b708c1ace4f6859270e17ee686a92de461b7e105c8933384a2c41fcb",
         "kinds": ["MCPTool"],
         "properties": {
           "name": "execute_sql",
@@ -67,12 +67,12 @@
           "capability_surface": ["database_access"],
           "has_injection_patterns": false,
           "has_cross_references": false,
-          "objectid": "sha256:16b9d71dc29ae9b0a08dfce28111f94ac4822b9c332c1b098a69605a61280075"
+          "objectid": "sha256:94fe82c7b708c1ace4f6859270e17ee686a92de461b7e105c8933384a2c41fcb"
         },
         "observation_domains": ["mcp:fixture:sha256:b45789dcd85e58b98e62ebc088142e4d53ffdc72f5e065fa12c4f9423db48267"]
       },
       {
-        "id": "sha256:7fbf3d2d2ff3008740aa14503eee760b91bc7f970a3aa359db64b4c5e6b8d8ce",
+        "id": "sha256:78f6d72fd069471e53ce8756234130c6a1b2ab9274a9f12502d2b2f448c9238d",
         "kinds": ["MCPTool"],
         "properties": {
           "name": "list_tables",
@@ -82,12 +82,12 @@
           "capability_surface": ["database_access"],
           "has_injection_patterns": false,
           "has_cross_references": false,
-          "objectid": "sha256:7fbf3d2d2ff3008740aa14503eee760b91bc7f970a3aa359db64b4c5e6b8d8ce"
+          "objectid": "sha256:78f6d72fd069471e53ce8756234130c6a1b2ab9274a9f12502d2b2f448c9238d"
         },
         "observation_domains": ["mcp:fixture:sha256:b45789dcd85e58b98e62ebc088142e4d53ffdc72f5e065fa12c4f9423db48267"]
       },
       {
-        "id": "sha256:b74d2e60ab7e435347f18e509af1912ec57a5f9c87e3dfad16b34e6955b19c09",
+        "id": "sha256:dd14d983f88dca86b45927f261c3eb6a86a7c7598906310576b1d12f13cc2a49",
         "kinds": ["MCPTool"],
         "properties": {
           "name": "get_schema",
@@ -97,12 +97,12 @@
           "capability_surface": ["database_access"],
           "has_injection_patterns": false,
           "has_cross_references": false,
-          "objectid": "sha256:b74d2e60ab7e435347f18e509af1912ec57a5f9c87e3dfad16b34e6955b19c09"
+          "objectid": "sha256:dd14d983f88dca86b45927f261c3eb6a86a7c7598906310576b1d12f13cc2a49"
         },
         "observation_domains": ["mcp:fixture:sha256:b45789dcd85e58b98e62ebc088142e4d53ffdc72f5e065fa12c4f9423db48267"]
       },
       {
-        "id": "sha256:fa81d5d056e9c410b7d7a181192e7c554afeb3506cfb3d45c536f529eead9004",
+        "id": "sha256:830cc71892be08c0d22b4b81a0c8218dce99a259b1e58266e49181c2721f204c",
         "kinds": ["MCPResource"],
         "properties": {
           "uri": "postgres://prod-db:5432/customers",
@@ -110,15 +110,15 @@
           "mime_type": "application/x-postgresql",
           "uri_scheme": "postgres",
           "sensitivity": "critical",
-          "objectid": "sha256:fa81d5d056e9c410b7d7a181192e7c554afeb3506cfb3d45c536f529eead9004"
+          "objectid": "sha256:830cc71892be08c0d22b4b81a0c8218dce99a259b1e58266e49181c2721f204c"
         },
         "observation_domains": ["mcp:fixture:sha256:b45789dcd85e58b98e62ebc088142e4d53ffdc72f5e065fa12c4f9423db48267"]
       }
     ],
     "edges": [
       {
-        "source": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
-        "target": "sha256:16b9d71dc29ae9b0a08dfce28111f94ac4822b9c332c1b098a69605a61280075",
+        "source": "sha256:01982d9064e7f525724523ad5890b3bd394982612b36b47f3dac06e74612eb7a",
+        "target": "sha256:94fe82c7b708c1ace4f6859270e17ee686a92de461b7e105c8933384a2c41fcb",
         "kind": "PROVIDES_TOOL",
         "source_kind": "MCPServer",
         "target_kind": "MCPTool",
@@ -132,8 +132,8 @@
         "observation_domains": ["mcp:fixture:sha256:b45789dcd85e58b98e62ebc088142e4d53ffdc72f5e065fa12c4f9423db48267"]
       },
       {
-        "source": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
-        "target": "sha256:7fbf3d2d2ff3008740aa14503eee760b91bc7f970a3aa359db64b4c5e6b8d8ce",
+        "source": "sha256:01982d9064e7f525724523ad5890b3bd394982612b36b47f3dac06e74612eb7a",
+        "target": "sha256:78f6d72fd069471e53ce8756234130c6a1b2ab9274a9f12502d2b2f448c9238d",
         "kind": "PROVIDES_TOOL",
         "source_kind": "MCPServer",
         "target_kind": "MCPTool",
@@ -147,8 +147,8 @@
         "observation_domains": ["mcp:fixture:sha256:b45789dcd85e58b98e62ebc088142e4d53ffdc72f5e065fa12c4f9423db48267"]
       },
       {
-        "source": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
-        "target": "sha256:b74d2e60ab7e435347f18e509af1912ec57a5f9c87e3dfad16b34e6955b19c09",
+        "source": "sha256:01982d9064e7f525724523ad5890b3bd394982612b36b47f3dac06e74612eb7a",
+        "target": "sha256:dd14d983f88dca86b45927f261c3eb6a86a7c7598906310576b1d12f13cc2a49",
         "kind": "PROVIDES_TOOL",
         "source_kind": "MCPServer",
         "target_kind": "MCPTool",
@@ -162,8 +162,8 @@
         "observation_domains": ["mcp:fixture:sha256:b45789dcd85e58b98e62ebc088142e4d53ffdc72f5e065fa12c4f9423db48267"]
       },
       {
-        "source": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
-        "target": "sha256:fa81d5d056e9c410b7d7a181192e7c554afeb3506cfb3d45c536f529eead9004",
+        "source": "sha256:01982d9064e7f525724523ad5890b3bd394982612b36b47f3dac06e74612eb7a",
+        "target": "sha256:830cc71892be08c0d22b4b81a0c8218dce99a259b1e58266e49181c2721f204c",
         "kind": "PROVIDES_RESOURCE",
         "source_kind": "MCPServer",
         "target_kind": "MCPResource",

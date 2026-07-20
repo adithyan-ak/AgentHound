@@ -83,6 +83,9 @@ func TestBuildTransportHTTP(t *testing.T) {
 	if st.Endpoint != "http://localhost:8080/mcp" {
 		t.Errorf("expected endpoint http://localhost:8080/mcp, got %s", st.Endpoint)
 	}
+	if !st.DisableStandaloneSSE {
+		t.Fatal("collector enumeration must disable the optional standalone SSE stream")
+	}
 }
 
 func TestBuildTransportHTTPInsecure(t *testing.T) {
@@ -269,6 +272,68 @@ func TestHeaderRoundTripper_SameHostUnchanged(t *testing.T) {
 	}
 	if gotCustom != "v" {
 		t.Errorf("X-Custom = %q, want %q", gotCustom, "v")
+	}
+}
+
+func TestHeaderRoundTripper_CanonicalizesEquivalentCaseVariants(t *testing.T) {
+	const credential = "Bearer same-value"
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if got := r.Header.Get("Authorization"); got != credential {
+			t.Errorf("Authorization = %q, want %q", got, credential)
+		}
+		if values := r.Header.Values("Authorization"); len(values) != 1 {
+			t.Errorf("Authorization values = %v, want one canonical field", values)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	client := &http.Client{Transport: headerRoundTripper{
+		base: &http.Transport{},
+		headers: map[string]string{
+			"Authorization": credential,
+			"authorization": credential,
+		},
+		origin: mustHTTPOrigin(t, server.URL),
+	}}
+	response, err := client.Get(server.URL)
+	if err != nil {
+		t.Fatalf("equivalent case variants failed: %v", err)
+	}
+	defer response.Body.Close()
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+}
+
+func TestHeaderRoundTripper_RejectsCanonicalConflictBeforeBaseTransport(t *testing.T) {
+	baseCalled := false
+	roundTripper := headerRoundTripper{
+		base: transportRoundTripFunc(func(*http.Request) (*http.Response, error) {
+			baseCalled = true
+			return &http.Response{
+				StatusCode: http.StatusNoContent,
+				Header:     make(http.Header),
+				Body:       http.NoBody,
+			}, nil
+		}),
+		headers: map[string]string{
+			"Authorization": "Bearer first-secret",
+			"authorization": "Basic second-secret",
+		},
+		origin: mustHTTPOrigin(t, "https://mcp.example/mcp"),
+	}
+	request, err := http.NewRequest(http.MethodPost, "https://mcp.example/mcp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := roundTripper.RoundTrip(request); err == nil || err.Error() != ambiguousServerProfileError {
+		t.Fatalf("RoundTrip error = %v, want fixed ambiguity", err)
+	}
+	if baseCalled {
+		t.Fatal("canonical header conflict reached the base transport")
 	}
 }
 

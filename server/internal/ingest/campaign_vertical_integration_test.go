@@ -98,15 +98,15 @@ func TestIntegrationCompiledCampaignExportProbeIngestPromotesOnlySourceAgent(t *
 		node(agentA, "AgentInstance", map[string]any{"name": "source agent"}),
 		node(agentB, "AgentInstance", map[string]any{"name": "other agent"}),
 		node(entryServer, "MCPServer", map[string]any{
-			"name": "entry", "transport": "http", "auth_method": "apiKey",
+			"name": "entry", "transport": "http", "endpoint": "https://entry.example/mcp", "auth_method": "apiKey",
 			"auth_assurance": "weak", "auth_evidence": "configured_credential",
 		}),
 		node(alternateServer, "MCPServer", map[string]any{
-			"name": "alternate entry", "transport": "http", "auth_method": "apiKey",
+			"name": "alternate entry", "transport": "http", "endpoint": "https://alternate.example/mcp", "auth_method": "apiKey",
 			"auth_assurance": "weak", "auth_evidence": "configured_credential",
 		}),
 		node(serverID, "MCPServer", map[string]any{
-			"name": "resource", "transport": "http", "auth_method": "bearer",
+			"name": "resource", "transport": "http", "endpoint": httpServer.URL, "auth_method": "bearer",
 			"auth_assurance": "moderate", "auth_evidence": "configured_credential",
 		}),
 		node(entryTool, "MCPTool", map[string]any{

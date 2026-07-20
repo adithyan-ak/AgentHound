@@ -202,6 +202,48 @@ configured `meta.origin` → validate →
 normalize → freeze pre-write totals → write → reconcile complete observation
 domains → post-process → freeze post-analysis totals → snapshot → publish.
 
+Origin admission is deliberately first. A host/realm mismatch returns
+`409 COLLECTION_REALM_MISMATCH`; a database marker that cannot be verified
+returns sanitized `503 STORAGE_BINDING_UNAVAILABLE`. Neither case creates a
+scan-audit row, records a campaign rejection, starts lifecycle state, or writes
+the graph. Origin fields are non-secret provenance, not authentication or a
+signature.
+
+For `MCPServer` and `A2AAgent`, configured method, assurance, and evidence must
+form a producer-compatible tuple. Method-to-assurance mapping is fixed;
+anonymous-probe evidence requires `none/unauthenticated`, local-process
+evidence requires `unknown/unknown`, known authenticated/custom methods require
+configured-credential or declared-scheme evidence, and the documented
+unknown/query/declaration/local cases remain accepted. A configured
+`none/unauthenticated` declaration with `unknown` or declared-scheme evidence
+is accepted as provenance but remains fail-closed during analysis.
+Even an exact raw configured anonymous-probe tuple remains fail-closed unless
+it is selected through validated observed provenance; it does not independently
+produce an unauthenticated effective assurance or exact weakness score.
+
+For `MCPServer`, if any `observed_auth_*` field is present,
+method/assurance/evidence are required as one canonical tuple. Runtime
+declaration-only evidence is rejected because the MCP collector does not emit
+it as an observation. The anonymous tuple is valid only for a reachable HTTP
+server and must be exactly
+`none/unauthenticated/anonymous_probe_succeeded`; partial, unreachable, or
+contradictory anonymous claims return `400 VALIDATION_ERROR`. Current
+unreachable (`unknown/unknown/unknown`), stdio
+(`unknown/unknown/local_process`), and unknown configured-request-material
+(`unknown/unknown/configured_credential`) tuples remain valid.
+
+For `A2AAgent`, observed authentication is accepted only as the atomic exact
+tuple `none/unauthenticated/anonymous_probe_succeeded` with
+`auth_probe_method=get_task_nonexistent` and
+`auth_probe_status=anonymous_protocol_access`, with `auth_probe_detail` equal
+to `task_not_found_v1` or `task_not_found_v0_3`. The lookup is read-only and
+must return the protocol's exact nonexistent-task result. Method, status, and
+bounded fixed detail are required together. Card access, protected responses,
+and inconclusive results may publish the canonical diagnostic triple but must
+omit `observed_auth_*`; orphan positive status, partial/wrongly typed metadata,
+arbitrary status/detail, generic observed tuples, and observed fields on a
+non-positive status return `400 VALIDATION_ERROR`.
+
 Campaign submissions add a scenario-specific prevalidation stage immediately
 after generic validation and before normalization, `BeginScan`, graph writes, or
 coverage reconciliation. Both positive and negative artifacts must match their

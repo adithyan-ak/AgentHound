@@ -2,11 +2,16 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +19,7 @@ import (
 
 	configmodule "github.com/adithyan-ak/agenthound/modules/config"
 	"github.com/adithyan-ak/agenthound/sdk/collector"
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
@@ -49,6 +55,302 @@ func TestMCPCollectorOfficialStreamableHandlerUsesCanonicalScope(t *testing.T) {
 		if len(node.ObservationDomains) != 1 || node.ObservationDomains[0] != wantKey {
 			t.Fatalf("node %s domains = %v, want [%s]", node.ID, node.ObservationDomains, wantKey)
 		}
+		if ingest.ConcreteNodeKind(node.Kinds) == "MCPServer" {
+			for property, want := range map[string]any{
+				"observed_auth_method":    string(common.AuthNone),
+				"observed_auth_assurance": string(common.AuthAssuranceUnauthenticated),
+				"observed_auth_evidence":  common.AuthEvidenceAnonymousProbeSucceeded,
+			} {
+				if got := node.Properties[property]; got != want {
+					t.Errorf("header-free %s = %v, want %v", property, got, want)
+				}
+			}
+		}
+	}
+}
+
+func TestMCPCollectorBoundsStreamableSessionDeleteByPerServerTimeout(t *testing.T) {
+	server := mcp.NewServer(
+		&mcp.Implementation{Name: "bounded-close-server", Version: "1.0.0"},
+		nil,
+	)
+	mcpHandler := mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return server },
+		&mcp.StreamableHTTPOptions{JSONResponse: true},
+	)
+	deleteStarted := make(chan struct{}, 1)
+	deleteCanceled := make(chan struct{}, 1)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodDelete {
+			mcpHandler.ServeHTTP(w, request)
+			return
+		}
+		deleteStarted <- struct{}{}
+		<-request.Context().Done()
+		deleteCanceled <- struct{}{}
+	}))
+	defer httpServer.Close()
+
+	const serverTimeout = 100 * time.Millisecond
+	type collectResult struct {
+		data *ingest.IngestData
+		err  error
+	}
+	finished := make(chan collectResult, 1)
+	started := time.Now()
+	go func() {
+		data, err := NewMCPCollector(
+			WithTimeout(serverTimeout),
+			WithInitTimeout(serverTimeout),
+		).Collect(context.Background(), collector.CollectOptions{
+			TargetURL: httpServer.URL,
+			ScanID:    "bounded-session-delete",
+		})
+		finished <- collectResult{data: data, err: err}
+	}()
+
+	var result collectResult
+	select {
+	case result = <-finished:
+	case <-time.After(time.Second):
+		// Unblock the pre-fix behavior so this regression fails promptly without
+		// leaving a hanging test server or collector goroutine behind.
+		httpServer.CloseClientConnections()
+		result = <-finished
+		t.Fatal("Collect outlived the public per-server timeout while session DELETE was stalled")
+	}
+	if elapsed := time.Since(started); elapsed > 750*time.Millisecond {
+		t.Fatalf("Collect took %v with a %v per-server timeout", elapsed, serverTimeout)
+	}
+	if result.err != nil {
+		t.Fatalf("Collect: %v", result.err)
+	}
+	if result.data == nil || result.data.Meta.Collection == nil ||
+		result.data.Meta.Collection.State != ingest.OutcomeComplete {
+		t.Fatalf("bounded cleanup changed successful enumeration: %+v", result.data)
+	}
+	select {
+	case <-deleteStarted:
+	default:
+		t.Fatal("stateful MCP session DELETE was not attempted")
+	}
+	select {
+	case <-deleteCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("stalled session DELETE was not canceled by the per-server deadline")
+	}
+}
+
+func TestMCPCollectorCookieGatedInitializeCannotClaimAnonymous(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "cookie-gated-server", Version: "1.0.0"}, nil)
+	mcpHandler := mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return server },
+		&mcp.StreamableHTTPOptions{JSONResponse: true},
+	)
+	const cookieValue = "session=COOKIE-GATED-OPAQUE-VALUE"
+	var accepted atomic.Int64
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Cookie") != cookieValue {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		accepted.Add(1)
+		mcpHandler.ServeHTTP(w, request)
+	}))
+	defer httpServer.Close()
+
+	configPath := filepath.Join(t.TempDir(), "claude_desktop_config.json")
+	configDocument := map[string]any{
+		"mcpServers": map[string]any{
+			"cookie-gated": map[string]any{
+				"url": httpServer.URL,
+				"headers": map[string]string{
+					"Cookie": cookieValue,
+				},
+			},
+		},
+	}
+	encoded, err := json.Marshal(configDocument)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(configPath, encoded, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	result, err := NewMCPCollector().Collect(context.Background(), collector.CollectOptions{
+		ConfigPath: configPath,
+		ScanID:     "cookie-gated-auth-truth",
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if accepted.Load() == 0 {
+		t.Fatal("configured Cookie did not reach the real MCP Initialize handler")
+	}
+	if result.Meta.Collection == nil {
+		t.Fatal("cookie-gated collection omitted collection metadata")
+	}
+	initializeComplete := false
+	for _, outcome := range result.Meta.Collection.Outcomes {
+		if outcome.Method == "initialize" && outcome.State == ingest.OutcomeComplete {
+			initializeComplete = true
+			break
+		}
+	}
+	if !initializeComplete {
+		t.Fatalf("cookie-gated Initialize was not complete: %+v", result.Meta.Collection)
+	}
+
+	var observedServer *ingest.Node
+	for i := range result.Graph.Nodes {
+		if ingest.ConcreteNodeKind(result.Graph.Nodes[i].Kinds) == "MCPServer" {
+			observedServer = &result.Graph.Nodes[i]
+			break
+		}
+	}
+	if observedServer == nil {
+		t.Fatal("cookie-gated collection emitted no MCPServer")
+	}
+	if got := observedServer.Properties["observed_auth_method"]; got != string(common.AuthUnknown) {
+		t.Fatalf("cookie-gated observed method = %v, want unknown", got)
+	}
+	if got := observedServer.Properties["observed_auth_assurance"]; got != string(common.AuthAssuranceUnknown) {
+		t.Fatalf("cookie-gated observed assurance = %v, want unknown", got)
+	}
+	if got := observedServer.Properties["observed_auth_evidence"]; got != common.AuthEvidenceConfiguredCredential {
+		t.Fatalf("cookie-gated observed evidence = %v, want configured credential", got)
+	}
+
+	serialized, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if strings.Contains(string(serialized), cookieValue) {
+		t.Fatalf("cookie material leaked into collection artifact: %s", serialized)
+	}
+}
+
+func TestMCPCollectorPreservesSharedHostPerTargetDomain(t *testing.T) {
+	servers := make([]*httptest.Server, 0, 2)
+	targets := make([]string, 0, 2)
+	for i := 0; i < 2; i++ {
+		server := mcp.NewServer(
+			&mcp.Implementation{Name: "shared-host-server", Version: "1.0.0"},
+			nil,
+		)
+		httpServer := httptest.NewServer(mcp.NewStreamableHTTPHandler(
+			func(*http.Request) *mcp.Server { return server },
+			&mcp.StreamableHTTPOptions{JSONResponse: true},
+		))
+		servers = append(servers, httpServer)
+		targets = append(targets, httpServer.URL)
+	}
+	for _, server := range servers {
+		defer server.Close()
+	}
+
+	result, err := NewMCPCollector().Collect(
+		context.Background(),
+		collector.CollectOptions{TargetURLs: targets, ScanID: "shared-host-targets"},
+	)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	wantDomains := map[string]bool{
+		mcpCoverageKey(ServerSpec{Transport: "http", URL: targets[0]}): true,
+		mcpCoverageKey(ServerSpec{Transport: "http", URL: targets[1]}): true,
+	}
+	observedDomains := make(map[string]bool)
+	for _, node := range result.Graph.Nodes {
+		if ingest.ConcreteNodeKind(node.Kinds) != "Host" ||
+			len(node.ObservationDomains) != 1 {
+			continue
+		}
+		domain := node.ObservationDomains[0]
+		if wantDomains[domain] {
+			observedDomains[domain] = true
+		}
+	}
+	if len(observedDomains) != 2 {
+		t.Fatalf("shared host contributions = %v, want one per MCP target", observedDomains)
+	}
+}
+
+func TestMCPContributionDedupPreservesDistinctSameOwnerFragments(t *testing.T) {
+	base := ingest.Edge{
+		Source: "server", Kind: "RUNS_ON", Target: "host",
+		SourceKind: "MCPServer", TargetKind: "Host",
+		ObservationDomains: []string{"mcp:target:sha256:owner"},
+		Properties:         map[string]any{"confidence": 1.0},
+	}
+	exactKey, exactComparable := mcpEdgeContributionDedupKey(base)
+	duplicateKey, duplicateComparable := mcpEdgeContributionDedupKey(base)
+	changed := base
+	changed.Properties = map[string]any{"confidence": 0.5}
+	changedKey, changedComparable := mcpEdgeContributionDedupKey(changed)
+	if !exactComparable || !duplicateComparable || !changedComparable {
+		t.Fatal("canonical collector contributions were not comparable")
+	}
+	if exactKey != duplicateKey {
+		t.Fatal("exact same-owner contribution was not deduplicated")
+	}
+	if exactKey == changedKey {
+		t.Fatal("conflicting same-owner fragment would be collapsed before writer validation")
+	}
+}
+
+func TestMCPCollectorOmitsUnknownResourceSize(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "resource-size-server", Version: "1.0.0"}, nil)
+	server.AddResource(&mcp.Resource{
+		URI:  "file:///unknown-size.txt",
+		Name: "unknown-size",
+	}, nil)
+	server.AddResource(&mcp.Resource{
+		URI:  "file:///known-size.txt",
+		Name: "known-size",
+		Size: 42,
+	}, nil)
+	httpServer := httptest.NewServer(mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return server },
+		&mcp.StreamableHTTPOptions{JSONResponse: true},
+	))
+	defer httpServer.Close()
+
+	data, err := NewMCPCollector().Collect(context.Background(), collector.CollectOptions{
+		TargetURL: httpServer.URL,
+		ScanID:    "resource-size-presence",
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	resources := make(map[string]ingest.Node)
+	var observedServer *ingest.Node
+	for _, node := range data.Graph.Nodes {
+		for _, kind := range node.Kinds {
+			if kind == "MCPResource" {
+				uri, ok := node.Properties["uri"].(string)
+				if !ok {
+					t.Fatalf("resource URI is not a string: %+v", node.Properties)
+				}
+				resources[uri] = node
+			}
+			if kind == "MCPServer" {
+				copy := node
+				observedServer = &copy
+			}
+		}
+	}
+	if observedServer == nil || observedServer.Properties["has_tasks_capability"] != false {
+		t.Fatalf("absent raw tasks key was not represented as false: %+v", observedServer)
+	}
+	unknown := resources["file:///unknown-size.txt"]
+	if _, exists := unknown.Properties["size"]; exists {
+		t.Fatalf("unknown wire size was fabricated: %+v", unknown.Properties)
+	}
+	known := resources["file:///known-size.txt"]
+	if got := known.Properties["size"]; got != int64(42) {
+		t.Fatalf("known wire size = %#v, want int64(42)", got)
 	}
 }
 
@@ -263,11 +565,319 @@ func TestComputeServerID(t *testing.T) {
 		}
 		first := serverIdentityForSpec(spec1)
 		second := serverIdentityForSpec(spec2)
-		if first.Scheme != ingest.MCPStdioIdentitySchemeV2 ||
-			second.Scheme != ingest.MCPStdioIdentitySchemeV2 {
-			t.Fatalf("reordered definitions must use ordered v2 identity: %+v %+v", first, second)
+		if first.Scheme != ingest.MCPStdioIdentitySchemeV3 ||
+			second.Scheme != ingest.MCPStdioIdentitySchemeV3 {
+			t.Fatalf("reordered definitions must use hashed-argv v3 identity: %+v %+v", first, second)
 		}
 	})
+}
+
+func TestCollapseServerSpecsPreservesHarmlessAliasesAndRejectsAuthAmbiguity(t *testing.T) {
+	alpha := ServerSpec{
+		Name: "alpha", ConfiguredNames: []string{"alpha"}, Configured: true,
+		Transport: "stdio", Command: "node", Args: []string{"server.js"},
+		Env: map[string]string{"API_KEY": "same-secret"},
+	}
+	beta := alpha
+	beta.Name = "beta"
+	beta.ConfiguredNames = []string{"beta"}
+
+	forward := collapseServerSpecs([]ServerSpec{beta, alpha})
+	reverse := collapseServerSpecs([]ServerSpec{alpha, beta})
+	if !reflect.DeepEqual(forward, reverse) {
+		t.Fatalf("alias collapse depends on input order:\nforward=%+v\nreverse=%+v", forward, reverse)
+	}
+	if len(forward) != 1 || forward[0].Ambiguity != "" {
+		t.Fatalf("identical aliases did not collapse safely: %+v", forward)
+	}
+	if want := []string{"alpha", "beta"}; !reflect.DeepEqual(forward[0].ConfiguredNames, want) {
+		t.Fatalf("configured names = %v, want %v", forward[0].ConfiguredNames, want)
+	}
+
+	conflicting := beta
+	conflicting.Env = map[string]string{"API_KEY": "different-secret"}
+	ambiguous := collapseServerSpecs([]ServerSpec{alpha, conflicting})
+	if len(ambiguous) != 1 || ambiguous[0].Ambiguity != ambiguousServerProfileError {
+		t.Fatalf("credential-distinct aliases were not rejected deterministically: %+v", ambiguous)
+	}
+	if strings.Contains(ambiguous[0].Ambiguity, "same-secret") ||
+		strings.Contains(ambiguous[0].Ambiguity, "different-secret") {
+		t.Fatalf("ambiguity diagnostic leaked credential material: %q", ambiguous[0].Ambiguity)
+	}
+}
+
+func TestCollapseServerSpecsCanonicalizesHTTPHeaderProfiles(t *testing.T) {
+	const sharedCredential = "Bearer same-case-insensitive-value"
+	alpha := ServerSpec{
+		Name: "alpha", ConfiguredNames: []string{"alpha"}, Configured: true,
+		Transport: "http", URL: "https://mcp.example/mcp",
+		Headers: map[string]string{"Authorization": sharedCredential},
+	}
+	beta := alpha
+	beta.Name = "beta"
+	beta.ConfiguredNames = []string{"beta"}
+	beta.Headers = map[string]string{"authorization": sharedCredential}
+
+	forward := collapseServerSpecs([]ServerSpec{alpha, beta})
+	reverse := collapseServerSpecs([]ServerSpec{beta, alpha})
+	if !reflect.DeepEqual(forward, reverse) {
+		t.Fatalf("case-insensitive alias collapse depends on input order:\nforward=%+v\nreverse=%+v", forward, reverse)
+	}
+	if len(forward) != 1 || forward[0].Ambiguity != "" {
+		t.Fatalf("equivalent case-variant headers did not collapse: %+v", forward)
+	}
+	if want := map[string]string{"Authorization": sharedCredential}; !reflect.DeepEqual(forward[0].Headers, want) {
+		t.Fatalf("canonical headers = %#v, want %#v", forward[0].Headers, want)
+	}
+
+	conflictingAlias := beta
+	conflictingAlias.Headers = map[string]string{"authorization": "Basic distinct-value"}
+	conflicting := collapseServerSpecs([]ServerSpec{alpha, conflictingAlias})
+	if len(conflicting) != 1 || conflicting[0].Ambiguity != ambiguousServerProfileError {
+		t.Fatalf("case-variant alias conflict was not rejected: %+v", conflicting)
+	}
+
+	conflictingEntry := alpha
+	conflictingEntry.Headers = map[string]string{
+		"Authorization": "Bearer first-secret",
+		"authorization": "Basic second-secret",
+	}
+	withinEntry := collapseServerSpecs([]ServerSpec{conflictingEntry})
+	if len(withinEntry) != 1 || withinEntry[0].Ambiguity != ambiguousServerProfileError {
+		t.Fatalf("one-entry canonical header conflict was not rejected: %+v", withinEntry)
+	}
+}
+
+func TestMCPCollectorRejectsCanonicalHeaderConflictsBeforeNetworkAndDoesNotLeak(t *testing.T) {
+	var requests atomic.Int64
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer httpServer.Close()
+
+	for _, test := range []struct {
+		name    string
+		headers string
+	}{
+		{
+			name: "canonical then lowercase",
+			headers: `"Authorization":"Bearer sk-FIRST-CANONICAL-SECRET-123456789",` +
+				`"authorization":"Basic sk-SECOND-LOWERCASE-SECRET-123456789"`,
+		},
+		{
+			name: "lowercase then canonical",
+			headers: `"authorization":"Basic sk-SECOND-LOWERCASE-SECRET-123456789",` +
+				`"Authorization":"Bearer sk-FIRST-CANONICAL-SECRET-123456789"`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "claude_desktop_config.json")
+			document := fmt.Sprintf(
+				`{"mcpServers":{"conflict":{"url":%q,"headers":{%s}}}}`,
+				httpServer.URL,
+				test.headers,
+			)
+			if err := os.WriteFile(configPath, []byte(document), 0o600); err != nil {
+				t.Fatalf("write conflicting config: %v", err)
+			}
+
+			result, err := NewMCPCollector().Collect(
+				context.Background(),
+				collector.CollectOptions{
+					ConfigPath: configPath,
+					ScanID:     "canonical-header-conflict",
+				},
+			)
+			if err != nil {
+				t.Fatalf("Collect should preserve a typed failed outcome: %v", err)
+			}
+			if requests.Load() != 0 {
+				t.Fatalf("ambiguous headers reached the network: requests=%d", requests.Load())
+			}
+			if len(result.Graph.Nodes) != 0 || len(result.Graph.Edges) != 0 {
+				t.Fatalf("ambiguous header profile emitted graph facts: %+v", result.Graph)
+			}
+			if result.Meta.Collection == nil || result.Meta.Collection.State == ingest.OutcomeComplete {
+				t.Fatalf("ambiguous header profile reported complete: %+v", result.Meta.Collection)
+			}
+			serialized, err := json.Marshal(result)
+			if err != nil {
+				t.Fatalf("marshal failed outcome: %v", err)
+			}
+			for _, secret := range []string{
+				"sk-FIRST-CANONICAL-SECRET-123456789",
+				"sk-SECOND-LOWERCASE-SECRET-123456789",
+			} {
+				if strings.Contains(string(serialized), secret) {
+					t.Fatalf("failed outcome leaked %q: %s", secret, serialized)
+				}
+			}
+			if !strings.Contains(string(serialized), ambiguousServerProfileError) {
+				t.Fatalf("fixed ambiguity diagnostic missing: %s", serialized)
+			}
+		})
+	}
+}
+
+func TestMCPCollectorAmbiguousAliasesDoNotExecuteOrLeak(t *testing.T) {
+	tempDir := t.TempDir()
+	marker := filepath.Join(tempDir, "must-not-exist")
+	configPath := filepath.Join(tempDir, "claude_desktop_config.json")
+	configDocument := map[string]any{
+		"mcpServers": map[string]any{
+			"alpha": map[string]any{
+				"command": "/bin/sh",
+				"args":    []string{"-c", "touch " + marker},
+				"env":     map[string]string{"API_KEY": "sk-AMBIGUOUS-ALPHA-123456789"},
+			},
+			"beta": map[string]any{
+				"command": "/bin/sh",
+				"args":    []string{"-c", "touch " + marker},
+				"env":     map[string]string{"API_KEY": "sk-AMBIGUOUS-BETA-123456789"},
+			},
+		},
+	}
+	encoded, err := json.Marshal(configDocument)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(configPath, encoded, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	result, err := NewMCPCollector().Collect(context.Background(), collector.CollectOptions{
+		ConfigPath: configPath,
+		ScanID:     "ambiguous-aliases",
+	})
+	if err != nil {
+		t.Fatalf("Collect should return a typed failed outcome, got: %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("ambiguous profile was executed; marker stat = %v", err)
+	}
+	if len(result.Graph.Nodes) != 0 || len(result.Graph.Edges) != 0 {
+		t.Fatalf("ambiguous access path emitted arbitrary graph facts: %+v", result.Graph)
+	}
+	if result.Meta.Collection == nil || result.Meta.Collection.State == ingest.OutcomeComplete {
+		t.Fatalf("ambiguous collection reported complete: %+v", result.Meta.Collection)
+	}
+	serialized, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	for _, secret := range []string{
+		"sk-AMBIGUOUS-ALPHA-123456789", "sk-AMBIGUOUS-BETA-123456789", "touch " + marker,
+	} {
+		if strings.Contains(string(serialized), secret) {
+			t.Fatalf("ambiguous outcome leaked %q: %s", secret, serialized)
+		}
+	}
+	if !strings.Contains(string(serialized), ambiguousServerProfileError) {
+		t.Fatalf("ambiguity diagnostic missing from typed outcome: %s", serialized)
+	}
+}
+
+func TestMCPCollectorSanitizesLiveHTTPURLSecretsAcrossEntireEnvelope(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "safe-server", Version: "1.0.0"}, nil)
+	const userinfoSecret = "sk-RAW-LIVE-USERINFO-SECRET-123456789"
+	const querySecret = "sk-RAW-LIVE-QUERY-SECRET-123456789"
+	const fragmentSecret = "RAW-LIVE-FRAGMENT-SECRET"
+	var requests atomic.Int64
+	var standaloneGETs atomic.Int64
+	var queryObserved atomic.Bool
+	var userinfoObserved atomic.Bool
+	httpServer := httptest.NewServer(mcp.NewStreamableHTTPHandler(
+		func(request *http.Request) *mcp.Server {
+			requests.Add(1)
+			if request.Method == http.MethodGet {
+				standaloneGETs.Add(1)
+			}
+			if request.URL.Query().Get("api_key") == querySecret {
+				queryObserved.Store(true)
+			}
+			username, password, ok := request.BasicAuth()
+			if ok && username == "agenthound-user" && password == userinfoSecret {
+				userinfoObserved.Store(true)
+			}
+			return server
+		},
+		&mcp.StreamableHTTPOptions{JSONResponse: true},
+	))
+	defer httpServer.Close()
+	rawTarget := fmt.Sprintf(
+		"http://agenthound-user:%s@%s?api_key=%s#%s",
+		userinfoSecret,
+		strings.TrimPrefix(httpServer.URL, "http://"),
+		querySecret,
+		fragmentSecret,
+	)
+
+	result, err := NewMCPCollector().Collect(context.Background(), collector.CollectOptions{
+		TargetURL: rawTarget,
+		ScanID:    "safe-live-http",
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if requests.Load() == 0 || !queryObserved.Load() || !userinfoObserved.Load() {
+		t.Fatalf(
+			"live request proof failed: requests=%d query=%v userinfo=%v",
+			requests.Load(),
+			queryObserved.Load(),
+			userinfoObserved.Load(),
+		)
+	}
+	if standaloneGETs.Load() != 0 {
+		t.Fatalf("collector opened %d optional standalone SSE requests", standaloneGETs.Load())
+	}
+	if result.Meta.Collection == nil || result.Meta.Collection.State != ingest.OutcomeComplete {
+		t.Fatalf("credential-bearing live collection was not complete: %+v", result.Meta.Collection)
+	}
+	serialized, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	for _, forbidden := range []string{
+		userinfoSecret,
+		querySecret,
+		fragmentSecret,
+		"agenthound-user",
+		"api_key=",
+	} {
+		if strings.Contains(string(serialized), forbidden) {
+			t.Fatalf("live MCP envelope leaked %q: %s", forbidden, serialized)
+		}
+	}
+	servers := make([]ingest.Node, 0)
+	for _, node := range result.Graph.Nodes {
+		for _, kind := range node.Kinds {
+			if kind == "MCPServer" {
+				servers = append(servers, node)
+				break
+			}
+		}
+	}
+	if len(servers) != 1 {
+		t.Fatalf("MCPServer nodes = %d, want one", len(servers))
+	}
+	if got := servers[0].Properties["endpoint"]; got != httpServer.URL {
+		t.Fatalf("safe endpoint = %v, want %q", got, httpServer.URL)
+	}
+	if servers[0].Properties["status"] != "reachable" {
+		t.Fatalf("live target was not reachable: %+v", servers[0].Properties)
+	}
+	if servers[0].Properties["endpoint_userinfo_redacted"] != true ||
+		servers[0].Properties["endpoint_query_redacted"] != true ||
+		servers[0].Properties["endpoint_fragment_redacted"] != true {
+		t.Fatalf("redaction markers missing: %+v", servers[0].Properties)
+	}
+	if got := servers[0].Properties["observed_auth_method"]; got != string(common.AuthBasic) {
+		t.Fatalf("userinfo-backed access auth = %v, want basic", got)
+	}
+	if got := servers[0].Properties["observed_auth_evidence"]; got != common.AuthEvidenceConfiguredCredential {
+		t.Fatalf("userinfo-backed access evidence = %v, want configured credential", got)
+	}
 }
 
 func TestMCPCoverageKeyUsesCanonicalServerIdentity(t *testing.T) {

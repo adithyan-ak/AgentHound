@@ -268,7 +268,7 @@ All node IDs are deterministic, content-based SHA-256 hashes. This ensures ident
 | Node Kind | ID Computation |
 |-----------|----------------|
 | `MCPServer` (HTTP) | `SHA-256("MCPServer:" + transport + ":" + endpoint)` |
-| `MCPServer` (stdio) | SHA-256 over domain-separated, length-framed command plus **order-preserving argv** (`mcp_stdio_v2_ordered`) |
+| `MCPServer` (stdio) | SHA-256 over domain-separated, length-framed command plus the ordered domain-separated SHA-256 digest of each exact argv element (`mcp_stdio_v3_hashed_argv`) |
 | `MCPTool` | `SHA-256("MCPTool:" + server_id + ":" + tool_name)` |
 | `MCPResource` | `SHA-256("MCPResource:" + server_id + ":" + resource_uri)` |
 | `MCPPrompt` | `SHA-256("MCPPrompt:" + server_id + ":" + prompt_name)` |
@@ -278,14 +278,37 @@ All node IDs are deterministic, content-based SHA-256 hashes. This ensures ident
 | `ConfigFile` | `SHA-256("ConfigFile:" + absolute_path)` |
 | `Host` | `SHA-256("Host:" + hostname_or_ip)` |
 | `Identity` | `SHA-256("Identity:" + parent_id + ":" + type)` |
-| `Credential` | `SHA-256("Credential:" + source + ":" + name)` |
+| `Credential` (Config) | `SHA-256("Credential:" + coverage_key + ":" + server_id + ":" + source + ":" + location + ":" + name)`; cross-service correlation uses `value_hash`, not object-ID merging |
 | `InstructionFile` | `SHA-256("InstructionFile:" + absolute_path)` |
 | `AIModel` | `SHA-256("AIModel:" + instance_id + ":" + model_name)` |
 
 **Critical invariant:** Config and MCP collectors use the same identity helper.
-Stdio identity preserves argv order and bytes because process behavior can
-depend on them. Artifacts and graph writes use only this ordered identity; no
-stdio alias or migration contract exists.
+Stdio identity preserves argv order and exact bytes because process behavior can
+depend on them, but raw argv never needs to leave collector memory. Each raw
+argument is first hashed with the `mcp_stdio_argument_v1` domain and length
+framing; the ordered digest strings are then framed into the v3 server ID. The
+artifact publishes those `arg_hashes` and `arg_count`, allowing strict ingest to
+recompute the parent ID while rejecting a raw `args` property. Argument hashes
+are deterministic identifiers, not password hashing or encryption: a consumer
+can guess low-entropy argv offline.
+
+HTTP v1 identity still uses the untouched raw configured URL in collector
+memory. Public `endpoint` removes user-info, query, and fragment; marker
+properties disclose that components were removed without disclosing their
+bytes. Consequently an HTTP ID whose input contained hidden components is not
+recomputable from the public endpoint, and the validator deliberately does not
+pretend otherwise. Strict ingest requires every present public endpoint to
+already be the valid canonical sanitized display value, regardless of the
+transport discriminator, and an HTTP server must publish one. Stdio servers use
+`command` and omit `endpoint`. Authoritative MCP servers require canonical
+string transport `http` or `stdio`; property-neutral `reference_only` nodes are
+exempt. The fixed invalid placeholder is not accepted. Raw `args`, `env`,
+`headers`, and `url` properties are rejected on every authoritative MCP server,
+even when `transport` is missing or malformed.
+
+Stdio v2 artifacts are not aliases for v3 and are rejected. Recollect with the
+current collector after resetting an older pre-release projection; child MCP
+tool/resource/prompt IDs also change because they include the parent ID.
 
 ---
 
@@ -446,8 +469,8 @@ New modules emit nodes and edges via the `sdk/ingest` wire format:
     "identity_schemes": [{
       "entity_kind": "MCPServer",
       "transport": "stdio",
-      "scheme": "mcp_stdio_v2_ordered",
-      "version": 2
+      "scheme": "mcp_stdio_v3_hashed_argv",
+      "version": 3
     }]
   },
   "graph": {

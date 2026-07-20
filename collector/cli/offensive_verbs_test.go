@@ -520,7 +520,7 @@ func TestRunExtract_DryRun(t *testing.T) {
 	out := &bytes.Buffer{}
 	rootCmd.SetOut(out)
 	rootCmd.SetErr(out)
-	rootCmd.SetArgs([]string{"extract", "sha256:node-id", "--type", "mock-extract",
+	rootCmd.SetArgs([]string{"extract", ingest.ComputeNodeID("AIModel", "test-instance", "test-model"), "--type", "mock-extract",
 		"--artifact", tmpArtifact, "--engagement-id", "TEST"})
 	err := rootCmd.Execute()
 	if err != nil {
@@ -542,9 +542,19 @@ func TestRunExtract_NoModule(t *testing.T) {
 	_ = extractCmd.Flags().Set("type", "not-registered-extractor")
 	_ = extractCmd.Flags().Set("engagement-id", "TEST")
 	_ = extractCmd.Flags().Set("artifact", "/tmp/fake.gguf")
-	err := runExtract(extractCmd, []string{"sha256:node-id"})
+	err := runExtract(extractCmd, []string{ingest.ComputeNodeID("AIModel", "test-instance", "test-model")})
 	if err == nil || !strings.Contains(err.Error(), "no extractor registered") {
 		t.Errorf("expected 'no extractor registered' error, got: %v", err)
+	}
+}
+
+func TestRunExtractRejectsNonCanonicalSourceNodeID(t *testing.T) {
+	out := &bytes.Buffer{}
+	extractCmd.SetOut(out)
+	extractCmd.SetErr(out)
+	err := runExtract(extractCmd, []string{"hf://example/model.gguf"})
+	if err == nil || !strings.Contains(err.Error(), "<source-node-id> must be sha256:") {
+		t.Fatalf("invalid source node ID error = %v", err)
 	}
 }
 

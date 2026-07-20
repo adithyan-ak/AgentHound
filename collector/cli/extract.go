@@ -66,6 +66,11 @@ func init() {
 
 func runExtract(cmd *cobra.Command, args []string) error {
 	sourceNodeID := args[0]
+	if !ingest.IsCanonicalNodeID(sourceNodeID) {
+		return errors.New(
+			"extract: <source-node-id> must be sha256: followed by 64 lowercase hexadecimal characters",
+		)
+	}
 	kind, _ := cmd.Flags().GetString("type")
 	artifactPath, _ := cmd.Flags().GetString("artifact")
 	commit, _ := cmd.Flags().GetBool("commit")

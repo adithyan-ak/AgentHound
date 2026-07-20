@@ -58,11 +58,11 @@ func (o ToolObserver) Observe(ctx context.Context, spec ServerSpec, toolName str
 	deadline, _ := observeCtx.Deadline()
 	transport, err := o.transport(spec, deadline)
 	if err != nil {
-		return ToolObservation{}, fmt.Errorf("mcp tool observer: build transport: %w", err)
+		return ToolObservation{}, safeToolObserverError("transport setup", err)
 	}
 	session, err := o.connect(observeCtx, transport)
 	if err != nil {
-		return ToolObservation{}, fmt.Errorf("mcp tool observer: initialize: %w", err)
+		return ToolObservation{}, safeToolObserverError("initialize", err)
 	}
 	defer func() { _ = session.Close() }()
 
@@ -75,7 +75,7 @@ func (o ToolObserver) Observe(ctx context.Context, spec ServerSpec, toolName str
 	items := 0
 	for tool, iterErr := range session.Tools(observeCtx, nil) {
 		if iterErr != nil {
-			return ToolObservation{}, fmt.Errorf("mcp tool observer: tools/list: %w", iterErr)
+			return ToolObservation{}, safeToolObserverError("tools/list", iterErr)
 		}
 		if items >= o.MaxItems {
 			return ToolObservation{}, fmt.Errorf("mcp tool observer: tools/list exceeded safety limit of %d items", o.MaxItems)
@@ -94,6 +94,21 @@ func (o ToolObserver) Observe(ctx context.Context, spec ServerSpec, toolName str
 		return ToolObservation{}, fmt.Errorf("mcp tool observer: tool %q not found", toolName)
 	}
 	return observed, nil
+}
+
+// safeToolObserverError deliberately drops arbitrary transport and protocol
+// error text because SDK errors can echo target URLs, credentials, or remote
+// JSON-RPC messages. The two standard context sentinels are preserved without
+// retaining any of the surrounding, potentially sensitive error chain.
+func safeToolObserverError(stage string, err error) error {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("mcp tool observer: %s failed: %w", stage, context.DeadlineExceeded)
+	case errors.Is(err, context.Canceled):
+		return fmt.Errorf("mcp tool observer: %s failed: %w", stage, context.Canceled)
+	default:
+		return fmt.Errorf("mcp tool observer: %s failed; details omitted", stage)
+	}
 }
 
 func (o ToolObserver) connect(ctx context.Context, transport mcpsdk.Transport) (*mcpsdk.ClientSession, error) {

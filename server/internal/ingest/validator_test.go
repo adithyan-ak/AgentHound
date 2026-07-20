@@ -50,7 +50,8 @@ func validIngestData() *ingest.IngestData {
 				{
 					ID: "sha256:aaa", Kinds: []string{"MCPServer"},
 					Properties: map[string]any{
-						"name": "srv", "auth_method": "unknown",
+						"name": "srv", "transport": "http", "endpoint": "https://mcp.example",
+						"auth_method":    "unknown",
 						"auth_assurance": "unknown", "auth_evidence": "unknown",
 					},
 					ObservationDomains: []string{scope},
@@ -313,6 +314,412 @@ func TestValidatorRejectsLocalProcessAnonymousTuple(t *testing.T) {
 	)
 }
 
+func TestValidatorConfiguredAuthTupleMatrix(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		method    string
+		assurance string
+		evidence  string
+	}{
+		{name: "unknown no observation", method: "unknown", assurance: "unknown", evidence: "unknown"},
+		{name: "unknown ambiguous declaration", method: "unknown", assurance: "unknown", evidence: "declared_security_scheme"},
+		{name: "unknown MCP query credential", method: "unknown", assurance: "unknown", evidence: "configured_credential"},
+		{name: "unknown local process", method: "unknown", assurance: "unknown", evidence: "local_process"},
+		{name: "unconfirmed none", method: "none", assurance: "unauthenticated", evidence: "unknown"},
+		{name: "A2A empty security requirement", method: "none", assurance: "unauthenticated", evidence: "declared_security_scheme"},
+		{name: "confirmed anonymous", method: "none", assurance: "unauthenticated", evidence: "anonymous_probe_succeeded"},
+		{name: "basic configured", method: "basic", assurance: "weak", evidence: "configured_credential"},
+		{name: "basic declared", method: "basic", assurance: "weak", evidence: "declared_security_scheme"},
+		{name: "api key configured", method: "apiKey", assurance: "weak", evidence: "configured_credential"},
+		{name: "api key declared", method: "apiKey", assurance: "weak", evidence: "declared_security_scheme"},
+		{name: "bearer configured", method: "bearer", assurance: "moderate", evidence: "configured_credential"},
+		{name: "bearer declared", method: "bearer", assurance: "moderate", evidence: "declared_security_scheme"},
+		{name: "oauth configured", method: "oauth", assurance: "strong", evidence: "configured_credential"},
+		{name: "oauth declared", method: "oauth", assurance: "strong", evidence: "declared_security_scheme"},
+		{name: "oidc configured", method: "oidc", assurance: "strong", evidence: "configured_credential"},
+		{name: "oidc declared", method: "oidc", assurance: "strong", evidence: "declared_security_scheme"},
+		{name: "mtls configured", method: "mtls", assurance: "strong", evidence: "configured_credential"},
+		{name: "mtls declared", method: "mtls", assurance: "strong", evidence: "declared_security_scheme"},
+		{name: "custom configured", method: "custom", assurance: "unknown", evidence: "configured_credential"},
+		{name: "custom declared", method: "custom", assurance: "unknown", evidence: "declared_security_scheme"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			errs := validateAuthProperties(map[string]any{
+				"auth_method": test.method, "auth_assurance": test.assurance,
+				"auth_evidence": test.evidence,
+			}, 0)
+			if len(errs) != 0 {
+				t.Fatalf("producer-compatible configured tuple rejected: %+v", errs)
+			}
+		})
+	}
+}
+
+func TestValidatorRejectsConfiguredAuthEvidenceMismatch(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		method    string
+		assurance string
+		evidence  string
+	}{
+		{name: "bearer cannot claim anonymous probe", method: "bearer", assurance: "moderate", evidence: "anonymous_probe_succeeded"},
+		{name: "none cannot claim configured credential", method: "none", assurance: "unauthenticated", evidence: "configured_credential"},
+		{name: "unknown cannot claim anonymous probe", method: "unknown", assurance: "unknown", evidence: "anonymous_probe_succeeded"},
+		{name: "basic cannot use unknown evidence", method: "basic", assurance: "weak", evidence: "unknown"},
+		{name: "custom cannot use unknown evidence", method: "custom", assurance: "unknown", evidence: "unknown"},
+		{name: "oauth cannot claim local process", method: "oauth", assurance: "strong", evidence: "local_process"},
+		{name: "none cannot claim local process", method: "none", assurance: "unauthenticated", evidence: "local_process"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			errs := validateAuthProperties(map[string]any{
+				"auth_method": test.method, "auth_assurance": test.assurance,
+				"auth_evidence": test.evidence,
+			}, 0)
+			if len(errs) == 0 {
+				t.Fatal("contradictory configured auth evidence was accepted")
+			}
+			if errs[len(errs)-1].Path != "graph.nodes[0].properties.auth_evidence" {
+				t.Fatalf("error path = %q, want auth_evidence", errs[len(errs)-1].Path)
+			}
+		})
+	}
+}
+
+func TestValidatorRejectsConfiguredAuthMethodAssuranceMismatch(t *testing.T) {
+	for _, test := range []struct {
+		method, assurance string
+	}{
+		{method: "none", assurance: "unknown"},
+		{method: "unknown", assurance: "unauthenticated"},
+		{method: "basic", assurance: "moderate"},
+		{method: "apiKey", assurance: "strong"},
+		{method: "bearer", assurance: "weak"},
+		{method: "oauth", assurance: "moderate"},
+		{method: "oidc", assurance: "weak"},
+		{method: "mtls", assurance: "moderate"},
+		{method: "custom", assurance: "strong"},
+	} {
+		t.Run(test.method+"_"+test.assurance, func(t *testing.T) {
+			errs := validateAuthProperties(map[string]any{
+				"auth_method": test.method, "auth_assurance": test.assurance,
+				"auth_evidence": "configured_credential",
+			}, 0)
+			if len(errs) == 0 {
+				t.Fatal("configured method/assurance mismatch was accepted")
+			}
+		})
+	}
+}
+
+func TestValidatorAcceptsObservedMCPAuthTupleMatrix(t *testing.T) {
+	tests := []struct {
+		name      string
+		transport string
+		status    string
+		method    string
+		assurance string
+		evidence  string
+	}{
+		{
+			name: "reachable anonymous HTTP", transport: "http", status: "reachable",
+			method: "none", assurance: "unauthenticated", evidence: "anonymous_probe_succeeded",
+		},
+		{
+			name: "reachable bearer HTTP", transport: "http", status: "reachable",
+			method: "bearer", assurance: "moderate", evidence: "configured_credential",
+		},
+		{
+			name: "reachable query credential with unknown scheme", transport: "http", status: "reachable",
+			method: "unknown", assurance: "unknown", evidence: "configured_credential",
+		},
+		{
+			name: "unreachable network server", transport: "http", status: "unreachable",
+			method: "unknown", assurance: "unknown", evidence: "unknown",
+		},
+		{
+			name: "reachable local process", transport: "stdio", status: "reachable",
+			method: "unknown", assurance: "unknown", evidence: "local_process",
+		},
+		{
+			name: "reachable custom authorization", transport: "http", status: "reachable",
+			method: "custom", assurance: "unknown", evidence: "configured_credential",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			properties := map[string]any{
+				"transport":               test.transport,
+				"status":                  test.status,
+				"observed_auth_method":    test.method,
+				"observed_auth_assurance": test.assurance,
+				"observed_auth_evidence":  test.evidence,
+			}
+			if errs := validateObservedMCPAuthProperties(properties, 0); len(errs) != 0 {
+				t.Fatalf("valid observed tuple rejected: %+v", errs)
+			}
+		})
+	}
+}
+
+func TestValidatorRejectsPartialOrContradictoryObservedMCPAuthTuple(t *testing.T) {
+	tests := []struct {
+		name       string
+		properties map[string]any
+	}{
+		{
+			name: "partial tuple",
+			properties: map[string]any{
+				"transport": "http", "status": "reachable",
+				"observed_auth_method": "none",
+			},
+		},
+		{
+			name: "method assurance mismatch",
+			properties: map[string]any{
+				"transport": "http", "status": "reachable",
+				"observed_auth_method": "bearer", "observed_auth_assurance": "strong",
+				"observed_auth_evidence": "configured_credential",
+			},
+		},
+		{
+			name: "forged anonymous result on unreachable server",
+			properties: map[string]any{
+				"transport": "http", "status": "unreachable",
+				"observed_auth_method": "none", "observed_auth_assurance": "unauthenticated",
+				"observed_auth_evidence": "anonymous_probe_succeeded",
+			},
+		},
+		{
+			name: "none from configured credential",
+			properties: map[string]any{
+				"transport": "http", "status": "reachable",
+				"observed_auth_method": "none", "observed_auth_assurance": "unauthenticated",
+				"observed_auth_evidence": "configured_credential",
+			},
+		},
+		{
+			name: "local process claim on HTTP",
+			properties: map[string]any{
+				"transport": "http", "status": "reachable",
+				"observed_auth_method": "unknown", "observed_auth_assurance": "unknown",
+				"observed_auth_evidence": "local_process",
+			},
+		},
+		{
+			name: "credential observation claim on stdio",
+			properties: map[string]any{
+				"transport": "stdio", "status": "reachable",
+				"observed_auth_method": "bearer", "observed_auth_assurance": "moderate",
+				"observed_auth_evidence": "configured_credential",
+			},
+		},
+		{
+			name: "unsupported evidence",
+			properties: map[string]any{
+				"transport": "http", "status": "reachable",
+				"observed_auth_method": "none", "observed_auth_assurance": "unauthenticated",
+				"observed_auth_evidence": "caller_said_so",
+			},
+		},
+		{
+			name: "configured-only declaration presented as observation",
+			properties: map[string]any{
+				"transport": "http", "status": "reachable",
+				"observed_auth_method": "bearer", "observed_auth_assurance": "moderate",
+				"observed_auth_evidence": "declared_security_scheme",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if errs := validateObservedMCPAuthProperties(test.properties, 0); len(errs) == 0 {
+				t.Fatal("contradictory observed tuple was accepted")
+			}
+		})
+	}
+}
+
+func TestValidatorEnforcesObservedMCPAuthTupleAtIngestBoundary(t *testing.T) {
+	data := validIngestData()
+	data.Graph.Nodes[0].Properties["status"] = "reachable"
+	data.Graph.Nodes[0].Properties["observed_auth_method"] = "none"
+	data.Graph.Nodes[0].Properties["observed_auth_assurance"] = "unauthenticated"
+	data.Graph.Nodes[0].Properties["observed_auth_evidence"] = "anonymous_probe_succeeded"
+	if err := NewValidator().Validate(data); err != nil {
+		t.Fatalf("valid observed anonymous tuple rejected: %v", err)
+	}
+
+	delete(data.Graph.Nodes[0].Properties, "observed_auth_assurance")
+	assertValidationError(
+		t,
+		NewValidator().Validate(data),
+		"graph.nodes[0].properties.observed_auth_assurance",
+	)
+}
+
+func TestValidatorAcceptsConfirmedObservedA2AAuthTuple(t *testing.T) {
+	properties := map[string]any{
+		"observed_auth_method":    "none",
+		"observed_auth_assurance": "unauthenticated",
+		"observed_auth_evidence":  "anonymous_probe_succeeded",
+		"auth_probe_method":       "get_task_nonexistent",
+		"auth_probe_status":       "anonymous_protocol_access",
+		"auth_probe_detail":       "task_not_found_v1",
+	}
+	if errs := validateObservedA2AAuthProperties(properties, 0); len(errs) != 0 {
+		t.Fatalf("confirmed read-only A2A observation rejected: %+v", errs)
+	}
+
+	// Non-positive probes may preserve diagnostics, but no observed auth tuple.
+	if errs := validateObservedA2AAuthProperties(map[string]any{
+		"auth_probe_method": "get_task_nonexistent",
+		"auth_probe_status": "authentication_required",
+		"auth_probe_detail": "http_unauthorized",
+	}, 0); len(errs) != 0 {
+		t.Fatalf("metadata-only protected A2A probe rejected: %+v", errs)
+	}
+}
+
+func TestValidatorAcceptsCanonicalA2AProbeDetailVocabulary(t *testing.T) {
+	detailsByStatus := map[string][]string{
+		"anonymous_protocol_access": {"task_not_found_v1", "task_not_found_v0_3"},
+		"authentication_required":   {"http_unauthorized", "http_forbidden"},
+		"unknown": {
+			"no_preferred_interface", "nonconformant_preferred_interface",
+			"unsupported_protocol_binding", "unsupported_protocol_version",
+			"invalid_preferred_interface_url", "query_interface_not_probeable",
+			"cross_origin_interface",
+			"random_id_generation_failed", "request_encoding_failed",
+			"request_creation_failed", "transport_unavailable", "timeout",
+			"context_canceled", "transport_error", "redirect_response",
+			"unexpected_http_status", "non_json_response", "response_too_large",
+			"malformed_jsonrpc_response", "unexpected_jsonrpc_response",
+			"response_id_mismatch", "non_task_not_found_error",
+		},
+	}
+	for status, details := range detailsByStatus {
+		for _, detail := range details {
+			t.Run(status+"_"+detail, func(t *testing.T) {
+				properties := map[string]any{
+					"auth_probe_method": "get_task_nonexistent",
+					"auth_probe_status": status,
+					"auth_probe_detail": detail,
+				}
+				if status == "anonymous_protocol_access" {
+					properties["observed_auth_method"] = "none"
+					properties["observed_auth_assurance"] = "unauthenticated"
+					properties["observed_auth_evidence"] = "anonymous_probe_succeeded"
+				}
+				if errs := validateObservedA2AAuthProperties(properties, 0); len(errs) != 0 {
+					t.Fatalf("canonical A2A probe diagnostic rejected: %+v", errs)
+				}
+			})
+		}
+	}
+}
+
+func TestValidatorRejectsUnprovenObservedA2AAuth(t *testing.T) {
+	valid := func() map[string]any {
+		return map[string]any{
+			"observed_auth_method":    "none",
+			"observed_auth_assurance": "unauthenticated",
+			"observed_auth_evidence":  "anonymous_probe_succeeded",
+			"auth_probe_method":       "get_task_nonexistent",
+			"auth_probe_status":       "anonymous_protocol_access",
+			"auth_probe_detail":       "task_not_found_v0_3",
+		}
+	}
+	for _, test := range []struct {
+		name     string
+		wantPath string
+		mutate   func(map[string]any)
+	}{
+		{name: "partial observed tuple", wantPath: "observed_auth_assurance", mutate: func(p map[string]any) { delete(p, "observed_auth_assurance") }},
+		{name: "missing probe method", wantPath: "auth_probe_method", mutate: func(p map[string]any) { delete(p, "auth_probe_method") }},
+		{name: "missing probe status", wantPath: "auth_probe_status", mutate: func(p map[string]any) { delete(p, "auth_probe_status") }},
+		{name: "missing probe detail", wantPath: "auth_probe_detail", mutate: func(p map[string]any) { delete(p, "auth_probe_detail") }},
+		{name: "orphan positive status", wantPath: "observed_auth_method", mutate: func(p map[string]any) {
+			delete(p, "observed_auth_method")
+			delete(p, "observed_auth_assurance")
+			delete(p, "observed_auth_evidence")
+		}},
+		{name: "arbitrary status", wantPath: "auth_probe_status", mutate: func(p map[string]any) { p["auth_probe_status"] = "looks_open" }},
+		{name: "wrong status type", wantPath: "auth_probe_status", mutate: func(p map[string]any) { p["auth_probe_status"] = 200 }},
+		{name: "wrong method type", wantPath: "auth_probe_method", mutate: func(p map[string]any) { p["auth_probe_method"] = true }},
+		{name: "wrong detail type", wantPath: "auth_probe_detail", mutate: func(p map[string]any) { p["auth_probe_detail"] = []string{"task_not_found_v1"} }},
+		{name: "wrong observed type", wantPath: "observed_auth_method", mutate: func(p map[string]any) { p["observed_auth_method"] = false }},
+		{name: "unbounded detail", wantPath: "auth_probe_detail", mutate: func(p map[string]any) { p["auth_probe_detail"] = "raw server response" }},
+		{name: "protected response cannot prove anonymous", wantPath: "observed_auth_method", mutate: func(p map[string]any) {
+			p["auth_probe_status"] = "authentication_required"
+			p["auth_probe_detail"] = "http_unauthorized"
+		}},
+		{name: "unknown response cannot prove anonymous", wantPath: "observed_auth_method", mutate: func(p map[string]any) {
+			p["auth_probe_status"] = "unknown"
+			p["auth_probe_detail"] = "timeout"
+		}},
+		{name: "card fetch is not an auth probe", wantPath: "auth_probe_method", mutate: func(p map[string]any) { p["auth_probe_method"] = "agent_card_get" }},
+		{name: "declared scheme is not observed access", wantPath: "observed_auth_evidence", mutate: func(p map[string]any) { p["observed_auth_evidence"] = "declared_security_scheme" }},
+		{name: "generic authenticated tuple is not supported", wantPath: "observed_auth_method", mutate: func(p map[string]any) {
+			p["observed_auth_method"] = "bearer"
+			p["observed_auth_assurance"] = "moderate"
+			p["observed_auth_evidence"] = "configured_credential"
+		}},
+		{name: "non-positive unknown tuple must be omitted", wantPath: "observed_auth_method", mutate: func(p map[string]any) {
+			p["observed_auth_method"] = "unknown"
+			p["observed_auth_assurance"] = "unknown"
+			p["observed_auth_evidence"] = "unknown"
+			p["auth_probe_status"] = "unknown"
+			p["auth_probe_detail"] = "timeout"
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			properties := valid()
+			test.mutate(properties)
+			errs := validateObservedA2AAuthProperties(properties, 0)
+			if len(errs) == 0 {
+				t.Fatal("unproven A2A observed authentication was accepted")
+			}
+			wantPath := "graph.nodes[0].properties." + test.wantPath
+			for _, fieldErr := range errs {
+				if fieldErr.Path == wantPath {
+					return
+				}
+			}
+			t.Fatalf("errors = %+v, want path %q", errs, wantPath)
+		})
+	}
+}
+
+func TestValidatorEnforcesObservedA2AAuthAtIngestBoundary(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "valid_a2a_scan.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var data ingest.IngestData
+	if err := json.Unmarshal(raw, &data); err != nil {
+		t.Fatal(err)
+	}
+	data.Meta.Version = ingest.CurrentVersion
+	data.Meta.Origin = testCollectionOrigin
+	properties := data.Graph.Nodes[0].Properties
+	properties["observed_auth_method"] = "none"
+	properties["observed_auth_assurance"] = "unauthenticated"
+	properties["observed_auth_evidence"] = "anonymous_probe_succeeded"
+	properties["auth_probe_method"] = "get_task_nonexistent"
+	properties["auth_probe_status"] = "anonymous_protocol_access"
+	properties["auth_probe_detail"] = "task_not_found_v1"
+	if err := NewValidator().Validate(&data); err != nil {
+		t.Fatalf("valid A2A runtime observation rejected: %v", err)
+	}
+
+	delete(properties, "auth_probe_status")
+	assertValidationError(
+		t,
+		NewValidator().Validate(&data),
+		"graph.nodes[0].properties.auth_probe_status",
+	)
+}
+
 func TestValidatorAcceptsDeclaredObservationDomains(t *testing.T) {
 	v := NewValidator()
 	data := validIngestData()
@@ -508,11 +915,11 @@ func TestValidatorRejectsRemovedGraphCompatibilityProperties(t *testing.T) {
 	}
 }
 
-func TestValidatorRequiresOrderedStdioIdentity(t *testing.T) {
+func TestValidatorRequiresHashedArgvStdioIdentity(t *testing.T) {
 	t.Run("metadata", func(t *testing.T) {
 		data := validIngestData()
-		data.Meta.IdentitySchemes[0].Scheme = "mcp_stdio_v1_sorted"
-		data.Meta.IdentitySchemes[0].Version = 1
+		data.Meta.IdentitySchemes[0].Scheme = ingest.MCPStdioIdentitySchemeV2
+		data.Meta.IdentitySchemes[0].Version = 2
 		assertValidationError(
 			t,
 			NewValidator().Validate(data),
@@ -522,6 +929,7 @@ func TestValidatorRequiresOrderedStdioIdentity(t *testing.T) {
 	t.Run("node", func(t *testing.T) {
 		data := validIngestData()
 		data.Graph.Nodes[0].Properties["transport"] = "stdio"
+		delete(data.Graph.Nodes[0].Properties, "endpoint")
 		data.Graph.Nodes[0].Properties["id_scheme"] = "unordered"
 		assertValidationError(
 			t,
@@ -534,21 +942,21 @@ func TestValidatorRequiresOrderedStdioIdentity(t *testing.T) {
 func TestValidatorRequiresCurrentStdioParentAndChildIDs(t *testing.T) {
 	currentData := func() *ingest.IngestData {
 		data := validIngestData()
-		parentID := ingest.ComputeMCPServerID(
+		identity := ingest.ResolveMCPServerIdentity(
 			"stdio",
 			"npx",
 			"-y",
 			"@modelcontextprotocol/server-postgres",
 		)
+		parentID := identity.ObjectID
 		childID := ingest.ComputeNodeID("MCPTool", parentID, "tool")
 		data.Graph.Nodes[0].ID = parentID
 		data.Graph.Nodes[0].Properties["transport"] = "stdio"
+		delete(data.Graph.Nodes[0].Properties, "endpoint")
 		data.Graph.Nodes[0].Properties["command"] = "npx"
-		data.Graph.Nodes[0].Properties["args"] = []string{
-			"-y",
-			"@modelcontextprotocol/server-postgres",
-		}
-		data.Graph.Nodes[0].Properties["id_scheme"] = ingest.MCPStdioIdentitySchemeV2
+		data.Graph.Nodes[0].Properties["arg_hashes"] = identity.ArgumentHashes
+		data.Graph.Nodes[0].Properties["arg_count"] = len(identity.ArgumentHashes)
+		data.Graph.Nodes[0].Properties["id_scheme"] = ingest.MCPStdioIdentitySchemeV3
 		data.Graph.Nodes[1].ID = childID
 		data.Graph.Edges[0].Source = parentID
 		data.Graph.Edges[0].Target = childID
@@ -570,6 +978,204 @@ func TestValidatorRequiresCurrentStdioParentAndChildIDs(t *testing.T) {
 		data.Graph.Edges[0].Target = data.Graph.Nodes[1].ID
 		assertValidationError(t, NewValidator().Validate(data), "graph.edges[0].target")
 	})
+}
+
+func TestValidatorRejectsRawOrUnverifiableStdioArgv(t *testing.T) {
+	currentData := func() *ingest.IngestData {
+		data := validIngestData()
+		identity := ingest.ResolveMCPServerIdentity("stdio", "node", "server.js", "--token=secret")
+		data.Graph.Nodes[0].ID = identity.ObjectID
+		data.Graph.Nodes[0].Properties["transport"] = "stdio"
+		delete(data.Graph.Nodes[0].Properties, "endpoint")
+		data.Graph.Nodes[0].Properties["command"] = "node"
+		data.Graph.Nodes[0].Properties["arg_hashes"] = identity.ArgumentHashes
+		data.Graph.Nodes[0].Properties["arg_count"] = len(identity.ArgumentHashes)
+		data.Graph.Nodes[0].Properties["id_scheme"] = ingest.MCPStdioIdentitySchemeV3
+		data.Graph.Nodes[1].ID = ingest.ComputeNodeID("MCPTool", identity.ObjectID, "tool")
+		data.Graph.Edges[0].Source = identity.ObjectID
+		data.Graph.Edges[0].Target = data.Graph.Nodes[1].ID
+		return data
+	}
+
+	if err := NewValidator().Validate(currentData()); err != nil {
+		t.Fatalf("hashed argv contract rejected: %v", err)
+	}
+	t.Run("raw args", func(t *testing.T) {
+		data := currentData()
+		data.Graph.Nodes[0].Properties["args"] = []string{"--token=secret"}
+		assertValidationError(t, NewValidator().Validate(data), "graph.nodes[0].properties.args")
+	})
+	t.Run("missing hashes", func(t *testing.T) {
+		data := currentData()
+		delete(data.Graph.Nodes[0].Properties, "arg_hashes")
+		assertValidationError(t, NewValidator().Validate(data), "graph.nodes[0].properties.arg_hashes")
+	})
+	t.Run("null hashes", func(t *testing.T) {
+		data := currentData()
+		data.Graph.Nodes[0].Properties["arg_hashes"] = nil
+		data.Graph.Nodes[0].Properties["arg_count"] = 0
+		assertValidationError(t, NewValidator().Validate(data), "graph.nodes[0].properties.arg_hashes")
+	})
+	t.Run("non canonical hash", func(t *testing.T) {
+		data := currentData()
+		data.Graph.Nodes[0].Properties["arg_hashes"] = []string{"sha256:not-a-digest"}
+		data.Graph.Nodes[0].Properties["arg_count"] = 1
+		assertValidationError(t, NewValidator().Validate(data), "graph.nodes[0].properties.arg_hashes[0]")
+	})
+	t.Run("count mismatch", func(t *testing.T) {
+		data := currentData()
+		data.Graph.Nodes[0].Properties["arg_count"] = 1
+		assertValidationError(t, NewValidator().Validate(data), "graph.nodes[0].properties.arg_count")
+	})
+	t.Run("missing count", func(t *testing.T) {
+		data := currentData()
+		delete(data.Graph.Nodes[0].Properties, "arg_count")
+		assertValidationError(t, NewValidator().Validate(data), "graph.nodes[0].properties.arg_count")
+	})
+	t.Run("id mismatch", func(t *testing.T) {
+		data := currentData()
+		data.Graph.Nodes[0].ID = ingest.ComputeNodeID("wrong", "stdio-server")
+		data.Graph.Edges[0].Source = data.Graph.Nodes[0].ID
+		assertValidationError(t, NewValidator().Validate(data), "graph.nodes[0].id")
+	})
+}
+
+func TestValidatorRejectsRawMCPTransportPropertiesWithoutTrustingTransport(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		transport any
+		set       bool
+	}{
+		{name: "http", transport: "http", set: true},
+		{name: "omitted"},
+		{name: "ill typed", transport: map[string]any{"type": "stdio"}, set: true},
+	} {
+		t.Run("args with "+test.name+" transport", func(t *testing.T) {
+			data := validIngestData()
+			if test.set {
+				data.Graph.Nodes[0].Properties["transport"] = test.transport
+			} else {
+				delete(data.Graph.Nodes[0].Properties, "transport")
+			}
+			if test.transport == "http" {
+				data.Graph.Nodes[0].Properties["endpoint"] = "https://mcp.example/api"
+			}
+			data.Graph.Nodes[0].Properties["args"] = []string{"--token=secret"}
+			assertValidationError(
+				t,
+				NewValidator().Validate(data),
+				"graph.nodes[0].properties.args",
+			)
+		})
+	}
+
+	for _, test := range []struct {
+		property string
+		value    any
+	}{
+		{property: "args", value: []string{"--token=secret"}},
+		{property: "env", value: map[string]string{"API_KEY": "secret"}},
+		{property: "headers", value: map[string]string{"Authorization": "Bearer secret"}},
+		{property: "url", value: "https://mcp.example/api?token=secret"},
+	} {
+		t.Run("raw "+test.property, func(t *testing.T) {
+			data := validIngestData()
+			data.Graph.Nodes[0].Properties[test.property] = test.value
+			assertValidationError(
+				t,
+				NewValidator().Validate(data),
+				"graph.nodes[0].properties."+test.property,
+			)
+		})
+	}
+}
+
+func TestValidatorRequiresCanonicalSanitizedHTTPMCPEndpoint(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		endpoint any
+		set      bool
+	}{
+		{name: "missing"},
+		{name: "ill typed", endpoint: []string{"https://mcp.example/api"}, set: true},
+		{name: "userinfo", endpoint: "https://user:secret@mcp.example/api", set: true},
+		{name: "query", endpoint: "https://mcp.example/api?token=secret", set: true},
+		{name: "fragment", endpoint: "https://mcp.example/api#secret", set: true},
+		{name: "relative", endpoint: "/api?token=secret", set: true},
+		{name: "malformed", endpoint: "https://%zz", set: true},
+		{name: "invalid raw text", endpoint: "token=secret", set: true},
+		{name: "invalid placeholder", endpoint: ingest.InvalidHTTPEndpointDisplay, set: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data := validIngestData()
+			data.Graph.Nodes[0].Properties["transport"] = "http"
+			if test.set {
+				data.Graph.Nodes[0].Properties["endpoint"] = test.endpoint
+			} else {
+				delete(data.Graph.Nodes[0].Properties, "endpoint")
+			}
+			assertValidationError(
+				t,
+				NewValidator().Validate(data),
+				"graph.nodes[0].properties.endpoint",
+			)
+		})
+	}
+}
+
+func TestValidatorSanitizesMCPEndpointWithoutTrustingTransport(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		transport any
+		set       bool
+	}{
+		{name: "omitted"},
+		{name: "ill typed", transport: map[string]any{"type": "http"}, set: true},
+		{name: "noncanonical string", transport: "HTTP", set: true},
+	} {
+		t.Run("raw endpoint with "+test.name+" transport", func(t *testing.T) {
+			data := validIngestData()
+			if test.set {
+				data.Graph.Nodes[0].Properties["transport"] = test.transport
+			} else {
+				delete(data.Graph.Nodes[0].Properties, "transport")
+			}
+			data.Graph.Nodes[0].Properties["endpoint"] = "https://mcp.example/api?token=secret"
+			assertValidationError(
+				t,
+				NewValidator().Validate(data),
+				"graph.nodes[0].properties.endpoint",
+			)
+		})
+
+		t.Run("clean endpoint still rejects "+test.name+" transport", func(t *testing.T) {
+			data := validIngestData()
+			if test.set {
+				data.Graph.Nodes[0].Properties["transport"] = test.transport
+			} else {
+				delete(data.Graph.Nodes[0].Properties, "transport")
+			}
+			data.Graph.Nodes[0].Properties["endpoint"] = "https://mcp.example/api"
+			assertValidationError(
+				t,
+				NewValidator().Validate(data),
+				"graph.nodes[0].properties.transport",
+			)
+		})
+	}
+}
+
+func TestValidatorAcceptsSanitizedHTTPMCPEndpointWithRedactionMarkers(t *testing.T) {
+	data := validIngestData()
+	data.Graph.Nodes[0].Properties["transport"] = "http"
+	data.Graph.Nodes[0].Properties["endpoint"] = "https://mcp.example/api"
+	data.Graph.Nodes[0].Properties["endpoint_userinfo_redacted"] = true
+	data.Graph.Nodes[0].Properties["endpoint_query_redacted"] = true
+	data.Graph.Nodes[0].Properties["endpoint_fragment_redacted"] = true
+
+	if err := NewValidator().Validate(data); err != nil {
+		t.Fatalf("canonical sanitized HTTP MCP endpoint rejected: %v", err)
+	}
 }
 
 func TestValidatorRejectsBadType(t *testing.T) {
@@ -674,7 +1280,8 @@ func TestValidatorAcceptsDocumentedUmbrellaAndRepeatedConcreteRows(t *testing.T)
 			ID:    data.Graph.Nodes[0].ID,
 			Kinds: []string{"MCPServer"},
 			Properties: map[string]any{
-				"name": "same server", "auth_method": "unknown",
+				"name": "same server", "transport": "http", "endpoint": "https://mcp.example",
+				"auth_method":    "unknown",
 				"auth_assurance": "unknown", "auth_evidence": "unknown",
 			},
 			ObservationDomains: data.Graph.Nodes[0].ObservationDomains,

@@ -29,8 +29,8 @@
     "identity_schemes": [{
       "entity_kind": "MCPServer",
       "transport": "stdio",
-      "scheme": "mcp_stdio_v2_ordered",
-      "version": 2
+      "scheme": "mcp_stdio_v3_hashed_argv",
+      "version": 3
     }]
   },
   "graph": {
@@ -58,38 +58,38 @@
         "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
-        "id": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
+        "id": "sha256:01982d9064e7f525724523ad5890b3bd394982612b36b47f3dac06e74612eb7a",
         "kinds": ["MCPServer"],
         "properties": {
           "name": "postgres-server",
-          "endpoint": "npx",
           "transport": "stdio",
           "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-postgres"],
-          "id_scheme": "mcp_stdio_v2_ordered",
+          "arg_hashes": ["sha256:a01cf5b8e65799111f549b4245b226642e4fb78561e4a7bb738dab94f812c68a", "sha256:64274e858605926f9602c5b5a75dd19cc222cfb50c7101ab56bfeed597b6e023"],
+          "arg_count": 2,
+          "id_scheme": "mcp_stdio_v3_hashed_argv",
           "auth_method": "apiKey",
           "auth_assurance": "weak",
           "auth_evidence": "configured_credential",
           "is_pinned": false,
-          "objectid": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6"
+          "objectid": "sha256:01982d9064e7f525724523ad5890b3bd394982612b36b47f3dac06e74612eb7a"
         },
         "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
-        "id": "sha256:564c3e9ef22e223e1530ecd9895e5f295dfa89ff080e7ad014d003dacbfb57dc",
+        "id": "sha256:21f860b0f2636c0ba484e91980cd69cd7a145b0d367b65e6648b1fab7fa288f7",
         "kinds": ["MCPServer"],
         "properties": {
           "name": "slack-server",
-          "endpoint": "npx",
           "transport": "stdio",
           "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-slack"],
-          "id_scheme": "mcp_stdio_v2_ordered",
+          "arg_hashes": ["sha256:a01cf5b8e65799111f549b4245b226642e4fb78561e4a7bb738dab94f812c68a", "sha256:b1da96905e7a7ac4f5b3c808fed25399301dda452469e09aa028face019408ab"],
+          "arg_count": 2,
+          "id_scheme": "mcp_stdio_v3_hashed_argv",
           "auth_method": "unknown",
           "auth_assurance": "unknown",
           "auth_evidence": "local_process",
           "is_pinned": false,
-          "objectid": "sha256:564c3e9ef22e223e1530ecd9895e5f295dfa89ff080e7ad014d003dacbfb57dc"
+          "objectid": "sha256:21f860b0f2636c0ba484e91980cd69cd7a145b0d367b65e6648b1fab7fa288f7"
         },
         "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
@@ -135,7 +135,7 @@
     "edges": [
       {
         "source": "sha256:55555669cfdb8a62247a7d5b857df9dfbac760df7330fdf454b07e422ea384d4",
-        "target": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
+        "target": "sha256:01982d9064e7f525724523ad5890b3bd394982612b36b47f3dac06e74612eb7a",
         "kind": "TRUSTS_SERVER",
         "source_kind": "AgentInstance",
         "target_kind": "MCPServer",
@@ -150,7 +150,7 @@
       },
       {
         "source": "sha256:55555669cfdb8a62247a7d5b857df9dfbac760df7330fdf454b07e422ea384d4",
-        "target": "sha256:564c3e9ef22e223e1530ecd9895e5f295dfa89ff080e7ad014d003dacbfb57dc",
+        "target": "sha256:21f860b0f2636c0ba484e91980cd69cd7a145b0d367b65e6648b1fab7fa288f7",
         "kind": "TRUSTS_SERVER",
         "source_kind": "AgentInstance",
         "target_kind": "MCPServer",
@@ -164,7 +164,7 @@
         "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
-        "source": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
+        "source": "sha256:01982d9064e7f525724523ad5890b3bd394982612b36b47f3dac06e74612eb7a",
         "target": "sha256:55ded6ce9a6992962ab8989d228fccd4a1ba9d2c8bf241bec3c5f8e9523f5397",
         "kind": "CONFIGURED_IN",
         "source_kind": "MCPServer",
@@ -179,7 +179,7 @@
         "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
-        "source": "sha256:564c3e9ef22e223e1530ecd9895e5f295dfa89ff080e7ad014d003dacbfb57dc",
+        "source": "sha256:21f860b0f2636c0ba484e91980cd69cd7a145b0d367b65e6648b1fab7fa288f7",
         "target": "sha256:55ded6ce9a6992962ab8989d228fccd4a1ba9d2c8bf241bec3c5f8e9523f5397",
         "kind": "CONFIGURED_IN",
         "source_kind": "MCPServer",
@@ -194,7 +194,7 @@
         "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
-        "source": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
+        "source": "sha256:01982d9064e7f525724523ad5890b3bd394982612b36b47f3dac06e74612eb7a",
         "target": "sha256:9c89f380dee67385c1a567e067f32a16db451bae2aa831957036955347773722",
         "kind": "AUTHENTICATES_WITH",
         "source_kind": "MCPServer",
@@ -224,7 +224,7 @@
         "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
-        "source": "sha256:80d8e94ff3aa0bbdfe526dbf5b251f69943ab4407328769e2e9e73d76df6d0b6",
+        "source": "sha256:01982d9064e7f525724523ad5890b3bd394982612b36b47f3dac06e74612eb7a",
         "target": "sha256:e064ba278c66ee6985b52020aba0cd6fc426a8a1369191333fd6fdae688acd3a",
         "kind": "RUNS_ON",
         "source_kind": "MCPServer",
@@ -239,7 +239,7 @@
         "observation_domains": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"]
       },
       {
-        "source": "sha256:564c3e9ef22e223e1530ecd9895e5f295dfa89ff080e7ad014d003dacbfb57dc",
+        "source": "sha256:21f860b0f2636c0ba484e91980cd69cd7a145b0d367b65e6648b1fab7fa288f7",
         "target": "sha256:e064ba278c66ee6985b52020aba0cd6fc426a8a1369191333fd6fdae688acd3a",
         "kind": "RUNS_ON",
         "source_kind": "MCPServer",
