@@ -175,6 +175,15 @@ func TestIntegrationSchemaInitRejectsLegacyUnfingerprintedOwners(t *testing.T) {
 	if err := InitSchema(ctx, driver); err != nil {
 		t.Fatalf("initialize current schema: %v", err)
 	}
+	baseline, err := readObservationFingerprintSchemaState(ctx, driver)
+	if err != nil {
+		t.Fatalf("read current schema baseline: %v", err)
+	}
+	if baseline.Version != graphSchemaVersion {
+		t.Fatalf("current schema baseline = %+v", baseline)
+	}
+	wantUnfingerprintedNodes := baseline.UnfingerprintedNodes + 1
+	wantUnfingerprintedRelationships := baseline.UnfingerprintedRelationships + 1
 
 	if _, err := integrationWrite(ctx, driver, `
 		MATCH (schema:SchemaVersion) DELETE schema
@@ -217,8 +226,8 @@ func TestIntegrationSchemaInitRejectsLegacyUnfingerprintedOwners(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Neo4j graph schema 1",
-		"1 authoritative nodes",
-		"1 raw relationships",
+		fmt.Sprintf("%d authoritative nodes", wantUnfingerprintedNodes),
+		fmt.Sprintf("%d raw relationships", wantUnfingerprintedRelationships),
 		"automatic upgrade to schema 2 cannot preserve shared-owner evidence safely",
 	} {
 		if !strings.Contains(err.Error(), want) {
@@ -230,8 +239,9 @@ func TestIntegrationSchemaInitRejectsLegacyUnfingerprintedOwners(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read rejected schema state: %v", err)
 	}
-	if state.Version != 1 || state.UnfingerprintedNodes != 1 ||
-		state.UnfingerprintedRelationships != 1 {
+	if state.Version != 1 ||
+		state.UnfingerprintedNodes != wantUnfingerprintedNodes ||
+		state.UnfingerprintedRelationships != wantUnfingerprintedRelationships {
 		t.Fatalf("rejected schema state = %+v", state)
 	}
 
