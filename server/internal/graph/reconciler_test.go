@@ -71,8 +71,15 @@ func TestReconcileObservationsRetiresOnlySelectedDomains(t *testing.T) {
 	if !ok {
 		t.Fatalf("retire query type = %T", calls[0].Args[0])
 	}
-	if !strings.Contains(retireQuery, "token IN $current_tokens") {
-		t.Fatal("current observation tokens must survive owner retirement")
+	for _, fragment := range []string{
+		"token IN $current_tokens",
+		"removed_facts_redundant",
+		"split(remaining, $fingerprint_separator)[1]",
+		"AND NOT removed_facts_redundant",
+	} {
+		if !strings.Contains(retireQuery, fragment) {
+			t.Fatalf("relationship retirement query missing %q:\n%s", fragment, retireQuery)
+		}
 	}
 	deleteQuery, ok := calls[3].Args[0].(string)
 	if !ok {
@@ -90,6 +97,10 @@ func TestReconcileObservationsRetiresOnlySelectedDomains(t *testing.T) {
 		"remaining_authoritative_tokens",
 		"size(old_authoritative_tokens) > 0",
 		"size(remaining_authoritative_tokens) = 0",
+		"removed_authoritative_domains",
+		"removed_facts_redundant",
+		"split(remaining, $fingerprint_separator)[1]",
+		"AND NOT removed_facts_redundant",
 		"SET n = {",
 		"observation_properties_complete: true",
 	} {
@@ -129,6 +140,9 @@ func TestReconcileDependencyEdgeRetiresWhenEitherDomainChanges(t *testing.T) {
 		if !strings.Contains(query, fragment) {
 			t.Fatalf("dependency reconciliation missing %q:\n%s", fragment, query)
 		}
+	}
+	if strings.Contains(query, "removed_facts_redundant") {
+		t.Fatalf("dependency retirement unexpectedly adopted any-owner transfer semantics:\n%s", query)
 	}
 	params, _ := calls[0].Args[1].(map[string]any)
 	if params["all_dependencies_semantics"] !=

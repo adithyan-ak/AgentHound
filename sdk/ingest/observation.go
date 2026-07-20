@@ -107,8 +107,9 @@ func TagObservationDomain(graph *GraphData, domain string) {
 }
 
 // MergeObservationDomains returns the sorted union of observation ownership
-// keys. Collectors use it when the same shared fact is emitted by more than one
-// target/config scope.
+// keys within one contribution. Collector aggregation must keep contributions
+// from distinct owner domains separate until the graph writer fingerprints
+// each owner independently.
 func MergeObservationDomains(groups ...[]string) []string {
 	seen := make(map[string]bool)
 	var merged []string

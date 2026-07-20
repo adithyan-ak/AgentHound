@@ -329,8 +329,10 @@ a stable root `coverage_key` and the complete `child_coverage_keys` active set.
 The server reconciles prior children omitted from that set as complete-empty.
 Targeted and non-exhaustive runs omit this field and cannot retire siblings.
 
-`submitted` counts input facts, `write_rows` counts Neo4j write-result rows
-(including matches of existing facts), and `graph_totals` freezes public
+`submitted` counts literal input contributions. `write_rows` counts unique
+logical nodes and relationships affected by successful Neo4j writes (including
+matches of existing facts); multiple owner or property-semantics contributions
+to the same database fact are counted once. `graph_totals` freezes public
 inventory before and after processing. A batch failure returns
 `500 INGEST_FAILED` with the same typed partial result under `error.details`,
 including committed write rows. The scan and global projection state are

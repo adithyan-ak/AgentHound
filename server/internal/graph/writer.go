@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 )
@@ -15,6 +16,19 @@ import (
 const defaultBatchSize = 1000
 
 const observationTokenSeparator = "\x1f"
+
+const (
+	observationFactFingerprintSeparator = "\x1e"
+	observationFactFingerprintsKey      = "observation_fact_fingerprints"
+)
+
+var observationVolatilePropertyKeys = []string{
+	"extracted_at",
+	"first_seen",
+	"last_seen",
+	"last_verified_at",
+	"scan_id",
+}
 
 // execFunc executes a single cypher batch. Real driver-backed instances use
 // driverExecBatch; tests inject an in-memory recorder to assert batching,
@@ -84,20 +98,31 @@ func (w *Writer) WriteObservationNodes(
 	if err := validateWriterNodes(nodes); err != nil {
 		return 0, err
 	}
-	return w.writeNodesBatched(ctx, nodes, scanID, completeDomains)
+	prepared, fingerprints, err := prepareObservationNodes(nodes)
+	if err != nil {
+		return 0, err
+	}
+	return w.writeNodesBatched(ctx, prepared, fingerprints, scanID, completeDomains)
 }
 
 func (w *Writer) writeNodesBatched(
 	ctx context.Context,
 	nodes []ingest.Node,
+	fingerprintsByNode map[string][]string,
 	scanID string,
 	completeDomains []string,
 ) (int, error) {
 	grouped := groupNodesByKindTuple(nodes)
-	total := 0
+	writtenIDs := make(map[string]bool, len(nodes))
 	completePrefixes := observationDomainPrefixes(completeDomains)
 
-	for tupleKey, group := range grouped {
+	tupleKeys := make([]string, 0, len(grouped))
+	for tupleKey := range grouped {
+		tupleKeys = append(tupleKeys, tupleKey)
+	}
+	sort.Strings(tupleKeys)
+	for _, tupleKey := range tupleKeys {
+		group := grouped[tupleKey]
 		cypher := nodeCypherForKindTuple(group.PrimaryKind, group.ExtraLabels)
 
 		for i := 0; i < len(group.Nodes); i += w.batchSize {
@@ -106,28 +131,35 @@ func (w *Writer) writeNodesBatched(
 
 			params := make([]map[string]any, len(batch))
 			for j, n := range batch {
+				properties := factProperties(n.Properties)
+				fingerprints := fingerprintsByNode[nodePreparationKey(n)]
 				params[j] = map[string]any{
-					"id":                          n.ID,
-					"properties":                  factProperties(n.Properties),
-					"observation_tokens":          observationTokens(n.ObservationDomains, scanID),
-					"observation_domain_prefixes": observationDomainPrefixes(n.ObservationDomains),
-					"complete_domain_prefixes":    completePrefixes,
+					"id":                            n.ID,
+					"properties":                    properties,
+					"observation_tokens":            observationTokens(n.ObservationDomains, scanID),
+					"observation_domain_prefixes":   observationDomainPrefixes(n.ObservationDomains),
+					"observation_fact_fingerprints": fingerprints,
+					"observation_fingerprint_domain_prefixes": observationFingerprintDomainPrefixes(n.ObservationDomains),
+					"complete_domain_prefixes":                completePrefixes,
 					"reference_only": n.PropertySemantics ==
 						ingest.NodePropertySemanticsReferenceOnly,
 				}
 			}
 
 			written, err := w.execFn(ctx, cypher, map[string]any{
-				"nodes":   params,
-				"scan_id": scanID,
+				"nodes":                        params,
+				"scan_id":                      scanID,
+				"semantic_volatile_properties": observationVolatilePropertyKeys,
 			})
 			if err != nil {
-				return total, fmt.Errorf("fallback node batch %s at offset %d: %w", tupleKey, i, err)
+				return len(writtenIDs), fmt.Errorf("fallback node batch %s at offset %d: %w", tupleKey, i, err)
 			}
-			total += written
+			for _, node := range batch[:min(written, len(batch))] {
+				writtenIDs[node.ID] = true
+			}
 		}
 	}
-	return total, nil
+	return len(writtenIDs), nil
 }
 
 // nodeCypherForKindTuple builds a MERGE-on-primary-label, then-SET-umbrella-labels
@@ -148,17 +180,20 @@ WITH n, node,
      n.first_seen AS old_first_seen,
      coalesce(n.observation_tokens, []) AS old_tokens,
      coalesce(n.observation_reference_tokens, []) AS old_reference_tokens,
+     coalesce(n.observation_fact_fingerprints, []) AS old_fact_fingerprints,
      coalesce(n.observation_properties_complete, false) AS old_properties_complete
 WITH n, node, observation_created,
      old_description_hash, old_input_schema_hash, old_instructions_hash,
-     old_first_seen, old_tokens, old_reference_tokens, old_properties_complete,
+     old_first_seen, old_tokens, old_reference_tokens, old_fact_fingerprints,
+     old_properties_complete,
      [token IN old_tokens WHERE NOT token IN old_reference_tokens] AS old_authoritative_tokens,
      (size(node.observation_tokens) > 0
       AND all(token IN node.observation_tokens WHERE
           any(prefix IN node.complete_domain_prefixes WHERE token STARTS WITH prefix))) AS incoming_complete
 WITH n, node, observation_created,
      old_description_hash, old_input_schema_hash, old_instructions_hash,
-     old_first_seen, old_tokens, old_reference_tokens, old_properties_complete,
+     old_first_seen, old_tokens, old_reference_tokens, old_fact_fingerprints,
+     old_properties_complete,
      old_authoritative_tokens, incoming_complete,
      (NOT observation_created
       AND NOT node.reference_only
@@ -167,7 +202,8 @@ WITH n, node, observation_created,
           any(prefix IN node.observation_domain_prefixes WHERE token STARTS WITH prefix))) AS replace_properties
 WITH n, node, observation_created,
      old_description_hash, old_input_schema_hash, old_instructions_hash,
-     old_first_seen, old_tokens, old_reference_tokens, old_properties_complete,
+     old_first_seen, old_tokens, old_reference_tokens, old_fact_fingerprints,
+     old_properties_complete,
      old_authoritative_tokens, incoming_complete, replace_properties,
      (NOT observation_created
       AND NOT node.reference_only
@@ -177,8 +213,18 @@ WITH n, node, observation_created,
       AND none(token IN old_authoritative_tokens WHERE
           any(prefix IN node.observation_domain_prefixes WHERE token STARTS WITH prefix))
       AND all(key IN keys(node.properties) WHERE
-          key IN ['scan_id', 'first_seen', 'last_seen']
-          OR n[key] IS NULL OR n[key] = node.properties[key])) AS compatible_new_owner
+          key IN $semantic_volatile_properties
+          OR n[key] IS NULL OR n[key] = node.properties[key])) AS compatible_new_owner,
+     (NOT observation_created
+      AND NOT node.reference_only
+      AND incoming_complete
+      AND old_properties_complete
+      AND size(old_authoritative_tokens) > 0
+      AND size(node.observation_fact_fingerprints) > 0
+      AND all(prefix IN node.observation_domain_prefixes WHERE
+          any(token IN old_authoritative_tokens WHERE token STARTS WITH prefix))
+      AND all(fingerprint IN node.observation_fact_fingerprints WHERE
+          fingerprint IN old_fact_fingerprints)) AS compatible_existing_owner
 FOREACH (_ IN CASE
   WHEN (observation_created AND NOT node.reference_only) OR replace_properties
   THEN [1] ELSE [] END |
@@ -187,6 +233,7 @@ FOREACH (_ IN CASE WHEN observation_created AND node.reference_only THEN [1] ELS
   SET n = {objectid: node.id})
 FOREACH (_ IN CASE
   WHEN NOT observation_created AND NOT replace_properties AND NOT node.reference_only
+       AND (compatible_new_owner OR compatible_existing_owner)
   THEN [1] ELSE [] END |
   SET n += node.properties)
 SET n.objectid = node.id,
@@ -207,6 +254,28 @@ SET n.objectid = node.id,
           END)
       ELSE [token IN old_reference_tokens WHERE NOT token IN node.observation_tokens]
     END,
+    n.observation_fact_fingerprints = CASE
+      WHEN node.reference_only THEN old_fact_fingerprints
+      WHEN (observation_created AND incoming_complete) OR replace_properties THEN
+        reduce(fingerprints = [
+          fingerprint IN old_fact_fingerprints
+          WHERE none(prefix IN node.observation_fingerprint_domain_prefixes WHERE
+            fingerprint STARTS WITH prefix)
+        ], fingerprint IN node.observation_fact_fingerprints |
+          CASE WHEN fingerprint IN fingerprints
+            THEN fingerprints ELSE fingerprints + fingerprint END)
+      WHEN compatible_new_owner THEN
+        reduce(fingerprints = old_fact_fingerprints,
+          fingerprint IN node.observation_fact_fingerprints |
+          CASE WHEN fingerprint IN fingerprints
+            THEN fingerprints ELSE fingerprints + fingerprint END)
+      WHEN compatible_existing_owner THEN old_fact_fingerprints
+      WHEN incoming_complete THEN
+        [fingerprint IN old_fact_fingerprints
+         WHERE none(prefix IN node.observation_fingerprint_domain_prefixes WHERE
+           fingerprint STARTS WITH prefix)]
+      ELSE old_fact_fingerprints
+    END,
     n.observation_properties_complete = CASE
       WHEN observation_created THEN incoming_complete
       WHEN node.reference_only THEN
@@ -214,6 +283,7 @@ SET n.objectid = node.id,
         (incoming_complete AND size(old_authoritative_tokens) = 0)
       WHEN replace_properties THEN true
       WHEN compatible_new_owner THEN true
+      WHEN compatible_existing_owner THEN true
       ELSE false
     END`)
 	incomingLabels := make(map[string]bool, len(extraLabels)+1)
@@ -233,7 +303,11 @@ SET n.objectid = node.id,
 	}
 	sb.WriteString("\nREMOVE n.__agenthound_observation_created")
 	for _, lbl := range extraLabels {
-		fmt.Fprintf(&sb, "\nSET n:%s", lbl)
+		fmt.Fprintf(
+			&sb,
+			"\nFOREACH (_ IN CASE WHEN observation_created OR replace_properties OR compatible_new_owner OR compatible_existing_owner THEN [1] ELSE [] END | SET n:%s)",
+			lbl,
+		)
 	}
 	sb.WriteString("\nRETURN count(*) AS written")
 	return sb.String()
@@ -255,7 +329,11 @@ func (w *Writer) WriteObservationEdges(
 	if err := validateRawWriterEdges(edges); err != nil {
 		return 0, err
 	}
-	return w.writeEdges(ctx, edges, scanID, completeDomains)
+	prepared, fingerprints, err := prepareObservationEdges(edges)
+	if err != nil {
+		return 0, err
+	}
+	return w.writeEdges(ctx, prepared, fingerprints, scanID, completeDomains)
 }
 
 // WriteCompositeEdges is the postprocessor-only edge path. Composite facts do
@@ -272,26 +350,33 @@ func (w *Writer) WriteCompositeEdges(
 	if err := validateCompositeWriterEdges(edges); err != nil {
 		return 0, err
 	}
-	return w.writeEdges(ctx, edges, scanID, nil)
+	return w.writeEdges(ctx, edges, nil, scanID, nil)
 }
 
 func (w *Writer) writeEdges(
 	ctx context.Context,
 	edges []ingest.Edge,
+	fingerprintsByEdge map[string][]string,
 	scanID string,
 	completeDomains []string,
 ) (int, error) {
 	w.detectAPOC(ctx)
 
 	if w.hasAPOC {
-		return w.writeEdgesAPOC(ctx, edges, scanID, completeDomains)
+		return w.writeEdgesAPOC(ctx, edges, fingerprintsByEdge, scanID, completeDomains)
 	}
-	return w.writeEdgesFallback(ctx, edges, scanID, completeDomains)
+	return w.writeEdgesFallback(ctx, edges, fingerprintsByEdge, scanID, completeDomains)
 }
 
+// An all_dependencies relationship has one indivisible dependency group per
+// logical (source, kind, target) triple. A complete incoming group is a fresh
+// affirmative proof and atomically supersedes the prior group, even when a
+// retired dependency was not scanned in this epoch. Unioning the groups would
+// either wedge completeness forever or let reconciliation delete new evidence.
 func (w *Writer) writeEdgesAPOC(
 	ctx context.Context,
 	edges []ingest.Edge,
+	fingerprintsByEdge map[string][]string,
 	scanID string,
 	completeDomains []string,
 ) (int, error) {
@@ -299,7 +384,8 @@ func (w *Writer) writeEdgesAPOC(
 	total := 0
 	completePrefixes := observationDomainPrefixes(completeDomains)
 
-	for key, kindEdges := range grouped {
+	for _, key := range sortedEdgeGroupKeys(grouped) {
+		kindEdges := grouped[key]
 		sourceMatch := matchClause("a", key.SourceKind, "source")
 		targetMatch := matchClause("b", key.TargetKind, "target")
 
@@ -311,21 +397,34 @@ WITH rel, edge, coalesce(rel.__agenthound_observation_created, false) AS observa
 WITH rel, edge, observation_created,
      coalesce(rel.observation_tokens, []) AS old_tokens,
      coalesce(rel.observation_dependency_tokens, []) AS old_dependency_tokens,
+     coalesce(rel.observation_fact_fingerprints, []) AS old_fact_fingerprints,
      coalesce(rel.observation_properties_complete, false) AS old_properties_complete
-WITH rel, edge, observation_created, old_tokens, old_dependency_tokens, old_properties_complete,
+WITH rel, edge, observation_created, old_tokens, old_dependency_tokens,
+     old_fact_fingerprints, old_properties_complete,
      CASE WHEN edge.observation_semantics = 'all_dependencies'
           THEN old_dependency_tokens ELSE old_tokens END AS old_ownership_tokens
-WITH rel, edge, observation_created, old_tokens, old_dependency_tokens, old_properties_complete, old_ownership_tokens,
+WITH rel, edge, observation_created, old_tokens, old_dependency_tokens,
+     old_fact_fingerprints, old_properties_complete, old_ownership_tokens,
      (size(edge.ownership_tokens) > 0
       AND all(token IN edge.ownership_tokens WHERE
           any(prefix IN edge.complete_domain_prefixes WHERE token STARTS WITH prefix))) AS incoming_complete
-WITH rel, edge, observation_created, old_tokens, old_dependency_tokens, old_properties_complete, old_ownership_tokens, incoming_complete,
+WITH rel, edge, observation_created, old_tokens, old_dependency_tokens,
+     old_fact_fingerprints, old_properties_complete, old_ownership_tokens, incoming_complete,
+	     (NOT observation_created
+	      AND edge.observation_semantics = 'all_dependencies'
+	      AND incoming_complete
+	      AND size(old_ownership_tokens) > 0) AS replace_dependency_set
+WITH rel, edge, observation_created, old_tokens, old_dependency_tokens,
+     old_fact_fingerprints, old_properties_complete, old_ownership_tokens, incoming_complete,
+     replace_dependency_set,
      (NOT observation_created
       AND incoming_complete
-      AND all(token IN old_ownership_tokens WHERE
-          any(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix))) AS replace_properties
+      AND (replace_dependency_set
+           OR all(token IN old_ownership_tokens WHERE
+             any(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix)))) AS replace_properties
 WITH rel, edge, observation_created, old_tokens, old_dependency_tokens,
-     old_properties_complete, old_ownership_tokens, incoming_complete, replace_properties,
+     old_fact_fingerprints, old_properties_complete, old_ownership_tokens,
+     incoming_complete, replace_dependency_set, replace_properties,
      (NOT observation_created
       AND incoming_complete
       AND old_properties_complete
@@ -333,23 +432,61 @@ WITH rel, edge, observation_created, old_tokens, old_dependency_tokens,
       AND none(token IN old_ownership_tokens WHERE
           any(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix))
       AND all(key IN keys(edge.properties) WHERE
-          key IN ['scan_id', 'first_seen', 'last_seen']
-          OR rel[key] IS NULL OR rel[key] = edge.properties[key])) AS compatible_new_owner
+          key IN $semantic_volatile_properties
+          OR rel[key] IS NULL OR rel[key] = edge.properties[key])) AS compatible_new_owner,
+     (NOT observation_created
+      AND incoming_complete
+      AND old_properties_complete
+      AND size(old_ownership_tokens) > 0
+      AND size(edge.observation_fact_fingerprints) > 0
+      AND all(prefix IN edge.observation_domain_prefixes WHERE
+          any(token IN old_ownership_tokens WHERE token STARTS WITH prefix))
+      AND all(fingerprint IN edge.observation_fact_fingerprints WHERE
+          fingerprint IN old_fact_fingerprints)) AS compatible_existing_owner
 FOREACH (_ IN CASE WHEN NOT observation_created AND replace_properties THEN [1] ELSE [] END |
   SET rel = edge.properties)
-FOREACH (_ IN CASE WHEN NOT observation_created AND NOT replace_properties THEN [1] ELSE [] END |
+FOREACH (_ IN CASE
+  WHEN NOT observation_created AND NOT replace_properties
+       AND (compatible_new_owner OR compatible_existing_owner)
+  THEN [1] ELSE [] END |
   SET rel += edge.properties)
 SET rel.observation_properties_complete = CASE
       WHEN observation_created THEN incoming_complete
       WHEN replace_properties THEN true
       WHEN compatible_new_owner THEN true
+      WHEN compatible_existing_owner THEN true
       ELSE false
     END,
     rel.observation_tokens = reduce(tokens = old_tokens, token IN edge.observation_tokens |
       CASE WHEN token IN tokens THEN tokens ELSE tokens + token END),
-    rel.observation_dependency_tokens = reduce(tokens = old_dependency_tokens, token IN edge.observation_dependency_tokens |
-      CASE WHEN token IN tokens THEN tokens ELSE tokens + token END),
+    rel.observation_dependency_tokens = CASE
+      WHEN replace_dependency_set THEN edge.observation_dependency_tokens
+      ELSE reduce(tokens = old_dependency_tokens, token IN edge.observation_dependency_tokens |
+        CASE WHEN token IN tokens THEN tokens ELSE tokens + token END)
+    END,
     rel.observation_semantics = edge.observation_semantics,
+    rel.observation_fact_fingerprints = CASE
+      WHEN replace_dependency_set THEN edge.observation_fact_fingerprints
+      WHEN (observation_created AND incoming_complete) OR replace_properties THEN
+        reduce(fingerprints = [
+          fingerprint IN old_fact_fingerprints
+          WHERE none(prefix IN edge.observation_fingerprint_domain_prefixes WHERE
+            fingerprint STARTS WITH prefix)
+        ], fingerprint IN edge.observation_fact_fingerprints |
+          CASE WHEN fingerprint IN fingerprints
+            THEN fingerprints ELSE fingerprints + fingerprint END)
+      WHEN compatible_new_owner THEN
+        reduce(fingerprints = old_fact_fingerprints,
+          fingerprint IN edge.observation_fact_fingerprints |
+          CASE WHEN fingerprint IN fingerprints
+            THEN fingerprints ELSE fingerprints + fingerprint END)
+      WHEN compatible_existing_owner THEN old_fact_fingerprints
+      WHEN incoming_complete THEN
+        [fingerprint IN old_fact_fingerprints
+         WHERE none(prefix IN edge.observation_fingerprint_domain_prefixes WHERE
+           fingerprint STARTS WITH prefix)]
+      ELSE old_fact_fingerprints
+    END,
     rel.scan_id = $scan_id,
     rel.last_seen = datetime()
 REMOVE rel.__agenthound_observation_created
@@ -361,31 +498,20 @@ RETURN count(*) AS written`, sourceMatch, targetMatch)
 
 			params := make([]map[string]any, len(batch))
 			for j, e := range batch {
-				props := factProperties(e.Properties)
-				createProps := cloneProperties(props)
-				createProps["__agenthound_observation_created"] = true
-				tokens, dependencyTokens := edgeObservationTokens(e, scanID)
-				createProps["observation_tokens"] = tokens
-				createProps["observation_dependency_tokens"] = dependencyTokens
-				createProps["observation_semantics"] = string(e.ObservationSemantics)
-				params[j] = map[string]any{
-					"source":                        e.Source,
-					"target":                        e.Target,
-					"properties":                    props,
-					"create_properties":             createProps,
-					"observation_tokens":            tokens,
-					"observation_dependency_tokens": dependencyTokens,
-					"observation_semantics":         string(e.ObservationSemantics),
-					"ownership_tokens":              ownershipTokens(tokens, dependencyTokens),
-					"observation_domain_prefixes":   observationDomainPrefixes(e.ObservationDomains),
-					"complete_domain_prefixes":      completePrefixes,
-				}
+				params[j] = observationEdgeRow(
+					e,
+					fingerprintsByEdge[edgePreparationKey(e)],
+					scanID,
+					completePrefixes,
+					true,
+				)
 			}
 
 			written, err := w.execFn(ctx, cypher, map[string]any{
-				"edges":   params,
-				"kind":    key.Kind,
-				"scan_id": scanID,
+				"edges":                        params,
+				"kind":                         key.Kind,
+				"scan_id":                      scanID,
+				"semantic_volatile_properties": observationVolatilePropertyKeys,
 			})
 			if err != nil {
 				return total, fmt.Errorf("apoc edge batch %s at offset %d: %w", key.Kind, i, err)
@@ -399,6 +525,7 @@ RETURN count(*) AS written`, sourceMatch, targetMatch)
 func (w *Writer) writeEdgesFallback(
 	ctx context.Context,
 	edges []ingest.Edge,
+	fingerprintsByEdge map[string][]string,
 	scanID string,
 	completeDomains []string,
 ) (int, error) {
@@ -406,7 +533,8 @@ func (w *Writer) writeEdgesFallback(
 	total := 0
 	completePrefixes := observationDomainPrefixes(completeDomains)
 
-	for key, kindEdges := range grouped {
+	for _, key := range sortedEdgeGroupKeys(grouped) {
+		kindEdges := grouped[key]
 		cypher := edgeCypherForKinds(key.Kind, key.SourceKind, key.TargetKind)
 
 		for i := 0; i < len(kindEdges); i += w.batchSize {
@@ -415,24 +543,19 @@ func (w *Writer) writeEdgesFallback(
 
 			params := make([]map[string]any, len(batch))
 			for j, e := range batch {
-				props := factProperties(e.Properties)
-				tokens, dependencyTokens := edgeObservationTokens(e, scanID)
-				params[j] = map[string]any{
-					"source":                        e.Source,
-					"target":                        e.Target,
-					"properties":                    props,
-					"observation_tokens":            tokens,
-					"observation_dependency_tokens": dependencyTokens,
-					"observation_semantics":         string(e.ObservationSemantics),
-					"ownership_tokens":              ownershipTokens(tokens, dependencyTokens),
-					"observation_domain_prefixes":   observationDomainPrefixes(e.ObservationDomains),
-					"complete_domain_prefixes":      completePrefixes,
-				}
+				params[j] = observationEdgeRow(
+					e,
+					fingerprintsByEdge[edgePreparationKey(e)],
+					scanID,
+					completePrefixes,
+					false,
+				)
 			}
 
 			written, err := w.execFn(ctx, cypher, map[string]any{
-				"edges":   params,
-				"scan_id": scanID,
+				"edges":                        params,
+				"scan_id":                      scanID,
+				"semantic_volatile_properties": observationVolatilePropertyKeys,
 			})
 			if err != nil {
 				return total, fmt.Errorf("edge batch %s at offset %d: %w", key.Kind, i, err)
@@ -460,22 +583,34 @@ ON CREATE SET r.__agenthound_observation_created = true
 WITH r, edge,
      coalesce(r.__agenthound_observation_created, false) AS observation_created,
      coalesce(r.observation_tokens, []) AS old_tokens,
-     coalesce(r.observation_dependency_tokens, []) AS old_dependency_tokens
-WITH r, edge, observation_created, old_tokens, old_dependency_tokens,
+     coalesce(r.observation_dependency_tokens, []) AS old_dependency_tokens,
+     coalesce(r.observation_fact_fingerprints, []) AS old_fact_fingerprints
+WITH r, edge, observation_created, old_tokens, old_dependency_tokens, old_fact_fingerprints,
      coalesce(r.observation_properties_complete, false) AS old_properties_complete,
      CASE WHEN edge.observation_semantics = 'all_dependencies'
           THEN old_dependency_tokens ELSE old_tokens END AS old_ownership_tokens
-WITH r, edge, observation_created, old_tokens, old_dependency_tokens, old_properties_complete, old_ownership_tokens,
+WITH r, edge, observation_created, old_tokens, old_dependency_tokens,
+     old_fact_fingerprints, old_properties_complete, old_ownership_tokens,
      (size(edge.ownership_tokens) > 0
       AND all(token IN edge.ownership_tokens WHERE
           any(prefix IN edge.complete_domain_prefixes WHERE token STARTS WITH prefix))) AS incoming_complete
-WITH r, edge, observation_created, old_tokens, old_dependency_tokens, old_properties_complete, old_ownership_tokens, incoming_complete,
+WITH r, edge, observation_created, old_tokens, old_dependency_tokens,
+     old_fact_fingerprints, old_properties_complete, old_ownership_tokens, incoming_complete,
+	     (NOT observation_created
+	      AND edge.observation_semantics = 'all_dependencies'
+	      AND incoming_complete
+	      AND size(old_ownership_tokens) > 0) AS replace_dependency_set
+WITH r, edge, observation_created, old_tokens, old_dependency_tokens,
+     old_fact_fingerprints, old_properties_complete, old_ownership_tokens, incoming_complete,
+     replace_dependency_set,
      (NOT observation_created
       AND incoming_complete
-      AND all(token IN old_ownership_tokens WHERE
-          any(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix))) AS replace_properties
+      AND (replace_dependency_set
+           OR all(token IN old_ownership_tokens WHERE
+             any(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix)))) AS replace_properties
 WITH r, edge, observation_created, old_tokens, old_dependency_tokens,
-     old_properties_complete, old_ownership_tokens, incoming_complete, replace_properties,
+     old_fact_fingerprints, old_properties_complete, old_ownership_tokens,
+     incoming_complete, replace_dependency_set, replace_properties,
      (NOT observation_created
       AND incoming_complete
       AND old_properties_complete
@@ -483,23 +618,61 @@ WITH r, edge, observation_created, old_tokens, old_dependency_tokens,
       AND none(token IN old_ownership_tokens WHERE
           any(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix))
       AND all(key IN keys(edge.properties) WHERE
-          key IN ['scan_id', 'first_seen', 'last_seen']
-          OR r[key] IS NULL OR r[key] = edge.properties[key])) AS compatible_new_owner
+          key IN $semantic_volatile_properties
+          OR r[key] IS NULL OR r[key] = edge.properties[key])) AS compatible_new_owner,
+     (NOT observation_created
+      AND incoming_complete
+      AND old_properties_complete
+      AND size(old_ownership_tokens) > 0
+      AND size(edge.observation_fact_fingerprints) > 0
+      AND all(prefix IN edge.observation_domain_prefixes WHERE
+          any(token IN old_ownership_tokens WHERE token STARTS WITH prefix))
+      AND all(fingerprint IN edge.observation_fact_fingerprints WHERE
+          fingerprint IN old_fact_fingerprints)) AS compatible_existing_owner
 FOREACH (_ IN CASE WHEN observation_created OR replace_properties THEN [1] ELSE [] END |
   SET r = edge.properties)
-FOREACH (_ IN CASE WHEN NOT observation_created AND NOT replace_properties THEN [1] ELSE [] END |
+FOREACH (_ IN CASE
+  WHEN NOT observation_created AND NOT replace_properties
+       AND (compatible_new_owner OR compatible_existing_owner)
+  THEN [1] ELSE [] END |
   SET r += edge.properties)
 SET r.scan_id = $scan_id,
     r.last_seen = datetime(),
     r.observation_tokens = reduce(tokens = old_tokens, token IN edge.observation_tokens |
       CASE WHEN token IN tokens THEN tokens ELSE tokens + token END),
-    r.observation_dependency_tokens = reduce(tokens = old_dependency_tokens, token IN edge.observation_dependency_tokens |
-      CASE WHEN token IN tokens THEN tokens ELSE tokens + token END),
+    r.observation_dependency_tokens = CASE
+      WHEN replace_dependency_set THEN edge.observation_dependency_tokens
+      ELSE reduce(tokens = old_dependency_tokens, token IN edge.observation_dependency_tokens |
+        CASE WHEN token IN tokens THEN tokens ELSE tokens + token END)
+    END,
     r.observation_semantics = edge.observation_semantics,
+    r.observation_fact_fingerprints = CASE
+      WHEN replace_dependency_set THEN edge.observation_fact_fingerprints
+      WHEN (observation_created AND incoming_complete) OR replace_properties THEN
+        reduce(fingerprints = [
+          fingerprint IN old_fact_fingerprints
+          WHERE none(prefix IN edge.observation_fingerprint_domain_prefixes WHERE
+            fingerprint STARTS WITH prefix)
+        ], fingerprint IN edge.observation_fact_fingerprints |
+          CASE WHEN fingerprint IN fingerprints
+            THEN fingerprints ELSE fingerprints + fingerprint END)
+      WHEN compatible_new_owner THEN
+        reduce(fingerprints = old_fact_fingerprints,
+          fingerprint IN edge.observation_fact_fingerprints |
+          CASE WHEN fingerprint IN fingerprints
+            THEN fingerprints ELSE fingerprints + fingerprint END)
+      WHEN compatible_existing_owner THEN old_fact_fingerprints
+      WHEN incoming_complete THEN
+        [fingerprint IN old_fact_fingerprints
+         WHERE none(prefix IN edge.observation_fingerprint_domain_prefixes WHERE
+           fingerprint STARTS WITH prefix)]
+      ELSE old_fact_fingerprints
+    END,
     r.observation_properties_complete = CASE
       WHEN observation_created THEN incoming_complete
       WHEN replace_properties THEN true
       WHEN compatible_new_owner THEN true
+      WHEN compatible_existing_owner THEN true
       ELSE false
     END
 REMOVE r.__agenthound_observation_created
@@ -568,6 +741,40 @@ func observationDomainPrefixes(domains []string) []string {
 	return prefixes
 }
 
+func observationFingerprintDomainPrefix(domain string) string {
+	return domain + observationFactFingerprintSeparator
+}
+
+func observationFingerprintDomainPrefixes(domains []string) []string {
+	domains = normalizedDomains(domains)
+	prefixes := make([]string, len(domains))
+	for i, domain := range domains {
+		prefixes[i] = observationFingerprintDomainPrefix(domain)
+	}
+	return prefixes
+}
+
+func observationFactFingerprints(domains []string, fact any) ([]string, error) {
+	digest, err := common.CanonicalJSONHash(fact)
+	if err != nil {
+		return nil, err
+	}
+	domains = normalizedDomains(domains)
+	fingerprints := make([]string, len(domains))
+	for i, domain := range domains {
+		fingerprints[i] = observationFingerprintDomainPrefix(domain) + digest
+	}
+	return fingerprints, nil
+}
+
+func fingerprintProperties(properties map[string]any) map[string]any {
+	fingerprint := cloneProperties(properties)
+	for _, key := range observationVolatilePropertyKeys {
+		delete(fingerprint, key)
+	}
+	return fingerprint
+}
+
 func cloneProperties(props map[string]any) map[string]any {
 	out := make(map[string]any, len(props))
 	for key, value := range props {
@@ -583,6 +790,7 @@ func factProperties(props map[string]any) map[string]any {
 	delete(out, "observation_semantics")
 	delete(out, "observation_properties_complete")
 	delete(out, "observation_reference_tokens")
+	delete(out, observationFactFingerprintsKey)
 	delete(out, "__agenthound_observation_created")
 	return out
 }

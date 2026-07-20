@@ -213,7 +213,10 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	coverageComplete := sdkingest.CollectionCoverageComplete(data.Meta.Collection) &&
 		attributionComplete &&
 		normalizationDegradedErr == nil
-	writeGraph := coalesceObservationGraph(data.Graph)
+	// Preserve owner-scoped contributions through the pipeline. The graph
+	// writer fingerprints each original owner before deterministically
+	// coalescing compatible contributions into unique database rows.
+	writeGraph := data.Graph
 
 	artifactObservedAt, timestampErr := parseArtifactObservedAt(data.Meta.Timestamp)
 	if timestampErr != nil {

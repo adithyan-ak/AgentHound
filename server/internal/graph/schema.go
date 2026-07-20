@@ -29,6 +29,47 @@ var indexDefs = []struct{ Label, Property string }{
 	{"Credential", "value_hash"},
 }
 
+const graphSchemaVersion = 2
+
+const observationFingerprintSchemaStateCypher = `
+CALL {
+  MATCH (n)
+  WHERE any(label IN labels(n) WHERE label IN $public_kinds)
+  WITH n, [
+    token IN coalesce(n.observation_tokens, [])
+    WHERE NOT token IN coalesce(n.observation_reference_tokens, [])
+  ] AS ownership_tokens
+  WHERE any(token IN ownership_tokens WHERE
+    none(fingerprint IN coalesce(n.observation_fact_fingerprints, []) WHERE
+      fingerprint STARTS WITH
+        split(token, $token_separator)[0] + $fingerprint_separator))
+  RETURN count(n) AS unfingerprinted_nodes
+}
+CALL {
+  MATCH ()-[r]->()
+  WHERE type(r) IN $raw_edge_kinds
+  WITH r, CASE
+    WHEN r.observation_semantics = $all_dependencies_semantics
+    THEN coalesce(r.observation_dependency_tokens, [])
+    ELSE coalesce(r.observation_tokens, [])
+  END AS ownership_tokens
+  WHERE any(token IN ownership_tokens WHERE
+    none(fingerprint IN coalesce(r.observation_fact_fingerprints, []) WHERE
+      fingerprint STARTS WITH
+        split(token, $token_separator)[0] + $fingerprint_separator))
+  RETURN count(r) AS unfingerprinted_relationships
+}
+OPTIONAL MATCH (schema:SchemaVersion)
+RETURN coalesce(max(schema.version), 0) AS version,
+       unfingerprinted_nodes,
+       unfingerprinted_relationships`
+
+type observationFingerprintSchemaState struct {
+	Version                      int64
+	UnfingerprintedNodes         int64
+	UnfingerprintedRelationships int64
+}
+
 func InitSchema(ctx context.Context, driver neo4j.DriverWithContext) error {
 	major, minor, err := DetectVersion(ctx, driver)
 	if err != nil {
@@ -36,6 +77,29 @@ func InitSchema(ctx context.Context, driver neo4j.DriverWithContext) error {
 		major, minor = 4, 4
 	}
 	slog.Info("detected neo4j version", "major", major, "minor", minor)
+
+	fingerprintState, err := readObservationFingerprintSchemaState(ctx, driver)
+	if err != nil {
+		return fmt.Errorf("inspect observation fingerprint schema: %w", err)
+	}
+	if fingerprintState.Version > graphSchemaVersion {
+		return fmt.Errorf(
+			"Neo4j graph schema %d is newer than the maximum schema %d supported by this server; refusing to downgrade the database",
+			fingerprintState.Version,
+			graphSchemaVersion,
+		)
+	}
+	if fingerprintState.Version < graphSchemaVersion &&
+		(fingerprintState.UnfingerprintedNodes > 0 ||
+			fingerprintState.UnfingerprintedRelationships > 0) {
+		return fmt.Errorf(
+			"Neo4j graph schema %d contains %d authoritative nodes and %d raw relationships without per-owner observation fingerprints; automatic upgrade to schema %d cannot preserve shared-owner evidence safely: back up the deployment, recreate the Neo4j and PostgreSQL volumes, and recollect before starting this release",
+			fingerprintState.Version,
+			fingerprintState.UnfingerprintedNodes,
+			fingerprintState.UnfingerprintedRelationships,
+			graphSchemaVersion,
+		)
+	}
 
 	useForRequire := major > 4 || (major == 4 && minor >= 4)
 
@@ -76,13 +140,92 @@ func InitSchema(ctx context.Context, driver neo4j.DriverWithContext) error {
 		slog.Info("created index", "label", idx.Label, "property", idx.Property)
 	}
 
-	// Schema version tracking
-	if err := runDDL(ctx, driver, "MERGE (:SchemaVersion {version: 1})"); err != nil {
+	// Schema version 2 introduces per-owner observation fingerprints. Existing
+	// schema-1 graphs are advanced only after the compatibility check above.
+	if err := runDDL(ctx, driver, fmt.Sprintf(
+		"MATCH (schema:SchemaVersion) SET schema.version = %d",
+		graphSchemaVersion,
+	)); err != nil {
+		return fmt.Errorf("update schema version: %w", err)
+	}
+	if err := runDDL(ctx, driver, fmt.Sprintf(
+		"MERGE (:SchemaVersion {version: %d})",
+		graphSchemaVersion,
+	)); err != nil {
 		return fmt.Errorf("schema version: %w", err)
 	}
 
 	slog.Info("schema initialization complete", "constraints", constraintCount, "indexes", len(indexDefs))
 	return nil
+}
+
+func readObservationFingerprintSchemaState(
+	ctx context.Context,
+	driver neo4j.DriverWithContext,
+) (observationFingerprintSchemaState, error) {
+	session := driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
+	defer session.Close(ctx)
+
+	result, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+		rows, err := tx.Run(ctx, observationFingerprintSchemaStateCypher, map[string]any{
+			"public_kinds":          ingest.PublicNodeLabels,
+			"raw_edge_kinds":        rawEdgeKinds(),
+			"token_separator":       observationTokenSeparator,
+			"fingerprint_separator": observationFactFingerprintSeparator,
+			"all_dependencies_semantics": string(
+				ingest.ObservationSemanticsAllDependencies,
+			),
+		})
+		if err != nil {
+			return nil, err
+		}
+		if !rows.Next(ctx) {
+			if err := rows.Err(); err != nil {
+				return nil, err
+			}
+			return nil, fmt.Errorf("schema state query returned no row")
+		}
+		record := rows.Record()
+		readCount := func(key string) (int64, error) {
+			value, exists := record.Get(key)
+			if !exists {
+				return 0, fmt.Errorf("schema state missing %s", key)
+			}
+			count, ok := value.(int64)
+			if !ok {
+				return 0, fmt.Errorf("schema state %s has type %T", key, value)
+			}
+			return count, nil
+		}
+		version, err := readCount("version")
+		if err != nil {
+			return nil, err
+		}
+		nodes, err := readCount("unfingerprinted_nodes")
+		if err != nil {
+			return nil, err
+		}
+		relationships, err := readCount("unfingerprinted_relationships")
+		if err != nil {
+			return nil, err
+		}
+		return observationFingerprintSchemaState{
+			Version:                      version,
+			UnfingerprintedNodes:         nodes,
+			UnfingerprintedRelationships: relationships,
+		}, nil
+	})
+	if err != nil {
+		return observationFingerprintSchemaState{}, err
+	}
+	state, ok := result.(observationFingerprintSchemaState)
+	if !ok {
+		return observationFingerprintSchemaState{}, fmt.Errorf(
+			"unexpected schema state type %T",
+			result,
+		)
+	}
+	return state, nil
 }
 
 func constraintCypher(label string, useForRequire bool) string {

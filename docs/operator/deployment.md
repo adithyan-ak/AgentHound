@@ -153,17 +153,36 @@ backup from one deployment incompatible with a Neo4j backup from another.
 `agenthound-server` initializes Neo4j constraints and the PostgreSQL schema on
 startup. The pre-launch PostgreSQL history was replaced by one current
 single-user `001_initial.sql`; prior development schemas are intentionally not
-upgradeable. After checking out this baseline, recreate both development
-databases:
+upgradeable. Graph schema 2 adds per-owner observation fingerprints. A
+schema-1 Neo4j graph that already contains authoritative facts without those
+fingerprints is rejected at startup: silently accepting it could make the
+first targeted refresh property-incomplete with no safe way to reconstruct
+each historical owner's contribution. This is a fail-fast compatibility guard,
+not a lossless migration.
+
+Back up the deployment, preserve any source artifacts needed for recollection,
+then recreate both development databases before starting this release:
 
 ```bash
 docker compose -f docker/docker-compose.yml down --volumes
+export AGENTHOUND_HOST_ID=security-laptop
+export AGENTHOUND_NETWORK_REALM_ID=corp-lab
+export AGENTHOUND_STORAGE_PAIR_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 docker compose -f docker/docker-compose.yml up -d
 ```
 
 This permanently deletes the development Neo4j and PostgreSQL volumes. The
-fresh baseline is idempotent after creation. The server still detects Neo4j
-4.4 versus 5.x and applies the appropriate constraint syntax.
+fresh schema-2 baseline is idempotent after creation. An empty schema-1 graph,
+or a pre-release graph whose active owners already all carry fingerprints, is
+advanced automatically. The server still detects Neo4j 4.4 versus 5.x and
+applies the appropriate constraint syntax.
+
+Re-run the current collector after the reset. Stdio MCP identity changed from
+`mcp_stdio_v2_ordered` to `mcp_stdio_v3_hashed_argv` so artifacts can prove the
+parent ID using ordered argument digests without exposing raw argv. The strict
+server rejects v2 identity metadata rather than merging incompatible parent and
+child IDs. Retained v2 scan JSON is therefore evidence to archive, not an input
+that can rebuild the v3 projection.
 
 ---
 

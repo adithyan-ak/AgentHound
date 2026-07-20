@@ -203,7 +203,24 @@ Implementation details:
   owners. Additive updates are marked property-incomplete and block global
   publication until a complete observation replaces every active owner.
 - New facts carry length-delimited observation owner tokens. Shared facts keep
-  one token per active coverage domain.
+  one token per active coverage domain. Complete authoritative writes also
+  retain an internal stable-domain semantic fingerprint. Collectors and the
+  ingest pipeline preserve one contribution per owner domain; the writer
+  fingerprints each contribution before deterministically unioning compatible
+  contributions into one database fact. Conflicting overlapping semantic
+  values fail the write before graph execution instead of selecting a value by
+  input order. A co-owner can rotate its scan token without downgrading the
+  union only when its new fingerprint exactly matches the one already recorded
+  for that domain. Writer/observation timestamps (`scan_id`, `first_seen`,
+  `last_seen`, `last_verified_at`, and `extracted_at`) are excluded from this
+  comparison; the latest timestamp wins when contributions are unioned. Any
+  other collected-property, label, endpoint-kind, or observation-semantics
+  change remains property-incomplete while another owner is active. Such an
+  incompatible targeted refresh preserves the last coherent public properties
+  and labels, invalidates that owner's stored fingerprint, and cannot be
+  re-certified by retrying an older targeted artifact. A complete joint write,
+  or an exact remaining-owner write after the other owners retire, replaces the
+  fact and restores completeness.
 - Reference-only node observations add ownership without merging managed
   properties or downgrading an existing complete authoritative observation.
   Their owner tokens are tracked as an explicit subset of node owners.
@@ -221,7 +238,8 @@ Only domain states derived as explicit `complete` outcomes may replace their
 prior owner token. Reconciliation removes old owner tokens, deletes unowned raw
 relationships, then deletes unowned isolated nodes. Facts with another active
 owner survive. Partial, failed, truncated, and unknown coverage performs no
-retirement.
+retirement. Stable semantic fingerprints are retired with their authoritative
+owner domain and are never returned by the public graph reader.
 When reconciliation retires a node's last authoritative property owner but a
 reference-only owner remains, managed properties are cleared to truthful
 reference identity instead of certifying stale rich properties.
@@ -295,8 +313,9 @@ Dependency validation runs before the first processor executes. If a processor a
 `Pipeline.Ingest()` returns `*sdkingest.IngestResult`:
 - `ScanID` -- the scan identifier
 - `Outcome`, `ProjectionStatus` -- attempt result and mutable projection state
-- `Submitted` -- literal artifact node/edge counts
-- `WriteRows` -- Neo4j write-result rows, not unique discoveries
+- `Submitted` -- literal artifact contribution counts
+- `WriteRows` -- unique logical nodes/relationships affected by successful
+  Neo4j writes, including matches of facts that already existed
 - `GraphTotals` -- frozen public inventory totals before and after processing
 - `Warnings` -- normalizer warnings
 - `NormalizationStatus`, `NormalizationWarnings` -- deterministic

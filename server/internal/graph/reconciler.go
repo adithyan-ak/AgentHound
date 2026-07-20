@@ -92,13 +92,26 @@ WHERE type(r) IN $raw_edge_kinds
   AND r.observation_semantics = $all_dependencies_semantics
   AND any(token IN coalesce(r.observation_dependency_tokens, [])
           WHERE any(prefix IN $domain_prefixes WHERE token STARTS WITH prefix))
-SET r.observation_dependency_tokens = [
+WITH r, [
   token IN coalesce(r.observation_dependency_tokens, [])
   WHERE none(prefix IN $domain_prefixes WHERE token STARTS WITH prefix)
      OR token IN $current_tokens
-]
+] AS remaining_tokens
+WITH r, remaining_tokens,
+     [token IN remaining_tokens | split(token, $token_separator)[0]] AS remaining_domains
+SET r.observation_dependency_tokens = remaining_tokens,
+    r.observation_fact_fingerprints = [
+      fingerprint IN coalesce(r.observation_fact_fingerprints, [])
+      WHERE split(fingerprint, $fingerprint_separator)[0] IN remaining_domains
+    ]
 RETURN count(r) AS retired`
 
+// Owner retirement normally makes a retained property union incomplete: the
+// removed owner may have contributed unique fields. The one safe exception is
+// an exact ownership transfer, proven when every removed owner fingerprint has
+// the same semantic digest under a surviving owner. Missing fingerprints and
+// non-identical contributions deliberately remain fail-closed. Node retirement
+// below applies the same proof to authoritative (non-reference) owners.
 const retireRelationshipOwnersCypher = `
 MATCH ()-[r]->()
 WHERE type(r) IN $raw_edge_kinds
@@ -106,17 +119,42 @@ WHERE type(r) IN $raw_edge_kinds
   AND any(token IN coalesce(r.observation_tokens, [])
           WHERE any(prefix IN $domain_prefixes WHERE token STARTS WITH prefix))
 WITH r, coalesce(r.observation_tokens, []) AS old_tokens,
+     coalesce(r.observation_fact_fingerprints, []) AS old_fact_fingerprints,
+     coalesce(r.observation_properties_complete, false) AS old_properties_complete,
      [token IN coalesce(r.observation_tokens, [])
       WHERE none(prefix IN $domain_prefixes WHERE token STARTS WITH prefix)
          OR token IN $current_tokens] AS remaining_tokens
+WITH r, old_tokens, old_fact_fingerprints, old_properties_complete, remaining_tokens,
+     [token IN old_tokens | split(token, $token_separator)[0]] AS old_domains,
+     [token IN remaining_tokens | split(token, $token_separator)[0]] AS remaining_domains
+WITH r, old_tokens, old_fact_fingerprints, old_properties_complete, remaining_tokens,
+     remaining_domains,
+     [domain IN old_domains WHERE NOT domain IN remaining_domains] AS removed_domains,
+     [fingerprint IN old_fact_fingerprints
+      WHERE split(fingerprint, $fingerprint_separator)[0] IN remaining_domains
+     ] AS remaining_fact_fingerprints
+WITH r, old_properties_complete, remaining_tokens, removed_domains,
+     remaining_fact_fingerprints,
+     size(removed_domains) > 0
+       AND all(domain IN removed_domains WHERE
+         any(fingerprint IN old_fact_fingerprints WHERE
+           split(fingerprint, $fingerprint_separator)[0] = domain))
+       AND all(fingerprint IN [
+         candidate IN old_fact_fingerprints
+         WHERE split(candidate, $fingerprint_separator)[0] IN removed_domains
+       ] WHERE
+         any(remaining IN remaining_fact_fingerprints WHERE
+           split(remaining, $fingerprint_separator)[1] =
+             split(fingerprint, $fingerprint_separator)[1]))
+       AS removed_facts_redundant
 SET r.observation_tokens = remaining_tokens,
+    r.observation_fact_fingerprints = remaining_fact_fingerprints,
     r.observation_properties_complete = CASE
       WHEN size(remaining_tokens) > 0
-       AND any(prefix IN $domain_prefixes WHERE
-             any(token IN old_tokens WHERE token STARTS WITH prefix)
-             AND none(token IN remaining_tokens WHERE token STARTS WITH prefix))
+       AND size(removed_domains) > 0
+       AND NOT removed_facts_redundant
       THEN false
-      ELSE coalesce(r.observation_properties_complete, false)
+      ELSE old_properties_complete
     END
 RETURN count(r) AS retired`
 
@@ -140,9 +178,11 @@ WITH n,
      n.scan_id AS scan_id,
      n.first_seen AS first_seen,
      n.last_seen AS last_seen,
+     coalesce(n.observation_fact_fingerprints, []) AS old_fact_fingerprints,
      coalesce(n.observation_properties_complete, false) AS old_properties_complete
 WITH n, old_tokens, old_reference_tokens,
-     objectid, scan_id, first_seen, last_seen, old_properties_complete,
+     objectid, scan_id, first_seen, last_seen,
+     old_fact_fingerprints, old_properties_complete,
      [token IN old_tokens
       WHERE none(prefix IN $domain_prefixes WHERE token STARTS WITH prefix)
          OR token IN $current_tokens] AS remaining_tokens,
@@ -150,18 +190,55 @@ WITH n, old_tokens, old_reference_tokens,
       WHERE none(prefix IN $domain_prefixes WHERE token STARTS WITH prefix)
          OR token IN $current_tokens] AS remaining_reference_tokens
 WITH n, remaining_tokens, remaining_reference_tokens,
-     objectid, scan_id, first_seen, last_seen, old_properties_complete,
+     objectid, scan_id, first_seen, last_seen,
+     old_fact_fingerprints, old_properties_complete,
      [token IN old_tokens
       WHERE NOT token IN old_reference_tokens] AS old_authoritative_tokens,
      [token IN remaining_tokens
       WHERE NOT token IN remaining_reference_tokens] AS remaining_authoritative_tokens
+WITH n, remaining_tokens, remaining_reference_tokens,
+     objectid, scan_id, first_seen, last_seen,
+     old_fact_fingerprints, old_properties_complete,
+     old_authoritative_tokens, remaining_authoritative_tokens,
+     [token IN old_authoritative_tokens |
+       split(token, $token_separator)[0]] AS old_authoritative_domains,
+     [token IN remaining_authoritative_tokens |
+       split(token, $token_separator)[0]] AS remaining_authoritative_domains
+WITH n, remaining_tokens, remaining_reference_tokens,
+     objectid, scan_id, first_seen, last_seen,
+     old_fact_fingerprints, old_properties_complete,
+     old_authoritative_tokens, remaining_authoritative_tokens,
+     [domain IN old_authoritative_domains
+      WHERE NOT domain IN remaining_authoritative_domains
+     ] AS removed_authoritative_domains,
+     [fingerprint IN old_fact_fingerprints
+      WHERE split(fingerprint, $fingerprint_separator)[0]
+        IN remaining_authoritative_domains
+     ] AS remaining_fact_fingerprints
+WITH n, remaining_tokens, remaining_reference_tokens,
+     objectid, scan_id, first_seen, last_seen, old_properties_complete,
+     old_authoritative_tokens, remaining_authoritative_tokens,
+     removed_authoritative_domains, remaining_fact_fingerprints,
+     size(removed_authoritative_domains) > 0
+       AND all(domain IN removed_authoritative_domains WHERE
+         any(fingerprint IN old_fact_fingerprints WHERE
+           split(fingerprint, $fingerprint_separator)[0] = domain))
+       AND all(fingerprint IN [
+         candidate IN old_fact_fingerprints
+         WHERE split(candidate, $fingerprint_separator)[0]
+           IN removed_authoritative_domains
+       ] WHERE
+         any(remaining IN remaining_fact_fingerprints WHERE
+           split(remaining, $fingerprint_separator)[1] =
+             split(fingerprint, $fingerprint_separator)[1]))
+       AS removed_facts_redundant
 SET n.observation_tokens = remaining_tokens,
     n.observation_reference_tokens = remaining_reference_tokens,
+    n.observation_fact_fingerprints = remaining_fact_fingerprints,
     n.observation_properties_complete = CASE
       WHEN size(remaining_authoritative_tokens) > 0
-       AND any(prefix IN $domain_prefixes WHERE
-             any(token IN old_authoritative_tokens WHERE token STARTS WITH prefix)
-             AND none(token IN remaining_authoritative_tokens WHERE token STARTS WITH prefix))
+       AND size(removed_authoritative_domains) > 0
+       AND NOT removed_facts_redundant
       THEN false
       ELSE old_properties_complete
     END
@@ -211,10 +288,12 @@ func ReconcileObservations(
 		currentTokens = append(currentTokens, observationToken(domain, scanID))
 	}
 	params := map[string]any{
-		"domain_prefixes": prefixes,
-		"current_tokens":  currentTokens,
-		"public_kinds":    ingest.PublicNodeLabels,
-		"raw_edge_kinds":  rawEdgeKinds(),
+		"domain_prefixes":       prefixes,
+		"current_tokens":        currentTokens,
+		"public_kinds":          ingest.PublicNodeLabels,
+		"raw_edge_kinds":        rawEdgeKinds(),
+		"token_separator":       observationTokenSeparator,
+		"fingerprint_separator": observationFactFingerprintSeparator,
 		"all_dependencies_semantics": string(
 			ingest.ObservationSemanticsAllDependencies,
 		),

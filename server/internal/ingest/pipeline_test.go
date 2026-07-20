@@ -648,6 +648,71 @@ func TestPipeline_HappyPath(t *testing.T) {
 	}
 }
 
+func TestPipelinePreservesOwnerContributionsForWriterPreparation(t *testing.T) {
+	data := validIngestDataFor("scan-owner-contributions")
+	domainA := data.Meta.Collection.CoverageKeys[0]
+	domainB := sdkingest.CanonicalCoverageKey(
+		"mcp", "target", "https://second-mcp.example",
+	)
+	data.Meta.Collection.CoverageKeys = append(
+		data.Meta.Collection.CoverageKeys,
+		domainB,
+	)
+	data.Meta.Collection.Outcomes = append(
+		data.Meta.Collection.Outcomes,
+		sdkingest.CollectionOutcome{
+			Collector:   "mcp",
+			CoverageKey: domainB,
+			Target:      "https://second-mcp.example",
+			Method:      "enumerate",
+			State:       sdkingest.OutcomeComplete,
+			Items:       2,
+		},
+	)
+	serverB := data.Graph.Nodes[0]
+	serverB.ObservationDomains = []string{domainB}
+	serverB.Properties = map[string]any{
+		"name": "srv", "transport": "http", "endpoint": "https://mcp.example",
+		"auth_method":    "unknown",
+		"auth_assurance": "unknown", "auth_evidence": "unknown",
+		"protocol_version": "2025-06-18",
+	}
+	toolB := data.Graph.Nodes[1]
+	toolB.ObservationDomains = []string{domainB}
+	toolB.Properties = map[string]any{"name": "tool"}
+	edgeB := data.Graph.Edges[0]
+	edgeB.ObservationDomains = []string{domainB}
+	edgeB.Properties = map[string]any{"risk_weight": 0.1, "confidence": 1.0}
+	data.Graph.Nodes = append(data.Graph.Nodes, serverB, toolB)
+	data.Graph.Edges = append(data.Graph.Edges, edgeB)
+
+	writer := &fakeWriter{}
+	pipeline := newTestPipeline(
+		writer,
+		&graph.MockGraphDB{},
+		&fakeScanStore{},
+		noOpRunPP,
+	)
+	if _, err := pipeline.Ingest(context.Background(), data); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if len(writer.nodeCalls) != 1 || len(writer.nodeCalls[0].Nodes) != 4 {
+		t.Fatalf("writer node contributions = %+v, want all four owner rows", writer.nodeCalls)
+	}
+	if len(writer.edgeCalls) != 1 || len(writer.edgeCalls[0].Edges) != 2 {
+		t.Fatalf("writer edge contributions = %+v, want both owner rows", writer.edgeCalls)
+	}
+	serverDomains := make(map[string]bool)
+	for _, node := range writer.nodeCalls[0].Nodes {
+		if node.ID == "sha256:aaa" && len(node.ObservationDomains) == 1 {
+			serverDomains[node.ObservationDomains[0]] = true
+		}
+	}
+	if !serverDomains[domainA] || !serverDomains[domainB] || len(serverDomains) != 2 {
+		t.Fatalf("server contributions lost owner scope: %v", serverDomains)
+	}
+}
+
 func TestPipeline_ExhaustiveRootReconcilesRemovedChildAsCompleteEmpty(t *testing.T) {
 	data := validIngestDataFor("scan-removed-child")
 	currentChild := data.Meta.Collection.CoverageKeys[0]
