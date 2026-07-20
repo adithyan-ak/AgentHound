@@ -439,9 +439,20 @@ Lower weight = easier to exploit = higher risk. Used by bounded weighted-path qu
 
 Nodes merge by `objectid` using Cypher `MERGE`. When the same entity appears from multiple collectors:
 
-- Properties use **last-write-wins** semantics
+- Each authoritative observation domain contributes properties independently.
+  Equal or disjoint contributions are unioned deterministically; overlapping
+  non-timestamp values that disagree are rejected before mutation rather than
+  selected by collector or input order.
+- A complete exact re-observation may replace stale managed properties only
+  when the active-owner fingerprints prove that the replacement is coherent.
+  Otherwise the fact remains property-incomplete and publication is withheld.
+- `reference_only` observations contribute identity and ownership but never
+  author managed properties.
 - The node MERGE pivots the previous-hash trio (`previous_description_hash`, `previous_input_schema_hash`, `previous_instructions_hash`) on both `ON CREATE` (seeded from the incoming hashes) and `ON MATCH` (set to the prior values before `n += node.properties` overwrites them) for rug-pull detection
-- Edges accumulate (different collectors contribute different edge types to the same node)
+- Different edge types accumulate. Contributions to the same logical
+  `(source, kind, target)` relationship follow the compatible-union and
+  conflict-rejection rules above; `all_dependencies` relationships replace
+  their complete owner group atomically.
 
 ### Composite Epoch Replacement
 

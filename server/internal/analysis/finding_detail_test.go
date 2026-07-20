@@ -17,7 +17,9 @@ func TestAttackPathFromExactEvidenceUsesPersistedWitness(t *testing.T) {
 			Complete: true,
 			Reasons:  []string{},
 			Nodes: []model.ExactFindingEvidenceNode{
-				{ID: "source", Kinds: []string{"AgentInstance"}, Properties: map[string]any{"name": "agent"}},
+				{ID: "source", Kinds: []string{"AgentInstance"}, Properties: map[string]any{
+					"name": "agent", "observation_fact_fingerprints": []any{"internal-node"},
+				}},
 				{ID: "target", Kinds: []string{"MCPResource"}, Properties: map[string]any{"name": "resource"}},
 			},
 			Edges: []model.ExactFindingEvidenceEdge{{
@@ -25,7 +27,7 @@ func TestAttackPathFromExactEvidenceUsesPersistedWitness(t *testing.T) {
 				Target: "target",
 				Kind:   "HAS_ACCESS_TO",
 				Properties: map[string]any{
-					"risk_weight": 0.2,
+					"risk_weight": 0.2, "observation_fact_fingerprints": []any{"internal-edge"},
 				},
 			}},
 		},
@@ -40,6 +42,15 @@ func TestAttackPathFromExactEvidenceUsesPersistedWitness(t *testing.T) {
 		path.Cost.Value == nil ||
 		*path.Cost.Value != 0.2 {
 		t.Fatalf("evidence state = %+v cost=%+v", path.Completeness, path.Cost)
+	}
+	if _, exists := path.Nodes[0].Properties["observation_fact_fingerprints"]; exists {
+		t.Fatalf("finding detail node leaked internal fingerprint: %+v", path.Nodes[0])
+	}
+	if _, exists := path.Edges[0].Properties["observation_fact_fingerprints"]; exists {
+		t.Fatalf("finding detail edge leaked internal fingerprint: %+v", path.Edges[0])
+	}
+	if _, exists := finding.ExactEvidence.Nodes[0].Properties["observation_fact_fingerprints"]; !exists {
+		t.Fatal("finding detail sanitization mutated persisted exact evidence")
 	}
 }
 

@@ -541,9 +541,7 @@ func exactFindingEvidenceFromRow(row map[string]any) *model.ExactFindingEvidence
 			continue
 		}
 		properties, _ := node["properties"].(map[string]any)
-		if properties == nil {
-			properties = map[string]any{}
-		}
+		properties = graph.PublicFactProperties(properties)
 		if boolFromAny(properties["evidence_missing"]) {
 			exact.Reasons = append(exact.Reasons, "detector_node_missing:"+id)
 		}
@@ -575,9 +573,7 @@ func exactFindingEvidenceFromRow(row map[string]any) *model.ExactFindingEvidence
 		target := stringVal(edge, "target")
 		kind := stringVal(edge, "kind")
 		properties, _ := edge["properties"].(map[string]any)
-		if properties == nil {
-			properties = map[string]any{}
-		}
+		properties = graph.PublicFactProperties(properties)
 		if boolFromAny(properties["evidence_missing"]) ||
 			source == "" || target == "" || kind == "" {
 			exact.Reasons = append(exact.Reasons, fmt.Sprintf("detector_edge_%d_missing", i))

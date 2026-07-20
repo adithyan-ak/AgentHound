@@ -927,10 +927,27 @@ func TestCollector_DuplicateTargets(t *testing.T) {
 }
 
 func TestCollectorPreservesSharedAgentPerTargetDomain(t *testing.T) {
-	body := loadFixture(t, "agent_card_v030.json")
+	fixture := loadFixture(t, "agent_card_v030.json")
 	servers := make([]*httptest.Server, 0, 2)
 	targets := make([]string, 0, 2)
+	wantNames := []string{"SharedAgentAlpha", "SharedAgentBeta"}
+	cardBodies := make([][]byte, len(wantNames))
+	for i, name := range wantNames {
+		var card map[string]any
+		if err := json.Unmarshal(fixture, &card); err != nil {
+			t.Fatalf("unmarshal shared agent fixture: %v", err)
+		}
+		card["name"] = name
+		card["description"] = "owner-specific description for " + name
+		card["url"] = "https://agents.example.test/shared"
+		body, err := json.Marshal(card)
+		if err != nil {
+			t.Fatalf("marshal shared agent fixture %d: %v", i, err)
+		}
+		cardBodies[i] = body
+	}
 	for i := 0; i < 2; i++ {
+		body := cardBodies[i]
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(body)
@@ -953,7 +970,11 @@ func TestCollectorPreservesSharedAgentPerTargetDomain(t *testing.T) {
 		a2aCoverageKey(targets[0]): true,
 		a2aCoverageKey(targets[1]): true,
 	}
-	agentsByID := make(map[string]map[string]bool)
+	wantNameByDomain := map[string]string{
+		a2aCoverageKey(targets[0]): wantNames[0],
+		a2aCoverageKey(targets[1]): wantNames[1],
+	}
+	agentsByID := make(map[string]map[string]string)
 	for _, node := range data.Graph.Nodes {
 		if ingest.ConcreteNodeKind(node.Kinds) != "A2AAgent" ||
 			len(node.ObservationDomains) != 1 {
@@ -964,9 +985,10 @@ func TestCollectorPreservesSharedAgentPerTargetDomain(t *testing.T) {
 			continue
 		}
 		if agentsByID[node.ID] == nil {
-			agentsByID[node.ID] = make(map[string]bool)
+			agentsByID[node.ID] = make(map[string]string)
 		}
-		agentsByID[node.ID][domain] = true
+		name, _ := node.Properties["name"].(string)
+		agentsByID[node.ID][domain] = name
 	}
 	if len(agentsByID) != 1 {
 		t.Fatalf("shared logical agents = %v, want one ID", agentsByID)
@@ -974,6 +996,16 @@ func TestCollectorPreservesSharedAgentPerTargetDomain(t *testing.T) {
 	for _, domains := range agentsByID {
 		if len(domains) != 2 {
 			t.Fatalf("shared agent contributions = %v, want one per target", domains)
+		}
+		for domain, wantName := range wantNameByDomain {
+			if domains[domain] != wantName {
+				t.Fatalf(
+					"shared agent contribution for %s has name %q, want %q",
+					domain,
+					domains[domain],
+					wantName,
+				)
+			}
 		}
 	}
 }
