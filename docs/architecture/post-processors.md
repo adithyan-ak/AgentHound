@@ -244,19 +244,44 @@ credential material or references)
 Joins Config Collector and LiteLLM Looter emissions on `Credential.value_hash`:
 
 ```
-AgentInstance -> MCPServer -[HAS_ENV_VAR]-> Credential(c1)
+AgentInstance -> MCPServer -[AUTHENTICATES_WITH]-> Identity
+    -[USES_CREDENTIAL]-> Credential(c1)
     where c1.value_hash matches...
 LiteLLMGateway -[EXPOSES_CREDENTIAL]-> Credential(c1master)
 LiteLLMGateway -[EXPOSES_CREDENTIAL]-> Credential(c2, type IN [apiKey, virtual_key])
 ```
 
+Both `c1` and `c1master` must have a non-empty hash and explicit
+`merge_key=value_hash`, `identity_basis=value_hash`, `material_status=observed`,
+and `exposure_status=exposed`. Optional `HAS_ENV_VAR` location evidence is not
+part of the correlation path.
+
+Evidence nodes are ordered `(agent, server, identity, c1, c1master, gateway,
+c2)`. Raw relationship evidence is ordered `(TRUSTS_SERVER,
+AUTHENTICATES_WITH, USES_CREDENTIAL, EXPOSES_CREDENTIAL(master),
+EXPOSES_CREDENTIAL(upstream))`; the `c1`/`c1master` value-hash correlation is
+recorded separately as synthetic evidence.
+
 Emits: `(AgentInstance)-[:CAN_REACH]->(c2)` with evidence including
 `merge_value_hash`, `via_gateway`, `upstream_provider`. The resulting finding
 variant is `credential_chain_observed_material` only when c2 explicitly carries
 observed, exposed, non-identity material; masked/hashed targets are
-`credential_chain_reference`. Confidence: 0.95, hops metadata: 5.
+`credential_chain_reference`. Confidence: 0.95, hops metadata: 6.
+`via_gateway` uses the gateway name when present, then its endpoint, and finally
+its immutable object ID. The final fallback is required because a standalone
+LiteLLM loot collection references the gateway without claiming fingerprint-owned
+display properties.
 
-The same single query also computes **credential blast radius**: `count(DISTINCT agent)` reaching the merged secret, written as `blast_radius` on both `c1` (the env-var credential) and `c1master` (its value_hash twin). The agents are collected for the count and re-UNWOUND so the CAN_REACH MERGE stays one edge per (agent, upstream-credential). `blast_radius` then amplifies the server credential-handling risk term (see risk-scoring.md).
+The same single query also computes **credential blast radius** at the canonical
+`value_hash` grain: `count(DISTINCT agent)` across every configured credential
+node representing that secret. The global count is written to every matching
+`c1` and `c1master`; two config nodes with the same secret therefore cannot
+race to leave a smaller per-node count on the shared master. Candidate paths
+are then ordered by their stable seven-node object-ID tuple and reduced to one
+winner per `(agent, upstream credential)` before `MERGE`, so repeated runs and
+multiple config paths cannot overwrite evidence nondeterministically.
+`blast_radius` then amplifies the server credential-handling risk term (see
+risk-scoring.md).
 
 The `value_hash` is the cross-collector merge primitive -- same secret value regardless of how each collector derives its objectid.
 

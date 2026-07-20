@@ -203,42 +203,6 @@ func effectiveAuthIntegrationDB(
 	return ctx, db, graph.NewWriter(driver), cleanup
 }
 
-func processorFixtureNode(
-	id, kind, name, scanID string,
-	extra map[string]any,
-) ingest.Node {
-	properties := map[string]any{
-		"objectid": id,
-		"name":     name,
-		"scan_id":  scanID,
-	}
-	for key, value := range extra {
-		properties[key] = value
-	}
-	return ingest.Node{ID: id, Kinds: []string{kind}, Properties: properties}
-}
-
-func processorFixtureCredential(
-	id, name, scanID, valueHash, mergeKey, identityBasis string,
-) ingest.Node {
-	return processorFixtureNode(id, "Credential", name, scanID, map[string]any{
-		"type":            "apiKey",
-		"value_hash":      valueHash,
-		"merge_key":       mergeKey,
-		"identity_basis":  identityBasis,
-		"material_status": "observed",
-		"exposure_status": "exposed",
-	})
-}
-
-func processorFixtureEdge(source, target, kind, sourceKind, targetKind string) ingest.Edge {
-	return ingest.Edge{
-		Source: source, Target: target, Kind: kind,
-		SourceKind: sourceKind, TargetKind: targetKind,
-		Properties: map[string]any{"risk_weight": 0.1},
-	}
-}
-
 func assertCompositeEdgeCount(
 	t *testing.T,
 	ctx context.Context,

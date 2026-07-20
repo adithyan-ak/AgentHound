@@ -93,10 +93,18 @@ The graph after a successful `agenthound loot --type litellm` run contains:
 If you previously ran the Config Collector against an MCP client config that referenced the master key by env var (e.g. `LITELLM_MASTER_KEY` in `claude_desktop_config.json`), the Config Collector emitted:
 
 ```
-(:MCPServer) -[HAS_ENV_VAR]-> (:Credential value_hash=H1)  // SAME hash as master Credential above
+(:MCPServer) -[AUTHENTICATES_WITH]-> (:Identity)
+  -[USES_CREDENTIAL]-> (:Credential value_hash=H1)  // SAME hash as master Credential above
 ```
 
-The `cross_service_credential_chain` post-processor joins on `value_hash`, walks `(:AgentInstance)-[:TRUSTS_SERVER]->(:MCPServer)-[:HAS_ENV_VAR]->(c1)` and matches `c1.value_hash` to a master `:Credential` exposed by a `:LiteLLMGateway`, then emits `(:AgentInstance)-[:CAN_REACH]->(c2)` for every upstream provider Credential `c2` the gateway exposes.
+The same canonical identity topology is emitted when observed credential
+material came from a header, argument, or URL component; `HAS_ENV_VAR` is only
+extra location evidence for env-backed material. The
+`cross_service_credential_chain` post-processor joins on `value_hash`, walks
+`(:AgentInstance)-[:TRUSTS_SERVER]->(:MCPServer)-[:AUTHENTICATES_WITH]->(:Identity)-[:USES_CREDENTIAL]->(c1)`,
+and matches `c1.value_hash` to a master `:Credential` exposed by a
+`:LiteLLMGateway`, then emits `(:AgentInstance)-[:CAN_REACH]->(c2)` for every
+upstream provider Credential `c2` the gateway exposes.
 
 The pre-built `litellm-credential-leak` query reports the observed master-key
 exposure. It returns provider and virtual-key nodes only as explicit
@@ -121,7 +129,7 @@ findings remain separate analysis output.
 
 **Synthetic value_hash for unknown upstream values.** LiteLLM's `/model/info` strips upstream `api_key` server-side (`remove_sensitive_info_from_deployment` in `openai_endpoint_utils.py`), so the raw upstream provider key is never surfaced. The looter still emits a `:Credential` node for each upstream provider with `value_hash = HashCredentialValue(provider + ":" + model_name)` and marks it `merge_key: "identity"`. This makes the upstream Credential node identifiable across re-runs but excludes it from cross-collector value_hash joins — the `cross_service_credential_chain` post-processor filters `merge_key: "identity"` out of both sides of the join (`server/internal/analysis/processors/cross_service_credential_chain.go`) so a synthetic hash can never false-positive against a real credential. The chain join only fires for the master key (which the operator supplied and carries `merge_key: "value_hash"`).
 
-**Virtual-key value_hash is pre-hashed by LiteLLM.** LiteLLM's `/key/list` returns the token column verbatim, which is already `SHA-256(raw_key).hexdigest()` per `proxy/utils.py::hash_token()`. The looter assigns this string to `value_hash` DIRECTLY (no second hash). Any other collector that observes the raw `sk-...` value produces the same `SHA-256(raw)` and the two nodes merge on `value_hash` as intended. Pre-U-CRIT-1 the looter double-hashed (`SHA-256(SHA-256(raw))`) and the cross-collector merge silently failed.
+**Virtual-key value_hash is pre-hashed by LiteLLM.** LiteLLM's `/key/list` returns the token column verbatim, which is already `SHA-256(raw_key).hexdigest()` per `proxy/utils.py::hash_token()`. The looter assigns this string to `value_hash` DIRECTLY (no second hash). Any other collector that observes the raw `sk-...` value produces the same `SHA-256(raw)`, allowing the distinct collector-owned nodes to correlate on `value_hash`. Pre-U-CRIT-1 the looter double-hashed (`SHA-256(SHA-256(raw))`) and the cross-collector correlation silently failed.
 
 **`--include-credential-values=true` audit-mode.** The default loot is hash-only. With this flag, raw values land in the `value` property on every `:Credential` node. Use this for engagements where the deliverable explicitly includes the credentials themselves (e.g. internal red-team handoff to remediation). The cross-collector chain works the same way either way — `value_hash` is always populated.
 

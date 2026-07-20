@@ -435,15 +435,23 @@ The `value_hash` property on `Credential` nodes is the cross-collector merge pri
 
 **How it works:**
 
-1. Config Collector emits a Credential node via `HAS_ENV_VAR` (MCP server → credential)
+1. Config Collector emits an MCP server's canonical credential topology via
+   `AUTHENTICATES_WITH` and `USES_CREDENTIAL` (server → identity → credential),
+   independent of whether the material came from an env var, header, argument,
+   or URL component
 2. LiteLLM Looter emits a Credential node via `EXPOSES_CREDENTIAL` (gateway → master/upstream/virtual keys)
 3. Both compute `value_hash = SHA-256(credential_material)` via
    `sdk/common.HashCredentialValue`. For a recognized HTTP `Authorization`
    scheme, the material is the value after `Bearer`, `Basic`, or the other
    recognized scheme; protocol syntax is not part of the reusable secret.
-4. Same secret value → same `value_hash` → nodes merge on `objectid` regardless of how each collector derives it
+   Empty and whitespace-only env, header, argument, URL userinfo, and URL query
+   values are placeholders rather than credentials and are omitted. Every
+   non-empty value otherwise preserves its exact bytes, including surrounding
+   whitespace, for hashing and optional raw-value output.
+4. Same secret value → same `value_hash` → the processor correlates the two
+   distinct collector-owned nodes without pretending their object IDs are equal
 
-This enables evidence graphs like `AgentInstance → MCPServer → Credential ← LiteLLMGateway → upstream provider`. An observed `value_hash` match correlates the local and gateway credential records; the upstream target is classified separately as observed material or a reference.
+This enables evidence graphs like `AgentInstance → MCPServer → Identity → Credential ← LiteLLMGateway → upstream provider`. An observed `value_hash` match correlates the local and gateway credential records; the upstream target is classified separately as observed material or a reference.
 
 **Requirement:** Every collector or looter MUST populate `value_hash` on every emitted Credential node.
 

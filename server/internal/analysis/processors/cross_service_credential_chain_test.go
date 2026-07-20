@@ -107,6 +107,10 @@ func TestCrossServiceCredentialChain_CypherJoinsOnValueHash(t *testing.T) {
 	if strings.Contains(captured, "NOT EXISTS((a)-[:CAN_REACH]->(c2))") {
 		t.Errorf("Cypher must refresh existing CAN_REACH scan_id instead of skipping matches; query:\n%s", captured)
 	}
+	if strings.Contains(captured, "HAS_ENV_VAR") ||
+		!strings.Contains(captured, "-[authenticates:AUTHENTICATES_WITH]->(i:Identity)-[uses:USES_CREDENTIAL]->(c1:Credential)") {
+		t.Fatalf("Cypher must use the canonical auth/uses topology, independent of credential location; query:\n%s", captured)
+	}
 }
 
 // TestCrossServiceCredentialChain_MergeKeyFilter guards the U-MED-4
@@ -129,6 +133,8 @@ func TestCrossServiceCredentialChain_MergeKeyFilter(t *testing.T) {
 	for _, side := range []string{
 		"c1.merge_key = 'value_hash'",
 		"c1master.merge_key = 'value_hash'",
+		"c1.identity_basis = 'value_hash'",
+		"c1master.identity_basis = 'value_hash'",
 		"c1.material_status = 'observed'",
 		"c1master.material_status = 'observed'",
 		"c1.exposure_status = 'exposed'",
@@ -136,6 +142,14 @@ func TestCrossServiceCredentialChain_MergeKeyFilter(t *testing.T) {
 	} {
 		if !strings.Contains(captured, side) {
 			t.Errorf("Cypher missing merge_key filter %q; query:\n%s", side, captured)
+		}
+	}
+	for _, nonemptyHash := range []string{
+		"c1.value_hash IS NOT NULL AND c1.value_hash <> ''",
+		"c1master.value_hash IS NOT NULL AND c1master.value_hash <> ''",
+	} {
+		if !strings.Contains(captured, nonemptyHash) {
+			t.Errorf("Cypher accepts an empty value_hash; missing %q; query:\n%s", nonemptyHash, captured)
 		}
 	}
 	if strings.Contains(captured, "material_status IS NULL") ||
@@ -149,7 +163,7 @@ func TestCrossServiceCredentialChain_MergeKeyFilter(t *testing.T) {
 	}
 }
 
-func TestCrossServiceCredentialChain_PreservesPerAgentWitnesses(t *testing.T) {
+func TestCrossServiceCredentialChain_GlobalBlastRadiusAndDeterministicWitnessSelection(t *testing.T) {
 	var captured string
 	mock := &graph.MockGraphDB{
 		ExecuteWriteFunc: func(_ context.Context, cypher string, _ map[string]any) (int, error) {
@@ -165,17 +179,39 @@ func TestCrossServiceCredentialChain_PreservesPerAgentWitnesses(t *testing.T) {
 		t.Fatalf("Process: %v", err)
 	}
 	for _, witness := range []string{
-		"id(trust)", "id(environment)", "id(exposes_master)",
-		"id(exposes_upstream)", "witness.relationship_ids",
-		"e.evidence_relationship_ids = witness_relationship_ids",
-		"collect({\n  agent: a,\n  relationship_ids: agent_paths[0]\n}) AS agent_witnesses",
-		"size(agent_witnesses) AS reachable_agents",
+		"id(trust)", "id(authenticates)", "id(uses)", "id(exposes_master)",
+		"id(exposes_upstream)",
+		"WITH c1.value_hash AS matched_value_hash",
+		"collect(DISTINCT a) AS reachable_agents",
+		"collect(DISTINCT c1) AS configured_credentials",
+		"collect(DISTINCT c1master) AS master_credentials",
+		"SET credential.blast_radius = size(reachable_agents)",
+		"collect(candidate)[0] AS winner",
+		"e.evidence_relationship_ids = winner.relationship_ids",
+		"e.via_gateway = COALESCE(winner.gateway.name, winner.gateway.endpoint, winner.gateway.objectid)",
 	} {
 		if !strings.Contains(captured, witness) {
-			t.Errorf("Cypher missing per-agent witness %q; query:\n%s", witness, captured)
+			t.Errorf("Cypher missing global aggregation or deterministic witness %q; query:\n%s", witness, captured)
 		}
 	}
-	if strings.Contains(captured, "collect(DISTINCT {\n  agent: a,") {
-		t.Errorf("blast radius must not count distinct agent/path tuples; query:\n%s", captured)
+	if strings.Contains(captured, "WITH s, i, c1, c1master, c2, gw") ||
+		strings.Contains(captured, "size(agent_witnesses) AS reachable_agents") {
+		t.Errorf("blast radius must aggregate across distinct c1 nodes sharing one value_hash; query:\n%s", captured)
+	}
+	for _, orderedEvidence := range []string{
+		"candidate.server.objectid,\n" +
+			"         candidate.identity.objectid,\n" +
+			"         candidate.configured_credential.objectid,\n" +
+			"         candidate.master_credential.objectid,\n" +
+			"         candidate.gateway.objectid",
+		"a.objectid, winner.server.objectid, winner.identity.objectid,\n" +
+			"      winner.configured_credential.objectid, winner.master_credential.objectid,\n" +
+			"      winner.gateway.objectid, c2.objectid",
+		"id(trust), id(authenticates), id(uses), id(exposes_master), id(exposes_upstream)",
+		"e.hops = 6",
+	} {
+		if !strings.Contains(captured, orderedEvidence) {
+			t.Errorf("Cypher missing canonical ordered evidence %q; query:\n%s", orderedEvidence, captured)
+		}
 	}
 }
