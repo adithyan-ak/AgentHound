@@ -364,6 +364,27 @@ func TestLoot_RequiresMasterKey(t *testing.T) {
 	}
 }
 
+func TestLoot_RejectsWhitespaceOnlyMasterKeyBeforeProbing(t *testing.T) {
+	s := newStub(t)
+	srv := httptest.NewServer(s.handler())
+	defer srv.Close()
+
+	res, err := (&Looter{}).Loot(context.Background(), action.Target{
+		Address: strings.TrimPrefix(srv.URL, "http://"),
+	}, action.LootOptions{
+		Credentials: map[string]string{"master_key": " \t\n "},
+	})
+	if err == nil {
+		t.Fatal("expected error for whitespace-only master_key")
+	}
+	if res != nil {
+		t.Fatalf("result = %+v, want nil before graph construction", res)
+	}
+	if len(s.seenMethods) != 0 {
+		t.Fatalf("requests = %v, want none for invalid credential input", s.seenMethods)
+	}
+}
+
 func TestLoot_IncludeCredentialValues(t *testing.T) {
 	// When the operator opts in, the master Credential carries the raw
 	// value too. The merge-primitive value_hash is unchanged.
