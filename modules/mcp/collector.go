@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -110,13 +111,30 @@ func (c *MCPCollector) Collect(ctx context.Context, opts collector.CollectOption
 	data.Meta.IdentitySchemes = []ingest.IdentityScheme{{
 		EntityKind: "MCPServer",
 		Transport:  "stdio",
-		Scheme:     ingest.MCPStdioIdentitySchemeV2,
-		Version:    2,
+		Scheme:     ingest.MCPStdioIdentitySchemeV3,
+		Version:    3,
 	}}
 
 	results := c.enumerateAll(ctx, specs, scanID)
 
-	seen := make(map[string]bool)
+	nodeSeen := make(map[string]bool)
+	addNode := func(node ingest.Node) {
+		if key, comparable := mcpNodeContributionDedupKey(node); comparable && nodeSeen[key] {
+			return
+		} else if comparable {
+			nodeSeen[key] = true
+		}
+		data.Graph.Nodes = append(data.Graph.Nodes, node)
+	}
+	edgeSeen := make(map[string]bool)
+	addEdge := func(edge ingest.Edge) {
+		if key, comparable := mcpEdgeContributionDedupKey(edge); comparable && edgeSeen[key] {
+			return
+		} else if comparable {
+			edgeSeen[key] = true
+		}
+		data.Graph.Edges = append(data.Graph.Edges, edge)
+	}
 	coverage := make(map[string]bool, len(results))
 	report := &ingest.CollectionReport{}
 	if configDiscovery != nil {
@@ -141,28 +159,11 @@ func (c *MCPCollector) Collect(ctx context.Context, opts collector.CollectOption
 		graph := ingest.GraphData{Nodes: r.Nodes, Edges: r.Edges}
 		ingest.TagObservationDomain(&graph, scopeKey)
 		for _, n := range graph.Nodes {
-			if !seen[n.ID] {
-				seen[n.ID] = true
-				data.Graph.Nodes = append(data.Graph.Nodes, n)
-				continue
-			}
-			for i := range data.Graph.Nodes {
-				if data.Graph.Nodes[i].ID == n.ID {
-					data.Graph.Nodes[i].ObservationDomains = ingest.MergeObservationDomains(
-						data.Graph.Nodes[i].ObservationDomains,
-						n.ObservationDomains,
-					)
-					if data.Graph.Nodes[i].Properties == nil {
-						data.Graph.Nodes[i].Properties = make(map[string]any)
-					}
-					for key, value := range n.Properties {
-						data.Graph.Nodes[i].Properties[key] = value
-					}
-					break
-				}
-			}
+			addNode(n)
 		}
-		data.Graph.Edges = append(data.Graph.Edges, graph.Edges...)
+		for _, edge := range graph.Edges {
+			addEdge(edge)
+		}
 	}
 	for key := range coverage {
 		report.CoverageKeys = append(report.CoverageKeys, key)
@@ -172,6 +173,27 @@ func (c *MCPCollector) Collect(ctx context.Context, opts collector.CollectOption
 	data.Meta.Collection = report
 
 	return data, nil
+}
+
+func mcpNodeContributionKey(node ingest.Node) string {
+	return node.ID + "\x00" + string(node.PropertySemantics) + "\x00" +
+		strings.Join(ingest.MergeObservationDomains(node.ObservationDomains), "\x1f")
+}
+
+func mcpEdgeContributionKey(edge ingest.Edge) string {
+	return edge.Source + "\x00" + edge.Kind + "\x00" + edge.Target + "\x00" +
+		string(edge.ObservationSemantics) + "\x00" +
+		strings.Join(ingest.MergeObservationDomains(edge.ObservationDomains), "\x1f")
+}
+
+func mcpNodeContributionDedupKey(node ingest.Node) (string, bool) {
+	digest, err := common.CanonicalJSONHash(node)
+	return mcpNodeContributionKey(node) + "\x00" + digest, err == nil
+}
+
+func mcpEdgeContributionDedupKey(edge ingest.Edge) (string, bool) {
+	digest, err := common.CanonicalJSONHash(edge)
+	return mcpEdgeContributionKey(edge) + "\x00" + digest, err == nil
 }
 
 func (c *MCPCollector) enumerateAll(ctx context.Context, specs []ServerSpec, scanID string) []*ServerResult {
@@ -259,25 +281,126 @@ func (c *MCPCollector) buildServerList(
 		}
 	}
 
-	unique := make([]ServerSpec, 0, len(specs))
-	seen := make(map[string]bool)
-	for _, spec := range specs {
-		key := computeServerID(spec)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		unique = append(unique, spec)
-	}
-	return unique, discovery, nil
+	return collapseServerSpecs(specs), discovery, nil
 }
 
 func serverDefToSpec(server config.ServerDef) ServerSpec {
 	return ServerSpec{
-		Name: server.Name, Transport: server.Transport, Command: server.Command,
+		Name: server.Name, ConfiguredNames: []string{server.Name},
+		Transport: server.Transport, Command: server.Command,
 		Args: append([]string(nil), server.Args...), Env: server.Env, URL: server.URL,
 		Headers: server.Headers, Configured: true,
 	}
+}
+
+const ambiguousServerProfileError = "multiple execution or authentication profiles share one canonical MCP server identity"
+
+// collapseServerSpecs groups aliases by canonical server identity. Identical
+// connection profiles are safe aliases and are enumerated once. Profiles that
+// differ in command, argv, URL, environment, or headers are not interchangeable
+// access paths; choosing one would make map/input order security-significant,
+// so the group becomes an explicit fail-closed result with no network attempt.
+func collapseServerSpecs(specs []ServerSpec) []ServerSpec {
+	type profile struct {
+		Transport string            `json:"transport"`
+		Command   string            `json:"command"`
+		Args      []string          `json:"args"`
+		Env       map[string]string `json:"env"`
+		URL       string            `json:"url"`
+		Headers   map[string]string `json:"headers"`
+	}
+	type candidate struct {
+		spec          ServerSpec
+		serverID      string
+		profileDigest string
+		ambiguous     bool
+	}
+	candidates := make([]candidate, 0, len(specs))
+	for _, spec := range specs {
+		canonicalHeaders, conflictingHeaders := canonicalMCPHeaders(spec.Headers)
+		spec.Headers = canonicalHeaders
+		args := append([]string{}, spec.Args...)
+		env := make(map[string]string, len(spec.Env))
+		for name, value := range spec.Env {
+			env[name] = value
+		}
+		headers := make(map[string]string, len(spec.Headers))
+		for name, value := range spec.Headers {
+			headers[name] = value
+		}
+		digest := ""
+		if !conflictingHeaders {
+			var err error
+			digest, err = common.CanonicalJSONHash(profile{
+				Transport: spec.Transport,
+				Command:   spec.Command,
+				Args:      args,
+				Env:       env,
+				URL:       spec.URL,
+				Headers:   headers,
+			})
+			if err != nil {
+				digest = ""
+			}
+		}
+		candidates = append(candidates, candidate{
+			spec: spec, serverID: computeServerID(spec), profileDigest: digest,
+			ambiguous: conflictingHeaders,
+		})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].serverID != candidates[j].serverID {
+			return candidates[i].serverID < candidates[j].serverID
+		}
+		if candidates[i].profileDigest != candidates[j].profileDigest {
+			return candidates[i].profileDigest < candidates[j].profileDigest
+		}
+		return candidates[i].spec.Name < candidates[j].spec.Name
+	})
+
+	var collapsed []ServerSpec
+	for start := 0; start < len(candidates); {
+		end := start + 1
+		for end < len(candidates) && candidates[end].serverID == candidates[start].serverID {
+			end++
+		}
+		group := candidates[start:end]
+		representative := group[0].spec
+		profiles := make(map[string]bool)
+		ambiguous := false
+		var configuredNames []string
+		for _, item := range group {
+			profiles[item.profileDigest] = true
+			ambiguous = ambiguous || item.ambiguous
+			if item.spec.Configured {
+				representative.Configured = true
+				configuredNames = append(configuredNames, item.spec.Name)
+				configuredNames = append(configuredNames, item.spec.ConfiguredNames...)
+			}
+		}
+		representative.ConfiguredNames = uniqueSortedStrings(configuredNames)
+		if ambiguous || len(profiles) != 1 || group[0].profileDigest == "" {
+			representative.Ambiguity = ambiguousServerProfileError
+		}
+		collapsed = append(collapsed, representative)
+		start = end
+	}
+	return collapsed
+}
+
+func uniqueSortedStrings(values []string) []string {
+	seen := make(map[string]bool)
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func summarizeConfigDiscovery(result *config.DiscoveryResult) (ingest.OutcomeState, int, string) {
@@ -375,18 +498,7 @@ func discoverAllConfigs() ([]ServerSpec, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	uniqueSpecs := make([]ServerSpec, 0, len(allSpecs))
-	seen := make(map[string]bool)
-	for _, spec := range allSpecs {
-		key := computeServerID(spec)
-		if !seen[key] {
-			seen[key] = true
-			uniqueSpecs = append(uniqueSpecs, spec)
-		}
-	}
-
-	return uniqueSpecs, nil
+	return collapseServerSpecs(allSpecs), nil
 }
 
 func discoverRawConfigSpecs() ([]ServerSpec, error) {

@@ -84,6 +84,13 @@ whose generic shape is shared by several clients and whose path proves none of
 them, the servers are retained under client `unknown` instead of inventing a
 specific application.
 
+Credential-named env vars, headers, arguments, and URL components with empty or
+whitespace-only values are omitted rather than emitted as exposed credentials
+sharing the hash of an empty placeholder. Non-empty values preserve their
+exact bytes, including surrounding whitespace, when computing `value_hash`
+(recognized HTTP `Authorization` schemes still remove only the protocol scheme
+before hashing).
+
 Instruction discovery covers the root project files plus every nested
 `<component>/.cursor/rules/**/*.mdc` tree beneath the effective project root.
 It does not follow directory symlinks or enter `.git`, and bounds traversal at
@@ -103,6 +110,16 @@ reads, parser registry, and failure distinctions as config collection. Usable
 servers are retained when another config is malformed or unreadable, but the
 MCP authoritative root completes only when discovery and every active server
 scope are complete.
+
+For HTTP targets, a successful Initialize proves anonymous access only when the
+configured URL contains no userinfo/query and the request used no non-empty
+caller-configured header. Recognized `Authorization` and API-key headers retain
+their method. Every other non-empty configured header, including cookies,
+opaque session headers, `Accept`, and `User-Agent`, produces an unknown
+configured-material observation rather than fabricated anonymous evidence.
+Empty/whitespace-only values carry no credential material. There is no benign
+non-empty header allowlist and the collector does not issue a second
+Initialize without the configured headers.
 
 Read-only: calls `tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`. Never calls `tools/call` or `resources/read`.
 
@@ -497,6 +514,12 @@ Extract training signals from model artifacts (v0.5). Parses GGUF weight files a
 agenthound extract <source-node-id> --type embedding-invert \
     --artifact /tmp/loot/model.bin --commit --engagement-id DC35-DEMO
 ```
+
+`<source-node-id>` is the already-established `AIModel` object ID, not a URL,
+model name, or artifact path. It must use AgentHound's canonical
+`sha256:` plus 64 lowercase hexadecimal representation. The extractor carries
+that identity as an empty `reference_only` endpoint so strict ingest can close
+the emitted edges without inventing model properties.
 
 | Flag | Default | Description |
 |------|---------|-------------|

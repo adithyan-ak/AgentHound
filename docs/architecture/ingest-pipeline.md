@@ -62,8 +62,8 @@ Input is the `sdk/ingest.IngestData` struct:
     "identity_schemes": [{
       "entity_kind": "MCPServer",
       "transport": "stdio",
-      "scheme": "mcp_stdio_v2_ordered",
-      "version": 2
+      "scheme": "mcp_stdio_v3_hashed_argv",
+      "version": 3
     }]
   },
   "graph": {
@@ -81,6 +81,17 @@ scoped coverage key, target, method, and explicit state; complete-empty
 collection is represented by an outcome with `items: 0`. Ruleset entries
 persist canonical effective matcher definitions and every non-fatal load
 failure. Digests identify semantics but do not attest authenticity.
+Stdio MCP server nodes publish an ordered `arg_hashes` array and matching
+`arg_count`; raw argv remains collector-local and is rejected by ingest. Every
+MCP server rejects executable `args`, `env`, `headers`, and `url` properties
+regardless of its declared transport. Every present MCP `endpoint` must be valid
+and already equal the canonical output of `SanitizeHTTPEndpoint`, even when the
+transport discriminator is missing or malformed. Authoritative MCP servers
+require the canonical string transport `http` or `stdio`; HTTP requires the
+endpoint property, while stdio publishes `command` and omits `endpoint`.
+User-info, query, fragments, invalid raw endpoint text, and the fixed invalid
+placeholder cannot enter the graph. Property-neutral `reference_only` endpoints
+remain exempt from authoritative property requirements.
 Every node and edge must carry one or more `observation_domains` drawn from the
 declared coverage keys. The server never infers fact ownership from a
 single-domain report. A node may set `property_semantics: "reference_only"` to
@@ -140,9 +151,14 @@ Checks performed:
 - coverage keys must use `<collector>:<scope>:sha256:<digest>`
 - every raw fact must carry explicit declared observation domains
 - Every node must have a non-empty `id` and at least one `kind` from `AllowedNodeKinds` (23 kinds)
-- Every edge must have non-empty `source`/`target` and a `kind` from `RawEdgeKinds` (18 kinds)
+- Every edge must have non-empty `source`/`target` and a `kind` from `RawEdgeKinds` (20 kinds)
 - v1 property aliases are rejected; canonical status/evidence fields are
   required for credentials, hosts, MCP servers, and A2A agents
+- configured MCP/A2A method, assurance, and evidence must form a
+  producer-compatible tuple
+- MCP observed auth must be a complete protocol-valid tuple; A2A observed auth
+  is accepted only for the exact bounded nonexistent-task positive probe with
+  its method and status metadata
 
 Validation errors are structured (`FieldError` with JSON path + message) and returned as a `ValidationError` to the caller. On failure, the pipeline aborts -- no partial writes.
 

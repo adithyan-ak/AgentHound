@@ -44,12 +44,16 @@ The output file is a standard ingest envelope. `discover` emits raw `:MCPServer`
 ```json
 {
   "meta": {
-    "version": 2,
+    "version": 3,
     "type": "agenthound-ingest",
     "collector": "scan",
     "collector_version": "0.3.0-dev",
     "timestamp": "2026-07-11T20:00:00Z",
     "scan_id": "...",
+    "origin": {
+      "host_id": "security-laptop",
+      "network_realm_id": "corp-lab"
+    },
     "collection": {
       "state": "complete",
       "coverage_keys": ["scan:discover:sha256:..."],
@@ -70,8 +74,8 @@ The output file is a standard ingest envelope. `discover` emits raw `:MCPServer`
     "identity_schemes": [{
       "entity_kind": "MCPServer",
       "transport": "stdio",
-      "scheme": "mcp_stdio_v2_ordered",
-      "version": 2
+      "scheme": "mcp_stdio_v3_hashed_argv",
+      "version": 3
     }],
     "extra": {
       "discover_spec": "10.0.0.0/24",

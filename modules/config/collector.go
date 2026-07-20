@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/adithyan-ak/agenthound/sdk/collector"
 	"github.com/adithyan-ak/agenthound/sdk/common"
@@ -83,8 +84,8 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 	data.Meta.IdentitySchemes = []ingest.IdentityScheme{{
 		EntityKind: "MCPServer",
 		Transport:  "stdio",
-		Scheme:     ingest.MCPStdioIdentitySchemeV2,
-		Version:    2,
+		Scheme:     ingest.MCPStdioIdentitySchemeV3,
+		Version:    3,
 	}}
 
 	homeDir, err := os.UserHomeDir()
@@ -125,43 +126,30 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 	data.Meta.Collection.CoverageKeys = uniqueSorted(data.Meta.Collection.CoverageKeys)
 	data.Meta.Collection.State = ingest.AggregateOutcomeState(data.Meta.Collection.Outcomes)
 
-	nodeIndex := make(map[string]int)
+	nodeSeen := make(map[string]bool)
 	addNode := func(n ingest.Node, domains ...string) {
 		n.ObservationDomains = ingest.MergeObservationDomains(
 			n.ObservationDomains,
 			domains,
 		)
-		if index, seen := nodeIndex[n.ID]; seen {
-			data.Graph.Nodes[index].ObservationDomains = ingest.MergeObservationDomains(
-				data.Graph.Nodes[index].ObservationDomains,
-				n.ObservationDomains,
-			)
-			if data.Graph.Nodes[index].Properties == nil {
-				data.Graph.Nodes[index].Properties = make(map[string]any)
-			}
-			for key, value := range n.Properties {
-				data.Graph.Nodes[index].Properties[key] = value
-			}
+		if key, comparable := nodeContributionDedupKey(n); comparable && nodeSeen[key] {
 			return
+		} else if comparable {
+			nodeSeen[key] = true
 		}
-		nodeIndex[n.ID] = len(data.Graph.Nodes)
 		data.Graph.Nodes = append(data.Graph.Nodes, n)
 	}
-	edgeIndex := make(map[string]int)
+	edgeSeen := make(map[string]bool)
 	addEdge := func(e ingest.Edge, domains ...string) {
 		e.ObservationDomains = ingest.MergeObservationDomains(
 			e.ObservationDomains,
 			domains,
 		)
-		key := e.Kind + "\x00" + e.Source + "\x00" + e.Target
-		if index, seen := edgeIndex[key]; seen {
-			data.Graph.Edges[index].ObservationDomains = ingest.MergeObservationDomains(
-				data.Graph.Edges[index].ObservationDomains,
-				e.ObservationDomains,
-			)
+		if key, comparable := edgeContributionDedupKey(e); comparable && edgeSeen[key] {
 			return
+		} else if comparable {
+			edgeSeen[key] = true
 		}
-		edgeIndex[key] = len(data.Graph.Edges)
 		data.Graph.Edges = append(data.Graph.Edges, e)
 	}
 
@@ -210,14 +198,18 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 			"config_path": absPath,
 		}), scopeKey)
 
-		for _, srv := range cfg.Servers {
-			if srv.Disabled {
-				continue
-			}
-
-			serverIdentity := serverIdentityFor(srv)
+		for _, group := range groupServerDefinitions(cfg.Servers) {
+			srv := group.Definitions[0]
+			serverIdentity := group.Identity
 			serverID := serverIdentity.ObjectID
-			creds := ExtractCredentials(srv.Env, srv.Headers, srv.Name, opts.IncludeCredentialValues, engine)
+			var creds []CredentialInfo
+			for _, definition := range group.Definitions {
+				creds = append(creds, ExtractServerCredentials(
+					definition,
+					opts.IncludeCredentialValues,
+					engine,
+				)...)
+			}
 			authMethod := deriveAuthMethod(srv.Transport, creds)
 			authAssessment := common.AssessAuth(string(authMethod))
 			serverProps := serverNodeProperties(srv, creds)
@@ -226,11 +218,14 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 			trustWeight := authRiskWeight(string(authMethod))
 			trustProps := common.NewEdgeProps(scanID, 1.0, trustWeight)
 			trustProps["auth_assessment_complete"] = authAssessment.Weakness != nil
+			trustProps["configured_names"] = append([]string(nil), group.Names...)
 			addEdge(common.NewEdge(agentID, serverID, "TRUSTS_SERVER", "AgentInstance", "MCPServer",
 				trustProps), scopeKey)
 
+			configuredProps := common.DefaultEdgeProps(scanID)
+			configuredProps["configured_names"] = append([]string(nil), group.Names...)
 			addEdge(common.NewEdge(serverID, configFileID, "CONFIGURED_IN", "MCPServer", "ConfigFile",
-				common.DefaultEdgeProps(scanID)), scopeKey)
+				configuredProps), scopeKey)
 
 			hostName := hostForServer(srv)
 			hostID := common.HostNodeID(hostName)
@@ -243,18 +238,31 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 			addEdge(common.NewEdge(serverID, hostID, "RUNS_ON", "MCPServer", "Host",
 				common.DefaultEdgeProps(scanID)), scopeKey)
 
+			staticIdentityTypes := make(map[string]bool)
+			for _, cred := range creds {
+				if cred.Type == "hardcoded" {
+					staticIdentityTypes[credToIdentityType(cred)] = true
+				}
+			}
 			for _, cred := range creds {
 				identityType := credToIdentityType(cred)
 				identityID := ingest.ComputeNodeID("Identity", serverID, identityType)
 				identityProps := map[string]any{
 					"type":           identityType,
-					"scope":          srv.Name,
-					"is_static":      cred.Type == "hardcoded",
+					"scope":          serverID,
+					"is_static":      staticIdentityTypes[identityType],
 					"auth_assurance": string(common.AssessAuth(identityType).Assurance),
 				}
 				addNode(common.NewNode(identityID, []string{"Identity"}, identityProps), scopeKey)
 
-				credID := ingest.ComputeNodeID("Credential", cred.Source, cred.Name)
+				credID := ingest.ComputeNodeID(
+					"Credential",
+					scopeKey,
+					serverID,
+					cred.Source,
+					cred.Location,
+					cred.Name,
+				)
 				// value_hash is the cross-collector merge primitive — see
 				// docs/plans/v0.2-implementation.md decision B and
 				// sdk/common/hasher.go HashCredentialValue. Always populated
@@ -268,6 +276,7 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 					"type":         cred.Type,
 					"name":         cred.Name,
 					"source":       cred.Source,
+					"location":     cred.Location,
 					"high_entropy": cred.HighEntropy,
 					"format":       cred.Format,
 					"value_hash":   cred.ValueHash,
@@ -292,7 +301,7 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 				addEdge(common.NewEdge(identityID, credID, "USES_CREDENTIAL", "Identity", "Credential",
 					common.NewEdgeProps(scanID, 1.0, 0.5)), scopeKey)
 
-				if cred.Type == "hardcoded" || cred.Type == "envVar" {
+				if cred.Location == "env" {
 					addEdge(common.NewEdge(serverID, credID, "HAS_ENV_VAR", "MCPServer", "Credential",
 						common.DefaultEdgeProps(scanID)), scopeKey)
 				}
@@ -341,6 +350,57 @@ func serverIdentityFor(srv ServerDef) ingest.MCPServerIdentity {
 	return ingest.ResolveMCPServerIdentity("stdio", srv.Command, srv.Args...)
 }
 
+type serverDefinitionGroup struct {
+	Identity    ingest.MCPServerIdentity
+	Names       []string
+	Definitions []ServerDef
+}
+
+// groupServerDefinitions collapses aliases that refer to the same canonical
+// MCP server within one configuration owner. Alias names remain edge-local
+// configuration evidence; they must not create conflicting scalar properties
+// on the shared MCPServer or Identity nodes.
+func groupServerDefinitions(definitions []ServerDef) []serverDefinitionGroup {
+	byID := make(map[string]*serverDefinitionGroup)
+	for _, definition := range definitions {
+		if definition.Disabled {
+			continue
+		}
+		identity := serverIdentityFor(definition)
+		group := byID[identity.ObjectID]
+		if group == nil {
+			group = &serverDefinitionGroup{Identity: identity}
+			byID[identity.ObjectID] = group
+		}
+		group.Names = append(group.Names, definition.Name)
+		group.Definitions = append(group.Definitions, definition)
+	}
+
+	ids := make([]string, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	groups := make([]serverDefinitionGroup, 0, len(ids))
+	for _, id := range ids {
+		group := byID[id]
+		group.Names = uniqueSorted(group.Names)
+		sort.SliceStable(group.Definitions, func(i, j int) bool {
+			if group.Definitions[i].Name != group.Definitions[j].Name {
+				return group.Definitions[i].Name < group.Definitions[j].Name
+			}
+			left, leftErr := common.CanonicalJSONHash(group.Definitions[i])
+			right, rightErr := common.CanonicalJSONHash(group.Definitions[j])
+			if leftErr != nil || rightErr != nil {
+				return false
+			}
+			return left < right
+		})
+		groups = append(groups, *group)
+	}
+	return groups
+}
+
 // ServerNodeProperties returns the configuration-backed MCPServer facts shared
 // by config collection and MCP auto-discovery. Values are derived without
 // retaining raw credential material so the live MCP projection can preserve
@@ -348,14 +408,17 @@ func serverIdentityFor(srv ServerDef) ingest.MCPServerIdentity {
 func ServerNodeProperties(srv ServerDef, engine *rules.Engine) map[string]any {
 	return serverNodeProperties(
 		srv,
-		ExtractCredentials(srv.Env, srv.Headers, srv.Name, false, engine),
+		ExtractServerCredentials(srv, false, engine),
 	)
 }
 
 func serverNodeProperties(srv ServerDef, creds []CredentialInfo) map[string]any {
-	endpoint := srv.Command
+	identity := serverIdentityFor(srv)
+	displayName := stdioServerDisplayName(srv.Command, identity.ObjectID)
+	var safeHTTP ingest.SanitizedHTTPEndpoint
 	if srv.Transport == "http" {
-		endpoint = srv.URL
+		safeHTTP = ingest.SanitizeHTTPEndpoint(srv.URL)
+		displayName = safeHTTP.Display
 	}
 	authMethod := deriveAuthMethod(srv.Transport, creds)
 	authAssessment := common.AssessAuth(string(authMethod))
@@ -372,18 +435,30 @@ func serverNodeProperties(srv ServerDef, creds []CredentialInfo) map[string]any 
 	}
 
 	props := map[string]any{
-		"name":           srv.Name,
-		"endpoint":       endpoint,
+		"name":           displayName,
 		"transport":      srv.Transport,
 		"auth_method":    string(authMethod),
 		"auth_assurance": string(authAssessment.Assurance),
 		"auth_evidence":  authEvidence,
 		"pinning_status": string(pinningStatus),
-		"id_scheme":      serverIdentityFor(srv).Scheme,
+		"id_scheme":      identity.Scheme,
 	}
-	if srv.Transport == "stdio" {
+	switch srv.Transport {
+	case "stdio":
 		props["command"] = srv.Command
-		props["args"] = append([]string(nil), srv.Args...)
+		props["arg_hashes"] = append([]string{}, identity.ArgumentHashes...)
+		props["arg_count"] = len(identity.ArgumentHashes)
+	case "http":
+		props["endpoint"] = safeHTTP.Display
+		if safeHTTP.UserinfoRedacted {
+			props["endpoint_userinfo_redacted"] = true
+		}
+		if safeHTTP.QueryRedacted {
+			props["endpoint_query_redacted"] = true
+		}
+		if safeHTTP.FragmentRedacted {
+			props["endpoint_fragment_redacted"] = true
+		}
 	}
 	switch pinningStatus {
 	case common.PinningPinned:
@@ -392,6 +467,21 @@ func serverNodeProperties(srv ServerDef, creds []CredentialInfo) map[string]any 
 		props["is_pinned"] = false
 	}
 	return props
+}
+
+func stdioServerDisplayName(command, objectID string) string {
+	name := filepath.Base(strings.TrimSpace(command))
+	if name == "." || name == "" {
+		name = "stdio"
+	}
+	digest := strings.TrimPrefix(objectID, "sha256:")
+	if len(digest) > 8 {
+		digest = digest[:8]
+	}
+	if digest == "" {
+		return name
+	}
+	return fmt.Sprintf("%s [%s]", name, digest)
 }
 
 func hostForServer(srv ServerDef) string {
@@ -448,4 +538,28 @@ func credToIdentityType(cred CredentialInfo) string {
 		return string(common.AuthCustom)
 	}
 	return string(method)
+}
+
+// Contribution keys deliberately include ownership and semantics. A shared
+// graph identity observed by two config scopes must remain two contributions
+// until the graph writer fingerprints each owner independently.
+func nodeContributionKey(node ingest.Node) string {
+	return node.ID + "\x00" + string(node.PropertySemantics) + "\x00" +
+		strings.Join(ingest.MergeObservationDomains(node.ObservationDomains), "\x1f")
+}
+
+func edgeContributionKey(edge ingest.Edge) string {
+	return edge.Source + "\x00" + edge.Kind + "\x00" + edge.Target + "\x00" +
+		string(edge.ObservationSemantics) + "\x00" +
+		strings.Join(ingest.MergeObservationDomains(edge.ObservationDomains), "\x1f")
+}
+
+func nodeContributionDedupKey(node ingest.Node) (string, bool) {
+	digest, err := common.CanonicalJSONHash(node)
+	return nodeContributionKey(node) + "\x00" + digest, err == nil
+}
+
+func edgeContributionDedupKey(edge ingest.Edge) (string, bool) {
+	digest, err := common.CanonicalJSONHash(edge)
+	return edgeContributionKey(edge) + "\x00" + digest, err == nil
 }

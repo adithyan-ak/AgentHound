@@ -571,7 +571,11 @@ func collectMCP(
 		ScanID:      scanID,
 		RulesEngine: engine,
 	}
-	slog.Info("running mcp collector", "discover", opts.Discover, "url", url)
+	logURL := ""
+	if url != "" {
+		logURL = ingest.SanitizeHTTPEndpoint(url).Display
+	}
+	slog.Info("running mcp collector", "discover", opts.Discover, "url", logURL)
 	return c.Collect(ctx, opts)
 }
 

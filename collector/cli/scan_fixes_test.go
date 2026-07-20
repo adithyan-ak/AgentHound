@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -309,6 +310,80 @@ func TestRunScan_URLWithoutMCP(t *testing.T) {
 	if _, err := os.Stat(out); err != nil {
 		t.Fatalf("expected artifact at %s: %v", out, err)
 	}
+}
+
+func TestCollectMCP_DefaultLogsRedactTargetURLSecrets(t *testing.T) {
+	const rawURL = "http://url-user:url-pass@127.0.0.1:1/mcp?api_key=url-query-secret#url-fragment-secret"
+	const safeURL = "http://127.0.0.1:1/mcp"
+
+	for _, tc := range []struct {
+		name    string
+		jsonLog bool
+	}{
+		{name: "text"},
+		{name: "json", jsonLog: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureMCPCollectionLogs(t, tc.jsonLog, rawURL)
+			if !strings.Contains(logs, safeURL) {
+				t.Fatalf("logs do not contain sanitized endpoint %q: %s", safeURL, logs)
+			}
+			for _, secret := range []string{
+				rawURL,
+				"url-user",
+				"url-pass",
+				"url-query-secret",
+				"url-fragment-secret",
+			} {
+				if strings.Contains(logs, secret) {
+					t.Fatalf("default %s logs leaked %q: %s", tc.name, secret, logs)
+				}
+			}
+		})
+	}
+}
+
+func captureMCPCollectionLogs(t *testing.T, jsonLog bool, rawURL string) string {
+	t.Helper()
+
+	previousLogger := slog.Default()
+	previousStderr := os.Stderr
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stderr capture pipe: %v", err)
+	}
+	os.Stderr = writer
+	setupLogger("info", false, jsonLog)
+
+	defer func() {
+		slog.SetDefault(previousLogger)
+		os.Stderr = previousStderr
+		_ = writer.Close()
+		_ = reader.Close()
+	}()
+
+	_, _ = collectMCP(
+		context.Background(),
+		testCollectionOrigin,
+		rawURL,
+		"",
+		1,
+		100*time.Millisecond,
+		false,
+		"log-redaction-test",
+		nil,
+	)
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close stderr capture: %v", err)
+	}
+	os.Stderr = previousStderr
+	slog.SetDefault(previousLogger)
+
+	logs, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read stderr capture: %v", err)
+	}
+	return string(logs)
 }
 
 // TestRunScan_ExplicitConfigWithURLStillErrors confirms the Finding 7 fix

@@ -1,11 +1,13 @@
 package mcppoison
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -311,6 +313,104 @@ func newTestPoisoner(t *testing.T) *Poisoner {
 func authorizeFixture(t *testing.T) {
 	t.Helper()
 	t.Setenv("AGENTHOUND_CONTEXTFORGE_TOKEN", testSessionJWT(t, nil))
+}
+
+func TestContextForgePreflightOmitsRawMCPInitializeError(t *testing.T) {
+	authorizeFixture(t)
+	const sentinel = "MCP-PREFLIGHT-INITIALIZE-SECRET-b6c2"
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID json.RawMessage `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, "request decode failed", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"error": map[string]any{
+				"code":    -32000,
+				"message": sentinel,
+			},
+		})
+	}))
+	defer httpServer.Close()
+
+	_, err := newTestPoisoner(t).preflight(context.Background(), contextForgeConfig{
+		MCPURL: httpServer.URL, ManagementBase: httpServer.URL,
+		ServerID: testServerID, ToolName: testToolName,
+	})
+	if err == nil || !strings.Contains(err.Error(), "observe MCP tool through initialized SDK session") ||
+		!strings.Contains(err.Error(), "initialize failed") {
+		t.Fatalf("preflight error = %v, want categorized MCP initialize failure", err)
+	}
+	if strings.Contains(err.Error(), sentinel) {
+		t.Fatalf("preflight error exposed raw MCP initialize detail: %v", err)
+	}
+}
+
+func TestContextForgePreflightOmitsRawMCPToolsListError(t *testing.T) {
+	authorizeFixture(t)
+	const sentinel = "MCP-PREFLIGHT-TOOLS-LIST-SECRET-670e"
+	server := mcpsdk.NewServer(
+		&mcpsdk.Implementation{Name: "preflight-list-error", Version: "1.0.0"}, nil,
+	)
+	server.AddTool(
+		&mcpsdk.Tool{
+			Name: testToolName, Description: testOriginal,
+			InputSchema: &jsonschema.Schema{Type: "object"},
+		},
+		func(context.Context, *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+			return &mcpsdk.CallToolResult{}, nil
+		},
+	)
+	handler := mcpsdk.NewStreamableHTTPHandler(
+		func(*http.Request) *mcpsdk.Server { return server },
+		&mcpsdk.StreamableHTTPOptions{JSONResponse: true},
+	)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "request read failed", http.StatusInternalServerError)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		if !bytes.Contains(body, []byte(`"method":"tools/list"`)) {
+			handler.ServeHTTP(w, r)
+			return
+		}
+		var request struct {
+			ID json.RawMessage `json:"id"`
+		}
+		if err := json.Unmarshal(body, &request); err != nil {
+			http.Error(w, "request decode failed", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"error": map[string]any{
+				"code":    -32000,
+				"message": sentinel,
+			},
+		})
+	}))
+	defer httpServer.Close()
+
+	_, err := newTestPoisoner(t).preflight(context.Background(), contextForgeConfig{
+		MCPURL: httpServer.URL, ManagementBase: httpServer.URL,
+		ServerID: testServerID, ToolName: testToolName,
+	})
+	if err == nil || !strings.Contains(err.Error(), "observe MCP tool through initialized SDK session") ||
+		!strings.Contains(err.Error(), "tools/list failed") {
+		t.Fatalf("preflight error = %v, want categorized MCP tools/list failure", err)
+	}
+	if strings.Contains(err.Error(), sentinel) {
+		t.Fatalf("preflight error exposed raw MCP tools/list detail: %v", err)
+	}
 }
 
 func TestContextForgePoisonPersistsTypedReceiptBeforeWriteAndReverts(t *testing.T) {

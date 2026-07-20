@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/adithyan-ak/agenthound/sdk/common"
@@ -45,7 +46,13 @@ func parseMCPServersMap(data map[string]any, rootKey, urlKey string) ([]ServerDe
 
 	var servers []ServerDef
 	malformed := 0
-	for name, entry := range serversMap {
+	names := make([]string, 0, len(serversMap))
+	for name := range serversMap {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		entry := serversMap[name]
 		obj, ok := entry.(map[string]any)
 		if !ok {
 			malformed++
