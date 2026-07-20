@@ -160,6 +160,106 @@ After deferred changes were restored, the reconstructed product tree again
 matched checkpoint `6428f13` byte-for-byte except for the intentionally omitted
 private ledger. No new release-blocking defect was found in stack 03.
 
+### Stack 04 — complete
+
+- Branch: `codex/release-stack-04-auth-evidence`
+- Commit: `e6a6af7` (`fix(auth): require observed runtime evidence across consumers`)
+- Parent: stack 03 commit `2084a63`
+- Scope: 73 files, 4,883 insertions, 395 deletions
+- Staged tree: `cfa00d42e5ffcf94d8f26b724e1a0b3062fe4fc0`
+- Public remote: not pushed
+
+The isolated tree passed `gofmt -l .`, `go build ./...`, `go vet ./...`, and
+`go test ./... -race` both before and immediately before commit. Every changed
+collector/ingest/analysis package then passed 10 consecutive race-enabled
+runs. The frontend passed all 229 tests across 50 files, ESLint, and the Vite
+production build; strict MkDocs passed using the pinned disposable environment
+created from `docs/requirements.txt`.
+
+Slicing exposed two real dependency boundaries, neither a new runtime defect:
+
+- The new effective-auth consumer integration test used three generic fixture
+  helpers that originally lived only in stack 05's untracked cross-service
+  integration file. The helpers are defined in stack 04 so this parent compiles
+  independently. Stack 05 moves their definitions back into the cross-service
+  test when that file enters the stack, restoring the monolithic candidate
+  bytes.
+- `CanReach` applies its effective-auth predicate and canonical
+  `MCPServer -> Identity -> Credential` resource witness in the same Cypher
+  statement. Splitting those clauses would create a knowingly stale query, so
+  stack 04 owns that complete credential-to-resource path migration. Stack 05
+  still owns cross-service value-hash grouping, upstream-credential
+  correlation, global blast radius, and credential-risk consumers.
+
+Real A2A verification used the staged-only linux/arm64 collector (SHA-256
+`d0a17049d4be5bad1cb2970836cabcb79b1e4dacdf140aaca4d3a1a072dac27d`)
+against the retained official-SDK fixture:
+
+- One six-target scan emitted 19 nodes and 14 edges. The v1 and v0.3 lanes
+  reported exact nonexistent-task evidence as observed anonymous protocol
+  access; the protected lane retained its declared API-key/weak posture and
+  reported `authentication_required`; the version-ambiguous lane remained
+  unknown rather than being guessed anonymous.
+- Every dynamic lane received exactly one `GetTask` request. Executor calls,
+  non-GetTask calls, task-store saves, and task-store deletes all remained
+  zero.
+- A separate protected-target run supplied a unique operator bearer. The card
+  request could use it, but the bounded anonymous protocol probe did not:
+  `credential_header_requests` stayed unchanged. The secret sentinel was
+  absent from the graph artifact.
+
+Real looter verification matched the seeded upstream predicates exactly:
+
+- Ollama: one model, one `PROVIDES_MODEL`, confirmed embedding capability,
+  complete collection, zero partials.
+- MLflow: two experiments, one run, one registered model/version/resource,
+  complete collection, zero partials.
+- Qdrant: two sorted collections, four total points, four bounded sampled
+  resources, complete collection, zero partials.
+- Open WebUI: verified protected posture, one redacted upstream credential,
+  and a configuration-only Ollama backend reference without fabricated active
+  discovery/auth facts.
+
+The same four looters were deliberately aimed at an unrelated live
+OpenAI-compatible decoy. Each artifact was partial with the exact 404
+diagnostic, one neutral attempt node, zero resource/credential nodes, and zero
+edges. `loot_observed=true` was initially investigated as a possible false
+affirmation, then closed as a documented action-provenance fact: successful
+identity/auth claims require the separate product-shaped response and
+`probe_status=verified`, which were absent. No risk or UI consumer treats the
+attempt marker as verification.
+
+Live analysis verification used disposable Neo4j 4.4 and 5.26 containers and
+removed both afterward. On each version, the complete prebuilt, processor, and
+risk-score packages passed three race-enabled repetitions with integration
+tests active. This exercised paired effective tuple derivation, per-edge trust
+assessment, direct and credential-path `CAN_REACH`, cross-protocol and
+confused-deputy eligibility, weighted paths, and Agent/A2A/MCP risk consumers.
+
+Finally, the retained release API and browser were compared against the same
+published projection:
+
+- API page revision `5` contained five MCP servers. A bearer-protected server
+  exposed configured, observed, and effective `bearer/moderate` tuples with
+  source `observed`; an anonymously reachable server retained configured
+  unknown while exposing observed/effective
+  `none/unauthenticated/anonymous_probe_succeeded`, also source `observed`.
+- Explorer Properties and Evidence rendered those fields exactly without
+  collapsing provenance. The anonymous server's remediation correctly asked
+  the operator to add authentication. The rendered view had no browser console
+  warnings/errors or contradictory/clipped labels.
+
+Harness-only diagnostics were resolved once and not looped: `go vet` first
+identified the cross-stack test-helper dependency; the first docs command
+lacked the ignored virtualenv on `PATH`; one decoy command mistakenly invoked
+the Linux binary on the macOS host; and the first browser tab binding reused a
+stale generic identifier. None reached product code or target state, and each
+was corrected at the execution boundary before evidence was accepted.
+
+After deferred changes were restored, a full file-by-file comparison against
+checkpoint `6428f13` was empty for all product files. No new release-blocking
+defect was found in stack 04.
+
 ## Why this is a stack, not parallel PRs
 
 The final fixes share several contract files:
@@ -287,7 +387,8 @@ scan; unpublished/partial/output-writer CLI controls.
 make every consumer use a complete effective tuple.
 
 **Issues:** RC-02 Issues 2, 9, 15, 16, 35, 40, 44, 45, 46; candidate hardening
-Issues 43 and 41; RC-10 Issue 36.
+Issues 43 and 41; RC-10 Issue 36; credential-to-resource portion of RC-09
+Issue 32.
 
 **Owns:**
 
@@ -297,6 +398,8 @@ Issues 43 and 41; RC-10 Issue 36.
 - Ollama/MLflow/Qdrant proof-before-affirmation and empty-credential rejection.
 - Effective-auth materialization and all query/risk/traversal/remediation/UI
   consumers.
+- The complete `CanReach` effective-auth gate and canonical
+  Server→Identity→Credential resource witness, which are one Cypher unit.
 - Evidence drawer and Markdown provenance representation.
 - Focused real controls and relevant auth documentation.
 
@@ -316,12 +419,14 @@ Neo4j/query/risk projection.
 **Purpose:** correct credential topology, attribution, witness determinism,
 blast radius, and downstream risk/query results.
 
-**Issues:** RC-09 Issues 32, 33, and 37.
+**Issues:** remaining cross-service portion of RC-09 Issue 32, plus Issues 33
+and 37.
 
 **Owns:**
 
-- Location-independent downstream Agent→Server→Identity→Credential
-  reachability over the producer topology established in stack 02.
+- Cross-service Config credential → canonical value-hash group → LiteLLM
+  gateway/upstream-credential correlation over the producer topology
+  established in stack 02.
 - Exact observed-material/value-hash gates and identity-hash exclusion.
 - Deterministic seven-node/five-relationship plus synthetic witness.
 - Global distinct-agent blast radius at canonical value-hash grain.
