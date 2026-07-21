@@ -657,23 +657,42 @@ func TestQueryFindings_CapturesExactDetectorWitness(t *testing.T) {
 		"target_merge_key": "identity",
 		"evidence_version": int64(1),
 		"exact_evidence_nodes": []any{
-			map[string]any{"id": "agent", "kinds": []any{"AgentInstance"}, "properties": map[string]any{"name": "Agent"}},
-			map[string]any{"id": "left", "kinds": []any{"Credential"}, "properties": map[string]any{"name": "Left"}},
-			map[string]any{"id": "right", "kinds": []any{"Credential"}, "properties": map[string]any{"name": "Right"}},
+			map[string]any{"id": "agent", "kinds": []any{"AgentInstance"}, "properties": map[string]any{
+				"name": "Agent", "observation_fact_fingerprints": []any{"internal-node"},
+			}},
+			map[string]any{"id": "server", "kinds": []any{"MCPServer"}, "properties": map[string]any{"name": "Configured server"}},
+			map[string]any{"id": "identity", "kinds": []any{"Identity"}, "properties": map[string]any{"type": "bearer"}},
+			map[string]any{"id": "c1", "kinds": []any{"Credential"}, "properties": map[string]any{"name": "Configured key"}},
+			map[string]any{"id": "c1master", "kinds": []any{"Credential"}, "properties": map[string]any{"name": "Gateway master key"}},
+			map[string]any{"id": "gateway", "kinds": []any{"LiteLLMGateway", "AIService"}, "properties": map[string]any{"name": "Gateway"}},
 			map[string]any{"id": "credential", "kinds": []any{"Credential"}, "properties": map[string]any{"name": "Provider key"}},
 		},
 		"exact_evidence_edges": []any{
 			map[string]any{
-				"source": "agent", "target": "left", "kind": "HAS_ENV_VAR",
-				"properties": map[string]any{"risk_weight": 0.1},
+				"source": "agent", "target": "server", "kind": "TRUSTS_SERVER",
+				"properties": map[string]any{
+					"risk_weight": 0.1, "observation_fact_fingerprints": []any{"internal-edge"},
+				},
 			},
 			map[string]any{
-				"source": "right", "target": "credential", "kind": "EXPOSES_CREDENTIAL",
+				"source": "server", "target": "identity", "kind": "AUTHENTICATES_WITH",
+				"properties": map[string]any{"risk_weight": 0.2},
+			},
+			map[string]any{
+				"source": "identity", "target": "c1", "kind": "USES_CREDENTIAL",
+				"properties": map[string]any{"risk_weight": 0.2},
+			},
+			map[string]any{
+				"source": "gateway", "target": "c1master", "kind": "EXPOSES_CREDENTIAL",
+				"properties": map[string]any{"risk_weight": 0.2},
+			},
+			map[string]any{
+				"source": "gateway", "target": "credential", "kind": "EXPOSES_CREDENTIAL",
 				"properties": map[string]any{"risk_weight": 0.2},
 			},
 		},
 		"exact_evidence_synthetic_edge": []any{
-			"left", "right", "VALUE_HASH_MATCH",
+			"c1", "c1master", "VALUE_HASH_MATCH",
 			"identity_correlation", "value_hash", "cross_service_credential_chain",
 		},
 	}}}
@@ -685,11 +704,38 @@ func TestQueryFindings_CapturesExactDetectorWitness(t *testing.T) {
 		t.Fatalf("exact evidence missing: %+v", findings)
 	}
 	exact := findings[0].ExactEvidence
-	if !exact.Complete || len(exact.Nodes) != 4 || len(exact.Edges) != 3 {
+	if !exact.Complete || len(exact.Nodes) != 7 || len(exact.Edges) != 6 {
 		t.Fatalf("exact evidence = %+v", exact)
 	}
-	synthetic := exact.Edges[2]
+	wantNodeIDs := []string{"agent", "server", "identity", "c1", "c1master", "gateway", "credential"}
+	for i, node := range exact.Nodes {
+		if node.ID != wantNodeIDs[i] {
+			t.Fatalf("exact evidence node %d = %q, want %q", i, node.ID, wantNodeIDs[i])
+		}
+		if _, exists := node.Properties["observation_fact_fingerprints"]; exists {
+			t.Fatalf("exact evidence node %d leaked internal fingerprint: %+v", i, node)
+		}
+	}
+	wantRawEdges := [][3]string{
+		{"agent", "server", "TRUSTS_SERVER"},
+		{"server", "identity", "AUTHENTICATES_WITH"},
+		{"identity", "c1", "USES_CREDENTIAL"},
+		{"gateway", "c1master", "EXPOSES_CREDENTIAL"},
+		{"gateway", "credential", "EXPOSES_CREDENTIAL"},
+	}
+	for i, edge := range exact.Edges {
+		if _, exists := edge.Properties["observation_fact_fingerprints"]; exists {
+			t.Fatalf("exact evidence edge %d leaked internal fingerprint: %+v", i, edge)
+		}
+		if i < len(wantRawEdges) &&
+			(edge.Source != wantRawEdges[i][0] || edge.Target != wantRawEdges[i][1] || edge.Kind != wantRawEdges[i][2]) {
+			t.Fatalf("exact evidence edge %d = %+v, want %v", i, edge, wantRawEdges[i])
+		}
+	}
+	synthetic := exact.Edges[5]
 	if !synthetic.Synthetic ||
+		synthetic.Source != "c1" ||
+		synthetic.Target != "c1master" ||
 		synthetic.Kind != "VALUE_HASH_MATCH" ||
 		synthetic.Provenance["basis"] != "value_hash" {
 		t.Fatalf("synthetic evidence = %+v", synthetic)

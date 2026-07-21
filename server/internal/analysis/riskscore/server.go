@@ -152,7 +152,13 @@ RETURN h.scope AS scope`
 
 func serverCredentialHandlingAssessment(ctx context.Context, db graph.GraphDB, objectID string) (Assessment, error) {
 	cypher := `
-MATCH (s {objectid: $id})-[:HAS_ENV_VAR]->(c:Credential)
+MATCH (s {objectid: $id})-[:AUTHENTICATES_WITH]->(:Identity)-[:USES_CREDENTIAL]->(c:Credential)
+WHERE c.value_hash IS NOT NULL AND c.value_hash <> ''
+  AND c.merge_key = 'value_hash'
+  AND c.identity_basis = 'value_hash'
+  AND c.material_status = 'observed'
+  AND c.exposure_status = 'exposed'
+WITH DISTINCT c
 RETURN c.high_entropy AS high_entropy, c.type AS cred_type,
        c.blast_radius AS blast_radius, c.material_status AS material_status,
        c.exposure_status AS exposure_status, c.merge_key AS merge_key`

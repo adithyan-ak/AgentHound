@@ -21,7 +21,7 @@ func TestAgentRiskScore_AllZero(t *testing.T) {
 func TestAgentRiskScore_HighEntropyCreds(t *testing.T) {
 	mock := &graph.MockGraphDB{
 		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
-			if containsSubstring(cypher, "HAS_ENV_VAR") {
+			if containsSubstring(cypher, "USES_CREDENTIAL") {
 				return []map[string]any{
 					{
 						"high_entropy": true, "cred_type": "envVar",
@@ -47,7 +47,7 @@ func TestAgentRiskScore_HighEntropyCreds(t *testing.T) {
 func TestAgentRiskScore_HardcodedCreds(t *testing.T) {
 	mock := &graph.MockGraphDB{
 		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
-			if containsSubstring(cypher, "HAS_ENV_VAR") {
+			if containsSubstring(cypher, "USES_CREDENTIAL") {
 				return []map[string]any{
 					{
 						"high_entropy": false, "cred_type": "hardcoded",
@@ -72,7 +72,7 @@ func TestAgentRiskScore_HardcodedCreds(t *testing.T) {
 func TestAgentRiskScore_NormalCreds(t *testing.T) {
 	mock := &graph.MockGraphDB{
 		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
-			if containsSubstring(cypher, "HAS_ENV_VAR") {
+			if containsSubstring(cypher, "USES_CREDENTIAL") {
 				return []map[string]any{
 					{
 						"high_entropy": false, "cred_type": "envVar",
@@ -92,6 +92,55 @@ func TestAgentRiskScore_NormalCreds(t *testing.T) {
 	// cred=60, rest=0. score = 0.30*60 = 18
 	if score != 18 {
 		t.Errorf("score = %f, want 18", score)
+	}
+}
+
+func TestAgentCredentialRiskUsesCanonicalTopologyForEveryConfigLocation(t *testing.T) {
+	for _, location := range []string{"header", "arg:1", "url_query:token"} {
+		t.Run(location, func(t *testing.T) {
+			var captured string
+			mock := &graph.MockGraphDB{
+				QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
+					captured = cypher
+					return []map[string]any{{
+						"location": location, "high_entropy": true, "cred_type": "hardcoded",
+						"merge_key": "value_hash", "material_status": "observed",
+						"exposure_status": "exposed",
+					}}, nil
+				},
+			}
+
+			risk, err := agentCredentialRisk(context.Background(), mock, "agent-1")
+			if err != nil {
+				t.Fatalf("agentCredentialRisk: %v", err)
+			}
+			if risk != 100 {
+				t.Fatalf("risk = %v, want 100 for %s credential", risk, location)
+			}
+			assertCanonicalCredentialRiskQuery(t, captured)
+		})
+	}
+}
+
+func assertCanonicalCredentialRiskQuery(t *testing.T, cypher string) {
+	t.Helper()
+	for _, clause := range []string{
+		"TRUSTS_SERVER",
+		"-[:AUTHENTICATES_WITH]->(:Identity)-[:USES_CREDENTIAL]->(c:Credential)",
+		"WITH DISTINCT c",
+		"c.value_hash IS NOT NULL",
+		"c.value_hash <> ''",
+		"c.merge_key = 'value_hash'",
+		"c.identity_basis = 'value_hash'",
+		"c.material_status = 'observed'",
+		"c.exposure_status = 'exposed'",
+	} {
+		if !containsSubstring(cypher, clause) {
+			t.Errorf("credential risk query missing %q:\n%s", clause, cypher)
+		}
+	}
+	if containsSubstring(cypher, "HAS_ENV_VAR") || containsSubstring(cypher, "location") {
+		t.Fatalf("credential risk query still depends on config location:\n%s", cypher)
 	}
 }
 

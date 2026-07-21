@@ -8,8 +8,9 @@ import (
 )
 
 // CrossServiceCredentialChain wires the v0.2 credential-chain demo:
-// when the Config Collector emits a Credential C1 (an env var or
-// hardcoded value referenced by an MCP server) AND the LiteLLM Looter
+// when the Config Collector emits a Credential C1 (observed material
+// referenced by an MCP server, independent of its config location) AND the
+// LiteLLM Looter
 // emits a Credential C1master (the master key the operator supplied),
 // AND C1.value_hash == C1master.value_hash, those two nodes describe
 // the same secret. The LiteLLM gateway then exposes upstream provider
@@ -19,14 +20,14 @@ import (
 // Path:
 //
 //	(:AgentInstance)-[:TRUSTS_SERVER]->(:MCPServer)
-//	    -[:HAS_ENV_VAR]->(:Credential C1)
+//	    -[:AUTHENTICATES_WITH]->(:Identity)-[:USES_CREDENTIAL]->(:Credential C1)
 //	    where C1.value_hash matches a Credential C1master from a LiteLLM Looter run
 //	(:LiteLLMGateway:AIService gw)-[:EXPOSES_CREDENTIAL]->(:Credential C1master)
 //	(gw)-[:EXPOSES_CREDENTIAL]->(:Credential C2)
 //	    where C2.type IN ["apiKey", "virtual_key"]
 //
 // We emit (:AgentInstance)-[:CAN_REACH]->(C2) with metadata that
-// records the merge endpoint (hash + LiteLLM gateway name).
+// records the merge endpoint (hash + a stable LiteLLM gateway identifier).
 //
 // Dependencies: ["has_access_to", "can_reach"] — has_access_to so the
 // graph has resource accessibility wired, can_reach so this processor
@@ -44,7 +45,9 @@ func (p *CrossServiceCredentialChain) Process(ctx context.Context, db graph.Grap
 	start := time.Now()
 
 	// The join: c1.value_hash = c1master.value_hash. c1 comes from the
-	// Config Collector (MCPServer-[:HAS_ENV_VAR]->c1). c1master comes
+	// Config Collector's canonical authentication topology
+	// (MCPServer-[:AUTHENTICATES_WITH]->Identity-[:USES_CREDENTIAL]->c1).
+	// c1master comes
 	// from the LiteLLM Looter ((gw:LiteLLMGateway)-[:EXPOSES_CREDENTIAL]->c1master).
 	// gw also -[:EXPOSES_CREDENTIAL]->c2, the upstream provider Credential.
 	//
@@ -55,14 +58,15 @@ func (p *CrossServiceCredentialChain) Process(ctx context.Context, db graph.Grap
 	// Single query (one ExecuteWrite): the same agent→server→credential
 	// join also yields the credential blast radius (count of distinct
 	// agents that can reach the merged secret), which we materialize on
-	// both the env-var credential (c1) and its value_hash-merged master
-	// (c1master). Folding it here avoids re-MATCHing the join path. The
-	// join is first reduced to the agent grain so blast radius counts
-	// DISTINCT agents rather than (agent, path) tuples — an agent with
-	// multiple reachable paths must not inflate the count. Each distinct
-	// agent's witness relationship IDs are preserved, then re-UNWOUND so the
-	// CAN_REACH MERGE stays one edge per (agent, upstream-credential) and each
-	// edge retains the exact relationship IDs for that agent's path.
+	// every configured credential (c1) and master credential (c1master)
+	// participating in the same value-hash correlation. Folding it here
+	// avoids re-MATCHing the join path. The aggregation grain is the shared
+	// value_hash, not an individual c1: distinct config nodes may represent
+	// the same secret, and their reachable agents must contribute to one
+	// global blast radius. Candidate paths are then ordered by their stable
+	// seven-node object-ID tuple before one winner per (agent, upstream
+	// credential) is selected. Relationship IDs are evidence only and do not
+	// influence the winner, so relationship recreation cannot flip topology.
 	// merge_key filter (U-MED-4): when a Looter cannot observe the raw
 	// credential value (e.g. LiteLLM masks upstream provider api_key
 	// server-side, so /model/info gives us no key material), it emits a
@@ -76,60 +80,83 @@ func (p *CrossServiceCredentialChain) Process(ctx context.Context, db graph.Grap
 	// merge_key='value_hash' credentials are eligible.
 	cypher := `
 MATCH (a:AgentInstance)-[trust:TRUSTS_SERVER]->(s:MCPServer)
-      -[environment:HAS_ENV_VAR]->(c1:Credential)
+      -[authenticates:AUTHENTICATES_WITH]->(i:Identity)-[uses:USES_CREDENTIAL]->(c1:Credential)
 WHERE c1.value_hash IS NOT NULL AND c1.value_hash <> ''
   AND c1.merge_key = 'value_hash'
+  AND c1.identity_basis = 'value_hash'
   AND c1.material_status = 'observed'
   AND c1.exposure_status = 'exposed'
 MATCH (gw:LiteLLMGateway)-[exposes_master:EXPOSES_CREDENTIAL]->(c1master:Credential)
 WHERE c1master.value_hash = c1.value_hash
+  AND c1master.value_hash IS NOT NULL AND c1master.value_hash <> ''
   AND c1master.objectid <> c1.objectid
   AND c1master.merge_key = 'value_hash'
+  AND c1master.identity_basis = 'value_hash'
   AND c1master.material_status = 'observed'
   AND c1master.exposure_status = 'exposed'
 MATCH (gw)-[exposes_upstream:EXPOSES_CREDENTIAL]->(c2:Credential)
 WHERE c2.type IN ['apiKey', 'virtual_key'] AND c2.objectid <> c1master.objectid
-// Collapse each agent's (possibly multiple) traversal paths to the agent
-// grain first. An agent that reaches the merged secret via more than one
-// path (e.g. two TRUSTS_SERVER or HAS_ENV_VAR edges) would otherwise yield
-// several distinct witness tuples and inflate the blast radius. Grouping by
-// the agent node here makes one row per distinct agent while collect() keeps
-// that agent's witness relationship-ID tuples for the CAN_REACH evidence.
-WITH s, c1, c1master, c2, gw, a,
-     collect([
-       id(trust), id(environment), id(exposes_master), id(exposes_upstream)
-     ]) AS agent_paths
-WITH s, c1, c1master, c2, gw, collect({
-  agent: a,
-  relationship_ids: agent_paths[0]
-}) AS agent_witnesses
-WITH s, c1, c1master, c2, gw, agent_witnesses,
-     size(agent_witnesses) AS reachable_agents
-SET c1.blast_radius = reachable_agents, c1master.blast_radius = reachable_agents
-WITH s, c1, c1master, c2, gw, agent_witnesses
-UNWIND agent_witnesses AS witness
-WITH s, c1, c1master, c2, gw,
-     witness.agent AS a,
-     witness.relationship_ids AS witness_relationship_ids
+// Aggregate globally by the cross-service identity key. Grouping by c1 here
+// would undercount a master credential when two distinct config credentials
+// carry the same secret. DISTINCT agents prevent multiple paths for one agent
+// from inflating the shared-secret blast radius.
+WITH c1.value_hash AS matched_value_hash,
+     collect(DISTINCT a) AS reachable_agents,
+     collect(DISTINCT c1) AS configured_credentials,
+     collect(DISTINCT c1master) AS master_credentials,
+     collect(DISTINCT {
+       agent: a,
+       server: s,
+       identity: i,
+       configured_credential: c1,
+       master_credential: c1master,
+       gateway: gw,
+       upstream_credential: c2,
+       relationship_ids: [
+         id(trust), id(authenticates), id(uses), id(exposes_master), id(exposes_upstream)
+       ]
+     }) AS candidates
+FOREACH (credential IN configured_credentials |
+  SET credential.blast_radius = size(reachable_agents))
+FOREACH (credential IN master_credentials |
+  SET credential.blast_radius = size(reachable_agents))
+WITH candidates
+UNWIND candidates AS candidate
+// A single agent/upstream pair may be reachable through several config nodes
+// or servers. Select one stable seven-node evidence tuple before MERGE so later
+// rows cannot overwrite the edge with traversal-order-dependent evidence.
+WITH candidate
+ORDER BY candidate.agent.objectid,
+         candidate.upstream_credential.objectid,
+         candidate.server.objectid,
+         candidate.identity.objectid,
+         candidate.configured_credential.objectid,
+         candidate.master_credential.objectid,
+         candidate.gateway.objectid
+WITH candidate.agent AS a,
+     candidate.upstream_credential AS c2,
+     collect(candidate)[0] AS winner
 MERGE (a)-[e:CAN_REACH]->(c2)
 SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true,
     e.source_collector = 'cross_service_credential_chain',
-    e.via_server = s.name,
-    e.via_credential = c1.name,
-    e.via_gateway = gw.name,
-    e.merge_value_hash = c1.value_hash,
+    e.via_server = winner.server.name,
+    e.via_credential = winner.configured_credential.name,
+    e.via_gateway = COALESCE(winner.gateway.name, winner.gateway.endpoint, winner.gateway.objectid),
+    e.merge_value_hash = winner.configured_credential.value_hash,
     e.upstream_provider = COALESCE(c2.provider, 'unknown'),
-    e.hops = 5,
+    e.hops = 6,
     e.confidence = 0.95,
     e.risk_weight = 0.1,
     e.evidence_version = 1,
     e.evidence_node_ids = [
-      a.objectid, s.objectid, c1.objectid, c1master.objectid,
-      gw.objectid, c2.objectid
+      a.objectid, winner.server.objectid, winner.identity.objectid,
+      winner.configured_credential.objectid, winner.master_credential.objectid,
+      winner.gateway.objectid, c2.objectid
     ],
-    e.evidence_relationship_ids = witness_relationship_ids,
+    e.evidence_relationship_ids = winner.relationship_ids,
     e.evidence_synthetic_edge = [
-      c1.objectid, c1master.objectid, 'VALUE_HASH_MATCH',
+      winner.configured_credential.objectid, winner.master_credential.objectid,
+      'VALUE_HASH_MATCH',
       'identity_correlation', 'value_hash', 'cross_service_credential_chain'
     ]
 RETURN count(e) AS written`

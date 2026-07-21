@@ -57,7 +57,8 @@ Example: a local MCP config exposes a LiteLLM master key, and the LiteLLM looter
 
 ```text
 (:AgentInstance)-[:TRUSTS_SERVER]->(:MCPServer)
-  -[:HAS_ENV_VAR]->(:Credential {value_hash: H1})
+  -[:AUTHENTICATES_WITH]->(:Identity)
+  -[:USES_CREDENTIAL]->(:Credential {value_hash: H1})
 
 (:LiteLLMGateway)-[:EXPOSES_CREDENTIAL]->(:Credential {value_hash: H1})
 (:LiteLLMGateway)-[:EXPOSES_CREDENTIAL]->(:Credential {type: "apiKey"})
@@ -71,9 +72,13 @@ The `cross_service_credential_chain` processor joins on `value_hash` and emits:
   via_gateway,
   merge_value_hash,
   upstream_provider,
-  hops: 5
+  hops: 6
 }]->(:Credential)
 ```
+
+`via_gateway` is always traceable: it uses the gateway name when available,
+then its endpoint, and otherwise the immutable gateway object ID emitted by the
+LiteLLM looter.
 
 It also writes `blast_radius` on the joined credential nodes: the number of
 distinct agents correlated with the merged secret. The upstream target remains

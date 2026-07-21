@@ -71,7 +71,7 @@ score = 0.30 * credential + 0.25 * blast_radius + 0.20 * auth_risk
 
 | Component | Computation |
 |-----------|-------------|
-| `credential` | 100 if any trusted server has high-entropy or hardcoded credentials; 60 if credentials exist but are vault-referenced; 0 otherwise |
+| `credential` | For observed/exposed value-hash material used by any trusted server: 100 if any credential is high-entropy or hardcoded, 60 if another eligible credential exists, and 0 otherwise. Config location (environment, header, argument, or URL component) does not change eligibility. |
 | `blast_radius` | `min(reachable_resource_count * 10, 100)` |
 | `auth_risk` | `(1 - avg_effective_trust_edge_weight) * 100` over complete effective assessments (weak auth = high score); incomplete edges contribute a bounded unknown factor |
 | `tool_surface` | `min(trusted_tool_count * 5, 100)` |
@@ -109,9 +109,14 @@ score = 0.35 * auth_strength + 0.25 * tool_risk + 0.20 * exposure
 | `auth_strength` | From the paired `effective_auth_*` tuple: none=100 only with explicit anonymous-probe evidence and `effective_auth_source=observed`; basic=85, apiKey=70, bearer=50, oauth=25, oidc=20, mtls=10; unknown/custom/configured-or-unsupported-none have no numeric weakness |
 | `tool_risk` | max `capability_risk` across all provided tools |
 | `exposure` | public host=100, private network=50, localhost=20; unknown contributes a 0-100 bound and marks assessment incomplete |
-| `credential_handling` | Observed/exposed material only: `max(base, blast)` where `base` = 100 if high-entropy or hardcoded creds else 50, and `blast` = `min(Credential.blast_radius * 10, 100)`. Masked, hashed, unobserved, and identity-only references do not count. |
+| `credential_handling` | Observed/exposed value-hash material used for server authentication, independent of config location: `max(base, blast)` where `base` = 100 if high-entropy or hardcoded creds else 50, and `blast` = `min(Credential.blast_radius * 10, 100)`. Masked, hashed, unobserved, and identity-only references do not count. |
 
-`Credential.blast_radius` (distinct agents that can reach a value_hash-merged secret) is materialized by the `cross_service_credential_chain` post-processor, so a widely-shared secret amplifies its server's credential-handling risk even when the secret itself is not high-entropy.
+Both credential components follow the canonical
+`MCPServer-[:AUTHENTICATES_WITH]->Identity-[:USES_CREDENTIAL]->Credential`
+topology. `HAS_ENV_VAR` records optional environment-location evidence only; it
+is not the server-to-credential ownership path.
+
+`Credential.blast_radius` (distinct agents that can reach a value-hash-correlated secret) is materialized by the `cross_service_credential_chain` post-processor, so a widely-shared secret amplifies its server's credential-handling risk even when the secret itself is not high-entropy.
 
 ### MCPTool
 

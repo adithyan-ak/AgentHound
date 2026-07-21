@@ -123,6 +123,7 @@ func TestIntegrationCompiledCampaignExportProbeIngestPromotesOnlySourceAgent(t *
 		}),
 		node(credentialID, "Credential", map[string]any{
 			"name":       "DB_TOKEN",
+			"location":   "header",
 			"value_hash": common.HashCredentialValue(credentialMaterial),
 			"merge_key":  "value_hash", "identity_basis": "value_hash",
 			"material_status": "observed", "exposure_status": "exposed",
@@ -150,7 +151,6 @@ func TestIntegrationCompiledCampaignExportProbeIngestPromotesOnlySourceAgent(t *
 		edge(alternateServer, alternateTool, "PROVIDES_TOOL", "MCPServer", "MCPTool"),
 		edge(serverID, resourceTool, "PROVIDES_TOOL", "MCPServer", "MCPTool"),
 		edge(serverID, resourceID, "PROVIDES_RESOURCE", "MCPServer", "MCPResource"),
-		edge(serverID, credentialID, "HAS_ENV_VAR", "MCPServer", "Credential"),
 		edge(serverID, identityID, "AUTHENTICATES_WITH", "MCPServer", "Identity"),
 		edge(identityID, credentialID, "USES_CREDENTIAL", "Identity", "Credential"),
 	}

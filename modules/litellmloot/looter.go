@@ -81,7 +81,7 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 	}
 
 	// Emit a property-neutral edge-source reference so the production CLI
-	// envelope is independently valid ingest v2. The looter knows the canonical
+	// envelope is independently valid ingest v3. The looter knows the canonical
 	// node identity and kinds, but does not own discovery or auth posture.
 	res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, ingest.Node{
 		ID:                gatewayObjectID,
@@ -93,7 +93,7 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 	// 1. The master-key Credential — emitted unconditionally.
 	//    value_hash is the cross-collector merge primitive; the Config
 	//    Collector emits a Credential with the same value_hash for the
-	//    same secret seen as an env var, and the
+	//    same secret seen in any supported config location, and the
 	//    cross_service_credential_chain post-processor (Phase 5) joins
 	//    on this property. Without this node the demo fails silently.
 	masterValueHash := common.HashCredentialValue(masterKey)
