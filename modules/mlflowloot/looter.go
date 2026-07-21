@@ -1,4 +1,4 @@
-// Package mlflowloot implements the v0.4 MLflow Looter.
+// Package mlflowloot implements the MLflow Looter.
 //
 // MLflow Tracking Server (default port 5000) exposes experiment
 // metadata, run history, and Model Registry contents via a REST API

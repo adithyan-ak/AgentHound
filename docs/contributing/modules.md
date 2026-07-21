@@ -1,6 +1,11 @@
 # Writing a Module
 
-Modules are self-registering units that perform a specific action against a target service. They live in `modules/<name>/` and register at `init()` time via `sdk/module.Register()`.
+Action modules are self-registering units that perform a specific action against
+a target service. They live in `modules/<name>/` and register at `init()` time
+via `sdk/module.Register()`. Two campaign scenarios instead use `sdk/campaign`,
+and `protoscan` is a discovery engine. Config, MCP, and A2A enumeration remain
+legacy collector paths; their compatibility registry entries do not implement
+or dispatch `Enumerator`.
 
 ## Action Interfaces
 
@@ -10,9 +15,9 @@ Choose the interface that matches your module's purpose:
 |-----------|--------|----------|-----------|
 | `Fingerprinter` | `fingerprint` | Probe a target, identify the service kind/version/auth | No |
 | `Scanner` | `scan` | Expand a CIDR / range / discovery seed into concrete `Target`s (feeds Fingerprinters) | No |
-| `Enumerator` | `enumerate` | Inspect a single `Target` and produce a graph patch (`ingest.IngestData`); supersedes today's collector shape | No |
+| `Enumerator` | `enumerate` | Reserved contract for inspecting a single `Target`; the current CLI does not dispatch it | No |
 | `Looter` | `loot` | Extract secrets/state read-only (GET/HEAD; idempotent search/lookup POSTs allowed with a `get_only` guard) | No |
-| `Extractor` | `extract` | Pull specific resources by reference (compute-heavy) | No (billing-heavy) |
+| `Extractor` | `extract` | Analyze a specific operator-supplied resource by reference | No |
 | `Poisoner` | `poison` | Inject content into upstream artifacts | **Yes** — requires `Reverter` |
 | `Implanter` | `implant` | Plant persistent backdoors in target config | **Yes** — requires `Reverter` |
 
@@ -53,8 +58,8 @@ package yourservicefp
 
 import (
     "context"
+    "errors"
     "github.com/adithyan-ak/agenthound/sdk/action"
-    "github.com/adithyan-ak/agenthound/sdk/ingest"
     "github.com/adithyan-ak/agenthound/sdk/rules"
 )
 
@@ -77,10 +82,9 @@ func New() (*Fingerprinter, error) {
 }
 
 func (f *Fingerprinter) Fingerprint(ctx context.Context, t action.Target) (*action.FingerprintResult, error) {
-    // Build base URL from t.Address
-    // Run the probe via rules.RunFingerprint(ctx, client, baseURL, *f.rule)
-    // On match: build ingest.Node with multi-label kinds, return FingerprintResult
-    // On no-match: return &action.FingerprintResult{Matched: false}, nil
+    // Replace this no-match skeleton with the service-specific probe and
+    // IngestData construction used by modules/ollamafp.
+    return &action.FingerprintResult{Matched: false}, nil
 }
 
 var _ action.Fingerprinter = (*Fingerprinter)(nil)
@@ -137,7 +141,9 @@ _ "github.com/adithyan-ak/agenthound/modules/yourservicefp"
 
 ### 5. Add to the collector allowlist
 
-Update `scripts/collector-allowlist.txt` with any new transitive dependencies your module introduces. CI will reject unlisted deps.
+Add the module package and any new dependency packages to
+`scripts/collector-allowlist.txt`. CI rejects packages that cross the collector
+dependency boundary without an allowlist entry.
 
 ### 6. Write tests
 
@@ -221,7 +227,7 @@ module.GetByTarget("ollama", action.Fingerprint)    // by (target, action) pair
 - [ ] Implements `sdk/module.Module`
 - [ ] Has `register.go` with `init()` calling `module.Register()`
 - [ ] Blank-imported in `collector/cmd/agenthound/main.go`
-- [ ] Added to `scripts/collector-allowlist.txt` (if new deps)
+- [ ] Module package and any new dependencies added to `scripts/collector-allowlist.txt`
 - [ ] Tests cover match, no-match, and error cases
 - [ ] `make build-collector && make deps-check` passes
 - [ ] `IsDestructive()` returns true for Poisoner/Implanter modules

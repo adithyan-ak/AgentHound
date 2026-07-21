@@ -22,10 +22,12 @@ Both binaries read environment variables at startup. The collector has no config
 | `AGENTHOUND_QUIET` | `--quiet` | _(unset)_ | Set to `1` to suppress non-error log output, plus the `scan` / `discover` progress line, the per-host/endpoint summary, and fingerprint output |
 | `AGENTHOUND_LOG_JSON` | `--log-json` | _(unset)_ | Set to `1` for structured JSON logs to stderr |
 | `AGENTHOUND_RULES_BUNDLE` | `--rules-bundle` | _(unset)_ | Path to a fingerprint rules bundle (directory or `.tar.gz`). Same-id rules override the embedded set. Verify cosign signature before use. |
+| `AGENTHOUND_RULES_DIR` | _(none)_ | `~/.agenthound/rules/` | Custom text-detection rule directory. |
 | `AGENTHOUND_CAMPAIGN_CREDENTIAL` | `--credential-env` (names the var) | _(unset)_ | Out-of-band credential material for `agenthound campaign`. Hash-matched locally against the witness `value_hash`; never logged, serialized, or written to the graph. Never pass credentials as a flag. |
 | `AGENTHOUND_MCP_TOKEN` | _(none)_ | _(unset)_ | Explicit bearer value for MCP SDK observation by the ContextForge poison/round-trip adapter. Overrides exact-URL MCP client-config credential discovery. Never stored in receipts or reports. |
 | `AGENTHOUND_CONTEXTFORGE_TOKEN` | _(none)_ | _(unset)_ | Explicit ContextForge management-bearer override. Required for cross-origin management; otherwise same-origin management reuses the resolved MCP bearer. Never stored in receipts or reports. |
 | `AGENTHOUND_CAMPAIGN_AUTHORIZED` | _(none)_ | _(unset)_ | Set to `AUTHORIZED` to acknowledge the `campaign` authorization gate non-interactively (needed when stdin is consumed by `--witness -` / `--credential-stdin`). |
+| `AGENTHOUND_STATE_DIR` | _(none)_ | `~/.agenthound/state/` | Override the protected offensive-action and campaign receipt root. Does not relocate acknowledgement sentinels. |
 
 Output file permissions: `0600` on POSIX. Atomic write via temp file + rename.
 
@@ -95,19 +97,26 @@ a new storage-pair UUID, and recollect from the new vantage point.
 
 ## State Directory (`~/.agenthound/`)
 
-The server and offensive modules persist state under `~/.agenthound/`:
+The collector's custom rules and offensive modules persist state under
+`~/.agenthound/`:
 
 ```
 ~/.agenthound/
   loot-acknowledged              # Marker file — operator acknowledged loot output risks
   poison-acknowledged            # Marker file — operator acknowledged poisoner risks
   extract-acknowledged           # Marker file — operator acknowledged extractor risks
+  campaign-acknowledged          # Marker file — operator acknowledged campaign risks
+  rules/                         # Custom text-detection rules
   state/
     <module>/
-      <engagement>.json          # Per-module engagement state (e.g. scanner session, poison undo log)
+      <engagement>.json          # Poison/implant/campaign recovery receipts
 ```
 
-`AGENTHOUND_STATE_DIR` overrides the state-root path (`~/.agenthound/state/`). Sentinels (`loot-acknowledged`, `poison-acknowledged`, `extract-acknowledged`) always live under `~/.agenthound/`, resolved via `os.UserHomeDir()`.
+`AGENTHOUND_STATE_DIR` overrides the receipt state-root path
+(`~/.agenthound/state/`). Sentinels (`loot-acknowledged`,
+`poison-acknowledged`, `extract-acknowledged`, and
+`campaign-acknowledged`) always live under `~/.agenthound/`, resolved via
+`os.UserHomeDir()`.
 
 ---
 

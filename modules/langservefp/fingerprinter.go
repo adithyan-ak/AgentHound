@@ -1,4 +1,4 @@
-// Package langservefp implements the v0.4 LangServe fingerprinter.
+// Package langservefp implements the LangServe fingerprinter.
 // Probe semantics live in sdk/rules/builtin/fingerprints/langserve.yaml.
 package langservefp
 

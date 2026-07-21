@@ -449,12 +449,11 @@ func TestConfigCollector_CredentialValuesIncluded(t *testing.T) {
 	}
 }
 
-// TestConfigCollector_ValueHashAlwaysPopulated guards the v0.2
+// TestConfigCollector_ValueHashAlwaysPopulated guards the
 // cross-collector merge primitive: every emitted Credential node
 // MUST carry value_hash, regardless of --include-credential-values.
-// Without it the cross_service_credential_chain post-processor (Phase 5)
-// has nothing to join on, and the LiteLLM credential-chain demo
-// returns zero rows.
+// Without it the cross_service_credential_chain post-processor has nothing to
+// join on, and the corresponding credential-chain findings return zero rows.
 func TestConfigCollector_ValueHashAlwaysPopulated(t *testing.T) {
 	tmp := t.TempDir()
 	configPath := filepath.Join(tmp, "config.json")

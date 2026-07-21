@@ -237,10 +237,12 @@ func TestEdgeRiskWeight(t *testing.T) {
 		want float64
 	}{
 		{"TRUSTS_SERVER", "none", 0.1},
+		{"TRUSTS_SERVER", "basic", 0.25},
 		{"TRUSTS_SERVER", "apiKey", 0.3},
 		{"TRUSTS_SERVER", "oauth", 0.7},
+		{"TRUSTS_SERVER", "oidc", 0.75},
 		{"TRUSTS_SERVER", "mtls", 0.9},
-		{"TRUSTS_SERVER", "unknown", 0.1},
+		{"TRUSTS_SERVER", "unknown", 0.5},
 		{"DELEGATES_TO", "oauth", 0.5},
 		{"DELEGATES_TO", "none", 0.1},
 		{"DELEGATES_TO", "", 0.1},

@@ -87,7 +87,9 @@ agenthound version
 agenthound-server version
 ```
 
-Both print version, commit hash, and build date. On a release build (GoReleaser), the version matches the git tag. On a dev build, it prints `dev`.
+Both print `version (commit: commit)`. On a release build GoReleaser injects the
+git-tag version and commit hash. A local build without linker overrides prints
+the compiled development defaults.
 
 ## Release signatures
 

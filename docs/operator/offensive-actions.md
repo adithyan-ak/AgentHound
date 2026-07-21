@@ -1,16 +1,20 @@
-# `agenthound poison` and `agenthound revert` — destructive primitives
+# Offensive actions, campaigns, and recovery
 
 > **Read this before you run anything in this document.** Poisoners modify on-target state. Even when reverted, the modification is in the target's audit trail (HTTP access log, file mtime, database WAL). Operating these primitives without written authorization for the target system violates the Computer Fraud and Abuse Act (US, 18 U.S.C. § 1030), the Computer Misuse Act 1990 (UK), § 202a–c (Germany), and equivalent statutes worldwide.
 
 ## What `poison` does
 
-`agenthound poison <host> --type <kind> ...` rewrites a piece of state on the target — a tool description, an instruction file, a config-file entry — that an AI agent will consume. The change is the substrate of an attack: a poisoned tool description redirects an agent's planning step; a poisoned CLAUDE.md changes how the agent reasons across an entire project.
+`agenthound poison <host> --type <kind> ...` rewrites content that an AI agent
+will consume, such as a tool description or instruction file. Persistent MCP
+client config entries belong to `agenthound implant`, not `poison`. A poisoned
+tool description can redirect an agent's planning step; a poisoned `CLAUDE.md`
+can change how the agent reasons across an entire project.
 
 Every Poisoner module embeds the `Reverter` interface (`sdk/action/reverter.go`). The compile-time embedding means a Poisoner without a recovery implementation will not build. Every `Poison()` call returns a `PoisonReceipt` containing the rollback state; `agenthound revert` reads receipts off disk and invokes each module's Revert. This is an implementation guarantee, not a promise that an external provider will accept restoration after policy drift, conflicts, deletion, or loss of access. AgentHound reports and verifies the runtime outcome.
 
 ## Safety controls
 
-Four gates, all on by default. Decision G in `docs/plans/v0.3-v0.4-implementation.md`:
+Four gates are on by default:
 
 | Gate | What it prevents | How to override |
 |---|---|---|
@@ -247,7 +251,8 @@ the second shared-path agent predicted.
 
 ## See also
 
-- `docs/plans/v0.3-v0.4-implementation.md` — the destructive-action design rationale (decision G).
+- [Security and OPSEC](security.md) — current authorization, mutation, receipt,
+  and recovery contracts.
 - `sdk/action/poisoner.go`, `sdk/action/reverter.go` — the contract.
 - `sdk/module/stateful.go` — receipt persistence helper.
 - `modules/mcppoison/` — the ContextForge provider implementation.

@@ -1,4 +1,4 @@
-// Package vllmfp implements the v0.3 vLLM fingerprinter module.
+// Package vllmfp implements the vLLM fingerprinter module.
 //
 // vLLM is a high-throughput LLM inference server speaking the OpenAI-compatible
 // API. Its service-specific /version endpoint is the canonical fingerprint.
@@ -26,7 +26,7 @@ const DefaultPort = 8000
 
 // DefaultProbeTimeout caps a single fingerprint dispatch. /version on a
 // vLLM box returns within milliseconds; 5s is generous and matches the rest
-// of the v0.2 fingerprinters.
+// of the other fingerprinters.
 const DefaultProbeTimeout = 5 * time.Second
 
 // Fingerprinter is the registered module.

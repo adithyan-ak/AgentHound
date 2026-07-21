@@ -95,7 +95,7 @@ func init() {
 
 	scanCmd.Flags().String("scan-output", "", "Write scan JSON to this path. Use '-' for stdout. Defaults to ./scan-<scan_id>.json in CWD.")
 
-	// Network-scan mode flags (Phase 1).
+	// Network-scan mode flags.
 	scanCmd.Flags().IntSlice("ports", nil, "Override the default AI-service port set (network mode only). Default: 11434, 8000, 6333, 5000, 4000, 8888, 3000.")
 	scanCmd.Flags().Int("network-scan-concurrency", networkscan.DefaultConcurrency, "Max parallel TCP connect probes (network mode only)")
 	scanCmd.Flags().Bool("allow-public-targets", false, "Allow scanning public (non-RFC1918) IP space. Requires interactive AUTHORIZED confirmation.")
@@ -109,9 +109,8 @@ func init() {
 
 func runScan(cmd *cobra.Command, args []string) error {
 	// Network-mode dispatch: when a positional CIDR/host/@file is supplied,
-	// the scanner runs instead of the legacy collector flow. v0.2 Phase 1
-	// emits target descriptors only; Phase 2 wires fingerprint dispatch
-	// after the port sweep.
+	// the scanner runs instead of the legacy collector flow. The network path
+	// performs the port sweep and then dispatches every registered fingerprinter.
 	if len(args) == 1 {
 		origin, err := requireCollectionOrigin()
 		if err != nil {
@@ -616,9 +615,9 @@ func collectA2A(ctx context.Context, origin ingest.CollectionOrigin, target stri
 	return c.Collect(ctx, opts)
 }
 
-// runNetworkScan handles `agenthound scan <CIDR|host|@file>`. v0.2 Phase 1
-// runs the port sweep and writes the discovered targets to the scan-output
-// JSON envelope. Fingerprint dispatch lands in Phase 2.
+// runNetworkScan handles `agenthound scan <CIDR|host|@file>`. It runs the port
+// sweep, dispatches fingerprint probes, and writes the combined scan-output
+// JSON envelope.
 //
 // Safety controls in this path:
 //   - --allow-public-targets gates public IP space AND requires the
@@ -735,7 +734,7 @@ func runNetworkScan(cmd *cobra.Command, spec string, origin ingest.CollectionOri
 		}
 	}
 
-	// Phase 2 evaluates every registered fingerprinter on every open endpoint.
+	// Evaluate every registered fingerprinter on every open endpoint.
 	// PortToKind is an ordering hint only, so a real service on a custom port is
 	// still discoverable. Operationally indeterminate probes make this domain
 	// partial and therefore cannot retire a previously observed service.
@@ -789,11 +788,10 @@ func runNetworkScan(cmd *cobra.Command, spec string, origin ingest.CollectionOri
 	return writeCollectorOutput(envelope, output)
 }
 
-// buildNetworkScanEnvelope constructs the v0.2 Phase 1 ingest envelope.
-// Phase 1 emits no nodes — Phase 2 fingerprinters populate them based on
-// the targets recorded here. The authorization block is the v0.2 watermark
-// described in design doc 9.6: it lets downstream analysis tools refuse
-// to operate on watermark-less public-target scans.
+// buildNetworkScanEnvelope constructs the ingest envelope populated by the
+// network scanner and subsequent fingerprint dispatch. The authorization
+// watermark lets downstream analysis tools refuse to operate on public-target
+// scans that lack an authorization record.
 func buildNetworkScanEnvelope(origin ingest.CollectionOrigin, spec string, targets []action.Target, authzFile, authzHash string, allowPublic bool) *ingest.IngestData {
 	scanID := uuid.New().String()
 	env := common.NewIngestData("scan", scanID)
@@ -812,7 +810,7 @@ func buildNetworkScanEnvelope(origin ingest.CollectionOrigin, spec string, targe
 		}},
 	}
 	// Authorization watermark is recorded as a top-level Meta extension via
-	// a property on the envelope. Phase 2 fingerprinters append nodes/edges
+	// a property on the envelope. Fingerprinters append nodes/edges
 	// to env.Graph; the watermark is independent of the graph payload.
 	env.Meta.Extra = map[string]any{
 		"network_scan_spec":    spec,

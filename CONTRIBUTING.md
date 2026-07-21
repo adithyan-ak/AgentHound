@@ -5,10 +5,17 @@
 ```bash
 git clone https://github.com/adithyan-ak/agenthound.git
 cd agenthound
-docker compose -f docker/docker-compose.yml up -d   # Neo4j + PostgreSQL
+export AGENTHOUND_HOST_ID=dev-workstation
+export AGENTHOUND_NETWORK_REALM_ID=dev-lab
+export AGENTHOUND_STORAGE_PAIR_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+docker compose -f docker/docker-compose.yml up -d   # Neo4j + PostgreSQL + server
 make build                                            # Build collector + server (UI auto-built)
 make test                                             # Run all tests
 ```
+
+Generate `AGENTHOUND_STORAGE_PAIR_ID` once for a database-volume pair, then
+save and reuse it while those volumes exist. Changing it against existing
+volumes correctly fails the storage-pair safety check.
 
 `make build` invokes `make ui-build` first, which compiles the React UI (`server/ui`) and copies the output into `server/internal/api/ui/dist/` so `go:embed` finds it. Raw `go build ./...` also works on a fresh clone — a placeholder fallback page ships at `server/internal/api/ui/fallback/index.html`.
 
@@ -39,17 +46,27 @@ CI additionally runs `golangci-lint`, `govulncheck`, `go-licenses`, `scripts/dep
 
 ## How to add a new module (collector / fingerprinter / looter)
 
-Modules live under `modules/` and self-register at init time. The module system supersedes the older `pkg/collector/` layout — you don't need to touch the CLI or anything in `server/` to add one.
+Action modules live under `modules/` and self-register at init time. Config,
+MCP, and A2A enumeration are current compatibility exceptions: their registry
+entries describe the capability, while the CLI invokes their legacy collectors
+directly. Do not use `Enumerator` as an extension point until the CLI dispatches
+it.
 
 1. Create a new directory: `modules/<name>/`.
-2. Implement an action interface from `sdk/action/` — typically `Enumerator` for collectors, `Fingerprinter` for service detection, or `Looter` for credential extraction.
+2. Implement a currently dispatched action interface from `sdk/action/` — for
+   example `Fingerprinter`, `Looter`, `Extractor`, `Poisoner`, or `Implanter`.
 3. Add `register.go` calling `module.Register(...)` in `init()`.
 4. Blank-import your module in `collector/cmd/agenthound/main.go`:
    ```go
    _ "github.com/adithyan-ak/agenthound/modules/<name>"
    ```
-5. Produce JSON output matching `sdk/ingest.IngestData` (see `docs/graph-model.md` for the schema). Node IDs must be deterministic SHA-256 hashes per `sdk/common`.
-6. Add tests + fixtures under `modules/<name>/testdata/` (or repo-root `testdata/` for shared fixtures).
+5. Produce JSON output matching `sdk/ingest.IngestData` (see
+   `docs/reference/graph-model.md` for the schema). Node IDs must be
+   deterministic SHA-256 hashes per `sdk/common`.
+6. Add the module package and any new dependency packages to
+   `scripts/collector-allowlist.txt`.
+7. Add tests + fixtures under `modules/<name>/testdata/` (or repo-root
+   `testdata/` for shared fixtures).
 
 See `modules/README.md` for the canonical example and `modules/mcp/`, `modules/a2a/`, `modules/config/` for working modules.
 
@@ -68,7 +85,8 @@ Post-processors implement the `PostProcessor` interface in `server/internal/anal
    ```
 3. `Dependencies()` returns processor names that must run before this one (e.g. `CAN_REACH` depends on `HAS_ACCESS_TO`).
 4. Register the processor by appending to `allProcessors()` in `server/internal/analysis/registry.go`.
-5. Add `<name>_test.go` against the mock `GraphDB` in `server/internal/graph/mock_test.go`.
+5. Add `<name>_test.go` against the mock `GraphDB` in
+   `server/internal/graph/mock_graphdb.go`.
 6. If the detection should appear as a pre-built query, also add it under `server/internal/analysis/prebuilt/`.
 
 ## How to add a pre-built query
@@ -82,20 +100,22 @@ Post-processors implement the `PostProcessor` interface in `server/internal/anal
 
 ## How to add a config parser
 
-Config parsers live in `modules/config/parsers/` and implement the `ConfigParser` interface (defined in `modules/config/`).
+Config parsers are `modules/config/parser_*.go` files in package `config` and
+implement the `ConfigParser` interface defined in `modules/config/parser.go`.
 
-1. Create `modules/config/parsers/<client>.go`.
+1. Create `modules/config/parser_<client>.go`.
 2. Implement:
    ```go
    type ConfigParser interface {
        ClientName() string
-       ConfigPaths() []string
-       Parse(path string, data []byte) (*ParseResult, error)
+       ConfigPaths(homeDir string) []string
+       Parse(path string, data []byte) (*ParsedConfig, error)
    }
    ```
 3. `ConfigPaths()` returns platform-specific default config file locations.
-4. Register the parser in the parser registry inside `modules/config/`.
-5. Add test fixtures in `modules/config/testdata/<client>/`.
+4. Add the parser to the `parsers` slice in `NewConfigCollector()`.
+5. Add parser cases to `modules/config/parsers_test.go` and any fixtures under
+   `modules/config/testdata/<client>/`.
 
 ## How to add a detection rule (YAML)
 
@@ -103,14 +123,17 @@ Rules engine: `sdk/rules/`. Builtin rules: `sdk/rules/builtin/*.yaml`.
 
 1. Create `sdk/rules/builtin/<id>.yaml` with `id`, `description`, `severity`, `matcher`, and (optionally) OWASP mapping. Matcher types: `keyword`, `prefix`, `regex`, `entropy`, `compound`. See existing files for examples.
 2. Add a test fixture in `sdk/rules/builtin_tests/<id>.yaml` with sample inputs/expected matches. Test fixtures live OUTSIDE the runtime `//go:embed builtin` path — attacker-shaped strings never ship in production binaries.
-3. Run `make test` (executes `agenthound rules test` under the hood).
+3. Run `make test`. The Go rule tests attach fixtures from
+   `sdk/rules/builtin_tests/`; the production CLI intentionally does not embed
+   or load those fixtures.
 
 ## Testing
 
 - All new features must include tests.
 - Run `make test` for Go (race detector enabled), `cd server/ui && npm test` for frontend.
 - Use `testdata/` fixtures for collector and ingest tests.
-- Post-processor tests should verify edge creation against a known graph state via `server/internal/graph/mock_test.go`.
+- Post-processor tests should verify edge creation against a known graph state
+  via `server/internal/graph/mock_graphdb.go`.
 - DB-touching tests skip locally unless `AGENTHOUND_NEO4J_URI` and a Postgres URI are set; CI runs them with services.
 
 ## Reporting bugs

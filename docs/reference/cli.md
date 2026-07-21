@@ -21,7 +21,12 @@ AgentHound ships as **two binaries**: `agenthound` (collector) and `agenthound-s
 
 Priority: CLI flag > env var > default.
 
-The collector is offline-by-default. No outbound HTTP, no DB clients, no phone-home. Move the resulting JSON to the analysis box via file copy, SSH pipe, or the UI's drag-drop import.
+The collector has no DB clients, server control channel, telemetry, or
+phone-home behavior. Commands that assess configured or operator-selected
+targets do make target-scoped network requests: MCP/A2A collection, active scan
+and discovery, looters, poisoners, and campaigns use the protocols documented
+for those commands. Move resulting JSON to the analysis box via file copy, SSH
+pipe, an explicit curl pipeline, or the UI's drag-drop import.
 
 Both origin IDs must match `[a-z0-9][a-z0-9._-]{0,127}` and remain stable.
 They are required whenever the command emits an ingest artifact (`scan`,
@@ -70,7 +75,7 @@ When none specified, defaults to config + MCP.
 | `--path` | | Single config file path (overrides auto-discovery). |
 | `--paths` | | Comma-separated paths to multiple config files. |
 | `--project-dir` | current working directory | Authoritative project root for project config, instruction, and MCP auto-discovery. Missing, inaccessible, or non-directory roots fail closed; they are never treated as an empty project. |
-| `--include-credential-values` | `false` | Emit raw credential values instead of SHA-256 hashes. |
+| `--include-credential-values` | `false` | Include credential values that the collector actually observes; hashes and material-status fields remain authoritative when a service masks or hashes a value. |
 
 Supported clients (12): Claude Desktop, Claude Code, Cursor, VS Code, Windsurf, Continue, Zed, Cline, JetBrains, Kiro, Amazon Q, Augment.
 
@@ -275,7 +280,7 @@ agenthound loot <host:port> --type <kind> [flags]
 | `--type` | **(required)** | Looter kind: `litellm`, `ollama`, `mlflow`, `qdrant`, `openwebui`, `jupyter`. |
 | `--master-key` | | Sugar for `--credential master_key=...`. |
 | `--credential` | | Operator-supplied credential as `KEY=VALUE` (repeatable). |
-| `--include-credential-values` | `false` | Emit raw values on Credential nodes. |
+| `--include-credential-values` | `false` | Include observed values where available; this cannot recover values that a service masks or returns only as a hash. |
 | `--max-items` | `0` (looter default) | Cap on the enumerated resource per Looter — semantics vary by module. See the [per-Looter default table](../operator/loot/index.md) for defaults + semantics. |
 | `--timeout` | `0` (looter default) | Per-probe HTTP timeout. |
 | `--engagement-id` | | Engagement identifier for IR coordination. |
@@ -498,7 +503,7 @@ Custom rules are loaded from `$AGENTHOUND_RULES_DIR` or `~/.agenthound/rules/`.
 agenthound rules validate [path] [--strict]
 ```
 
-Validates rule definitions for correctness and runs inline tests. If path is a file, validates that rule. If a directory, validates all `.yaml` files in it. No path = all loaded rules.
+Validates text-detection rule definitions and runs their inline tests. If path is a file, validates that rule. If a directory, validates all `.yaml` files in it. No path validates all loaded text rules. This command does not parse the fingerprint-rule schema under `sdk/rules/builtin/fingerprints/`.
 
 `--strict` treats warnings (including missing test cases) as errors.
 
@@ -513,21 +518,29 @@ agenthound rules test [path] [flags]
 | `--format` | `table` | `table` or `json`. |
 | `--verbose` | `false` | Show passing test cases, not just failures. |
 
-Exits with code 1 if any test fails.
+Runs `tests:` blocks embedded in text-detection rule files and exits with code 1
+if any case fails. Production built-ins deliberately contain no inline cases;
+their fixtures live outside the embedded tree under `sdk/rules/builtin_tests/`.
+Consequently, bare `agenthound rules test` reports zero built-in cases. Run the
+shipped fixture suite with:
+
+```bash
+go test ./sdk/rules -run TestBuiltinRules_AllPassInlineTests
+```
 
 #### Example
 
 ```bash
 agenthound rules list --severity critical --format json
 agenthound rules validate ./custom-rules/ --strict
-agenthound rules test
+agenthound rules test ./custom-rules/
 ```
 
 ---
 
 ### `agenthound extract`
 
-Extract training signals from model artifacts (v0.5). Parses GGUF weight files and detects statistical outlier embeddings likely added during fine-tuning.
+Extract training signals from model artifacts. Parses GGUF weight files and detects statistical outlier embeddings likely added during fine-tuning.
 
 ```bash
 agenthound extract <source-node-id> --type embedding-invert \
@@ -782,7 +795,7 @@ Triage decisions (`accepted-risk`, `false-positive`) suppress a finding from the
 |----|----------|----------|
 | `agents-shell-access` | Critical Paths | critical |
 | `shortest-to-database` | Critical Paths | critical |
-| `cross-protocol-paths` | Critical Paths | critical |
+| `cross-protocol-paths` | Exposure Hypotheses | medium |
 | `exfiltration-routes` | Critical Paths | critical |
 | `credential-chain` | Critical Paths | critical |
 | `litellm-credential-leak` | Critical Paths | critical |
@@ -841,12 +854,18 @@ Print version string and commit hash.
 | `AGENTHOUND_OUTPUT` | collector | `./scan-<scan_id>.json` |
 | `AGENTHOUND_LOG_LEVEL` | both | `info` |
 | `AGENTHOUND_CONCURRENCY` | collector | `5` |
+| `AGENTHOUND_HOST_ID` | both | required for collector artifact output and server DB commands |
+| `AGENTHOUND_NETWORK_REALM_ID` | both | required for collector artifact output and server DB commands |
+| `AGENTHOUND_STORAGE_PAIR_ID` | server | required canonical UUID for DB commands |
 | `AGENTHOUND_QUIET` | collector | (unset) |
 | `AGENTHOUND_LOG_JSON` | collector | (unset) |
 | `AGENTHOUND_RULES_BUNDLE` | collector | (unset) |
 | `AGENTHOUND_RULES_DIR` | collector | `~/.agenthound/rules/` |
 | `AGENTHOUND_CAMPAIGN_CREDENTIAL` | collector | (unset) — out-of-band credential material for `campaign` |
 | `AGENTHOUND_CAMPAIGN_AUTHORIZED` | collector | (unset) — non-interactive `campaign` authorization ack |
+| `AGENTHOUND_MCP_TOKEN` | collector | (unset) — explicit MCP bearer for the ContextForge adapter |
+| `AGENTHOUND_CONTEXTFORGE_TOKEN` | collector | (unset) — ContextForge management-bearer override |
+| `AGENTHOUND_STATE_DIR` | collector | `~/.agenthound/state/` — offensive-action and campaign receipt root |
 | `AGENTHOUND_BIND` | server | `127.0.0.1:8080` |
 | `AGENTHOUND_NEO4J_URI` | server | `bolt://localhost:7687` |
 | `AGENTHOUND_NEO4J_USER` | server | `neo4j` |
@@ -862,5 +881,7 @@ Print version string and commit hash.
 |------|---------|
 | `~/.agenthound/loot-acknowledged` | Loot authorization sentinel. |
 | `~/.agenthound/poison-acknowledged` | Poison/implant authorization sentinel. |
-| `~/.agenthound/state/<module-id>/<engagement-id>.json` | Poison/implant receipts (audit trail + revert source). |
+| `~/.agenthound/extract-acknowledged` | Extract authorization sentinel. |
+| `~/.agenthound/campaign-acknowledged` | Campaign authorization sentinel. |
+| `~/.agenthound/state/<module-id>/<engagement-id>.json` | Poison/implant/campaign recovery receipts and audit trail. |
 | `~/.agenthound/rules/` | Custom detection rules directory. |

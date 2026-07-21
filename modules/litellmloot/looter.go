@@ -1,10 +1,10 @@
-// Package litellmloot implements the v0.2 LiteLLM Looter — the action
-// that turns a discovered :LiteLLMGateway:AIService node into the
-// upstream credential nodes that make the credential-chain demo land.
+// Package litellmloot implements the LiteLLM Looter. It turns a discovered
+// :LiteLLMGateway:AIService node into observed master-key material plus masked
+// provider and server-hashed virtual-key references.
 //
 // Operator workflow:
 //
-//	agenthound scan 172.20.0.0/24 --output -          // Phase 2/3: find LiteLLM
+//	agenthound scan 172.20.0.0/24 --output -          // find LiteLLM
 //	agenthound loot 172.20.0.10:4000 --type litellm \
 //	    --master-key sk-... \
 //	    --engagement-id RTV-DEMO --output -
@@ -48,9 +48,9 @@ const (
 // Looter is the registered module.
 type Looter struct{}
 
-// Loot probes a LiteLLM gateway with the operator-supplied master key
-// and emits Credential nodes + EXPOSES_CREDENTIAL edges for every
-// upstream provider key and virtual key the gateway exposes.
+// Loot probes a LiteLLM gateway with the operator-supplied master key and emits
+// Credential nodes + EXPOSES_CREDENTIAL edges for the observed master key,
+// masked provider identities, and server-hashed virtual-key references.
 //
 // opts.Credentials must contain a "master_key" entry. Other keys are
 // ignored. PartialErrors is populated when individual probes fail; the
@@ -94,7 +94,7 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 	//    value_hash is the cross-collector merge primitive; the Config
 	//    Collector emits a Credential with the same value_hash for the
 	//    same secret seen in any supported config location, and the
-	//    cross_service_credential_chain post-processor (Phase 5) joins
+	//    cross_service_credential_chain post-processor joins
 	//    on this property. Without this node the demo fails silently.
 	masterValueHash := common.HashCredentialValue(masterKey)
 	masterID := ingest.ComputeNodeID("Credential", baseURL, "litellm-master")

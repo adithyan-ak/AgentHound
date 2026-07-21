@@ -1,5 +1,10 @@
 # Sprint 3 — Offensive primitives (network scanner + first Looter)
 
+> **Archived pre-v1 planning record.** This draft is excluded from the public
+> documentation site and is preserved for design history. It does not describe
+> the current v1 command surface or contracts. Use `CHANGELOG.md` and the
+> current operator/reference guides for implemented behavior.
+
 > **2026-07-06 correction (post-v0.3, retroactive).** §2.1's bullets treating `/api/blobs/<digest>` as a GET-able weight-download channel sit outside Ollama's documented HTTP API surface. Upstream defines only `HEAD` (existence check for the create-model flow) and `POST` (upload) on that path — raw weight blobs are reachable via filesystem access to `~/.ollama/models/blobs/` on the host, not over HTTP. The Ollama Looter's `--include-weights` / `--weights-dir` surface (planned in §5) was removed in a follow-up to align with the upstream API — see the CHANGELOG entry titled "Ollama Looter: align flag surface with upstream API". Read every subsequent Ollama-loot section in this plan with that correction in mind.
 >
 > **Status:** Draft for design review (refreshed 2026-05-16).

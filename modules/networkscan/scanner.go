@@ -13,7 +13,7 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/action"
 )
 
-// DefaultPorts is the v0.2 fixed AI-service port set. Order does not matter;
+// DefaultPorts is the default AI-service port set. Order does not matter;
 // the scanner probes each independently.
 //
 // Every open endpoint is evaluated by every registered fingerprinter. These
@@ -70,8 +70,8 @@ type dialer interface {
 //     hint at (e.g. "ollama,litellm"); fingerprinters consume this to
 //     decide which probe to run first
 //
-// The scanner does NOT emit ingest JSON. Node emission begins in Phase 2
-// when fingerprinters dispatch on these targets.
+// The scanner does not emit ingest JSON; the CLI dispatches fingerprinters on
+// these targets and adds their nodes to the network-scan envelope.
 type Scanner struct {
 	Ports       []int
 	Concurrency int

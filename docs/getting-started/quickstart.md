@@ -123,7 +123,7 @@ agenthound discover 10.0.0.0/24 --output - \
 
 ## 6. Loot a Service
 
-Looters extract latent credentials from discovered services via read-only HTTP (GET/HEAD only). The first invocation prompts for an interactive AUTHORIZED confirmation:
+Looters inventory credential evidence and service metadata without durable target mutation. GET/HEAD is the norm; documented idempotent lookup/search POSTs are used where an API exposes reads only through POST. The first invocation prompts for an interactive AUTHORIZED confirmation:
 
 ```bash
 agenthound loot 10.0.0.20:4000 --type litellm \
@@ -142,8 +142,8 @@ agenthound loot 10.0.0.10:11434 --type ollama \
     --output loot-ollama.json
 ```
 
-Ingest the loot envelope to surface credential-chain findings in the
-graph (point curl at the file the collector wrote):
+Ingest the loot envelope to add the model inventory and its graph evidence
+(point curl at the file the collector wrote):
 
 ```bash
 curl --data-binary @./loot-ollama.json \
@@ -167,7 +167,7 @@ curl --data-binary @./loot-ollama.json \
 # Pre-built query (agents with shell access)
 curl http://127.0.0.1:8080/api/v1/analysis/prebuilt/agents-shell-access
 
-# Cross-protocol paths (MCP-to-A2A boundary traversal)
+# Cross-protocol paths (A2A-to-MCP shared-host hypotheses)
 curl http://127.0.0.1:8080/api/v1/analysis/prebuilt/cross-protocol-paths
 
 # Findings (filter by severity)

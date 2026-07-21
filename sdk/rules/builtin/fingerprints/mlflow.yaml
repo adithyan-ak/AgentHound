@@ -1,4 +1,4 @@
-# MLflow fingerprint rule (v0.4).
+# MLflow fingerprint rule.
 #
 # MLflow Tracking Server (default port 5000) serves both an HTML
 # console at "/" and a REST API under "/api/2.0/mlflow/...". The

@@ -6,16 +6,14 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
-// Extractor pulls a specific resource by reference (a known file path,
-// memory region, table, etc.) from a Target. Distinct from Looter, which
-// performs broader untargeted collection. Extractors are computationally
-// heavy and potentially destructive in the billing sense (they may
-// consume inference compute on the target) — gated behind --commit like
-// Poisoners.
+// Extractor analyzes a specific resource supplied by reference (a known file
+// path, memory region, table, etc.). It is distinct from Looter, which performs
+// broader target collection. The current embedding-inversion implementation
+// performs local analysis and does not mutate or consume compute on the target.
 //
-// v0.4 ships one proof-of-concept Extractor: embedding-inversion. It
-// takes an AIModel node + a GGUF weight file the operator has already
-// obtained by other means (filesystem access to ~/.ollama/models/blobs/
+// The embedding-inversion Extractor takes an AIModel node + a GGUF weight file
+// the operator has already obtained by other means (filesystem access to
+// ~/.ollama/models/blobs/
 // on a compromised Ollama host, a HuggingFace download, or any other
 // out-of-band source) and runs a local embedding-inversion algorithm
 // to produce probabilistic training-signal artifacts. AgentHound does
@@ -44,9 +42,9 @@ type ExtractOptions struct {
 	// EngagementID correlates the extraction with the engagement.
 	EngagementID string
 
-	// DryRun=true runs the extraction pipeline end-to-end but does not
-	// persist results or emit ingest data. Useful for profiling
-	// resource consumption before committing.
+	// DryRun=true runs the extraction pipeline end-to-end but does not emit
+	// ingest data. The --commit flag is an output gate, not an execution or
+	// target-mutation gate.
 	DryRun bool
 
 	// Extras carries per-Extractor flag values, same pattern as

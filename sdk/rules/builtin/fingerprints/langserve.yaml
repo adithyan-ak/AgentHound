@@ -1,4 +1,4 @@
-# LangServe fingerprint rule (v0.4).
+# LangServe fingerprint rule.
 #
 # LangServe is LangChain's REST-API wrapper that exposes deployed
 # LangChain runnables as HTTP endpoints. Default port 8000 (collides

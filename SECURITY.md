@@ -46,10 +46,11 @@ AgentHound handles sensitive data (credentials, infrastructure topology, attack 
 - **Input validation:** All API inputs are validated. The `/query` endpoint is OriginGuard-gated; node/edge kinds are checked against an allowlist before being interpolated into Cypher.
 - **Container security:** Non-root user, minimal base image, no unnecessary packages.
 
-For the full threat model see [`docs/security.md`](docs/security.md).
+For the full threat model see
+[`docs/operator/security.md`](docs/operator/security.md).
 
 ## Supported versions
 
 | Version | Supported |
 |---------|-----------|
-| 0.1.x   | Yes       |
+| 1.0.x   | Yes       |

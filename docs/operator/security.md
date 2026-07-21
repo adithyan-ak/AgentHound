@@ -37,9 +37,10 @@ primary security control:
   the public internet. The application is not designed for that
   threat model and never will be.
 
-If a multi-tenant team server is what you need, fork before this
-commit (auth lived in `internal/auth/` until then) — but expect to
-maintain it yourself. The project direction is single-user-first.
+If a multi-tenant team server is what you need, this release is not that
+product. The removed pre-launch auth/RBAC implementation is not a supported
+branch or migration target; introducing multi-tenancy requires a separately
+maintained security architecture. The project direction is single-user-first.
 
 ## Origin guard on mutating endpoints
 

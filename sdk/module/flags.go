@@ -1,4 +1,4 @@
-// Package module — FlagsModule is a v0.3 sidecar interface for modules that
+// Package module — FlagsModule is a sidecar interface for modules that
 // need per-module CLI flags. It is a pure side-interface: modules that need
 // flags add the method, modules that don't, don't.
 //
@@ -19,7 +19,7 @@
 // ship zero per-module flags. Adding RegisterFlags to the Module interface
 // would force every existing module to implement a no-op method. The
 // sidecar keeps Module narrow and lets future capability sidecars (e.g.
-// StatefulModule for v0.4 receipt persistence) compose the same way.
+// StatefulModule for receipt persistence) compose the same way.
 package module
 
 import (

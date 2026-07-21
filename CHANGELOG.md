@@ -1,5 +1,15 @@
 # 🐕 AgentHound Changelog
 
+## Unreleased
+
+- Correct documentation and source comments against the v1 implementation,
+  including credential-material semantics, graph variants, CLI workflows,
+  contributor paths, environment requirements, and historical version labels.
+- Align the legacy `EdgeRiskWeight` helper with the canonical v1 risk table for
+  Basic, OIDC, and unknown/custom authentication.
+- Upgrade `golang.org/x/text` to 0.39.0 to address the reachable
+  `GO-2026-5970` invalid-input infinite loop reported by `govulncheck`.
+
 ## v1.0.0 — 🚀 First Supported Public Release (2026-07-20)
 
 AgentHound v1.0.0 is the first supported public release of an offensive

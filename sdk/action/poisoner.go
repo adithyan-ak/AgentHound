@@ -13,8 +13,8 @@ import (
 //
 // Implementations also implement sdk/module.Module.
 //
-// v0.4 wires this concretely. Every Poisoner emits a PoisonReceipt that
-// carries the original content and provider-specific rollback state plus
+// Every Poisoner emits a PoisonReceipt that carries the original content and
+// provider-specific rollback state plus
 // engagement metadata. Receipts are persisted by the StatefulModule
 // sidecar (sdk/module/stateful.go) keyed on engagement-id so
 // `agenthound revert <engagement-id>` walks all module state dirs and
@@ -31,7 +31,7 @@ type Poisoner interface {
 //
 // TargetID is the per-module logical address of what is being poisoned —
 // for the MCP tool Poisoner this is the MCPTool.objectid. For an
-// instruction-file Poisoner (v4-phase 2) it is the absolute file path.
+// instruction-file Poisoner it is the absolute file path.
 //
 // Mode controls how InjectionContent combines with existing content:
 //

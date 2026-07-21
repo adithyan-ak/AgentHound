@@ -1,4 +1,4 @@
-// Package ollamafp implements the v0.2 Ollama fingerprinter module.
+// Package ollamafp implements the Ollama fingerprinter module.
 // It probes a Target's Address (expected shape "host:11434") with
 // GET /api/version and emits a multi-label :OllamaInstance:AIService
 // node when the response matches the canonical Ollama version JSON.

@@ -39,8 +39,8 @@ One framework attacks every layer - MCP, A2A, model gateways, inference servers,
 </td>
 <td width="50%" valign="top">
 
-🔓 **Credential looting across the gateway & service plane**<br/>
-Hand the LiteLLM looter one master key and get back every upstream provider key it brokers - OpenAI, Anthropic, Bedrock - plus virtual keys and spend. Credential records correlate across services by `value_hash`.
+🔓 **Credential inventory across the gateway & service plane**<br/>
+Hand the LiteLLM looter one master key to inventory the observed master-key exposure, masked upstream-provider references, and hashed virtual-key references with spend metadata. Only observed credential material participates in cross-service `value_hash` correlation.
 
 </td>
 </tr>
@@ -48,7 +48,7 @@ Hand the LiteLLM looter one master key and get back every upstream provider key 
 <td width="50%" valign="top">
 
 🧬 **Modelfile, system-prompt & fine-tune inventory**<br/>
-Enumerate every model on an unauthenticated Ollama - names, digests, sizes, modelfiles, templates, and system prompts. Fine-tunes (SYSTEM / ADAPTER directives) get flagged; each `:AIModel` node carries `value_hash` so a leaked prompt matches across collectors.
+Enumerate every model on an unauthenticated Ollama - names, digests, sizes, modelfiles, templates, and system prompts. Fine-tunes (SYSTEM / ADAPTER directives) get flagged; a model with observable modelfile content carries a stable content hash for cross-run comparison.
 
 </td>
 <td width="50%" valign="top">
@@ -112,7 +112,7 @@ A new attack against a new AI service is one module away - implement an action i
 |---|---|---|
 | **Agent client** | 12 MCP client configs + instruction files (`CLAUDE.md`, `AGENTS.md`, `.cursorrules`) | `config` |
 | **Protocol** | MCP servers (stdio + HTTP/SSE), A2A agents (agent cards, JWS, delegation) | `mcp`, `a2a`, `protoscan` |
-| **Model gateway** | LiteLLM - one master key → the whole upstream provider keyring | `litellmfp`, `litellmloot` |
+| **Model gateway** | LiteLLM - observed master-key exposure plus masked provider and hashed virtual-key inventory | `litellmfp`, `litellmloot` |
 | **Inference** | Ollama, vLLM - model inventory, modelfiles, system prompts, fine-tune detection | `ollamafp`, `ollamaloot`, `vllmfp` |
 | **Vector / RAG** | Qdrant collections | `qdrantfp`, `qdrantloot` |
 | **MLOps** | MLflow experiments + runs | `mlflowfp`, `mlflowloot` |
@@ -121,11 +121,11 @@ A new attack against a new AI service is one module away - implement an action i
 
 ## 📦 By the numbers
 
-- **23 module packages** - 22 self-registering attack modules + the `protoscan` discovery engine
-- **7 offensive CLI verbs** - `scan` · `discover` · `loot` · `extract` · `poison` · `implant` · `revert` (`enumerate` + `fingerprint` run inside `scan`)
+- **25 directories under `modules/`** - 22 `sdk/module` registrations, 2 `sdk/campaign` scenarios, and the `protoscan` discovery engine
+- **8 lifecycle CLI commands** - `scan` · `discover` · `loot` · `extract` · `poison` · `implant` · `revert` · `campaign` (`enumerate` + `fingerprint` run inside `scan`)
 - **8 fingerprinters · 6 looters · 1 model-inversion extractor · 2 poisoners · 1 implanter**
 - **Graph:** 23 node labels · 32 edge kinds (20 raw + 12 composite) · **15 post-processors**
-- **Intelligence:** 35 detection rules + 8 fingerprint rules · 19 prebuilt attack-path queries · OWASP MCP Top 10 + OWASP Agentic Top 10 + **7 MITRE ATLAS techniques**
+- **Intelligence:** 35 text-detection rules + 7 YAML fingerprint rules + 1 code-backed Jupyter detector · 19 prebuilt attack-path queries · OWASP MCP Top 10 + OWASP Agentic Top 10 + **7 MITRE ATLAS techniques**
 - **One static collector binary (~9.9 MiB, no DB/UI/server deps, offline by default).** Apache-2.0, cosign-signed releases with SBOM.
 
 ## 🚀 Quick start
@@ -174,7 +174,18 @@ Also available via Homebrew (`brew tap adithyan-ak/agenthound`, then
 
 ## 🔪 The offensive lifecycle
 
-One binary runs the whole offensive lifecycle. Every stage emits the same ingest envelope, so results land in the same graph. Active verbs (`loot`, `extract`, `poison`, `implant`) require an interactive `AUTHORIZED` confirmation; `extract`, `poison`, and `implant` are dry-run until `--commit`. `poison` and `implant` record recovery paths for `agenthound revert`, whose runtime outcome is verified; `extract` does not mutate its source artifact and has no Reverter - see [Safety & Authorization](#-safety--authorization).
+One binary runs the whole offensive lifecycle. `scan`, `discover`, and `loot`
+write ingest envelopes; `extract` and the credential-reach campaign do so only
+on committed runs. `poison` and `implant` report mutation status and persist
+protected receipts; `revert` consumes those receipts and reports rollback
+status; the MCP poison round-trip campaign emits a bounded `RunReport`, not
+graph evidence. `loot`, `extract`, `poison`, and `implant` have per-action
+`AUTHORIZED` gates. `campaign` has a distinct acknowledgement, and committed
+mutation scenarios also require the poison acknowledgement. `extract`, `poison`,
+`implant`, and `campaign` default to dry-run. `poison` and `implant` record
+recovery paths for `agenthound revert`; `extract` analyzes a local artifact,
+does not mutate it, and has no Reverter - see
+[Safety & Authorization](#-safety--authorization).
 
 **1. Recon** - find the AI estate:
 
@@ -183,7 +194,8 @@ agenthound scan 10.0.0.0/24
 agenthound discover 10.0.0.0/24 --mcp --a2a
 ```
 
-**2. Loot** - pull latent credentials and model metadata, read-only (GET/HEAD):
+**2. Loot** - inventory credential evidence and model metadata without durable
+target mutation (GET/HEAD plus documented idempotent lookup/search POSTs):
 
 ```bash
 agenthound loot 10.0.0.20:4000 --type litellm --master-key sk-... --engagement-id ENG-1 --output -
@@ -251,7 +263,7 @@ AgentHound doesn't just list findings - it creates graph edges you can chain, qu
 - **`CAN_REACH`**: an agent can traverse trust, credential, host, or protocol relationships to reach a target.
 - **`CAN_EXECUTE`**: an agent can reach a tool capable of command, database, network, or code execution.
 - **`CAN_EXFILTRATE_VIA`**: an agent can read sensitive data and send it through an outbound channel.
-- **`CAN_IMPERSONATE`**: an agent or identity can act as another trust principal.
+- **`CAN_IMPERSONATE`**: an A2A agent can act as another A2A agent.
 - **`SHADOWS`**: a tool mimics a trusted tool closely enough to hijack expected behavior.
 - **`POISONED_DESCRIPTION` / `POISONED_INSTRUCTIONS`**: tool or instruction text contains model-steering content.
 
@@ -267,27 +279,29 @@ flowchart LR
   ConfigCred["Credential<br/>configured secret<br/>value_hash: a3f9..."]
   Gateway["LiteLLMGateway<br/>prod"]
   MasterCred["Credential<br/>gateway master key<br/>value_hash: a3f9..."]
-  ProviderCred["Credential<br/>upstream provider key"]
+  ProviderRef["Credential<br/>masked provider reference<br/>material not observed"]
 
   Agent -- TRUSTS_SERVER --> Notes
   Notes -- AUTHENTICATES_WITH --> Identity
   Identity -- USES_CREDENTIAL --> ConfigCred
   ConfigCred -. VALUE_HASH_MATCH .-> MasterCred
   Gateway -- EXPOSES_CREDENTIAL --> MasterCred
-  Gateway -- EXPOSES_CREDENTIAL --> ProviderCred
-  Agent -- CAN_REACH --> ProviderCred
+  Gateway -- EXPOSES_CREDENTIAL --> ProviderRef
+  Agent -- CAN_REACH --> ProviderRef
 ```
 
 No single config file declares this path. AgentHound correlates the two
 collector-owned credential records by `value_hash` and computes the reachability
-edge once both outputs land in the same graph.
+edge once both outputs land in the same graph. The provider target remains a
+reference-only finding: it does not assert that AgentHound obtained usable
+upstream provider secret material.
 
 ## 🛡️ Safety & authorization
 
 Built to be run under authorization, with the controls this audience checks for:
 
 - **Read-only looter contract** - GET/HEAD only (narrow idempotent-search carve-outs), each guarded by a `get_only_test.go` regression test.
-- **Destructive verbs dry-run by default** - `poison` / `implant` / `extract` do nothing mutating without `--commit`.
+- **Mutating verbs dry-run by default** - `poison`, `implant`, and mutation campaigns do not modify a target without `--commit`. `extract` performs its local analysis in dry-run and uses `--commit` only to emit ingest data.
 - **Compile-time-mandatory recovery path** - `Poisoner` / `Implanter` embed `Reverter`; every destructive module must implement recovery. Runtime restoration is verified, not guaranteed across provider policy changes, conflicts, or unavailable targets.
 - **Receipt before mutation** - the undo receipt is persisted to disk *before* the write lands.
 - **AUTHORIZED gates + `--engagement-id`** - interactive first-run prompts; every receipt and edge threaded for IR coordination.

@@ -22,13 +22,13 @@ import (
 	"github.com/spf13/pflag"
 )
 
-// lootCmd is the v0.2 entry point for the `loot` action. It dispatches
+// lootCmd is the entry point for the `loot` action. It dispatches
 // to a registered Looter via module.GetByTarget(--type, action.Loot)
 // and writes the resulting ingest envelope to --output (or stdout via
-// --output -). v0.2 ships with one Looter (LiteLLM) registered at
-// modules/litellmloot; --type litellm resolves to it.
+// --output -). The supported target kinds are listed in the command's
+// user-facing help below.
 //
-// Safety controls (per docs/plans/v0.2-implementation.md decision C):
+// Safety controls:
 //   - First-run AUTHORIZED interactive prompt + ~/.agenthound/loot-acknowledged
 //     sentinel so the operator confirms once that they have authorization.
 //     Subsequent invocations skip the prompt.

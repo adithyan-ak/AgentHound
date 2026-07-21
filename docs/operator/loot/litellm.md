@@ -1,8 +1,11 @@
 # `agenthound loot --type litellm` — LiteLLM Looter operator guide
 
-> **Authorized engagements only.** Looting a LiteLLM gateway with the master key extracts upstream provider credentials (OpenAI, Anthropic, AWS Bedrock, Azure, Cohere keys behind the master) AND leaves a clear audit trail in the gateway's Postgres backend, LangFuse instrumentation (if present), and any defender SIEM watching the proxy. Coordinate with the target's IR/security team out-of-band BEFORE running this against production. The first `agenthound loot` invocation on a machine triggers an interactive `AUTHORIZED` prompt and writes a sentinel file (`~/.agenthound/loot-acknowledged`) to record the acknowledgement.
+> **Authorized engagements only.** Looting a LiteLLM gateway uses an operator-supplied master key to inventory the observed master-key exposure, masked upstream-provider references, and hashed virtual-key references. It does not recover usable upstream-provider or virtual-key plaintext. The requests can leave an audit trail in gateway and infrastructure logs. Coordinate with the target's IR/security team out-of-band BEFORE running this against production. The first `agenthound loot` invocation on a machine triggers an interactive `AUTHORIZED` prompt and writes a sentinel file (`~/.agenthound/loot-acknowledged`) to record the acknowledgement.
 
-The LiteLLM Looter is the v0.2 marquee action — the first concrete `Looter` against a high-leverage target. A single LiteLLM master key compromise yields aggregated provider credentials for every upstream the gateway proxies. This is what lights up the credential-chain finding in the AgentHound graph.
+The LiteLLM Looter records what the gateway actually exposes. An observed master
+key can correlate with the same secret found in an MCP client config. Provider
+and virtual-key rows remain non-plaintext references and must not be presented
+as recovered secrets.
 
 ---
 
@@ -10,9 +13,9 @@ The LiteLLM Looter is the v0.2 marquee action — the first concrete `Looter` ag
 
 Three GET-only HTTP probes against a fingerprinted LiteLLM gateway:
 
-1. **`GET /model/info`** (master-key authenticated) — lists every upstream provider model the gateway proxies, including `litellm_params.api_base` and (when LiteLLM exposes it) `litellm_params.api_key`. Emits one `:Credential` node per provider with `type=apiKey`, `provider=openai|anthropic|aws_bedrock|...`, `value_hash` populated.
+1. **`GET /model/info`** (master-key authenticated) — lists upstream provider models. LiteLLM strips `litellm_params.api_key`; AgentHound emits one masked, `not_observed` `:Credential` reference per provider with a synthetic identity hash and `merge_key=identity`. These nodes cannot participate in real-secret `value_hash` joins.
 
-2. **`GET /key/list`** (master-key authenticated) — enumerates virtual keys with their spend and model allowlist. Emits one `:Credential` node per virtual key with `type=virtual_key`. Failure here (common — many production deployments restrict `/key/list`) does not abort the loot; it lands in `LootResult.PartialErrors` and the looter continues.
+2. **`GET /key/list`** (master-key authenticated) — enumerates server-side virtual-key hashes with their spend and model allowlist. Emits one hashed, `not_observed` `:Credential` reference per virtual key. Failure here (common — many production deployments restrict `/key/list`) does not abort the loot; it lands in `LootResult.PartialErrors` and the looter continues.
 
 3. **The master-key Credential itself** — emitted unconditionally as the FIRST node, with `value_hash = HashCredentialValue(master_key)`. This is the cross-collector merge primitive: if the same secret appears as `LITELLM_MASTER_KEY` in an MCP config, the Config Collector emits a `:Credential` with the same `value_hash`, and the `cross_service_credential_chain` post-processor joins the two sides into a credential-chain finding.
 
@@ -55,7 +58,7 @@ agenthound loot 10.0.0.10:4000 --type litellm \
 | `--master-key sk-...` | One of | — | Sugar for `--credential master_key=...`. |
 | `--credential KEY=VALUE` | One of | — | Generic per-module credential form, repeatable. The LiteLLM Looter reads `master_key`. |
 | `--engagement-id <id>` | Recommended | empty | Recorded in every emitted edge's evidence map and on every slog line. Coordinate with target IR for attribution. |
-| `--include-credential-values` | No | `false` | When `false` (default), Credential nodes carry `value_hash` only — the raw value is omitted. When `true`, the raw `value` property is also populated. The hash is always populated. |
+| `--include-credential-values` | No | `false` | When `true`, includes only values AgentHound actually observed. For LiteLLM this means the operator-supplied master key and the already-hashed virtual-key token returned by `/key/list`; upstream provider references have no raw value. |
 | `--max-items <n>` | No | 1000 | Caps emitted Credential nodes per category. |
 | `--output <path>` | No | `./loot-<scan_id>.json` | Use `-` for stdout. |
 | `--timeout <duration>` | No | 30s | Total probe timeout. |
@@ -104,7 +107,9 @@ extra location evidence for env-backed material. The
 `(:AgentInstance)-[:TRUSTS_SERVER]->(:MCPServer)-[:AUTHENTICATES_WITH]->(:Identity)-[:USES_CREDENTIAL]->(c1)`,
 and matches `c1.value_hash` to a master `:Credential` exposed by a
 `:LiteLLMGateway`, then emits `(:AgentInstance)-[:CAN_REACH]->(c2)` for every
-upstream provider Credential `c2` the gateway exposes.
+provider or virtual-key reference `c2` the gateway exposes. Finding presentation
+distinguishes observed usable material from reference-only targets; this edge
+does not prove possession of provider or virtual-key plaintext.
 
 The pre-built `litellm-credential-leak` query reports the observed master-key
 exposure. It returns provider and virtual-key nodes only as explicit
@@ -131,7 +136,7 @@ findings remain separate analysis output.
 
 **Virtual-key value_hash is pre-hashed by LiteLLM.** LiteLLM's `/key/list` returns the token column verbatim, which is already `SHA-256(raw_key).hexdigest()` per `proxy/utils.py::hash_token()`. The looter assigns this string to `value_hash` DIRECTLY (no second hash). Any other collector that observes the raw `sk-...` value produces the same `SHA-256(raw)`, allowing the distinct collector-owned nodes to correlate on `value_hash`. Pre-U-CRIT-1 the looter double-hashed (`SHA-256(SHA-256(raw))`) and the cross-collector correlation silently failed.
 
-**`--include-credential-values=true` audit-mode.** The default loot is hash-only. With this flag, raw values land in the `value` property on every `:Credential` node. Use this for engagements where the deliverable explicitly includes the credentials themselves (e.g. internal red-team handoff to remediation). The cross-collector chain works the same way either way — `value_hash` is always populated.
+**`--include-credential-values=true` audit-mode.** The default loot omits the `value` property. With this flag, the observed master-key plaintext may land in `value`; virtual-key rows can contain only the already-hashed token returned by LiteLLM; upstream-provider rows still have no value. Treat the field according to each node's `material_status` and `exposure_status`, not as a guarantee of usable plaintext.
 
 **Engagement-id is recorded everywhere.** Every edge's evidence map carries it; every slog line carries it; the top-level `meta.extra.engagement_id` carries it. After-the-fact attribution works regardless of which surface the SOC inspects first.
 

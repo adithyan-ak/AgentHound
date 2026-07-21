@@ -1,4 +1,4 @@
-// Package mlflowfp implements the v0.4 MLflow fingerprinter module.
+// Package mlflowfp implements the MLflow fingerprinter module.
 // Probe semantics live in sdk/rules/builtin/fingerprints/mlflow.yaml.
 package mlflowfp
 

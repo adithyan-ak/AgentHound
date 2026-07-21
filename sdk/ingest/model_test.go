@@ -289,8 +289,8 @@ func TestRawEdgeKindsSubsetOfAllowed(t *testing.T) {
 	}
 }
 
-// TestAIServiceKindsRegistered guards against accidental removal of the v0.2
-// AI-service node kinds + edge kinds. The credential-chain demo and every
+// TestAIServiceKindsRegistered guards against accidental removal of the
+// AI-service node kinds + edge kinds. The credential-chain analysis and every
 // downstream consumer (writer, schema, post-processors, UI) depends on these
 // being present in their respective maps.
 func TestAIServiceKindsRegistered(t *testing.T) {
@@ -301,7 +301,7 @@ func TestAIServiceKindsRegistered(t *testing.T) {
 	}
 	for _, k := range wantNodeKinds {
 		if !AllowedNodeKinds[k] {
-			t.Errorf("AllowedNodeKinds missing v0.2 kind %q", k)
+			t.Errorf("AllowedNodeKinds missing AI-service kind %q", k)
 		}
 	}
 
@@ -312,17 +312,17 @@ func TestAIServiceKindsRegistered(t *testing.T) {
 	}
 	for _, k := range wantNodeKinds {
 		if !labelSet[k] {
-			t.Errorf("AllNodeLabels missing v0.2 label %q", k)
+			t.Errorf("AllNodeLabels missing AI-service label %q", k)
 		}
 	}
 
 	wantEdgeKinds := []string{"EXPOSES", "EXPOSES_CREDENTIAL"}
 	for _, k := range wantEdgeKinds {
 		if !RawEdgeKinds[k] {
-			t.Errorf("RawEdgeKinds missing v0.2 edge %q (validator gate at server/internal/ingest/validator.go:80 will reject ingest)", k)
+			t.Errorf("RawEdgeKinds missing AI-service edge %q (the ingest validator will reject it)", k)
 		}
 		if !AllowedEdgeKinds[k] {
-			t.Errorf("AllowedEdgeKinds missing v0.2 edge %q", k)
+			t.Errorf("AllowedEdgeKinds missing AI-service edge %q", k)
 		}
 	}
 
@@ -333,30 +333,30 @@ func TestAIServiceKindsRegistered(t *testing.T) {
 	}
 }
 
-// TestAIModelKindRegistered guards the v0.3 AIModel + PROVIDES_MODEL additions.
+// TestAIModelKindRegistered guards the AIModel + PROVIDES_MODEL contract.
 // The Ollama Looter (modules/ollamaloot) emits one :AIModel per model surfaced
 // via /api/tags + /api/show, joined by an OllamaInstance -[PROVIDES_MODEL]->
 // AIModel edge. AIModel is NOT an umbrella — it's a per-kind label that gets
 // its own uniqueness constraint via the AllNodeLabels loop.
 func TestAIModelKindRegistered(t *testing.T) {
 	if !AllowedNodeKinds["AIModel"] {
-		t.Error("AllowedNodeKinds missing v0.3 kind \"AIModel\"")
+		t.Error("AllowedNodeKinds missing kind \"AIModel\"")
 	}
 	labelSet := make(map[string]bool, len(AllNodeLabels))
 	for _, l := range AllNodeLabels {
 		labelSet[l] = true
 	}
 	if !labelSet["AIModel"] {
-		t.Error("AllNodeLabels missing v0.3 label \"AIModel\"")
+		t.Error("AllNodeLabels missing label \"AIModel\"")
 	}
 	if UmbrellaLabels["AIModel"] {
 		t.Error("AIModel must NOT be in UmbrellaLabels — it gets its own uniqueness constraint")
 	}
 	if !RawEdgeKinds["PROVIDES_MODEL"] {
-		t.Error("RawEdgeKinds missing v0.3 edge \"PROVIDES_MODEL\"")
+		t.Error("RawEdgeKinds missing edge \"PROVIDES_MODEL\"")
 	}
 	if !AllowedEdgeKinds["PROVIDES_MODEL"] {
-		t.Error("AllowedEdgeKinds missing v0.3 edge \"PROVIDES_MODEL\"")
+		t.Error("AllowedEdgeKinds missing edge \"PROVIDES_MODEL\"")
 	}
 	ep, ok := EdgeKindEndpoints["PROVIDES_MODEL"]
 	if !ok {

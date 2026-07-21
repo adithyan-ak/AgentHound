@@ -8,7 +8,7 @@ AgentHound surfaces findings through two complementary layers:
 
 | Layer | Where it runs | Count | Storage |
 |---|---|---|---|
-| **YAML rules engine** | Inside collectors at scan time. Drives capability classification, credential extraction, prompt-injection pattern matching, instruction-file poisoning, source-trust tagging, and resource-sensitivity classification. | **35 builtin rules** | `sdk/rules/builtin/*.yaml`. Inspect with `agenthound rules list`; test with `agenthound rules test`; query the running server via `GET /api/v1/rules`. |
+| **YAML rules engine** | Inside collectors at scan time. Drives capability classification, credential extraction, prompt-injection pattern matching, instruction-file poisoning, source-trust tagging, and resource-sensitivity classification. | **35 builtin rules** | `sdk/rules/builtin/*.yaml`. Inspect with `agenthound rules list`; run custom inline tests with `agenthound rules test <path>`; run the shipped external fixtures with `go test ./sdk/rules -run TestBuiltinRules_AllPassInlineTests`; query the running server via `GET /api/v1/rules`. |
 | **Pre-built graph queries** | Inside `agenthound-server` against the post-processed Neo4j graph. Each query expresses a high-level finding as a Cypher path or pattern. | **19 queries** | `server/internal/analysis/prebuilt/`. Surface as findings via `GET /api/v1/analysis/findings`, runnable via `GET /api/v1/analysis/prebuilt/{id}` or `agenthound-server query --prebuilt <id>`. |
 
 The two layers feed each other: the rules engine emits structured signals (`capability_surface`, `exposure_status`, `material_status`, `high_entropy`, `has_injection_patterns`, `source_trust`, sensitivity classifications) on collected nodes; the post-processors and pre-built queries consume those signals to compute composite edges (`HAS_ACCESS_TO`, `CAN_REACH`, `POISONED_DESCRIPTION`, `TAINTS`, `IFC_VIOLATION`, `CONFUSED_DEPUTY`, `POISONS_CONTEXT`, etc.) and enumerate attack paths.
@@ -343,10 +343,9 @@ and negated delegation are benign counterexamples. The lexical edge remains a
 50%-confidence hypothesis. The cross-protocol post-processor additionally
 requires explicit anonymous-probe evidence for the external A2A actor, then
 correlates its possible delegation target with an MCP server recorded on the
-same host. The correlation is represented as `CAN_REACH`, but carries
-`cross_protocol=true`, 50% confidence,
-`variant=cross_protocol_host_correlation`, and
-`evidence.state=hypothesis`.
+same host. The `CAN_REACH` edge carries `cross_protocol=true` and 50% confidence.
+When the edge is published as a finding, the findings layer derives
+`variant=cross_protocol_host_correlation` and `evidence.state=hypothesis`.
 
 **Risk:** Host co-location is an investigation lead, not proof of an invocation bridge. Validate process isolation, identities, authorization, and an authorized end-to-end call before treating the correlation as reachability.
 

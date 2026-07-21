@@ -27,14 +27,14 @@ func TestGet_InvalidID(t *testing.T) {
 
 func TestList_Count(t *testing.T) {
 	queries := List()
-	// 17 v0.1 + 1 v0.2 (litellm-credential-leak) + 1 (tool-name-collision) = 19.
+	// Keep the registered inventory explicit so accidental removals fail loudly.
 	if len(queries) != 19 {
 		t.Fatalf("expected 19 pre-built queries, got %d", len(queries))
 	}
 }
 
-// TestLitellmCredentialLeak_Registered guards the v0.2 acceptance
-// criterion: the new prebuilt query is wired through the registry,
+// TestLitellmCredentialLeak_Registered guards that the prebuilt query is wired
+// through the registry,
 // shows up in List(), is fetchable via Get(), and points at a
 // non-empty Cypher constant.
 func TestLitellmCredentialLeak_Registered(t *testing.T) {

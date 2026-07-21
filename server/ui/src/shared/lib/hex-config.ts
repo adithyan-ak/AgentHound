@@ -143,14 +143,14 @@ export const HEX_CONFIG: Record<string, HexKindConfig> = {
     column: 4,
     groupLabel: "Resources",
   },
-  // v0.2 AI services. All sit in column 2 ("Tools & Skills") so they
+  // AI services all sit in column 2 ("Tools & Skills") so they
   // place between :MCPServer and :MCPResource in the layered explorer
   // view — visually consistent with how a LiteLLM gateway sits between
   // an MCP server (which knows the master key) and the upstream
-  // provider credentials it exposes. Per-kind label is kinds[0]; the
+  // provider credential references it reports. Per-kind label is kinds[0]; the
   // umbrella :AIService is rendered via the AIService entry only when
   // a node has NO known per-kind label (defensive fallback for
-  // forward-compat with v0.3+ kinds the UI hasn't been taught yet).
+  // forward compatibility with kinds the UI has not been taught yet).
   OllamaInstance: {
     strokeColor: NODE_KIND_COLORS.OllamaInstance,
     fillColor: EXPLORER_HEX_FILL,
@@ -175,7 +175,7 @@ export const HEX_CONFIG: Record<string, HexKindConfig> = {
     column: 2,
     groupLabel: "AI Services",
   },
-  // v0.3 / v0.4 fingerprinters. Stroke colors source from
+  // Additional service fingerprinters. Stroke colors source from
   // NODE_KIND_COLORS — the canonical palette in theme/tokens.ts. Visual
   // distinctness is the property of that palette, not duplicated here.
   VLLMInstance: {
@@ -226,7 +226,7 @@ export const HEX_CONFIG: Record<string, HexKindConfig> = {
     column: 2,
     groupLabel: "AI Services",
   },
-  // v0.3 model-artifact node. Sits one column right of OllamaInstance so the
+  // Model-artifact node. Sits one column right of OllamaInstance so the
   // PROVIDES_MODEL edge reads OllamaInstance(col 2) -> AIModel(col 3) — model
   // artifacts visually live "downstream" of the service that hosts them.
   // Distinct from MCPResource (col 4) which is a remote-resource pointer, not

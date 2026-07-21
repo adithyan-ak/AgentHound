@@ -181,7 +181,7 @@ func TestClassifyHost(t *testing.T) {
 }
 
 // TestClassifyHost_v0_2 covers the IPv6 + link-local + multicast
-// classifications added in v0.2. The scanner refuses link-local and
+// classifications. The scanner refuses link-local and
 // multicast targets outright, so the classification is load-bearing for
 // safety, not just metadata.
 func TestClassifyHost_v0_2(t *testing.T) {
@@ -200,7 +200,7 @@ func TestClassifyHost_v0_2(t *testing.T) {
 		{name: "ipv6 multicast ff02::1", input: "ff02::1", multicast: true, isPublic: true},
 		{name: "ipv4 link-local 169.254.0.5", input: "169.254.0.5", linkLocal: true, isPublic: true},
 		{name: "ipv4 multicast 224.0.0.1", input: "224.0.0.1", multicast: true, isPublic: true},
-		// Cloud metadata literal stays private (preserved from v0.1).
+		// Cloud metadata literal stays private.
 		{name: "cloud metadata stays private", input: "169.254.169.254", isPrivate: true},
 		// Public IPv6.
 		{name: "ipv6 public", input: "2001:db8::1", isPublic: true},

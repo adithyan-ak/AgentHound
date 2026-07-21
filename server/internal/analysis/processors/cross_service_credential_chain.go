@@ -7,15 +7,16 @@ import (
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 )
 
-// CrossServiceCredentialChain wires the v0.2 credential-chain demo:
+// CrossServiceCredentialChain correlates credential reuse across services:
 // when the Config Collector emits a Credential C1 (observed material
 // referenced by an MCP server, independent of its config location) AND the
 // LiteLLM Looter
 // emits a Credential C1master (the master key the operator supplied),
 // AND C1.value_hash == C1master.value_hash, those two nodes describe
-// the same secret. The LiteLLM gateway then exposes upstream provider
-// keys (C2) via EXPOSES_CREDENTIAL — and a CAN_REACH edge from the
-// agent through that chain to the upstream credential is the finding.
+// the same secret. The LiteLLM gateway also emits masked upstream-provider and
+// server-hashed virtual-key references (C2) via EXPOSES_CREDENTIAL. A
+// CAN_REACH edge from the agent through that chain records inferred reachability
+// to the reference; it does not claim possession of unobserved plaintext.
 //
 // Path:
 //
@@ -31,8 +32,8 @@ import (
 //
 // Dependencies: ["has_access_to", "can_reach"] — has_access_to so the
 // graph has resource accessibility wired, can_reach so this processor
-// runs AFTER the existing transitive can_reach work and we don't
-// double-emit edges that the Phase 4 chain already covers.
+// runs AFTER the existing transitive can_reach work and avoids duplicate
+// processing.
 type CrossServiceCredentialChain struct{}
 
 func (p *CrossServiceCredentialChain) Name() string { return "cross_service_credential_chain" }
@@ -49,7 +50,8 @@ func (p *CrossServiceCredentialChain) Process(ctx context.Context, db graph.Grap
 	// (MCPServer-[:AUTHENTICATES_WITH]->Identity-[:USES_CREDENTIAL]->c1).
 	// c1master comes
 	// from the LiteLLM Looter ((gw:LiteLLMGateway)-[:EXPOSES_CREDENTIAL]->c1master).
-	// gw also -[:EXPOSES_CREDENTIAL]->c2, the upstream provider Credential.
+	// gw also -[:EXPOSES_CREDENTIAL]->c2, an upstream provider or virtual-key
+	// Credential reference.
 	//
 	// We require c1 != c1master (otherwise this would only fire on
 	// hand-loaded test fixtures where both nodes happen to share an

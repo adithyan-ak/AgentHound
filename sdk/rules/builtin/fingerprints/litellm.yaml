@@ -1,4 +1,4 @@
-# LiteLLM fingerprint rule (v0.2).
+# LiteLLM fingerprint rule.
 #
 # Identifies a LiteLLM proxy / gateway. Default port 4000 (BerriAI's
 # stock value). The fingerprint is a single GET to /health/liveliness
@@ -7,7 +7,8 @@
 # else listening on 4000 — no auth required.
 #
 # Authentication posture is "master_key" because the looter that lands
-# in v0.2 Phase 4 needs the master key to extract upstream credentials.
+# requires a master key to enumerate observed master-key material plus masked
+# provider and server-hashed virtual-key references.
 # is_anonymous_loot=false: the looter cannot exfiltrate credentials
 # without operator-supplied master key (vs. Ollama, which exposes its
 # model list anonymously).

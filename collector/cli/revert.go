@@ -1,4 +1,4 @@
-// Package cli — revert.go is the v0.4 entry point for rolling back any
+// Package cli — revert.go is the entry point for rolling back any
 // destructive action this machine applied under a given engagement-id.
 //
 // CLI shape:

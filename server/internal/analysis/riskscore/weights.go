@@ -2,9 +2,11 @@ package riskscore
 
 var trustsServerWeights = map[string]float64{
 	"none":   0.1,
+	"basic":  0.25,
 	"apiKey": 0.3,
 	"bearer": 0.5,
 	"oauth":  0.7,
+	"oidc":   0.75,
 	"mtls":   0.9,
 }
 
@@ -24,7 +26,7 @@ func EdgeRiskWeight(edgeKind, authMethod string) float64 {
 		if w, ok := trustsServerWeights[authMethod]; ok {
 			return w
 		}
-		return trustsServerWeights["none"]
+		return 0.5
 	case "DELEGATES_TO":
 		if authMethod != "" && authMethod != "none" {
 			return 0.5

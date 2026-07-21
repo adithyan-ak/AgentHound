@@ -12,7 +12,7 @@ const (
 	Extract     Action = "extract"
 	Poison      Action = "poison"
 	Implant     Action = "implant"
-	// Discover is the v0.3 protocol-discovery action: probe a CIDR for
+	// Discover is the protocol-discovery action: probe a CIDR for
 	// MCP servers (JSON-RPC initialize) and A2A agents (well-known agent
 	// cards). Distinct from Scan (TCP port sweep) and Fingerprint
 	// (per-host service identity) because the probe semantics are

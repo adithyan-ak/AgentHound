@@ -1,4 +1,4 @@
-// Package protoscan implements the v0.3 Discover action — content-driven
+// Package protoscan implements the Discover action — content-driven
 // detection of MCP servers and A2A agents on a network. Unlike
 // modules/networkscan (which is a TCP port-sweeper feeding fingerprint
 // dispatch on AI-service ports), protoscan probes per-protocol shapes:

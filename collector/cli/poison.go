@@ -1,4 +1,4 @@
-// Package cli — poison.go is the v0.4 entry point for the destructive
+// Package cli — poison.go is the entry point for the destructive
 // poison action.
 //
 // CLI shape:
@@ -10,7 +10,7 @@
 //	    [--commit] \
 //	    --engagement-id <ID>
 //
-// Safety gates per the v0.3-v0.4 implementation plan, decision G:
+// Safety gates:
 //
 //  1. Reverter is COMPILE-TIME mandatory — Poisoner embeds Reverter.
 //  2. --commit=false is the DEFAULT. Without it, the Poisoner runs
@@ -62,8 +62,8 @@ var poisonCmd = &cobra.Command{
 	Short: "Inject attacker-controlled content into a destructive target (Reverter mandatory)",
 	Long: `Run a registered Poisoner against a known service endpoint.
 
-Poisoners modify on-target state (a tool description, an instruction
-file, a config-file entry). Every Poisoner embeds Reverter, so it cannot
+Poisoners modify on-target content (a tool description or instruction
+file). Every Poisoner embeds Reverter, so it cannot
 compile without implementing a recovery path. Receipts are persisted to
 ~/.agenthound/state/<module-id>/<engagement-id>.json so
 'agenthound revert <engagement-id>' can attempt rollback for changes made

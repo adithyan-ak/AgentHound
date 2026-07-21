@@ -18,7 +18,7 @@ type Implanter interface {
 
 // ImplantPayload describes one Implant invocation.
 //
-// TargetID is the per-module logical address. For the v0.4 file-based
+// TargetID is the per-module logical address. For file-based
 // Implanters this is the absolute path to the file being modified
 // (CLAUDE.md, ~/.cursor/mcp.json). For a future cron / systemd / hook
 // Implanter it would be the unit / job identifier.
@@ -28,7 +28,7 @@ type Implanter interface {
 // any mutating write; the receipt is persisted with DryRun=true so
 // `agenthound revert` knows to skip it.
 //
-// Sentinel-bracketed insertions are the v0.4 default: every implant
+// Sentinel-bracketed insertions are the current default: every implant
 // writes its content between two sentinel comment markers so the
 // Reverter can regex-strip the bracketed block instead of needing to
 // preserve the entire pre-state file. This is friendlier than the

@@ -1,4 +1,4 @@
-# Ollama fingerprint rule (v0.3).
+# Ollama fingerprint rule.
 #
 # Identifies an Ollama LLM inference server. Default port 11434, no
 # authentication by default — see docs/plans/sprint3-offensive-primitives.md

@@ -264,7 +264,6 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 					cred.Name,
 				)
 				// value_hash is the cross-collector merge primitive — see
-				// docs/plans/v0.2-implementation.md decision B and
 				// sdk/common/hasher.go HashCredentialValue. Always populated
 				// from the ORIGINAL raw value (cred.ValueHash carries that;
 				// cred.Value may already be the hash when

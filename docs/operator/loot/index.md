@@ -18,7 +18,7 @@ Every Looter implements `sdk/action.Looter` and adheres to:
 |------|----------|---------|-------|
 | `--type <module>` | Yes | -- | Module dispatcher key (`litellm`, `ollama`, `mlflow`, `qdrant`, `openwebui`, `jupyter`) |
 | `--engagement-id <id>` | Recommended | empty | Correlation key for IR coordination. Recorded on every edge and slog line. |
-| `--include-credential-values` | No | `false` | Emit raw `value` property alongside `value_hash`. Default is hash-only. |
+| `--include-credential-values` | No | `false` | Include an observed `value` where the target exposes one. Masked or server-hashed material remains unavailable; use each node's material-status fields. |
 | `--max-items <n>` | No | (per-Looter default, see below) | Cap on the enumerated resource per Looter — semantics vary by module |
 | `--output <path>` | No | `./loot-<scan_id>.json` | Use `-` for stdout |
 | `--timeout <duration>` | No | 30s | Per-probe HTTP timeout |
@@ -40,7 +40,7 @@ The first `agenthound loot` invocation on a machine triggers an interactive `AUT
 
 | Module | Target | Key extraction |
 |--------|--------|----------------|
-| [`litellm`](litellm.md) | LiteLLM gateway (port 4000) | Master key, upstream provider keys, virtual keys |
+| [`litellm`](litellm.md) | LiteLLM gateway (port 4000) | Observed master key, masked upstream-provider references, hashed virtual-key references + spend |
 | [`ollama`](ollama.md) | Ollama instance (port 11434) | Model inventory, modelfiles, system prompts |
 | `mlflow` | MLflow tracking server (port 5000) | Experiment + run inventory + registered models + version storage URIs (`:MCPResource` with sensitivity heuristic) — anonymous by default |
 | `qdrant` | Qdrant vector DB (port 6333) | Collection inventory (anonymous, GET-only, no Credential nodes); flag-gated payload sampling via `--include-points` emits one `:MCPResource` per scrolled point |

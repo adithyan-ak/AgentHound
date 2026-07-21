@@ -426,7 +426,7 @@ func TestRunRevert_DispatchesNonDryRunAndSkipsDryRun(t *testing.T) {
 
 // --- Implant tests ---
 
-// TestRunImplant_FallsBackToPoisoner guards the v0.5 fix where
+// TestRunImplant_FallsBackToPoisoner guards the compatibility path where
 // `agenthound implant --type instruction.file` was previously broken:
 // instructionpoison registers as action.Poison but the docs surface
 // instruction.file under `implant`. runImplant now falls back to a

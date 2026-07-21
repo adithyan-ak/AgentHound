@@ -1,4 +1,4 @@
-// Package cli — discover.go implements the v0.3 `agenthound discover <CIDR>`
+// Package cli — discover.go implements the `agenthound discover <CIDR>`
 // verb, the protocol-discovery counterpart to `agenthound scan`. Where scan
 // surveys AI-service ports (Ollama, vLLM, …) for fingerprintable services,
 // discover probes per-protocol shapes — JSON-RPC initialize for MCP, the

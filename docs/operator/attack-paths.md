@@ -53,7 +53,10 @@ and looter that observes a `Credential` value populates it with
 correlates independently discovered records without returning the raw value.
 Identity-only synthetic hashes are excluded from this join.
 
-Example: a local MCP config exposes a LiteLLM master key, and the LiteLLM looter uses that same key to enumerate upstream provider keys.
+Example: a local MCP config exposes a LiteLLM master key, and the LiteLLM looter
+uses that same key to inventory provider and virtual-key references. LiteLLM
+masks provider keys and returns virtual keys as hashes, so those downstream
+records do not imply usable plaintext.
 
 ```text
 (:AgentInstance)-[:TRUSTS_SERVER]->(:MCPServer)
@@ -308,8 +311,11 @@ The critical `shortest-to-database` pre-built query always uses security scope.
 The Findings API returns composite-edge findings ranked by severity. The response shape uses `edge_kind`, not a processor name.
 
 ```bash
-# All critical and high findings
-agenthound-server query --findings --severity critical,high
+# Critical findings
+agenthound-server query --findings --severity critical
+
+# High findings (the CLI accepts one exact severity per invocation)
+agenthound-server query --findings --severity high
 
 # All CAN_REACH findings
 curl -s localhost:8080/api/v1/analysis/findings | \
