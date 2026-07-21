@@ -94,6 +94,8 @@ dockers:
     use: buildx
     build_flag_templates:
       - "--platform=linux/amd64"
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--build-arg=COMMIT={{ .Commit }}"
       - "--label=org.opencontainers.image.title=agenthound"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.source=https://github.com/adithyan-ak/agenthound"
@@ -108,6 +110,8 @@ dockers:
     use: buildx
     build_flag_templates:
       - "--platform=linux/arm64"
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--build-arg=COMMIT={{ .Commit }}"
     extra_files: [collector, server, sdk, modules, go.mod, go.sum]
     goarch: arm64
   - id: agenthound-server
@@ -118,6 +122,8 @@ dockers:
     use: buildx
     build_flag_templates:
       - "--platform=linux/amd64"
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--build-arg=COMMIT={{ .Commit }}"
     extra_files: [collector, server, sdk, modules, go.mod, go.sum]
     goarch: amd64
   - id: agenthound-server-arm64
@@ -128,6 +134,8 @@ dockers:
     use: buildx
     build_flag_templates:
       - "--platform=linux/arm64"
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--build-arg=COMMIT={{ .Commit }}"
     extra_files: [collector, server, sdk, modules, go.mod, go.sum]
     goarch: arm64
 

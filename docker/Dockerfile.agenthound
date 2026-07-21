@@ -1,14 +1,16 @@
 # Collector image — lean field binary; no UI, no DBs, no chi/pgx/neo4j.
-# Versioning is handled at release time by goreleaser; this Dockerfile builds
-# an unversioned binary suitable for dev / CI smoke builds.
+# Source/CI builds keep honest dev defaults. GoReleaser supplies VERSION and
+# COMMIT so tagged images report the same provenance as release archives.
 FROM golang:1.25-alpine AS builder
 WORKDIR /src
+ARG VERSION=dev
+ARG COMMIT=none
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
-    -ldflags='-s -w' \
+    -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
     -o /bin/agenthound \
     ./collector/cmd/agenthound
 

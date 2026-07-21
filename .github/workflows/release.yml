@@ -103,11 +103,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Prepare curated release notes
+        shell: bash
+        run: ./scripts/release-notes.sh > "${RUNNER_TEMP}/agenthound-release-notes.md"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94  # v7.2.3
         with:
           version: 'v2.15.4'
-          args: release --clean
+          args: release --clean --release-notes=${{ runner.temp }}/agenthound-release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
@@ -128,6 +132,13 @@ jobs:
             exit 1
           fi
 
+          expected_notes="$(cat "${RUNNER_TEMP}/agenthound-release-notes.md")"
+          published_notes="$(gh release view "${tag}" --json body --jq '.body')"
+          if [[ "${published_notes}" != "${expected_notes}" ]]; then
+            echo "Published release notes do not match the curated changelog section" >&2
+            exit 1
+          fi
+
           for formula in agenthound agenthound-server; do
             formula_body="$(GH_TOKEN="${HOMEBREW_TAP_GITHUB_TOKEN}" gh api \
               -H 'Accept: application/vnd.github.raw+json' \
@@ -139,4 +150,11 @@ jobs:
             manifest="$(docker buildx imagetools inspect "ghcr.io/adithyan-ak/${image}:${version}")"
             grep -Fq 'linux/amd64' <<<"${manifest}"
             grep -Fq 'linux/arm64' <<<"${manifest}"
+
+            version_output="$(docker run --rm "ghcr.io/adithyan-ak/${image}:${version}" --version)"
+            expected_output="${image} version ${version} (commit: ${GITHUB_SHA})"
+            if [[ "${version_output}" != "${expected_output}" ]]; then
+              echo "Unexpected ${image} container version: ${version_output}" >&2
+              exit 1
+            fi
           done

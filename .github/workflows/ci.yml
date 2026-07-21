@@ -248,13 +248,31 @@ jobs:
         with:
           context: .
           file: docker/Dockerfile.agenthound
+          load: true
           push: false
+          tags: agenthound:ci
+          build-args: |
+            VERSION=ci-test
+            COMMIT=ci-test-commit
       - name: Build server image
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf
         with:
           context: .
           file: docker/Dockerfile.agenthound-server
+          load: true
           push: false
+          tags: agenthound-server:ci
+          build-args: |
+            VERSION=ci-test
+            COMMIT=ci-test-commit
+      - name: Verify injected image version metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(docker run --rm agenthound:ci --version)" == \
+            "agenthound version ci-test (commit: ci-test-commit)" ]]
+          [[ "$(docker run --rm agenthound-server:ci --version)" == \
+            "agenthound-server version ci-test (commit: ci-test-commit)" ]]
       - name: Build standard image
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf
         with:
