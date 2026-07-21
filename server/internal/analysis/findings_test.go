@@ -696,6 +696,51 @@ func TestQueryFindings_CapturesExactDetectorWitness(t *testing.T) {
 	}
 }
 
+func TestExactFindingEvidenceStripsInternalObservationFingerprints(t *testing.T) {
+	nodeProperties := map[string]any{
+		"name":                          "Agent",
+		"observation_fact_fingerprints": []any{"internal-node"},
+	}
+	edgeProperties := map[string]any{
+		"risk_weight":                   0.1,
+		"observation_fact_fingerprints": []any{"internal-edge"},
+	}
+	exact := exactFindingEvidenceFromRow(map[string]any{
+		"evidence_version": int64(1),
+		"exact_evidence_nodes": []any{
+			map[string]any{
+				"id": "agent", "kinds": []any{"AgentInstance"},
+				"properties": nodeProperties,
+			},
+			map[string]any{
+				"id": "resource", "kinds": []any{"MCPResource"},
+				"properties": map[string]any{"name": "Resource"},
+			},
+		},
+		"exact_evidence_edges": []any{
+			map[string]any{
+				"source": "agent", "target": "resource", "kind": "HAS_ACCESS_TO",
+				"properties": edgeProperties,
+			},
+		},
+	})
+	if exact == nil || !exact.Complete || len(exact.Nodes) != 2 || len(exact.Edges) != 1 {
+		t.Fatalf("exact evidence = %+v", exact)
+	}
+	if _, exists := exact.Nodes[0].Properties["observation_fact_fingerprints"]; exists {
+		t.Fatalf("exact evidence node leaked internal fingerprint: %+v", exact.Nodes[0])
+	}
+	if _, exists := exact.Edges[0].Properties["observation_fact_fingerprints"]; exists {
+		t.Fatalf("exact evidence edge leaked internal fingerprint: %+v", exact.Edges[0])
+	}
+	if _, exists := nodeProperties["observation_fact_fingerprints"]; !exists {
+		t.Fatal("node sanitization mutated the raw query result")
+	}
+	if _, exists := edgeProperties["observation_fact_fingerprints"]; !exists {
+		t.Fatal("edge sanitization mutated the raw query result")
+	}
+}
+
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
 
 func sameStrings(got, want []string) bool {

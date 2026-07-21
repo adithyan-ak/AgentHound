@@ -873,6 +873,52 @@ func TestWriterStoresAllDependencyTokensSeparately(t *testing.T) {
 	}
 }
 
+func TestWriterReplacesCompleteAllDependencyOwnerSetAtomically(t *testing.T) {
+	edge := ingest.Edge{
+		Source:               "a",
+		Target:               "b",
+		Kind:                 "DELEGATES_TO",
+		SourceKind:           "A2AAgent",
+		TargetKind:           "A2AAgent",
+		ObservationDomains:   []string{"a2a:target:a", "a2a:target:c"},
+		ObservationSemantics: ingest.ObservationSemanticsAllDependencies,
+	}
+	for _, hasAPOC := range []bool{false, true} {
+		name := "fallback"
+		if hasAPOC {
+			name = "apoc"
+		}
+		t.Run(name, func(t *testing.T) {
+			recorder := &recordedExec{}
+			writer := newTestWriter(recorder.exec, hasAPOC)
+			if _, err := writer.WriteObservationEdges(
+				context.Background(),
+				[]ingest.Edge{edge},
+				"scan-current",
+				[]string{"a2a:target:a", "a2a:target:c"},
+			); err != nil {
+				t.Fatalf("WriteObservationEdges: %v", err)
+			}
+			calls := recorder.snapshot()
+			if len(calls) != 1 {
+				t.Fatalf("writer calls = %d, want 1", len(calls))
+			}
+			for _, fragment := range []string{
+				"AS replace_dependency_set",
+				"AND incoming_complete",
+				"AND (replace_dependency_set",
+				"WHEN replace_dependency_set THEN edge.observation_dependency_tokens",
+				"WHEN replace_dependency_set THEN edge.observation_fact_fingerprints",
+				"ELSE old_fact_fingerprints",
+			} {
+				if !strings.Contains(calls[0].Cypher, fragment) {
+					t.Fatalf("dependency-set replacement query missing %q:\n%s", fragment, calls[0].Cypher)
+				}
+			}
+		})
+	}
+}
+
 func TestCompleteObservationReplacesManagedProperties(t *testing.T) {
 	scope := "mcp:target:sha256:server-a"
 	recorder := &recordedExec{}

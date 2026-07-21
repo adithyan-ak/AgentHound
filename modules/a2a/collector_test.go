@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sync/atomic"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/sdk/collector"
@@ -265,7 +267,11 @@ func TestCollector_A2ARelationsDeclareAllDependencies(t *testing.T) {
 
 func TestSetRelationObservationScopesUsesAnyOwnerForSameScope(t *testing.T) {
 	edge := ingest.Edge{Kind: "DELEGATES_TO"}
-	setRelationObservationScopes(&edge, "a2a:target:shared", "a2a:target:shared")
+	setRelationObservationScopes(
+		&edge,
+		[]string{"a2a:target:shared"},
+		[]string{"a2a:target:shared"},
+	)
 
 	if edge.ObservationSemantics != ingest.ObservationSemanticsAnyOwner {
 		t.Fatalf("semantics = %q, want any_owner", edge.ObservationSemantics)
@@ -273,6 +279,233 @@ func TestSetRelationObservationScopesUsesAnyOwnerForSameScope(t *testing.T) {
 	if len(edge.ObservationDomains) != 1 ||
 		edge.ObservationDomains[0] != "a2a:target:shared" {
 		t.Fatalf("domains = %v, want one current owner", edge.ObservationDomains)
+	}
+}
+
+func TestCollectorSharedAgentAliasesAreOrderIndependentAndLifecycleSafe(t *testing.T) {
+	security := func() (map[string]any, []any) {
+		return map[string]any{
+			"oauth": map[string]any{
+				"type": "oauth2",
+				"flows": map[string]any{
+					"clientCredentials": map[string]any{
+						"tokenUrl": "https://auth.example.test/token",
+						"scopes":   map[string]any{},
+					},
+				},
+			},
+		}, []any{map[string]any{"oauth": []any{}}}
+	}
+	cardBody := func(name, description, cardURL string) []byte {
+		schemes, requirements := security()
+		body, err := json.Marshal(map[string]any{
+			"name":            name,
+			"description":     description,
+			"url":             cardURL,
+			"version":         "1.0.0",
+			"protocolVersion": "0.3.0",
+			"securitySchemes": schemes,
+			"security":        requirements,
+		})
+		if err != nil {
+			t.Fatalf("marshal %s card: %v", name, err)
+		}
+		return body
+	}
+
+	alphaBody := cardBody(
+		"AgentAlpha",
+		"Delegates tasks to AgentBeta for processing",
+		"https://agents.example.test/alpha",
+	)
+	betaBody := cardBody(
+		"AgentBeta",
+		"Processes delegated tasks",
+		"https://agents.example.test/beta",
+	)
+	var secondAlphaHealthy atomic.Bool
+	secondAlphaHealthy.Store(true)
+	newServer := func(body []byte, healthy *atomic.Bool) *httptest.Server {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			if healthy != nil && !healthy.Load() {
+				http.Error(w, "temporary alias failure", http.StatusServiceUnavailable)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(body)
+		}))
+		t.Cleanup(server.Close)
+		return server
+	}
+	servers := []*httptest.Server{
+		newServer(alphaBody, nil),
+		newServer(alphaBody, &secondAlphaHealthy),
+		newServer(betaBody, nil),
+		newServer(betaBody, nil),
+	}
+	targets := make([]string, len(servers))
+	for index, server := range servers {
+		targets[index] = server.URL
+	}
+
+	collect := func(order []string) *ingest.IngestData {
+		data, err := NewA2ACollector().Collect(
+			context.Background(),
+			collector.CollectOptions{
+				TargetURLs: order,
+				ScanID:     "shared-alias-order",
+			},
+		)
+		if err != nil {
+			t.Fatalf("Collect(%v): %v", order, err)
+		}
+		return data
+	}
+	alphaID := ingest.ComputeNodeID(
+		"A2AAgent",
+		normalizeBaseURL("https://agents.example.test/alpha"),
+	)
+	betaID := ingest.ComputeNodeID(
+		"A2AAgent",
+		normalizeBaseURL("https://agents.example.test/beta"),
+	)
+	assertGraph := func(
+		data *ingest.IngestData,
+		wantDomains []string,
+		wantAgentAliases map[string][]string,
+	) {
+		t.Helper()
+		wantDomains = ingest.MergeObservationDomains(wantDomains)
+		aliasesByAgent := make(map[string][]string)
+		for _, node := range data.Graph.Nodes {
+			if ingest.ConcreteNodeKind(node.Kinds) != "A2AAgent" {
+				continue
+			}
+			if node.ID != alphaID && node.ID != betaID {
+				continue
+			}
+			aliasesByAgent[node.ID] = ingest.MergeObservationDomains(
+				aliasesByAgent[node.ID],
+				node.ObservationDomains,
+			)
+		}
+		for agentID, aliases := range wantAgentAliases {
+			aliases = ingest.MergeObservationDomains(aliases)
+			if !reflect.DeepEqual(aliasesByAgent[agentID], aliases) {
+				t.Fatalf(
+					"agent %s alias contributions = %v, want %v",
+					agentID,
+					aliasesByAgent[agentID],
+					aliases,
+				)
+			}
+		}
+
+		relationCounts := map[string]int{}
+		for _, edge := range data.Graph.Edges {
+			if edge.Kind != "DELEGATES_TO" && edge.Kind != "SAME_AUTH_DOMAIN" {
+				continue
+			}
+			relationCounts[edge.Kind]++
+			if edge.ObservationSemantics != ingest.ObservationSemanticsAllDependencies {
+				t.Fatalf("%s semantics = %q", edge.Kind, edge.ObservationSemantics)
+			}
+			if !reflect.DeepEqual(edge.ObservationDomains, wantDomains) {
+				t.Fatalf(
+					"%s dependency group = %v, want %v",
+					edge.Kind,
+					edge.ObservationDomains,
+					wantDomains,
+				)
+			}
+			if edge.Kind == "DELEGATES_TO" &&
+				(edge.Source != alphaID || edge.Target != betaID) {
+				t.Fatalf("delegation endpoints = %s -> %s", edge.Source, edge.Target)
+			}
+			if edge.Kind == "SAME_AUTH_DOMAIN" && edge.Source > edge.Target {
+				t.Fatalf("symmetric auth-domain endpoints are not canonical: %+v", edge)
+			}
+		}
+		if relationCounts["DELEGATES_TO"] != 1 || relationCounts["SAME_AUTH_DOMAIN"] != 1 {
+			t.Fatalf("derived relation counts = %v, want one of each", relationCounts)
+		}
+	}
+
+	allDomains := make([]string, len(targets))
+	for index, target := range targets {
+		allDomains[index] = a2aCoverageKey(target)
+	}
+	wantAgents := map[string][]string{
+		alphaID: {allDomains[0], allDomains[1]},
+		betaID:  {allDomains[2], allDomains[3]},
+	}
+	forward := collect(targets)
+	assertGraph(forward, allDomains, wantAgents)
+	reversedTargets := append([]string(nil), targets...)
+	for left, right := 0, len(reversedTargets)-1; left < right; left, right = left+1, right-1 {
+		reversedTargets[left], reversedTargets[right] = reversedTargets[right], reversedTargets[left]
+	}
+	reversed := collect(reversedTargets)
+	assertGraph(reversed, allDomains, wantAgents)
+
+	// Volatile wall-clock values are irrelevant to ordering. Everything else,
+	// including contribution and outcome slice order, must be byte-for-byte
+	// equivalent after reversing the configured targets.
+	scrubVolatile := func(data *ingest.IngestData) {
+		data.Meta.Timestamp = ""
+		for index := range data.Graph.Edges {
+			delete(data.Graph.Edges[index].Properties, "last_seen")
+		}
+	}
+	scrubVolatile(forward)
+	scrubVolatile(reversed)
+	if !reflect.DeepEqual(forward, reversed) {
+		forwardJSON, _ := json.MarshalIndent(forward, "", "  ")
+		reversedJSON, _ := json.MarshalIndent(reversed, "", "  ")
+		t.Fatalf(
+			"reversing target order changed collected output:\nforward=%s\nreversed=%s",
+			forwardJSON,
+			reversedJSON,
+		)
+	}
+
+	secondAlphaHealthy.Store(false)
+	failover := collect(targets)
+	remainingDomains := []string{allDomains[0], allDomains[2], allDomains[3]}
+	assertGraph(failover, remainingDomains, map[string][]string{
+		alphaID: {allDomains[0]},
+		betaID:  {allDomains[2], allDomains[3]},
+	})
+	if failover.Meta.Collection == nil ||
+		failover.Meta.Collection.State != ingest.OutcomePartial {
+		t.Fatalf("failover collection = %+v, want partial", failover.Meta.Collection)
+	}
+	completeScopes := make(map[string]bool)
+	failedScopes := make(map[string]bool)
+	for _, outcome := range failover.Meta.Collection.Outcomes {
+		switch outcome.State {
+		case ingest.OutcomeComplete:
+			completeScopes[outcome.CoverageKey] = true
+		case ingest.OutcomeFailed:
+			failedScopes[outcome.CoverageKey] = true
+		}
+	}
+	if !failedScopes[allDomains[1]] {
+		t.Fatalf("failed alias outcome missing for %s: %+v", allDomains[1], failover.Meta.Collection.Outcomes)
+	}
+	for _, edge := range failover.Graph.Edges {
+		if edge.Kind != "DELEGATES_TO" && edge.Kind != "SAME_AUTH_DOMAIN" {
+			continue
+		}
+		for _, domain := range edge.ObservationDomains {
+			if !completeScopes[domain] {
+				t.Fatalf(
+					"replacement group includes non-complete domain %s: %+v",
+					domain,
+					failover.Meta.Collection.Outcomes,
+				)
+			}
+		}
 	}
 }
 
@@ -690,6 +923,112 @@ func TestCollector_DuplicateTargets(t *testing.T) {
 	}
 	if agentCount != 1 {
 		t.Errorf("expected 1 A2AAgent node after dedup, got %d", agentCount)
+	}
+}
+
+func TestCollectorPreservesSharedAgentPerTargetDomain(t *testing.T) {
+	fixture := loadFixture(t, "agent_card_v030.json")
+	servers := make([]*httptest.Server, 0, 2)
+	targets := make([]string, 0, 2)
+	wantNames := []string{"SharedAgentAlpha", "SharedAgentBeta"}
+	cardBodies := make([][]byte, len(wantNames))
+	for i, name := range wantNames {
+		var card map[string]any
+		if err := json.Unmarshal(fixture, &card); err != nil {
+			t.Fatalf("unmarshal shared agent fixture: %v", err)
+		}
+		card["name"] = name
+		card["description"] = "owner-specific description for " + name
+		card["url"] = "https://agents.example.test/shared"
+		body, err := json.Marshal(card)
+		if err != nil {
+			t.Fatalf("marshal shared agent fixture %d: %v", i, err)
+		}
+		cardBodies[i] = body
+	}
+	for i := 0; i < 2; i++ {
+		body := cardBodies[i]
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(body)
+		}))
+		servers = append(servers, server)
+		targets = append(targets, server.URL)
+	}
+	for _, server := range servers {
+		defer server.Close()
+	}
+
+	data, err := NewA2ACollector().Collect(
+		context.Background(),
+		collector.CollectOptions{TargetURLs: targets, ScanID: "shared-agent-targets"},
+	)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	wantDomains := map[string]bool{
+		a2aCoverageKey(targets[0]): true,
+		a2aCoverageKey(targets[1]): true,
+	}
+	wantNameByDomain := map[string]string{
+		a2aCoverageKey(targets[0]): wantNames[0],
+		a2aCoverageKey(targets[1]): wantNames[1],
+	}
+	agentsByID := make(map[string]map[string]string)
+	for _, node := range data.Graph.Nodes {
+		if ingest.ConcreteNodeKind(node.Kinds) != "A2AAgent" ||
+			len(node.ObservationDomains) != 1 {
+			continue
+		}
+		domain := node.ObservationDomains[0]
+		if !wantDomains[domain] {
+			continue
+		}
+		if agentsByID[node.ID] == nil {
+			agentsByID[node.ID] = make(map[string]string)
+		}
+		name, _ := node.Properties["name"].(string)
+		agentsByID[node.ID][domain] = name
+	}
+	if len(agentsByID) != 1 {
+		t.Fatalf("shared logical agents = %v, want one ID", agentsByID)
+	}
+	for _, domains := range agentsByID {
+		if len(domains) != 2 {
+			t.Fatalf("shared agent contributions = %v, want one per target", domains)
+		}
+		for domain, wantName := range wantNameByDomain {
+			if domains[domain] != wantName {
+				t.Fatalf(
+					"shared agent contribution for %s has name %q, want %q",
+					domain,
+					domains[domain],
+					wantName,
+				)
+			}
+		}
+	}
+}
+
+func TestA2AContributionDedupPreservesDistinctSameOwnerFragments(t *testing.T) {
+	base := ingest.Node{
+		ID: "shared", Kinds: []string{"A2AAgent"},
+		ObservationDomains: []string{"a2a:target:sha256:owner"},
+		Properties:         map[string]any{"name": "first"},
+	}
+	exactKey, exactComparable := a2aNodeContributionDedupKey(base)
+	duplicateKey, duplicateComparable := a2aNodeContributionDedupKey(base)
+	changed := base
+	changed.Properties = map[string]any{"name": "second"}
+	changedKey, changedComparable := a2aNodeContributionDedupKey(changed)
+	if !exactComparable || !duplicateComparable || !changedComparable {
+		t.Fatal("canonical collector contributions were not comparable")
+	}
+	if exactKey != duplicateKey {
+		t.Fatal("exact same-owner contribution was not deduplicated")
+	}
+	if exactKey == changedKey {
+		t.Fatal("conflicting same-owner fragment would be collapsed before writer validation")
 	}
 }
 

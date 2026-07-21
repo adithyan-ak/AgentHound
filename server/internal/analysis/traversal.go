@@ -567,9 +567,7 @@ func traversalNodeFromRow(row map[string]any) TraversalNode {
 		name = id
 	}
 	properties, _ := row["properties"].(map[string]any)
-	if properties == nil {
-		properties = map[string]any{}
-	}
+	properties = graph.PublicFactProperties(properties)
 	return TraversalNode{
 		ID:         id,
 		Name:       name,

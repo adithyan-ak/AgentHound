@@ -86,7 +86,7 @@ func subtractCoverage(keys []string, replaced ...[]string) []string {
 	return remaining
 }
 
-// prepareObservationDomains verifies the strict-v2 ownership contract after
+// prepareObservationDomains verifies the strict-v3 ownership contract after
 // validation. It never infers ownership from report-level coverage.
 func prepareObservationDomains(data *sdkingest.IngestData) bool {
 	keys := coverageKeys(data.Meta.Collection)
@@ -115,99 +115,6 @@ func prepareObservationDomains(data *sdkingest.IngestData) bool {
 		}
 	}
 	return len(keys) > 0
-}
-
-func coalesceObservationGraph(graph sdkingest.GraphData) sdkingest.GraphData {
-	merged := sdkingest.GraphData{
-		Nodes: make([]sdkingest.Node, 0, len(graph.Nodes)),
-		Edges: make([]sdkingest.Edge, 0, len(graph.Edges)),
-	}
-	nodeIndex := make(map[string]int, len(graph.Nodes))
-	for _, node := range graph.Nodes {
-		// Keep authoritative and reference-only observations as separate
-		// writer rows. Collapsing them would incorrectly promote the reference
-		// domains into property authors.
-		key := node.ID + "\x00" + string(node.PropertySemantics)
-		if index, exists := nodeIndex[key]; exists {
-			current := &merged.Nodes[index]
-			current.Kinds = mergeStringsPreservingOrder(current.Kinds, node.Kinds)
-			current.ObservationDomains = sdkingest.MergeObservationDomains(
-				current.ObservationDomains,
-				node.ObservationDomains,
-			)
-			if current.Properties == nil {
-				current.Properties = make(map[string]any)
-			}
-			for key, value := range node.Properties {
-				current.Properties[key] = value
-			}
-			continue
-		}
-		node.Properties = cloneProperties(node.Properties)
-		node.ObservationDomains = sdkingest.MergeObservationDomains(node.ObservationDomains)
-		nodeIndex[key] = len(merged.Nodes)
-		merged.Nodes = append(merged.Nodes, node)
-	}
-
-	edgeIndex := make(map[string]int, len(graph.Edges))
-	for _, edge := range graph.Edges {
-		key := edge.Source + "\x00" + edge.Kind + "\x00" + edge.Target
-		if index, exists := edgeIndex[key]; exists {
-			current := &merged.Edges[index]
-			current.ObservationDomains = sdkingest.MergeObservationDomains(
-				current.ObservationDomains,
-				edge.ObservationDomains,
-			)
-			if current.SourceKind == "" {
-				current.SourceKind = edge.SourceKind
-			}
-			if current.TargetKind == "" {
-				current.TargetKind = edge.TargetKind
-			}
-			if current.ObservationSemantics == "" {
-				current.ObservationSemantics = edge.ObservationSemantics
-			}
-			if current.Properties == nil {
-				current.Properties = make(map[string]any)
-			}
-			for property, value := range edge.Properties {
-				current.Properties[property] = value
-			}
-			continue
-		}
-		edge.Properties = cloneProperties(edge.Properties)
-		edge.ObservationDomains = sdkingest.MergeObservationDomains(edge.ObservationDomains)
-		edgeIndex[key] = len(merged.Edges)
-		merged.Edges = append(merged.Edges, edge)
-	}
-	return merged
-}
-
-func mergeStringsPreservingOrder(first, second []string) []string {
-	merged := append([]string(nil), first...)
-	seen := make(map[string]bool, len(merged)+len(second))
-	for _, value := range merged {
-		seen[value] = true
-	}
-	for _, value := range second {
-		if value == "" || seen[value] {
-			continue
-		}
-		seen[value] = true
-		merged = append(merged, value)
-	}
-	return merged
-}
-
-func cloneProperties(properties map[string]any) map[string]any {
-	if properties == nil {
-		return map[string]any{}
-	}
-	cloned := make(map[string]any, len(properties))
-	for key, value := range properties {
-		cloned[key] = value
-	}
-	return cloned
 }
 
 func parseArtifactObservedAt(value string) (*time.Time, error) {

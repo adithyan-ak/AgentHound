@@ -142,33 +142,41 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 		}(i, target)
 	}
 	wg.Wait()
+	sort.Slice(results, func(i, j int) bool {
+		leftScope := a2aCoverageKey(results[i].url)
+		rightScope := a2aCoverageKey(results[j].url)
+		if leftScope == rightScope {
+			return results[i].url < results[j].url
+		}
+		return leftScope < rightScope
+	})
 
 	data := common.NewIngestData("a2a", scanID)
 	data.Meta.Origin = opts.Origin
 	data.Meta.Ruleset = rules.ManifestForEngine(engine)
-	nodeIndex := make(map[string]int)
+	nodeSeen := make(map[string]bool)
 	addNode := func(node ingest.Node) {
-		if index, ok := nodeIndex[node.ID]; ok {
-			data.Graph.Nodes[index].ObservationDomains = ingest.MergeObservationDomains(
-				data.Graph.Nodes[index].ObservationDomains,
-				node.ObservationDomains,
-			)
-			if data.Graph.Nodes[index].Properties == nil {
-				data.Graph.Nodes[index].Properties = make(map[string]any)
-			}
-			for key, value := range node.Properties {
-				data.Graph.Nodes[index].Properties[key] = value
-			}
+		if key, comparable := a2aNodeContributionDedupKey(node); comparable && nodeSeen[key] {
 			return
+		} else if comparable {
+			nodeSeen[key] = true
 		}
-		nodeIndex[node.ID] = len(data.Graph.Nodes)
 		data.Graph.Nodes = append(data.Graph.Nodes, node)
+	}
+	edgeSeen := make(map[string]bool)
+	addEdge := func(edge ingest.Edge) {
+		if key, comparable := a2aEdgeContributionDedupKey(edge); comparable && edgeSeen[key] {
+			return
+		} else if comparable {
+			edgeSeen[key] = true
+		}
+		data.Graph.Edges = append(data.Graph.Edges, edge)
 	}
 	report := &ingest.CollectionReport{}
 
 	var allCards []*AgentCardData
 	coverage := make(map[string]bool, len(results))
-	agentScopes := make(map[string]string, len(results))
+	agentScopes := make(map[string][]string, len(results))
 
 	for _, r := range results {
 		scopeKey := a2aCoverageKey(r.url)
@@ -194,21 +202,32 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 			Items:       1,
 		})
 		allCards = append(allCards, r.card)
-		agentScopes[agentNodeID(r.card)] = scopeKey
+		agentID := agentNodeID(r.card)
+		agentScopes[agentID] = ingest.MergeObservationDomains(
+			agentScopes[agentID],
+			[]string{scopeKey},
+		)
 		nodes, edges := buildGraph(r.card, scanID)
 		graph := ingest.GraphData{Nodes: nodes, Edges: edges}
 		ingest.TagObservationDomain(&graph, scopeKey)
 		for _, n := range graph.Nodes {
 			addNode(n)
 		}
-		data.Graph.Edges = append(data.Graph.Edges, graph.Edges...)
+		for _, edge := range graph.Edges {
+			addEdge(edge)
+		}
 	}
 
 	delegations := DetectDelegation(allCards)
+	delegationSeen := make(map[DelegationEdge]bool, len(delegations))
 	for _, d := range delegations {
 		if d.SourceAgentID == d.TargetAgentID {
 			continue
 		}
+		if delegationSeen[d] {
+			continue
+		}
+		delegationSeen[d] = true
 		riskWeight := 0.1
 		if hasAuth(allCards, d.TargetAgentID) {
 			riskWeight = 0.5
@@ -224,22 +243,32 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 			agentScopes[d.SourceAgentID],
 			agentScopes[d.TargetAgentID],
 		)
-		data.Graph.Edges = append(data.Graph.Edges, edge)
+		addEdge(edge)
 	}
 
 	authDomains := DetectSameAuthDomain(allCards)
+	authDomainSeen := make(map[string]bool, len(authDomains))
 	for _, ad := range authDomains {
 		if ad.AgentID1 == ad.AgentID2 {
 			continue
 		}
+		sourceAgentID, targetAgentID := ad.AgentID1, ad.AgentID2
+		if sourceAgentID > targetAgentID {
+			sourceAgentID, targetAgentID = targetAgentID, sourceAgentID
+		}
+		relationKey := sourceAgentID + "\x00" + targetAgentID
+		if authDomainSeen[relationKey] {
+			continue
+		}
+		authDomainSeen[relationKey] = true
 		props := common.NewEdgeProps(scanID, 0.9, 0.0)
-		edge := common.NewEdge(ad.AgentID1, ad.AgentID2, "SAME_AUTH_DOMAIN", "A2AAgent", "A2AAgent", props)
+		edge := common.NewEdge(sourceAgentID, targetAgentID, "SAME_AUTH_DOMAIN", "A2AAgent", "A2AAgent", props)
 		setRelationObservationScopes(
 			&edge,
-			agentScopes[ad.AgentID1],
-			agentScopes[ad.AgentID2],
+			agentScopes[sourceAgentID],
+			agentScopes[targetAgentID],
 		)
-		data.Graph.Edges = append(data.Graph.Edges, edge)
+		addEdge(edge)
 	}
 	for key := range coverage {
 		report.CoverageKeys = append(report.CoverageKeys, key)
@@ -251,10 +280,39 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 	return data, nil
 }
 
-func setRelationObservationScopes(edge *ingest.Edge, sourceScope, targetScope string) {
+func a2aNodeContributionKey(node ingest.Node) string {
+	return node.ID + "\x00" + string(node.PropertySemantics) + "\x00" +
+		strings.Join(ingest.MergeObservationDomains(node.ObservationDomains), "\x1f")
+}
+
+func a2aEdgeContributionKey(edge ingest.Edge) string {
+	return edge.Source + "\x00" + edge.Kind + "\x00" + edge.Target + "\x00" +
+		string(edge.ObservationSemantics) + "\x00" +
+		strings.Join(ingest.MergeObservationDomains(edge.ObservationDomains), "\x1f")
+}
+
+func a2aNodeContributionDedupKey(node ingest.Node) (string, bool) {
+	digest, err := common.CanonicalJSONHash(node)
+	return a2aNodeContributionKey(node) + "\x00" + digest, err == nil
+}
+
+func a2aEdgeContributionDedupKey(edge ingest.Edge) (string, bool) {
+	digest, err := common.CanonicalJSONHash(edge)
+	return a2aEdgeContributionKey(edge) + "\x00" + digest, err == nil
+}
+
+func setRelationObservationScopes(
+	edge *ingest.Edge,
+	sourceScopes, targetScopes []string,
+) {
+	// A derived relation is one logical fact, so all currently successful aliases
+	// for both endpoints form one indivisible dependency group. A subsequent
+	// partial collection omits failed aliases from its fresh affirmative group;
+	// the writer can then atomically replace the old group when every remaining
+	// dependency completed, without selecting an arbitrary canonical alias.
 	edge.ObservationDomains = ingest.MergeObservationDomains(
-		[]string{sourceScope},
-		[]string{targetScope},
+		sourceScopes,
+		targetScopes,
 	)
 	if len(edge.ObservationDomains) >= 2 {
 		edge.ObservationSemantics = ingest.ObservationSemanticsAllDependencies

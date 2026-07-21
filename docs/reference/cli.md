@@ -691,6 +691,12 @@ batch write (1000 ops/txn), and post-process (composite edges + risk scores).
 
 All three ingest entry points (CLI, `POST /api/v1/ingest`, UI drag-drop) run the same pipeline.
 
+The CLI prints the pipeline outcome, projection status, and publication
+revision. It exits successfully only when the ingest produced a complete,
+published projection. If a required stage is partial or failed, or publication
+is withheld, it exits non-zero and reports the first unhealthy required stage;
+write-row counts remain visible for diagnosis.
+
 #### Example
 
 ```bash

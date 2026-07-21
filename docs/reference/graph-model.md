@@ -190,7 +190,8 @@ type Edge struct {
 `property_semantics` field. Omitted `property_semantics` is an authoritative
 property observation. The only explicit alternative is `reference_only`,
 which asserts node ID and kinds while requiring an empty `properties` object.
-In wire version 2, collector artifacts preserve the producing target/config
+In wire version 3, collector artifacts preserve both the collector
+host/private-network origin and the producing target/config
 scope per fact using opaque canonical keys such as `mcp:target:sha256:...`,
 `a2a:target:sha256:...`, and `config:path:sha256:...`. The server does not
 infer ownership.
@@ -238,6 +239,38 @@ completeness considers only public collector-produced nodes and managed raw
 relationships, so internal graph state such as `SchemaVersion` and derived
 relationships cannot block publication. Internal ownership and completeness
 properties are reserved and stripped from imported `properties` maps.
+For a fact with multiple authoritative owners, the writer records an internal
+semantic fingerprint under each stable observation domain. Each owner
+contribution is fingerprinted before compatible properties are unioned into
+the single stored node or relationship. Overlapping non-timestamp values that
+disagree are rejected deterministically rather than being selected by input
+order. An independently refreshed owner remains complete only when its
+fingerprint is unchanged; observation timestamps (`scan_id`, `first_seen`,
+`last_seen`, `last_verified_at`, and `extracted_at`) do not participate. The
+latest timestamp is retained when simultaneous contributions are unioned. The
+fingerprints rotate with ownership and are stripped from all public graph
+responses. A changed or missing fingerprint cannot certify a shared union and
+therefore fails closed as property-incomplete. An incompatible targeted write
+does not mutate the last coherent public properties or labels; it removes the
+incoming owner's prior fingerprint so an older retry also remains incomplete.
+Completeness and replacement resume only after all active owners are observed
+together, or after retirement leaves an exact remaining-owner refresh able to
+replace the fact.
+Relationships marked `all_dependencies` instead carry one indivisible owner
+group for each logical `(source, edge kind, target)` fact. A complete incoming
+group atomically supersedes the prior dependency tokens, fingerprints, and
+semantic properties; unioning old and new groups could otherwise make the
+relationship permanently incomplete or let reconciliation delete newly
+observed evidence. When a prior coherent group exists, a partial replacement
+keeps those semantic properties, records no fingerprint for an incomplete new
+dependency, and marks the relationship property-incomplete until a complete
+group replaces it.
+This metadata is Neo4j graph schema 2. Startup rejects a schema-1 graph that
+contains authoritative owner tokens without matching fingerprints instead of
+silently accepting a projection that later cannot prove per-owner equality.
+Empty schema-1 graphs and pre-release graphs with complete fingerprint coverage
+advance automatically; older populated development graphs must be reset and
+recollected as described in the deployment guide.
 When a previously unseen complete domain adds only properties compatible with
 an already complete fact, the union remains complete. Any overlapping conflict
 still makes it incomplete. If one of those authoritative co-owner domains later
@@ -406,9 +439,20 @@ Lower weight = easier to exploit = higher risk. Used by bounded weighted-path qu
 
 Nodes merge by `objectid` using Cypher `MERGE`. When the same entity appears from multiple collectors:
 
-- Properties use **last-write-wins** semantics
+- Each authoritative observation domain contributes properties independently.
+  Equal or disjoint contributions are unioned deterministically; overlapping
+  non-timestamp values that disagree are rejected before mutation rather than
+  selected by collector or input order.
+- A complete exact re-observation may replace stale managed properties only
+  when the active-owner fingerprints prove that the replacement is coherent.
+  Otherwise the fact remains property-incomplete and publication is withheld.
+- `reference_only` observations contribute identity and ownership but never
+  author managed properties.
 - The node MERGE pivots the previous-hash trio (`previous_description_hash`, `previous_input_schema_hash`, `previous_instructions_hash`) on both `ON CREATE` (seeded from the incoming hashes) and `ON MATCH` (set to the prior values before `n += node.properties` overwrites them) for rug-pull detection
-- Edges accumulate (different collectors contribute different edge types to the same node)
+- Different edge types accumulate. Contributions to the same logical
+  `(source, kind, target)` relationship follow the compatible-union and
+  conflict-rejection rules above; `all_dependencies` relationships replace
+  their complete owner group atomically.
 
 ### Composite Epoch Replacement
 
