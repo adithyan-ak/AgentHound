@@ -6,15 +6,15 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
-// Enumerator inspects a single Target and produces a graph patch.
-// Supersedes today's Collector interface; the existing mcp / a2a / config
-// collectors will adapt to this shape in a later step.
+// Enumerator is the reserved action contract for inspecting one Target and
+// producing a graph patch. The current CLI does not dispatch this interface;
+// Config, MCP, and A2A runtime work uses sdk/collector.Collector directly.
 //
 // Implementations also implement sdk/module.Module.
 type Enumerator interface {
 	Enumerate(ctx context.Context, t Target, opts EnumerateOptions) (*ingest.IngestData, error)
 }
 
-// EnumerateOptions is a v0 stub. Concrete fields land per-module
-// (timeouts, transport overrides, redaction toggles) as needs surface.
+// EnumerateOptions is currently empty because no CLI path dispatches
+// Enumerator. Adding options is an explicit public API change.
 type EnumerateOptions struct{}

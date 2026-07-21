@@ -155,15 +155,17 @@ they still catch obfuscated instructions.
 
 ### `RunTests` parity
 
-`agenthound rules test` (and the builtin fixture guard) evaluate each inline
-`tests:` input through the exact same code path used at scan time: the raw view
-is matched first, and only when the rule is canonicalization-eligible and the
-canonical text differs is the shadow pass consulted. A single test input is
-evaluated once per rule regardless of how many `scope.targets` the rule
-declares, so an eligible multi-target rule's positive fixtures pass on either
-the raw or the shadow match, and its negative fixtures must fail on both.
-Fixtures for eligible rules therefore lock the same raw-first ordering and
-bounded-transform behavior that production scanning uses.
+`agenthound rules test` evaluates cases embedded in custom text-detection rules;
+the Go builtin-fixture guard temporarily attaches the external cases from
+`sdk/rules/builtin_tests/`. Both paths send each supplied input through the exact
+same matcher code used at scan time: the raw view is matched first, and only
+when the rule is canonicalization-eligible and the canonical text differs is
+the shadow pass consulted. A single test input is evaluated once per rule
+regardless of how many `scope.targets` the rule declares, so an eligible
+multi-target rule's positive fixtures pass on either the raw or the shadow
+match, and its negative fixtures must fail on both. Fixtures for eligible rules
+therefore lock the same raw-first ordering and bounded-transform behavior that
+production scanning uses.
 
 !!! warning "Behavior change: negative fixtures now see the shadow"
     Because `RunTests` mirrors scan-time evaluation exactly, a

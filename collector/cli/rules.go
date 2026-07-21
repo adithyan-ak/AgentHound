@@ -20,14 +20,15 @@ var rulesCmd = &cobra.Command{
 
 var rulesListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List loaded detection rules",
+	Short: "List loaded text-detection rules",
 	RunE:  runRulesList,
 }
 
 var rulesValidateCmd = &cobra.Command{
 	Use:   "validate [path]",
-	Short: "Validate rule definitions",
-	Long: `Validate detection rules for correctness.
+	Short: "Validate text-detection rule definitions",
+	Long: `Validate text-detection rules for correctness. Fingerprint probe YAML uses
+a separate schema and is not accepted by this command.
 
 If path is a file, validates that single rule.
 If path is a directory, validates all .yaml files in it.
@@ -38,8 +39,10 @@ If no path given, validates all loaded rules (builtin + custom).`,
 
 var rulesTestCmd = &cobra.Command{
 	Use:   "test [path]",
-	Short: "Run inline test cases for rules",
-	Long: `Run the inline test cases defined in each rule.
+	Short: "Run inline tests for text-detection rules",
+	Long: `Run inline test cases embedded in text-detection rules. Production built-ins
+deliberately omit inline fixtures and therefore contribute zero cases here;
+their external fixtures run only in the Go test suite.
 
 If path is a file, tests that single rule.
 If path is a directory, tests all .yaml files in it.

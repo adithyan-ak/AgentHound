@@ -11,15 +11,12 @@ func init() {
 
 // ConfigEnumerator is the registration shim for the Config module.
 //
-// It satisfies sdk/module.Module via the six identity methods below. The
-// sdk/action.Enumerator interface (with the Enumerate(ctx, Target, opts)
-// method) is intentionally NOT implemented here yet — the legacy
-// internal/collector.Collector implementation in collector.go still drives
-// runtime work, and a later step will adapt this struct to delegate to it.
+// It satisfies sdk/module.Module via the six identity methods below. It does
+// not implement sdk/action.Enumerator; the ConfigCollector implementation of
+// sdk/collector.Collector drives runtime work directly from the CLI.
 //
-// Because sdk/action.Enumerator is a Go interface and we never type-assert
-// to it from the registry, this struct can claim the "enumerator" role via
-// Action() == action.Enumerate without yet exposing the action method.
+// Action() == action.Enumerate is registry metadata and does not imply that the
+// registered value implements the action interface.
 type ConfigEnumerator struct{}
 
 func (*ConfigEnumerator) ID() string            { return "config.enumerate" }

@@ -19,9 +19,14 @@ func TestModulesRegistered(t *testing.T) {
 		t.Fatalf("want 3 modules, got %d: %v", len(all), all)
 	}
 
-	enumerators := module.ListByAction(action.Enumerate)
-	if len(enumerators) != 3 {
-		t.Fatalf("want 3 enumerators, got %d", len(enumerators))
+	enumeratorMetadata := module.ListByAction(action.Enumerate)
+	if len(enumeratorMetadata) != 3 {
+		t.Fatalf("want 3 enumerate metadata registrations, got %d", len(enumeratorMetadata))
+	}
+	for _, registered := range enumeratorMetadata {
+		if _, ok := registered.(action.Enumerator); ok {
+			t.Fatalf("%s unexpectedly implements action.Enumerator; update CLI dispatch and documentation together", registered.ID())
+		}
 	}
 
 	for _, target := range []string{"mcp", "a2a", "config"} {

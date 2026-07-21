@@ -11,15 +11,12 @@ func init() {
 
 // A2AEnumerator is the registration shim for the A2A module.
 //
-// It satisfies sdk/module.Module via the six identity methods below. The
-// sdk/action.Enumerator interface (with the Enumerate(ctx, Target, opts)
-// method) is intentionally NOT implemented here yet — the legacy
-// internal/collector.Collector implementation in collector.go still drives
-// runtime work, and a later step will adapt this struct to delegate to it.
+// It satisfies sdk/module.Module via the six identity methods below. It does
+// not implement sdk/action.Enumerator; the A2ACollector implementation of
+// sdk/collector.Collector drives runtime work directly from the CLI.
 //
-// Because sdk/action.Enumerator is a Go interface and we never type-assert
-// to it from the registry, this struct can claim the "enumerator" role via
-// Action() == action.Enumerate without yet exposing the action method.
+// Action() == action.Enumerate is registry metadata and does not imply that the
+// registered value implements the action interface.
 type A2AEnumerator struct{}
 
 func (*A2AEnumerator) ID() string            { return "a2a.enumerate" }

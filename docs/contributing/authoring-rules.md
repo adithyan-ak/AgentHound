@@ -167,28 +167,33 @@ All probe matchers are conjunctive (ALL must pass). Multiple probes are also con
 
 ## Validation and Testing
 
-### Validate rules
+### Validate custom text-detection rules
 
 ```bash
-agenthound rules validate sdk/rules/builtin/your-rule.yaml
+agenthound rules validate /path/to/custom-rule.yaml --strict
 ```
 
 The CLI validator accepts the text-detection schema only. It checks ID format,
-required fields, regex compilation, and matcher validity. It does not validate
-fingerprint YAML. Fingerprint rules are validated at load time by
-`rules.ValidateFingerprint`; for built-ins, run:
+required fields, regex compilation, matcher validity, and inline tests. Strict
+mode also requires at least one inline test. It does not validate fingerprint
+YAML.
+
+### Validate fingerprint rules
+
+Fingerprint rules are validated at load time by `rules.ValidateFingerprint`.
+For the embedded rules, run:
 
 ```bash
 go test ./sdk/rules -run 'TestValidateFingerprint|TestLoadFingerprints_EmbeddedRulesValid'
 ```
 
-### Test rules
+### Test custom text-detection rules
 
 ```bash
-agenthound rules test sdk/rules/builtin/your-rule.yaml
+agenthound rules test /path/to/custom-rule.yaml
 ```
 
-Runs the `tests:` block embedded in text-matching rules:
+This runs the `tests:` block embedded in a custom text-detection rule:
 
 ```yaml
 tests:
@@ -230,11 +235,25 @@ go test ./sdk/rules -run TestBuiltinRules_AllPassInlineTests
 
 ## Checklist
 
+For every rule:
+
 - [ ] Rule ID is kebab-case, 3-64 characters
-- [ ] OWASP mappings reference valid MCP01-MCP10 or ASI01-ASI10 codes
 - [ ] Regex patterns compile without error
-- [ ] Fingerprint probes use only GET or HEAD methods
-- [ ] Test fixtures cover true-positive and true-negative cases
-- [ ] Test fixture file is in `builtin_tests/`, not in the production rule
-- [ ] `agenthound rules validate` passes
-- [ ] `agenthound rules test` passes
+
+For a custom text-detection rule:
+
+- [ ] OWASP mappings reference valid MCP01-MCP10 or ASI01-ASI10 codes
+- [ ] Inline tests cover true-positive and true-negative cases
+- [ ] `agenthound rules validate /path/to/rule.yaml --strict` passes
+- [ ] `agenthound rules test /path/to/rule.yaml` runs the expected cases and passes
+
+For a built-in text-detection rule:
+
+- [ ] The fixture file is in `sdk/rules/builtin_tests/`, not the production rule
+- [ ] `go test ./sdk/rules -run 'TestBuiltinRules_AllValidate|TestBuiltinRules_AllPassInlineTests|TestBuiltinRules_NoInlineTestsInProductionYAML'` passes
+
+For a fingerprint rule:
+
+- [ ] Probes use only GET or HEAD methods
+- [ ] `go test ./sdk/rules -run 'TestValidateFingerprint|TestLoadFingerprints_EmbeddedRulesValid'` passes
+- [ ] The owning fingerprinter's tests cover a match, a non-match, and a network error
