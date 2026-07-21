@@ -106,8 +106,8 @@ RETURN count(DISTINCT r) AS cnt`
 func agentAuthPosture(ctx context.Context, db graph.GraphDB, objectID string) (Assessment, error) {
 	cypher := `
 MATCH (a {objectid: $id})-[t:TRUSTS_SERVER]->(s:MCPServer)
-RETURN t.risk_weight AS rw,
-       t.auth_assessment_complete AS auth_assessment_complete`
+RETURN t.effective_risk_weight AS rw,
+       t.effective_auth_assessment_complete AS auth_assessment_complete`
 
 	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
 	if err != nil {

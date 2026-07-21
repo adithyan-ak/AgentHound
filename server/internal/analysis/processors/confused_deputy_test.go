@@ -60,8 +60,12 @@ func TestConfusedDeputy_ProcessSuccess(t *testing.T) {
 	cypher, _ := calls[0].Args[0].(string)
 	for _, want := range []string{
 		"CONFUSED_DEPUTY",
-		"low.auth_assurance IN ['unauthenticated', 'weak']",
-		"high.auth_assurance = 'strong'",
+		"low.effective_auth_assurance = 'unauthenticated'",
+		"low.effective_auth_source = 'observed'",
+		"OR low.effective_auth_assurance = 'weak'",
+		"high.effective_auth_assurance = 'strong'",
+		"e.low_auth_method = low.effective_auth_method",
+		"e.high_auth_method = high.effective_auth_method",
 		"source_collector = 'a2a'",
 	} {
 		if !contains(cypher, want) {
@@ -70,6 +74,9 @@ func TestConfusedDeputy_ProcessSuccess(t *testing.T) {
 	}
 	if contains(cypher, "auth_strength >=") || contains(cypher, "auth_strength <=") {
 		t.Errorf("detector still uses numeric fallbacks that classify unknown auth: query:\n%s", cypher)
+	}
+	if contains(cypher, "low.effective_auth_assurance IN ['unauthenticated', 'weak']") {
+		t.Errorf("unauthenticated delegation must require observed provenance: query:\n%s", cypher)
 	}
 }
 

@@ -50,7 +50,10 @@ func ServerRiskAssessment(ctx context.Context, db graph.GraphDB, objectID string
 
 func serverAuthAssessment(ctx context.Context, db graph.GraphDB, objectID string) (Assessment, error) {
 	cypher := `MATCH (s {objectid: $id})
-RETURN s.auth_method AS am, s.auth_evidence AS auth_evidence`
+RETURN s.effective_auth_method AS am,
+       s.effective_auth_assurance AS auth_assurance,
+       s.effective_auth_evidence AS auth_evidence,
+       s.effective_auth_source AS auth_source`
 	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
 	if err != nil {
 		return Assessment{}, err
@@ -59,10 +62,18 @@ RETURN s.auth_method AS am, s.auth_evidence AS auth_evidence`
 		return unknownAssessment("auth_method", 0, 100), nil
 	}
 	am, _ := rows[0]["am"].(string)
+	authAssurance, _ := rows[0]["auth_assurance"].(string)
 	authEvidence, _ := rows[0]["auth_evidence"].(string)
-	if common.NormalizeAuthMethod(am) == common.AuthNone &&
-		!common.IsConfirmedAnonymousAccess(am, authEvidence) {
-		return unknownAssessment("auth_evidence", 0, 100), nil
+	authSource, _ := rows[0]["auth_source"].(string)
+	if common.NormalizeAuthMethod(am) == common.AuthNone {
+		switch {
+		case !common.IsConfirmedAnonymousAccess(am, authEvidence):
+			return unknownAssessment("auth_evidence", 0, 100), nil
+		case authSource != "observed":
+			return unknownAssessment("auth_source", 0, 100), nil
+		case authAssurance != string(common.AuthAssuranceUnauthenticated):
+			return unknownAssessment("auth_assurance", 0, 100), nil
+		}
 	}
 	auth := common.AssessAuth(am)
 	if auth.Weakness == nil {

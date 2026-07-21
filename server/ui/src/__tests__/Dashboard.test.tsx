@@ -1,9 +1,11 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { Dashboard } from "@features/dashboard";
 import { StatCards } from "@features/dashboard/ui/StatCards";
+import { ExposureGauge } from "@features/dashboard/ui/ExposureGauge";
+import type { Finding } from "@entities/finding/model";
 
 const publishedScan = vi.hoisted(() => ({
   id: "scan-1",
@@ -89,9 +91,62 @@ vi.mock("@entities/posture/api", () => ({
 
 import { useGraphStats } from "@entities/graph-stats/api";
 import { fetchFindings } from "@entities/finding/api";
+import { fetchNodeCollection } from "@entities/node/api";
 
 const mockedUseGraphStats = vi.mocked(useGraphStats);
 const mockedFetchFindings = vi.mocked(fetchFindings);
+const mockedFetchNodeCollection = vi.mocked(fetchNodeCollection);
+
+function observedAnonymousNode(id: string) {
+  return {
+    id,
+    kinds: ["MCPServer"],
+    properties: {
+      auth_method: "unknown",
+      auth_assurance: "unknown",
+      auth_evidence: "unknown",
+      observed_auth_method: "none",
+      observed_auth_assurance: "unauthenticated",
+      observed_auth_evidence: "anonymous_probe_succeeded",
+      effective_auth_method: "none",
+      effective_auth_assurance: "unauthenticated",
+      effective_auth_evidence: "anonymous_probe_succeeded",
+      effective_auth_source: "observed",
+    },
+  };
+}
+
+function nodeCollection(items: ReturnType<typeof observedAnonymousNode>[]) {
+  return {
+    items,
+    total: items.length,
+    complete: true,
+    revision: "graph-revision",
+    projection: { scanId: "scan-1", revision: 1 },
+  };
+}
+
+function highFinding(index: number): Finding {
+  return {
+    id: `finding-${index}`,
+    severity: "high",
+    category: "shadowing",
+    title: "shadowing",
+    description: "shadowing",
+    edge_kind: "SHADOWS",
+    source_id: `source-${index}`,
+    source_name: "source",
+    source_kind: "MCPTool",
+    target_id: `target-${index}`,
+    target_name: "target",
+    target_kind: "MCPTool",
+    confidence: 1,
+    variant: "default",
+    evidence: { state: "inferred" },
+    owasp_map: [],
+    atlas_map: [],
+  };
+}
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -180,11 +235,93 @@ describe("StatCards", () => {
     const zeros = screen.getAllByText("0");
     expect(zeros).toHaveLength(5);
   });
+
+  it("counts observed anonymous MCP servers in the server tile", async () => {
+    mockedUseGraphStats.mockReturnValue({
+      data: {
+        node_counts: { MCPServer: 1 },
+        edge_counts: {},
+        total_nodes: 1,
+        total_edges: 0,
+        projection: { scanId: "scan-1", revision: 1 },
+      },
+      isLoading: false,
+      error: null,
+      isError: false,
+      isPending: false,
+    } as unknown as ReturnType<typeof useGraphStats>);
+    mockedFetchNodeCollection.mockReset();
+    mockedFetchNodeCollection.mockResolvedValue(
+      nodeCollection([observedAnonymousNode("anonymous")]),
+    );
+
+    render(<StatCards />, { wrapper: createWrapper() });
+
+    const tile = (await screen.findByText("1 unauth")).closest(
+      ".card-elevated",
+    );
+    expect(tile).not.toBeNull();
+    expect(within(tile as HTMLElement).getByText("1 unauth")).toBeInTheDocument();
+  });
+});
+
+describe("ExposureGauge", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("includes observed anonymous servers in the public exposure index", async () => {
+    mockedFetchFindings.mockReset();
+    mockedFetchFindings.mockResolvedValue({
+      findings: Array.from({ length: 6 }, (_, index) => highFinding(index)),
+      scope: {
+        mode: "published",
+        scanId: "scan-1",
+        revision: 1,
+        publishedAt: "2026-07-11T00:00:00Z",
+        projectionStatus: "complete",
+        snapshotStatus: "complete",
+        available: true,
+        stale: false,
+      },
+    });
+    mockedFetchNodeCollection.mockReset();
+    mockedFetchNodeCollection.mockResolvedValue(
+      nodeCollection([
+        observedAnonymousNode("anonymous-1"),
+        observedAnonymousNode("anonymous-2"),
+      ]),
+    );
+
+    render(<ExposureGauge />, { wrapper: createWrapper() });
+
+    const unauthLabel = await screen.findByText("Unauth Srv");
+    expect(screen.getByText("Guarded")).toBeInTheDocument();
+    const unauth = unauthLabel.closest("div");
+    expect(unauth).not.toBeNull();
+    expect(within(unauth as HTMLElement).getByText("02")).toBeInTheDocument();
+  });
 });
 
 describe("Dashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockedFetchNodeCollection.mockReset();
+    mockedFetchNodeCollection.mockResolvedValue(nodeCollection([]));
+    mockedFetchFindings.mockReset();
+    mockedFetchFindings.mockResolvedValue({
+      findings: [],
+      scope: {
+        mode: "published",
+        scanId: "scan-1",
+        revision: 1,
+        publishedAt: "2026-07-11T00:00:00Z",
+        projectionStatus: "complete",
+        snapshotStatus: "complete",
+        available: true,
+        stale: false,
+      },
+    });
   });
 
   it("renders an error state when graph stats fail", () => {

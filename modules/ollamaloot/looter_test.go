@@ -6,11 +6,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/adithyan-ak/agenthound/modules/ollamafp"
 	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/common"
 )
 
 const tagsBody = `{
@@ -28,6 +31,8 @@ func ollamaStubServer(t *testing.T, opts stubOpts) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
+		case "/api/version":
+			_, _ = w.Write([]byte(`{"version":"0.5.1"}`))
 		case "/api/tags":
 			_, _ = w.Write([]byte(tagsBody))
 		case "/api/show":
@@ -48,6 +53,43 @@ func ollamaStubServer(t *testing.T, opts stubOpts) *httptest.Server {
 			w.WriteHeader(404)
 		}
 	}))
+}
+
+func TestFingerprintAndLootPropertiesComposeOnSameEndpoint(t *testing.T) {
+	srv := ollamaStubServer(t, stubOpts{})
+	defer srv.Close()
+	target := action.Target{Kind: "host", Address: strings.TrimPrefix(srv.URL, "http://")}
+
+	fingerprinter, err := ollamafp.New()
+	if err != nil {
+		t.Fatalf("new fingerprinter: %v", err)
+	}
+	fingerprint, err := fingerprinter.Fingerprint(context.Background(), target)
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+	loot, err := (&Looter{}).Loot(context.Background(), target, action.LootOptions{})
+	if err != nil {
+		t.Fatalf("loot: %v", err)
+	}
+	fingerprintNode := fingerprint.IngestData.Graph.Nodes[0]
+	lootNode := loot.IngestData.Graph.Nodes[0]
+	if fingerprintNode.ID != lootNode.ID {
+		t.Fatalf("same endpoint IDs differ: %q != %q", fingerprintNode.ID, lootNode.ID)
+	}
+	for key, fingerprintValue := range fingerprintNode.Properties {
+		if key == "last_verified_at" {
+			continue
+		}
+		if lootValue, shared := lootNode.Properties[key]; shared &&
+			!reflect.DeepEqual(fingerprintValue, lootValue) {
+			t.Errorf("shared property %q conflicts: fingerprint=%#v loot=%#v", key, fingerprintValue, lootValue)
+		}
+	}
+	if fingerprintNode.Properties["discovered_via"] != "network_scan" ||
+		lootNode.Properties["loot_observed"] != true {
+		t.Errorf("action provenance not separated: fingerprint=%+v loot=%+v", fingerprintNode.Properties, lootNode.Properties)
+	}
 }
 
 type stubOpts struct {
@@ -82,6 +124,12 @@ func TestLoot_AnonymousHappyPath(t *testing.T) {
 		switch n.Kinds[0] {
 		case "OllamaInstance":
 			ollama++
+			if n.Properties["loot_observed"] != true {
+				t.Errorf("OllamaInstance missing loot_observed: %+v", n.Properties)
+			}
+			if _, exists := n.Properties["discovered_via"]; exists {
+				t.Errorf("direct loot claimed discovery provenance: %+v", n.Properties)
+			}
 		case "AIModel":
 			ps, _ := n.Properties["parameter_size"].(string)
 			if ps == "" {
@@ -113,6 +161,7 @@ func TestLoot_AnonymousHappyPath(t *testing.T) {
 		t.Errorf("expected 1 OllamaInstance + 1 plain + 1 fine-tune; got %d/%d/%d",
 			ollama, modelLlama, modelFinetune)
 	}
+	assertAnonymousInventoryClaim(t, res.IngestData.Graph.Nodes[0].Properties)
 
 	for _, e := range res.IngestData.Graph.Edges {
 		if e.Kind != "PROVIDES_MODEL" {
@@ -120,6 +169,81 @@ func TestLoot_AnonymousHappyPath(t *testing.T) {
 		}
 		if e.SourceKind != "OllamaInstance" || e.TargetKind != "AIModel" {
 			t.Errorf("edge endpoints = %s -> %s, want OllamaInstance -> AIModel", e.SourceKind, e.TargetKind)
+		}
+	}
+}
+
+func TestLoot_TagsFailureDoesNotClaimAnonymousAccess(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "authentication denial", status: http.StatusUnauthorized, body: `{}`},
+		{name: "malformed success shape", status: http.StatusOK, body: `{}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer srv.Close()
+
+			res, err := (&Looter{}).Loot(context.Background(), action.Target{
+				Kind:    "host",
+				Address: strings.TrimPrefix(srv.URL, "http://"),
+			}, action.LootOptions{})
+			if err != nil {
+				t.Fatalf("Loot: %v", err)
+			}
+			assertNoAnonymousInventoryClaim(t, res.IngestData.Graph.Nodes[0].Properties)
+			if res.Summary.PartialFailures != 1 {
+				t.Fatalf("PartialFailures = %d, want 1", res.Summary.PartialFailures)
+			}
+		})
+	}
+
+	t.Run("transport failure", func(t *testing.T) {
+		srv := httptest.NewServer(http.NotFoundHandler())
+		address := strings.TrimPrefix(srv.URL, "http://")
+		srv.Close()
+
+		res, err := (&Looter{}).Loot(context.Background(), action.Target{
+			Kind: "host", Address: address,
+		}, action.LootOptions{})
+		if err != nil {
+			t.Fatalf("Loot: %v", err)
+		}
+		assertNoAnonymousInventoryClaim(t, res.IngestData.Graph.Nodes[0].Properties)
+		if res.Summary.PartialFailures != 1 {
+			t.Fatalf("PartialFailures = %d, want 1", res.Summary.PartialFailures)
+		}
+	})
+}
+
+func assertAnonymousInventoryClaim(t *testing.T, props map[string]any) {
+	t.Helper()
+	if props["auth_method"] != string(common.AuthNone) ||
+		props["auth_assurance"] != string(common.AuthAssuranceUnauthenticated) ||
+		props["auth_evidence"] != common.AuthEvidenceAnonymousProbeSucceeded ||
+		props["probe_status"] != string(common.VerificationVerified) ||
+		props["is_anonymous_loot"] != "true" {
+		t.Fatalf("anonymous inventory evidence = %+v", props)
+	}
+	if _, ok := props["last_verified_at"].(string); !ok {
+		t.Fatalf("last_verified_at missing from anonymous inventory evidence: %+v", props)
+	}
+}
+
+func assertNoAnonymousInventoryClaim(t *testing.T, props map[string]any) {
+	t.Helper()
+	for _, key := range []string{
+		"auth_method", "auth_assurance", "auth_evidence", "probe_status",
+		"last_verified_at", "is_anonymous_loot",
+	} {
+		if value, present := props[key]; present {
+			t.Errorf("failed inventory fabricated %s=%v: %+v", key, value, props)
 		}
 	}
 }

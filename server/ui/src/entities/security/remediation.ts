@@ -1,4 +1,8 @@
 import type { APIEdge, APINode } from "@entities/graph/dto";
+import {
+  authMethodFromProperties,
+  hasConfirmedAnonymousAccess,
+} from "@entities/node/model";
 
 export interface RemediationItem {
   severity: "critical" | "high" | "medium" | "low";
@@ -41,9 +45,8 @@ export function deriveRemediations(
 
   // No auth
   const isAuthEntity = kind === "MCPServer" || kind === "A2AAgent";
-  const explicitAnonymous =
-    props.auth_method === "none" &&
-    props.auth_evidence === "anonymous_probe_succeeded";
+  const explicitAnonymous = hasConfirmedAnonymousAccess(props);
+  const effectiveMethod = authMethodFromProperties(props);
   if (isAuthEntity && explicitAnonymous) {
     items.push({
       severity: "high",
@@ -53,9 +56,8 @@ export function deriveRemediations(
   }
   if (
     isAuthEntity &&
-    (props.auth_method == null ||
-      props.auth_method === "unknown" ||
-      (props.auth_method === "none" && !explicitAnonymous))
+    (effectiveMethod === "unknown" ||
+      (effectiveMethod === "none" && !explicitAnonymous))
   ) {
     items.push({
       severity: "low",

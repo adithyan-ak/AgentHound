@@ -46,20 +46,69 @@ func TestAuthStrength_ProcessSuccess(t *testing.T) {
 	}
 
 	calls := mock.CallsTo("ExecuteWrite")
-	if len(calls) != 1 {
-		t.Fatalf("ExecuteWrite called %d times, want 1", len(calls))
+	if len(calls) != 2 {
+		t.Fatalf("ExecuteWrite called %d times, want 2", len(calls))
 	}
 
 	cypher, _ := calls[0].Args[0].(string)
-	if !contains(cypher, "SET n.auth_strength =") {
+	if !contains(cypher, "n.auth_strength =") {
 		t.Errorf("Cypher should SET the auth_strength property; query:\n%s", cypher)
 	}
-	if !contains(cypher, "n.auth_assurance =") {
-		t.Errorf("Cypher should SET categorical auth_assurance; query:\n%s", cypher)
+	for _, property := range []string{
+		"n.effective_auth_method = effective_method",
+		"n.effective_auth_assurance =",
+		"n.effective_auth_evidence = effective_evidence",
+		"n.effective_auth_source = effective_source",
+	} {
+		if !contains(cypher, property) {
+			t.Errorf("Cypher should SET %s; query:\n%s", property, cypher)
+		}
 	}
-	if !contains(cypher, "n.auth_evidence") ||
-		!contains(cypher, "anonymous_probe_succeeded") {
-		t.Errorf("explicit none must require anonymous-probe evidence; query:\n%s", cypher)
+	if contains(cypher, "SET n.auth_assurance =") ||
+		contains(cypher, ", n.auth_assurance =") {
+		t.Errorf("configured auth_assurance must remain immutable; query:\n%s", cypher)
+	}
+	if !contains(cypher, "effective_evidence") ||
+		!contains(cypher, "anonymous_probe_succeeded") ||
+		!contains(cypher, "coalesce(effective_source, 'configured') <> 'observed'") {
+		t.Errorf("explicit none must require observed anonymous-probe evidence; query:\n%s", cypher)
+	}
+	for _, guard := range []string{
+		"n.status = 'reachable'",
+		"n.transport = 'http'",
+		"n.observed_auth_method = 'none'",
+		"n.observed_auth_assurance = 'unauthenticated'",
+		"n.observed_auth_evidence = 'anonymous_probe_succeeded'",
+		"n:A2AAgent",
+		"n.auth_probe_method = 'get_task_nonexistent'",
+		"n.auth_probe_status = 'anonymous_protocol_access'",
+		"n.auth_probe_detail IN ['task_not_found_v1', 'task_not_found_v0_3']",
+		"CASE WHEN use_observed THEN n.observed_auth_method ELSE n.auth_method END",
+		"CASE WHEN use_observed THEN n.observed_auth_evidence ELSE n.auth_evidence END",
+	} {
+		if !contains(cypher, guard) {
+			t.Errorf("effective tuple query missing %q; query:\n%s", guard, cypher)
+		}
+	}
+
+	trustCypher, _ := calls[1].Args[0].(string)
+	for _, guard := range []string{
+		"MATCH ()-[t:TRUSTS_SERVER]->(s:MCPServer)",
+		"s.effective_auth_source = 'observed'",
+		"s.effective_auth_method = 'none'",
+		"s.effective_auth_assurance = 'unauthenticated'",
+		"s.effective_auth_evidence = 'anonymous_probe_succeeded'",
+		"WHEN observed_anonymous THEN 0.1",
+		"ELSE t.risk_weight",
+		"WHEN observed_anonymous THEN true",
+		"ELSE t.auth_assessment_complete",
+		"t.effective_auth_source = CASE",
+		"WHEN observed_anonymous THEN 'observed'",
+		"ELSE 'configured'",
+	} {
+		if !contains(trustCypher, guard) {
+			t.Errorf("effective trust query missing %q; query:\n%s", guard, trustCypher)
+		}
 	}
 
 	// Drift guard: the CASE expression is built at runtime from
@@ -103,5 +152,26 @@ func TestAuthStrength_ProcessError(t *testing.T) {
 	_, err := p.Process(context.Background(), mock, "scan-1")
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestAuthStrength_TrustMaterializationError(t *testing.T) {
+	calls := 0
+	mock := &graph.MockGraphDB{
+		ExecuteWriteFunc: func(_ context.Context, _ string, _ map[string]any) (int, error) {
+			calls++
+			if calls == 2 {
+				return 0, errors.New("trust materialization failed")
+			}
+			return 4, nil
+		},
+	}
+
+	stats, err := (&AuthStrength{}).Process(context.Background(), mock, "scan-1")
+	if err == nil {
+		t.Fatal("expected trust materialization error")
+	}
+	if stats.NodesUpdated != 0 || stats.EdgesCreated != 0 {
+		t.Fatalf("failed pre-pass reported partial success: %+v", stats)
 	}
 }

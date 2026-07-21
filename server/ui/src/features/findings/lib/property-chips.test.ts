@@ -7,7 +7,12 @@ describe("authentication property chips", () => {
       getPropertyChips("MCPServer", {
         transport: "http",
         auth_method: "none",
+        auth_assurance: "unauthenticated",
         auth_evidence: "anonymous_probe_succeeded",
+        effective_auth_method: "none",
+        effective_auth_assurance: "unauthenticated",
+        effective_auth_evidence: "anonymous_probe_succeeded",
+        effective_auth_source: "observed",
       }),
     ).toContain("no-auth");
 
@@ -29,5 +34,20 @@ describe("authentication property chips", () => {
 
     expect(chips).toContain("local-process");
     expect(chips).not.toContain("no-auth");
+  });
+
+  it("renders observed anonymous access when configuration was unknown", () => {
+    const chips = getPropertyChips("MCPServer", {
+      transport: "http",
+      status: "reachable",
+      auth_method: "unknown",
+      auth_evidence: "unknown",
+      observed_auth_method: "none",
+      observed_auth_assurance: "unauthenticated",
+      observed_auth_evidence: "anonymous_probe_succeeded",
+    });
+
+    expect(chips).toContain("no-auth");
+    expect(chips).not.toContain("auth-unknown");
   });
 });

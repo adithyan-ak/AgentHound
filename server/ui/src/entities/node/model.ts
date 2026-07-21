@@ -47,10 +47,7 @@ export type AuthMethod =
 
 type DeclaredAuthMethod = Exclude<AuthMethod, "localProcess">;
 
-function declaredAuthMethod(
-  properties: Record<string, unknown>,
-): DeclaredAuthMethod {
-  const method = properties.auth_method;
+function declaredAuthMethod(method: unknown): DeclaredAuthMethod {
   switch (method) {
     case "none":
       return "none";
@@ -75,13 +72,96 @@ function declaredAuthMethod(
   }
 }
 
+export interface EffectiveAuthTuple {
+  method: DeclaredAuthMethod;
+  evidence: string;
+  assurance: string;
+  source: "observed" | "configured";
+}
+
+/**
+ * Selects one paired authentication assessment without mixing method,
+ * evidence, or assurance from different collectors.
+ *
+ * New projections materialize `effective_auth_*` server-side. The observed
+ * fallback keeps the UI truthful when viewing an older projection that still
+ * carries the raw dual-lane MCP evidence, while unknown observed methods defer
+ * to the configured tuple.
+ */
+export function effectiveAuthTupleFromProperties(
+  properties: Record<string, unknown>,
+): EffectiveAuthTuple {
+  const effectiveSource = properties.effective_auth_source;
+  if (
+    typeof properties.effective_auth_method === "string" &&
+    typeof properties.effective_auth_assurance === "string" &&
+    typeof properties.effective_auth_evidence === "string" &&
+    (effectiveSource === "observed" || effectiveSource === "configured")
+  ) {
+    return {
+      method: declaredAuthMethod(properties.effective_auth_method),
+      evidence: properties.effective_auth_evidence,
+      assurance: properties.effective_auth_assurance,
+      source: effectiveSource,
+    };
+  }
+
+  const observedMethod = declaredAuthMethod(properties.observed_auth_method);
+  const observedEvidence = properties.observed_auth_evidence;
+  const observedAssurance = properties.observed_auth_assurance;
+  const exactMCPAnonymousObservation =
+    properties.transport === "http" &&
+    properties.status === "reachable" &&
+    observedMethod === "none" &&
+    observedAssurance === "unauthenticated" &&
+    observedEvidence === "anonymous_probe_succeeded";
+  const exactA2AAnonymousObservation =
+    properties.auth_probe_method === "get_task_nonexistent" &&
+    properties.auth_probe_status === "anonymous_protocol_access" &&
+    (properties.auth_probe_detail === "task_not_found_v1" ||
+      properties.auth_probe_detail === "task_not_found_v0_3") &&
+    observedMethod === "none" &&
+    observedAssurance === "unauthenticated" &&
+    observedEvidence === "anonymous_probe_succeeded";
+  const exactAuthenticatedObservation =
+    observedEvidence === "configured_credential" &&
+    ((["basic", "apiKey"].includes(observedMethod) &&
+      observedAssurance === "weak") ||
+      (observedMethod === "bearer" && observedAssurance === "moderate") ||
+      (["oauth", "oidc", "mtls"].includes(observedMethod) &&
+        observedAssurance === "strong") ||
+      (observedMethod === "custom" && observedAssurance === "unknown"));
+  const observedIsUsable =
+    exactMCPAnonymousObservation ||
+    exactA2AAnonymousObservation ||
+    exactAuthenticatedObservation;
+  if (observedIsUsable) {
+    return {
+      method: observedMethod,
+      evidence: String(observedEvidence),
+      assurance: String(observedAssurance),
+      source: "observed",
+    };
+  }
+
+  return {
+    method: declaredAuthMethod(properties.auth_method),
+    evidence: String(properties.auth_evidence ?? "unknown"),
+    assurance: String(properties.auth_assurance ?? "unknown"),
+    source: "configured",
+  };
+}
+
 /** True only when an anonymous network request succeeded. */
 export function hasConfirmedAnonymousAccess(
   properties: Record<string, unknown>,
 ): boolean {
+  const auth = effectiveAuthTupleFromProperties(properties);
   return (
-    declaredAuthMethod(properties) === "none" &&
-    properties.auth_evidence === "anonymous_probe_succeeded"
+    auth.source === "observed" &&
+    auth.method === "none" &&
+    auth.assurance === "unauthenticated" &&
+    auth.evidence === "anonymous_probe_succeeded"
   );
 }
 
@@ -94,8 +174,9 @@ export function hasConfirmedAnonymousAccess(
 export function authMethodFromProperties(
   properties: Record<string, unknown>,
 ): AuthMethod {
-  if (properties.auth_evidence === "local_process") return "localProcess";
-  const method = declaredAuthMethod(properties);
+  const auth = effectiveAuthTupleFromProperties(properties);
+  if (auth.evidence === "local_process") return "localProcess";
+  const method = auth.method;
   if (method === "none" && !hasConfirmedAnonymousAccess(properties)) {
     return "unknown";
   }

@@ -7,12 +7,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	"github.com/adithyan-ak/agenthound/modules/qdrantfp"
 	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/common"
 )
 
 const collectionsBody = `{"result":{"collections":[{"name":"docs"},{"name":"chat-history"}]},"status":"ok","time":0.001}`
@@ -22,6 +25,8 @@ func qdrantStub(t *testing.T) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.URL.Path == "/telemetry" && r.Method == "GET":
+			_, _ = w.Write([]byte(`{"result":{"app":{"name":"qdrant","version":"1.7.4"}}}`))
 		case r.URL.Path == "/collections" && r.Method == "GET":
 			_, _ = w.Write([]byte(collectionsBody))
 		case r.URL.Path == "/collections/docs" && r.Method == "GET":
@@ -32,6 +37,40 @@ func qdrantStub(t *testing.T) *httptest.Server {
 			w.WriteHeader(404)
 		}
 	}))
+}
+
+func TestFingerprintAndLootPropertiesComposeOnSameEndpoint(t *testing.T) {
+	srv := qdrantStub(t)
+	defer srv.Close()
+	target := action.Target{Kind: "host", Address: strings.TrimPrefix(srv.URL, "http://")}
+
+	fingerprinter, err := qdrantfp.New()
+	if err != nil {
+		t.Fatalf("new fingerprinter: %v", err)
+	}
+	fingerprint, err := fingerprinter.Fingerprint(context.Background(), target)
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+	loot, err := (&Looter{}).Loot(context.Background(), target, action.LootOptions{})
+	if err != nil {
+		t.Fatalf("loot: %v", err)
+	}
+	fingerprintNode := fingerprint.IngestData.Graph.Nodes[0]
+	lootNode := loot.IngestData.Graph.Nodes[0]
+	if fingerprintNode.ID != lootNode.ID {
+		t.Fatalf("same endpoint IDs differ: %q != %q", fingerprintNode.ID, lootNode.ID)
+	}
+	for key, fingerprintValue := range fingerprintNode.Properties {
+		if lootValue, shared := lootNode.Properties[key]; shared &&
+			!reflect.DeepEqual(fingerprintValue, lootValue) {
+			t.Errorf("shared property %q conflicts: fingerprint=%#v loot=%#v", key, fingerprintValue, lootValue)
+		}
+	}
+	if fingerprintNode.Properties["discovered_via"] != "network_scan" ||
+		lootNode.Properties["loot_observed"] != true {
+		t.Errorf("action provenance not separated: fingerprint=%+v loot=%+v", fingerprintNode.Properties, lootNode.Properties)
+	}
 }
 
 func TestLoot_QdrantHappy(t *testing.T) {
@@ -53,6 +92,12 @@ func TestLoot_QdrantHappy(t *testing.T) {
 	if node.Kinds[0] != "QdrantInstance" {
 		t.Errorf("kind = %v, want QdrantInstance", node.Kinds)
 	}
+	if node.Properties["loot_observed"] != true {
+		t.Errorf("QdrantInstance missing loot_observed: %+v", node.Properties)
+	}
+	if _, exists := node.Properties["discovered_via"]; exists {
+		t.Errorf("direct loot claimed discovery provenance: %+v", node.Properties)
+	}
 	if cc, _ := node.Properties["collection_count"].(int); cc != 2 {
 		t.Errorf("collection_count = %v, want 2", node.Properties["collection_count"])
 	}
@@ -73,6 +118,7 @@ func TestLoot_QdrantHappy(t *testing.T) {
 	if res.Summary.PartialFailures != 0 {
 		t.Errorf("PartialFailures = %d, want 0", res.Summary.PartialFailures)
 	}
+	assertAnonymousInventoryClaim(t, node.Properties)
 }
 
 // A collection that returns a bad shape is counted in the inventory but
@@ -110,6 +156,65 @@ func TestLoot_Qdrant_CollectionDetailBadJSON(t *testing.T) {
 	if res.Summary.PartialFailures != 1 {
 		t.Errorf("PartialFailures = %d, want 1", res.Summary.PartialFailures)
 	}
+	assertAnonymousInventoryClaim(t, res.IngestData.Graph.Nodes[0].Properties)
+}
+
+func TestLoot_Qdrant_CollectionsMalformedOrUnavailableDoesNotClaimAnonymousAccess(t *testing.T) {
+	t.Run("malformed success shape", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{}`))
+		}))
+		defer srv.Close()
+
+		res, err := (&Looter{}).Loot(context.Background(), action.Target{
+			Kind: "host", Address: strings.TrimPrefix(srv.URL, "http://"),
+		}, action.LootOptions{})
+		if err != nil {
+			t.Fatalf("Loot: %v", err)
+		}
+		assertNoAnonymousInventoryClaim(t, res.IngestData.Graph.Nodes[0].Properties)
+	})
+
+	t.Run("transport failure", func(t *testing.T) {
+		srv := httptest.NewServer(http.NotFoundHandler())
+		address := strings.TrimPrefix(srv.URL, "http://")
+		srv.Close()
+
+		res, err := (&Looter{}).Loot(context.Background(), action.Target{
+			Kind: "host", Address: address,
+		}, action.LootOptions{})
+		if err != nil {
+			t.Fatalf("Loot: %v", err)
+		}
+		assertNoAnonymousInventoryClaim(t, res.IngestData.Graph.Nodes[0].Properties)
+	})
+}
+
+func assertAnonymousInventoryClaim(t *testing.T, props map[string]any) {
+	t.Helper()
+	if props["auth_method"] != string(common.AuthNone) ||
+		props["auth_assurance"] != string(common.AuthAssuranceUnauthenticated) ||
+		props["auth_evidence"] != common.AuthEvidenceAnonymousProbeSucceeded ||
+		props["probe_status"] != string(common.VerificationVerified) ||
+		props["is_anonymous_loot"] != "true" {
+		t.Fatalf("anonymous inventory evidence = %+v", props)
+	}
+	if _, ok := props["last_verified_at"].(string); !ok {
+		t.Fatalf("last_verified_at missing from anonymous inventory evidence: %+v", props)
+	}
+}
+
+func assertNoAnonymousInventoryClaim(t *testing.T, props map[string]any) {
+	t.Helper()
+	for _, key := range []string{
+		"auth_method", "auth_assurance", "auth_evidence", "probe_status",
+		"last_verified_at", "is_anonymous_loot", "anonymous_listing",
+	} {
+		if value, present := props[key]; present {
+			t.Errorf("failed inventory fabricated %s=%v: %+v", key, value, props)
+		}
+	}
 }
 
 // A closed/unreachable port (and a non-200 listing) must not error — the
@@ -137,6 +242,7 @@ func TestLoot_Qdrant_CollectionsListFails(t *testing.T) {
 	if res.Summary.PartialFailures != 1 {
 		t.Errorf("PartialFailures = %d, want 1", res.Summary.PartialFailures)
 	}
+	assertNoAnonymousInventoryClaim(t, res.IngestData.Graph.Nodes[0].Properties)
 }
 
 // TestLoot_Qdrant_ManyCollectionsConcurrent exercises the bounded worker

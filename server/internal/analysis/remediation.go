@@ -165,36 +165,50 @@ func remediationForRelation(
 	switch edge.Kind {
 	case "TRUSTS_SERVER":
 		step.Title = "Verify server authentication"
-		methodRaw, _ := targetNode.Properties["auth_method"].(string)
+		methodRaw, authEvidence, authSource := pathNodeEffectiveAuth(targetNode.Properties)
 		method := common.NormalizeAuthMethod(methodRaw)
-		authEvidence, _ := targetNode.Properties["auth_evidence"].(string)
+		authReporter := fmt.Sprintf(
+			"Configured authentication evidence for %s",
+			typedRemediationActor(target, "MCP server"),
+		)
+		if authSource == "observed" {
+			authReporter = fmt.Sprintf(
+				"Runtime observation for %s",
+				typedRemediationActor(target, "MCP server"),
+			)
+		}
 		switch method {
 		case common.AuthNone:
-			if !common.IsConfirmedAnonymousAccess(methodRaw, authEvidence) {
+			if authSource != "observed" ||
+				!common.IsConfirmedAnonymousAccess(methodRaw, authEvidence) {
 				step.Description = fmt.Sprintf(
-					"%s reports auth_method=none, but explicit anonymous-access evidence is unavailable. Verify the configured scheme and server identity used by %s before concluding that it is unauthenticated.",
-					typedRemediationActor(target, "MCP server"),
+					"%s reports auth_method=none, but explicit anonymous-access evidence is unavailable (effective source: %s). Verify the configured scheme and server identity used by %s before concluding that it is unauthenticated.",
+					authReporter,
+					authSource,
 					typedRemediationActor(source, "agent"),
 				)
 				break
 			}
 			step.Description = fmt.Sprintf(
-				"%s explicitly reports no authentication. Configure an authenticated trust relationship and verify the server identity before %s invokes it.",
-				typedRemediationActor(target, "MCP server"),
+				"%s explicitly reports no authentication (effective source: %s). Configure an authenticated trust relationship and verify the server identity before %s invokes it.",
+				authReporter,
+				authSource,
 				typedRemediationActor(source, "agent"),
 			)
 		case common.AuthUnknown, common.AuthCustom:
 			step.Description = fmt.Sprintf(
-				"Authentication evidence for %s is %s. Verify the configured scheme and server identity used by %s; no specific authentication upgrade is inferred.",
+				"Authentication evidence for %s is %s (effective source: %s). Verify the configured scheme and server identity used by %s; no specific authentication upgrade is inferred.",
 				typedRemediationActor(target, "MCP server"),
 				method,
+				authSource,
 				typedRemediationActor(source, "agent"),
 			)
 		default:
 			step.Description = fmt.Sprintf(
-				"%s reports %s authentication. Verify that %s validates that identity and that the credential scope is least-privileged.",
-				typedRemediationActor(target, "MCP server"),
+				"%s reports %s authentication (effective source: %s). Verify that %s validates that identity and that the credential scope is least-privileged.",
+				authReporter,
 				method,
+				authSource,
 				typedRemediationActor(source, "agent"),
 			)
 		}
@@ -294,6 +308,26 @@ func remediationForRelation(
 		return RemediationStep{}, false
 	}
 	return step, true
+}
+
+// pathNodeEffectiveAuth reads the materialized tuple atomically. Historical
+// snapshots created before effective-auth materialization fall back to the
+// configured pair, but a partial effective tuple is never mixed with configured
+// evidence.
+func pathNodeEffectiveAuth(properties map[string]any) (string, string, string) {
+	method, methodOK := properties["effective_auth_method"].(string)
+	assurance, assuranceOK := properties["effective_auth_assurance"].(string)
+	evidence, evidenceOK := properties["effective_auth_evidence"].(string)
+	source, sourceOK := properties["effective_auth_source"].(string)
+	if methodOK && method != "" &&
+		assuranceOK && assurance != "" &&
+		evidenceOK && evidence != "" &&
+		sourceOK && (source == "configured" || source == "observed") {
+		return method, evidence, source
+	}
+	method, _ = properties["auth_method"].(string)
+	evidence, _ = properties["auth_evidence"].(string)
+	return method, evidence, "configured"
 }
 
 func actorFromPathNode(node PathNode, fallbackID string) RemediationActor {

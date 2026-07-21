@@ -27,6 +27,12 @@ type A2ACollector struct {
 	trustedKeys      *jose.JSONWebKeySet
 }
 
+type a2aCardResult struct {
+	card *AgentCardData
+	url  string
+	err  error
+}
+
 type Option func(*A2ACollector)
 
 func WithConcurrency(n int) Option {
@@ -107,13 +113,7 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 		verifyOpts.Fetcher = NewJWKSFetcher(c.timeout)
 	}
 
-	type cardResult struct {
-		card *AgentCardData
-		url  string
-		err  error
-	}
-
-	results := make([]cardResult, len(targets))
+	results := make([]a2aCardResult, len(targets))
 	sem := make(chan struct{}, c.concurrency)
 	var wg sync.WaitGroup
 
@@ -126,19 +126,19 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 
 			raw, err := FetchAgentCard(ctx, tgt, authToken, insecure, c.timeout)
 			if err != nil {
-				results[idx] = cardResult{url: tgt, err: err}
+				results[idx] = a2aCardResult{url: tgt, err: err}
 				return
 			}
 			card, err := ParseAgentCard(ctx, raw, engine, verifyOpts)
 			if err != nil {
-				results[idx] = cardResult{url: tgt, err: err}
+				results[idx] = a2aCardResult{url: tgt, err: err}
 				return
 			}
 			if card.URL == "" {
 				card.URL = normalizeBaseURL(tgt)
 			}
 
-			results[idx] = cardResult{card: card, url: tgt}
+			results[idx] = a2aCardResult{card: card, url: tgt}
 		}(i, target)
 	}
 	wg.Wait()
@@ -150,6 +150,7 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 		}
 		return leftScope < rightScope
 	})
+	applyA2AAuthProbes(ctx, results, insecure, c.timeout, c.concurrency)
 
 	data := common.NewIngestData("a2a", scanID)
 	data.Meta.Origin = opts.Origin
@@ -452,6 +453,7 @@ func buildGraph(card *AgentCardData, scanID string) ([]ingest.Node, []ingest.Edg
 	}
 	agentProps["security_schemes"] = schemesData
 	agentProps["security_requirements"] = securityRequirementsProperty(card.SecurityRequirements)
+	applyAuthProbeProperties(agentProps, card.AuthProbe)
 
 	nodes = append(nodes, common.NewNode(agentID, []string{"A2AAgent"}, agentProps))
 

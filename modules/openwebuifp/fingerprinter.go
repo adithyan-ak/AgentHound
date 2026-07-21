@@ -89,13 +89,17 @@ func (f *Fingerprinter) Fingerprint(ctx context.Context, t action.Target) (*acti
 		}
 		props[k] = v
 	}
-	if _, ok := props["auth_method"]; !ok {
-		props["auth_method"] = "none"
-	}
-	auth := common.AssessAuth(fmt.Sprint(props["auth_method"]))
-	props["auth_method"] = string(auth.Method)
-	props["auth_assurance"] = string(auth.Assurance)
-	props["auth_evidence"] = common.AuthEvidenceAnonymousProbeSucceeded
+	// /api/version and /api/config are deliberately public even when Open
+	// WebUI protects chat and admin surfaces. A successful fingerprint probe
+	// therefore proves service identity only; it must not be promoted into an
+	// anonymous-access claim. Privileged access observations belong to the
+	// looter. Omit the auth fields entirely: writing "unknown" here would
+	// conflict with a looter's affirmative auth=false / anonymous observation
+	// when both actions own the same OpenWebUI node.
+	delete(props, "auth_method")
+	delete(props, "auth_assurance")
+	delete(props, "auth_evidence")
+	delete(props, "is_anonymous_loot")
 	props["probe_status"] = string(common.VerificationVerified)
 	props["last_verified_at"] = time.Now().UTC().Format(time.RFC3339)
 
@@ -113,7 +117,7 @@ func (f *Fingerprinter) Fingerprint(ctx context.Context, t action.Target) (*acti
 		Matched:     true,
 		ServiceKind: "openwebui",
 		Version:     res.Properties["version"],
-		AuthMethod:  res.Properties["auth_method"],
+		AuthMethod:  string(common.AuthUnknown),
 		IngestData:  out,
 		Properties:  res.Properties,
 	}, nil

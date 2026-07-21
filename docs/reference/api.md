@@ -244,6 +244,15 @@ omit `observed_auth_*`; orphan positive status, partial/wrongly typed metadata,
 arbitrary status/detail, generic observed tuples, and observed fields on a
 non-positive status return `400 VALIDATION_ERROR`.
 
+Normalization preserves pre-v1 direct-URL MCP artifacts that predate the
+configured/observed split. Only an envelope with `meta.collector=mcp` and a
+concrete reachable HTTP `MCPServer` whose raw tuple is exactly
+`none/unauthenticated/anonymous_probe_succeeded` and whose three
+`observed_auth_*` fields are all absent is migrated. The tuple is copied to
+`observed_auth_*` and marked `auth_observation_compat=pre_v1_raw_mcp`; Config,
+A2A, declaration-only, unknown, unreachable, stdio, reference-only, and partial
+observed near-misses are never migrated.
+
 Campaign submissions add a scenario-specific prevalidation stage immediately
 after generic validation and before normalization, `BeginScan`, graph writes, or
 coverage reconciliation. Both positive and negative artifacts must match their
@@ -406,7 +415,12 @@ Find the bounded minimum-risk-weight path with one deployment-independent
 algorithm. APOC availability does not change results. Missing `risk_weight`
 fails the request; negative or non-finite values also fail. The response
 includes `metadata.algorithm: "bounded-min-weight"` and traversal completeness
-metadata.
+metadata. On a `TRUSTS_SERVER` hop, the returned edge `risk_weight` is the
+derived effective trust weight (falling back to the raw configured weight only
+for a pre-materialization legacy relationship), and the path `weight` sums
+that same returned value. Exact finding-detail path costs follow the same rule
+while retaining both raw `risk_weight` and `effective_risk_weight` in edge
+properties for provenance.
 
 ### Explicit topology traversal *(Origin-gated)*
 
@@ -571,6 +585,12 @@ Like findings, pre-built queries carry an optional `atlas_map` (`[]string`) of [
 `projection` is required on every result. The `shortest-to-database` result
 also requires traversal `metadata`; other pre-built results omit it. An
 unavailable or changing projection returns `409 PROJECTION_CONFLICT`.
+
+Authentication columns in `agents-shell-access`, `no-auth-servers`,
+`no-auth-a2a`, and `chokepoint-servers` are effective post-analysis values.
+Where returned, `auth_source` is `observed` or `configured`; configured and
+observed node properties remain separately available through graph endpoints
+and raw Cypher.
 
 ---
 

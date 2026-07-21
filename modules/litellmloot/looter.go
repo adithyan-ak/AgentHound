@@ -58,7 +58,7 @@ type Looter struct{}
 // aborting on the first 401.
 func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOptions) (*action.LootResult, error) {
 	masterKey := opts.Credentials["master_key"]
-	if masterKey == "" {
+	if strings.TrimSpace(masterKey) == "" {
 		return nil, errors.New("litellm loot: --master-key (or --credential master_key=...) is required")
 	}
 

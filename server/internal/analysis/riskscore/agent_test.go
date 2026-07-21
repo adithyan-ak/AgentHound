@@ -136,9 +136,11 @@ func TestAgentRiskScore_BlastRadiusCapped(t *testing.T) {
 }
 
 func TestAgentRiskScore_AuthPosture(t *testing.T) {
+	var authQuery string
 	mock := &graph.MockGraphDB{
 		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
 			if containsSubstring(cypher, "risk_weight") {
+				authQuery = cypher
 				return []map[string]any{{
 					"rw":                       0.1,
 					"auth_assessment_complete": true,
@@ -159,6 +161,11 @@ func TestAgentRiskScore_AuthPosture(t *testing.T) {
 		assessment.Max != 18 ||
 		len(assessment.UnknownFactors) != 0 {
 		t.Errorf("assessment = %+v, want exact score 18", assessment)
+	}
+	if !containsSubstring(authQuery, "t.effective_risk_weight AS rw") ||
+		!containsSubstring(authQuery, "t.effective_auth_assessment_complete AS auth_assessment_complete") ||
+		containsSubstring(authQuery, "RETURN t.risk_weight AS rw") {
+		t.Fatalf("agent risk did not consume the effective trust assessment:\n%s", authQuery)
 	}
 }
 

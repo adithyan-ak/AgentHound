@@ -11,10 +11,11 @@ import (
 	serveringest "github.com/adithyan-ak/agenthound/server/internal/ingest"
 )
 
-func TestStrictV2ImportedA2ANoneAuthRequiresProbeEvidence(t *testing.T) {
+func TestStrictV3ImportedA2ANoneAuthRequiresProbeEvidence(t *testing.T) {
 	for _, test := range []struct {
 		name          string
 		authEvidence  string
+		observed      bool
 		wantComplete  bool
 		wantMin       float64
 		wantMax       float64
@@ -27,20 +28,35 @@ func TestStrictV2ImportedA2ANoneAuthRequiresProbeEvidence(t *testing.T) {
 			wantUnknownBy: "auth_evidence",
 		},
 		{
-			name:         "successful anonymous probe is exact",
-			authEvidence: "anonymous_probe_succeeded",
+			name:          "legacy raw anonymous evidence lacks runtime provenance",
+			authEvidence:  "anonymous_probe_succeeded",
+			wantMax:       30,
+			wantUnknownBy: "auth_source",
+		},
+		{
+			name:         "successful bounded anonymous probe is exact",
+			authEvidence: "declared_security_scheme",
+			observed:     true,
 			wantComplete: true,
 			wantMin:      30,
 			wantMax:      30,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			data := strictV2A2AImport(test.authEvidence)
+			data := strictV3A2AImport(test.authEvidence, test.observed)
 			if err := serveringest.NewValidator().Validate(data); err != nil {
-				t.Fatalf("strict-v2 A2A import rejected: %v", err)
+				t.Fatalf("strict-v3 A2A import rejected: %v", err)
 			}
 
 			properties := data.Graph.Nodes[0].Properties
+			effectiveEvidence := properties["auth_evidence"]
+			effectiveAssurance := "unknown"
+			effectiveSource := "configured"
+			if test.observed {
+				effectiveEvidence = properties["observed_auth_evidence"]
+				effectiveAssurance = "unauthenticated"
+				effectiveSource = "observed"
+			}
 			db := &graph.MockGraphDB{
 				QueryFunc: func(
 					_ context.Context,
@@ -49,8 +65,10 @@ func TestStrictV2ImportedA2ANoneAuthRequiresProbeEvidence(t *testing.T) {
 				) ([]map[string]any, error) {
 					if strings.Contains(cypher, "auth_method") {
 						return []map[string]any{{
-							"am":            properties["auth_method"],
-							"auth_evidence": properties["auth_evidence"],
+							"am":             properties["auth_method"],
+							"auth_assurance": effectiveAssurance,
+							"auth_evidence":  effectiveEvidence,
+							"auth_source":    effectiveSource,
 						}}, nil
 					}
 					return nil, nil
@@ -82,13 +100,13 @@ func TestStrictV2ImportedA2ANoneAuthRequiresProbeEvidence(t *testing.T) {
 	}
 }
 
-func strictV2A2AImport(authEvidence string) *sdkingest.IngestData {
+func strictV3A2AImport(authEvidence string, observed bool) *sdkingest.IngestData {
 	scope := sdkingest.CanonicalCoverageKey(
 		"a2a",
 		"target",
 		"https://imported.example/a2a",
 	)
-	return &sdkingest.IngestData{
+	data := &sdkingest.IngestData{
 		Meta: sdkingest.IngestMeta{
 			Version: sdkingest.CurrentVersion,
 			Type:    sdkingest.IngestType,
@@ -99,7 +117,7 @@ func strictV2A2AImport(authEvidence string) *sdkingest.IngestData {
 			Collector:        "a2a",
 			CollectorVersion: "import-test",
 			Timestamp:        "2026-07-12T00:00:00Z",
-			ScanID:           "strict-v2-a2a-import",
+			ScanID:           "strict-v3-a2a-import",
 			Collection: &sdkingest.CollectionReport{
 				State:        sdkingest.OutcomeComplete,
 				CoverageKeys: []string{scope},
@@ -137,4 +155,14 @@ func strictV2A2AImport(authEvidence string) *sdkingest.IngestData {
 			Edges: []sdkingest.Edge{},
 		},
 	}
+	if observed {
+		properties := data.Graph.Nodes[0].Properties
+		properties["observed_auth_method"] = "none"
+		properties["observed_auth_assurance"] = "unauthenticated"
+		properties["observed_auth_evidence"] = "anonymous_probe_succeeded"
+		properties["auth_probe_method"] = "get_task_nonexistent"
+		properties["auth_probe_status"] = "anonymous_protocol_access"
+		properties["auth_probe_detail"] = "task_not_found_v1"
+	}
+	return data
 }

@@ -61,6 +61,28 @@ func TestEvidenceGraphMissingWeightHasNullableIncompleteCost(t *testing.T) {
 	}
 }
 
+func TestEvidenceGraphUsesEffectiveTrustWeightWithoutMutatingRawEvidence(t *testing.T) {
+	path, err := testAttackPath(evidenceRow(
+		[]string{"a", "b", "c"},
+		[]map[string]any{
+			evidenceEdge("a", "b", "TRUSTS_SERVER", map[string]any{
+				"risk_weight": 0.7, "effective_risk_weight": 0.1,
+			}),
+			evidenceEdge("b", "c", "PROVIDES_TOOL", map[string]any{"risk_weight": 0.2}),
+		},
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path.Cost.Value == nil || *path.Cost.Value < 0.299 || *path.Cost.Value > 0.301 {
+		t.Fatalf("effective trust weight was not used in evidence sum: %+v", path.Cost)
+	}
+	if path.Edges[0].Properties["risk_weight"] != 0.7 ||
+		path.Edges[0].Properties["effective_risk_weight"] != 0.1 {
+		t.Fatalf("configured/derived relationship evidence was mutated: %+v", path.Edges[0].Properties)
+	}
+}
+
 func TestEvidenceGraphPreservesBranchedAndDisconnectedShapes(t *testing.T) {
 	t.Run("branched", func(t *testing.T) {
 		path, err := testAttackPath(evidenceRow(

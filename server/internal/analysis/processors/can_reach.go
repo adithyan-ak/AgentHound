@@ -13,7 +13,7 @@ import (
 type CanReach struct{}
 
 func (p *CanReach) Name() string           { return "can_reach" }
-func (p *CanReach) Dependencies() []string { return []string{"has_access_to"} }
+func (p *CanReach) Dependencies() []string { return []string{"auth_strength", "has_access_to"} }
 
 func (p *CanReach) Process(ctx context.Context, db graph.GraphDB, scanID string) (graph.ProcessingStats, error) {
 	start := time.Now()
@@ -24,8 +24,8 @@ MATCH (a:AgentInstance)-[ts:TRUSTS_SERVER]->(s:MCPServer)
 MERGE (a)-[e:CAN_REACH]->(r)
 SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true, e.source_collector = 'mcp',
     e.via_server = s.name, e.via_tool = t.name, e.hops = 3, e.risk_weight = 0.1,
-    e.confidence = CASE WHEN ts.risk_weight <= 0.1 THEN 1.0
-                        WHEN ts.risk_weight <= 0.3 THEN 0.8
+    e.confidence = CASE WHEN ts.effective_risk_weight <= 0.1 THEN 1.0
+                        WHEN ts.effective_risk_weight <= 0.3 THEN 0.8
                         ELSE 0.5 END,
     e.evidence_version = 1,
     e.evidence_node_ids = [a.objectid, s.objectid, t.objectid, r.objectid],
@@ -35,19 +35,27 @@ RETURN count(*) AS written`
 	credChainCypher := `
 MATCH (a:AgentInstance)-[trust1:TRUSTS_SERVER]->(s1:MCPServer)-[provides1:PROVIDES_TOOL]->(t1:MCPTool)
 WHERE ANY(cap IN t1.capability_surface WHERE cap IN ['file_read', 'credential_access'])
-MATCH (s2:MCPServer)-[environment:HAS_ENV_VAR]->(c:Credential)
-MATCH (c)<-[uses:USES_CREDENTIAL]-(i:Identity)<-[authenticates:AUTHENTICATES_WITH]-(s2)
+MATCH (s2:MCPServer)-[authenticates:AUTHENTICATES_WITH]->(i:Identity)-[uses:USES_CREDENTIAL]->(c:Credential)
 MATCH (s2)-[provides2:PROVIDES_TOOL]->(t2:MCPTool)-[access:HAS_ACCESS_TO]->(r:MCPResource)
 WHERE s1 <> s2
-  AND coalesce(s1.observed_auth_assurance, s1.auth_assurance) IN ['unauthenticated', 'weak']
-WITH a, s1, t1, s2, c, i, t2, r,
-     trust1, provides1, environment, uses, authenticates, provides2, access
+  AND (
+    (s1.effective_auth_assurance = 'unauthenticated'
+      AND s1.effective_auth_source = 'observed')
+    OR s1.effective_auth_assurance = 'weak'
+  )
+  AND c.value_hash IS NOT NULL AND c.value_hash <> ''
+  AND c.merge_key = 'value_hash'
+  AND c.identity_basis = 'value_hash'
+  AND c.material_status = 'observed'
+  AND c.exposure_status = 'exposed'
+WITH a, s1, t1, s2, i, c, t2, r,
+     trust1, provides1, authenticates, uses, provides2, access
 ORDER BY a.objectid, s1.objectid, t1.objectid, s2.objectid,
-         c.objectid, i.objectid, t2.objectid, r.objectid
+         i.objectid, c.objectid, t2.objectid, r.objectid
 WITH a, r, collect({
-  s1: s1, t1: t1, s2: s2, c: c, i: i, t2: t2,
-  trust1: trust1, provides1: provides1, environment: environment,
-  uses: uses, authenticates: authenticates, provides2: provides2, access: access
+  s1: s1, t1: t1, s2: s2, i: i, c: c, t2: t2,
+  trust1: trust1, provides1: provides1, authenticates: authenticates,
+  uses: uses, provides2: provides2, access: access
 })[0] AS winner
 WHERE NOT EXISTS {
     MATCH (a)-[current:CAN_REACH]->(r)
@@ -59,11 +67,11 @@ SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true, e.sou
     e.evidence_version = 1,
     e.evidence_node_ids = [
       a.objectid, winner.s1.objectid, winner.t1.objectid, winner.s2.objectid,
-      winner.c.objectid, winner.i.objectid, winner.t2.objectid, r.objectid
+      winner.i.objectid, winner.c.objectid, winner.t2.objectid, r.objectid
     ],
     e.evidence_relationship_ids = [
-      id(winner.trust1), id(winner.provides1), id(winner.environment), id(winner.uses),
-      id(winner.authenticates), id(winner.provides2), id(winner.access)
+      id(winner.trust1), id(winner.provides1), id(winner.authenticates),
+      id(winner.uses), id(winner.provides2), id(winner.access)
     ]
 RETURN count(*) AS written`
 

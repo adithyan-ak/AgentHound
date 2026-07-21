@@ -4,9 +4,9 @@ import "github.com/adithyan-ak/agenthound/server/internal/analysis/processors"
 
 func allProcessors() []PostProcessor {
 	return []PostProcessor{
-		// auth_strength is a pre-pass: it materializes a numeric
-		// auth_strength node property that confused_deputy compares in
-		// Cypher. No deps; must run before any processor that reads it.
+		// auth_strength is a pre-pass: it materializes paired effective node
+		// authentication plus effective TRUSTS_SERVER assessment properties.
+		// No deps; must run before any processor that reads those values.
 		&processors.AuthStrength{},
 		&processors.HasAccessTo{},
 		&processors.CanExecute{},

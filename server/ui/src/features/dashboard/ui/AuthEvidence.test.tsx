@@ -47,7 +47,12 @@ describe("dashboard authentication evidence", () => {
       data: [
         node("anonymous", {
           auth_method: "none",
+          auth_assurance: "unauthenticated",
           auth_evidence: "anonymous_probe_succeeded",
+          effective_auth_method: "none",
+          effective_auth_assurance: "unauthenticated",
+          effective_auth_evidence: "anonymous_probe_succeeded",
+          effective_auth_source: "observed",
         }),
         node("stdio-local", {
           auth_method: "none",
@@ -57,13 +62,22 @@ describe("dashboard authentication evidence", () => {
           auth_method: "none",
           auth_evidence: "unknown",
         }),
+        node("observed-anonymous", {
+          auth_method: "unknown",
+          auth_evidence: "unknown",
+          transport: "http",
+          status: "reachable",
+          observed_auth_method: "none",
+          observed_auth_assurance: "unauthenticated",
+          observed_auth_evidence: "anonymous_probe_succeeded",
+        }),
       ],
       isLoading: false,
     } as ReturnType<typeof useNodes>);
 
     render(<AuthCoverage />);
 
-    expect(within(screen.getByText("None").closest("li")!).getByText("1"))
+    expect(within(screen.getByText("None").closest("li")!).getByText("2"))
       .toBeInTheDocument();
     expect(
       within(screen.getByText("Local Process").closest("li")!).getByText("1"),
@@ -81,21 +95,27 @@ describe("dashboard authentication evidence", () => {
             agent_count: 4,
             tool_count: 2,
             auth_method: "none",
+            auth_assurance: "unauthenticated",
             auth_evidence: "anonymous_probe_succeeded",
+            auth_source: "observed",
           },
           {
             server_name: "stdio-local",
             agent_count: 3,
             tool_count: 1,
             auth_method: "none",
+            auth_assurance: "unknown",
             auth_evidence: "local_process",
+            auth_source: "configured",
           },
           {
             server_name: "unverified-none",
             agent_count: 2,
             tool_count: 1,
             auth_method: "none",
+            auth_assurance: "unknown",
             auth_evidence: "unknown",
+            auth_source: "configured",
           },
         ],
       },

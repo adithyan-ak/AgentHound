@@ -46,7 +46,10 @@ WHERE ANY(cap IN t.capability_surface WHERE cap = 'shell_access')
 RETURN a.name AS agent_name,
        s.name AS server_name,
        t.name AS tool_name,
-       s.auth_method AS auth_method,
+       s.effective_auth_method AS auth_method,
+       s.effective_auth_assurance AS auth_assurance,
+       s.effective_auth_evidence AS auth_evidence,
+       s.effective_auth_source AS auth_source,
        a.objectid AS agent_id,
        s.objectid AS server_id,
        t.objectid AS tool_id
@@ -138,24 +141,30 @@ ORDER BY r.confidence DESC`
 
 const CypherNoAuthServers = `
 MATCH (s:MCPServer)
-WHERE s.auth_method = 'none'
-  AND s.auth_evidence = 'anonymous_probe_succeeded'
+WHERE s.effective_auth_source = 'observed'
+  AND s.effective_auth_method = 'none'
+  AND s.effective_auth_assurance = 'unauthenticated'
+  AND s.effective_auth_evidence = 'anonymous_probe_succeeded'
 OPTIONAL MATCH (s)-[:PROVIDES_TOOL]->(t:MCPTool)
 RETURN s.name AS server_name,
        s.endpoint AS endpoint,
        s.transport AS transport,
+       s.effective_auth_source AS auth_source,
        count(t) AS tool_count,
        s.objectid AS server_id
 ORDER BY tool_count DESC`
 
 const CypherNoAuthA2A = `
 MATCH (a:A2AAgent)
-WHERE a.auth_method = 'none'
-  AND a.auth_evidence = 'anonymous_probe_succeeded'
+WHERE a.effective_auth_source = 'observed'
+  AND a.effective_auth_method = 'none'
+  AND a.effective_auth_assurance = 'unauthenticated'
+  AND a.effective_auth_evidence = 'anonymous_probe_succeeded'
 OPTIONAL MATCH (a)-[:ADVERTISES_SKILL]->(sk:A2ASkill)
 RETURN a.name AS agent_name,
        a.url AS url,
        a.provider AS provider,
+       a.effective_auth_source AS auth_source,
        count(sk) AS skill_count,
        a.objectid AS agent_id
 ORDER BY skill_count DESC`
@@ -217,8 +226,8 @@ WHERE c.high_entropy = true
   AND c.material_status = 'observed'
   AND c.exposure_status = 'exposed'
   AND c.merge_key = 'value_hash'
-OPTIONAL MATCH (s:MCPServer)-[:HAS_ENV_VAR]->(c)
-RETURN c.name AS credential_name,
+OPTIONAL MATCH (s:MCPServer)-[:AUTHENTICATES_WITH]->(:Identity)-[:USES_CREDENTIAL]->(c)
+RETURN DISTINCT c.name AS credential_name,
        c.type AS credential_type,
        c.source AS source,
        s.name AS server_name,
@@ -236,8 +245,10 @@ OPTIONAL MATCH (s)-[:PROVIDES_TOOL]->(t:MCPTool)
 RETURN s.name AS server_name,
        agent_count,
        count(t) AS tool_count,
-       s.auth_method AS auth_method,
-       s.auth_evidence AS auth_evidence,
+       s.effective_auth_method AS auth_method,
+       s.effective_auth_assurance AS auth_assurance,
+       s.effective_auth_evidence AS auth_evidence,
+       s.effective_auth_source AS auth_source,
        s.endpoint AS endpoint,
        s.objectid AS server_id
 ORDER BY agent_count DESC, tool_count DESC`

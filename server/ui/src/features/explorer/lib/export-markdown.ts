@@ -18,9 +18,16 @@ const MD_PRIORITY_KEYS = [
   "hostname",
   "transport",
   "protocol_version",
+  "effective_auth_method",
+  "effective_auth_assurance",
+  "effective_auth_evidence",
+  "effective_auth_source",
   "auth_method",
   "auth_assurance",
   "auth_evidence",
+  "observed_auth_method",
+  "observed_auth_assurance",
+  "observed_auth_evidence",
   "is_pinned",
   "scope",
   "exposure_status",
@@ -47,7 +54,8 @@ const MD_PRIORITY_KEYS = [
 /**
  * Format a node as a clean Markdown dump suitable for pasting into a
  * Jira ticket, GitHub issue, or incident report. Priority properties
- * (name, endpoint, auth_method, risk_score, etc.) are listed first in
+ * (name, endpoint, effective auth, configured/observed auth, risk_score, etc.)
+ * are listed first in
  * a stable order; everything else follows alphabetically. Noise fields
  * (hashes, timestamps, scan_id) are skipped.
  */
