@@ -63,7 +63,8 @@ brews:
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     ids: [agenthound]
     name: agenthound
-    description: "AgentHound — lean field collector for AI agent infrastructure"
+    directory: Formula
+    description: "Lean field collector for AI agent infrastructure"
     homepage: "https://github.com/adithyan-ak/agenthound"
     install: |
       bin.install "agenthound"
@@ -76,7 +77,8 @@ brews:
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     ids: [agenthound-server]
     name: agenthound-server
-    description: "AgentHound — single-user server (Neo4j-backed graph + UI)"
+    directory: Formula
+    description: "Single-user Neo4j-backed graph and UI for AgentHound"
     homepage: "https://github.com/adithyan-ak/agenthound"
     install: |
       bin.install "agenthound-server"

@@ -16,11 +16,13 @@ The **collector** (`agenthound`) has zero runtime dependencies -- single static 
 
 ```bash
 brew tap adithyan-ak/agenthound
-brew install agenthound            # collector only
-brew install agenthound-server     # analysis server
+brew install adithyan-ak/agenthound/agenthound            # collector only
+brew install adithyan-ak/agenthound/agenthound-server     # analysis server
 ```
 
-Both formulas are published by GoReleaser on every tagged release. Multi-arch (amd64 + arm64).
+Both formulas are published by GoReleaser on every tagged release. The
+fully-qualified names are required because Homebrew does not automatically
+trust third-party taps. Multi-arch (amd64 + arm64).
 
 ## Docker
 
