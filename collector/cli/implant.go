@@ -1,4 +1,4 @@
-// Package cli — implant.go is the v0.4 entry point for the destructive
+// Package cli — implant.go is the entry point for the destructive
 // implant action.
 //
 // Same safety gates as poison.go: Reverter mandatory, --commit=false

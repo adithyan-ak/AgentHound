@@ -6,8 +6,10 @@ Accepted — 2026-04-25.
 
 ## Context
 
-AgentHound v0.x shipped as a single Go binary. That binary bundled four very
-different responsibilities into one artifact:
+AgentHound's pre-1.0 development tree used a single Go binary. Version 1.0.0 was
+the first public release and already contained the split described by this ADR.
+The development binary bundled four very different responsibilities into one
+artifact:
 
 1. **Field collection** — config-file parsing, MCP SDK enumeration, A2A HTTP
    probing.
@@ -31,7 +33,9 @@ Two problems forced a split:
 A SharpHound/BloodHound-style split addresses both:
 
 - A lean **collector** drops on the target. Static binary, no DB clients,
-  ~9 MiB stripped on linux/amd64. Outputs JSON or uploads it to a server.
+  ~9 MiB stripped on linux/amd64. Outputs JSON for the operator to transfer or
+  explicitly pipe to the server ingest API/CLI; it has no built-in upload or
+  server control channel.
 - A **server** runs on the operator's laptop or on a hardened host they
   fully control. Single user, localhost-bound by default, no auth at the
   application layer.
@@ -56,13 +60,13 @@ Concrete decisions:
   `agenthound-server` at `server/cmd/agenthound-server`. Each is independently
   buildable and shippable.
 - **Public Go SDK.** Ingest request/response types, action interfaces, module
-  registry, and rules engine live under `sdk/`. Stability policy is documented
-  in `sdk/ingest/doc.go` — versions before 1.0 are explicitly unstable.
-- **Self-registering modules.** Each module under `modules/` has a `register.go`
-  that calls `sdk/module.Register()` from `init()`. The collector's
-  `main.go` blank-imports each module to bring it into the binary.
-  Future modules slot in by adding a directory and a blank import, without
-  touching shared code.
+  registry, and rules engine live under `sdk/`. The released ingest and action
+  contracts document their v1 stability policies in their package docs.
+- **Compile-time registration.** Action modules call `sdk/module.Register()`
+  from `init()` and are blank-imported by the collector. Campaign scenarios use
+  `sdk/campaign`; `protoscan` is an engine. Config/MCP/A2A enumeration remains a
+  compatibility path driven by legacy collectors rather than `Enumerator`
+  dispatch.
 - **Auth, RBAC, audit, users, API tokens — deleted.** All gone. The current
   single-user Postgres baseline never creates `users`, `api_tokens`, or
   `audit_log`. `AGENTHOUND_JWT_SECRET`, `AGENTHOUND_ADMIN_PASSWORD`, and
@@ -101,11 +105,12 @@ Negative / accepted:
   Postgres state from before the single-user baseline must be dropped and
   recreated. There is no compatibility migration for the removed
   user/token/audit schema.
-- **Public SDK at `sdk/` is unstable until 1.0.** Type renames, removals,
-  and signature changes are possible across pre-1.0 minor releases.
-  Documented in `sdk/ingest/doc.go`.
+- **The pre-1.0 SDK was unstable.** At the time of this decision, type renames,
+  removals, and signature changes were permitted across development versions.
+  The released ingest and action contracts now document their v1 policies in
+  their package docs.
 - **Operators who need evasion features are on their own.** AgentHound is
-  a transparent assessment tool. See `docs/security.md`.
+  a transparent assessment tool. See `docs/operator/security.md`.
 
 ## Alternatives considered
 

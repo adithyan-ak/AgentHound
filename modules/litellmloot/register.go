@@ -13,7 +13,7 @@ func (*Looter) ID() string            { return "litellm.loot" }
 func (*Looter) Action() action.Action { return action.Loot }
 func (*Looter) Target() string        { return "litellm" }
 func (*Looter) Description() string {
-	return "Extract upstream provider credentials from a LiteLLM gateway via the master key (read-only; GET only)"
+	return "Inventory an observed master key plus masked provider and hashed virtual-key references from a LiteLLM gateway (read-only; GET only)"
 }
 func (*Looter) Version() string     { return "0.2.0-dev" }
 func (*Looter) IsDestructive() bool { return false }

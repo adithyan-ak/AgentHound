@@ -27,7 +27,7 @@ var extractCmd = &cobra.Command{
 	Short: "Extract training signals or derived artifacts from a model (gated)",
 	Long: `Run a registered Extractor against a locally-available artifact.
 
-v0.5 ships one Extractor: embedding-invert — detects fine-tune training
+The embedding-invert Extractor detects fine-tune training
 signals by analyzing statistical outliers in the embedding layer of a
 GGUF weight file. Point --artifact at any GGUF the operator has already
 obtained out-of-band: a blob copied from ~/.ollama/models/blobs/ on a

@@ -1,4 +1,4 @@
-# Open WebUI fingerprint rule (v0.3, v3 shape).
+# Open WebUI fingerprint rule (v3 response shape).
 #
 # Open WebUI is the most-deployed self-hosted ChatGPT-style frontend. It speaks
 # to a backend Ollama (or any OpenAI-compatible API) and stores chat history,

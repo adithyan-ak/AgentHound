@@ -17,7 +17,7 @@ type CredentialInfo struct {
 	AuthMethod common.AuthMethod
 	Value      string // SHA-256 hash by default, actual value only if includeValues=true
 	ValueHash  string // SHA-256 hash of the original raw value, ALWAYS populated.
-	// ValueHash is the cross-collector merge primitive (v0.2). Even
+	// ValueHash is the cross-collector merge primitive. Even
 	// when includeValues=false replaces Value with the same hash, the
 	// LiteLLM Looter (which never sees the hashed form) needs an
 	// independent always-populated field to set on its Credential

@@ -1,4 +1,4 @@
-// Package openwebuiloot implements the v0.4 Open WebUI Looter.
+// Package openwebuiloot implements the Open WebUI Looter.
 //
 // Open WebUI (default port 3000) is the most-deployed self-hosted
 // ChatGPT-style frontend. It proxies to a backend Ollama or any
@@ -213,7 +213,7 @@ type configPosture struct {
 // fetchConfig issues GET /api/config (unauthenticated). Only reads the
 // signup / auth flags — verified stable across all 14 sampled Open
 // WebUI tags plus main. $.ollama.base_url was NEVER present on any
-// version and was removed from this decoder in v0.4.
+// sampled version and is not decoded.
 func fetchConfig(ctx context.Context, client *http.Client, baseURL string) (configPosture, error) {
 	body, err := common.GetJSON(ctx, client, strings.TrimRight(baseURL, "/")+"/api/config", "", 4<<20)
 	if err != nil {

@@ -72,13 +72,12 @@ const (
 // LoadFingerprintBundle reads fingerprint rules from a directory or
 // tar.gz file and returns them. Same-id rules from the bundle WIN over
 // embedded rules — operators can ship a rule fix without cutting a
-// binary release. Used by the v0.3 --rules-bundle CLI flag.
+// binary release. Used by the --rules-bundle CLI flag.
 //
-// Cosign signature verification is the operator's responsibility for
-// v0.3 — the loader does not validate signatures (mandatory verification
-// lands in v0.5 once the release pipeline has cut at least one bundle).
+// Cosign signature verification is the operator's responsibility; the loader
+// does not validate signatures.
 // Operators should run cosign verify-blob against the tarball before
-// pointing AgentHound at it; see docs/rules-bundle.md.
+// pointing AgentHound at it; see docs/operator/rules-bundle.md.
 //
 // path may be:
 //   - a directory containing *.yaml files (each file = one rule)

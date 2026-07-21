@@ -1,11 +1,10 @@
-// Package ollamaloot implements the v0.3 Ollama Looter.
+// Package ollamaloot implements the Ollama Looter.
 //
-// Ollama is the v0.3 anonymous-loot landing point: no auth by default, model
-// inventory + modelfile available via simple GETs. The Looter emits one
+// Ollama commonly exposes anonymous model inventory and modelfiles through
+// read-only HTTP lookups. The Looter emits one
 // :AIModel node per model, joined to the OllamaInstance via a PROVIDES_MODEL
-// edge, with the modelfile's `value_hash` populated so cross-collector chain
-// semantics extend to model artifacts (a leaked fine-tune matches across
-// re-runs and across other collectors that surface the same modelfile).
+// edge, with the modelfile's `value_hash` populated as stable content identity
+// for cross-run comparison. No current post-processor joins AIModel hashes.
 //
 // Probes (GET-only by default — Looters are read-only by contract):
 //
@@ -38,14 +37,11 @@
 //	is preserved here for backward compat with pre-/api/embed Ollama
 //	versions. Migration to /api/embed is deferred.
 //
-// The previous v0.3 --include-weights / --weights-dir surface was
-// removed: it targeted GET /api/blobs/<digest>, an endpoint Ollama's
-// HTTP API does not implement. Only HEAD (existence check) and POST
-// (upload for the create-model flow) are defined on that path — see
-// https://github.com/ollama/ollama/blob/main/docs/api.md — so the flag
-// could never stream weights against a real Ollama. Raw weight
-// extraction from a compromised host still requires filesystem access
-// to ~/.ollama/models/blobs/, which is out of scope for a Looter.
+// Weight-file retrieval is deliberately absent: Ollama's HTTP API defines
+// HEAD (existence check) and POST (upload for the create-model flow) on
+// /api/blobs/<digest>, not a download operation. Raw weight extraction from a
+// compromised host therefore requires filesystem access to
+// ~/.ollama/models/blobs/, which is out of scope for a Looter.
 package ollamaloot
 
 import (
@@ -174,10 +170,9 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 			"modified_at":    tag.ModifiedAt,
 		}
 		if show.Modelfile != "" {
-			// value_hash is the cross-collector merge primitive. A leaked
-			// fine-tune detected via Ollama matches the same modelfile
-			// content discovered through any other collector that
-			// surfaces model artifacts.
+			// value_hash is stable model-content identity for cross-run
+			// comparison. Credential-chain processing does not join AIModel
+			// hashes.
 			props["value_hash"] = common.HashCredentialValue(show.Modelfile)
 			props["modelfile_size_bytes"] = len(show.Modelfile)
 			props["has_system_prompt"] = show.SystemPrompt != ""

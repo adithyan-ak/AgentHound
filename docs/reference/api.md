@@ -51,7 +51,8 @@ All errors return a structured JSON response:
 Error codes: `VALIDATION_ERROR` (400), `FORBIDDEN` (403), `NOT_FOUND`
 (404), `REVISION_CONFLICT` (409), `PROJECTION_CONFLICT` (409),
 `COLLECTION_REALM_MISMATCH` (409), `SERVICE_UNAVAILABLE` (503),
-`STORAGE_BINDING_UNAVAILABLE` (503), `INTERNAL_ERROR` (500). Graph-backed reads
+`STORAGE_BINDING_UNAVAILABLE` (503), `INGEST_FAILED` (500),
+`SCAN_DELETE_CONFLICT` (409), and `INTERNAL_ERROR` (500). Graph-backed reads
 return `PROJECTION_CONFLICT` unless one stable, complete published projection
 is available for the entire read. `error.details.reason` is `absent`,
 `updating`, `incomplete`, or `changed`; clients must retry the whole read
@@ -270,7 +271,7 @@ credential material.
     "version": 3,
     "type": "agenthound-ingest",
     "collector": "mcp",
-    "collector_version": "0.1.0",
+    "collector_version": "1.0.0",
     "timestamp": "2026-07-11T00:00:00Z",
     "scan_id": "scan-abc123",
     "origin": {

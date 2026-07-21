@@ -1,4 +1,4 @@
-// Package instructionpoison implements the v0.4 instruction-file Poisoner.
+// Package instructionpoison implements the instruction-file Poisoner.
 //
 // Threat model. Instruction files (CLAUDE.md, AGENTS.md, .cursorrules,
 // .github/copilot-instructions.md) are read by AI coding assistants at

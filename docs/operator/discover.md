@@ -2,7 +2,7 @@
 
 > **Legal notice.** Probing protocol-shape endpoints (HTTP POST of JSON-RPC `initialize`, GET of `/.well-known/agent-card.json`) on hosts you do not control or do not have written authorization to test is a violation of the Computer Fraud and Abuse Act (US, 18 U.S.C. § 1030) and equivalent statutes (Computer Misuse Act 1990 in the UK; § 202a–c in Germany; comparable laws elsewhere). Treat every public IP target with `--allow-public-targets` the same way you would treat an authenticated red-team operation: paper authorization in hand, IR coordination, and a watermarked engagement.
 
-`agenthound discover <CIDR|host|@file>` is the v0.3 protocol-discovery verb. It is the counterpart to `agenthound scan` (which sweeps a fixed AI-service port set and dispatches per-port fingerprinters). Where `scan` answers "is there a vLLM listening on port 8000?", `discover` answers "is there an MCP server somewhere on this network, on whatever port it happens to bind?" — by issuing the protocol-shape probes that uniquely identify each protocol.
+`agenthound discover <CIDR|host|@file>` is the protocol-discovery command. It is the counterpart to `agenthound scan` (which sweeps a fixed AI-service port set and dispatches per-port fingerprinters). Where `scan` answers "is there a vLLM listening on port 8000?", `discover` asks whether an MCP server or A2A agent is present on the configured discovery ports by issuing protocol-shape probes.
 
 ## Probes
 
@@ -39,7 +39,7 @@ agenthound discover 198.51.100.0/24 \
 
 ## Output
 
-The output file is a standard ingest envelope. `discover` emits raw `:MCPServer` and `:A2AAgent` nodes with `discovered_via: "protoscan"` and the discovered base URL. The full enumeration (tools, resources, prompts for MCP; skills, delegate-to graph for A2A) happens when you re-run `agenthound scan --mcp --url <url>` / `--a2a --target <url>` against the discovered endpoints, OR when the server's downstream `mcp.enumerate` / `a2a.enumerate` modules consume the same envelope.
+The output file is a standard ingest envelope. `discover` emits raw `:MCPServer` and `:A2AAgent` nodes with `discovered_via: "protoscan"` and the discovered base URL. The analysis server ingests those facts but does not enumerate the endpoints. To collect tools, resources, and prompts from MCP or skills and delegation from A2A, rerun the collector with `agenthound scan --mcp --url <url>` or `agenthound scan --a2a --target <url>` against each discovered endpoint and ingest that output.
 
 ```json
 {
@@ -47,7 +47,7 @@ The output file is a standard ingest envelope. `discover` emits raw `:MCPServer`
     "version": 3,
     "type": "agenthound-ingest",
     "collector": "scan",
-    "collector_version": "0.3.0-dev",
+    "collector_version": "1.0.0",
     "timestamp": "2026-07-11T20:00:00Z",
     "scan_id": "...",
     "origin": {
@@ -129,7 +129,7 @@ Ctrl-C (SIGINT) or SIGTERM cancels the probe pool cleanly and writes the endpoin
 
 ## Combining with `scan` and `loot`
 
-The intended sequence for the v0.3 demo arc is:
+The intended workflow is:
 
 ```bash
 # 1. Find AI services (Ollama, LiteLLM, etc.) and fingerprint them.
@@ -138,7 +138,7 @@ agenthound scan 10.0.0.0/24 --output - | agenthound-server ingest -
 # 2. Find MCP servers and A2A agents.
 agenthound discover 10.0.0.0/24 --output - | agenthound-server ingest -
 
-# 3. Loot a known LiteLLM gateway for upstream provider keys.
+# 3. Inventory a known LiteLLM gateway's credential evidence.
 agenthound loot 10.0.0.20:4000 --type litellm --master-key sk-... \
     --engagement-id RTV-2027 --output - | agenthound-server ingest -
 
@@ -147,7 +147,11 @@ agenthound loot 10.0.0.10:11434 --type ollama \
     --engagement-id RTV-2027 --output - | agenthound-server ingest -
 ```
 
-After each ingest the `cross_service_credential_chain` post-processor folds the `value_hash` joins, surfacing `:CAN_REACH` paths from agents to upstream provider credentials via the LiteLLM gateway — the credential-chain finding the demo lab is built around.
+After each ingest the `cross_service_credential_chain` post-processor correlates
+an observed Config credential with the operator-supplied LiteLLM master key by
+`value_hash`. It can then surface `:CAN_REACH` findings to provider or virtual-key
+references exposed by that gateway. Masked/hashed targets remain reference-only;
+the edge does not establish possession of their plaintext.
 
 ## See also
 

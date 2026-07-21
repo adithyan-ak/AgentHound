@@ -16,7 +16,7 @@ func TestCrossServiceCredentialChain_Name(t *testing.T) {
 	}
 }
 
-// TestCrossServiceCredentialChain_Dependencies guards the v0.2 design
+// TestCrossServiceCredentialChain_Dependencies guards the ordering contract
 // decision (resolved during the architect-review pass) that this
 // processor depends on BOTH has_access_to AND can_reach. A future
 // refactor that drops can_reach from the dependency list re-introduces
@@ -69,7 +69,7 @@ func TestCrossServiceCredentialChain_ProcessError(t *testing.T) {
 }
 
 // TestCrossServiceCredentialChain_CypherJoinsOnValueHash guards the
-// load-bearing claim of the v0.2 design: the join predicate is
+// load-bearing claim of the design: the join predicate is
 // c1master.value_hash = c1.value_hash. If a future refactor changes
 // the join to objectid (which would only fire on hand-loaded test
 // fixtures) the credential-chain demo silently breaks. We assert the

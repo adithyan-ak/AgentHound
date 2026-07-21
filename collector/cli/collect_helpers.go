@@ -36,7 +36,8 @@ func writeCollectorOutput(data *ingest.IngestData, outputPath string) error {
 // writeOutputAtomic writes data to path via a temp file in the same directory
 // followed by os.Rename. A SIGINT or crash mid-write cannot leave a half-written
 // file at path. The temp file is chmod'd to 0o600 (POSIX; on NTFS this is a no-op
-// and the file inherits the directory's NTFS ACL — see docs/security.md).
+// and the file inherits the directory's NTFS ACL — see
+// docs/operator/security.md).
 func writeOutputAtomic(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".agenthound-*.json")

@@ -1,4 +1,4 @@
-// Package mcpconfigimplant implements the v0.4 MCP-config Implanter.
+// Package mcpconfigimplant implements the MCP-config Implanter.
 //
 // Threat model. AI-coding-agent clients (Cursor, Claude Code, VS Code,
 // Continue, …) read a JSON MCP config to learn which MCP servers to

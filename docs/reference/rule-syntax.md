@@ -191,11 +191,11 @@ Fingerprint rules describe HTTP probes that identify AI services on the network.
 id: "ollama-api"                   # 3-64 chars, [a-z0-9-]
 name: "Ollama API"
 description: "Identifies Ollama instances via /api/version endpoint."
-version: 2                         # v0.2 fingerprint format
+version: 2                         # Per-rule revision; omitted rules default to 2
 service_kind: OllamaInstance       # Node label for the primary kind
 
 probes:
-  - method: GET|HEAD               # v0.2 restricts to read-only methods
+  - method: GET|HEAD               # Fingerprint probes are read-only
     path: /api/version
     headers:                       # Optional request headers
       Accept: application/json

@@ -229,7 +229,7 @@ func TestEdgeCypherForKinds(t *testing.T) {
 	})
 }
 
-// TestGroupNodesByKindTuple is the v0.2 multi-label regression guard. The
+// TestGroupNodesByKindTuple is the multi-label regression guard. The
 // design (kinds.go: AIService umbrella, schema.go: skip umbrella constraints,
 // writer.go: MERGE on per-kind + SET umbrella) only works if the writer's
 // grouping function produces a separate Cypher template for every distinct

@@ -1,4 +1,4 @@
-// Package litellmfp implements the v0.2 LiteLLM fingerprinter module.
+// Package litellmfp implements the LiteLLM fingerprinter module.
 // It probes a Target's Address (expected shape "host:4000") with
 // GET /health/liveliness and emits a multi-label
 // :LiteLLMGateway:AIService node when the response matches LiteLLM's
@@ -9,9 +9,10 @@
 // dispatcher that loads that YAML, locates it by service_kind, and
 // runs it via sdk/rules.RunFingerprint.
 //
-// LiteLLM is the v0.2 Looter target — once a LiteLLMGateway is in the
+// Once a LiteLLMGateway is in the
 // graph, the operator runs `agenthound loot --type litellm` against it
-// to extract upstream provider keys (Phase 4).
+// to inventory the observed master key, masked provider references, and
+// hashed virtual-key references.
 package litellmfp
 
 import (
@@ -36,8 +37,7 @@ type Fingerprinter struct {
 }
 
 // New loads the LiteLLM fingerprint rule and returns a ready-to-use
-// Fingerprinter. Same shape as Ollama's New(); the duplication is
-// intentional in v0.2 — refactor when a third fingerprinter ships.
+// Fingerprinter.
 func New() (*Fingerprinter, error) {
 	all, err := rules.LoadFingerprints()
 	if err != nil {

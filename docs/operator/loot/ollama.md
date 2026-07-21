@@ -12,7 +12,7 @@ Ollama is the default anonymous-loot target: no authentication by default, model
 
 Each model emits an `:AIModel` node joined to the `:OllamaInstance` via a `PROVIDES_MODEL` edge. Fine-tunes (detected by `SYSTEM` or `ADAPTER` directives in the modelfile) are flagged with `is_finetune: true`.
 
-> **Note on raw weights.** The Ollama HTTP API does not expose a raw-weight download endpoint — `/api/blobs/<digest>` accepts only `HEAD` (existence check) and `POST` (upload for the create-model flow) per the [upstream API docs](https://github.com/ollama/ollama/blob/main/docs/api.md). Raw weight blobs live at `~/.ollama/models/blobs/sha256-<digest>` and require filesystem access on the target host to retrieve. A `--include-weights` flag was shipped in v0.3 based on a misread of that endpoint; it was withdrawn — see the CHANGELOG.
+> **Note on raw weights.** The Ollama HTTP API does not expose a raw-weight download endpoint — `/api/blobs/<digest>` accepts only `HEAD` (existence check) and `POST` (upload for the create-model flow) per the [upstream API docs](https://github.com/ollama/ollama/blob/main/docs/api.md). Raw weight blobs live at `~/.ollama/models/blobs/sha256-<digest>` and require filesystem access on the target host to retrieve. AgentHound therefore has no `--include-weights` flag.
 
 ## Probe levels
 
@@ -27,7 +27,7 @@ Issues `GET /api/tags` for the model list, then `POST /api/show` per model. Desp
 
 Emits per model:
 - `name`, `digest`, `size_bytes`, `family`, `parameters`, `is_finetune`
-- `value_hash` = `SHA-256(modelfile content)` -- the cross-collector merge primitive
+- `value_hash` = `SHA-256(modelfile content)` -- stable model-content identity
 - `has_system_prompt` = boolean
 - `modelfile_size_bytes`
 
@@ -45,7 +45,7 @@ Sets `embedding_capability_confirmed: true|false` on the `OllamaInstance` node.
 
 ## Getting raw weights (out-of-band)
 
-The Looter no longer attempts raw weight extraction — Ollama's HTTP API does not support it. If the engagement needs the actual GGUF weight file (e.g. as input to `agenthound extract --type embedding-invert`), obtain it out-of-band:
+The Looter does not attempt raw weight extraction — Ollama's HTTP API does not support it. If the engagement needs the actual GGUF weight file (e.g. as input to `agenthound extract --type embedding-invert`), obtain it out-of-band:
 
 - **Filesystem access to a compromised host.** Ollama stores weights as content-addressed blobs at `~/.ollama/models/blobs/sha256-<digest>`. `ollama show <model> --modelfile` on the host prints the `FROM` line with the blob's absolute path. `cp` the blob to a `.gguf` filename and any llama.cpp-compatible tool (including `agenthound extract`) loads it directly.
 - **Model registry / HuggingFace.** If the model name matches a public release, the weights are downloadable at source.
@@ -53,10 +53,11 @@ The Looter no longer attempts raw weight extraction — Ollama's HTTP API does n
 
 ## value_hash semantics
 
-When `/api/show` returns a non-empty modelfile, the `AIModel` node carries `value_hash = SHA-256(modelfile_content)`. Models whose `/api/show` returns no modelfile (rare — private, unbuilt, or pre-migration models) omit the property, per the validator contract (`value_hash` is required only on `Credential` nodes; `AIModel` is optional). This serves two purposes:
+When `/api/show` returns a non-empty modelfile, the `AIModel` node carries `value_hash = SHA-256(modelfile_content)`. Models whose `/api/show` returns no modelfile (rare — private, unbuilt, or pre-migration models) omit the property, per the validator contract (`value_hash` is required only on `Credential` nodes; `AIModel` is optional).
 
-1. **Cross-run stability.** The same model on the same Ollama instance produces the same hash across loot runs, enabling diff detection (rug-pull detection for model artifacts).
-2. **Cross-collector joins.** If another collector surfaces the same modelfile content (e.g., a config collector finds a modelfile on disk), the `cross_service_credential_chain` post-processor can join on `value_hash`.
+The hash provides cross-run content stability and supports model-artifact diffing.
+No current post-processor joins `AIModel.value_hash`; in particular,
+`cross_service_credential_chain` matches only `Credential` nodes.
 
 ## Level-2 keep_alive semantics
 

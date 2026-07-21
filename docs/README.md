@@ -15,7 +15,7 @@ The offensive security framework for AI agent infrastructure — run the full re
 - **[Rules Bundles](operator/rules-bundle.md)** — Out-of-band fingerprint rule updates (`--rules-bundle`)
 - **[Protocol Discovery](operator/discover.md)** — Find MCP servers and A2A agents by protocol shape
 - **[Looting](operator/loot/index.md)** — Extract credentials and model artifacts from discovered services
-  - [LiteLLM](operator/loot/litellm.md) — Master key → upstream provider keys
+  - [LiteLLM](operator/loot/litellm.md) — Observed master key, masked provider references, and hashed virtual-key inventory
   - [Ollama](operator/loot/ollama.md) — Model inventory, modelfiles, fine-tune detection
 - **[Offensive Actions](operator/offensive-actions.md)** — Poison tool descriptions, implant configs, revert
 - **[Attack Paths](operator/attack-paths.md)** — Credential chains, cross-protocol pivots, exfiltration routes

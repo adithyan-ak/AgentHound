@@ -7,7 +7,7 @@ paths:
 # Graph Schema Rules
 
 - 23 collector-produced node kinds in AllNodeLabels
-- 18 raw edge kinds + 12 composite = 30 in AllowedEdgeKinds
+- 20 raw edge kinds + 12 composite = 32 in AllowedEdgeKinds
 - AIService is an UmbrellaLabel — skip uniqueness constraint in schema-init
 - All collector and stored properties use canonical snake_case; non-canonical
   keys are rejected before normalization.

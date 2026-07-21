@@ -1,4 +1,4 @@
-// Package embeddinginvert implements the v0.5 embedding-inversion Extractor.
+// Package embeddinginvert implements the embedding-inversion Extractor.
 //
 // GGUF is the binary format used by llama.cpp (and Ollama) for storing
 // quantized LLM weights. This file implements a minimal parser that

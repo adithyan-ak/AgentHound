@@ -1,10 +1,9 @@
 package ingest
 
 // AllowedNodeKinds are the 23 collector-produced node kinds accepted in ingest
-// input. The first 12 are the v0.1 set; the next 8 are per-service AI-service
-// kinds added in v0.2; AIService is the multi-label umbrella every per-service
-// node also carries; AIModel is the v0.3 model-artifact kind; and
-// ExtractedTrainingSignal is the v0.5 extraction-output kind.
+// input. AIService is the multi-label umbrella carried by each concrete
+// AI-service node; AIModel represents a model artifact; and
+// ExtractedTrainingSignal represents extractor output.
 var AllowedNodeKinds = map[string]bool{
 	"MCPServer":               true,
 	"MCPTool":                 true,
@@ -116,9 +115,9 @@ func ConcreteNodeKind(kinds []string) string {
 }
 
 // RawEdgeKinds are the 20 collector-produced edge kinds accepted in ingest
-// input. EXPOSES is reserved in v0.2 for v0.3 fingerprinters; EXPOSES_CREDENTIAL
-// is emitted by the v0.2 LiteLLM Looter; PROVIDES_MODEL is emitted by the v0.3
-// Ollama Looter; EXTRACTED_FROM is emitted by the v0.5 embedding-inversion
+// input. EXPOSES_CREDENTIAL is emitted by credential-producing Looters;
+// PROVIDES_MODEL is emitted by the Ollama Looter; EXTRACTED_FROM is emitted by
+// the embedding-inversion
 // Extractor (AIModel → ExtractedTrainingSignal); INGESTS_UNTRUSTED is emitted by
 // the MCP Collector for tools whose rule-derived source_trust is untrusted;
 // CREDENTIAL_REACH_VERIFIED and PUBLIC_ACCESS_OBSERVED are emitted by the

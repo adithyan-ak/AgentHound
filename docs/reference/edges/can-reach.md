@@ -1,16 +1,23 @@
 # CAN_REACH Edge
 
-The `CAN_REACH` composite edge is AgentHound's primary finding: it proves that an agent (or external A2A caller) can transitively access a resource through the trust graph. This is the edge operators triage first.
+The `CAN_REACH` composite edge is AgentHound's primary reachability finding. It
+records an inferred path or correlation from an agent to a resource or
+credential reference. It is not, by itself, proof of a successful end-to-end
+invocation. An exact credential-reach campaign can upgrade one matching
+agent-to-resource edge to verified evidence.
 
 ---
 
 ## Semantics
 
-```
-(AgentInstance)-[:CAN_REACH]->(MCPResource)
-```
+Current processors emit these endpoint shapes:
 
-Meaning: the source agent has a viable path through trusted servers and their tools to reach the target resource. The agent does not need direct configuration for that resource — the path may traverse credential chains, multiple servers, or even cross-protocol boundaries.
+| Variant | Endpoints | Meaning |
+|---------|-----------|---------|
+| Direct MCP | `AgentInstance -> MCPResource` | Inferred trust/server/tool/resource path |
+| MCP credential chain | `AgentInstance -> MCPResource` | Inferred path through an observed exposed credential used by another server |
+| Cross-protocol host correlation | `A2AAgent -> MCPResource` | 50%-confidence shared-host hypothesis; not an invocation bridge |
+| Cross-service credential chain | `AgentInstance -> Credential` | Reachability to a provider or virtual-key credential record after a master-key correlation; finding evidence determines whether the target is observed material or reference-only |
 
 ---
 
@@ -83,26 +90,47 @@ WHERE ext.effective_auth_assurance = 'unauthenticated'
 This models a runtime-confirmed anonymous A2A agent delegating through a chain
 that lands on the same host as an MCP server — host correlation bridges the
 protocol boundary. A missing auth tuple or configured no-auth claim alone does
-not satisfy the correlation. This is the path class that no single-protocol
-scanner can find.
+not satisfy the correlation. Host co-location remains a hypothesis, not proof
+that the A2A caller invoked the MCP resource.
 
 ---
 
-## Edge Properties
+## Cross-Service Credential Variant
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `scan_id` | string | Scan that created this edge |
-| `last_seen` | datetime | Timestamp of last computation |
-| `is_composite` | bool | Always `true` |
-| `source_collector` | string | Detector provenance: `mcp`, `a2a`, or a processor-owned source such as `cross_service_credential_chain` |
-| `hops` | int | Path length: 3 (direct) or 6 (credential chain) |
-| `via_server` | string | MCP server name in the path |
-| `via_tool` | string | Tool name in the path |
-| `via_credential` | string | Credential name (chain variant only) |
-| `cross_protocol` | bool | True for A2A-to-MCP paths |
-| `confidence` | float | 0.5-1.0 based on auth strength |
-| `risk_weight` | float | 0.1 (constant, used by weighted traversal) |
+The `cross_service_credential_chain` processor correlates an observed Config
+Collector credential with the operator-supplied LiteLLM master key using the
+same canonical `value_hash`. It then emits:
+
+```text
+(AgentInstance)-[:CAN_REACH]->(Credential)
+```
+
+The target is a provider or virtual-key credential record exposed by the same
+gateway. Provider rows are masked identity references and virtual-key rows are
+hashed references, so this edge normally represents reference reachability, not
+possession of usable plaintext. The findings layer upgrades severity and wording
+only when the target independently carries observed, usable material.
+
+---
+
+## Edge Properties by Variant
+
+All variants carry `scan_id`, `last_seen`, `is_composite=true`,
+`source_collector`, `confidence`, `risk_weight`, and exact-witness references
+(`evidence_version`, `evidence_node_ids`, and `evidence_relationship_ids`).
+Variant-specific properties are:
+
+| Variant | Confidence | Properties |
+|---------|------------|------------|
+| Direct MCP | `0.5`, `0.8`, or `1.0` from effective trust weight | `hops=3`, `via_server`, `via_tool` |
+| MCP credential chain | `0.6` | `hops=6`, `via_credential` |
+| Cross-protocol | `0.5` | `cross_protocol=true`, `via_mcp_server`, `via_mcp_tool`, `via_host` |
+| Cross-service credential | `0.95` | `hops=6`, `via_server`, `via_credential`, `via_gateway`, `merge_value_hash`, `upstream_provider`, `evidence_synthetic_edge` |
+
+The findings layer, not the relationship itself, derives presentation fields
+such as `variant` and `evidence.state`. An exact `cred-reach` campaign can set
+`reach_evidence_state=verified`, attach bounded verification metadata, and raise
+one matching resource edge's confidence to `1.0`.
 
 ---
 
@@ -111,8 +139,8 @@ scanner can find.
 1. Sort CAN_REACH findings by target resource sensitivity (critical > high > medium).
 2. Prioritize paths where the agent's trust edge has
    `effective_risk_weight <= 0.1` (runtime-confirmed no auth).
-3. Cross-protocol paths (`cross_protocol = true`) represent novel attack surface — review host co-location.
-4. Credential chain paths indicate lateral movement potential — rotate exposed credentials.
+3. Treat cross-protocol paths (`cross_protocol = true`) as host-correlation hypotheses until validated.
+4. Distinguish observed credential material from masked/hashed references before assigning exposure impact.
 
 ---
 

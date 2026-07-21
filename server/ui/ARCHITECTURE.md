@@ -4,11 +4,9 @@ The UI is organized as a **4-layer feature-sliced architecture**. Each layer may
 only import from layers *below* it. This keeps domain logic out of the shared
 kernel, keeps features independent, and makes the dependency graph acyclic.
 
-> **Status:** Phase 1 (foundation) scaffolds the layers, path aliases, and the
-> lint boundary. Existing code still lives under `src/components`, `src/api`,
-> `src/hooks`, `src/lib`, and `src/store`; it is migrated into these layers in
-> later workstreams. Until a file is moved, it is "unknown" to the boundary
-> linter and unaffected.
+> **Status:** Product code is migrated into the four layers and the import
+> boundary is enforced by ESLint. Entry/test files and static assets outside
+> those layer roots are intentionally not domain elements.
 
 ## The four layers
 
@@ -19,7 +17,8 @@ kernel, keeps features independent, and makes the dependency graph acyclic.
 | **entities** | `src/entities/<x>` · `@entities` | Domain layer: typed view-models and per-entity data access (node, finding, scan, security, edge, rule, graph, ...). Rich models only where real logic exists. |
 | **shared** | `src/shared` · `@shared` | Cross-cutting kernel with **no domain knowledge**: api client, design tokens/theme, UI kit (`primitives`/`layout`/`widgets`/`feedback`), generic libs, global styles. |
 
-`@` continues to resolve to `src` for the unmigrated tree.
+`@` resolves to `src` for entry files, tests, assets, and imports that do not
+need a layer-specific alias.
 
 ## Import-direction rule (enforced)
 

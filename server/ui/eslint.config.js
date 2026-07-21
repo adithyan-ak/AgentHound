@@ -1,10 +1,8 @@
 // Flat ESLint config for the AgentHound UI.
 //
-// Its single job in Phase 1 is to enforce the layered import-direction rule
-// from ARCHITECTURE.md via eslint-plugin-boundaries. We deliberately do NOT
-// enable a broad TypeScript/React ruleset here: the existing src/components
-// tree predates this refactor and a recommended ruleset would flood `npm run
-// lint` with pre-existing-style noise. tsc (`npm run build`) already covers
+// Its single job is to enforce the layered import-direction rule from
+// ARCHITECTURE.md via eslint-plugin-boundaries. We deliberately do not enable a
+// broad TypeScript/React ruleset here; tsc (`npm run build`) covers
 // type/unused-symbol checking. Code-quality rulesets can be layered on later.
 //
 // The four architectural layers (only these are "elements"):
@@ -13,10 +11,9 @@
 //   entities -> may import shared and sibling entities (shared wire types)
 //   shared   -> may import shared only (no upward imports)
 //
-// Files that match none of the element patterns (e.g. the current
-// src/components/*, src/api/*, src/hooks/* trees, or src/main.tsx) are
-// treated as "unknown" and skipped by boundaries/dependencies, so this
-// config reports zero violations on the pre-migration tree.
+// Files outside the four layer roots (for example src/main.tsx, tests, and
+// static assets) are not domain elements and are skipped by
+// boundaries/dependencies.
 //
 // NOTE: eslint-plugin-boundaries v6 renamed `element-types` -> `dependencies`
 // and uses structured selectors ({ from, allow: { to } }) with Handlebars
@@ -39,8 +36,8 @@ export default tseslint.config(
       },
     },
   },
-  // Architecture boundaries, scoped to src. The rule only acts on files that
-  // resolve to a declared element, so unmigrated code is ignored.
+  // Architecture boundaries, scoped to src. The rule acts on files that
+  // resolve to a declared layer element.
   {
     files: ["src/**/*.{ts,tsx}"],
     plugins: { boundaries },
@@ -62,7 +59,7 @@ export default tseslint.config(
         },
       ],
       // Resolve `@/`, `@app/`, `@shared/`, `@entities/`, `@features/` and
-      // relative imports once files start moving in later workstreams.
+      // relative imports.
       "import/resolver": {
         typescript: { project: "tsconfig.json" },
         node: true,

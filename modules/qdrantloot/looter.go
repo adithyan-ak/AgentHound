@@ -1,4 +1,4 @@
-// Package qdrantloot implements the v0.4 Qdrant Looter.
+// Package qdrantloot implements the Qdrant Looter.
 //
 // Qdrant is a vector database commonly fronted by LLM/RAG systems
 // (default port 6333, REST API). By default Qdrant has NO auth, so the

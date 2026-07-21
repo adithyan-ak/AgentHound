@@ -43,7 +43,7 @@ UI's Scan Manager → Import Scan dialog.`,
 		}
 		setupLogger(cfg.LogLevel, quiet, jsonLog)
 
-		// v0.3 — wire the rules-bundle override BEFORE any module's
+		// Wire the rules-bundle override BEFORE any module's
 		// Fingerprint() call. rules.SetBundleOverridePath is a
 		// process-global so subsequent rules.LoadFingerprints() reads
 		// inside fingerprinter modules see the merged set transparently.

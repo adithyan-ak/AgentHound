@@ -1,4 +1,4 @@
-// Package qdrantfp implements the v0.4 Qdrant fingerprinter module.
+// Package qdrantfp implements the Qdrant fingerprinter module.
 // Probe semantics live in sdk/rules/builtin/fingerprints/qdrant.yaml.
 package qdrantfp
 

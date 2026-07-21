@@ -171,10 +171,16 @@ All probe matchers are conjunctive (ALL must pass). Multiple probes are also con
 
 ```bash
 agenthound rules validate sdk/rules/builtin/your-rule.yaml
-agenthound rules validate sdk/rules/builtin/fingerprints/your-fp.yaml
 ```
 
-Checks: ID format, required fields, regex compilation, matcher type validity, probe method restrictions (GET/HEAD only).
+The CLI validator accepts the text-detection schema only. It checks ID format,
+required fields, regex compilation, and matcher validity. It does not validate
+fingerprint YAML. Fingerprint rules are validated at load time by
+`rules.ValidateFingerprint`; for built-ins, run:
+
+```bash
+go test ./sdk/rules -run 'TestValidateFingerprint|TestLoadFingerprints_EmbeddedRulesValid'
+```
 
 ### Test rules
 
@@ -214,7 +220,13 @@ tests:
     description: "benign reference to instructions"
 ```
 
-The test runner (`sdk/rules/builtin_tests_helper_test.go`) loads these automatically and validates them against the compiled rule.
+The Go test helper (`sdk/rules/builtin_tests_helper_test.go`) loads these
+automatically and validates them against the compiled rule. The runtime CLI does
+not load this directory. Run the shipped fixtures with:
+
+```bash
+go test ./sdk/rules -run TestBuiltinRules_AllPassInlineTests
+```
 
 ## Checklist
 

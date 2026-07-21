@@ -8,7 +8,7 @@ The fundamental traversal pattern:
 Agent → Server → Tool → Resource
 ```
 
-An attacker (or a compromised agent) moves along edge direction to escalate access. Shortest-path and weighted-path queries over this graph surface attack paths that cross protocol boundaries — including MCP-to-A2A paths that single-protocol scanners cannot see.
+An attacker (or a compromised agent) moves along edge direction to escalate access. Shortest-path and weighted-path queries over this graph surface attack paths that cross protocol boundaries — including A2A-to-MCP shared-host correlations that single-protocol scanners cannot see.
 
 ---
 
@@ -27,7 +27,7 @@ These are the node kinds accepted in ingest input (`sdk/ingest.AllowedNodeKinds`
 | `A2AAgent` | A2A | `name`, `description`, `url`, `provider`, `version`, `card_schema_version`, `card_present_fields`, `card_conformant`, `card_conformance_errors`, ordered `interfaces`, `protocol_versions`, `capabilities`, `security_schemes`, OR-of-AND `security_requirements`, configured `auth_method`/`auth_assurance`/`auth_evidence`, bounded read-only `auth_probe_method`/`auth_probe_status`/`auth_probe_detail` diagnostics and exact-positive `observed_auth_method`/`observed_auth_assurance`/`observed_auth_evidence`, derived paired `effective_auth_method`/`effective_auth_assurance`/`effective_auth_evidence`/`effective_auth_source`, `auth_strength` (numeric only when known), `is_https`, `is_signed`, `signature_verification_status`, `signature_key_source`, `signature_key_trust`, `card_hash` |
 | `A2ASkill` | A2A | `id`, `name`, `description`, `input_modes`, `output_modes`, `security_requirements`, `conformant`, `conformance_errors`, `description_hash`, `has_injection_patterns` |
 | `AgentInstance` | Config | `name`, `framework`, `config_path` |
-| `Identity` | Config + MCP | `type` (none/apiKey/oauth/bearer/mtls), server-identity `scope`, `is_static` |
+| `Identity` | Config + A2A | `type` (none/apiKey/oauth/bearer/mtls), server-identity `scope`, `is_static` |
 | `Credential` | Config + LiteLLM/Open WebUI Looters | `type`, `name`, `source`, Config `location` (`env`, `header`, `arg:<index>`, or redacted URL component), required `merge_key` (`value_hash`/`identity`), `identity_basis` (`value_hash`/`provider_name`/`metadata`/`unknown`), `material_status` (`observed`/`masked`/`hashed`/`unobserved`/`unknown`), `exposure_status` (`exposed`/`not_observed`/`unknown`), `high_entropy`, `format`, `value_hash`, `blast_radius` |
 | `Host` | Config + A2A + MCP | `hostname`, `ip`, `scope` (`local`/`private`/`public`/`unknown`) |
 | `ConfigFile` | Config | `path`, sorted `clients`, singular `client` only for one applicable client, unique enabled `server_count` |
@@ -280,7 +280,12 @@ scope per fact using opaque canonical keys such as `mcp:target:sha256:...`,
 `a2a:target:sha256:...`, and `config:path:sha256:...`. The server does not
 infer ownership.
 
-### Edge Properties (all edges carry these)
+### Common Edge Properties
+
+Collector constructors and post-processors normally populate the following
+base fields. The ingest edge model itself is extensible, and `evidence` is not a
+universal property: emitters add structured evidence only where their edge
+contract defines it.
 
 | Property | Type | Description |
 |----------|------|-------------|
@@ -289,7 +294,10 @@ infer ownership.
 | `confidence` | float64 | 0.0–1.0 confidence score |
 | `risk_weight` | float64 | Lower = easier to exploit (used by weighted traversal) |
 | `is_composite` | bool | True for post-processed edges |
-| `evidence` | map[string]any | Structured evidence: `endpoint`, `source`, `engagement_id`, and edge-specific keys (e.g. `digest` for `PROVIDES_MODEL`, `backend_url` for `EXPOSES`, `model_name`/`model_version` for MLflow `PROVIDES_RESOURCE`, `collection`/`point_id` for Qdrant `PROVIDES_RESOURCE`) |
+
+Raw edges that carry an `evidence` map define its keys per edge, for example
+`endpoint`, `source`, or `engagement_id`. Do not assume the map exists on an
+arbitrary relationship.
 
 Composite edges additionally carry `source_collector` (`mcp`, `a2a`, `config`,
 or a processor-owned source such as `cross_service_credential_chain`) as
@@ -487,22 +495,10 @@ Processors run in strict dependency order. A processor may only read edges produ
 
 ### Edge Risk Weights
 
-Lower weight = easier to exploit = higher risk. Used by bounded weighted-path queries.
-
-| Edge | Weight | Condition |
-|------|--------|-----------|
-| `TRUSTS_SERVER` | 0.1 | configured no-auth, or exact reachable observed `none/unauthenticated/anonymous_probe_succeeded` |
-| `TRUSTS_SERVER` | 0.3 | configured auth_method = apiKey |
-| `TRUSTS_SERVER` | 0.5 | configured auth_method = bearer |
-| `TRUSTS_SERVER` | 0.7 | configured auth_method = oauth |
-| `TRUSTS_SERVER` | 0.9 | configured auth_method = mtls |
-| `PROVIDES_TOOL` | 0.1 | Always (tools are always available once trusted) |
-| `HAS_ACCESS_TO` | 0.2 | — |
-| `CAN_EXECUTE` | 0.1 | — |
-| `DELEGATES_TO` | 0.1 | auth_method = none |
-| `DELEGATES_TO` | 0.5 | authenticated |
-| `SHADOWS` | 0.4 | — |
-| `CAN_IMPERSONATE` | 0.6 | — |
+Lower weight means easier traversal and therefore higher risk. The complete,
+canonical table—including Basic, OIDC, unknown/custom authentication and
+resource/prompt edges—is maintained in
+[Risk Scoring](risk-scoring.md#edge-risk-weights).
 
 ### Node Risk Scores (0–100)
 
@@ -575,7 +571,7 @@ New modules emit nodes and edges via the `sdk/ingest` wire format:
     "version": 3,
     "type": "agenthound-ingest",
     "collector": "mcp|a2a|config|scan",
-    "collector_version": "0.1.0",
+    "collector_version": "1.0.0",
     "timestamp": "2025-01-15T10:30:00Z",
     "scan_id": "scan-abc123",
     "origin": {

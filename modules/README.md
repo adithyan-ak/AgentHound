@@ -1,8 +1,8 @@
 # AgentHound modules
 
-Each subdirectory implements one or more `sdk/action` interfaces and self-registers
-with `sdk/module` via `init()`. The collector binary (`collector/cmd/agenthound`)
-blank-imports each module package so registration happens at startup:
+Most subdirectories implement an `sdk/action` interface and self-register with
+`sdk/module` via `init()`. The collector binary (`collector/cmd/agenthound`)
+blank-imports those packages so registration happens at startup:
 
     import (
         _ "github.com/adithyan-ak/agenthound/modules/mcp"
@@ -10,14 +10,26 @@ blank-imports each module package so registration happens at startup:
         _ "github.com/adithyan-ak/agenthound/modules/config"
     )
 
-## Adding a new module
+The current exceptions are intentional:
+
+- `config`, `mcp`, and `a2a` register compatibility metadata but their legacy
+  collectors, not `sdk/action.Enumerator`, drive enumeration.
+- `credreach` and `mcproundtrip` register with `sdk/campaign`.
+- `protoscan` is a discovery engine, not an `sdk/module` registration.
+
+## Adding a new action module
 
 1. Create `modules/<name>/`.
-2. Implement an `sdk/action` interface (Enumerator, Fingerprinter, Looter, ...).
+2. Implement a CLI-dispatched `sdk/action` interface (Fingerprinter, Looter,
+   Extractor, Poisoner, Implanter, ...). `Enumerator` is not currently
+   dispatched as a third-party extension point.
 3. Add `register.go`:
 
        func init() { module.Register(&<Name>{}) }
 
 4. Add the blank-import line to `collector/cmd/agenthound/main.go`.
+5. Add the module package and any new dependency packages to
+   `scripts/collector-allowlist.txt`.
 
-That's it — no plugin loading, no runtime DLLs. Compile-time registration only.
+There is no runtime plugin loading or DLL mechanism; registration is compiled
+into the collector.

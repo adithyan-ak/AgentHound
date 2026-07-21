@@ -12,9 +12,9 @@ AgentHound is an offensive security framework for AI agent infrastructure. It ru
    |  scan / discover /    |  drag-drop   |  serve / ingest / query         |
    |  loot / extract /     |              |  +---------------------------+  |
    |  poison / implant /   |              |  |    API Server (chi/v5)    |  |
-   |  revert (+ rules)     |              |  | /api/v1/* — read=open,    |  |
-   +-----------------------+              |  |  mutate=Origin allowlist  |  |
-                                          |  |  +---------------------+  |  |
+   |  revert / campaign    |              |  | /api/v1/* — read=open,    |  |
+   |  (+ rules)            |              |  |  mutate=Origin allowlist  |  |
+   +-----------------------+              |  |  +---------------------+  |  |
                                           |  |  | Embedded React SPA  |  |  |
                                           |  |  | (go:embed)          |  |  |
                                           |  +--+----+----------+----+--+  |
@@ -77,9 +77,9 @@ scan --config         scan --mcp --url <url>           scan --a2a --target <url>
 | A2AAgent | A2A | Agent card: versioned conformance, ordered interfaces, OR-of-AND auth, delegation, signature validity/key trust |
 | A2ASkill | A2A | Individual skill with input/output modes and independent conformance |
 | AgentInstance | Config | Client instance (Claude, Cursor, etc.) |
-| Identity | Config + MCP | Auth identity (none/apiKey/oauth/bearer/mtls) |
-| Credential | Config | Credential reference with entropy analysis |
-| Host | Config + A2A | Hostname or IP with network classification |
+| Identity | Config + A2A | Auth identity (none/apiKey/oauth/bearer/mtls) |
+| Credential | Config + LiteLLM/Open WebUI Looters | Observed credential material or an explicitly masked/hashed reference |
+| Host | Config + A2A + MCP | Hostname or IP with network classification |
 | ConfigFile | Config | Parsed configuration file |
 | InstructionFile | Config | Agent instruction file with poisoning signals |
 | OllamaInstance | Network scan + Ollama fingerprinter | Ollama service endpoint and anonymous loot posture |
@@ -122,7 +122,10 @@ CREDENTIAL_REACH_VERIFIED, PUBLIC_ACCESS_OBSERVED.
 | 11 | CONFUSED_DEPUTY | Weakly-authed agent delegates to a strongly-authed one |
 | 12 | POISONS_CONTEXT | Injection-bearing tool poisons context driving a high-capability tool |
 
-All edges carry: `scan_id`, `last_seen`, `confidence`, `risk_weight`, `is_composite`, `evidence`.
+Edge constructors and processors normally populate `scan_id`, `last_seen`,
+`confidence`, `risk_weight`, and `is_composite`. Structured `evidence` is
+edge-specific, not universal. Finding-producing composite edges use bounded
+`evidence_*` witness references that are persisted into finding snapshots.
 
 ## Three Collectors
 

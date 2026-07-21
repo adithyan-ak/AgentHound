@@ -25,12 +25,10 @@ type Fingerprinter interface {
 // or matcher execution failure) and lifecycle-aware callers must treat the
 // corresponding coverage as incomplete.
 //
-// IngestData carries the node(s) and edge(s) the fingerprinter wants
-// merged into the scan output. v0.2 fingerprinters emit at most one
-// node — the per-service multi-labeled :ServiceKind:AIService node —
-// plus zero edges. Future fingerprinters that discover additional
-// structure (e.g. Open WebUI → Ollama backend) will emit edges via
-// IngestData as well.
+// IngestData carries the nodes and edges the fingerprinter wants merged into
+// the scan output. Current service fingerprinters emit a per-service,
+// multi-labeled :ServiceKind:AIService node and may emit additional observed
+// structure through the same graph payload.
 //
 // Properties duplicates the IngestData node properties for caller
 // convenience (e.g. logging, the scanner's stderr summary). Treat

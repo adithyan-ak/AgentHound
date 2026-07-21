@@ -21,7 +21,7 @@ var indexDefs = []struct{ Label, Property string }{
 	{"MCPServer", "is_pinned"},
 	{"A2AAgent", "is_signed"},
 	{"InstructionFile", "type"},
-	// v0.2 — AIService umbrella label gets indexes only (no uniqueness
+	// AIService umbrella label gets indexes only (no uniqueness
 	// constraint, per ingest.UmbrellaLabels). These power generic
 	// post-processors that span all AI service kinds.
 	{"AIService", "endpoint"},

@@ -1,4 +1,4 @@
-// Package module — stateful.go declares the v0.4 StatefulModule sidecar
+// Package module — stateful.go declares the StatefulModule sidecar
 // interface. Modules that produce per-engagement state (Poisoner receipts,
 // Implanter receipts) implement it so `agenthound revert <engagement-id>`
 // can walk every module's state directory, read the receipts matching the
@@ -17,8 +17,8 @@
 // Why a sidecar instead of a Module field: same reason FlagsModule is a
 // sidecar — the vast majority of modules ship no per-engagement state
 // (Fingerprinter, Looter). Pushing this onto Module would force every
-// module to implement no-ops. Sidecar lets V4-Phase 1's Poisoner adopt
-// it cleanly without touching every existing collector.
+// module to implement no-ops. The sidecar lets destructive modules adopt it
+// without touching every existing collector.
 package module
 
 import (

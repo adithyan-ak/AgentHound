@@ -17,7 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// FingerprintRule is the v0.2 shape for AI-service fingerprinting rules.
+// FingerprintRule is the schema for AI-service fingerprinting rules.
 // It is a sibling of the v1 Rule type (which targets text-field matching
 // inside the existing collectors): a fingerprint rule describes an HTTP
 // probe sequence and a set of matchers that classify the response. When
@@ -40,11 +40,8 @@ type FingerprintRule struct {
 }
 
 // FingerprintProbe is one HTTP request and the matchers that classify its
-// response. A rule may have multiple probes; ALL probes must succeed for
-// the rule to match (conjunction). v0.2 only ships single-probe rules
-// (Ollama: GET /api/version; LiteLLM: GET /health/liveliness); the
-// multi-probe path exists for future fingerprinters that need stronger
-// disambiguation.
+// response. A rule may have multiple probes; ALL probes must succeed for the
+// rule to match (conjunction).
 type FingerprintProbe struct {
 	Method   string             `yaml:"method"`
 	Path     string             `yaml:"path"`
@@ -75,9 +72,9 @@ type FingerprintProbe struct {
 //     in the response body.
 //   - json_path: matches if extracting JSONPath at Path from the body
 //     yields a value that satisfies the embedded comparison
-//     (Equals/Regex/Exists). v0.2 supports a tiny JSONPath subset:
+//     (Equals/Regex/Exists). The supported JSONPath subset is:
 //     "$.field" and "$.field.subfield" only — no array indices, no
-//     filters. Adequate for the v0.2 fingerprints; extend later as needed.
+//     filters.
 type FingerprintMatch struct {
 	Type            string `yaml:"type"`
 	StatusCode      int    `yaml:"status_code,omitempty"`
@@ -96,13 +93,11 @@ type FingerprintMatch struct {
 // the rule matches. NodeKinds is multi-label: the first entry is the
 // per-service primary label (e.g. "OllamaInstance") and subsequent
 // entries are umbrella labels (typically just "AIService"). The writer
-// MERGEs on the primary label and SETs the umbrellas (Phase 0
-// semantics).
+// MERGEs on the primary label and SETs the umbrellas.
 //
 // Properties is a static template; values may reference the special
 // "{capture:NAME}" placeholder which is replaced with the value the
-// probe captured under that name. v0.2 keeps this simple — no
-// recursive templating.
+// probe captured under that name. Templates are not recursive.
 type FingerprintEmit struct {
 	NodeKinds  []string          `yaml:"node_kinds"`
 	Properties map[string]string `yaml:"properties,omitempty"`
@@ -124,7 +119,7 @@ type FingerprintResult struct {
 // and returns the parsed rules. The loader skips files that fail to
 // parse (logging is the caller's job).
 //
-// v0.3+: when the process-global bundle override is set via
+// When the process-global bundle override is set via
 // SetBundleOverridePath (CLI --rules-bundle), bundle rules are merged
 // over the embedded set with same-id rules from the bundle winning.
 // See sdk/rules/bundle.go for the merge primitives.
@@ -232,7 +227,7 @@ func ValidateFingerprint(r FingerprintRule) []ValidationError {
 			errs = append(errs, ValidationError{Field: fmt.Sprintf("probes[%d].method", i), Message: "must not be empty"})
 		}
 		if p.Method != "GET" && p.Method != "HEAD" {
-			errs = append(errs, ValidationError{Field: fmt.Sprintf("probes[%d].method", i), Message: "v0.2 only supports GET / HEAD probes (looter contract is read-only)"})
+			errs = append(errs, ValidationError{Field: fmt.Sprintf("probes[%d].method", i), Message: "fingerprint probes support GET / HEAD only"})
 		}
 		if p.Path == "" {
 			errs = append(errs, ValidationError{Field: fmt.Sprintf("probes[%d].path", i), Message: "must not be empty"})
@@ -521,7 +516,7 @@ func statusInRange(code int, rangeStr string) bool {
 }
 
 // jsonPathExtract extracts a value from JSON-encoded body at the
-// supplied path. v0.2 supports a minimal subset:
+// supplied path. The supported subset is:
 //   - "$" → the whole body parsed as a JSON value, stringified
 //   - "$.field"
 //   - "$.field.subfield"
@@ -617,7 +612,7 @@ func resolveProperties(template, captures map[string]string) map[string]string {
 
 // DefaultFingerprintHTTPClient builds the *http.Client fingerprinters use
 // against AI-service targets. The timeout matches the scanner's per-host
-// budget; redirects are blocked because every supported v0.2 service
+// budget; redirects are blocked because every supported service
 // fingerprints on its own first-hop endpoint.
 func DefaultFingerprintHTTPClient(timeout time.Duration) *http.Client {
 	if timeout <= 0 {

@@ -22,7 +22,7 @@ export const NODE_KIND_COLORS = {
   // node-styles.ts kinds[0] semantics); the umbrella :AIService stays
   // on the node as a multi-label companion so unified queries can match
   // (s:AIService) without enumerating per-kind labels. Every per-service
-  // color is checked against the v0.1 palette above for visual distinctness
+  // color is checked against the base palette above for visual distinctness
   // — the umbrella :AIService color is the fallback only when the
   // per-kind dispatch returns nothing.
   OllamaInstance: "#FF7043",     // orange-red — distinct from MCPTool amber
@@ -34,7 +34,7 @@ export const NODE_KIND_COLORS = {
   JupyterServer: "#F57C00",      // deep orange — distinct from MCPPrompt #FB923C (orange-400)
   LangServeApp: "#9CCC65",       // chartreuse — distinct from AIService purple AND OpenWebUI green
   OpenWebUIInstance: "#66BB6A",  // green — chat-UI identity
-  // v0.3 model-artifact node — emitted by the Ollama Looter (one per /api/tags
+  // Model-artifact node — emitted by the Ollama Looter (one per /api/tags
   // entry, properties from /api/show). Deep purple chosen because it sits next
   // to AIService #7E57C2 and A2AAgent #A855F7 in hue but is materially darker,
   // so the explorer renders model artifacts as the "weight" beneath their AI

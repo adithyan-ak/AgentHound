@@ -142,7 +142,7 @@ func isPrivate(host string) bool {
 // 169.254.0.0/16 or IPv6 fe80::/10. Link-local multicast addresses
 // (224.0.0.0/24, ff02::/16) are reported by isMulticast instead so the two
 // flags stay disjoint. The AWS/Azure/GCP metadata literal 169.254.169.254
-// is classified as private (preserved from v0.1).
+// is classified as private.
 func isLinkLocal(host string) bool {
 	if host == "169.254.169.254" {
 		return false

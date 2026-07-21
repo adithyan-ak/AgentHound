@@ -1,4 +1,4 @@
-// Package openwebuifp implements the v0.3 Open WebUI fingerprinter module.
+// Package openwebuifp implements the Open WebUI fingerprinter module.
 //
 // Open WebUI is the most-deployed self-hosted ChatGPT-style frontend; it
 // proxies requests to a backend Ollama (or any OpenAI-compatible API). The
