@@ -161,10 +161,12 @@ unrelated collection vantage points. The IDs are provenance, not credentials.
 Prefer a reproducible, pinned install? Every release is cosign-signed with an SBOM:
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/v0.9.0/install.sh | sh
+curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/v1.0.0/install.sh | sh
 ```
 
-Also available via Homebrew (`brew install agenthound agenthound-server`), `go install`, and signed release binaries - see the [installation guide](https://docs.agenthound.io/getting-started/install/).
+Also available via Homebrew (`brew tap adithyan-ak/agenthound`, then
+`brew install adithyan-ak/agenthound/agenthound adithyan-ak/agenthound/agenthound-server`),
+`go install`, and signed release binaries - see the [installation guide](https://docs.agenthound.io/getting-started/install/).
 
 <p align="center">
   <img src="docs/readme-assets/agenthound-dashboard.png" alt="AgentHound dashboard" width="900">

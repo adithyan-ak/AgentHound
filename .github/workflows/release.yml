@@ -3,6 +3,14 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # A manual run executes only the publishing preflight. It proves that the
+  # Homebrew tap token can open the tap's Git receive endpoint without
+  # creating a commit, tag, branch, release, package, or formula update.
+  workflow_dispatch:
+
+concurrency:
+  group: agenthound-release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -10,7 +18,46 @@ permissions:
   id-token: write  # required for cosign keyless OIDC signing
 
 jobs:
+  publishing-preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Verify release tag and Homebrew tap access
+        env:
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            ./scripts/version-check.sh
+          fi
+
+          if [[ -z "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]]; then
+            echo "HOMEBREW_TAP_GITHUB_TOKEN is not configured" >&2
+            exit 1
+          fi
+
+          tap_url="https://github.com/adithyan-ak/homebrew-agenthound.git"
+          auth_header="$(printf 'x-access-token:%s' "${HOMEBREW_TAP_GITHUB_TOKEN}" | base64 | tr -d '\n')"
+          tap_sha="$(git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+            ls-remote "${tap_url}" refs/heads/main | awk '{print $1}')"
+
+          if [[ ! "${tap_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve the Homebrew tap's main branch with the configured token" >&2
+            exit 1
+          fi
+
+          git fetch --quiet "${tap_url}" "${tap_sha}"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+            push --dry-run "${tap_url}" "${tap_sha}:refs/heads/main"
+
   release:
+    needs: publishing-preflight
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -56,8 +103,37 @@ jobs:
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94  # v7.2.3
         with:
-          version: '~> v2'
+          version: 'v2.15.4'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+      - name: Verify published release surfaces
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          asset_count="$(gh release view "${tag}" --json assets --jq '.assets | length')"
+          if [[ "${asset_count}" != "26" ]]; then
+            echo "Expected 26 release assets, found ${asset_count}" >&2
+            exit 1
+          fi
+
+          for formula in agenthound agenthound-server; do
+            formula_body="$(GH_TOKEN="${HOMEBREW_TAP_GITHUB_TOKEN}" gh api \
+              -H 'Accept: application/vnd.github.raw+json' \
+              "repos/adithyan-ak/homebrew-agenthound/contents/Formula/${formula}.rb")"
+            grep -Fq "version \"${version}\"" <<<"${formula_body}"
+          done
+
+          for image in agenthound agenthound-server; do
+            manifest="$(docker buildx imagetools inspect "ghcr.io/adithyan-ak/${image}:${version}")"
+            grep -Fq 'linux/amd64' <<<"${manifest}"
+            grep -Fq 'linux/arm64' <<<"${manifest}"
+          done
