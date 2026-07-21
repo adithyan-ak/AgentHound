@@ -3,6 +3,8 @@ and (.meta.extra.partial_errors | length) == 0
 and (.graph.nodes | any(
   (.kinds | index("MLflowServer")) and
   .properties.endpoint == "http://mlflow:5000" and
+  .properties.loot_observed == true and
+  (.properties | has("discovered_via") | not) and
   .properties.experiment_count == 2 and
   .properties.total_runs == 1 and
   .properties.registered_model_count == 1 and

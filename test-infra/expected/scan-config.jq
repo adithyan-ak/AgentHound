@@ -27,22 +27,45 @@ and ([.graph.nodes[] | select(.kinds | index("InstructionFile")) | .properties.p
     "/root/projects/example/AGENTS.md",
     "/root/projects/example/CLAUDE.md"
   ] | sort)
-and ([.graph.nodes[] | select(.kinds | index("MCPServer")) | .properties.endpoint] | unique | length) == 4
-and ([.graph.nodes[] | select(.kinds | index("MCPServer")) | .properties.endpoint]
-  | index("/usr/local/bin/mcp-server-everything") != null)
+and ([.graph.nodes[] | select(
+  (.kinds | index("MCPServer")) and .properties.transport == "http"
+) | .properties.endpoint] | unique | length) == 4
+and (.graph.nodes | any(
+  (.kinds | index("MCPServer")) and
+  .properties.transport == "stdio" and
+  .properties.command == "/usr/local/bin/mcp-server-everything" and
+  (.properties | has("endpoint") | not)
+))
 and ([.graph.nodes[] | select(.kinds | index("MCPServer")) | .properties.endpoint]
   | index("http://mcp-sse:3001/sse") != null)
 and ([.graph.nodes[] | select(.kinds | index("MCPServer")) | .properties.endpoint]
   | index("http://mcp-streamable:3001/mcp") != null)
+and ([.graph.nodes[] | select(.kinds | index("MCPServer")) | .properties.endpoint]
+  | index("http://mcp-cross-service-gate:3003/mcp") != null)
 and (.graph.nodes | any(
   (.kinds | index("MCPServer")) and
+  .properties.transport == "http" and
   (.properties.endpoint | test("^http://contextforge:4444/servers/[0-9a-f-]+/mcp$"))
 ))
 and (.graph.nodes | any(
   (.kinds | index("Credential")) and
+  .properties.name == "Authorization" and
+  .properties.location == "header" and
+  .properties.value_hash == "18d8fb72d7e03d68e47afbf4e571b96829f265d3dbb86c558f018eb6de3fd10f" and
+  .properties.merge_key == "value_hash" and
+  .properties.identity_basis == "value_hash" and
+  .properties.material_status == "observed" and
+  .properties.exposure_status == "exposed" and
+  (has("value") | not)
+))
+and (.graph.nodes | any(
+  (.kinds | index("Credential")) and
+  .properties.name == "X-AgentHound-Secret" and
+  .properties.location == "header" and
+  .properties.high_entropy == true and
   .properties.merge_key == "value_hash" and
   (.properties.value_hash | test("^[0-9a-f]{64}$")) and
   (has("value") | not)
 ))
-and ([.graph.nodes[] | select(.kinds | index("Credential"))] | length) == 1
-and ([.graph.edges[] | select(.kind == "CONFIGURED_IN")] | length) == 19
+and ([.graph.nodes[] | select(.kinds | index("Credential"))] | length) == 3
+and ([.graph.edges[] | select(.kind == "CONFIGURED_IN")] | length) == 20

@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "argv-redaction-proof": {
+      "command": "/usr/local/bin/mcp-server-everything",
+      "args": [
+        "--api-key",
+        "agenthound-argv-secret-sentinel-20260719",
+        "--token=agenthound-inline-secret-sentinel-20260719"
+      ]
+    },
+    "url-redaction-proof": {
+      "url": "http://fixture:agenthound-userinfo-secret-sentinel-20260719@mcp-streamable:3001/mcp?api_key=agenthound-query-secret-sentinel-20260719#agenthound-fragment-secret-sentinel-20260719"
+    }
+  }
+}

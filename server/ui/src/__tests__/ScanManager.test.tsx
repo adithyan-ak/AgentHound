@@ -117,19 +117,21 @@ describe("ScanManager", () => {
   });
 
   it("renders completed_with_errors with a friendly label, write rows, and the error", async () => {
-    mockedFetchScanPage.mockResolvedValue(scanPage([
-      {
-        id: "scan-err00000-zzz",
-        collector: "mcp",
-        status: "completed_with_errors",
-        started_at: "2026-04-09T10:00:00Z",
-        completed_at: "2026-04-09T10:05:00Z",
-        submitted: { nodes: 12, edges: 7 },
-        write_rows: { nodes: 12, edges: 7 },
-        graph_totals: { before: null, after: null },
-        error: "post-processing: cypher syntax error",
-      },
-    ]));
+    mockedFetchScanPage.mockResolvedValue(
+      scanPage([
+        {
+          id: "scan-err00000-zzz",
+          collector: "mcp",
+          status: "completed_with_errors",
+          started_at: "2026-04-09T10:00:00Z",
+          completed_at: "2026-04-09T10:05:00Z",
+          submitted: { nodes: 12, edges: 7 },
+          write_rows: { nodes: 12, edges: 7 },
+          graph_totals: { before: null, after: null },
+          error: "post-processing: cypher syntax error",
+        },
+      ]),
+    );
 
     render(<ScanManager />, { wrapper: createWrapper() });
 
@@ -261,9 +263,7 @@ describe("ScanManager", () => {
     const deleteButtons = await screen.findAllByTitle("Delete scan history");
     expect(deleteButtons[0]).toBeEnabled();
     fireEvent.click(deleteButtons[0]!);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Delete scan" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "Delete scan" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(

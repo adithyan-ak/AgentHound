@@ -1,8 +1,14 @@
 .meta.collection.state == "complete"
-and .meta.extra.source_node_id == "hf://ggml-org/models@499bc8821c6b12b4e53c5bffcb21ec206f212d81/tinyllamas/stories260K.gguf"
+and .meta.extra.source_node_id == "sha256:4482e450f9f605ebe76de9243b6ce516c859b29e3a173b42af8425914009bef2"
 and .meta.extra.engagement_id == "RTV-EXTRACT"
-and (.graph.nodes | length) == 2
-and ([.graph.nodes[] | {
+and (.graph.nodes | length) == 3
+and (.graph.nodes | any(
+  .id == "sha256:4482e450f9f605ebe76de9243b6ce516c859b29e3a173b42af8425914009bef2" and
+  .kinds == ["AIModel"] and
+  .properties == {} and
+  .property_semantics == "reference_only"
+))
+and ([.graph.nodes[] | select(.kinds == ["ExtractedTrainingSignal"]) | {
   kind:.kinds,
   token_index:.properties.token_index,
   token_string:.properties.token_string,
@@ -24,14 +30,14 @@ and ([.graph.nodes[] | {
   (($second.z_score - 1.7803608237941912) | fabs < 1e-12) and
   ($second.confidence == 1) and
   ([$first,$second] | all(
-    .source_model_id == "hf://ggml-org/models@499bc8821c6b12b4e53c5bffcb21ec206f212d81/tinyllamas/stories260K.gguf" and
+    .source_model_id == "sha256:4482e450f9f605ebe76de9243b6ce516c859b29e3a173b42af8425914009bef2" and
     .engagement_id == "RTV-EXTRACT" and .method == "embedding-outlier"
   )))
 and (.graph.edges | length) == 2
-and ((.graph.nodes | map(.id) | sort) as $signal_ids |
+and (([.graph.nodes[] | select(.kinds == ["ExtractedTrainingSignal"]) | .id] | sort) as $signal_ids |
   ([.graph.edges[] | select(
     .kind == "EXTRACTED_FROM" and
-    .source == "hf://ggml-org/models@499bc8821c6b12b4e53c5bffcb21ec206f212d81/tinyllamas/stories260K.gguf" and
+    .source == "sha256:4482e450f9f605ebe76de9243b6ce516c859b29e3a173b42af8425914009bef2" and
     .source_kind == "AIModel" and .target_kind == "ExtractedTrainingSignal" and
     .properties.method == "embedding-outlier" and
     .properties.evidence.engagement_id == "RTV-EXTRACT"

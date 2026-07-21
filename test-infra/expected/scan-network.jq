@@ -16,6 +16,15 @@ and ([.graph.nodes[] | select(.kinds | index("JupyterServer")) | .properties.end
   == ["http://10.20.30.16:8888"]
 and ([.graph.nodes[] | select(.kinds | index("OpenWebUIInstance")) | .properties.endpoint])
   == ["http://10.20.30.17:3000"]
+and (.graph.nodes | any(
+  (.kinds | index("OpenWebUIInstance")) and
+  .properties.endpoint == "http://10.20.30.17:3000" and
+  (.properties | has("auth_method") | not) and
+  (.properties | has("auth_assurance") | not) and
+  (.properties | has("auth_evidence") | not) and
+  (.properties | has("is_anonymous_loot") | not) and
+  (.properties | has("loot_observed") | not)
+))
 and ([.graph.nodes[] | select(
   (.kinds | index("VLLMInstance")) and
   .properties.endpoint == "http://10.20.30.18:8000"

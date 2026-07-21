@@ -23,6 +23,9 @@ expect_jq() {
   body="$(ws curl -fsS "$3")" || fail "upstream truth: ${name} request failed"
   printf '%s' "${body}" | jq -e "${filter}" >/dev/null ||
     fail "upstream truth: ${name} returned unexpected real data"
+  if (($# == 4)); then
+    printf -v "$4" '%s' "${body}"
+  fi
   pass "upstream:${name}"
 }
 
@@ -285,7 +288,8 @@ expect_jq a2a-static-current \
   '.name == "PayrollAgent" and
    ([.supportedInterfaces[].protocolVersion] == ["1.0"]) and
    (.signatures | length) == 1' \
-  http://a2a-static/.well-known/agent-card.json
+  http://a2a-static/.well-known/agent-card.json \
+  a2a_static_current_card
 legacy_current_status="$(ws curl -sS -o /dev/null -w '%{http_code}' \
   http://a2a-static/legacy/.well-known/agent-card.json)"
 [[ "${legacy_current_status}" == 404 ]] ||
@@ -295,10 +299,83 @@ expect_jq a2a-static-legacy \
    (.defaultInputModes == ["application/json"]) and
    (.defaultOutputModes == ["application/json"]) and
    (has("signatures") | not)' \
-  http://a2a-static/legacy/.well-known/agent.json
+  http://a2a-static/legacy/.well-known/agent.json \
+  a2a_static_legacy_card
 expect_jq a2a-dynamic \
   '.name == "ClaimsTriageAgent" and ([.supportedInterfaces[].protocolVersion] | sort) == ["0.3","1.0"]' \
-  http://a2a-dynamic:9000/.well-known/agent-card.json
+  http://a2a-dynamic:9000/.well-known/agent-card.json \
+  a2a_dynamic_v1_card
+dynamic_legacy_current_status="$(ws curl -sS -o /dev/null -w '%{http_code}' \
+  http://a2a-dynamic:9000/legacy/.well-known/agent-card.json)"
+[[ "${dynamic_legacy_current_status}" == 404 ]] ||
+  fail 'upstream truth: SDK v0.3 A2A target no longer exercises legacy card fallback'
+expect_jq a2a-dynamic-v0.3 \
+  '.name == "LegacySDKAgent" and .protocolVersion == "0.3" and
+   .url == "http://a2a-dynamic:9000/legacy" and
+   (has("supportedInterfaces") | not)' \
+  http://a2a-dynamic:9000/legacy/.well-known/agent.json \
+  a2a_dynamic_v03_card
+expect_jq a2a-dynamic-protected \
+  '.name == "ProtectedPaymentsAgent" and
+   [.supportedInterfaces[].protocolVersion] == ["1.0"] and
+   (.securityRequirements | length) == 1 and
+   (.securityRequirements[0].schemes | has("api_key"))' \
+  http://a2a-dynamic:9000/protected/.well-known/agent-card.json \
+  a2a_dynamic_protected_card
+expect_jq a2a-dynamic-ambiguous \
+  '.name == "VersionAmbiguousAgent" and
+   [.supportedInterfaces[].protocolVersion] == ["1.9"]' \
+  http://a2a-dynamic:9000/ambiguous/.well-known/agent-card.json \
+  a2a_dynamic_ambiguous_card
+
+a2a_v1_response="$(ws curl -fsS \
+  -H 'Content-Type: application/json' -H 'A2A-Version: 1.0' \
+  --data '{"jsonrpc":"2.0","id":"upstream-v1","method":"GetTask","params":{"id":"missing-upstream-v1"}}' \
+  http://a2a-dynamic:9000/)"
+printf '%s' "${a2a_v1_response}" | jq -e '
+  .id == "upstream-v1" and .error.code == -32001 and
+  .error.message == "Task not found" and
+  (.error.data | any(.reason == "TASK_NOT_FOUND" and .domain == "a2a-protocol.org"))
+' >/dev/null || fail 'upstream truth: official A2A v1 GetTask outcome drifted'
+a2a_v03_response="$(ws curl -fsS \
+  -H 'Content-Type: application/json' \
+  --data '{"jsonrpc":"2.0","id":"upstream-v03","method":"tasks/get","params":{"id":"missing-upstream-v03"}}' \
+  http://a2a-dynamic:9000/legacy)"
+printf '%s' "${a2a_v03_response}" | jq -e '
+  .id == "upstream-v03" and .error.code == -32603 and
+  .error.message == "Task not found" and .error.data == null
+' >/dev/null || fail 'upstream truth: official A2A v0.3 GetTask outcome drifted'
+a2a_protected_status="$(ws curl -sS -o /dev/null -w '%{http_code}' \
+  -H 'Content-Type: application/json' -H 'A2A-Version: 1.0' \
+  --data '{"jsonrpc":"2.0","id":"upstream-protected-anon","method":"GetTask","params":{"id":"missing-upstream-protected-anon"}}' \
+  http://a2a-dynamic:9000/protected)"
+[[ "${a2a_protected_status}" == 401 ]] ||
+  fail "upstream truth: protected A2A handler did not reject anonymous GetTask (${a2a_protected_status})"
+a2a_protected_control="$(ws curl -fsS \
+  -H 'Content-Type: application/json' -H 'A2A-Version: 1.0' \
+  -H 'X-API-Key: agenthound-a2a-api-key-not-production' \
+  --data '{"jsonrpc":"2.0","id":"upstream-protected-auth","method":"GetTask","params":{"id":"missing-upstream-protected-auth"}}' \
+  http://a2a-dynamic:9000/protected)"
+printf '%s' "${a2a_protected_control}" | jq -e '
+  .id == "upstream-protected-auth" and .error.code == -32001 and
+  (.error.data | any(.reason == "TASK_NOT_FOUND"))
+' >/dev/null || fail 'upstream truth: protected A2A exact-key control did not reach the official handler'
+a2a_ambiguous_response="$(ws curl -fsS \
+  -H 'Content-Type: application/json' -H 'A2A-Version: 1.9' \
+  --data '{"jsonrpc":"2.0","id":"upstream-ambiguous","method":"GetTask","params":{"id":"missing-upstream-ambiguous"}}' \
+  http://a2a-dynamic:9000/ambiguous)"
+printf '%s' "${a2a_ambiguous_response}" | jq -e '
+  .id == "upstream-ambiguous" and .error.code == -32009 and
+  (.error.data | any(.reason == "VERSION_NOT_SUPPORTED"))
+' >/dev/null || fail 'upstream truth: A2A ambiguous version control drifted'
+a2a_probe_state="$(ws curl -fsS http://a2a-dynamic:9000/probe-state)"
+printf '%s' "${a2a_probe_state}" | jq -e '
+  all(.[];
+    .non_get_task_requests == 0 and .executor_calls == 0 and
+    .task_store_saves == 0 and .task_store_deletes == 0
+  )
+' >/dev/null || fail 'upstream truth: read-only A2A controls reached a mutation path'
+pass upstream:a2a-runtime-auth-lanes
 
 # Verify the ES256 AgentCardSignature independently with Node's crypto module.
 # The authored card contains its complete proto-JSON presence representation;
@@ -454,12 +531,22 @@ while IFS= read -r path; do
   jq -e 'type == "object"' "${path}" >/dev/null
 done </tmp/client-configs.list
 
+: "${AGENTHOUND_LITELLM_MASTER_KEY:?missing shared LiteLLM master fixture}"
+: "${AGENTHOUND_CROSS_SERVICE_PROOF:?missing cross-service proof fixture}"
 jq -e \
   --arg url "${contextforge_url}" \
   --arg authorization "Bearer ${contextforge_token}" \
+  --arg cross_authorization "Bearer ${AGENTHOUND_LITELLM_MASTER_KEY}" \
+  --arg cross_proof "${AGENTHOUND_CROSS_SERVICE_PROOF}" \
   '.mcpServers["contextforge-real"] == {
     url:$url,
     headers:{Authorization:$authorization}
+  } and .mcpServers["litellm-master-gated-everything"] == {
+    url:"http://mcp-cross-service-gate:3003/mcp",
+    headers:{
+      Authorization:$cross_authorization,
+      "X-AgentHound-Secret":$cross_proof
+    }
   } and .mcpServers["everything-disabled"].disabled == true' \
   /root/.cursor/mcp.json >/dev/null
 grep -qx 'schema: v1' /root/.continue/config.yaml
@@ -468,11 +555,107 @@ grep -qx '      - stdio' /root/.continue/config.yaml
 SH
 pass upstream:client-config-corpus
 
+a2a_upstream_truth="$(jq -cn \
+  --argjson static_current "${a2a_static_current_card}" \
+  --argjson static_legacy "${a2a_static_legacy_card}" \
+  --argjson dynamic_v1 "${a2a_dynamic_v1_card}" \
+  --argjson dynamic_v03 "${a2a_dynamic_v03_card}" \
+  --argjson dynamic_protected "${a2a_dynamic_protected_card}" \
+  --argjson dynamic_ambiguous "${a2a_dynamic_ambiguous_card}" \
+  --arg static_legacy_current_status "${legacy_current_status}" \
+  --arg dynamic_legacy_current_status "${dynamic_legacy_current_status}" \
+  --argjson v1_response "${a2a_v1_response}" \
+  --argjson v03_response "${a2a_v03_response}" \
+  --arg protected_anonymous_status "${a2a_protected_status}" \
+  --argjson protected_control "${a2a_protected_control}" \
+  --argjson ambiguous_response "${a2a_ambiguous_response}" \
+  --argjson handler_counters "${a2a_probe_state}" \
+  '{
+    agents: ([
+      $static_current.name,
+      $static_legacy.name,
+      $dynamic_v1.name,
+      $dynamic_v03.name,
+      $dynamic_protected.name,
+      $dynamic_ambiguous.name
+    ] | sort),
+    cards: {
+      static_current: {
+        name: $static_current.name,
+        protocol_versions: [$static_current.supportedInterfaces[].protocolVersion],
+        signature_count: ($static_current.signatures | length)
+      },
+      static_legacy: {
+        name: $static_legacy.name,
+        protocol_version: $static_legacy.protocolVersion
+      },
+      sdk_v1: {
+        name: $dynamic_v1.name,
+        protocol_versions: ([$dynamic_v1.supportedInterfaces[].protocolVersion] | sort)
+      },
+      sdk_v0_3: {
+        name: $dynamic_v03.name,
+        protocol_version: $dynamic_v03.protocolVersion
+      },
+      protected: {
+        name: $dynamic_protected.name,
+        protocol_versions: [$dynamic_protected.supportedInterfaces[].protocolVersion],
+        security_requirement_schemes: ($dynamic_protected.securityRequirements[0].schemes | keys | sort)
+      },
+      ambiguous: {
+        name: $dynamic_ambiguous.name,
+        protocol_versions: [$dynamic_ambiguous.supportedInterfaces[].protocolVersion]
+      }
+    },
+    legacy_fallback: {
+      static_current_path_status: ($static_legacy_current_status | tonumber),
+      sdk_current_path_status: ($dynamic_legacy_current_status | tonumber)
+    },
+    protocol_controls: {
+      v1_anonymous: {
+        method: "GetTask",
+        response_id: $v1_response.id,
+        error_code: $v1_response.error.code,
+        error_message: $v1_response.error.message,
+        error_reason: $v1_response.error.data[0].reason,
+        error_domain: $v1_response.error.data[0].domain
+      },
+      v0_3_anonymous: {
+        method: "tasks/get",
+        response_id: $v03_response.id,
+        error_code: $v03_response.error.code,
+        error_message: $v03_response.error.message,
+        error_data: $v03_response.error.data
+      },
+      protected_anonymous: {
+        method: "GetTask",
+        http_status: ($protected_anonymous_status | tonumber)
+      },
+      protected_exact_key: {
+        method: "GetTask",
+        response_id: $protected_control.id,
+        error_code: $protected_control.error.code,
+        error_message: $protected_control.error.message,
+        error_reason: $protected_control.error.data[0].reason
+      },
+      ambiguous_version: {
+        method: "GetTask",
+        response_id: $ambiguous_response.id,
+        error_code: $ambiguous_response.error.code,
+        error_message: $ambiguous_response.error.message,
+        error_reason: $ambiguous_response.error.data[0].reason
+      }
+    },
+    handler_counters_after_upstream_controls: $handler_counters,
+    static_signature_independently_verified: true
+  }')"
+
 jq -n \
   --arg verified_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg contextforge_server_id "${contextforge_server_id}" \
   --arg contextforge_resource_id "${contextforge_resource_id}" \
   --arg contextforge_tool_id "${contextforge_tool_id}" \
+  --argjson a2a_upstream_truth "${a2a_upstream_truth}" \
   '{
     status:"valid",
     verified_at:$verified_at,
@@ -488,8 +671,12 @@ jq -n \
       mlflow:{experiment:"agenthound-offline-qa",runs:1,model:"agenthound-fixture-model"},
       jupyter:{authentication:"token",files:["work/agenthound-fixtures/agenthound-fixture.ipynb","work/agenthound-fixtures/data/support-context.md"]},
       openwebui:{authentication:"session JWT",openai_upstreams:1,ollama_upstreams:1},
-      mcp_everything:{version:"2026.7.4",transports:["stdio","streamableHttp","sse"]},
-      a2a:{agents:["ClaimsTriageAgent","LegacyArchiveAgent","PayrollAgent"],legacy_fallback:true,signed_card:true},
+      mcp_everything:{
+        version:"2026.7.4",
+        transports:["stdio","streamableHttp","sse"],
+        enforcing_gates:["basic_query","bearer_and_proof_headers"]
+      },
+      a2a:$a2a_upstream_truth,
       contextforge:{version:"1.0.5",server_id:$contextforge_server_id,tool_id:$contextforge_tool_id,resource_id:$contextforge_resource_id,credential_gate:true}
     }
   }' >"${TRUTH_PATH}.tmp"

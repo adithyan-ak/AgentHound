@@ -46,6 +46,15 @@ isolated Neo4j/PostgreSQL only after network scanning, solely to ingest the
 actual collector projections and export the campaign witness. vLLM uses its
 official CPU image.
 
+The harness fixes the container-workstation origin to
+`agenthound-test-workstation` / `agenthound-test-lab` and asserts those exact
+ingest-v3 fields on every artifact before any scenario-specific oracle runs.
+Its PostgreSQL/Neo4j pair is bound by the fixed disposable UUID
+`7bc1f56e-c890-4de5-9cc5-921797176fa6`. The host-native macOS discovery lane
+uses `agenthound-test-macos` in the same realm and remains collection-only; it
+is intentionally not ingested into the workstation-bound databases. This
+proves the one-host/one-realm admission model rather than bypassing it.
+
 ## Run
 
 From the repository root:
@@ -90,12 +99,14 @@ No target implements an endpoint invented for the collector.
 - authenticated Open WebUI with Ollama and OpenAI-compatible upstream config
 - a second real LiteLLM process on port 8000 as a vLLM near-miss control
 - the official MCP `server-everything` package over stdio, Streamable HTTP, and
-  SSE
+  SSE, plus two enforcing reverse proxies that forward only exact credential
+  controls to that official implementation
 - IBM ContextForge v1.0.5 with real login, catalog API token, management API,
   virtual server, tool, resource, MCP authentication gate, poison/revert
   target, and campaign target
-- an A2A Python SDK agent plus conformant current and legacy cards served by
-  nginx, with the current card genuinely ES256-signed
+- official A2A Python SDK v1 and v0.3 JSON-RPC agents, an API-key enforcing
+  protocol lane, an ambiguous-version control, plus conformant current and
+  legacy cards served by nginx, with the current card genuinely ES256-signed
 - current client config paths and formats for Claude Code, Cursor, VS Code,
   Windsurf, Continue, Zed, Cline, Junie, Kiro, Amazon Q, and Augment
 - a host-native macOS Claude Desktop path lane, instead of pretending Claude
@@ -112,7 +123,11 @@ The collector phase covers:
   host-native platform discovery;
 - direct MCP enumeration and config-driven stdio/HTTP/SSE enumeration;
 - multi-agent A2A parsing, legacy fallback, offline JWKS verification, skills,
-  and delegation inference;
+  delegation inference, and the bounded anonymous-auth observer against exact
+  official-SDK v1/v0.3 TaskNotFound responses. The same scenario proves a
+  public-card/API-key handler remains protected, a version error remains
+  unknown, probes carry no operator credential, and neither an executor nor a
+  task-store mutation path runs;
 - protocol discovery and AI-service network fingerprinting with a near-miss
   negative control;
 - every registered looter, including Ollama embeddings, Qdrant point sampling,
@@ -122,6 +137,16 @@ The collector phase covers:
 - credential-reach against a genuinely credential-gated MCP resource, using a
   witness exported from actual collector data through the production
   ingest/analysis/publication path;
+- cross-service credential correlation from a real config header containing
+  the real LiteLLM looter master material, through production ingest to a
+  published finding for every pinned LiteLLM processor target (two masked
+  provider-key references and one hashed virtual-key reference), each with its
+  exact 7-node, 5-raw-edge, and synthetic `VALUE_HASH_MATCH` evidence. Public,
+  Neo4j, and PostgreSQL checks compare the detector-global result set against
+  the exact three expected source/target pairs, so an additional source or
+  target fails the lane. The same gate independently requires a second
+  high-entropy header and proves its server attribution in the published
+  `high-entropy-secrets` query;
 - ContextForge tool-description poison/revert and campaign round-trip against
   the actual GA management API;
 - instruction poison/revert and MCP config implant/revert using a launchable
@@ -136,25 +161,45 @@ the shared network dispatcher.
 |---|---|---|
 | `config.enumerate` | `scan-config`, `scan-config-host` | Native client files on Linux plus the macOS Claude Desktop path |
 | `mcp.enumerate` | `scan-mcp`, `scan-mcp-configured` | MCP Everything over HTTP/SSE/stdio and ContextForge MCP |
-| `a2a.enumerate` | `scan-a2a` | A2A SDK v1 agent and signed current/unsigned legacy static cards |
+| `a2a.enumerate` | `scan-a2a` | Official A2A SDK v1/v0.3 anonymous handlers, API-key protected and version-ambiguous controls, and signed current/unsigned legacy static cards |
 | `network.scan` and all eight `*.fingerprint` modules | `scan-network` | Ollama, vLLM, LangServe, Qdrant, MLflow, LiteLLM, Jupyter, and Open WebUI |
 | All six `*.loot` modules | `loot-*` | Authenticated/public APIs of those six upstream services |
 | `embedding.extract` | `extract-embedding` | Official, checksum-pinned GGUF artifact |
 | `mcp.poison` | `poison-mcp` | ContextForge v1.0.5 management API |
 | `instruction.poison` | `poison-instruction` | Real instruction file with exact restore oracle |
 | `mcp.config.implant` | `implant-mcp-config` | Cursor config plus launchable MCP Everything stdio entry |
+| Credential-chain analysis | `cross-service-credential-chain` | Enforced bearer-gated MCP Everything config correlated with the real LiteLLM looter output through production ingest/publication |
 | Campaign registry | `campaign-cred-reach`, `campaign-mcp-roundtrip` | Credential-gated ContextForge resource and reversible real tool mutation |
 | Protocol discovery, rules, and version CLI surfaces | `discover`, `rules-list`, `version` | Live MCP/A2A discovery plus local smoke checks |
 
 ## Artifacts and debugging
 
+A compatible run records exactly 24 named primary scenarios, each exactly once
+and with `pass` status. The summary exposes both `planned_scenarios` and
+`result_records` and reconciles the expected-name set, uniqueness, canonical
+statuses, and failure counter before it can report compatibility. A collector
+failure may add either explicitly allowed failure-only diagnostic record
+(witness-binding or artifact-wide raw-secret failure), each at most once,
+without hiding the primary scenario result. Any missing, duplicate, malformed,
+or unexpected result makes the harness itself invalid.
+
 Each run writes a new directory under `test-infra/artifacts/`. Important files:
 
 - `summary.json`: final harness/collector classification and every scenario
 - `results.ndjson`: append-only scenario results used to build the summary
-- `upstream-truth.json` (under `fixtures/`): independent exact truth record
+- `upstream-truth.json` (under `fixtures/`): independently observed upstream
+  inventories and control responses. Collector expectations remain separate in
+  `expected/` and the scenario post-checks.
 - `<scenario>.json`: collector output
 - `<scenario>.stderr`: diagnostics, with raw-secret checks applied
+- `scan-a2a-probe-proof.json`: before/after official-handler counters proving
+  one GetTask per dynamic lane, zero credential forwarding, and zero mutation
+- `cross-service-credential-chain-{findings,graph,high-entropy}.json`: the
+  public projection checks for the cross-service lane, including a non-empty
+  gateway identifier reconciled against the gateway node's name, endpoint, or
+  immutable object ID
+- `cross-service-credential-chain-persisted-evidence.json`: the exact finding
+  evidence frozen in PostgreSQL (public IDs and hashes only)
 
 Inspect a retained stack:
 

@@ -61,22 +61,27 @@ export function NavBar() {
   };
 
   return (
-    <header className="flex h-12 items-center border-b border-border bg-carbon-900 px-4">
-      <div className="mr-7 flex items-center gap-2">
+    <header className="flex h-12 items-center border-b border-border bg-carbon-900 px-2 sm:px-4">
+      <div className="mr-2 flex shrink-0 items-center gap-2 lg:mr-7">
         <img src="/logo-192.png" alt="AgentHound" className="h-6 w-6" />
-        <span className="font-mono text-sm font-bold uppercase tracking-[0.1em] text-foreground">
+        <span className="hidden font-mono text-sm font-bold uppercase tracking-[0.1em] text-foreground lg:inline">
           Agent<span className="text-primary">Hound</span>
         </span>
       </div>
-      <nav className="flex items-center gap-0.5">
+      <nav
+        aria-label="Primary"
+        className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto"
+      >
         {navItems.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}
             to={to}
             end={to === "/"}
+            aria-label={label}
+            title={label}
             className={({ isActive }) =>
               cn(
-                "flex items-center gap-1.5 rounded-[3px] px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-[0.08em] transition-colors",
+                "flex shrink-0 items-center gap-1.5 rounded-[3px] px-2 py-1.5 font-mono text-[11px] uppercase tracking-[0.08em] transition-colors sm:px-2.5",
                 isActive
                   ? "bg-primary/10 text-primary shadow-[inset_0_-2px_0_0_rgb(var(--phosphor-raw))]"
                   : "text-muted-foreground hover:bg-white/[0.04] hover:text-foreground",
@@ -84,12 +89,12 @@ export function NavBar() {
             }
           >
             <Icon className="h-3.5 w-3.5" />
-            {label}
+            <span className="hidden sm:inline">{label}</span>
           </NavLink>
         ))}
       </nav>
-      <div className="ml-auto flex items-center gap-4">
-        <div className="hidden items-center gap-3 sm:flex">
+      <div className="ml-auto flex shrink-0 items-center gap-4">
+        <div className="hidden items-center gap-3 xl:flex">
           <HealthLed label="Neo4j" state={healthState("neo4j")} />
           <HealthLed label="PG" state={healthState("postgres")} />
         </div>

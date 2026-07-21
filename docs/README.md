@@ -26,7 +26,7 @@ The offensive security framework for AI agent infrastructure — run the full re
 
 - **[CLI Reference](reference/cli.md)** — Every command, flag, and env var
 - **[API Reference](reference/api.md)** — REST endpoints, auth, request/response schemas
-- **[Graph Model](reference/graph-model.md)** — 25 node types, 30 edge types (18 raw + 12 composite), ID strategy, merge semantics
+- **[Graph Model](reference/graph-model.md)** — 23 node types, 32 edge types (20 raw + 12 composite), ID strategy, merge semantics
   - [CAN_REACH](reference/edges/can-reach.md) — Transitive agent→resource access (one of the 12 composite edges)
 - **[Detection Rules](reference/detection-rules.md)** — 19 pre-built queries + OWASP mapping
 - **[Rule Syntax](reference/rule-syntax.md)** — YAML schema for detection + fingerprint rules
