@@ -149,12 +149,13 @@ func artifactNodeScopes(data *IngestData, coverageScopes map[string]scopeRef) ma
 		case "ConfigFile", "InstructionFile", "AgentInstance":
 			scopes[node.ID] = pointScope
 		case "Identity", "Credential":
-			// Local/config observations stay collection-point scoped while
-			// endpoint-derived children follow the network (or artifact-local)
-			// coverage that produced them. Topology inheritance below handles
-			// producers that omit a child observation domain.
-			if domainScope, present := commonCoverageScope(node.ObservationDomains, coverageScopes); present {
-				scopes[node.ID] = domainScope
+			// Config credentials describe material on this collection point even
+			// when the configured service has a remote endpoint. Other identities
+			// and credentials are resolved from their owning topology below; a
+			// coverage scope is only a fallback because one broad inventory domain
+			// may contain both local and remote services.
+			if hasCoverageCollector(node.ObservationDomains, "config") {
+				scopes[node.ID] = pointScope
 			}
 		case "Host":
 			if node.Properties["scope"] == "local" {
@@ -206,10 +207,18 @@ func artifactNodeScopes(data *IngestData, coverageScopes map[string]scopeRef) ma
 	for _, node := range data.Graph.Nodes {
 		if authoritative[node.ID] {
 			if _, present := scopes[node.ID]; !present {
-				// Preserve the prior local fallback for an isolated identity or
-				// credential whose producer supplied neither coverage nor owning
-				// topology. Known endpoint-derived children were resolved above.
 				if kind := ConcreteNodeKind(node.Kinds); kind == "Identity" || kind == "Credential" {
+					// An isolated child can still inherit the unambiguous scope of
+					// its producing coverage. Preserve the prior collection-point
+					// fallback only when the producer supplied neither coverage nor
+					// owning topology.
+					if domainScope, hasDomainScope := commonCoverageScope(
+						node.ObservationDomains,
+						coverageScopes,
+					); hasDomainScope {
+						scopes[node.ID] = domainScope
+						continue
+					}
 					scopes[node.ID] = pointScope
 				} else {
 					scopes[node.ID] = networkScope
@@ -521,6 +530,16 @@ func sortedScopeRefs(values map[scopeRef]bool) []scopeRef {
 func containsString(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCoverageCollector(domains []string, collector string) bool {
+	prefix := collector + ":"
+	for _, domain := range domains {
+		if strings.HasPrefix(domain, prefix) {
 			return true
 		}
 	}

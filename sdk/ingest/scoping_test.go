@@ -222,6 +222,85 @@ func TestScopeArtifactRemoteChildrenInheritTopologyWithoutDomains(t *testing.T) 
 	}
 }
 
+func TestScopeArtifactEndpointChildrenPreferOwningTopologyOverBroadCoverage(t *testing.T) {
+	identity := strongTestIdentity("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	coverageKey := CanonicalCoverageKey("mcp", "inventory", "mixed-services")
+	data := &IngestData{
+		Meta: IngestMeta{
+			ScanID: "mixed-service-children", Identity: identity,
+			Collection: &CollectionReport{
+				State: OutcomeComplete, CoverageKeys: []string{coverageKey},
+				Outcomes: []CollectionOutcome{{
+					Collector: "mcp", CoverageKey: coverageKey, Target: "mixed-services",
+					Method: "enumerate", State: OutcomeComplete,
+				}},
+			},
+		},
+		Graph: GraphData{
+			Nodes: []Node{
+				{ID: "remote", Kinds: []string{"MCPServer"}, Properties: map[string]any{"transport": "http", "endpoint": "https://service.internal"}, ObservationDomains: []string{coverageKey}},
+				{ID: "local", Kinds: []string{"MCPServer"}, Properties: map[string]any{"transport": "http", "endpoint": "http://127.0.0.1:8080"}, ObservationDomains: []string{coverageKey}},
+				{ID: "remote-identity", Kinds: []string{"Identity"}, Properties: map[string]any{"name": "remote"}, ObservationDomains: []string{coverageKey}},
+				{ID: "local-identity", Kinds: []string{"Identity"}, Properties: map[string]any{"name": "local"}, ObservationDomains: []string{coverageKey}},
+				{ID: "remote-credential", Kinds: []string{"Credential"}, Properties: map[string]any{"value_hash": "remote-hash"}, ObservationDomains: []string{coverageKey}},
+				{ID: "local-credential", Kinds: []string{"Credential"}, Properties: map[string]any{"value_hash": "local-hash"}, ObservationDomains: []string{coverageKey}},
+			},
+			Edges: []Edge{
+				{Source: "remote", Target: "remote-identity", Kind: "AUTHENTICATES_WITH", ObservationDomains: []string{coverageKey}},
+				{Source: "remote-identity", Target: "remote-credential", Kind: "USES_CREDENTIAL", ObservationDomains: []string{coverageKey}},
+				{Source: "local", Target: "local-identity", Kind: "AUTHENTICATES_WITH", ObservationDomains: []string{coverageKey}},
+				{Source: "local-identity", Target: "local-credential", Kind: "USES_CREDENTIAL", ObservationDomains: []string{coverageKey}},
+			},
+		},
+	}
+	if err := ScopeArtifact(data); err != nil {
+		t.Fatal(err)
+	}
+	for _, rawID := range []string{"remote-identity", "remote-credential"} {
+		want := ScopedNodeID(ScopeNetworkContext, identity.NetworkContextID, rawID)
+		if !hasNodeID(data.Graph.Nodes, want) {
+			t.Fatalf("remote child %q missing owning network scope %q", rawID, want)
+		}
+	}
+	for _, rawID := range []string{"local-identity", "local-credential"} {
+		want := ScopedNodeID(ScopeCollectionPoint, identity.CollectionPointID, rawID)
+		if !hasNodeID(data.Graph.Nodes, want) {
+			t.Fatalf("local child %q missing owning point scope %q", rawID, want)
+		}
+	}
+}
+
+func TestScopeArtifactConfigCredentialRemainsPointScopedForRemoteService(t *testing.T) {
+	identity := strongTestIdentity("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	coverageKey := CanonicalCoverageKey("config", "path", "/tmp/mcp.json")
+	data := &IngestData{
+		Meta: IngestMeta{
+			ScanID: "config-credential", Identity: identity,
+			Collection: &CollectionReport{State: OutcomeComplete, CoverageKeys: []string{coverageKey}},
+		},
+		Graph: GraphData{
+			Nodes: []Node{
+				{ID: "server", Kinds: []string{"MCPServer"}, Properties: map[string]any{"transport": "http", "endpoint": "https://service.internal"}, ObservationDomains: []string{coverageKey}},
+				{ID: "identity", Kinds: []string{"Identity"}, Properties: map[string]any{"name": "configured"}, ObservationDomains: []string{coverageKey}},
+				{ID: "credential", Kinds: []string{"Credential"}, Properties: map[string]any{"value_hash": "configured-hash"}, ObservationDomains: []string{coverageKey}},
+			},
+			Edges: []Edge{
+				{Source: "server", Target: "identity", Kind: "AUTHENTICATES_WITH", ObservationDomains: []string{coverageKey}},
+				{Source: "identity", Target: "credential", Kind: "USES_CREDENTIAL", ObservationDomains: []string{coverageKey}},
+			},
+		},
+	}
+	if err := ScopeArtifact(data); err != nil {
+		t.Fatal(err)
+	}
+	for _, rawID := range []string{"identity", "credential"} {
+		want := ScopedNodeID(ScopeCollectionPoint, identity.CollectionPointID, rawID)
+		if !hasNodeID(data.Graph.Nodes, want) {
+			t.Fatalf("configured child %q missing point scope %q", rawID, want)
+		}
+	}
+}
+
 func hasNodeID(nodes []Node, id string) bool {
 	for _, node := range nodes {
 		if node.ID == id {
