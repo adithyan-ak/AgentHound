@@ -60,9 +60,130 @@ export function validateScanFile(file: File): string | null {
 
 type Status =
   | { kind: "idle" }
+  | { kind: "reading"; fileName: string }
+  | { kind: "preview"; file: File; summary: ArtifactSummary }
   | { kind: "uploading"; fileName: string }
   | { kind: "success"; result: IngestResult; fileName: string }
   | { kind: "error"; message: string };
+
+interface ArtifactSummary {
+  scanID: string;
+  collector: string;
+  timestamp: string;
+  collectionPointID: string;
+  networkContextID: string;
+  quality: "strong" | "weak";
+  networkQuality: "strong" | "unknown";
+  networkClass: "unknown" | "offline" | "private" | "public" | "mixed";
+  display: {
+    hostname?: string;
+    os?: string;
+    architecture?: string;
+  };
+}
+
+function objectValue(value: unknown, path: string): Record<string, unknown> {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${path} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function stringValue(value: unknown, path: string): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new TypeError(`${path} must be a non-empty string`);
+  }
+  return value;
+}
+
+const unsafeDisplayCharacter = /\p{C}/u;
+
+function optionalDisplayLabel(
+  display: Record<string, unknown>,
+  field: string,
+): string | undefined {
+  const value = display[field];
+  if (value === undefined || value === "") return undefined;
+  if (
+    typeof value !== "string" ||
+    value.trim() !== value ||
+    Array.from(value).length > 255 ||
+    unsafeDisplayCharacter.test(value)
+  ) {
+    throw new TypeError(`artifact.meta.identity.display.${field} is invalid`);
+  }
+  return value;
+}
+
+export function summarizeScanArtifact(value: unknown): ArtifactSummary {
+  const root = objectValue(value, "artifact");
+  const meta = objectValue(root.meta, "artifact.meta");
+  if (meta.version !== 4 || meta.type !== "agenthound-ingest") {
+    throw new TypeError("file must be an AgentHound ingest-v4 artifact");
+  }
+  const identity = objectValue(meta.identity, "artifact.meta.identity");
+  const quality = stringValue(identity.quality, "artifact.meta.identity.quality");
+  if (quality !== "strong" && quality !== "weak") {
+    throw new TypeError("artifact.meta.identity.quality is invalid");
+  }
+  const networkQuality = stringValue(
+    identity.network_quality,
+    "artifact.meta.identity.network_quality",
+  );
+  if (networkQuality !== "strong" && networkQuality !== "unknown") {
+    throw new TypeError("artifact.meta.identity.network_quality is invalid");
+  }
+  const networkClass = stringValue(
+    identity.network_class,
+    "artifact.meta.identity.network_class",
+  );
+  if (!["unknown", "offline", "private", "public", "mixed"].includes(networkClass)) {
+    throw new TypeError("artifact.meta.identity.network_class is invalid");
+  }
+  const displayValue = identity.display === undefined
+    ? {}
+    : objectValue(identity.display, "artifact.meta.identity.display");
+  const hostname = optionalDisplayLabel(displayValue, "hostname");
+  const os = optionalDisplayLabel(displayValue, "os");
+  const architecture = optionalDisplayLabel(displayValue, "architecture");
+  return {
+    scanID: stringValue(meta.scan_id, "artifact.meta.scan_id"),
+    collector: stringValue(meta.collector, "artifact.meta.collector"),
+    timestamp: stringValue(meta.timestamp, "artifact.meta.timestamp"),
+    collectionPointID: stringValue(
+      identity.collection_point_id,
+      "artifact.meta.identity.collection_point_id",
+    ),
+    networkContextID: stringValue(
+      identity.network_context_id,
+      "artifact.meta.identity.network_context_id",
+    ),
+    quality,
+    networkQuality,
+    networkClass: networkClass as ArtifactSummary["networkClass"],
+    display: {
+      ...(hostname ? { hostname } : {}),
+      ...(os ? { os } : {}),
+      ...(architecture ? { architecture } : {}),
+    },
+  };
+}
+
+function pointAlias(collectionPointID: string): string {
+  const digest = collectionPointID.replace(/^sha256:/, "");
+  return `Point ${digest.slice(0, 8) || "unknown"}`;
+}
+
+function pointDisplay(
+  collectionPointID: string,
+  display?: { hostname?: string; os?: string; architecture?: string },
+): string {
+  return display?.hostname || pointAlias(collectionPointID);
+}
+
+function platformDisplay(display?: { os?: string; architecture?: string }): string {
+  return [display?.os, display?.architecture].filter(Boolean).join(" / ");
+}
 
 function incompleteRequiredStages(result: IngestResult) {
   return (result.stages ?? []).filter(
@@ -93,6 +214,7 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
   const reset = useCallback(() => {
     setStatus({ kind: "idle" });
     setDragActive(false);
+    if (inputRef.current) inputRef.current.value = "";
   }, []);
 
   const handleClose = useCallback(() => {
@@ -132,7 +254,7 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
       }
 
       if (!isCurrent()) return;
-      setStatus({ kind: "uploading", fileName: file.name });
+      setStatus({ kind: "reading", fileName: file.name });
 
       let text: string;
       try {
@@ -148,46 +270,56 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
       }
       if (!isCurrent()) return;
 
+      let summary: ArtifactSummary;
       try {
-        JSON.parse(text);
+        summary = summarizeScanArtifact(JSON.parse(text));
       } catch (err) {
         if (isCurrent()) {
           setStatus({
             kind: "error",
             message:
               err instanceof Error
-                ? `not valid JSON: ${err.message}`
-                : "not valid JSON",
+                ? `cannot preview artifact: ${err.message}`
+                : "cannot preview artifact",
           });
         }
         return;
       }
+      if (!isCurrent()) return;
+      setStatus({ kind: "preview", file, summary });
+    },
+    [],
+  );
 
-      try {
-        const result = await uploadScan(file);
-        if (!isCurrent()) return;
-        setStatus({ kind: "success", result, fileName: file.name });
-        onSuccess?.();
-      } catch (err) {
-        if (isCurrent()) {
-          if (err instanceof IngestRequestError && err.result) {
-            setStatus({
-              kind: "success",
-              result: err.result,
-              fileName: file.name,
-            });
-            onSuccess?.();
-          } else {
-            setStatus({
-              kind: "error",
-              message: err instanceof Error ? err.message : "upload failed",
-            });
-          }
+  const confirmImport = useCallback(async () => {
+    if (status.kind !== "preview") return;
+    const { file } = status;
+    const attempt = ++attemptRef.current;
+    const isCurrent = () => openRef.current && attemptRef.current === attempt;
+    setStatus({ kind: "uploading", fileName: file.name });
+    try {
+      const result = await uploadScan(file);
+      if (!isCurrent()) return;
+      setStatus({ kind: "success", result, fileName: file.name });
+      onSuccess?.();
+    } catch (err) {
+      if (isCurrent()) {
+        if (err instanceof IngestRequestError && err.result) {
+          setStatus({
+            kind: "success",
+            result: err.result,
+            fileName: file.name,
+          });
+          onSuccess?.();
+        } else {
+          setStatus({
+            kind: "error",
+            message: err instanceof Error ? err.message : "upload failed",
+          });
         }
       }
-    },
-    [onSuccess, uploadScan],
-  );
+    }
+  }, [onSuccess, status, uploadScan]);
 
   const handleDrop = useCallback(
     (e: React.DragEvent<HTMLButtonElement>) => {
@@ -296,6 +428,72 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
           </>
         )}
 
+        {status.kind === "reading" && (
+          <div className="flex flex-col items-center justify-center gap-2 rounded-[3px] border border-border bg-black/20 p-8">
+            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+            <p className="font-mono text-xs uppercase tracking-[0.08em] text-foreground">
+              Reading {status.fileName}…
+            </p>
+          </div>
+        )}
+
+        {status.kind === "preview" && (
+          <div className="flex flex-col gap-3" data-testid="artifact-preview">
+            <div className="rounded-[3px] border border-primary/30 bg-primary/5 p-3">
+              <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-primary">
+                Ready to import
+              </p>
+              <p className="mt-1 text-sm font-medium text-foreground">
+                {pointDisplay(
+                  status.summary.collectionPointID,
+                  status.summary.display,
+                )}
+              </p>
+              {platformDisplay(status.summary.display) && (
+                <p className="text-xs text-muted-foreground">
+                  {platformDisplay(status.summary.display)}
+                </p>
+              )}
+              <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+                <dt className="text-muted-foreground">File</dt>
+                <dd className="break-all text-foreground/85">{status.file.name}</dd>
+                <dt className="text-muted-foreground">Collector</dt>
+                <dd className="font-mono text-foreground/85">{status.summary.collector}</dd>
+                <dt className="text-muted-foreground">Observed</dt>
+                <dd className="font-mono text-foreground/85">{status.summary.timestamp}</dd>
+                <dt className="text-muted-foreground">Point</dt>
+                <dd className="text-foreground/85">{status.summary.quality}</dd>
+                <dt className="text-muted-foreground">Network</dt>
+                <dd className="text-foreground/85">
+                  {status.summary.networkClass} · {status.summary.networkQuality}
+                </dd>
+              </dl>
+              <details className="mt-3 text-xs text-muted-foreground">
+                <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-[0.08em]">
+                  Identity details
+                </summary>
+                <div className="mt-2 space-y-1 break-all font-mono text-[10px]">
+                  <p>Scan: {status.summary.scanID}</p>
+                  <p>Point: {status.summary.collectionPointID}</p>
+                  <p>Network: {status.summary.networkContextID}</p>
+                </div>
+              </details>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Nothing has been imported yet. Confirm that this artifact belongs
+              to the current operation.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button type="button" className={ghostBtn} onClick={reset}>
+                Choose another
+              </button>
+              <button type="button" className={primaryBtn} onClick={() => void confirmImport()}>
+                Import
+              </button>
+            </div>
+          </div>
+        )}
+
         {status.kind === "uploading" && (
           <div className="flex flex-col items-center justify-center gap-2 rounded-[3px] border border-border bg-black/20 p-8">
             <Loader2 className="h-6 w-6 animate-spin text-primary" />
@@ -359,6 +557,34 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
                   </p>
                 )}
               </div>
+            </div>
+            <div className="rounded-[3px] border border-border bg-black/25 px-3 py-2 text-xs">
+              <p className="font-medium text-foreground">
+                {pointDisplay(
+                  status.result.identity.collection_point_id,
+                  status.result.identity.display,
+                )}{" "}
+                <span className="font-normal text-muted-foreground">
+                  · {status.result.identity.recognition}
+                </span>
+              </p>
+              {platformDisplay(status.result.identity.display) && (
+                <p className="text-muted-foreground">
+                  {platformDisplay(status.result.identity.display)}
+                </p>
+              )}
+              <p className="mt-1 text-muted-foreground">
+                Point {status.result.identity.quality} · network{" "}
+                {status.result.identity.network_class} /{" "}
+                {status.result.identity.network_quality}
+              </p>
+              <details className="mt-2 break-all font-mono text-[10px] text-muted-foreground">
+                <summary className="cursor-pointer uppercase tracking-[0.08em]">
+                  Identity details
+                </summary>
+                <p className="mt-1">Point: {status.result.identity.collection_point_id}</p>
+                <p>Network: {status.result.identity.network_context_id}</p>
+              </details>
             </div>
             {incompleteStages.length > 0 && (
               <div className="rounded-[3px] border border-border bg-black/25 px-3 py-2">

@@ -2,4 +2,4 @@
 
 package identity
 
-func platformSignals() ([]rawSignal, []rawSignal) { return nil, nil }
+func platformSignals() ([]rawSignal, []rawSignal, bool) { return nil, nil, false }

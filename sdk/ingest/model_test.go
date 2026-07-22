@@ -94,7 +94,7 @@ func TestIngestDataJSONRoundTrip(t *testing.T) {
 			"collector_version": "0.1.0",
 			"timestamp": "2026-04-06T10:30:00Z",
 			"scan_id": "scan-001",
-			"identity": {"scheme":"agenthound_collection_v1","version":1,"collection_point_id":"sha256:point","network_context_id":"sha256:network","quality":"strong","network_class":"private","evidence":[],"network_evidence":[]},
+			"identity": {"scheme":"agenthound_collection_v1","version":1,"collection_point_id":"sha256:point","network_context_id":"sha256:network","quality":"strong","network_quality":"strong","network_class":"private","evidence":[],"network_evidence":[]},
 			"collection": {
 				"state": "complete",
 				"coverage_keys": ["mcp:target:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],

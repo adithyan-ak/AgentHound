@@ -2,11 +2,26 @@ package identity
 
 import (
 	"encoding/json"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
+
+func TestDeriveEmitsValidatedDisplayAndIndependentQuality(t *testing.T) {
+	identity := Derive("native-identity-test")
+	if err := identity.Validate(); err != nil {
+		t.Fatalf("native identity invalid: %v", err)
+	}
+	if identity.Display.OS != runtime.GOOS || identity.Display.Architecture != runtime.GOARCH {
+		t.Fatalf("display = %+v", identity.Display)
+	}
+	if identity.NetworkQuality != ingest.IdentityQualityStrong &&
+		identity.NetworkQuality != ingest.IdentityQualityUnknown {
+		t.Fatalf("network quality = %q", identity.NetworkQuality)
+	}
+}
 
 func TestStrongIdentityIgnoresWeakFallbackSignals(t *testing.T) {
 	platform := []rawSignal{

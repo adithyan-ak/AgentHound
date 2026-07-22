@@ -101,8 +101,9 @@ func writeIngestResult(w io.Writer, result *ingest.IngestResult) error {
 		fmt.Sprintf("  Scan ID:            %s\n", result.ScanID),
 		fmt.Sprintf("  Outcome:            %s\n", result.Outcome),
 		fmt.Sprintf("  Projection status:  %s\n", result.ProjectionStatus),
-		fmt.Sprintf("  Collection point:   %s (%s, %s)\n", result.Identity.CollectionPointID, result.Identity.Quality, result.Identity.Recognition),
-		fmt.Sprintf("  Network context:    %s (%s)\n", result.Identity.NetworkContextID, result.Identity.NetworkClass),
+		fmt.Sprintf("  Collection point:   %s (%s, %s)\n", collectionPointDisplay(result.Identity), result.Identity.Quality, result.Identity.Recognition),
+		fmt.Sprintf("  Collection point ID: %s\n", result.Identity.CollectionPointID),
+		fmt.Sprintf("  Network context:    %s (%s, %s)\n", result.Identity.NetworkContextID, result.Identity.NetworkClass, result.Identity.NetworkQuality),
 	}
 	if result.PublishedRevision != nil {
 		lines = append(lines, fmt.Sprintf("  Published revision: %d\n", *result.PublishedRevision))
@@ -153,6 +154,23 @@ func writeIngestResult(w io.Writer, result *ingest.IngestResult) error {
 		result.ProjectionStatus,
 		detail,
 	)
+}
+
+func collectionPointDisplay(identity ingest.IngestIdentityResult) string {
+	label := identity.Display.Hostname
+	if label == "" {
+		const prefix = "sha256:"
+		digest := strings.TrimPrefix(identity.CollectionPointID, prefix)
+		if len(digest) > 8 {
+			digest = digest[:8]
+		}
+		label = "Point " + digest
+	}
+	platform := strings.TrimSpace(identity.Display.OS + " " + identity.Display.Architecture)
+	if platform != "" {
+		label += " · " + platform
+	}
+	return label
 }
 
 func conciseIngestError(message string) string {

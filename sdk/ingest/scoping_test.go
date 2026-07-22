@@ -137,6 +137,42 @@ func TestScopeArtifactNetworkMovePreservesOnlyPointScopedIdentity(t *testing.T) 
 	}
 }
 
+func TestScopeArtifactUnknownNetworkIsolatesOnlyNetworkEvidence(t *testing.T) {
+	identity := NewCollectionIdentity(
+		[]IdentityEvidence{
+			testEvidence("os_instance", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			testEvidence("principal", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+		},
+		[]IdentityEvidence{
+			testEvidence("network_visibility_unknown", "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+			testEvidence("route_private", "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
+		},
+		NetworkClassPrivate,
+	)
+	first := scopingFixture(identity, "unknown-network-a")
+	second := scopingFixture(identity, "unknown-network-b")
+	if err := ScopeArtifact(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := ScopeArtifact(second); err != nil {
+		t.Fatal(err)
+	}
+
+	pointID := ScopedNodeID(ScopeCollectionPoint, identity.CollectionPointID, "file")
+	if first.Graph.Nodes[0].ID != pointID || second.Graph.Nodes[0].ID != pointID {
+		t.Fatal("unknown network weakened collection-point evidence")
+	}
+	if first.Graph.Nodes[1].ID == second.Graph.Nodes[1].ID {
+		t.Fatal("unknown network merged remote evidence across artifacts")
+	}
+	for _, data := range []*IngestData{first, second} {
+		remote := data.Graph.Nodes[1]
+		if remote.Properties["artifact_scope_id"] == nil || remote.Properties["network_context_id"] != nil {
+			t.Fatalf("remote evidence did not receive artifact-local network scope: %+v", remote.Properties)
+		}
+	}
+}
+
 func TestScopeArtifactWeakIdentityIsArtifactLocal(t *testing.T) {
 	weak := NewCollectionIdentity(
 		[]IdentityEvidence{testEvidence("hostname", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")},
@@ -318,5 +354,79 @@ func TestScopeArtifactSplitsMCPRootByExplicitChildScope(t *testing.T) {
 	parents := CoverageParents(data.Meta.Collection)
 	if parents[pointChild] != pointRoot || parents[loopbackChild] != pointRoot || parents[networkChild] != networkRoot {
 		t.Fatalf("explicit scoped parentage = %+v", parents)
+	}
+}
+
+func TestScopeArtifactUnknownNetworkSplitsMCPRootBetweenPointAndArtifact(t *testing.T) {
+	identity := NewCollectionIdentity(
+		[]IdentityEvidence{
+			testEvidence("os_instance", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			testEvidence("principal", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+		},
+		[]IdentityEvidence{
+			testEvidence("network_visibility_unknown", "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+			testEvidence("route_private", "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
+		},
+		NetworkClassPrivate,
+	)
+	data := scopingFixture(identity, "unknown-root-scan")
+	remoteKey := data.Meta.Collection.CoverageKeys[0]
+	loopbackKey := data.Meta.Collection.CoverageKeys[1]
+	stdioKey := data.Meta.Collection.CoverageKeys[2]
+	root := CollectorRootCoverageKey("mcp")
+	data.Meta.Collection.CoverageKeys = append(data.Meta.Collection.CoverageKeys, root)
+	data.Meta.Collection.Outcomes = append(data.Meta.Collection.Outcomes, CollectionOutcome{
+		Collector: "mcp", CoverageKey: root, Target: "mcp", Method: "collect", State: OutcomeComplete,
+	})
+	data.Meta.Collection.AuthoritativeRoots = []CoverageRoot{{CoverageKey: root, ChildCoverageKeys: []string{remoteKey, loopbackKey, stdioKey}}}
+	EnsureCoverageParentage(data.Meta.Collection)
+	if err := ScopeArtifact(data); err != nil {
+		t.Fatal(err)
+	}
+
+	artifactID := framedSHA256("agenthound-artifact-scope-v1", data.Meta.ScanID)
+	pointRoot := ScopedCoverageKey(ScopeCollectionPoint, identity.CollectionPointID, root)
+	artifactRoot := ScopedCoverageKey(ScopeArtifactLocal, artifactID, root)
+	if len(data.Meta.Collection.AuthoritativeRoots) != 2 {
+		t.Fatalf("roots = %+v, want point and artifact roots", data.Meta.Collection.AuthoritativeRoots)
+	}
+	parents := CoverageParents(data.Meta.Collection)
+	if parents[ScopedCoverageKey(ScopeCollectionPoint, identity.CollectionPointID, loopbackKey)] != pointRoot ||
+		parents[ScopedCoverageKey(ScopeCollectionPoint, identity.CollectionPointID, stdioKey)] != pointRoot ||
+		parents[ScopedCoverageKey(ScopeArtifactLocal, artifactID, remoteKey)] != artifactRoot {
+		t.Fatalf("unknown-network scoped parentage = %+v", parents)
+	}
+}
+
+func TestScopeArtifactWeakIdentityKeepsMCPRootArtifactLocal(t *testing.T) {
+	identity := NewCollectionIdentity(
+		[]IdentityEvidence{testEvidence("hostname", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")},
+		[]IdentityEvidence{testEvidence("route_private", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")},
+		NetworkClassPrivate,
+	)
+	data := scopingFixture(identity, "weak-root-scan")
+	children := append([]string(nil), data.Meta.Collection.CoverageKeys...)
+	root := CollectorRootCoverageKey("mcp")
+	data.Meta.Collection.CoverageKeys = append(data.Meta.Collection.CoverageKeys, root)
+	data.Meta.Collection.Outcomes = append(data.Meta.Collection.Outcomes, CollectionOutcome{
+		Collector: "mcp", CoverageKey: root, Target: "mcp", Method: "collect", State: OutcomeComplete,
+	})
+	data.Meta.Collection.AuthoritativeRoots = []CoverageRoot{{CoverageKey: root, ChildCoverageKeys: children}}
+	EnsureCoverageParentage(data.Meta.Collection)
+	if err := ScopeArtifact(data); err != nil {
+		t.Fatal(err)
+	}
+
+	artifactID := framedSHA256("agenthound-artifact-scope-v1", data.Meta.ScanID)
+	artifactRoot := ScopedCoverageKey(ScopeArtifactLocal, artifactID, root)
+	if len(data.Meta.Collection.AuthoritativeRoots) != 1 ||
+		data.Meta.Collection.AuthoritativeRoots[0].CoverageKey != artifactRoot {
+		t.Fatalf("weak roots = %+v, want artifact-local root", data.Meta.Collection.AuthoritativeRoots)
+	}
+	for _, child := range children {
+		scopedChild := ScopedCoverageKey(ScopeArtifactLocal, artifactID, child)
+		if CoverageParents(data.Meta.Collection)[scopedChild] != artifactRoot {
+			t.Fatalf("weak child %q escaped artifact root", child)
+		}
 	}
 }

@@ -2,7 +2,7 @@
   "meta": {
     "version": 4,
     "type": "agenthound-ingest",
-    "identity": {"scheme":"agenthound_collection_v1","version":1,"collection_point_id":"sha256:e6336f15741e16f96744c54acd80daf85747bbb7c2b61e50cc4427317dda797a","network_context_id":"sha256:2c5259a97214a5ab63f8838345e49160950c61f9310bb947f9cf3f3ceeca043a","quality":"strong","network_class":"private","evidence":[{"kind":"os_instance","digest":"hmac-sha256:1111111111111111111111111111111111111111111111111111111111111111"},{"kind":"principal","digest":"hmac-sha256:2222222222222222222222222222222222222222222222222222222222222222"}],"network_evidence":[{"kind":"route_private","digest":"hmac-sha256:3333333333333333333333333333333333333333333333333333333333333333"}]},
+    "identity": {"scheme":"agenthound_collection_v1","version":1,"collection_point_id":"sha256:e6336f15741e16f96744c54acd80daf85747bbb7c2b61e50cc4427317dda797a","network_context_id":"sha256:2c5259a97214a5ab63f8838345e49160950c61f9310bb947f9cf3f3ceeca043a","quality":"strong","network_quality":"strong","network_class":"private","evidence":[{"kind":"os_instance","digest":"hmac-sha256:1111111111111111111111111111111111111111111111111111111111111111"},{"kind":"principal","digest":"hmac-sha256:2222222222222222222222222222222222222222222222222222222222222222"}],"network_evidence":[{"kind":"route_private","digest":"hmac-sha256:3333333333333333333333333333333333333333333333333333333333333333"}]},
     "collector": "a2a",
     "collector_version": "0.1.0",
     "timestamp": "2026-04-07T11:00:00Z",

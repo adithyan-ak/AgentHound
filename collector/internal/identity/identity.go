@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
@@ -27,14 +29,23 @@ type rawSignal struct {
 // blocks collection: the hostname/MAC fallback is classified weak, and a
 // completely opaque environment receives an artifact-local weak identity.
 func Derive(scanID string) ingest.CollectionIdentity {
-	platform, network := platformSignals()
-	return deriveFromSignals(
+	platform, network, routesComplete := platformSignals()
+	interfaceSignals, interfacesComplete := interfaceNetworkSignals()
+	if !routesComplete {
+		network = append(network, rawSignal{kind: "network_visibility_unknown", value: "route_table"})
+	}
+	if !interfacesComplete {
+		network = append(network, rawSignal{kind: "network_visibility_unknown", value: "interfaces"})
+	}
+	identity := deriveFromSignals(
 		scanID,
 		platform,
 		network,
 		fallbackSignals(),
-		append(interfaceNetworkSignals(), dnsSearchSignals()...),
+		append(interfaceSignals, dnsSearchSignals()...),
 	)
+	identity.Display = collectionDisplayLabels()
+	return identity
 }
 
 func deriveFromSignals(
@@ -43,7 +54,7 @@ func deriveFromSignals(
 ) ingest.CollectionIdentity {
 	if !containsKind(platform, "os_instance") {
 		platform = append(platform, fallback...)
-		platform = keepKinds(platform, "principal", "container", "hostname", "mac")
+		platform = keepKinds(platform, "principal", "container", "filesystem", "execution_scope_unknown", "hostname", "mac")
 	}
 	if len(platform) == 0 {
 		platform = []rawSignal{{kind: "artifact", value: scanID}}
@@ -112,18 +123,20 @@ func fallbackSignals() []rawSignal {
 	return signals
 }
 
-func interfaceNetworkSignals() []rawSignal {
+func interfaceNetworkSignals() ([]rawSignal, bool) {
 	interfaces, err := net.Interfaces()
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	var signals []rawSignal
+	complete := true
 	for _, iface := range interfaces {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
 		addresses, err := iface.Addrs()
 		if err != nil {
+			complete = false
 			continue
 		}
 		for _, address := range addresses {
@@ -139,7 +152,7 @@ func interfaceNetworkSignals() []rawSignal {
 			signals = append(signals, rawSignal{kind: kind, value: network.String()})
 		}
 	}
-	return signals
+	return signals, complete
 }
 
 func dnsSearchSignals() []rawSignal {
@@ -165,13 +178,15 @@ func dnsSearchSignals() []rawSignal {
 }
 
 func classifyNetwork(signals []rawSignal) ingest.NetworkClass {
-	var private, public bool
+	var private, public, unknown bool
 	for _, signal := range signals {
 		switch signal.kind {
 		case "route_private", "default_gateway", "network_profile", "dns_domain":
 			private = true
 		case "route_public":
 			public = true
+		case "network_visibility_unknown":
+			unknown = true
 		}
 	}
 	switch {
@@ -181,9 +196,37 @@ func classifyNetwork(signals []rawSignal) ingest.NetworkClass {
 		return ingest.NetworkClassPrivate
 	case public:
 		return ingest.NetworkClassPublic
+	case unknown:
+		return ingest.NetworkClassUnknown
 	default:
 		return ingest.NetworkClassOffline
 	}
+}
+
+func collectionDisplayLabels() ingest.CollectionDisplayLabels {
+	hostname, _ := os.Hostname()
+	return ingest.CollectionDisplayLabels{
+		Hostname:     boundedDisplayLabel(hostname),
+		OS:           boundedDisplayLabel(runtime.GOOS),
+		Architecture: boundedDisplayLabel(runtime.GOARCH),
+	}
+}
+
+func boundedDisplayLabel(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) > 255 {
+		runes = runes[:255]
+	}
+	for _, char := range runes {
+		if unicode.Is(unicode.C, char) {
+			return ""
+		}
+	}
+	return string(runes)
 }
 
 func containsKind(signals []rawSignal, kind string) bool {

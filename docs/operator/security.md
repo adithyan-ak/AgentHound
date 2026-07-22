@@ -103,20 +103,24 @@ posture revision with `409`.
 ## Collection provenance and storage pairing
 
 Every ingest-v4 artifact carries an automatically derived collection point and
-network context. Raw OS, account, platform, container, adapter, route, and DNS
-identifiers are transformed with AgentHound-specific HMACs before they enter
-the artifact. The server validates the scheme, algorithm version, digest
-consistency, and evidence classification rules. It cannot prove that a
-collector actually ran on the claimed machine: provenance is not
-authentication or attestation.
+network context. Raw machine/account/platform/container, adapter, route, and
+DNS identity evidence is transformed with AgentHound-specific HMACs before it
+enters the artifact. Bounded hostname, OS, and architecture labels are the
+deliberate display-only exception: they are emitted in clear, treated as
+untrusted text, and never affect identity or graph behavior. The server
+validates the scheme, algorithm version, digest consistency, and evidence
+classification rules. It cannot prove that a collector actually ran on the
+claimed machine: provenance is not authentication or attestation.
 
 The server accepts every valid artifact and scopes ambiguous evidence rather
 than admitting one configured realm. Local files, identities, credentials,
 stdio services, and loopback observations use collection-point scope. Remote
-endpoint observations use network-context scope. Weak identity artifacts are
-still analyzed, but their authoritative evidence is artifact-local and
-additive-only. Approved `value_hash` correlation may cross contexts; other
-processor joins require exact compatible scope.
+endpoint observations use network-context scope. Weak collection-point
+artifacts are still analyzed, but their authoritative evidence is
+artifact-local and additive-only. If only network visibility is incomplete,
+the collection point remains strong and only its remote/network-scoped evidence
+becomes artifact-local. Approved `value_hash` correlation may cross contexts;
+other processor joins require exact compatible scope.
 
 PostgreSQL and Neo4j carry the same server-generated internal storage-pair UUID,
 so crossed volumes fail closed. Verification remains the first ingest

@@ -39,7 +39,9 @@ function ingestCounts(
       collection_point_id: `sha256:${"1".repeat(64)}`,
       network_context_id: `sha256:${"2".repeat(64)}`,
       quality: "strong",
+      network_quality: "strong",
       network_class: "private",
+      display: { hostname: "target-01", os: "linux", architecture: "amd64" },
       recognition: "new",
     },
     collection: {
@@ -87,6 +89,17 @@ function makeOversizeFile(name: string): File {
   return f;
 }
 
+async function dropForPreview(file: File) {
+  fireEvent.drop(screen.getByTestId("dropzone"), {
+    dataTransfer: { files: [file] },
+  });
+  await screen.findByTestId("artifact-preview");
+}
+
+async function confirmPreview() {
+  fireEvent.click(screen.getByRole("button", { name: /^import$/i }));
+}
+
 const configCoverageKey = `config:target:sha256:${"a".repeat(64)}`;
 const validScanJSON = JSON.stringify({
   meta: {
@@ -98,7 +111,13 @@ const validScanJSON = JSON.stringify({
       collection_point_id: `sha256:${"1".repeat(64)}`,
       network_context_id: `sha256:${"2".repeat(64)}`,
       quality: "strong",
+      network_quality: "strong",
       network_class: "private",
+      display: {
+        hostname: "target-01",
+        os: "linux",
+        architecture: "amd64",
+      },
       evidence: [],
       network_evidence: [],
     },
@@ -145,7 +164,7 @@ describe("ScanImport", () => {
     vi.clearAllMocks();
   });
 
-  it("uploads a dropped JSON file and calls onSuccess", async () => {
+  it("previews a dropped artifact and imports only after confirmation", async () => {
     mockedUploadScan.mockResolvedValue({
       scan_id: "test-scan-1",
       outcome: "complete",
@@ -166,12 +185,14 @@ describe("ScanImport", () => {
       wrapper: createWrapper(),
     });
 
-    const dropzone = screen.getByTestId("dropzone");
     const file = makeJSONFile("scan.json", validScanJSON);
 
-    fireEvent.drop(dropzone, {
-      dataTransfer: { files: [file] },
-    });
+    await dropForPreview(file);
+    expect(screen.getByText("target-01")).toBeInTheDocument();
+    expect(screen.getByText("linux / amd64")).toBeInTheDocument();
+    expect(screen.getByText(/nothing has been imported yet/i)).toBeInTheDocument();
+    expect(mockedUploadScan).not.toHaveBeenCalled();
+    await confirmPreview();
 
     await waitFor(() => {
       expect(mockedUploadScan).toHaveBeenCalledWith(file);
@@ -183,6 +204,9 @@ describe("ScanImport", () => {
     expect(
       screen.getByText(/5 node write rows, 3 edge write rows/i),
     ).toBeInTheDocument();
+    expect(screen.getByText(/target-01/)).toBeInTheDocument();
+    expect(screen.getByText(/· new/i)).toBeInTheDocument();
+    expect(screen.getByText(/point strong · network private \/ strong/i)).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /view findings/i }),
     ).toBeInTheDocument();
@@ -207,9 +231,45 @@ describe("ScanImport", () => {
     await waitFor(() => {
       expect(screen.getByText(/import failed/i)).toBeInTheDocument();
     });
-    expect(screen.getByText(/not valid json/i)).toBeInTheDocument();
+    expect(screen.getByText(/cannot preview artifact/i)).toBeInTheDocument();
     expect(mockedUploadScan).not.toHaveBeenCalled();
     expect(onSuccess).not.toHaveBeenCalled();
+  });
+
+  it("uses a short point alias when no hostname label is available", async () => {
+    const artifact = JSON.parse(validScanJSON) as {
+      meta: { identity: { display?: Record<string, string> } };
+    };
+    artifact.meta.identity.display = {};
+    render(<ScanImport open={true} onClose={() => {}} />, {
+      wrapper: createWrapper(),
+    });
+
+    await dropForPreview(
+      makeJSONFile("unlabelled.json", JSON.stringify(artifact)),
+    );
+
+    expect(screen.getByText("Point 11111111")).toBeInTheDocument();
+    expect(mockedUploadScan).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unsafe display label before import", async () => {
+    const artifact = JSON.parse(validScanJSON) as {
+      meta: { identity: { display: { hostname: string } } };
+    };
+    artifact.meta.identity.display.hostname = "target\u202espoof";
+    render(<ScanImport open={true} onClose={() => {}} />, {
+      wrapper: createWrapper(),
+    });
+
+    fireEvent.drop(screen.getByTestId("dropzone"), {
+      dataTransfer: {
+        files: [makeJSONFile("unsafe-label.json", JSON.stringify(artifact))],
+      },
+    });
+
+    expect(await screen.findByText(/cannot preview artifact/i)).toBeInTheDocument();
+    expect(mockedUploadScan).not.toHaveBeenCalled();
   });
 
   it("shows an error when the server rejects the upload", async () => {
@@ -222,12 +282,10 @@ describe("ScanImport", () => {
       wrapper: createWrapper(),
     });
 
-    const dropzone = screen.getByTestId("dropzone");
     const file = makeJSONFile("scan.json", validScanJSON);
 
-    fireEvent.drop(dropzone, {
-      dataTransfer: { files: [file] },
-    });
+    await dropForPreview(file);
+    await confirmPreview();
 
     await waitFor(() => {
       expect(screen.getByText(/import failed/i)).toBeInTheDocument();
@@ -249,9 +307,8 @@ describe("ScanImport", () => {
     render(<ScanImport open={true} onClose={() => {}} onSuccess={onSuccess} />, {
       wrapper: createWrapper(),
     });
-    fireEvent.drop(screen.getByTestId("dropzone"), {
-      dataTransfer: { files: [makeJSONFile("bad-identity.json", validScanJSON)] },
-    });
+    await dropForPreview(makeJSONFile("bad-identity.json", validScanJSON));
+    await confirmPreview();
 
     expect(await screen.findByText(/import failed/i)).toBeInTheDocument();
     expect(
@@ -291,9 +348,8 @@ describe("ScanImport", () => {
       wrapper: createWrapper(),
     });
 
-    fireEvent.drop(screen.getByTestId("dropzone"), {
-      dataTransfer: { files: [makeJSONFile("partial-failure.json", validScanJSON)] },
-    });
+    await dropForPreview(makeJSONFile("partial-failure.json", validScanJSON));
+    await confirmPreview();
 
     expect(
       await screen.findByText(/import failed after writing partial-failure\.json/i),
@@ -380,12 +436,10 @@ describe("ScanImport", () => {
       wrapper: createWrapper(),
     });
 
-    const dropzone = screen.getByTestId("dropzone");
     const file = new File([validScanJSON], "scan.json", { type: "" });
 
-    fireEvent.drop(dropzone, {
-      dataTransfer: { files: [file] },
-    });
+    await dropForPreview(file);
+    await confirmPreview();
 
     await waitFor(() => {
       expect(mockedUploadScan).toHaveBeenCalledWith(file);
@@ -439,9 +493,8 @@ describe("ScanImport", () => {
       wrapper: createWrapper(),
     });
 
-    fireEvent.drop(screen.getByTestId("dropzone"), {
-      dataTransfer: { files: [makeJSONFile("partial.json", validScanJSON)] },
-    });
+    await dropForPreview(makeJSONFile("partial.json", validScanJSON));
+    await confirmPreview();
 
     expect(
       await screen.findByText(/imported partial\.json with incomplete results/i),
@@ -497,9 +550,8 @@ describe("ScanImport", () => {
       wrapper: createWrapper(),
     });
 
-    fireEvent.drop(screen.getByTestId("dropzone"), {
-      dataTransfer: { files: [makeJSONFile("ruleset-failed.json", validScanJSON)] },
-    });
+    await dropForPreview(makeJSONFile("ruleset-failed.json", validScanJSON));
+    await confirmPreview();
 
     expect(
       await screen.findByText(
@@ -531,9 +583,8 @@ describe("ScanImport", () => {
       { wrapper: createWrapper() },
     );
 
-    fireEvent.drop(screen.getByTestId("dropzone"), {
-      dataTransfer: { files: [makeJSONFile("delayed.json", validScanJSON)] },
-    });
+    await dropForPreview(makeJSONFile("delayed.json", validScanJSON));
+    await confirmPreview();
     await waitFor(() => expect(mockedUploadScan).toHaveBeenCalled());
 
     rerender(

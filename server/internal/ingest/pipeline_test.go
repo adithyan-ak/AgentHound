@@ -645,7 +645,9 @@ func TestPipeline_HappyPath(t *testing.T) {
 	if res.Identity.CollectionPointID == "" ||
 		res.Identity.NetworkContextID == "" ||
 		res.Identity.Quality != sdkingest.IdentityQualityStrong ||
+		res.Identity.NetworkQuality != sdkingest.IdentityQualityStrong ||
 		res.Identity.NetworkClass != sdkingest.NetworkClassPrivate ||
+		res.Identity.Display.Hostname != "target-01" ||
 		res.Identity.Recognition != "new" {
 		t.Fatalf("identity import result = %+v", res.Identity)
 	}

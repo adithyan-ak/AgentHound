@@ -247,14 +247,17 @@ components:
     CollectionIdentityV4:
       type: object
       additionalProperties: false
-      required: [scheme, version, collection_point_id, network_context_id, quality, network_class, evidence, network_evidence]
+      required: [scheme, version, collection_point_id, network_context_id, quality, network_quality, network_class, evidence, network_evidence]
       properties:
         scheme: { type: string, enum: [agenthound_collection_v1] }
         version: { type: integer, enum: [1] }
         collection_point_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
         network_context_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
         quality: { type: string, enum: [strong, weak] }
-        network_class: { type: string, enum: [offline, private, public, mixed] }
+        network_quality: { type: string, enum: [strong, unknown] }
+        network_class: { type: string, enum: [unknown, offline, private, public, mixed] }
+        display:
+          $ref: "#/components/schemas/CollectionDisplayLabels"
         evidence:
           type: array
           minItems: 1
@@ -263,6 +266,14 @@ components:
           type: array
           minItems: 1
           items: { $ref: "#/components/schemas/IdentityEvidenceV4" }
+
+    CollectionDisplayLabels:
+      type: object
+      additionalProperties: false
+      properties:
+        hostname: { type: string, maxLength: 255 }
+        os: { type: string, maxLength: 255 }
+        architecture: { type: string, maxLength: 255 }
 
     IngestCollectionV4:
       type: object
@@ -1285,12 +1296,15 @@ components:
     IngestIdentityResult:
       type: object
       additionalProperties: false
-      required: [collection_point_id, network_context_id, quality, network_class, recognition]
+      required: [collection_point_id, network_context_id, quality, network_quality, network_class, recognition]
       properties:
         collection_point_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
         network_context_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
         quality: { type: string, enum: [strong, weak] }
-        network_class: { type: string, enum: [offline, private, public, mixed] }
+        network_quality: { type: string, enum: [strong, unknown] }
+        network_class: { type: string, enum: [unknown, offline, private, public, mixed] }
+        display:
+          $ref: "#/components/schemas/CollectionDisplayLabels"
         recognition: { type: string, enum: [new, recognized, unknown] }
 
     Scan:

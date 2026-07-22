@@ -46,6 +46,75 @@ func TestCollectionIdentityWeakAndOffline(t *testing.T) {
 	}
 }
 
+func TestCollectionIdentityKeepsPointAndNetworkQualityIndependent(t *testing.T) {
+	record := NewCollectionIdentity(
+		[]IdentityEvidence{
+			testEvidence("os_instance", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			testEvidence("principal", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+		},
+		[]IdentityEvidence{
+			testEvidence("network_visibility_unknown", "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+			testEvidence("route_private", "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
+		},
+		NetworkClassPrivate,
+	)
+	if err := record.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if record.Quality != IdentityQualityStrong || record.NetworkQuality != IdentityQualityUnknown {
+		t.Fatalf("independent qualities = point %q network %q", record.Quality, record.NetworkQuality)
+	}
+
+	tampered := record
+	tampered.NetworkQuality = IdentityQualityStrong
+	if err := tampered.Validate(); err == nil {
+		t.Fatal("tampered network quality unexpectedly validated")
+	}
+}
+
+func TestCollectionIdentityDowngradesUnknownExecutionScopeOnly(t *testing.T) {
+	record := NewCollectionIdentity(
+		[]IdentityEvidence{
+			testEvidence("execution_scope_unknown", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			testEvidence("os_instance", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+			testEvidence("principal", "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+		},
+		[]IdentityEvidence{testEvidence("route_private", "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")},
+		NetworkClassPrivate,
+	)
+	if err := record.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if record.Quality != IdentityQualityWeak || record.NetworkQuality != IdentityQualityStrong {
+		t.Fatalf("qualities = point %q network %q", record.Quality, record.NetworkQuality)
+	}
+}
+
+func TestCollectionIdentityValidatesDisplayLabels(t *testing.T) {
+	record := NewCollectionIdentity(
+		[]IdentityEvidence{testEvidence("hostname", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")},
+		[]IdentityEvidence{testEvidence("offline", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")},
+		NetworkClassOffline,
+	)
+	record.Display = CollectionDisplayLabels{Hostname: "target-01", OS: "linux", Architecture: "amd64"}
+	if err := record.Validate(); err != nil {
+		t.Fatalf("valid display labels rejected: %v", err)
+	}
+	unlabelled := NewCollectionIdentity(record.Evidence, record.NetworkEvidence, record.NetworkClass)
+	if record.CollectionPointID != unlabelled.CollectionPointID ||
+		record.NetworkContextID != unlabelled.NetworkContextID {
+		t.Fatal("display labels changed authoritative identity")
+	}
+	record.Display.Hostname = "target\nspoof"
+	if err := record.Validate(); err == nil {
+		t.Fatal("control character in display hostname unexpectedly validated")
+	}
+	record.Display.Hostname = "target\u202espoof"
+	if err := record.Validate(); err == nil {
+		t.Fatal("format character in display hostname unexpectedly validated")
+	}
+}
+
 func TestCollectionIdentityRejectsUnsupportedAndMisclassifiedEvidence(t *testing.T) {
 	record := NewCollectionIdentity(
 		[]IdentityEvidence{

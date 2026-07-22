@@ -278,7 +278,9 @@ credential material.
       "collection_point_id": "sha256:...",
       "network_context_id": "sha256:...",
       "quality": "strong",
+      "network_quality": "strong",
       "network_class": "private",
+      "display": {"hostname": "target-01", "os": "linux", "architecture": "amd64"},
       "evidence": [
         {"kind": "os_instance", "digest": "hmac-sha256:..."},
         {"kind": "principal", "digest": "hmac-sha256:..."}
@@ -337,7 +339,9 @@ credential material.
     "collection_point_id": "sha256:...",
     "network_context_id": "sha256:...",
     "quality": "strong",
+    "network_quality": "strong",
     "network_class": "private",
+    "display": {"hostname": "target-01", "os": "linux", "architecture": "amd64"},
     "recognition": "new"
   },
   "duration": 1230000000
@@ -367,9 +371,13 @@ including committed write rows. The scan and global projection state are
 marked incomplete.
 
 `identity.recognition` is `new` when no earlier scan used that collection
-point and `recognized` otherwise. Quality and network class describe the
-artifact's derived evidence. Weak identities are still analyzed, but all of
-their authoritative facts receive an artifact-local additive-only scope.
+point and `recognized` otherwise. `quality` describes collection-point
+evidence; `network_quality` independently reports whether route/interface
+visibility was complete. If network quality is `unknown`, local point-scoped
+facts retain their normal scope while remote/network-scoped facts become
+artifact-local and additive-only. Weak collection-point identities localize all
+authoritative facts. `display` contains optional bounded, non-authoritative
+hostname/OS/architecture labels.
 
 Only explicitly complete, attributable target/config coverage keys can retire
 prior raw observations. Partial/failed/truncated collection never retires data

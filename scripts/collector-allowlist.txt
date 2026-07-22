@@ -164,6 +164,7 @@ github.com/spf13/pflag
 github.com/yosida95/uritemplate/v3
 golang.org/x/oauth2
 golang.org/x/oauth2/internal
+golang.org/x/net/route
 golang.org/x/sys/cpu
 golang.org/x/sys/unix
 golang.org/x/text/transform

@@ -37,6 +37,7 @@ Input is the `sdk/ingest.IngestData` struct:
       "collection_point_id": "sha256:...",
       "network_context_id": "sha256:...",
       "quality": "strong",
+      "network_quality": "strong",
       "network_class": "private",
       "evidence": [
         {"kind": "os_instance", "digest": "hmac-sha256:..."},
@@ -160,7 +161,8 @@ inventory counts, search, or collector wire format.
 Checks performed:
 - `meta.version` must be `4`; v1, v2, and v3 are rejected
 - `meta.identity` must have the current scheme/version, canonical HMAC evidence,
-  internally consistent IDs, and the evidence-derived quality classification
+  internally consistent IDs, independently derived collection-point and
+  network quality classifications, and bounded non-authoritative display labels
 - `meta.type` must be `"agenthound-ingest"`
 - `meta.collector` must be in `AllowedCollectors` (mcp, a2a, config, scan)
 - collector version, RFC3339 timestamp, and scan ID must be non-empty

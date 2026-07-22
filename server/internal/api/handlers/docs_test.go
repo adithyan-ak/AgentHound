@@ -63,7 +63,7 @@ func TestOpenAPIProjectionAwareResponseContracts(t *testing.T) {
 	requireSchemaFields(t, schemas, "PathResponse", "paths", "metadata", "projection")
 	requireSchemaFields(t, schemas, "PreBuiltResult", "query", "rows", "projection")
 	requireSchemaFields(t, schemas, "IngestMetaV4", "identity", "collection")
-	requireSchemaFields(t, schemas, "CollectionIdentityV4", "collection_point_id", "network_context_id", "quality", "network_class", "evidence", "network_evidence")
+	requireSchemaFields(t, schemas, "CollectionIdentityV4", "collection_point_id", "network_context_id", "quality", "network_quality", "network_class", "evidence", "network_evidence")
 	requireSchemaFields(t, schemas, "IngestCollectionV4", "state", "coverage_keys", "outcomes")
 	requireSchemaFields(t, schemas, "IngestResult", "collection", "identity")
 	ingestResponses := nestedMap(t, spec, "paths", "/ingest", "post", "responses")

@@ -7,15 +7,19 @@ import (
 	"hash"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
 	CollectionIdentityScheme  = "agenthound_collection_v1"
 	CollectionIdentityVersion = 1
 
-	IdentityQualityStrong IdentityQuality = "strong"
-	IdentityQualityWeak   IdentityQuality = "weak"
+	IdentityQualityStrong  IdentityQuality = "strong"
+	IdentityQualityWeak    IdentityQuality = "weak"
+	IdentityQualityUnknown IdentityQuality = "unknown"
 
+	NetworkClassUnknown NetworkClass = "unknown"
 	NetworkClassOffline NetworkClass = "offline"
 	NetworkClassPrivate NetworkClass = "private"
 	NetworkClassPublic  NetworkClass = "public"
@@ -24,6 +28,15 @@ const (
 
 type IdentityQuality string
 type NetworkClass string
+
+// CollectionDisplayLabels are bounded, non-authoritative operator hints. They
+// never participate in identity derivation, matching, admission, graph IDs, or
+// lifecycle ownership.
+type CollectionDisplayLabels struct {
+	Hostname     string `json:"hostname,omitempty"`
+	OS           string `json:"os,omitempty"`
+	Architecture string `json:"architecture,omitempty"`
+}
 
 // IdentityEvidence contains only an application-specific HMAC of a native
 // platform signal. Raw machine, account, container, route, DNS, and adapter
@@ -37,14 +50,16 @@ type IdentityEvidence struct {
 // network view. It is deterministic collection provenance, not host
 // authentication or attestation.
 type CollectionIdentity struct {
-	Scheme            string             `json:"scheme"`
-	Version           int                `json:"version"`
-	CollectionPointID string             `json:"collection_point_id"`
-	NetworkContextID  string             `json:"network_context_id"`
-	Quality           IdentityQuality    `json:"quality"`
-	NetworkClass      NetworkClass       `json:"network_class"`
-	Evidence          []IdentityEvidence `json:"evidence"`
-	NetworkEvidence   []IdentityEvidence `json:"network_evidence"`
+	Scheme            string                  `json:"scheme"`
+	Version           int                     `json:"version"`
+	CollectionPointID string                  `json:"collection_point_id"`
+	NetworkContextID  string                  `json:"network_context_id"`
+	Quality           IdentityQuality         `json:"quality"`
+	NetworkQuality    IdentityQuality         `json:"network_quality"`
+	NetworkClass      NetworkClass            `json:"network_class"`
+	Display           CollectionDisplayLabels `json:"display,omitempty"`
+	Evidence          []IdentityEvidence      `json:"evidence"`
+	NetworkEvidence   []IdentityEvidence      `json:"network_evidence"`
 }
 
 // NewCollectionIdentity creates the versioned record from already-HMACed
@@ -56,8 +71,14 @@ func NewCollectionIdentity(
 	evidence = canonicalEvidence(evidence)
 	networkEvidence = canonicalEvidence(networkEvidence)
 	quality := IdentityQualityWeak
-	if hasEvidenceKind(evidence, "os_instance") && hasEvidenceKind(evidence, "principal") {
+	if hasEvidenceKind(evidence, "os_instance") &&
+		hasEvidenceKind(evidence, "principal") &&
+		!hasEvidenceKind(evidence, "execution_scope_unknown") {
 		quality = IdentityQualityStrong
+	}
+	networkQuality := IdentityQualityStrong
+	if hasEvidenceKind(networkEvidence, "network_visibility_unknown") {
+		networkQuality = IdentityQualityUnknown
 	}
 	pointID := evidenceID("agenthound-collection-point-v1", evidence)
 	networkID := framedSHA256(
@@ -71,6 +92,7 @@ func NewCollectionIdentity(
 		CollectionPointID: pointID,
 		NetworkContextID:  networkID,
 		Quality:           quality,
+		NetworkQuality:    networkQuality,
 		NetworkClass:      networkClass,
 		Evidence:          evidence,
 		NetworkEvidence:   networkEvidence,
@@ -100,6 +122,9 @@ func (i CollectionIdentity) Validate() error {
 	if err := validateEvidenceKinds(i.Evidence, i.NetworkEvidence); err != nil {
 		return err
 	}
+	if err := i.Display.Validate(); err != nil {
+		return fmt.Errorf("display: %w", err)
+	}
 	if expectedClass := classifyNetworkEvidence(i.NetworkEvidence); i.NetworkClass != expectedClass {
 		return fmt.Errorf("network_class is inconsistent with network_evidence")
 	}
@@ -112,6 +137,9 @@ func (i CollectionIdentity) Validate() error {
 	}
 	if i.Quality != expected.Quality {
 		return fmt.Errorf("quality is inconsistent with evidence")
+	}
+	if i.NetworkQuality != expected.NetworkQuality {
+		return fmt.Errorf("network_quality is inconsistent with network_evidence")
 	}
 	if !validNetworkClass(i.NetworkClass) {
 		return fmt.Errorf("network_class is invalid")
@@ -150,12 +178,14 @@ func validateEvidence(field string, values []IdentityEvidence) error {
 func validateEvidenceKinds(identity, network []IdentityEvidence) error {
 	identityKinds := map[string]bool{
 		"artifact": true, "container": true, "filesystem": true,
-		"hostname": true, "mac": true, "os_instance": true,
+		"execution_scope_unknown": true,
+		"hostname":                true, "mac": true, "os_instance": true,
 		"platform": true, "principal": true,
 	}
 	networkKinds := map[string]bool{
 		"default_gateway": true, "dns_domain": true, "network_profile": true,
-		"offline": true, "route_private": true, "route_public": true,
+		"network_visibility_unknown": true,
+		"offline":                    true, "route_private": true, "route_public": true,
 	}
 	for index, value := range identity {
 		if !identityKinds[value.Kind] {
@@ -171,13 +201,15 @@ func validateEvidenceKinds(identity, network []IdentityEvidence) error {
 }
 
 func classifyNetworkEvidence(values []IdentityEvidence) NetworkClass {
-	var private, public bool
+	var private, public, unknown bool
 	for _, value := range values {
 		switch value.Kind {
 		case "default_gateway", "dns_domain", "network_profile", "route_private":
 			private = true
 		case "route_public":
 			public = true
+		case "network_visibility_unknown":
+			unknown = true
 		}
 	}
 	switch {
@@ -187,6 +219,8 @@ func classifyNetworkEvidence(values []IdentityEvidence) NetworkClass {
 		return NetworkClassPrivate
 	case public:
 		return NetworkClassPublic
+	case unknown:
+		return NetworkClassUnknown
 	default:
 		return NetworkClassOffline
 	}
@@ -261,9 +295,28 @@ func isCanonicalHMACSHA256(value string) bool {
 
 func validNetworkClass(value NetworkClass) bool {
 	switch value {
-	case NetworkClassOffline, NetworkClassPrivate, NetworkClassPublic, NetworkClassMixed:
+	case NetworkClassUnknown, NetworkClassOffline, NetworkClassPrivate, NetworkClassPublic, NetworkClassMixed:
 		return true
 	default:
 		return false
 	}
+}
+
+func (d CollectionDisplayLabels) Validate() error {
+	for name, value := range map[string]string{
+		"hostname": d.Hostname, "os": d.OS, "architecture": d.Architecture,
+	} {
+		if value == "" {
+			continue
+		}
+		if !utf8.ValidString(value) || strings.TrimSpace(value) != value || utf8.RuneCountInString(value) > 255 {
+			return fmt.Errorf("%s is not bounded canonical text", name)
+		}
+		for _, char := range value {
+			if unicode.Is(unicode.C, char) {
+				return fmt.Errorf("%s contains unsafe characters", name)
+			}
+		}
+	}
+	return nil
 }

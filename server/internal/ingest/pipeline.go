@@ -143,7 +143,9 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 			CollectionPointID: data.Meta.Identity.CollectionPointID,
 			NetworkContextID:  data.Meta.Identity.NetworkContextID,
 			Quality:           data.Meta.Identity.Quality,
+			NetworkQuality:    data.Meta.Identity.NetworkQuality,
 			NetworkClass:      data.Meta.Identity.NetworkClass,
+			Display:           data.Meta.Identity.Display,
 			Recognition:       "unknown",
 		},
 	}

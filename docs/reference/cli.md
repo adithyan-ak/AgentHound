@@ -32,6 +32,12 @@ network signals. Raw signals are never emitted. There are no public identity
 flags or environment variables, and the derived identity is provenance rather
 than authentication or attestation.
 
+The artifact also carries bounded hostname, OS, and architecture display
+labels in clear. These labels are operator hints only and never affect IDs,
+matching, scoping, or lifecycle. Collection-point and network quality are
+reported separately; incomplete route/interface inspection localizes only
+network-scoped evidence.
+
 ---
 
 ### `agenthound scan`
@@ -712,14 +718,17 @@ agenthound-server ingest <file.json>
 agenthound-server ingest -
 ```
 
-Pipeline stages: admit the strict v3 artifact origin and reverify both storage
-markers, validate/normalize supported values, deduplicate (MERGE by objectid),
-batch write (1000 ops/txn), and post-process (composite edges + risk scores).
+Pipeline stages: reverify both storage markers, validate the strict ingest-v4
+artifact, apply collection/network scope, normalize supported values,
+deduplicate (MERGE by objectid), batch write (1000 ops/txn), and post-process
+(composite edges + risk scores).
 
 All three ingest entry points (CLI, `POST /api/v1/ingest`, UI drag-drop) run the same pipeline.
 
-The CLI prints the pipeline outcome, projection status, and publication
-revision. It exits successfully only when the ingest produced a complete,
+The CLI prints the display label (or a short `Point <digest>` alias), full IDs,
+new/recognized state, separate point/network qualities, network class, pipeline
+outcome, projection status, and publication revision. It exits successfully
+only when the ingest produced a complete,
 published projection. If a required stage is partial or failed, or publication
 is withheld, it exits non-zero and reports the first unhealthy required stage;
 write-row counts remain visible for diagnosis.

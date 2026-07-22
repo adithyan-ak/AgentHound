@@ -25,10 +25,12 @@ All ports bind to loopback. No external exposure. Suitable for single-operator u
 The collector derives a deterministic collection point from the OS instance,
 effective principal, and filesystem/container execution scope. It derives a
 network context from that point plus the network visibility it can observe.
-Raw native identifiers never leave the collection host. The server accepts
-every structurally valid ingest-v4 artifact and uses these IDs to scope local,
+Raw identity evidence never leaves the collection host; bounded hostname, OS,
+and architecture labels are emitted only for display. The server accepts every
+structurally valid ingest-v4 artifact and uses the derived IDs to scope local,
 private, and endpoint-derived graph evidence; they are not authentication or
-attestation.
+attestation. If route/interface inspection fails, the point can remain strong
+while only network-scoped evidence is made artifact-local.
 
 The server also generates the storage UUID internally. Startup reads the
 versioned marker from both databases before migrations or schema writes.
@@ -154,6 +156,16 @@ docker compose -f docker/docker-compose.yml up -d
 This permanently deletes the selected Neo4j and PostgreSQL volumes; take the
 coordinated backup first. The fresh graph schema is idempotent after creation,
 and the server still detects Neo4j 4.4 versus 5.x constraint syntax.
+
+For the public no-clone installation, the equivalent full operation reset is:
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/docker/docker-compose.public.yml \
+  | docker compose -f - -p agenthound down --volumes
+```
+
+This command is intentionally destructive and cannot be undone without a
+coordinated backup. Run the public Quickstart `up` command again afterward.
 
 Re-run the current collector after the reset. Retained v3 JSON remains evidence
 to archive, not input for rebuilding the v4 projection. Stdio MCP identity changed from

@@ -39,11 +39,13 @@ type IngestResult struct {
 }
 
 type IngestIdentityResult struct {
-	CollectionPointID string          `json:"collection_point_id"`
-	NetworkContextID  string          `json:"network_context_id"`
-	Quality           IdentityQuality `json:"quality"`
-	NetworkClass      NetworkClass    `json:"network_class"`
-	Recognition       string          `json:"recognition"`
+	CollectionPointID string                  `json:"collection_point_id"`
+	NetworkContextID  string                  `json:"network_context_id"`
+	Quality           IdentityQuality         `json:"quality"`
+	NetworkQuality    IdentityQuality         `json:"network_quality"`
+	NetworkClass      NetworkClass            `json:"network_class"`
+	Display           CollectionDisplayLabels `json:"display,omitempty"`
+	Recognition       string                  `json:"recognition"`
 }
 
 type FactCounts struct {

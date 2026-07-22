@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
-func platformSignals() ([]rawSignal, []rawSignal) {
+func platformSignals() ([]rawSignal, []rawSignal, bool) {
 	var identity []rawSignal
 	if key, err := registry.OpenKey(
 		registry.LOCAL_MACHINE,
@@ -36,7 +37,56 @@ func platformSignals() ([]rawSignal, []rawSignal) {
 		}
 		_ = token.Close()
 	}
-	return identity, windowsNetworkProfiles()
+	routes, routesComplete := windowsRouteSignals()
+	return identity, append(windowsNetworkProfiles(), routes...), routesComplete
+}
+
+func windowsRouteSignals() ([]rawSignal, bool) {
+	var table *windows.MibIpForwardTable2
+	if err := windows.GetIpForwardTable2(windows.AF_UNSPEC, &table); err != nil || table == nil {
+		return nil, false
+	}
+	defer windows.FreeMibTable(unsafe.Pointer(table))
+	var signals []rawSignal
+	complete := true
+	for _, row := range table.Rows() {
+		destination := windowsSockaddrIP(&row.DestinationPrefix.Prefix)
+		if destination == nil {
+			complete = false
+			continue
+		}
+		bits := 128
+		if destination.To4() != nil {
+			bits = 32
+		}
+		if int(row.DestinationPrefix.PrefixLength) > bits {
+			complete = false
+			continue
+		}
+		gateway := windowsSockaddrIP(&row.NextHop)
+		signals = append(signals, canonicalRouteSignals(
+			destination,
+			int(row.DestinationPrefix.PrefixLength),
+			gateway,
+		)...)
+	}
+	return signals, complete
+}
+
+func windowsSockaddrIP(address *windows.RawSockaddrInet) net.IP {
+	if address == nil {
+		return nil
+	}
+	switch address.Family {
+	case windows.AF_INET:
+		value := (*windows.RawSockaddrInet4)(unsafe.Pointer(address))
+		return net.IPv4(value.Addr[0], value.Addr[1], value.Addr[2], value.Addr[3])
+	case windows.AF_INET6:
+		value := (*windows.RawSockaddrInet6)(unsafe.Pointer(address))
+		return net.IP(value.Addr[:])
+	default:
+		return nil
+	}
 }
 
 func windowsNetworkProfiles() []rawSignal {

@@ -66,7 +66,11 @@ curl --data-binary @./scan-<scan_id>.json \
   http://127.0.0.1:8080/api/v1/ingest
 ```
 
-Drag-drop a `scan-*.json` into the UI's Scan Manager also works — same endpoint.
+Drag-drop a `scan-*.json` into the UI's Scan Manager also works. The UI first
+shows the collection label, point/network quality, network class, and artifact
+metadata without mutating the graph; click **Import** only after confirming the
+artifact belongs to the current operation. After ingest it reports whether the
+collection point is new or recognized.
 
 ## 4. Run a Network Scan
 

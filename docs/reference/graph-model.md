@@ -281,6 +281,7 @@ scoped IDs before graph writes. The centralized policy is:
 |---|---|
 | Files, environment/config data, identities, credentials, stdio and loopback services | Collection point |
 | Private/remote hosts, DNS names, and endpoint-derived service observations | Network context |
+| Network-scoped facts when route/interface visibility is incomplete | Artifact-local, additive-only; collection-point facts remain strongly scoped |
 | Authoritative facts from weak-identity artifacts | Artifact-local, additive-only |
 | Unresolved property-neutral references | Reference-local until authoritative evidence resolves them |
 
@@ -595,7 +596,9 @@ New modules emit nodes and edges via the `sdk/ingest` wire format:
       "collection_point_id": "sha256:...",
       "network_context_id": "sha256:...",
       "quality": "strong",
+      "network_quality": "strong",
       "network_class": "private",
+      "display": {"hostname": "target-01", "os": "linux", "architecture": "amd64"},
       "evidence": [
         {"kind": "os_instance", "digest": "hmac-sha256:..."},
         {"kind": "principal", "digest": "hmac-sha256:..."}

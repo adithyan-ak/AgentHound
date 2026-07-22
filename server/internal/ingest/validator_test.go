@@ -15,7 +15,7 @@ import (
 )
 
 func testCollectionIdentity() ingest.CollectionIdentity {
-	return ingest.NewCollectionIdentity(
+	identity := ingest.NewCollectionIdentity(
 		[]ingest.IdentityEvidence{
 			{Kind: "os_instance", Digest: "hmac-sha256:" + strings.Repeat("a", 64)},
 			{Kind: "principal", Digest: "hmac-sha256:" + strings.Repeat("b", 64)},
@@ -25,6 +25,10 @@ func testCollectionIdentity() ingest.CollectionIdentity {
 		},
 		ingest.NetworkClassPrivate,
 	)
+	identity.Display = ingest.CollectionDisplayLabels{
+		Hostname: "target-01", OS: "linux", Architecture: "amd64",
+	}
+	return identity
 }
 
 func validIngestData() *ingest.IngestData {

@@ -49,7 +49,7 @@ func ScopeArtifact(data *IngestData) error {
 			coverageScopes,
 		)
 	}
-	scopeCoverage(data.Meta.Collection, coverageScopes, data.Meta.Identity)
+	scopeCoverage(data.Meta.Collection, coverageScopes, data.Meta.Identity, data.Meta.ScanID)
 
 	idMap := make(map[string]string, len(nodeScopes))
 	for rawID, scope := range nodeScopes {
@@ -124,7 +124,7 @@ func artifactNodeScopes(data *IngestData, coverageScopes map[string]scopeRef) ma
 	identity := data.Meta.Identity
 	artifactScope := scopeRef{kind: ScopeArtifactLocal, id: framedSHA256("agenthound-artifact-scope-v1", data.Meta.ScanID)}
 	pointScope := scopeRef{kind: ScopeCollectionPoint, id: identity.CollectionPointID}
-	networkScope := scopeRef{kind: ScopeNetworkContext, id: identity.NetworkContextID}
+	networkScope := effectiveNetworkScope(identity, artifactScope)
 	if identity.Quality == IdentityQualityWeak {
 		scopes := make(map[string]scopeRef, len(data.Graph.Nodes))
 		for _, node := range data.Graph.Nodes {
@@ -270,7 +270,7 @@ func artifactCoverageScopes(data *IngestData) map[string]scopeRef {
 	identity := data.Meta.Identity
 	artifact := scopeRef{kind: ScopeArtifactLocal, id: framedSHA256("agenthound-artifact-scope-v1", data.Meta.ScanID)}
 	point := scopeRef{kind: ScopeCollectionPoint, id: identity.CollectionPointID}
-	network := scopeRef{kind: ScopeNetworkContext, id: identity.NetworkContextID}
+	network := effectiveNetworkScope(identity, artifact)
 	if identity.Quality == IdentityQualityWeak {
 		for _, key := range data.Meta.Collection.CoverageKeys {
 			result[key] = artifact
@@ -381,6 +381,7 @@ func scopeCoverage(
 	report *CollectionReport,
 	scopes map[string]scopeRef,
 	identity CollectionIdentity,
+	scanID string,
 ) {
 	if report == nil {
 		return
@@ -407,13 +408,15 @@ func scopeCoverage(
 		if parents := parentVariants[outcome.CoverageKey]; len(parents) > 0 {
 			variants = parents
 		}
-		if rootKeys[outcome.CoverageKey] && outcome.Collector == "mcp" {
+		if rootKeys[outcome.CoverageKey] && outcome.Collector == "mcp" &&
+			identity.Quality == IdentityQualityStrong {
 			// One exhaustive MCP run inventories both local stdio servers and
 			// services visible in the current network context. Keep those roots
 			// independent so an empty run can retire both local and current-network
 			// children without touching a different network context.
 			variants[scopeRef{kind: ScopeCollectionPoint, id: identity.CollectionPointID}] = true
-			variants[scopeRef{kind: ScopeNetworkContext, id: identity.NetworkContextID}] = true
+			artifact := scopeRef{kind: ScopeArtifactLocal, id: framedSHA256("agenthound-artifact-scope-v1", scanID)}
+			variants[effectiveNetworkScope(identity, artifact)] = true
 		}
 		variantsByKey[outcome.CoverageKey] = variants
 		ordered := sortedScopeRefs(variants)
@@ -464,6 +467,13 @@ func scopeCoverage(
 	sort.Slice(roots, func(i, j int) bool { return roots[i].CoverageKey < roots[j].CoverageKey })
 	report.AuthoritativeRoots = roots
 
+}
+
+func effectiveNetworkScope(identity CollectionIdentity, artifact scopeRef) scopeRef {
+	if identity.NetworkQuality != IdentityQualityStrong {
+		return artifact
+	}
+	return scopeRef{kind: ScopeNetworkContext, id: identity.NetworkContextID}
 }
 
 func scopedDomains(values []string, scopes map[string]scopeRef) []string {

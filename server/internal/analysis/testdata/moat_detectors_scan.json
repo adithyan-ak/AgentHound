@@ -8,6 +8,7 @@
       "collection_point_id": "sha256:e6336f15741e16f96744c54acd80daf85747bbb7c2b61e50cc4427317dda797a",
       "network_context_id": "sha256:2c5259a97214a5ab63f8838345e49160950c61f9310bb947f9cf3f3ceeca043a",
       "quality": "strong",
+      "network_quality": "strong",
       "network_class": "private",
       "evidence": [
         {"kind": "os_instance", "digest": "hmac-sha256:1111111111111111111111111111111111111111111111111111111111111111"},

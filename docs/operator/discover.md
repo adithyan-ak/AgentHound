@@ -56,6 +56,7 @@ The output file is a standard ingest envelope. `discover` emits raw `:MCPServer`
       "collection_point_id": "sha256:...",
       "network_context_id": "sha256:...",
       "quality": "strong",
+      "network_quality": "strong",
       "network_class": "private",
       "evidence": [
         {"kind": "os_instance", "digest": "hmac-sha256:..."},
