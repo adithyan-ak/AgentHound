@@ -116,14 +116,15 @@ classification rules. It cannot prove that a collector actually ran on the
 claimed machine: provenance is not authentication or attestation.
 
 The server accepts every valid artifact and scopes ambiguous evidence rather
-than admitting one configured realm. Local files, identities, credentials,
-stdio services, and loopback observations use collection-point scope. Remote
-endpoint observations use network-context scope. Weak collection-point
-artifacts are still analyzed, but their authoritative evidence is
-artifact-local and additive-only. If only network visibility is incomplete,
-the collection point remains strong and only its remote/network-scoped evidence
-becomes artifact-local. Approved `value_hash` correlation may cross contexts;
-other processor joins require exact compatible scope.
+than admitting one configured realm. Local files, locally observed config
+identities and credentials, stdio services, and loopback observations use
+collection-point scope. Remote endpoint observations and their derived identity
+or credential children use network-context scope. Weak collection-point artifacts
+are still analyzed, but their authoritative evidence is artifact-local and
+additive-only. If only network visibility is incomplete, the collection point
+remains strong and only its remote/network-scoped evidence becomes artifact-local.
+Approved `value_hash` correlation may cross contexts; other processor joins
+require exact compatible scope.
 
 PostgreSQL and Neo4j carry the same server-generated internal storage-pair UUID,
 so crossed volumes fail closed. Verification remains the first ingest

@@ -146,8 +146,16 @@ func artifactNodeScopes(data *IngestData, coverageScopes map[string]scopeRef) ma
 		}
 		kind := ConcreteNodeKind(node.Kinds)
 		switch kind {
-		case "ConfigFile", "InstructionFile", "AgentInstance", "Identity", "Credential":
+		case "ConfigFile", "InstructionFile", "AgentInstance":
 			scopes[node.ID] = pointScope
+		case "Identity", "Credential":
+			// Local/config observations stay collection-point scoped while
+			// endpoint-derived children follow the network (or artifact-local)
+			// coverage that produced them. Topology inheritance below handles
+			// producers that omit a child observation domain.
+			if domainScope, present := commonCoverageScope(node.ObservationDomains, coverageScopes); present {
+				scopes[node.ID] = domainScope
+			}
 		case "Host":
 			if node.Properties["scope"] == "local" {
 				scopes[node.ID] = pointScope
@@ -198,7 +206,14 @@ func artifactNodeScopes(data *IngestData, coverageScopes map[string]scopeRef) ma
 	for _, node := range data.Graph.Nodes {
 		if authoritative[node.ID] {
 			if _, present := scopes[node.ID]; !present {
-				scopes[node.ID] = networkScope
+				// Preserve the prior local fallback for an isolated identity or
+				// credential whose producer supplied neither coverage nor owning
+				// topology. Known endpoint-derived children were resolved above.
+				if kind := ConcreteNodeKind(node.Kinds); kind == "Identity" || kind == "Credential" {
+					scopes[node.ID] = pointScope
+				} else {
+					scopes[node.ID] = networkScope
+				}
 			}
 		}
 	}
@@ -256,7 +271,8 @@ func commonCoverageScope(domains []string, coverageScopes map[string]scopeRef) (
 func inheritsSourceScope(kind string) bool {
 	switch kind {
 	case "PROVIDES_TOOL", "PROVIDES_RESOURCE", "PROVIDES_PROMPT", "ADVERTISES_SKILL",
-		"PROVIDES_MODEL", "EXTRACTED_FROM":
+		"PROVIDES_MODEL", "EXTRACTED_FROM", "AUTHENTICATES_WITH", "USES_CREDENTIAL",
+		"HAS_ENV_VAR", "EXPOSES_CREDENTIAL":
 		return true
 	default:
 		return false

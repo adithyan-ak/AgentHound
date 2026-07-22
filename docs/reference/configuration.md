@@ -38,9 +38,11 @@ gateway, interface-prefix, and DNS evidence. This includes split VPN and pivot
 routes. Each retained private route is bound to its next hop and a stable native
 profile/link discriminator when available, so an overlapping prefix reached
 through a different pivot derives a different context. Route metrics and
-interface names are not identity inputs. Raw identity signal values are
-transformed with AgentHound-specific HMAC-SHA-256 before they enter the artifact.
-No child process is spawned and no target-side AgentHound state is created.
+interface names are not identity inputs. macOS ARP/neighbor-cache and cloned
+host routes are excluded because their expiry does not change network
+visibility. Raw identity signal values are transformed with AgentHound-specific
+HMAC-SHA-256 before they enter the artifact. No child process is spawned and no
+target-side AgentHound state is created.
 
 Collection-point quality and network-context quality are independent. If the
 collector cannot inspect the route table or active interfaces—or cannot

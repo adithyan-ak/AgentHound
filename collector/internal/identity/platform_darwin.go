@@ -39,11 +39,15 @@ func darwinRouteSignals() ([]rawSignal, bool) {
 	if err != nil {
 		return nil, false
 	}
+	return darwinRouteSignalsFromMessages(messages)
+}
+
+func darwinRouteSignalsFromMessages(messages []route.Message) ([]rawSignal, bool) {
 	var signals []rawSignal
 	complete := true
 	for _, raw := range messages {
 		message, ok := raw.(*route.RouteMessage)
-		if !ok || message.Flags&syscall.RTF_UP == 0 || len(message.Addrs) <= syscall.RTAX_DST {
+		if !ok || !darwinRouteIsStable(message.Flags) || len(message.Addrs) <= syscall.RTAX_DST {
 			continue
 		}
 		destination := darwinRouteIP(message.Addrs[syscall.RTAX_DST])
@@ -73,6 +77,11 @@ func darwinRouteSignals() ([]rawSignal, bool) {
 		complete = complete && routeComplete
 	}
 	return signals, complete
+}
+
+func darwinRouteIsStable(flags int) bool {
+	return flags&syscall.RTF_UP != 0 &&
+		flags&(syscall.RTF_LLINFO|syscall.RTF_WASCLONED) == 0
 }
 
 func darwinRoutePathDiscriminator(message *route.RouteMessage) string {

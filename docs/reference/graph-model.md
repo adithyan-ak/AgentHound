@@ -279,8 +279,8 @@ scoped IDs before graph writes. The centralized policy is:
 
 | Observation | Identity scope |
 |---|---|
-| Files, environment/config data, identities, credentials, stdio and loopback services | Collection point |
-| Private/remote hosts, DNS names, and endpoint-derived service observations | Network context |
+| Files, environment/config data and their identities/credentials, stdio and loopback services | Collection point |
+| Private/remote hosts, DNS names, endpoint-derived service observations, and their identity/credential children | Network context |
 | Network-scoped facts when route/interface visibility is incomplete | Artifact-local, additive-only; collection-point facts remain strongly scoped |
 | Authoritative facts from weak-identity artifacts | Artifact-local, additive-only |
 | Unresolved property-neutral references | Reference-local until authoritative evidence resolves them |

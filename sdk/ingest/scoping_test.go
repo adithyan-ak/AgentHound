@@ -137,6 +137,100 @@ func TestScopeArtifactNetworkMovePreservesOnlyPointScopedIdentity(t *testing.T) 
 	}
 }
 
+func TestScopeArtifactSeparatesRemoteIdentityAndCredentialAcrossNetworks(t *testing.T) {
+	firstIdentity := strongTestIdentity("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	secondIdentity := strongTestIdentity("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	fixture := func(identity CollectionIdentity, scanID string) *IngestData {
+		a2aKey := CanonicalCoverageKey("a2a", "target", "https://agent.internal")
+		lootKey := CanonicalCoverageKey("scan", "loot", "litellm\x00https://service.internal")
+		return &IngestData{
+			Meta: IngestMeta{
+				ScanID: scanID, Identity: identity, Extra: map[string]any{"loot_type": "litellm"},
+				Collection: &CollectionReport{
+					State: OutcomeComplete, CoverageKeys: []string{a2aKey, lootKey},
+					Outcomes: []CollectionOutcome{
+						{Collector: "a2a", CoverageKey: a2aKey, Target: "https://agent.internal", Method: "agent_card", State: OutcomeComplete},
+						{Collector: "scan", CoverageKey: lootKey, Target: "https://service.internal", Method: "loot:litellm", State: OutcomeComplete},
+					},
+				},
+			},
+			Graph: GraphData{
+				Nodes: []Node{
+					{ID: "agent", Kinds: []string{"A2AAgent"}, Properties: map[string]any{"url": "https://agent.internal"}, ObservationDomains: []string{a2aKey}},
+					{ID: "remote-identity", Kinds: []string{"Identity"}, Properties: map[string]any{"type": "apiKey"}, ObservationDomains: []string{a2aKey}},
+					{ID: "gateway", Kinds: []string{"LiteLLMGateway", "AIService"}, Properties: map[string]any{"endpoint": "https://service.internal"}, ObservationDomains: []string{lootKey}},
+					{ID: "remote-credential", Kinds: []string{"Credential"}, Properties: map[string]any{"value_hash": "shared-secret-hash", "merge_key": "value_hash"}, ObservationDomains: []string{lootKey}},
+				},
+				Edges: []Edge{
+					{Source: "agent", Target: "remote-identity", Kind: "AUTHENTICATES_WITH", ObservationDomains: []string{a2aKey}},
+					{Source: "gateway", Target: "remote-credential", Kind: "EXPOSES_CREDENTIAL", ObservationDomains: []string{lootKey}},
+				},
+			},
+		}
+	}
+
+	first := fixture(firstIdentity, "remote-children-a")
+	second := fixture(secondIdentity, "remote-children-b")
+	if err := ScopeArtifact(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := ScopeArtifact(second); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, rawID := range []string{"remote-identity", "remote-credential"} {
+		firstID := ScopedNodeID(ScopeNetworkContext, firstIdentity.NetworkContextID, rawID)
+		secondID := ScopedNodeID(ScopeNetworkContext, secondIdentity.NetworkContextID, rawID)
+		if firstID == secondID || !hasNodeID(first.Graph.Nodes, firstID) || !hasNodeID(second.Graph.Nodes, secondID) {
+			t.Fatalf("remote child %q did not separate by network: first=%q second=%q", rawID, firstID, secondID)
+		}
+	}
+	for _, data := range []*IngestData{first, second} {
+		for _, node := range data.Graph.Nodes {
+			if node.Properties["value_hash"] == "shared-secret-hash" &&
+				node.Properties["merge_key"] != "value_hash" {
+				t.Fatalf("credential correlation primitive changed: %+v", node)
+			}
+		}
+	}
+}
+
+func TestScopeArtifactRemoteChildrenInheritTopologyWithoutDomains(t *testing.T) {
+	identity := strongTestIdentity("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	data := &IngestData{
+		Meta: IngestMeta{ScanID: "topology-children", Identity: identity, Collection: &CollectionReport{}},
+		Graph: GraphData{
+			Nodes: []Node{
+				{ID: "agent", Kinds: []string{"A2AAgent"}, Properties: map[string]any{"url": "https://agent.internal"}},
+				{ID: "identity", Kinds: []string{"Identity"}, Properties: map[string]any{"type": "apiKey"}},
+				{ID: "credential", Kinds: []string{"Credential"}, Properties: map[string]any{"value_hash": "hash"}},
+			},
+			Edges: []Edge{
+				{Source: "agent", Target: "identity", Kind: "AUTHENTICATES_WITH"},
+				{Source: "identity", Target: "credential", Kind: "USES_CREDENTIAL"},
+			},
+		},
+	}
+	if err := ScopeArtifact(data); err != nil {
+		t.Fatal(err)
+	}
+	for _, rawID := range []string{"identity", "credential"} {
+		want := ScopedNodeID(ScopeNetworkContext, identity.NetworkContextID, rawID)
+		if !hasNodeID(data.Graph.Nodes, want) {
+			t.Fatalf("topology child %q missing network-scoped ID %q", rawID, want)
+		}
+	}
+}
+
+func hasNodeID(nodes []Node, id string) bool {
+	for _, node := range nodes {
+		if node.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 func TestScopeArtifactUnknownNetworkIsolatesOnlyNetworkEvidence(t *testing.T) {
 	identity := NewCollectionIdentity(
 		[]IdentityEvidence{
