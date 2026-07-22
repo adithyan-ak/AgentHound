@@ -63,9 +63,49 @@ func darwinRouteSignals() ([]rawSignal, bool) {
 		if len(message.Addrs) > syscall.RTAX_GATEWAY {
 			gateway = darwinRouteIP(message.Addrs[syscall.RTAX_GATEWAY])
 		}
-		signals = append(signals, canonicalRouteSignals(destination, prefixLength, gateway)...)
+		routeSignals, routeComplete := canonicalRouteSignals(
+			destination,
+			prefixLength,
+			gateway,
+			darwinRoutePathDiscriminator(message),
+		)
+		signals = append(signals, routeSignals...)
+		complete = complete && routeComplete
 	}
 	return signals, complete
+}
+
+func darwinRoutePathDiscriminator(message *route.RouteMessage) string {
+	for _, index := range []int{syscall.RTAX_IFP, syscall.RTAX_GATEWAY} {
+		if len(message.Addrs) <= index {
+			continue
+		}
+		link, ok := message.Addrs[index].(*route.LinkAddr)
+		if !ok {
+			continue
+		}
+		if address := stableLinkAddress(link.Addr); address != "" {
+			return "link=" + address
+		}
+		if address := darwinInterfaceLinkAddress(link.Index); address != "" {
+			return "link=" + address
+		}
+	}
+	if address := darwinInterfaceLinkAddress(message.Index); address != "" {
+		return "link=" + address
+	}
+	return ""
+}
+
+func darwinInterfaceLinkAddress(index int) string {
+	if index <= 0 {
+		return ""
+	}
+	iface, err := net.InterfaceByIndex(index)
+	if err != nil {
+		return ""
+	}
+	return stableLinkAddress(iface.HardwareAddr)
 }
 
 func darwinRoutePrefixLength(message *route.RouteMessage, bits int) (int, bool) {

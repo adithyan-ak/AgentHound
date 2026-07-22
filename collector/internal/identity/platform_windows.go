@@ -64,13 +64,43 @@ func windowsRouteSignals() ([]rawSignal, bool) {
 			continue
 		}
 		gateway := windowsSockaddrIP(&row.NextHop)
-		signals = append(signals, canonicalRouteSignals(
+		routeSignals, routeComplete := canonicalRouteSignals(
 			destination,
 			int(row.DestinationPrefix.PrefixLength),
 			gateway,
-		)...)
+			windowsRoutePathDiscriminator(row),
+		)
+		signals = append(signals, routeSignals...)
+		complete = complete && routeComplete
 	}
 	return signals, complete
+}
+
+func windowsRoutePathDiscriminator(routeRow windows.MibIpForwardRow2) string {
+	interfaceRow := windows.MibIfRow2{
+		InterfaceLuid:  routeRow.InterfaceLuid,
+		InterfaceIndex: routeRow.InterfaceIndex,
+	}
+	if err := windows.GetIfEntry2Ex(windows.MibIfEntryNormalWithoutStatistics, &interfaceRow); err != nil {
+		return ""
+	}
+	var parts []string
+	if interfaceRow.InterfaceGuid != (windows.GUID{}) {
+		parts = append(parts, "interface_guid="+strings.ToLower(interfaceRow.InterfaceGuid.String()))
+	}
+	if interfaceRow.NetworkGuid != (windows.GUID{}) {
+		parts = append(parts, "network_guid="+strings.ToLower(interfaceRow.NetworkGuid.String()))
+	}
+	addressLength := int(interfaceRow.PhysicalAddressLength)
+	if addressLength > len(interfaceRow.PermanentPhysicalAddress) {
+		addressLength = len(interfaceRow.PermanentPhysicalAddress)
+	}
+	if address := stableLinkAddress(interfaceRow.PermanentPhysicalAddress[:addressLength]); address != "" {
+		parts = append(parts, "link="+address)
+	} else if address := stableLinkAddress(interfaceRow.PhysicalAddress[:addressLength]); address != "" {
+		parts = append(parts, "link="+address)
+	}
+	return strings.Join(parts, "\x00")
 }
 
 func windowsSockaddrIP(address *windows.RawSockaddrInet) net.IP {

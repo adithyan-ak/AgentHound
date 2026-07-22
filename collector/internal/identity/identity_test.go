@@ -123,13 +123,23 @@ func TestIdentityArtifactContainsOnlyHMACedSignals(t *testing.T) {
 		},
 		nil,
 		nil,
-		[]rawSignal{{kind: "dns_domain", value: "sensitive.internal"}},
+		[]rawSignal{
+			{kind: "dns_domain", value: "sensitive.internal"},
+			{kind: "route_private", value: "10.20.0.0/16\x00next_hop=192.168.1.10\x00path=profile=pivot-secret"},
+		},
 	)
 	wire, err := json.Marshal(identity)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, raw := range []string{"raw-machine-secret", "raw-principal-secret", "sensitive.internal"} {
+	for _, raw := range []string{
+		"raw-machine-secret",
+		"raw-principal-secret",
+		"sensitive.internal",
+		"10.20.0.0/16",
+		"192.168.1.10",
+		"pivot-secret",
+	} {
 		if strings.Contains(string(wire), raw) {
 			t.Fatalf("identity artifact leaked raw evidence %q: %s", raw, wire)
 		}

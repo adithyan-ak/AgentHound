@@ -170,42 +170,79 @@ func linuxNetworkManagerProfiles() []rawSignal {
 	paths, _ := filepath.Glob("/run/NetworkManager/devices/*")
 	var signals []rawSignal
 	for _, path := range paths {
-		file, err := os.Open(path)
-		if err != nil {
-			continue
+		if profile := linuxNetworkManagerProfile(path); profile != "" {
+			signals = append(signals, rawSignal{kind: "network_profile", value: profile})
 		}
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			for _, prefix := range []string{"connection-uuid=", "connection_uuid="} {
-				if strings.HasPrefix(line, prefix) {
-					signals = append(signals, rawSignal{
-						kind: "network_profile", value: strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, prefix))),
-					})
-				}
-			}
-		}
-		_ = file.Close()
 	}
 	return signals
 }
 
+func linuxNetworkManagerProfile(path string) string {
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = file.Close() }()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		for _, prefix := range []string{"connection-uuid=", "connection_uuid="} {
+			if strings.HasPrefix(line, prefix) {
+				return strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, prefix)))
+			}
+		}
+	}
+	return ""
+}
+
+type linuxRoutePathResolver func(interfaceName string) string
+
+func linuxRoutePathDiscriminator(interfaceName string) string {
+	iface, err := net.InterfaceByName(interfaceName)
+	if err != nil {
+		return ""
+	}
+	var parts []string
+	if profile := linuxNetworkManagerProfile(
+		filepath.Join("/run/NetworkManager/devices", strconv.Itoa(iface.Index)),
+	); profile != "" {
+		parts = append(parts, "profile="+profile)
+	}
+	if address := stableLinkAddress(iface.HardwareAddr); address != "" {
+		parts = append(parts, "link="+address)
+	}
+	return strings.Join(parts, "\x00")
+}
+
+func cachedLinuxRoutePathResolver(resolve linuxRoutePathResolver) linuxRoutePathResolver {
+	cache := make(map[string]string)
+	return func(interfaceName string) string {
+		if value, present := cache[interfaceName]; present {
+			return value
+		}
+		value := resolve(interfaceName)
+		cache[interfaceName] = value
+		return value
+	}
+}
+
 func linuxRouteSignals() ([]rawSignal, bool) {
-	ipv4, ipv4Complete := linuxIPv4RouteSignals()
-	ipv6, ipv6Complete := linuxIPv6RouteSignals()
+	resolvePath := cachedLinuxRoutePathResolver(linuxRoutePathDiscriminator)
+	ipv4, ipv4Complete := linuxIPv4RouteSignals(resolvePath)
+	ipv6, ipv6Complete := linuxIPv6RouteSignals(resolvePath)
 	return append(ipv4, ipv6...), ipv4Complete && ipv6Complete
 }
 
-func linuxIPv4RouteSignals() ([]rawSignal, bool) {
+func linuxIPv4RouteSignals(resolvePath linuxRoutePathResolver) ([]rawSignal, bool) {
 	file, err := os.Open("/proc/net/route")
 	if err != nil {
 		return nil, false
 	}
 	defer func() { _ = file.Close() }()
-	return parseLinuxIPv4Routes(file)
+	return parseLinuxIPv4Routes(file, resolvePath)
 }
 
-func parseLinuxIPv4Routes(reader io.Reader) ([]rawSignal, bool) {
+func parseLinuxIPv4Routes(reader io.Reader, resolvePath linuxRoutePathResolver) ([]rawSignal, bool) {
 	var signals []rawSignal
 	complete := true
 	scanner := bufio.NewScanner(reader)
@@ -240,7 +277,14 @@ func parseLinuxIPv4Routes(reader io.Reader) ([]rawSignal, bool) {
 			complete = false
 			continue
 		}
-		signals = append(signals, canonicalRouteSignals(destination, ones, gateway)...)
+		routeSignals, routeComplete := canonicalRouteSignals(
+			destination,
+			ones,
+			gateway,
+			resolvePath(fields[0]),
+		)
+		signals = append(signals, routeSignals...)
+		complete = complete && routeComplete
 	}
 	return signals, complete && scanner.Err() == nil
 }
@@ -256,7 +300,7 @@ func parseLinuxIPv4Hex(value string) (net.IP, bool) {
 	return net.IPv4(byte(parsed), byte(parsed>>8), byte(parsed>>16), byte(parsed>>24)), true
 }
 
-func linuxIPv6RouteSignals() ([]rawSignal, bool) {
+func linuxIPv6RouteSignals(resolvePath linuxRoutePathResolver) ([]rawSignal, bool) {
 	file, err := os.Open("/proc/net/ipv6_route")
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -267,10 +311,10 @@ func linuxIPv6RouteSignals() ([]rawSignal, bool) {
 		return nil, false
 	}
 	defer func() { _ = file.Close() }()
-	return parseLinuxIPv6Routes(file)
+	return parseLinuxIPv6Routes(file, resolvePath)
 }
 
-func parseLinuxIPv6Routes(reader io.Reader) ([]rawSignal, bool) {
+func parseLinuxIPv6Routes(reader io.Reader, resolvePath linuxRoutePathResolver) ([]rawSignal, bool) {
 	var signals []rawSignal
 	complete := true
 	scanner := bufio.NewScanner(reader)
@@ -298,9 +342,14 @@ func parseLinuxIPv6Routes(reader io.Reader) ([]rawSignal, bool) {
 			complete = false
 			continue
 		}
-		signals = append(signals, canonicalRouteSignals(
-			net.IP(destinationBytes), int(prefixLength), net.IP(gatewayBytes),
-		)...)
+		routeSignals, routeComplete := canonicalRouteSignals(
+			net.IP(destinationBytes),
+			int(prefixLength),
+			net.IP(gatewayBytes),
+			resolvePath(fields[9]),
+		)
+		signals = append(signals, routeSignals...)
+		complete = complete && routeComplete
 	}
 	return signals, complete && scanner.Err() == nil
 }

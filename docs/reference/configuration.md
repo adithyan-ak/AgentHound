@@ -35,17 +35,20 @@ versioned `collection_point_id` from native OS-instance, effective-principal,
 platform, and filesystem/container evidence. It derives `network_context_id`
 from that point plus active network-profile, private/ULA route-table, default-
 gateway, interface-prefix, and DNS evidence. This includes split VPN and pivot
-routes without including route metrics or interface names. Raw identity signal
-values are transformed with AgentHound-specific HMAC-SHA-256 before they enter
-the artifact. No child process is spawned and no target-side AgentHound state is
-created.
+routes. Each retained private route is bound to its next hop and a stable native
+profile/link discriminator when available, so an overlapping prefix reached
+through a different pivot derives a different context. Route metrics and
+interface names are not identity inputs. Raw identity signal values are
+transformed with AgentHound-specific HMAC-SHA-256 before they enter the artifact.
+No child process is spawned and no target-side AgentHound state is created.
 
 Collection-point quality and network-context quality are independent. If the
-collector cannot inspect the route table or active interfaces, a strong local
-collection point stays strong, while only remote/network-scoped facts and
-coverage receive artifact-local additive-only scope for that import. The
-artifact reports network quality as `unknown`; it is never treated as an
-authoritative offline view.
+collector cannot inspect the route table or active interfaces—or cannot
+distinguish the path for a retained private route—a strong local collection
+point stays strong, while only remote/network-scoped facts and coverage receive
+artifact-local additive-only scope for that import. The artifact reports
+network quality as `unknown`; it is never treated as an authoritative offline
+view.
 
 Hostname, OS, and architecture may also appear in clear as bounded display-only
 labels. They never participate in an ID, match, graph scope, lifecycle key, or

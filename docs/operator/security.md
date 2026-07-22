@@ -103,9 +103,12 @@ posture revision with `409`.
 ## Collection provenance and storage pairing
 
 Every ingest-v4 artifact carries an automatically derived collection point and
-network context. Raw machine/account/platform/container, adapter, route, and
-DNS identity evidence is transformed with AgentHound-specific HMACs before it
-enters the artifact. Bounded hostname, OS, and architecture labels are the
+network context. Private-route evidence binds the destination prefix to its
+observable next hop and stable native profile/link discriminator; if neither
+path signal is available, only network quality becomes unknown. Raw
+machine/account/platform/container, adapter, route, and DNS identity evidence
+is transformed with AgentHound-specific HMACs before it enters the artifact.
+Bounded hostname, OS, and architecture labels are the
 deliberate display-only exception: they are emitted in clear, treated as
 untrusted text, and never affect identity or graph behavior. The server
 validates the scheme, algorithm version, digest consistency, and evidence
