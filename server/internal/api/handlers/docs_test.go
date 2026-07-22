@@ -62,11 +62,12 @@ func TestOpenAPIProjectionAwareResponseContracts(t *testing.T) {
 	)
 	requireSchemaFields(t, schemas, "PathResponse", "paths", "metadata", "projection")
 	requireSchemaFields(t, schemas, "PreBuiltResult", "query", "rows", "projection")
-	requireSchemaFields(t, schemas, "IngestMetaV3", "origin", "collection")
-	requireSchemaFields(t, schemas, "IngestOriginV3", "host_id", "network_realm_id")
-	requireSchemaFields(t, schemas, "IngestResult", "collection")
+	requireSchemaFields(t, schemas, "IngestMetaV4", "identity", "collection")
+	requireSchemaFields(t, schemas, "CollectionIdentityV4", "collection_point_id", "network_context_id", "quality", "network_quality", "network_class", "evidence", "network_evidence")
+	requireSchemaFields(t, schemas, "IngestCollectionV4", "state", "coverage_keys", "outcomes")
+	requireSchemaFields(t, schemas, "IngestResult", "collection", "identity")
 	ingestResponses := nestedMap(t, spec, "paths", "/ingest", "post", "responses")
-	for _, status := range []string{"200", "400", "403", "409", "503"} {
+	for _, status := range []string{"200", "400", "403", "500", "503"} {
 		if _, ok := ingestResponses[status]; !ok {
 			t.Errorf("POST /ingest does not document response %s", status)
 		}

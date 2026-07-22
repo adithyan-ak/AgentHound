@@ -1,48 +1,139 @@
 package ingest
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
-func TestCollectionOriginValidate(t *testing.T) {
-	t.Parallel()
-	valid := []CollectionOrigin{
-		{HostID: "defcon-laptop", NetworkRealmID: "defcon.lab_1"},
-		{HostID: "h", NetworkRealmID: "0"},
+func testEvidence(kind, hex string) IdentityEvidence {
+	return IdentityEvidence{Kind: kind, Digest: "hmac-sha256:" + hex}
+}
+
+func TestCollectionIdentityValidationAndDerivation(t *testing.T) {
+	osEvidence := testEvidence("os_instance", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	principal := testEvidence("principal", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	route := testEvidence("route_private", "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	record := NewCollectionIdentity(
+		[]IdentityEvidence{principal, osEvidence},
+		[]IdentityEvidence{route},
+		NetworkClassPrivate,
+	)
+	if err := record.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
 	}
-	for _, origin := range valid {
-		if err := origin.Validate(); err != nil {
-			t.Errorf("Validate(%+v): %v", origin, err)
-		}
+	if record.Quality != IdentityQualityStrong {
+		t.Fatalf("quality = %q, want strong", record.Quality)
+	}
+	if !IsCanonicalSHA256(record.CollectionPointID) || !IsCanonicalSHA256(record.NetworkContextID) {
+		t.Fatalf("noncanonical derived IDs: %+v", record)
 	}
 
-	invalid := []CollectionOrigin{
-		{},
-		{HostID: "Host-A", NetworkRealmID: "lab"},
-		{HostID: "host-a", NetworkRealmID: " lab"},
-		{HostID: "-host", NetworkRealmID: "lab"},
-		{HostID: strings.Repeat("a", MaxOriginIDLength+1), NetworkRealmID: "lab"},
-	}
-	for _, origin := range invalid {
-		if err := origin.Validate(); err == nil {
-			t.Errorf("Validate(%+v) unexpectedly succeeded", origin)
-		}
+	tampered := record
+	tampered.NetworkContextID = record.CollectionPointID
+	if err := tampered.Validate(); err == nil {
+		t.Fatal("tampered network context unexpectedly validated")
 	}
 }
 
-func TestOriginDigestSeparatesHostAndRealm(t *testing.T) {
-	t.Parallel()
-	base := OriginDigest(CollectionOrigin{HostID: "host-a", NetworkRealmID: "realm-a"})
-	if len(base) != 64 {
-		t.Fatalf("digest length = %d, want 64", len(base))
+func TestCollectionIdentityWeakAndOffline(t *testing.T) {
+	record := NewCollectionIdentity(
+		[]IdentityEvidence{testEvidence("hostname", "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")},
+		[]IdentityEvidence{testEvidence("offline", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")},
+		NetworkClassOffline,
+	)
+	if err := record.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
 	}
-	for _, other := range []CollectionOrigin{
-		{HostID: "host-b", NetworkRealmID: "realm-a"},
-		{HostID: "host-a", NetworkRealmID: "realm-b"},
-	} {
-		if got := OriginDigest(other); got == base {
-			t.Fatalf("origin %+v collided with base", other)
-		}
+	if record.Quality != IdentityQualityWeak {
+		t.Fatalf("quality = %q, want weak", record.Quality)
+	}
+}
+
+func TestCollectionIdentityKeepsPointAndNetworkQualityIndependent(t *testing.T) {
+	record := NewCollectionIdentity(
+		[]IdentityEvidence{
+			testEvidence("os_instance", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			testEvidence("principal", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+		},
+		[]IdentityEvidence{
+			testEvidence("network_visibility_unknown", "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+			testEvidence("route_private", "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
+		},
+		NetworkClassPrivate,
+	)
+	if err := record.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if record.Quality != IdentityQualityStrong || record.NetworkQuality != IdentityQualityUnknown {
+		t.Fatalf("independent qualities = point %q network %q", record.Quality, record.NetworkQuality)
+	}
+
+	tampered := record
+	tampered.NetworkQuality = IdentityQualityStrong
+	if err := tampered.Validate(); err == nil {
+		t.Fatal("tampered network quality unexpectedly validated")
+	}
+}
+
+func TestCollectionIdentityDowngradesUnknownExecutionScopeOnly(t *testing.T) {
+	record := NewCollectionIdentity(
+		[]IdentityEvidence{
+			testEvidence("execution_scope_unknown", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			testEvidence("os_instance", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+			testEvidence("principal", "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+		},
+		[]IdentityEvidence{testEvidence("route_private", "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")},
+		NetworkClassPrivate,
+	)
+	if err := record.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if record.Quality != IdentityQualityWeak || record.NetworkQuality != IdentityQualityStrong {
+		t.Fatalf("qualities = point %q network %q", record.Quality, record.NetworkQuality)
+	}
+}
+
+func TestCollectionIdentityValidatesDisplayLabels(t *testing.T) {
+	record := NewCollectionIdentity(
+		[]IdentityEvidence{testEvidence("hostname", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")},
+		[]IdentityEvidence{testEvidence("offline", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")},
+		NetworkClassOffline,
+	)
+	record.Display = CollectionDisplayLabels{Hostname: "target-01", OS: "linux", Architecture: "amd64"}
+	if err := record.Validate(); err != nil {
+		t.Fatalf("valid display labels rejected: %v", err)
+	}
+	unlabelled := NewCollectionIdentity(record.Evidence, record.NetworkEvidence, record.NetworkClass)
+	if record.CollectionPointID != unlabelled.CollectionPointID ||
+		record.NetworkContextID != unlabelled.NetworkContextID {
+		t.Fatal("display labels changed authoritative identity")
+	}
+	record.Display.Hostname = "target\nspoof"
+	if err := record.Validate(); err == nil {
+		t.Fatal("control character in display hostname unexpectedly validated")
+	}
+	record.Display.Hostname = "target\u202espoof"
+	if err := record.Validate(); err == nil {
+		t.Fatal("format character in display hostname unexpectedly validated")
+	}
+}
+
+func TestCollectionIdentityRejectsUnsupportedAndMisclassifiedEvidence(t *testing.T) {
+	record := NewCollectionIdentity(
+		[]IdentityEvidence{
+			testEvidence("os_instance", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			testEvidence("principal", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+		},
+		[]IdentityEvidence{testEvidence("route_private", "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")},
+		NetworkClassPublic,
+	)
+	if err := record.Validate(); err == nil {
+		t.Fatal("misclassified network evidence unexpectedly validated")
+	}
+
+	record = NewCollectionIdentity(
+		[]IdentityEvidence{testEvidence("invented", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")},
+		[]IdentityEvidence{testEvidence("offline", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")},
+		NetworkClassOffline,
+	)
+	if err := record.Validate(); err == nil {
+		t.Fatal("unsupported evidence kind unexpectedly validated")
 	}
 }

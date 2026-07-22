@@ -6,7 +6,7 @@ import (
 	"io"
 )
 
-// DecodeStrict decodes exactly one ingest-v3 document and rejects unknown
+// DecodeStrict decodes exactly one ingest-v4 document and rejects unknown
 // structural fields. Collector-defined graph properties remain open maps.
 func DecodeStrict(reader io.Reader, data *IngestData) error {
 	decoder := json.NewDecoder(reader)

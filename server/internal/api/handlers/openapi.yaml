@@ -167,13 +167,13 @@ components:
         page:
           $ref: "#/components/schemas/PageMetadata"
 
-    IngestV3:
+    IngestV4:
       type: object
       additionalProperties: false
       required: [meta, graph]
       properties:
         meta:
-          $ref: "#/components/schemas/IngestMetaV3"
+          $ref: "#/components/schemas/IngestMetaV4"
         graph:
           type: object
           additionalProperties: false
@@ -182,19 +182,19 @@ components:
             nodes:
               type: array
               items:
-                $ref: "#/components/schemas/IngestNodeV3"
+                $ref: "#/components/schemas/IngestNodeV4"
             edges:
               type: array
               items:
-                $ref: "#/components/schemas/IngestEdgeV3"
+                $ref: "#/components/schemas/IngestEdgeV4"
 
-    IngestMetaV3:
+    IngestMetaV4:
       type: object
       additionalProperties: false
       required:
         - version
         - type
-        - origin
+        - identity
         - collector
         - collector_version
         - timestamp
@@ -205,12 +205,12 @@ components:
       properties:
         version:
           type: integer
-          enum: [3]
+          enum: [4]
         type:
           type: string
           enum: [agenthound-ingest]
-        origin:
-          $ref: "#/components/schemas/IngestOriginV3"
+        identity:
+          $ref: "#/components/schemas/CollectionIdentityV4"
         collector:
           type: string
           enum: [mcp, a2a, config, scan]
@@ -224,35 +224,58 @@ components:
           type: string
           minLength: 1
         collection:
-          $ref: "#/components/schemas/IngestCollectionV3"
+          $ref: "#/components/schemas/IngestCollectionV4"
         ruleset:
-          $ref: "#/components/schemas/IngestRulesetV3"
+          $ref: "#/components/schemas/IngestRulesetV4"
         identity_schemes:
           type: array
           minItems: 1
           items:
-            $ref: "#/components/schemas/IngestIdentitySchemeV3"
+            $ref: "#/components/schemas/IngestIdentitySchemeV4"
         extra:
           type: object
           additionalProperties: true
 
-    IngestOriginV3:
+    IdentityEvidenceV4:
       type: object
       additionalProperties: false
-      required: [host_id, network_realm_id]
+      required: [kind, digest]
       properties:
-        host_id:
-          type: string
-          minLength: 1
-          maxLength: 128
-          pattern: "^[a-z0-9][a-z0-9._-]{0,127}$"
-        network_realm_id:
-          type: string
-          minLength: 1
-          maxLength: 128
-          pattern: "^[a-z0-9][a-z0-9._-]{0,127}$"
+        kind: { type: string, pattern: "^[a-z_]+$" }
+        digest: { type: string, pattern: "^hmac-sha256:[0-9a-f]{64}$" }
 
-    IngestCollectionV3:
+    CollectionIdentityV4:
+      type: object
+      additionalProperties: false
+      required: [scheme, version, collection_point_id, network_context_id, quality, network_quality, network_class, evidence, network_evidence]
+      properties:
+        scheme: { type: string, enum: [agenthound_collection_v1] }
+        version: { type: integer, enum: [1] }
+        collection_point_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        network_context_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        quality: { type: string, enum: [strong, weak] }
+        network_quality: { type: string, enum: [strong, unknown] }
+        network_class: { type: string, enum: [unknown, offline, private, public, mixed] }
+        display:
+          $ref: "#/components/schemas/CollectionDisplayLabels"
+        evidence:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/IdentityEvidenceV4" }
+        network_evidence:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/IdentityEvidenceV4" }
+
+    CollectionDisplayLabels:
+      type: object
+      additionalProperties: false
+      properties:
+        hostname: { type: string, maxLength: 255 }
+        os: { type: string, maxLength: 255 }
+        architecture: { type: string, maxLength: 255 }
+
+    IngestCollectionV4:
       type: object
       additionalProperties: false
       required: [state, coverage_keys, outcomes]
@@ -296,6 +319,7 @@ components:
                 type: string
                 enum: [mcp, a2a, config, scan]
               coverage_key: { type: string }
+              parent_coverage_key: { type: string }
               target: { type: string, minLength: 1 }
               method: { type: string, minLength: 1 }
               state:
@@ -304,7 +328,7 @@ components:
               items: { type: integer, minimum: 0 }
               error: { type: string }
 
-    IngestRulesetV3:
+    IngestRulesetV4:
       type: object
       additionalProperties: false
       required: [digest, load_state, authenticity]
@@ -333,7 +357,7 @@ components:
           items: { type: string }
         authenticity: { type: string, minLength: 1 }
 
-    IngestIdentitySchemeV3:
+    IngestIdentitySchemeV4:
       type: object
       additionalProperties: false
       required: [entity_kind, scheme, version]
@@ -343,7 +367,7 @@ components:
         scheme: { type: string, minLength: 1 }
         version: { type: integer, minimum: 1 }
 
-    IngestNodeV3:
+    IngestNodeV4:
       type: object
       additionalProperties: false
       required: [id, kinds, properties, observation_domains]
@@ -366,7 +390,7 @@ components:
           enum: [reference_only]
           description: Omit for an authoritative property observation. reference_only asserts only id and kinds and requires an empty properties object.
 
-    IngestEdgeV3:
+    IngestEdgeV4:
       type: object
       additionalProperties: false
       required:
@@ -723,6 +747,9 @@ components:
         - credential_merge_key
         - server_id
         - server_kind
+        - server_identity_id
+        - service_scope
+        - service_scope_id
         - resource_id
         - resource_kind
         - resource_identity_input
@@ -731,7 +758,7 @@ components:
       properties:
         schema_version:
           type: integer
-          enum: [2]
+          enum: [3]
         topology_normalization_version:
           type: integer
           enum: [1]
@@ -749,6 +776,11 @@ components:
         credential_merge_key: { type: string, enum: [value_hash] }
         server_id: { type: string, minLength: 1 }
         server_kind: { type: string, enum: [MCPServer] }
+        server_identity_id: { type: string, minLength: 1 }
+        service_scope:
+          type: string
+          enum: [collection_point, network_context, artifact]
+        service_scope_id: { type: string, minLength: 1 }
         resource_id: { type: string, minLength: 1 }
         resource_kind: { type: string, enum: [MCPResource] }
         resource_identity_input: { type: string, minLength: 1 }
@@ -1202,7 +1234,7 @@ components:
     IngestResult:
       type: object
       additionalProperties: false
-      required: [scan_id, outcome, projection_status, submitted, write_rows, graph_totals, normalization_status, collection, duration]
+      required: [scan_id, outcome, projection_status, submitted, write_rows, graph_totals, normalization_status, collection, identity, duration]
       properties:
         scan_id:
           type: string
@@ -1229,7 +1261,9 @@ components:
           items:
             $ref: "#/components/schemas/NormalizationWarning"
         collection:
-          $ref: "#/components/schemas/IngestCollectionV3"
+          $ref: "#/components/schemas/IngestCollectionV4"
+        identity:
+          $ref: "#/components/schemas/IngestIdentityResult"
         post_processing_stats:
           type: array
           items:
@@ -1258,6 +1292,20 @@ components:
         duration:
           type: integer
           description: Duration in nanoseconds
+
+    IngestIdentityResult:
+      type: object
+      additionalProperties: false
+      required: [collection_point_id, network_context_id, quality, network_quality, network_class, recognition]
+      properties:
+        collection_point_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        network_context_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        quality: { type: string, enum: [strong, weak] }
+        network_quality: { type: string, enum: [strong, unknown] }
+        network_class: { type: string, enum: [unknown, offline, private, public, mixed] }
+        display:
+          $ref: "#/components/schemas/CollectionDisplayLabels"
+        recognition: { type: string, enum: [new, recognized, unknown] }
 
     Scan:
       type: object
@@ -1773,14 +1821,14 @@ paths:
     post:
       summary: Ingest collector output
       description: >-
-        Upload strict ingest-v3 collector JSON. Before generic validation or
-        lifecycle/audit writes, the server reverifies both immutable database
-        markers and admits only the configured exact host/network realm.
-        V1/V2, missing or mismatched collection origin, unknown structural
-        fields, unscoped facts, legacy property aliases, and incomplete
-        canonical evidence metadata are rejected before graph writes. Runs the
-        full pipeline: admission, validation, normalization, deduplication,
-        Neo4j write, and composite-edge post-processing. Max body 100 MB.
+        Upload strict ingest-v4 collector JSON. Before generic validation or
+        lifecycle/audit writes, the server reverifies the automatically paired
+        PostgreSQL and Neo4j markers. V1/V2/V3, malformed or inconsistent
+        derived identity, unknown structural fields, unscoped facts, legacy
+        property aliases, and incomplete canonical evidence metadata are
+        rejected before graph writes. Every valid artifact is accepted; the
+        server scopes ambiguous identities and lifecycle ownership from the
+        artifact's collection point and network context. Max body 100 MB.
       operationId: ingest
       tags: [Ingest]
       requestBody:
@@ -1788,7 +1836,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/IngestV3"
+              $ref: "#/components/schemas/IngestV4"
       responses:
         "200":
           description: Ingest successful
@@ -1800,8 +1848,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "403":
           $ref: "#/components/responses/Forbidden"
-        "409":
-          description: Artifact host/network realm does not match this database.
+        "500":
+          description: Ingest failed before or after graph mutation.
           content:
             application/json:
               schema:

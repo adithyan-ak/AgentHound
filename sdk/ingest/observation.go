@@ -36,17 +36,6 @@ func CollectorRootCoverageKey(collector string) string {
 	return CanonicalCoverageKey(collector, "root", "collect")
 }
 
-// ParentCollectorRootKey returns the stable collector root that can track a
-// scoped child head. Recording this membership is non-authoritative; only a
-// completed CoverageRoot declaration may diff the active child set.
-func ParentCollectorRootKey(coverageKey string) string {
-	parts := strings.Split(coverageKey, ":")
-	if len(parts) != 4 || parts[1] == "root" || !AllowedCollectors[parts[0]] {
-		return ""
-	}
-	return CollectorRootCoverageKey(parts[0])
-}
-
 // CanonicalURLScope normalizes URL spelling for coverage identity without
 // changing the actual collector target. Credentials and fragments are not part
 // of scope identity; query parameters are sorted deterministically.

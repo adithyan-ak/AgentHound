@@ -15,40 +15,29 @@ The shipped `docker/docker-compose.yml` runs three containers:
 | `agenthound` | `agenthound-server` | `127.0.0.1:8080` |
 
 ```bash
-export AGENTHOUND_HOST_ID=security-laptop
-export AGENTHOUND_NETWORK_REALM_ID=corp-lab
-export AGENTHOUND_STORAGE_PAIR_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 cd docker && docker compose up -d
 ```
 
 All ports bind to loopback. No external exposure. Suitable for single-operator use on a laptop or jump box.
 
-Generate the storage UUID only for a new empty pair, then persist all three
-values in the deployment configuration. `host-id` is the one collector machine
-whose artifacts this pair accepts; `network-realm-id` identifies the private
-network visible from it. Each ID must match
-`[a-z0-9][a-z0-9._-]{0,127}`. Do not infer them from a container hostname or
-IP address, which can change across restarts.
+### Automatic multi-vantage provenance
 
-### One collection realm per database pair
+The collector derives a deterministic collection point from the OS instance,
+effective principal, and filesystem/container execution scope. It derives a
+network context from that point plus the network visibility it can observe.
+Raw identity evidence never leaves the collection host; bounded hostname, OS,
+and architecture labels are emitted only for display. The server accepts every
+structurally valid ingest-v4 artifact and uses the derived IDs to scope local,
+private, and endpoint-derived graph evidence; they are not authentication or
+attestation. If route/interface inspection fails, the point can remain strong
+while only network-scoped evidence is made artifact-local.
 
-The host/realm restriction prevents false graph merges between filesystem
-paths, loopback services, RFC1918 endpoints, host identities, and lifecycle
-coverage observed from different vantage points. The server compares every v3
-artifact with its configured tuple before generic validation or any scan/graph
-write. A mismatch returns `409 COLLECTION_REALM_MISMATCH`.
-
-The storage UUID binds PostgreSQL and Neo4j to each other. Startup reads both
-markers before migrations or schema writes. Crossed pairs, future marker
-versions, mismatches, and unbound non-empty databases fail closed. A one-sided
-missing marker is repaired only while both stores are product-empty, covering
-an interrupted first initialization. A runtime verification failure returns a
-sanitized `503 STORAGE_BINDING_UNAVAILABLE` and writes nothing.
-
-These identifiers are admission provenance, not authentication or signatures.
-Keep the server behind its documented network boundary and protect artifacts
-in transit. To move to another host or realm, reset both databases and recollect
-rather than editing provenance on retained artifacts.
+The server also generates the storage UUID internally. Startup reads the
+versioned marker from both databases before migrations or schema writes.
+Crossed pairs, future marker versions, and unsafe unbound non-empty databases
+fail closed. A repairable one-sided missing marker is restored automatically.
+A runtime verification failure returns a sanitized
+`503 STORAGE_BINDING_UNAVAILABLE` and writes nothing.
 
 ---
 
@@ -143,46 +132,53 @@ docker compose -f docker/docker-compose.yml exec app-db pg_dump -U agenthound ag
 
 Schedule both as one coordinated backup set. Neo4j contains the mutable graph projection; Postgres
 contains publication history and analyst triage that re-ingestion does not
-reconstruct. The immutable storage-pair marker deliberately makes a PostgreSQL
+reconstruct. The internal storage-pair marker deliberately makes a PostgreSQL
 backup from one deployment incompatible with a Neo4j backup from another.
 
 ---
 
 ## Upgrades
 
-`agenthound-server` initializes Neo4j constraints and the PostgreSQL schema on
-startup. The pre-launch PostgreSQL history was replaced by one current
-single-user `001_initial.sql`; prior development schemas are intentionally not
-upgradeable. Graph schema 2 adds per-owner observation fingerprints. A
-schema-1 Neo4j graph that already contains authoritative facts without those
-fingerprints is rejected at startup: silently accepting it could make the
-first targeted refresh property-incomplete with no safe way to reconstruct
-each historical owner's contribution. This is a fail-fast compatibility guard,
-not a lossless migration.
+Ingest v4 is a clean database boundary. Existing unscoped v3 evidence cannot be
+safely rewritten into collection-point and network-context ownership, so it
+must not be mixed into the v4 projection. Preserve the old deployment or a
+coordinated backup as read-only evidence, then start v4 with fresh PostgreSQL
+and Neo4j volumes and recollect.
 
 Back up the deployment, preserve any source artifacts needed for recollection,
 then recreate both development databases before starting this release:
 
 ```bash
 docker compose -f docker/docker-compose.yml down --volumes
-export AGENTHOUND_HOST_ID=security-laptop
-export AGENTHOUND_NETWORK_REALM_ID=corp-lab
-export AGENTHOUND_STORAGE_PAIR_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 docker compose -f docker/docker-compose.yml up -d
 ```
 
-This permanently deletes the development Neo4j and PostgreSQL volumes. The
-fresh schema-2 baseline is idempotent after creation. An empty schema-1 graph,
-or a pre-release graph whose active owners already all carry fingerprints, is
-advanced automatically. The server still detects Neo4j 4.4 versus 5.x and
-applies the appropriate constraint syntax.
+This permanently deletes the selected Neo4j and PostgreSQL volumes; take the
+coordinated backup first. The fresh graph schema is idempotent after creation,
+and the server still detects Neo4j 4.4 versus 5.x constraint syntax.
 
-Re-run the current collector after the reset. Stdio MCP identity changed from
+For the public no-clone installation, the equivalent full operation reset is:
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/docker/docker-compose.public.yml \
+  | docker compose -f - -p agenthound down --volumes
+```
+
+This command is intentionally destructive and cannot be undone without a
+coordinated backup. Run the public Quickstart `up` command again afterward.
+
+Re-run the current collector after the reset. Retained v3 JSON remains evidence
+to archive, not input for rebuilding the v4 projection. Stdio MCP identity changed from
 `mcp_stdio_v2_ordered` to `mcp_stdio_v3_hashed_argv` so artifacts can prove the
 parent ID using ordered argument digests without exposing raw argv. The strict
-server rejects v2 identity metadata rather than merging incompatible parent and
-child IDs. Retained v2 scan JSON is therefore evidence to archive, not an input
-that can rebuild the v3 projection.
+server rejects incompatible identity metadata rather than merging parent and
+child IDs.
+
+Per-collection-point purge is intentionally unavailable. The graph stores a
+merged current projection, not every point's immutable normalized contribution,
+so removing one owner could not always reconstruct surviving properties
+exactly. Scan deletion remains history-only. When all evidence must be removed,
+perform a documented full operation reset by replacing both database volumes.
 
 ---
 
@@ -190,8 +186,8 @@ that can rebuild the v3 projection.
 
 - [ ] All ports bound to `127.0.0.1` (or behind VPN/mesh)
 - [ ] `AGENTHOUND_CORS_ORIGINS` matches the operator-facing URL(s); foreign-origin browser POSTs are rejected
-- [ ] Stable `AGENTHOUND_HOST_ID` and `AGENTHOUND_NETWORK_REALM_ID` name the one admitted collection vantage point
-- [ ] One canonical `AGENTHOUND_STORAGE_PAIR_ID` is retained with the paired PostgreSQL and Neo4j volumes/backups
+- [ ] PostgreSQL and Neo4j are backed up and restored as one coordinated pair
+- [ ] Existing unscoped v3 databases are preserved separately, never mixed into the v4 projection
 - [ ] Neo4j credentials changed from default `agenthound`
 - [ ] Postgres credentials changed from default
 - [ ] If exposed via reverse proxy: mTLS or equivalent client auth enabled

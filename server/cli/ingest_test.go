@@ -20,6 +20,15 @@ func TestWriteIngestResultComplete(t *testing.T) {
 		PublishedRevision: &revision,
 		WriteRows:         ingest.FactCounts{Nodes: 3, Edges: 2},
 		Duration:          1500 * time.Millisecond,
+		Identity: ingest.IngestIdentityResult{
+			CollectionPointID: "sha256:" + strings.Repeat("a", 64),
+			NetworkContextID:  "sha256:" + strings.Repeat("b", 64),
+			Quality:           ingest.IdentityQualityStrong,
+			NetworkQuality:    ingest.IdentityQualityUnknown,
+			NetworkClass:      ingest.NetworkClassPrivate,
+			Display:           ingest.CollectionDisplayLabels{Hostname: "target-01", OS: "linux", Architecture: "amd64"},
+			Recognition:       "new",
+		},
 	}
 
 	var output bytes.Buffer
@@ -33,6 +42,10 @@ func TestWriteIngestResultComplete(t *testing.T) {
 		"Scan ID:            scan-complete",
 		"Outcome:            complete",
 		"Projection status:  complete",
+		"Collection point:   target-01 · linux amd64 (strong, new)",
+		"Collection point ID: sha256:aaaaaaaa",
+		"Network context:    sha256:bbbbbbbb",
+		"(private, unknown)",
 		"Published revision: 7",
 		"Node write rows:    3",
 		"Edge write rows:    2",

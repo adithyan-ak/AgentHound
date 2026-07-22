@@ -189,7 +189,10 @@ func validCampaignEvidenceRow(t *testing.T, agentID string, relationshipID int64
 	t.Helper()
 	serverID := "sha256:campaign-server"
 	resourceInput := "postgres://prod/customers"
-	resourceID := ingest.ComputeNodeID("MCPResource", serverID, resourceInput)
+	serviceScopeID := "sha256:processor-test-network"
+	scopedServerID := ingest.ScopedNodeID(ingest.ScopeNetworkContext, serviceScopeID, serverID)
+	rawResourceID := ingest.ComputeNodeID("MCPResource", serverID, resourceInput)
+	resourceID := ingest.ScopedNodeID(ingest.ScopeNetworkContext, serviceScopeID, rawResourceID)
 	witness := campaign.Witness{
 		SchemaVersion:                campaign.WitnessSchemaVersion,
 		TopologyNormalizationVersion: campaign.WitnessTopologyNormalizationVersion,
@@ -201,13 +204,16 @@ func validCampaignEvidenceRow(t *testing.T, agentID string, relationshipID int64
 		CredentialKind:               "Credential",
 		CredentialValueHash:          "sha256:campaign-value",
 		CredentialMergeKey:           campaign.CredentialMergeKeyValueHash,
-		ServerID:                     serverID,
+		ServerID:                     scopedServerID,
 		ServerKind:                   "MCPServer",
+		ServerIdentityID:             serverID,
+		ServiceScope:                 ingest.ScopeNetworkContext,
+		ServiceScopeID:               serviceScopeID,
 		ResourceID:                   resourceID,
 		ResourceKind:                 "MCPResource",
 		ResourceIdentityInput:        resourceInput,
 		EvidenceNodeIDs: []string{
-			agentID, serverID, "sha256:campaign-credential", resourceID,
+			agentID, scopedServerID, "sha256:campaign-credential", resourceID,
 		},
 		EvidenceNodeKinds: []string{
 			"AgentInstance", "MCPServer", "Credential", "MCPResource",
@@ -274,6 +280,9 @@ func TestValidatedCampaignEvidenceRejectsPerFieldTamper(t *testing.T) {
 		campaign.PropCredentialMergeKey:  func(_, props map[string]any) { props[campaign.PropCredentialMergeKey] = "identity" },
 		campaign.PropServerID:            func(_, props map[string]any) { props[campaign.PropServerID] = "sha256:other" },
 		campaign.PropServerKind:          func(_, props map[string]any) { props[campaign.PropServerKind] = "Host" },
+		campaign.PropServerIdentityID:    func(_, props map[string]any) { props[campaign.PropServerIdentityID] = "sha256:other" },
+		campaign.PropServiceScope:        func(_, props map[string]any) { props[campaign.PropServiceScope] = "reference" },
+		campaign.PropServiceScopeID:      func(_, props map[string]any) { props[campaign.PropServiceScopeID] = "sha256:other" },
 		campaign.PropResourceID:          func(_, props map[string]any) { props[campaign.PropResourceID] = "sha256:other" },
 		campaign.PropResourceKind:        func(_, props map[string]any) { props[campaign.PropResourceKind] = "Credential" },
 		campaign.PropResourceIdentity:    func(_, props map[string]any) { props[campaign.PropResourceIdentity] = "other://resource" },

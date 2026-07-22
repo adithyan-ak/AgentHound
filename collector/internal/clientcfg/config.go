@@ -12,16 +12,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/spf13/pflag"
 )
 
 type Config struct {
-	LogLevel       string
-	Output         string
-	Concurrency    int
-	HostID         string
-	NetworkRealmID string
+	LogLevel    string
+	Output      string
+	Concurrency int
 }
 
 // LoadWithFlags creates a Config using flag values → env vars → defaults.
@@ -33,13 +30,6 @@ func LoadWithFlags(flags *pflag.FlagSet) *Config {
 
 	cfg.LogLevel = resolve(flags, "log-level", "AGENTHOUND_LOG_LEVEL", cfg.LogLevel)
 	cfg.Output = resolve(flags, "output", "AGENTHOUND_OUTPUT", cfg.Output)
-	cfg.HostID = resolve(flags, "host-id", "AGENTHOUND_HOST_ID", "")
-	cfg.NetworkRealmID = resolve(
-		flags,
-		"network-realm-id",
-		"AGENTHOUND_NETWORK_REALM_ID",
-		"",
-	)
 
 	if v := resolve(flags, "concurrency", "AGENTHOUND_CONCURRENCY", ""); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -67,40 +57,11 @@ func (c *Config) Validate() error {
 	if c.Concurrency < 1 {
 		errs = append(errs, fmt.Sprintf("invalid concurrency %d: must be >= 1", c.Concurrency))
 	}
-	if c.HostID != "" {
-		if err := ingest.ValidateOriginID("host_id", c.HostID); err != nil {
-			errs = append(errs, err.Error())
-		}
-	}
-	if c.NetworkRealmID != "" {
-		if err := ingest.ValidateOriginID("network_realm_id", c.NetworkRealmID); err != nil {
-			errs = append(errs, err.Error())
-		}
-	}
 
 	if len(errs) > 0 {
 		return fmt.Errorf("config validation: %s", strings.Join(errs, "; "))
 	}
 	return nil
-}
-
-// CollectionOrigin returns the mandatory origin for a command that emits an
-// ingest artifact. Non-collection commands may use Config without setting it.
-func (c *Config) CollectionOrigin() (ingest.CollectionOrigin, error) {
-	if c == nil {
-		return ingest.CollectionOrigin{}, fmt.Errorf("collection origin configuration is unavailable")
-	}
-	origin := ingest.CollectionOrigin{
-		HostID:         c.HostID,
-		NetworkRealmID: c.NetworkRealmID,
-	}
-	if err := origin.Validate(); err != nil {
-		return ingest.CollectionOrigin{}, fmt.Errorf(
-			"collection origin: %w (set --host-id/AGENTHOUND_HOST_ID and --network-realm-id/AGENTHOUND_NETWORK_REALM_ID)",
-			err,
-		)
-	}
-	return origin, nil
 }
 
 // resolve returns the first non-empty value from: flag, env var, default.

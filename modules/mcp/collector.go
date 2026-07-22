@@ -106,7 +106,6 @@ func (c *MCPCollector) Collect(ctx context.Context, opts collector.CollectOption
 	}
 
 	data := common.NewIngestData("mcp", scanID)
-	data.Meta.Origin = opts.Origin
 	data.Meta.Ruleset = rules.ManifestForEngine(c.engine)
 	data.Meta.IdentitySchemes = []ingest.IdentityScheme{{
 		EntityKind: "MCPServer",

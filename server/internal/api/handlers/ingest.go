@@ -31,21 +31,12 @@ func (h *IngestHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.pipeline.Ingest(r.Context(), &data)
 	if err != nil {
-		if binding.IsRealmMismatch(err) {
-			WriteJSON(w, http.StatusConflict, ErrorResponse{
-				Error: ErrorDetail{
-					Code:    "COLLECTION_REALM_MISMATCH",
-					Message: err.Error(),
-				},
-			})
-			return
-		}
 		if binding.IsStorageError(err) {
 			slog.Error("storage binding admission failed", "error", err)
 			WriteJSON(w, http.StatusServiceUnavailable, ErrorResponse{
 				Error: ErrorDetail{
 					Code:    "STORAGE_BINDING_UNAVAILABLE",
-					Message: "The configured PostgreSQL and Neo4j storage binding could not be verified.",
+					Message: "The PostgreSQL and Neo4j storage pair could not be verified.",
 				},
 			})
 			return

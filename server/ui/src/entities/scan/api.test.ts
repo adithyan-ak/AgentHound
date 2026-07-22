@@ -61,6 +61,18 @@ function ingestCollection(suffix = "c") {
   };
 }
 
+function ingestIdentity() {
+  return {
+    collection_point_id: `sha256:${"1".repeat(64)}`,
+    network_context_id: `sha256:${"2".repeat(64)}`,
+    quality: "strong",
+    network_quality: "strong",
+    network_class: "private",
+    display: { hostname: "target-01", os: "linux", architecture: "amd64" },
+    recognition: "new",
+  };
+}
+
 describe("uploadScan", () => {
   beforeEach(() => {
     getMock.mockReset();
@@ -78,6 +90,7 @@ describe("uploadScan", () => {
           submitted: { nodes: 1, edges: 0 },
           write_rows: { nodes: 1, edges: 0 },
           graph_totals: { before: null, after: null },
+          identity: ingestIdentity(),
           collection: {
             state: "complete",
             coverage_keys: [coverageKey],
@@ -128,6 +141,7 @@ describe("uploadScan", () => {
           submitted: { nodes: 0, edges: 0 },
           write_rows: { nodes: 0, edges: 0 },
           graph_totals: { before: null, after: null },
+          identity: ingestIdentity(),
           collection: {
             state: "complete",
             coverage_keys: [coverageKey],
@@ -164,6 +178,7 @@ describe("uploadScan", () => {
           submitted: { nodes: 0, edges: 0 },
           write_rows: { nodes: 0, edges: 0 },
           graph_totals: { before: null, after: null },
+          identity: ingestIdentity(),
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
@@ -190,6 +205,7 @@ describe("uploadScan", () => {
               submitted: { nodes: 1000, edges: 0 },
               write_rows: { nodes: 1000, edges: 0 },
               graph_totals: { before: null, after: null },
+              identity: ingestIdentity(),
               collection: ingestCollection("d"),
               stages: [
                 {
@@ -248,6 +264,7 @@ describe("uploadScan", () => {
               submitted: { nodes: 1, edges: 0 },
               write_rows: { nodes: 1, edges: 0 },
               graph_totals: { before: null, after: null },
+              identity: ingestIdentity(),
             },
           },
         }),

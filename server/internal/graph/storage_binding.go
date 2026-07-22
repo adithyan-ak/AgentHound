@@ -105,10 +105,7 @@ func (s *StorageBindingStore) readOptional(
 		rows, err := tx.Run(ctx, `
 MATCH (b:AgentHoundStorageBinding)
 RETURN b.binding_version AS binding_version,
-       b.storage_pair_id AS storage_pair_id,
-       b.host_id AS host_id,
-       b.network_realm_id AS network_realm_id,
-       b.realm_sha256 AS realm_sha256
+       b.storage_pair_id AS storage_pair_id
 ORDER BY b.singleton
 LIMIT 2`, nil)
 		if err != nil {
@@ -125,24 +122,9 @@ LIMIT 2`, nil)
 			if err != nil {
 				return nil, err
 			}
-			hostID, err := recordString(record, "host_id")
-			if err != nil {
-				return nil, err
-			}
-			networkRealmID, err := recordString(record, "network_realm_id")
-			if err != nil {
-				return nil, err
-			}
-			realmSHA256, err := recordString(record, "realm_sha256")
-			if err != nil {
-				return nil, err
-			}
 			markers = append(markers, binding.Marker{
 				BindingVersion: int(bindingVersion),
 				StoragePairID:  storagePairID,
-				HostID:         hostID,
-				NetworkRealmID: networkRealmID,
-				RealmSHA256:    realmSHA256,
 			})
 		}
 		if err := rows.Err(); err != nil {
@@ -201,16 +183,10 @@ func (s *StorageBindingStore) Install(
 MERGE (b:AgentHoundStorageBinding {singleton: 'agenthound'})
 ON CREATE SET b.binding_version = $binding_version,
               b.storage_pair_id = $storage_pair_id,
-              b.host_id = $host_id,
-              b.network_realm_id = $network_realm_id,
-              b.realm_sha256 = $realm_sha256,
               b.created_at = datetime()
 RETURN b.binding_version AS binding_version`, map[string]any{
-			"binding_version":  marker.BindingVersion,
-			"storage_pair_id":  marker.StoragePairID,
-			"host_id":          marker.HostID,
-			"network_realm_id": marker.NetworkRealmID,
-			"realm_sha256":     marker.RealmSHA256,
+			"binding_version": marker.BindingVersion,
+			"storage_pair_id": marker.StoragePairID,
 		})
 		if err != nil {
 			return nil, err

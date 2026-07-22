@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
@@ -130,6 +131,21 @@ func (s *ScanStore) CreateScan(ctx context.Context, scan *model.Scan) error {
 	return nil
 }
 
+// CollectionPointRecognized reports whether a previously recorded import used
+// the same derived execution vantage. This is import feedback only; it is not
+// an admission decision.
+func (s *ScanStore) CollectionPointRecognized(ctx context.Context, collectionPointID string) (bool, error) {
+	var recognized bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM scans
+		WHERE metadata->'collection_identity'->>'collection_point_id' = $1
+	)`, collectionPointID).Scan(&recognized)
+	if err != nil {
+		return false, fmt.Errorf("recognize collection point: %w", err)
+	}
+	return recognized, nil
+}
+
 // BeginScan records a new attempt and marks the mutable projection as
 // updating in one PostgreSQL transaction. A same-ID retry keeps the previous
 // finding rows and published revision visible until finalization atomically
@@ -138,6 +154,7 @@ func (s *ScanStore) BeginScan(
 	ctx context.Context,
 	scan *model.Scan,
 	dirtyCoverage []string,
+	coverageParents map[string]string,
 ) ([]string, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -222,6 +239,9 @@ func (s *ScanStore) BeginScan(
 	)
 	if err != nil {
 		return nil, fmt.Errorf("begin scan row: %w", err)
+	}
+	if err := recordCoverageMemberships(ctx, tx, coverageParents); err != nil {
+		return nil, err
 	}
 
 	var inheritedJSON []byte
@@ -357,7 +377,58 @@ func (s *ScanStore) ResolveRetiredCoverage(
 	if err := json.Unmarshal(inheritedJSON, &inheritedDirty); err != nil {
 		return nil, fmt.Errorf("decode inherited dirty coverage: %w", err)
 	}
-	return retiredCoverageKeys(roots, heads, inheritedDirty), nil
+	dirtyParents := make(map[string]string)
+	if len(inheritedDirty) > 0 {
+		membershipRows, err := s.pool.Query(ctx, `SELECT coverage_key, parent_key
+			FROM coverage_memberships
+			WHERE coverage_key = ANY($1::text[])
+			  AND parent_key = ANY($2::text[])
+			ORDER BY parent_key, coverage_key`, inheritedDirty, rootKeys)
+		if err != nil {
+			return nil, fmt.Errorf("read dirty coverage membership: %w", err)
+		}
+		defer membershipRows.Close()
+		for membershipRows.Next() {
+			var key, parent string
+			if err := membershipRows.Scan(&key, &parent); err != nil {
+				return nil, fmt.Errorf("scan dirty coverage membership: %w", err)
+			}
+			dirtyParents[key] = parent
+		}
+		if err := membershipRows.Err(); err != nil {
+			return nil, fmt.Errorf("read dirty coverage membership: %w", err)
+		}
+	}
+	return retiredCoverageKeys(roots, heads, inheritedDirty, dirtyParents), nil
+}
+
+func recordCoverageMemberships(
+	ctx context.Context,
+	tx pgx.Tx,
+	parents map[string]string,
+) error {
+	keys := make([]string, 0, len(parents))
+	for key, parent := range parents {
+		if key != "" && parent != "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		parent := parents[key]
+		tag, err := tx.Exec(ctx, `INSERT INTO coverage_memberships
+			    (coverage_key, parent_key, updated_at)
+			VALUES ($1, $2, NOW())
+			ON CONFLICT (coverage_key) DO UPDATE SET updated_at = NOW()
+			WHERE coverage_memberships.parent_key = EXCLUDED.parent_key`, key, parent)
+		if err != nil {
+			return fmt.Errorf("record coverage membership %s: %w", key, err)
+		}
+		if tag.RowsAffected() != 1 {
+			return fmt.Errorf("coverage key %s changed its explicit parent", key)
+		}
+	}
+	return nil
 }
 
 func (s *ScanStore) RecordFailure(ctx context.Context, failure ScanFailure) error {

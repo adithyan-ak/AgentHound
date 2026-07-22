@@ -11,27 +11,17 @@ import (
 	"os"
 	"strings"
 
-	"github.com/adithyan-ak/agenthound/sdk/ingest"
-	"github.com/google/uuid"
 	"github.com/spf13/pflag"
 )
 
 type Config struct {
-	LogLevel       string
-	Bind           string
-	Neo4jURI       string
-	Neo4jUser      string
-	Neo4jPassword  string
-	PostgresURI    string
-	CORSOrigins    []string
-	HostID         string
-	NetworkRealmID string
-	StoragePairID  string
-}
-
-type StorageBinding struct {
-	Origin        ingest.CollectionOrigin
-	StoragePairID string
+	LogLevel      string
+	Bind          string
+	Neo4jURI      string
+	Neo4jUser     string
+	Neo4jPassword string
+	PostgresURI   string
+	CORSOrigins   []string
 }
 
 // LoadWithFlags creates a Config using flag values → env vars → defaults.
@@ -51,19 +41,6 @@ func LoadWithFlags(flags *pflag.FlagSet) *Config {
 	cfg.Neo4jUser = resolve(flags, "neo4j-user", "AGENTHOUND_NEO4J_USER", cfg.Neo4jUser)
 	cfg.Neo4jPassword = resolve(flags, "neo4j-password", "AGENTHOUND_NEO4J_PASSWORD", cfg.Neo4jPassword)
 	cfg.PostgresURI = resolve(flags, "pg-uri", "AGENTHOUND_PG_URI", cfg.PostgresURI)
-	cfg.HostID = resolve(flags, "host-id", "AGENTHOUND_HOST_ID", "")
-	cfg.NetworkRealmID = resolve(
-		flags,
-		"network-realm-id",
-		"AGENTHOUND_NETWORK_REALM_ID",
-		"",
-	)
-	cfg.StoragePairID = resolve(
-		flags,
-		"storage-pair-id",
-		"AGENTHOUND_STORAGE_PAIR_ID",
-		"",
-	)
 
 	if origins := resolve(flags, "cors-origins", "AGENTHOUND_CORS_ORIGINS", ""); origins != "" {
 		for _, o := range strings.Split(origins, ",") {
@@ -107,52 +84,11 @@ func (c *Config) Validate() error {
 	if c.PostgresURI == "" {
 		errs = append(errs, "postgres URI must not be empty")
 	}
-	if c.HostID != "" {
-		if err := ingest.ValidateOriginID("host_id", c.HostID); err != nil {
-			errs = append(errs, err.Error())
-		}
-	}
-	if c.NetworkRealmID != "" {
-		if err := ingest.ValidateOriginID("network_realm_id", c.NetworkRealmID); err != nil {
-			errs = append(errs, err.Error())
-		}
-	}
-	if c.StoragePairID != "" {
-		parsed, err := uuid.Parse(c.StoragePairID)
-		if err != nil || parsed.String() != c.StoragePairID {
-			errs = append(errs, "storage_pair_id must be a canonical lowercase UUID")
-		}
-	}
 
 	if len(errs) > 0 {
 		return fmt.Errorf("config validation: %s", strings.Join(errs, "; "))
 	}
 	return nil
-}
-
-// Binding returns the immutable deployment binding required by commands that
-// connect to the AgentHound PostgreSQL+Neo4j storage pair.
-func (c *Config) Binding() (StorageBinding, error) {
-	if c == nil {
-		return StorageBinding{}, fmt.Errorf("storage binding configuration is unavailable")
-	}
-	origin := ingest.CollectionOrigin{
-		HostID:         c.HostID,
-		NetworkRealmID: c.NetworkRealmID,
-	}
-	if err := origin.Validate(); err != nil {
-		return StorageBinding{}, fmt.Errorf(
-			"storage binding origin: %w (set --host-id/AGENTHOUND_HOST_ID and --network-realm-id/AGENTHOUND_NETWORK_REALM_ID)",
-			err,
-		)
-	}
-	parsed, err := uuid.Parse(c.StoragePairID)
-	if err != nil || parsed.String() != c.StoragePairID {
-		return StorageBinding{}, fmt.Errorf(
-			"storage binding: storage_pair_id must be a canonical lowercase UUID (set --storage-pair-id/AGENTHOUND_STORAGE_PAIR_ID)",
-		)
-	}
-	return StorageBinding{Origin: origin, StoragePairID: c.StoragePairID}, nil
 }
 
 // resolve returns the first non-empty value from: flag, env var, default.

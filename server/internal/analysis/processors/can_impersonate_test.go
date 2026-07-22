@@ -65,9 +65,9 @@ func TestCanImpersonate_ProcessSimilarAgents(t *testing.T) {
 		QueryFunc: func(_ context.Context, cypher string, params map[string]any) ([]map[string]any, error) {
 			if strings.Contains(cypher, "A2AAgent)") && !strings.Contains(cypher, "ADVERTISES_SKILL") {
 				return []map[string]any{
-					{"id": "agent-1", "name": "Agent A", "provider": ""},
-					{"id": "agent-2", "name": "Agent B", "provider": ""},
-					{"id": "agent-3", "name": "Agent C", "provider": ""},
+					{"id": "agent-1", "name": "Agent A", "provider": "", "scope_kind": "network_context", "scope_id": "network-a", "collection_point_id": "point-a", "network_context_id": "network-a"},
+					{"id": "agent-2", "name": "Agent B", "provider": "", "scope_kind": "network_context", "scope_id": "network-a", "collection_point_id": "point-a", "network_context_id": "network-a"},
+					{"id": "agent-3", "name": "Agent C", "provider": "", "scope_kind": "network_context", "scope_id": "network-a", "collection_point_id": "point-a", "network_context_id": "network-a"},
 				}, nil
 			}
 			if params != nil {
@@ -181,6 +181,22 @@ func TestCanImpersonate_ProcessSameProviderSkipped(t *testing.T) {
 	}
 }
 
+func TestCanImpersonate_IncompatibleAgentsDoNotChangeSimilarityCorpus(t *testing.T) {
+	agents := []agentInfo{
+		{id: "agent-1", scopeCoordinates: scopeCoordinates{kind: "network_context", id: "network-a", collectionPoint: "point-a", networkContextID: "network-a"}},
+		{id: "agent-2", scopeCoordinates: scopeCoordinates{kind: "network_context", id: "network-a", collectionPoint: "point-a", networkContextID: "network-a"}},
+		{id: "agent-3", scopeCoordinates: scopeCoordinates{kind: "network_context", id: "network-b", collectionPoint: "point-b", networkContextID: "network-b"}},
+	}
+	docs := map[string]string{
+		"agent-1": "database query search records",
+		"agent-2": "database query search records",
+		"agent-3": "unrelated image processing",
+	}
+	if got := compatiblePairSimilarity(agents, docs, 0, 1); got != 0 {
+		t.Fatalf("incompatible third agent changed pair similarity to %f, want 0", got)
+	}
+}
+
 func TestCanImpersonate_ProcessQueryError(t *testing.T) {
 	mock := &graph.MockGraphDB{QueryError: errors.New("query failed")}
 
@@ -196,9 +212,9 @@ func TestCanImpersonate_ProcessWriteError(t *testing.T) {
 		QueryFunc: func(_ context.Context, cypher string, params map[string]any) ([]map[string]any, error) {
 			if strings.Contains(cypher, "A2AAgent)") && !strings.Contains(cypher, "ADVERTISES_SKILL") {
 				return []map[string]any{
-					{"id": "agent-1", "name": "Agent A", "provider": ""},
-					{"id": "agent-2", "name": "Agent B", "provider": ""},
-					{"id": "agent-3", "name": "Agent C", "provider": ""},
+					{"id": "agent-1", "name": "Agent A", "provider": "", "scope_kind": "network_context", "scope_id": "network-a", "collection_point_id": "point-a", "network_context_id": "network-a"},
+					{"id": "agent-2", "name": "Agent B", "provider": "", "scope_kind": "network_context", "scope_id": "network-a", "collection_point_id": "point-a", "network_context_id": "network-a"},
+					{"id": "agent-3", "name": "Agent C", "provider": "", "scope_kind": "network_context", "scope_id": "network-a", "collection_point_id": "point-a", "network_context_id": "network-a"},
 				}, nil
 			}
 			if params != nil {

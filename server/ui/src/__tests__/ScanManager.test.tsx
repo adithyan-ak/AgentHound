@@ -295,25 +295,21 @@ describe("ScanManager", () => {
     await waitFor(() => {
       expect(
         screen.getByText(
-          /agenthound scan --host-id <host-id> --network-realm-id <network-realm-id> --config/i,
+          /agenthound scan --config/i,
         ),
       ).toBeInTheDocument();
     });
     expect(
       screen.getByText(
-        /agenthound scan --host-id <host-id> --network-realm-id <network-realm-id> --output agenthound-scan\.json && agenthound-server ingest agenthound-scan\.json/i,
+        /agenthound scan --output agenthound-scan\.json && agenthound-server ingest agenthound-scan\.json/i,
       ),
     ).toBeInTheDocument();
     const collectorCommands = screen
-      .getAllByText(/^agenthound scan /i)
+      .getAllByText(/^agenthound scan(?: |$)/i)
       .map((element) => element.textContent ?? "");
     expect(collectorCommands).toHaveLength(5);
-    for (const command of collectorCommands) {
-      expect(command).toContain("--host-id <host-id>");
-      expect(command).toContain("--network-realm-id <network-realm-id>");
-    }
     expect(
-      screen.getByText(/They are provenance labels, not credentials\./i),
+      screen.getByText(/there are no identity flags to configure/i),
     ).toBeInTheDocument();
     expect(
       screen.queryByText(/\| agenthound-server ingest/),

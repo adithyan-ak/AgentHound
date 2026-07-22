@@ -1,5 +1,5 @@
-// Package binding defines the immutable host/network/storage boundary shared
-// by the server bootstrap and ingest admission paths.
+// Package binding defines the server-internal PostgreSQL/Neo4j storage-pair
+// boundary. Collection provenance is deliberately independent from it.
 package binding
 
 import (
@@ -7,26 +7,19 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/google/uuid"
 )
 
-const CurrentVersion = 1
+const CurrentVersion = 2
 
 var ErrMarkerMissing = errors.New("storage binding marker is missing")
 
 type Marker struct {
 	BindingVersion int
 	StoragePairID  string
-	HostID         string
-	NetworkRealmID string
-	RealmSHA256    string
 }
 
-func NewMarker(origin ingest.CollectionOrigin, storagePairID string) (Marker, error) {
-	if err := origin.Validate(); err != nil {
-		return Marker{}, fmt.Errorf("origin: %w", err)
-	}
+func NewMarker(storagePairID string) (Marker, error) {
 	parsed, err := uuid.Parse(storagePairID)
 	if err != nil || parsed.String() != storagePairID {
 		return Marker{}, fmt.Errorf("storage_pair_id must be a canonical lowercase UUID")
@@ -34,18 +27,11 @@ func NewMarker(origin ingest.CollectionOrigin, storagePairID string) (Marker, er
 	return Marker{
 		BindingVersion: CurrentVersion,
 		StoragePairID:  storagePairID,
-		HostID:         origin.HostID,
-		NetworkRealmID: origin.NetworkRealmID,
-		RealmSHA256:    ingest.OriginDigest(origin),
 	}, nil
 }
 
-func (m Marker) Origin() ingest.CollectionOrigin {
-	return ingest.CollectionOrigin{HostID: m.HostID, NetworkRealmID: m.NetworkRealmID}
-}
-
 func (m Marker) Validate() error {
-	expected, err := NewMarker(m.Origin(), m.StoragePairID)
+	_, err := NewMarker(m.StoragePairID)
 	if err != nil {
 		return err
 	}
@@ -56,46 +42,16 @@ func (m Marker) Validate() error {
 			CurrentVersion,
 		)
 	}
-	if m.RealmSHA256 != expected.RealmSHA256 {
-		return fmt.Errorf("realm_sha256 does not match host_id and network_realm_id")
-	}
 	return nil
 }
 
 func (m Marker) Equal(other Marker) bool {
 	return m.BindingVersion == other.BindingVersion &&
-		m.StoragePairID == other.StoragePairID &&
-		m.HostID == other.HostID &&
-		m.NetworkRealmID == other.NetworkRealmID &&
-		m.RealmSHA256 == other.RealmSHA256
+		m.StoragePairID == other.StoragePairID
 }
 
 type MarkerReader interface {
 	ReadStorageBinding(context.Context) (Marker, error)
-}
-
-type RealmMismatchError struct {
-	Expected ingest.CollectionOrigin
-	Actual   ingest.CollectionOrigin
-	Cause    error
-}
-
-func (e *RealmMismatchError) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("collection realm mismatch: %v", e.Cause)
-	}
-	return fmt.Sprintf(
-		"collection realm mismatch: artifact host_id=%q network_realm_id=%q; database admits host_id=%q network_realm_id=%q",
-		e.Actual.HostID,
-		e.Actual.NetworkRealmID,
-		e.Expected.HostID,
-		e.Expected.NetworkRealmID,
-	)
-}
-
-func IsRealmMismatch(err error) bool {
-	var target *RealmMismatchError
-	return errors.As(err, &target)
 }
 
 type StorageError struct {
@@ -133,16 +89,9 @@ func NewGuard(expected Marker, postgres, neo4j MarkerReader) (*Guard, error) {
 	return &Guard{expected: expected, postgres: postgres, neo4j: neo4j}, nil
 }
 
-// Admit is deliberately read-only. It runs before validation paths that may
+// Verify is deliberately read-only. It runs before validation paths that may
 // write campaign-rejection audits, scan lifecycle rows, or graph state.
-func (g *Guard) Admit(ctx context.Context, origin ingest.CollectionOrigin) error {
-	if err := origin.Validate(); err != nil {
-		return &RealmMismatchError{Expected: g.expected.Origin(), Actual: origin, Cause: err}
-	}
-	if origin != g.expected.Origin() {
-		return &RealmMismatchError{Expected: g.expected.Origin(), Actual: origin}
-	}
-
+func (g *Guard) Verify(ctx context.Context) error {
 	postgresMarker, err := g.postgres.ReadStorageBinding(ctx)
 	if err != nil {
 		return &StorageError{Message: "PostgreSQL marker read failed", Cause: err}

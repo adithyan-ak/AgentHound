@@ -38,7 +38,7 @@ func TestJupyterMaxItemsTruncationIsNotPublishedComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Loot: %v", err)
 	}
-	envelope := buildLootEnvelope(testCollectionOrigin, server.URL, "jupyter", "TRUNCATED", result)
+	envelope := buildLootEnvelope(server.URL, "jupyter", "TRUNCATED", result)
 	if envelope.Meta.Collection.State != ingest.OutcomePartial {
 		t.Fatalf("collection state = %q, want partial", envelope.Meta.Collection.State)
 	}
@@ -72,7 +72,7 @@ func TestJupyterMaxDepthTruncationIsNotPublishedComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Loot: %v", err)
 	}
-	envelope := buildLootEnvelope(testCollectionOrigin, server.URL, "jupyter", "TRUNCATED", result)
+	envelope := buildLootEnvelope(server.URL, "jupyter", "TRUNCATED", result)
 	if envelope.Meta.Collection.State != ingest.OutcomePartial {
 		t.Fatalf("collection state = %q, want partial", envelope.Meta.Collection.State)
 	}

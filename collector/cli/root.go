@@ -8,7 +8,6 @@ import (
 	"github.com/adithyan-ak/agenthound/collector/internal/clientcfg"
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/common"
-	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/sdk/module"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
 	"github.com/spf13/cobra"
@@ -68,13 +67,6 @@ func Execute() error {
 	return rootCmd.Execute()
 }
 
-func requireCollectionOrigin() (ingest.CollectionOrigin, error) {
-	if cfg == nil {
-		return ingest.CollectionOrigin{}, fmt.Errorf("collection origin configuration is unavailable")
-	}
-	return cfg.CollectionOrigin()
-}
-
 // finalizeModuleFlags runs after every blank-imported module has completed its
 // init registration and before Cobra parses argv. Registration is idempotent so
 // embedded callers and tests may execute the command tree repeatedly.
@@ -100,8 +92,6 @@ func init() {
 	rootCmd.PersistentFlags().String("log-level", "", "Log level: debug, info, warn, error (env: AGENTHOUND_LOG_LEVEL)")
 	rootCmd.PersistentFlags().String("output", "", "Write collected JSON to this path. Use '-' for stdout. Defaults to ./scan-<scan_id>.json in CWD. (env: AGENTHOUND_OUTPUT)")
 	rootCmd.PersistentFlags().Int("concurrency", 0, "Max parallel collector workers (env: AGENTHOUND_CONCURRENCY)")
-	rootCmd.PersistentFlags().String("host-id", "", "Stable lowercase ID for this collection host (env: AGENTHOUND_HOST_ID; required for collection commands)")
-	rootCmd.PersistentFlags().String("network-realm-id", "", "Stable lowercase ID for the private network realm visible to this host (env: AGENTHOUND_NETWORK_REALM_ID; required for collection commands)")
 	rootCmd.PersistentFlags().Bool("quiet", false, "Suppress non-error log output (env: AGENTHOUND_QUIET=1)")
 	rootCmd.PersistentFlags().Bool("log-json", false, "Emit logs as JSON instead of text (env: AGENTHOUND_LOG_JSON=1)")
 	rootCmd.PersistentFlags().String("rules-bundle", "", "Path to a fingerprint rules bundle (directory or .tar.gz). Same-id rules from the bundle override the embedded set. Verify cosign signature manually before pointing AgentHound at it; see https://docs.agenthound.io/reference/rule-syntax/. (env: AGENTHOUND_RULES_BUNDLE)")

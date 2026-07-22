@@ -44,15 +44,27 @@ The output file is a standard ingest envelope. `discover` emits raw `:MCPServer`
 ```json
 {
   "meta": {
-    "version": 3,
+    "version": 4,
     "type": "agenthound-ingest",
     "collector": "scan",
     "collector_version": "1.0.0",
     "timestamp": "2026-07-11T20:00:00Z",
     "scan_id": "...",
-    "origin": {
-      "host_id": "security-laptop",
-      "network_realm_id": "corp-lab"
+    "identity": {
+      "scheme": "agenthound_collection_v1",
+      "version": 1,
+      "collection_point_id": "sha256:...",
+      "network_context_id": "sha256:...",
+      "quality": "strong",
+      "network_quality": "strong",
+      "network_class": "private",
+      "evidence": [
+        {"kind": "os_instance", "digest": "hmac-sha256:..."},
+        {"kind": "principal", "digest": "hmac-sha256:..."}
+      ],
+      "network_evidence": [
+        {"kind": "route_private", "digest": "hmac-sha256:..."}
+      ]
     },
     "collection": {
       "state": "complete",

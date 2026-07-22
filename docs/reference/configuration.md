@@ -17,8 +17,6 @@ Both binaries read environment variables at startup. The collector has no config
 | `AGENTHOUND_LOG_LEVEL` | `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 | `AGENTHOUND_OUTPUT` | `--output` | `./scan-<scan_id>.json` | Output path. Use `-` for stdout. |
 | `AGENTHOUND_CONCURRENCY` | `--concurrency` | `5` | Max parallel collector goroutines. For `scan`, used as the fallback for `--scan-concurrency` when that flag is not set explicitly (explicit `--scan-concurrency` wins; `--network-scan-concurrency` is unaffected). |
-| `AGENTHOUND_HOST_ID` | `--host-id` | _(required for ingest-artifact output)_ | Stable lowercase ID for the machine running the collector, for example `security-laptop`. |
-| `AGENTHOUND_NETWORK_REALM_ID` | `--network-realm-id` | _(required for ingest-artifact output)_ | Stable lowercase ID for the private-network view reachable from that machine, for example `corp-lab`. |
 | `AGENTHOUND_QUIET` | `--quiet` | _(unset)_ | Set to `1` to suppress non-error log output, plus the `scan` / `discover` progress line, the per-host/endpoint summary, and fingerprint output |
 | `AGENTHOUND_LOG_JSON` | `--log-json` | _(unset)_ | Set to `1` for structured JSON logs to stderr |
 | `AGENTHOUND_RULES_BUNDLE` | `--rules-bundle` | _(unset)_ | Path to a fingerprint rules bundle (directory or `.tar.gz`). Same-id rules override the embedded set. Verify cosign signature before use. |
@@ -31,19 +29,38 @@ Both binaries read environment variables at startup. The collector has no config
 
 Output file permissions: `0600` on POSIX. Atomic write via temp file + rename.
 
-`host-id` and `network-realm-id` are required by `scan`, `discover`, `loot`,
-committed `extract`, and witness-backed committed `campaign` operations because
-those operations emit ingest artifacts. They are not required by local-only
-commands that emit no graph artifact, such as `version`, `rules`, dry-run
-`extract`, poison/revert, implants, or the standalone MCP round-trip campaign.
-Each identifier is 1-128 bytes and must match
-`[a-z0-9][a-z0-9._-]{0,127}` exactly. Do not derive either value from an
-ephemeral container hostname or IP address.
+Collection provenance is automatic and has no public flags, environment
+variables, or config file. At artifact-write time the collector derives a
+versioned `collection_point_id` from native OS-instance, effective-principal,
+platform, and filesystem/container evidence. It derives `network_context_id`
+from that point plus active network-profile, private/ULA route-table, default-
+gateway, interface-prefix, and DNS evidence. This includes split VPN and pivot
+routes. Each retained private route is bound to its next hop and a stable native
+profile/link discriminator when available, so an overlapping prefix reached
+through a different pivot derives a different context. Route metrics and
+interface names are not identity inputs. macOS ARP/neighbor-cache and cloned
+host routes are excluded because their expiry does not change network
+visibility. Raw identity signal values are transformed with AgentHound-specific
+HMAC-SHA-256 before they enter the artifact. No child process is spawned and no
+target-side AgentHound state is created.
 
-The pair is collection provenance: it prevents a server from merging local
-paths, loopback endpoints, private addresses, and lifecycle coverage from a
-different collection context. It is not authentication or a signature; anyone
-who can rewrite an artifact can rewrite these non-secret fields too.
+Collection-point quality and network-context quality are independent. If the
+collector cannot inspect the route table or active interfaces—or cannot
+distinguish the path for a retained private route—a strong local collection
+point stays strong, while only remote/network-scoped facts and coverage receive
+artifact-local additive-only scope for that import. The artifact reports
+network quality as `unknown`; it is never treated as an authoritative offline
+view.
+
+Hostname, OS, and architecture may also appear in clear as bounded display-only
+labels. They never participate in an ID, match, graph scope, lifecycle key, or
+admission decision.
+
+When OS-instance evidence is unavailable, hostname and permanent MAC addresses
+are weak fallbacks. Weak artifacts are still accepted and analyzed, but their
+authoritative graph and lifecycle identity is artifact-local so they cannot
+merge with or retire another vantage point. Derived provenance is deterministic
+recognition, not authentication or attestation.
 
 For ContextForge operations, MCP and management authentication remain independently configurable and origin-bound. If `AGENTHOUND_MCP_TOKEN` is unset, AgentHound searches its existing MCP client-config discovery paths for one unique `Authorization` header whose configured URL is byte-for-byte equal to the positional MCP URL after surrounding whitespace is trimmed. It does not use host-only, prefix, normalized, or fuzzy matching, and conflicting exact-URL headers fail closed. Stdio wrappers, routing headers, and unresolved credential references are not inferred.
 
@@ -63,35 +80,27 @@ AgentHound does not create, retrieve, or elevate ContextForge management credent
 | `AGENTHOUND_NEO4J_USER` | `--neo4j-user` | `neo4j` | Neo4j username |
 | `AGENTHOUND_NEO4J_PASSWORD` | `--neo4j-password` | `agenthound` | Neo4j password |
 | `AGENTHOUND_PG_URI` | `--pg-uri` | `postgres://agenthound:agenthound@localhost:5432/agenthound?sslmode=disable` | PostgreSQL connection string |
-| `AGENTHOUND_HOST_ID` | `--host-id` | _(required for DB commands)_ | Exact collector host admitted by this database pair. Must equal artifact `meta.origin.host_id`. |
-| `AGENTHOUND_NETWORK_REALM_ID` | `--network-realm-id` | _(required for DB commands)_ | Exact private-network realm admitted by this database pair. Must equal artifact `meta.origin.network_realm_id`. |
-| `AGENTHOUND_STORAGE_PAIR_ID` | `--storage-pair-id` | _(required for DB commands)_ | Canonical lowercase UUID permanently pairing the PostgreSQL and Neo4j volumes. Generate once and keep it across restarts. |
 | `AGENTHOUND_CORS_ORIGINS` | `--cors-origins` | `http://localhost:8080,http://127.0.0.1:8080` | Comma-separated allowed origins. Shared by CORS and OriginGuard (mutating-endpoint CSRF defense). |
 
-### Collection realm and storage binding
+### Automatic storage binding and multi-vantage ingest
 
-One AgentHound database pair accepts one exact collector host in one exact
-private-network realm. This is deliberate: the graph contains facts whose
-meaning is local to the collection vantage point, including filesystem paths,
-loopback services, RFC1918 endpoints, host nodes, and lifecycle coverage roots.
-Merging two such vantage points into one projection could silently join
-unrelated infrastructure or retire another host's current observations.
+The server accepts every structurally valid ingest-v4 artifact. It does not
+bind a database to one host or network and has no collection-origin admission
+configuration. Ambiguous graph identities and coverage ownership are scoped by
+the artifact's derived collection point or network context before mutation.
 
-Generate `AGENTHOUND_STORAGE_PAIR_ID` once when creating the PostgreSQL and
-Neo4j volumes, then store it alongside the deployment configuration. On every
-DB-using startup, the server takes a PostgreSQL advisory lock and reads the
-binding marker from both stores before running migrations, creating graph
-schema, or accepting ingest. Exact markers are admitted. A missing marker is
-repaired only when that store and its partner are still product-empty, which
-covers a crash between the two initial marker writes. A future marker version,
-crossed storage pair, realm mismatch, or unbound non-empty database fails
-closed without mutating either store.
+PostgreSQL and Neo4j are still an inseparable storage pair. On first startup,
+the server generates one internal UUID and atomically installs it in both empty
+stores under a PostgreSQL advisory lock. On later startups it verifies both
+markers. It repairs a one-sided marker only when both stores remain
+product-empty, covering a crash during first initialization. Crossed volumes,
+invalid markers, or a missing marker beside non-empty product data fail closed.
+There is no public storage-pair flag or environment variable.
 
-Back up and restore PostgreSQL and Neo4j as one pair. Do not regenerate the
-UUID on restart, attach either volume to a different partner, or submit an
-artifact collected with another host/realm tuple. To intentionally change the
-admitted host or realm, archive the source artifacts, reset both volumes, pick
-a new storage-pair UUID, and recollect from the new vantage point.
+Back up and restore PostgreSQL and Neo4j together. Ingest v4 is a clean database
+boundary: preserve an ingest-v3 deployment or backup as read-only, create fresh
+v4 volumes, and recollect. Existing unscoped graph state is never mixed into
+the v4 projection automatically.
 
 ---
 
@@ -137,14 +146,9 @@ AGENTHOUND_NEO4J_PASSWORD: agenthound
 AGENTHOUND_PG_URI: postgres://agenthound:agenthound@app-db:5432/agenthound?sslmode=disable
 AGENTHOUND_BIND: 0.0.0.0:8080   # reachable from host via port mapping
 AGENTHOUND_LOG_LEVEL: info
-AGENTHOUND_HOST_ID: security-laptop
-AGENTHOUND_NETWORK_REALM_ID: corp-lab
-AGENTHOUND_STORAGE_PAIR_ID: 7bc1f56e-c890-4de5-9cc5-921797176fa6
 ```
 
-The shipped Compose files intentionally have no defaults for the final three
-values. Shell interpolation fails before container startup when any is absent.
-Keep the same values for the lifetime of the named volumes; the UUID above is
-an example and must not be copied into a real deployment.
+The shipped Compose files require no collection-identity or storage-pair
+settings.
 
 Port mappings bind to `127.0.0.1` on the host side — no external exposure by default.

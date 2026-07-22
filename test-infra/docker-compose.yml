@@ -475,9 +475,6 @@ services:
     volumes:
       - ./fixtures:/root/fixtures
     environment:
-      AGENTHOUND_HOST_ID: agenthound-test-workstation
-      AGENTHOUND_NETWORK_REALM_ID: agenthound-test-lab
-      AGENTHOUND_STORAGE_PAIR_ID: 7bc1f56e-c890-4de5-9cc5-921797176fa6
       AGENTHOUND_NEO4J_URI: bolt://analysis-neo4j:7687
       AGENTHOUND_NEO4J_USER: neo4j
       AGENTHOUND_NEO4J_PASSWORD: agenthound-analysis-local

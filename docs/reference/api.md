@@ -50,8 +50,7 @@ All errors return a structured JSON response:
 
 Error codes: `VALIDATION_ERROR` (400), `FORBIDDEN` (403), `NOT_FOUND`
 (404), `REVISION_CONFLICT` (409), `PROJECTION_CONFLICT` (409),
-`COLLECTION_REALM_MISMATCH` (409), `SERVICE_UNAVAILABLE` (503),
-`STORAGE_BINDING_UNAVAILABLE` (503), `INGEST_FAILED` (500),
+`SERVICE_UNAVAILABLE` (503), `STORAGE_BINDING_UNAVAILABLE` (503), `INGEST_FAILED` (500),
 `SCAN_DELETE_CONFLICT` (409), and `INTERNAL_ERROR` (500). Graph-backed reads
 return `PROJECTION_CONFLICT` unless one stable, complete published projection
 is available for the entire read. `error.details.reason` is `absent`,
@@ -194,21 +193,20 @@ Returns reachable nodes grouped by ring (1-hop, 2-hop, ...). Useful for "what ca
 
 **Max body:** 100 MB.
 
-Upload strict ingest-v3 collector JSON. Unknown structural fields, v1/v2
-artifacts, missing origin/collection/rules/identity metadata, unscoped facts, omitted
+Upload strict ingest-v4 collector JSON. Unknown structural fields, v1/v2/v3
+artifacts, missing identity/collection/rules metadata, unscoped facts, omitted
 edge endpoint kinds, legacy property aliases, and incomplete canonical
 credential/host/auth evidence are rejected before any write. Runs the
-serialized lifecycle: verify both database binding markers and admit the exact
-configured `meta.origin` → validate →
-normalize → freeze pre-write totals → write → reconcile complete observation
+serialized lifecycle: verify both database binding markers → validate identity
+schema and internal consistency → apply graph and coverage scopes → normalize →
+freeze pre-write totals → write → reconcile complete observation
 domains → post-process → freeze post-analysis totals → snapshot → publish.
 
-Origin admission is deliberately first. A host/realm mismatch returns
-`409 COLLECTION_REALM_MISMATCH`; a database marker that cannot be verified
-returns sanitized `503 STORAGE_BINDING_UNAVAILABLE`. Neither case creates a
-scan-audit row, records a campaign rejection, starts lifecycle state, or writes
-the graph. Origin fields are non-secret provenance, not authentication or a
-signature.
+Every valid artifact is accepted; collection identity controls graph meaning,
+not admission. The server verifies the identity scheme/version, digest
+consistency, and evidence classification rules but cannot prove where the
+collector ran. A database marker that cannot be verified returns sanitized
+`503 STORAGE_BINDING_UNAVAILABLE` before any graph write.
 
 For `MCPServer` and `A2AAgent`, configured method, assurance, and evidence must
 form a producer-compatible tuple. Method-to-assurance mapping is fixed;
@@ -268,15 +266,28 @@ credential material.
 // Request body (abridged; see graph-model.md for the complete schema)
 {
   "meta": {
-    "version": 3,
+    "version": 4,
     "type": "agenthound-ingest",
     "collector": "mcp",
     "collector_version": "1.0.0",
     "timestamp": "2026-07-11T00:00:00Z",
     "scan_id": "scan-abc123",
-    "origin": {
-      "host_id": "security-laptop",
-      "network_realm_id": "corp-lab"
+    "identity": {
+      "scheme": "agenthound_collection_v1",
+      "version": 1,
+      "collection_point_id": "sha256:...",
+      "network_context_id": "sha256:...",
+      "quality": "strong",
+      "network_quality": "strong",
+      "network_class": "private",
+      "display": {"hostname": "target-01", "os": "linux", "architecture": "amd64"},
+      "evidence": [
+        {"kind": "os_instance", "digest": "hmac-sha256:..."},
+        {"kind": "principal", "digest": "hmac-sha256:..."}
+      ],
+      "network_evidence": [
+        {"kind": "route_private", "digest": "hmac-sha256:..."}
+      ]
     },
     "collection": {
       "state": "complete",
@@ -324,6 +335,15 @@ credential material.
       "state": "complete"
     }]
   },
+  "identity": {
+    "collection_point_id": "sha256:...",
+    "network_context_id": "sha256:...",
+    "quality": "strong",
+    "network_quality": "strong",
+    "network_class": "private",
+    "display": {"hostname": "target-01", "os": "linux", "architecture": "amd64"},
+    "recognition": "new"
+  },
   "duration": 1230000000
 }
 ```
@@ -336,6 +356,8 @@ Nodes may set `property_semantics: "reference_only"` only with an empty
 replacing managed properties; omitted `property_semantics` is authoritative.
 Completed dynamic exhaustive runs may include `authoritative_roots`, each with
 a stable root `coverage_key` and the complete `child_coverage_keys` active set.
+Every child outcome includes its explicit `parent_coverage_key`; the server
+does not infer root membership from opaque key syntax.
 The server reconciles prior children omitted from that set as complete-empty.
 Targeted and non-exhaustive runs omit this field and cannot retire siblings.
 
@@ -347,6 +369,15 @@ inventory before and after processing. A batch failure returns
 `500 INGEST_FAILED` with the same typed partial result under `error.details`,
 including committed write rows. The scan and global projection state are
 marked incomplete.
+
+`identity.recognition` is `new` when no earlier scan used that collection
+point and `recognized` otherwise. `quality` describes collection-point
+evidence; `network_quality` independently reports whether route/interface
+visibility was complete. If network quality is `unknown`, local point-scoped
+facts retain their normal scope while remote/network-scoped facts become
+artifact-local and additive-only. Weak collection-point identities localize all
+authoritative facts. `display` contains optional bounded, non-authoritative
+hostname/OS/architecture labels.
 
 Only explicitly complete, attributable target/config coverage keys can retire
 prior raw observations. Partial/failed/truncated collection never retires data
@@ -490,14 +521,15 @@ Export a stable, sanitized **campaign witness** for a predicted credential-gated
 `CAN_REACH` finding (16-char fingerprint), so the collector-side campaign runner
 (`agenthound campaign --scenario cred-reach`) can verify it.
 
-Witness v2 is built under a guarded read and is runnable only when the providing
+Witness v3 is built under a guarded read and is runnable only when the providing
 `MCPServer` transport is HTTP. It carries the explicit source agent, explicit
 agent/server/credential/resource kinds and IDs, credential `value_hash` +
-`merge_key`, resource identity input, predicted edge kind, topology
-normalization version, and the actual ordered current `CAN_REACH` evidence node
-IDs/kinds. The endpoint remains out-of-band. It carries no Neo4j relationship
-IDs, arbitrary properties, or raw credential. Its unkeyed fingerprint is a
-consistency checksum, not authenticity or authorization.
+`merge_key`, the endpoint-derived server identity hash, opaque service scope,
+resource identity input, predicted edge kind, topology normalization version,
+and the actual ordered current `CAN_REACH` evidence node IDs/kinds. The endpoint
+remains out-of-band. It carries no Neo4j relationship IDs, arbitrary properties,
+or raw credential. Its unkeyed fingerprint is a consistency checksum, not
+authenticity or authorization.
 
 Returns `400` for a malformed finding ID, `404` when no runnable
 credential-gated `CAN_REACH` prediction matches the finding (e.g. the credential
@@ -510,7 +542,7 @@ non-verified findings.
 ```json
 {
   "witness": {
-    "schema_version": 2,
+    "schema_version": 3,
     "topology_normalization_version": 1,
     "publication_revision": 7,
     "predicted_edge_kind": "CAN_REACH",
@@ -522,6 +554,9 @@ non-verified findings.
     "credential_merge_key": "value_hash",
     "server_id": "sha256:...",
     "server_kind": "MCPServer",
+    "server_identity_id": "sha256:...",
+    "service_scope": "network_context",
+    "service_scope_id": "sha256:...",
     "resource_id": "sha256:...",
     "resource_kind": "MCPResource",
     "resource_identity_input": "postgres://prod/customers",

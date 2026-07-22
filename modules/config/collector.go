@@ -79,7 +79,6 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 		scanID = common.GenerateScanID("config")
 	}
 	data := common.NewIngestData("config", scanID)
-	data.Meta.Origin = opts.Origin
 	data.Meta.Ruleset = rules.ManifestForEngine(engine)
 	data.Meta.IdentitySchemes = []ingest.IdentityScheme{{
 		EntityKind: "MCPServer",

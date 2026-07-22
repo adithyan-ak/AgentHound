@@ -50,6 +50,19 @@ export interface IngestResult {
   };
   warnings?: string[];
   collection: IngestCollectionReport;
+  identity: {
+    collection_point_id: string;
+    network_context_id: string;
+    quality: "strong" | "weak";
+    network_quality: "strong" | "unknown";
+    network_class: "unknown" | "offline" | "private" | "public" | "mixed";
+    display?: {
+      hostname?: string;
+      os?: string;
+      architecture?: string;
+    };
+    recognition: "new" | "recognized" | "unknown";
+  };
   stages?: Array<{
     name: string;
     state: string;
@@ -383,6 +396,7 @@ function decodeIngestResult(value: unknown, path: string): IngestResult {
     throw new TypeError(`${path}.outcome is invalid`);
   }
   const graphTotals = record(result.graph_totals, `${path}.graph_totals`);
+  const identity = decodeIngestIdentity(result.identity, `${path}.identity`);
   return {
     ...(result as unknown as IngestResult),
     scan_id: requiredString(result.scan_id, `${path}.scan_id`),
@@ -397,6 +411,7 @@ function decodeIngestResult(value: unknown, path: string): IngestResult {
       result.collection,
       `${path}.collection`,
     ),
+    identity,
     graph_totals: {
       before: decodeInventoryTotals(
         graphTotals.before,
@@ -407,6 +422,65 @@ function decodeIngestResult(value: unknown, path: string): IngestResult {
         `${path}.graph_totals.after`,
       ),
     },
+  };
+}
+
+function decodeIngestIdentity(
+  value: unknown,
+  path: string,
+): IngestResult["identity"] {
+  const identity = record(value, path);
+  const quality = requiredString(identity.quality, `${path}.quality`);
+  if (quality !== "strong" && quality !== "weak") {
+    throw new TypeError(`${path}.quality is invalid`);
+  }
+  const networkQuality = requiredString(
+    identity.network_quality,
+    `${path}.network_quality`,
+  );
+  if (networkQuality !== "strong" && networkQuality !== "unknown") {
+    throw new TypeError(`${path}.network_quality is invalid`);
+  }
+  const networkClass = requiredString(
+    identity.network_class,
+    `${path}.network_class`,
+  );
+  if (!["unknown", "offline", "private", "public", "mixed"].includes(networkClass)) {
+    throw new TypeError(`${path}.network_class is invalid`);
+  }
+  const recognition = requiredString(identity.recognition, `${path}.recognition`);
+  if (!["new", "recognized", "unknown"].includes(recognition)) {
+    throw new TypeError(`${path}.recognition is invalid`);
+  }
+  let display: IngestResult["identity"]["display"];
+  if (identity.display !== undefined) {
+    const labels = record(identity.display, `${path}.display`);
+    display = {
+      ...(labels.hostname === undefined
+        ? {}
+        : { hostname: requiredString(labels.hostname, `${path}.display.hostname`) }),
+      ...(labels.os === undefined
+        ? {}
+        : { os: requiredString(labels.os, `${path}.display.os`) }),
+      ...(labels.architecture === undefined
+        ? {}
+        : { architecture: requiredString(labels.architecture, `${path}.display.architecture`) }),
+    };
+  }
+  return {
+    collection_point_id: requiredString(
+      identity.collection_point_id,
+      `${path}.collection_point_id`,
+    ),
+    network_context_id: requiredString(
+      identity.network_context_id,
+      `${path}.network_context_id`,
+    ),
+    quality,
+    network_quality: networkQuality,
+    network_class: networkClass as IngestResult["identity"]["network_class"],
+    recognition: recognition as IngestResult["identity"]["recognition"],
+    ...(display === undefined ? {} : { display }),
   };
 }
 

@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/server/internal/binding"
 	"github.com/adithyan-ak/agenthound/server/model"
 	"github.com/jackc/pgx/v5"
@@ -88,6 +87,7 @@ func TestIntegrationMigrations(t *testing.T) {
 	}
 	wantTables := []string{
 		"coverage_heads",
+		"coverage_memberships",
 		"finding_triage",
 		"findings",
 		"posture_publications",
@@ -117,7 +117,7 @@ func TestIntegrationMigrations(t *testing.T) {
 	if err := versionRows.Err(); err != nil {
 		t.Fatalf("list migration versions: %v", err)
 	}
-	if want := []int{1, 2}; !reflect.DeepEqual(versions, want) {
+	if want := []int{1, 2, 3}; !reflect.DeepEqual(versions, want) {
 		t.Fatalf("migration versions = %v, want %v", versions, want)
 	}
 
@@ -198,8 +198,7 @@ func TestIntegrationMigrationsUpgradeProductEmptyV1Schema(t *testing.T) {
 		t.Fatal("upgrade left the product-empty v1 schema without storage_binding")
 	}
 
-	origin := sdkingest.CollectionOrigin{HostID: "upgrade-host", NetworkRealmID: "upgrade-realm"}
-	marker, err := binding.NewMarker(origin, integrationStoragePairID)
+	marker, err := binding.NewMarker(integrationStoragePairID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,8 +255,7 @@ func TestIntegrationStorageBindingLifecycle(t *testing.T) {
 		t.Fatalf("migrate: %v", err)
 	}
 
-	origin := sdkingest.CollectionOrigin{HostID: "host-a", NetworkRealmID: "realm-a"}
-	marker, err := binding.NewMarker(origin, integrationStoragePairID)
+	marker, err := binding.NewMarker(integrationStoragePairID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +269,7 @@ func TestIntegrationStorageBindingLifecycle(t *testing.T) {
 	if err != nil || !actual.Equal(marker) {
 		t.Fatalf("read marker = %+v, %v", actual, err)
 	}
-	other, err := binding.NewMarker(origin, "ee2f3afe-209e-42fb-8685-af55caa7e58d")
+	other, err := binding.NewMarker("ee2f3afe-209e-42fb-8685-af55caa7e58d")
 	if err != nil {
 		t.Fatal(err)
 	}

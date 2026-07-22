@@ -5,17 +5,13 @@
 ```bash
 git clone https://github.com/adithyan-ak/agenthound.git
 cd agenthound
-export AGENTHOUND_HOST_ID=dev-workstation
-export AGENTHOUND_NETWORK_REALM_ID=dev-lab
-export AGENTHOUND_STORAGE_PAIR_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 docker compose -f docker/docker-compose.yml up -d   # Neo4j + PostgreSQL + server
 make build                                            # Build collector + server (UI auto-built)
 make test                                             # Run all tests
 ```
 
-Generate `AGENTHOUND_STORAGE_PAIR_ID` once for a database-volume pair, then
-save and reuse it while those volumes exist. Changing it against existing
-volumes correctly fails the storage-pair safety check.
+Collection provenance and the database storage-pair UUID are automatic; no
+identity environment variables are required.
 
 `make build` invokes `make ui-build` first, which compiles the React UI (`server/ui`) and copies the output into `server/internal/api/ui/dist/` so `go:embed` finds it. Raw `go build ./...` also works on a fresh clone — a placeholder fallback page ships at `server/internal/api/ui/fallback/index.html`.
 

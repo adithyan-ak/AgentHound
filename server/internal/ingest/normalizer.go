@@ -17,6 +17,15 @@ func NewNormalizer() *Normalizer {
 
 func (n *Normalizer) Normalize(data *ingest.IngestData) []ingest.NormalizationWarning {
 	var warnings []ingest.NormalizationWarning
+	if err := ingest.ScopeArtifact(data); err != nil {
+		return []ingest.NormalizationWarning{{
+			Code:              "identity_scope_failed",
+			Status:            ingest.NormalizationStatusDegraded,
+			Message:           err.Error(),
+			Context:           "artifact",
+			PublicationUnsafe: true,
+		}}
+	}
 
 	if data.Graph.Nodes == nil {
 		data.Graph.Nodes = []ingest.Node{}

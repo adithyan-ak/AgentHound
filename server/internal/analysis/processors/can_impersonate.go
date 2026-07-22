@@ -44,30 +44,18 @@ func (p *CanImpersonate) Process(ctx context.Context, db graph.GraphDB, scanID s
 		}, fmt.Errorf("build documents: %w", err)
 	}
 
-	docTexts := make([]string, len(agents))
-	for i, a := range agents {
-		docTexts[i] = docs[a.id]
-	}
-	corpus := similarity.NewCorpus(docTexts)
-
-	vectors := make([]map[string]float64, len(agents))
-	for i, a := range agents {
-		vectors[i] = corpus.TFIDFVector(docs[a.id])
-	}
-
 	var edges []ingest.Edge
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	for i := 0; i < len(agents); i++ {
 		for j := i + 1; j < len(agents); j++ {
+			if !scopesCompatible(agents[i].scopeCoordinates, agents[j].scopeCoordinates) {
+				continue
+			}
 			if agents[i].provider != "" && agents[i].provider == agents[j].provider {
 				continue
 			}
-			if vectors[i] == nil || vectors[j] == nil {
-				continue
-			}
-
-			sim := similarity.CosineSimilarity(vectors[i], vectors[j])
+			sim := compatiblePairSimilarity(agents, docs, i, j)
 			if sim < impersonationThreshold {
 				continue
 			}
@@ -140,14 +128,47 @@ func (p *CanImpersonate) Process(ctx context.Context, db graph.GraphDB, scanID s
 	}, nil
 }
 
+// compatiblePairSimilarity prevents agents from unrelated collection scopes
+// from changing the TF-IDF weights used to decide an otherwise compatible
+// pair. The comparison corpus is the intersection of observations that may
+// compose with both endpoints.
+func compatiblePairSimilarity(agents []agentInfo, docs map[string]string, left, right int) float64 {
+	var texts []string
+	leftIndex, rightIndex := -1, -1
+	for index, agent := range agents {
+		if !scopesCompatible(agents[left].scopeCoordinates, agent.scopeCoordinates) ||
+			!scopesCompatible(agents[right].scopeCoordinates, agent.scopeCoordinates) {
+			continue
+		}
+		if index == left {
+			leftIndex = len(texts)
+		}
+		if index == right {
+			rightIndex = len(texts)
+		}
+		texts = append(texts, docs[agent.id])
+	}
+	if leftIndex < 0 || rightIndex < 0 {
+		return 0
+	}
+	corpus := similarity.NewCorpus(texts)
+	leftVector := corpus.TFIDFVector(texts[leftIndex])
+	rightVector := corpus.TFIDFVector(texts[rightIndex])
+	if leftVector == nil || rightVector == nil {
+		return 0
+	}
+	return similarity.CosineSimilarity(leftVector, rightVector)
+}
+
 type agentInfo struct {
 	id       string
 	provider string
+	scopeCoordinates
 }
 
 func (p *CanImpersonate) loadAgents(ctx context.Context, db graph.GraphDB) ([]agentInfo, error) {
 	rows, err := db.Query(ctx,
-		"MATCH (a:A2AAgent) RETURN a.objectid AS id, a.name AS name, a.provider AS provider",
+		"MATCH (a:A2AAgent) RETURN a.objectid AS id, a.name AS name, a.provider AS provider, a.identity_scope AS scope_kind, a.identity_scope_id AS scope_id, a.collection_point_id AS collection_point_id, a.network_context_id AS network_context_id",
 		nil,
 	)
 	if err != nil {
@@ -161,7 +182,18 @@ func (p *CanImpersonate) loadAgents(ctx context.Context, db graph.GraphDB) ([]ag
 			continue
 		}
 		provider, _ := row["provider"].(string)
-		agents = append(agents, agentInfo{id: id, provider: provider})
+		scopeKind, _ := row["scope_kind"].(string)
+		scopeID, _ := row["scope_id"].(string)
+		collectionPoint, _ := row["collection_point_id"].(string)
+		networkContextID, _ := row["network_context_id"].(string)
+		agents = append(agents, agentInfo{
+			id: id, provider: provider,
+			scopeCoordinates: scopeCoordinates{
+				kind: scopeKind, id: scopeID,
+				collectionPoint:  collectionPoint,
+				networkContextID: networkContextID,
+			},
+		})
 	}
 	return agents, nil
 }

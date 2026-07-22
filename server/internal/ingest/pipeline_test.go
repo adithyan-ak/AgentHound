@@ -18,8 +18,7 @@ import (
 	"github.com/adithyan-ak/agenthound/server/model"
 )
 
-// --- existing testdata-driven tests (kept; they cover the validator + normalizer
-//     against real fixture files) ------------------------------------------------
+// --- testdata-driven validator and normalizer coverage --------------------------
 
 func TestValidateTestDataFiles(t *testing.T) {
 	v := NewValidator()
@@ -35,7 +34,7 @@ func TestValidateTestDataFiles(t *testing.T) {
 		{"valid_merged_scan.json", -1, -1}, // count varies
 	}
 
-	testdataDir := filepath.Join("..", "..", "testdata")
+	testdataDir := filepath.Join("..", "..", "..", "testdata")
 
 	for _, tc := range validFiles {
 		path := filepath.Join(testdataDir, tc.file)
@@ -74,7 +73,7 @@ func TestValidateTestDataFiles(t *testing.T) {
 
 func TestInvalidTestDataRejected(t *testing.T) {
 	v := NewValidator()
-	testdataDir := filepath.Join("..", "..", "testdata")
+	testdataDir := filepath.Join("..", "..", "..", "testdata")
 
 	data, err := os.ReadFile(filepath.Join(testdataDir, "invalid_scan.json"))
 	if err != nil {
@@ -102,7 +101,7 @@ func TestInvalidTestDataRejected(t *testing.T) {
 }
 
 func TestMCPServerIDMergePoint(t *testing.T) {
-	testdataDir := filepath.Join("..", "..", "testdata")
+	testdataDir := filepath.Join("..", "..", "..", "testdata")
 
 	mcpData, err := os.ReadFile(filepath.Join(testdataDir, "valid_mcp_scan.json"))
 	if err != nil {
@@ -152,7 +151,7 @@ func TestMCPServerIDMergePoint(t *testing.T) {
 }
 
 func TestNormalizerWithTestData(t *testing.T) {
-	testdataDir := filepath.Join("..", "..", "testdata")
+	testdataDir := filepath.Join("..", "..", "..", "testdata")
 	data, err := os.ReadFile(filepath.Join(testdataDir, "valid_mcp_scan.json"))
 	if err != nil {
 		t.Skipf("testdata not found: %v", err)
@@ -279,23 +278,32 @@ type fakeScanStore struct {
 	retired       []string
 	resolvedRoots []sdkingest.CoverageRoot
 
-	createErr  error
-	resolveErr error
-	updateErr  error
+	createErr    error
+	resolveErr   error
+	updateErr    error
+	recognized   bool
+	recognizeErr error
 }
 
-type allowOriginAdmitter struct{}
+func (s *fakeScanStore) CollectionPointRecognized(
+	_ context.Context,
+	_ string,
+) (bool, error) {
+	return s.recognized, s.recognizeErr
+}
 
-func (allowOriginAdmitter) Admit(context.Context, sdkingest.CollectionOrigin) error {
+type allowStorageVerifier struct{}
+
+func (allowStorageVerifier) Verify(context.Context) error {
 	return nil
 }
 
-type rejectOriginAdmitter struct {
+type rejectStorageVerifier struct {
 	err   error
 	calls int
 }
 
-func (a *rejectOriginAdmitter) Admit(context.Context, sdkingest.CollectionOrigin) error {
+func (a *rejectStorageVerifier) Verify(context.Context) error {
 	a.calls++
 	return a.err
 }
@@ -310,6 +318,7 @@ func (s *fakeLifecycleScanStore) BeginScan(
 	ctx context.Context,
 	scan *model.Scan,
 	dirtyCoverage []string,
+	_ map[string]string,
 ) ([]string, error) {
 	seen := make(map[string]bool)
 	merged := append([]string(nil), s.dirtyCoverage...)
@@ -359,6 +368,7 @@ func (s *fakeScanStore) BeginScan(
 	ctx context.Context,
 	scan *model.Scan,
 	dirtyCoverage []string,
+	_ map[string]string,
 ) ([]string, error) {
 	s.mu.Lock()
 	merged := mergeCoverage(s.dirtyCoverage, dirtyCoverage)
@@ -507,8 +517,8 @@ func newTestPipeline(w nodeEdgeWriter, db graph.GraphDB, ss scanLifecycleRecorde
 		findingStore: &fakePublisher{
 			scanStore: scanStore,
 		},
-		runPP:       runPP,
-		originGuard: allowOriginAdmitter{},
+		runPP:        runPP,
+		storageGuard: allowStorageVerifier{},
 	}
 }
 
@@ -520,19 +530,30 @@ func validIngestDataFor(scanID string) *sdkingest.IngestData {
 	return data
 }
 
-func TestPipelineOriginAdmissionPrecedesEveryMutationAndValidationAudit(t *testing.T) {
-	sentinel := errors.New("realm rejected")
-	guard := &rejectOriginAdmitter{err: sentinel}
+func scopedCoverageFor(
+	data *sdkingest.IngestData,
+	kind sdkingest.IdentityScope,
+	rawKey string,
+) string {
+	scopeID := data.Meta.Identity.NetworkContextID
+	if kind == sdkingest.ScopeCollectionPoint {
+		scopeID = data.Meta.Identity.CollectionPointID
+	}
+	return sdkingest.ScopedCoverageKey(kind, scopeID, rawKey)
+}
+
+func TestPipelineStorageVerificationPrecedesEveryMutationAndValidationAudit(t *testing.T) {
+	sentinel := errors.New("storage rejected")
+	guard := &rejectStorageVerifier{err: sentinel}
 	writer := &fakeWriter{}
 	scans := &fakeScanStore{}
 	db := &graph.MockGraphDB{}
 	pipeline := newTestPipeline(writer, db, scans, noOpRunPP)
-	pipeline.originGuard = guard
+	pipeline.storageGuard = guard
 
 	// Deliberately make this a generic-invalid campaign submission. If the
 	// validator ran first, it would persist a campaign-rejection audit.
 	data := campaignEvidenceIngest()
-	data.Meta.Origin.HostID = "wrong-host"
 	data.Graph.Edges[0].ObservationDomains = nil
 
 	result, err := pipeline.Ingest(context.Background(), data)
@@ -540,26 +561,26 @@ func TestPipelineOriginAdmissionPrecedesEveryMutationAndValidationAudit(t *testi
 		t.Fatalf("error = %v, want admission sentinel", err)
 	}
 	if result != nil {
-		t.Fatalf("admission failure returned result: %+v", result)
+		t.Fatalf("storage verification failure returned result: %+v", result)
 	}
 	if guard.calls != 1 {
-		t.Fatalf("admission calls = %d, want 1", guard.calls)
+		t.Fatalf("storage verification calls = %d, want 1", guard.calls)
 	}
 	if len(scans.rejections) != 0 || len(scans.creates) != 0 || len(scans.updates) != 0 ||
 		len(writer.nodeCalls) != 0 || len(writer.edgeCalls) != 0 ||
 		len(db.CallsTo("Query")) != 0 || len(db.CallsTo("ExecuteWrite")) != 0 {
 		t.Fatalf(
-			"rejected realm mutated or queried state: rejections=%d creates=%d updates=%d nodes=%d edges=%d",
+			"rejected storage pair mutated or queried state: rejections=%d creates=%d updates=%d nodes=%d edges=%d",
 			len(scans.rejections), len(scans.creates), len(scans.updates),
 			len(writer.nodeCalls), len(writer.edgeCalls),
 		)
 	}
 }
 
-func TestPipelineFailsClosedWithoutOriginGuard(t *testing.T) {
+func TestPipelineFailsClosedWithoutStorageGuard(t *testing.T) {
 	pipeline := newTestPipeline(&fakeWriter{}, &graph.MockGraphDB{}, &fakeScanStore{}, noOpRunPP)
-	pipeline.originGuard = nil
-	result, err := pipeline.Ingest(context.Background(), validIngestDataFor("missing-origin-guard"))
+	pipeline.storageGuard = nil
+	result, err := pipeline.Ingest(context.Background(), validIngestDataFor("missing-storage-guard"))
 	if err == nil || !strings.Contains(err.Error(), "admission guard unavailable") {
 		t.Fatalf("error = %v, want unavailable admission guard", err)
 	}
@@ -583,7 +604,12 @@ func TestPipeline_HappyPath(t *testing.T) {
 		if scanID != "scan-happy" {
 			t.Errorf("post-processor: expected scan_id=scan-happy, got %s", scanID)
 		}
-		wantDomain := validIngestDataFor("unused").Meta.Collection.CoverageKeys[0]
+		fixture := validIngestDataFor("unused")
+		wantDomain := scopedCoverageFor(
+			fixture,
+			sdkingest.ScopeNetworkContext,
+			fixture.Meta.Collection.CoverageKeys[0],
+		)
 		if len(completeDomains) != 1 || completeDomains[0] != wantDomain {
 			t.Errorf(
 				"post-processor: expected complete domains=[%s], got %v",
@@ -615,6 +641,15 @@ func TestPipeline_HappyPath(t *testing.T) {
 	}
 	if res.Duration <= 0 {
 		t.Errorf("Duration should be > 0, got %v", res.Duration)
+	}
+	if res.Identity.CollectionPointID == "" ||
+		res.Identity.NetworkContextID == "" ||
+		res.Identity.Quality != sdkingest.IdentityQualityStrong ||
+		res.Identity.NetworkQuality != sdkingest.IdentityQualityStrong ||
+		res.Identity.NetworkClass != sdkingest.NetworkClassPrivate ||
+		res.Identity.Display.Hostname != "target-01" ||
+		res.Identity.Recognition != "new" {
+		t.Fatalf("identity import result = %+v", res.Identity)
 	}
 
 	// Scan store was called once create + once update(completed)
@@ -648,11 +683,55 @@ func TestPipeline_HappyPath(t *testing.T) {
 	}
 }
 
+func TestPipelineReportsRecognizedCollectionPoint(t *testing.T) {
+	store := &fakeScanStore{recognized: true}
+	pipeline := newTestPipeline(
+		&fakeWriter{},
+		&graph.MockGraphDB{},
+		store,
+		noOpRunPP,
+	)
+	result, err := pipeline.Ingest(
+		context.Background(),
+		validIngestDataFor("recognized-point"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Identity.Recognition != "recognized" {
+		t.Fatalf("recognition = %q, want recognized", result.Identity.Recognition)
+	}
+}
+
+func TestPipelineRecognitionFailurePrecedesLifecycleMutation(t *testing.T) {
+	sentinel := errors.New("recognition unavailable")
+	store := &fakeScanStore{recognizeErr: sentinel}
+	writer := &fakeWriter{}
+	pipeline := newTestPipeline(writer, &graph.MockGraphDB{}, store, noOpRunPP)
+	result, err := pipeline.Ingest(
+		context.Background(),
+		validIngestDataFor("recognition-failure"),
+	)
+	if !errors.Is(err, sentinel) || result != nil {
+		t.Fatalf("result=%+v error=%v, want recognition failure", result, err)
+	}
+	if len(store.creates) != 0 || len(writer.nodeCalls) != 0 || len(writer.edgeCalls) != 0 {
+		t.Fatal("recognition failure mutated lifecycle or graph state")
+	}
+}
+
 func TestPipelinePreservesOwnerContributionsForWriterPreparation(t *testing.T) {
 	data := validIngestDataFor("scan-owner-contributions")
 	domainA := data.Meta.Collection.CoverageKeys[0]
 	domainB := sdkingest.CanonicalCoverageKey(
 		"mcp", "target", "https://second-mcp.example",
+	)
+	scopedDomainA := scopedCoverageFor(data, sdkingest.ScopeNetworkContext, domainA)
+	scopedDomainB := scopedCoverageFor(data, sdkingest.ScopeNetworkContext, domainB)
+	scopedServerID := sdkingest.ScopedNodeID(
+		sdkingest.ScopeNetworkContext,
+		data.Meta.Identity.NetworkContextID,
+		"sha256:aaa",
 	)
 	data.Meta.Collection.CoverageKeys = append(
 		data.Meta.Collection.CoverageKeys,
@@ -704,11 +783,11 @@ func TestPipelinePreservesOwnerContributionsForWriterPreparation(t *testing.T) {
 	}
 	serverDomains := make(map[string]bool)
 	for _, node := range writer.nodeCalls[0].Nodes {
-		if node.ID == "sha256:aaa" && len(node.ObservationDomains) == 1 {
+		if node.ID == scopedServerID && len(node.ObservationDomains) == 1 {
 			serverDomains[node.ObservationDomains[0]] = true
 		}
 	}
-	if !serverDomains[domainA] || !serverDomains[domainB] || len(serverDomains) != 2 {
+	if !serverDomains[scopedDomainA] || !serverDomains[scopedDomainB] || len(serverDomains) != 2 {
 		t.Fatalf("server contributions lost owner scope: %v", serverDomains)
 	}
 }
@@ -722,6 +801,10 @@ func TestPipeline_ExhaustiveRootReconcilesRemovedChildAsCompleteEmpty(t *testing
 		"target",
 		"https://removed.example",
 	)
+	scopedCurrentChild := scopedCoverageFor(data, sdkingest.ScopeNetworkContext, currentChild)
+	scopedRemovedChild := scopedCoverageFor(data, sdkingest.ScopeNetworkContext, removedChild)
+	scopedNetworkRoot := scopedCoverageFor(data, sdkingest.ScopeNetworkContext, root)
+	scopedPointRoot := scopedCoverageFor(data, sdkingest.ScopeCollectionPoint, root)
 	data.Meta.Collection.CoverageKeys = append(
 		data.Meta.Collection.CoverageKeys,
 		root,
@@ -740,9 +823,10 @@ func TestPipeline_ExhaustiveRootReconcilesRemovedChildAsCompleteEmpty(t *testing
 		CoverageKey:       root,
 		ChildCoverageKeys: []string{currentChild},
 	}}
+	sdkingest.EnsureCoverageParentage(data.Meta.Collection)
 
 	writer := &fakeWriter{}
-	store := &fakeScanStore{retired: []string{removedChild}}
+	store := &fakeScanStore{retired: []string{scopedRemovedChild}}
 	db := &graph.MockGraphDB{}
 	publisher := &fakePublisher{scanStore: store}
 	var postProcessDomains []string
@@ -769,7 +853,12 @@ func TestPipeline_ExhaustiveRootReconcilesRemovedChildAsCompleteEmpty(t *testing
 	if result.Outcome != sdkingest.OutcomeComplete {
 		t.Fatalf("result outcome = %q, want complete", result.Outcome)
 	}
-	wantReconciled := mergeCoverage([]string{currentChild, root, removedChild})
+	wantReconciled := mergeCoverage([]string{
+		scopedCurrentChild,
+		scopedNetworkRoot,
+		scopedPointRoot,
+		scopedRemovedChild,
+	})
 	if got := writer.nodeCalls[0].CompleteScopes; strings.Join(got, "\x00") != strings.Join(wantReconciled, "\x00") {
 		t.Fatalf("writer complete scopes = %v, want %v", got, wantReconciled)
 	}
@@ -786,19 +875,18 @@ func TestPipeline_ExhaustiveRootReconcilesRemovedChildAsCompleteEmpty(t *testing
 	}
 	finalized := publisher.finalizations[0]
 	if got := finalized.CompleteDomains; strings.Join(got, "\x00") !=
-		strings.Join(mergeCoverage([]string{currentChild, root}), "\x00") {
+		strings.Join(mergeCoverage([]string{scopedCurrentChild, scopedNetworkRoot, scopedPointRoot}), "\x00") {
 		t.Fatalf("promoted heads = %v, want current child and root", got)
 	}
 	if len(finalized.ResolvedDirtyCoverage) != 1 ||
-		finalized.ResolvedDirtyCoverage[0] != removedChild {
+		finalized.ResolvedDirtyCoverage[0] != scopedRemovedChild {
 		t.Fatalf(
 			"resolved removed coverage = %v, want [%s]",
 			finalized.ResolvedDirtyCoverage,
-			removedChild,
+			scopedRemovedChild,
 		)
 	}
-	if len(finalized.AuthoritativeRoots) != 1 ||
-		finalized.AuthoritativeRoots[0].CoverageKey != root {
+	if len(finalized.AuthoritativeRoots) != 2 {
 		t.Fatalf("finalized authoritative roots = %+v", finalized.AuthoritativeRoots)
 	}
 }
@@ -829,11 +917,14 @@ func TestPipeline_CompleteEmptyRootClearsFailedUnheadedChild(t *testing.T) {
 			State:       sdkingest.OutcomeComplete,
 		}},
 	}
+	scopedPointRoot := scopedCoverageFor(data, sdkingest.ScopeCollectionPoint, root)
+	scopedNetworkRoot := scopedCoverageFor(data, sdkingest.ScopeNetworkContext, root)
+	scopedFailedChild := scopedCoverageFor(data, sdkingest.ScopeNetworkContext, failedChild)
 
-	store := &fakeScanStore{retired: []string{failedChild}}
+	store := &fakeScanStore{retired: []string{scopedFailedChild}}
 	lifecycle := &fakeLifecycleScanStore{
 		fakeScanStore: store,
-		dirtyCoverage: []string{failedChild},
+		dirtyCoverage: []string{scopedFailedChild},
 	}
 	publisher := &fakePublisher{lifecycle: lifecycle}
 	writer := &fakeWriter{}
@@ -853,7 +944,7 @@ func TestPipeline_CompleteEmptyRootClearsFailedUnheadedChild(t *testing.T) {
 		result.ProjectionStatus != model.ProjectionComplete {
 		t.Fatalf("complete-empty recovery result = %+v", result)
 	}
-	wantReconciled := mergeCoverage([]string{root, failedChild})
+	wantReconciled := mergeCoverage([]string{scopedPointRoot, scopedNetworkRoot, scopedFailedChild})
 	if got := writer.nodeCalls[0].CompleteScopes; strings.Join(got, "\x00") !=
 		strings.Join(wantReconciled, "\x00") {
 		t.Fatalf("reconciled coverage = %v, want %v", got, wantReconciled)
@@ -861,7 +952,7 @@ func TestPipeline_CompleteEmptyRootClearsFailedUnheadedChild(t *testing.T) {
 	if len(publisher.finalizations) != 1 ||
 		!publisher.finalizations[0].Publish ||
 		len(publisher.finalizations[0].ResolvedDirtyCoverage) != 1 ||
-		publisher.finalizations[0].ResolvedDirtyCoverage[0] != failedChild {
+		publisher.finalizations[0].ResolvedDirtyCoverage[0] != scopedFailedChild {
 		t.Fatalf("complete-empty finalization = %+v", publisher.finalizations)
 	}
 	if len(lifecycle.dirtyCoverage) != 0 {
@@ -912,6 +1003,7 @@ func TestPipeline_PartialCurrentChildPreventsRootRetirement(t *testing.T) {
 			},
 		},
 	}
+	sdkingest.EnsureCoverageParentage(data.Meta.Collection)
 
 	store := &fakeScanStore{retired: []string{absentChild}}
 	writer := &fakeWriter{}
@@ -999,7 +1091,12 @@ func TestPipeline_PublishesAtomicEmptySnapshotAfterRequiredStages(t *testing.T) 
 	if finalized.Findings == nil || len(finalized.Findings) != 0 {
 		t.Fatalf("empty snapshot = %#v, want non-nil empty slice", finalized.Findings)
 	}
-	wantDomain := validIngestDataFor("unused").Meta.Collection.CoverageKeys[0]
+	fixture := validIngestDataFor("unused")
+	wantDomain := scopedCoverageFor(
+		fixture,
+		sdkingest.ScopeNetworkContext,
+		fixture.Meta.Collection.CoverageKeys[0],
+	)
 	if len(finalized.CompleteDomains) != 1 || finalized.CompleteDomains[0] != wantDomain {
 		t.Fatalf("complete domains = %v, want [%s]", finalized.CompleteDomains, wantDomain)
 	}
@@ -1592,7 +1689,7 @@ func TestPipeline_MissingLifecycleStoreStopsBeforeGraphMutation(t *testing.T) {
 		scanStore:    nil,
 		findingStore: &fakePublisher{},
 		runPP:        noOpRunPP,
-		originGuard:  allowOriginAdmitter{},
+		storageGuard: allowStorageVerifier{},
 	}
 
 	res, err := p.Ingest(context.Background(), validIngestDataFor("scan-nil-store"))
@@ -1610,13 +1707,13 @@ func TestPipeline_MissingLifecycleStoreStopsBeforeGraphMutation(t *testing.T) {
 func TestPipeline_MissingPublicationStoreStopsBeforeGraphMutation(t *testing.T) {
 	w := &fakeWriter{}
 	p := &Pipeline{
-		validator:   NewValidator(),
-		normalizer:  NewNormalizer(),
-		writer:      w,
-		graphDB:     &graph.MockGraphDB{},
-		scanStore:   &fakeScanStore{},
-		runPP:       noOpRunPP,
-		originGuard: allowOriginAdmitter{},
+		validator:    NewValidator(),
+		normalizer:   NewNormalizer(),
+		writer:       w,
+		graphDB:      &graph.MockGraphDB{},
+		scanStore:    &fakeScanStore{},
+		runPP:        noOpRunPP,
+		storageGuard: allowStorageVerifier{},
 	}
 
 	res, err := p.Ingest(context.Background(), validIngestDataFor("scan-no-publisher"))
@@ -1757,11 +1854,14 @@ func TestPipeline_PostProcessorReceivesCompleteDomains(t *testing.T) {
 	for i := range d.Graph.Edges {
 		d.Graph.Edges[i].ObservationDomains = []string{configScope}
 	}
+	scopedPointScope := scopedCoverageFor(d, sdkingest.ScopeCollectionPoint, configScope)
+	scopedNetworkScope := scopedCoverageFor(d, sdkingest.ScopeNetworkContext, configScope)
 	if _, err := p.Ingest(context.Background(), d); err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
-	if len(seenDomains) != 1 || seenDomains[0] != configScope {
-		t.Errorf("expected complete domains=[%s], got %v", configScope, seenDomains)
+	wantDomains := mergeCoverage([]string{scopedPointScope, scopedNetworkScope})
+	if strings.Join(seenDomains, "\x00") != strings.Join(wantDomains, "\x00") {
+		t.Errorf("expected split config domains=%v, got %v", wantDomains, seenDomains)
 	}
 }
 
@@ -1938,7 +2038,7 @@ func TestPipeline_TokenlessPublicObservationWithholdsPublication(t *testing.T) {
 // runner. We pass nil for the unit-testable types we don't have here
 // (Writer, GraphDB, ScanStore) — the constructor is purely structural.
 func TestNewPipeline_ConstructsWithDefaults(t *testing.T) {
-	p := NewPipeline(nil, nil, nil, nil, allowOriginAdmitter{})
+	p := NewPipeline(nil, nil, nil, nil, allowStorageVerifier{})
 	if p.validator == nil {
 		t.Error("validator should be initialized")
 	}
@@ -1948,7 +2048,7 @@ func TestNewPipeline_ConstructsWithDefaults(t *testing.T) {
 	if p.runPP == nil {
 		t.Error("runPP should default to analysis.RunPostProcessors")
 	}
-	if p.originGuard == nil {
+	if p.storageGuard == nil {
 		t.Error("origin guard should be retained")
 	}
 	// Nil concrete pointers must NOT become non-nil interface values
@@ -1971,7 +2071,7 @@ func TestNewPipeline_PassesConcreteThrough(t *testing.T) {
 	// only validate the Writer path here. The ScanStore path is
 	// exercised in production by bootstrap.go and indirectly covered
 	// by integration tests.
-	p := NewPipeline(w, nil, nil, nil, allowOriginAdmitter{})
+	p := NewPipeline(w, nil, nil, nil, allowStorageVerifier{})
 	if p.writer == nil {
 		t.Error("non-nil *graph.Writer should be stored as interface")
 	}

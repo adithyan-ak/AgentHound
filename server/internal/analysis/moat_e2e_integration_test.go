@@ -36,6 +36,9 @@ func TestIntegrationMoatDetectorsE2E(t *testing.T) {
 	if err := json.Unmarshal(raw, &data); err != nil {
 		t.Fatalf("unmarshal fixture: %v", err)
 	}
+	if err := sdkingest.ScopeArtifact(&data); err != nil {
+		t.Fatalf("scope fixture: %v", err)
+	}
 
 	// Self-guard: the fixture must keep the exact shape the four detectors
 	// rely on. If an edit changes the node/edge inventory, fail loudly here
@@ -103,12 +106,24 @@ func TestIntegrationMoatDetectorsE2E(t *testing.T) {
 	}
 
 	rows, err := db.Query(ctx, `
-MATCH (t:MCPTool {objectid: 'moat-sensitive'})
+MATCH (t:MCPTool {objectid: $tool_id})
       -[r:HAS_ACCESS_TO {is_composite: true}]->
-      (:MCPResource {objectid: 'moat-res'})
+      (:MCPResource {objectid: $resource_id})
 WHERE r.scan_id = $sid
 RETURN count(r) AS n`,
-		map[string]any{"sid": scanID})
+		map[string]any{
+			"sid": scanID,
+			"tool_id": sdkingest.ScopedNodeID(
+				sdkingest.ScopeNetworkContext,
+				data.Meta.Identity.NetworkContextID,
+				"moat-sensitive",
+			),
+			"resource_id": sdkingest.ScopedNodeID(
+				sdkingest.ScopeNetworkContext,
+				data.Meta.Identity.NetworkContextID,
+				"moat-res",
+			),
+		})
 	if err != nil {
 		t.Fatalf("count regenerated HAS_ACCESS_TO: %v", err)
 	}

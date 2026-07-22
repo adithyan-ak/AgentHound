@@ -37,7 +37,13 @@ type nodeEdgeWriter interface {
 // Pipeline. It remains an interface so tests can substitute a recorder, but
 // every ingest requires both operations.
 type scanLifecycleRecorder interface {
-	BeginScan(ctx context.Context, scan *model.Scan, dirtyCoverage []string) ([]string, error)
+	CollectionPointRecognized(ctx context.Context, collectionPointID string) (bool, error)
+	BeginScan(
+		ctx context.Context,
+		scan *model.Scan,
+		dirtyCoverage []string,
+		coverageParents map[string]string,
+	) ([]string, error)
 	RecordCampaignRejection(
 		ctx context.Context,
 		audit appdb.CampaignRejectionAudit,
@@ -62,8 +68,8 @@ type findingPublisher interface {
 	FinalizeScan(ctx context.Context, params appdb.FinalizeScanParams) (*appdb.PublicationResult, error)
 }
 
-type originAdmitter interface {
-	Admit(context.Context, sdkingest.CollectionOrigin) error
+type storageVerifier interface {
+	Verify(context.Context) error
 }
 
 // Pipeline serializes ingests through a single mutex.
@@ -80,7 +86,7 @@ type Pipeline struct {
 	scanStore    scanLifecycleRecorder
 	findingStore findingPublisher
 	runPP        postProcessFunc
-	originGuard  originAdmitter
+	storageGuard storageVerifier
 }
 
 func NewPipeline(
@@ -88,14 +94,14 @@ func NewPipeline(
 	graphDB graph.GraphDB,
 	scanStore *appdb.ScanStore,
 	findingStore *appdb.FindingStore,
-	originGuard originAdmitter,
+	storageGuard storageVerifier,
 ) *Pipeline {
 	p := &Pipeline{
-		validator:   NewValidator(),
-		normalizer:  NewNormalizer(),
-		graphDB:     graphDB,
-		runPP:       analysis.RunPostProcessors,
-		originGuard: originGuard,
+		validator:    NewValidator(),
+		normalizer:   NewNormalizer(),
+		graphDB:      graphDB,
+		runPP:        analysis.RunPostProcessors,
+		storageGuard: storageGuard,
 	}
 	// Avoid the typed-nil-into-interface trap: assign only if the
 	// concrete pointer is non-nil so `p.writer != nil` checks behave
@@ -121,18 +127,27 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	if data == nil {
 		return nil, fmt.Errorf("ingest data is nil")
 	}
-	// Realm/storage admission is the first operation after the nil check. It is
+	// Storage-pair verification is the first operation after the nil check. It is
 	// read-only and deliberately precedes generic validation because invalid
 	// campaign handling writes a PostgreSQL audit row.
-	if p.originGuard == nil {
+	if p.storageGuard == nil {
 		return nil, fmt.Errorf("storage binding admission guard unavailable")
 	}
-	if err := p.originGuard.Admit(ctx, data.Meta.Origin); err != nil {
+	if err := p.storageGuard.Verify(ctx); err != nil {
 		return nil, err
 	}
 	result := &sdkingest.IngestResult{
 		ScanID:  data.Meta.ScanID,
 		Outcome: sdkingest.OutcomeUnknown,
+		Identity: sdkingest.IngestIdentityResult{
+			CollectionPointID: data.Meta.Identity.CollectionPointID,
+			NetworkContextID:  data.Meta.Identity.NetworkContextID,
+			Quality:           data.Meta.Identity.Quality,
+			NetworkQuality:    data.Meta.Identity.NetworkQuality,
+			NetworkClass:      data.Meta.Identity.NetworkClass,
+			Display:           data.Meta.Identity.Display,
+			Recognition:       "unknown",
+		},
 	}
 
 	// Stage 1: Validate
@@ -244,11 +259,23 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		graph.ObservationCompleteness{},
 		completeDomains,
 	)
-
-	// Stage 3: Record scan start and projection attempt.
 	if p.scanStore == nil {
 		return nil, fmt.Errorf("begin scan lifecycle: lifecycle store unavailable")
 	}
+	recognized, err := p.scanStore.CollectionPointRecognized(
+		ctx,
+		data.Meta.Identity.CollectionPointID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if recognized {
+		result.Identity.Recognition = "recognized"
+	} else {
+		result.Identity.Recognition = "new"
+	}
+
+	// Stage 3: Record scan start and projection attempt.
 	if p.findingStore == nil {
 		return nil, fmt.Errorf("begin scan lifecycle: publication store unavailable")
 	}
@@ -261,6 +288,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		ctx,
 		initialScan,
 		mergeCoverage(keys, retiredDomains),
+		sdkingest.CoverageParents(data.Meta.Collection),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("begin scan lifecycle: %w", err)
@@ -688,6 +716,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		ObservationStatus:     observationStatus,
 		ObservationDetails:    modelObservationCompleteness(observationCompleteness),
 		CoverageKeys:          keys,
+		CoverageParents:       sdkingest.CoverageParents(data.Meta.Collection),
 		CompleteDomains:       publicationCompleteDomains,
 		ResolvedDirtyCoverage: publicationRetiredDomains,
 		AuthoritativeRoots:    publicationAuthoritativeRoots,

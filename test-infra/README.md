@@ -46,14 +46,12 @@ isolated Neo4j/PostgreSQL only after network scanning, solely to ingest the
 actual collector projections and export the campaign witness. vLLM uses its
 official CPU image.
 
-The harness fixes the container-workstation origin to
-`agenthound-test-workstation` / `agenthound-test-lab` and asserts those exact
-ingest-v3 fields on every artifact before any scenario-specific oracle runs.
-Its PostgreSQL/Neo4j pair is bound by the fixed disposable UUID
-`7bc1f56e-c890-4de5-9cc5-921797176fa6`. The host-native macOS discovery lane
-uses `agenthound-test-macos` in the same realm and remains collection-only; it
-is intentionally not ingested into the workstation-bound databases. This
-proves the one-host/one-realm admission model rather than bypassing it.
+The harness asserts the automatic ingest-v4 identity schema and canonical
+derived IDs on every artifact before any scenario-specific oracle runs. The
+server generates its PostgreSQL/Neo4j storage-pair UUID internally. The
+host-native macOS discovery lane remains collection-only and proves that no
+manual identity configuration is needed on either the host or the disposable
+container workstation.
 
 ## Run
 

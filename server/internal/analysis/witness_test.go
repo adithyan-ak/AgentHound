@@ -12,11 +12,22 @@ import (
 )
 
 const (
-	witnessServerID = "sha256:witness-server"
+	witnessEndpoint = "https://witness.example/mcp"
+	witnessScopeID  = "sha256:witness-network-scope"
 	witnessAgentID  = "sha256:witness-agent"
 	witnessCredID   = "sha256:witness-credential"
 	witnessResURI   = "postgres://prod/customers"
 )
+
+var (
+	witnessServerIdentityID = ingest.ResolveMCPServerIdentity("http", witnessEndpoint).ObjectID
+	witnessServerID         = ingest.ScopedNodeID(ingest.ScopeNetworkContext, witnessScopeID, witnessServerIdentityID)
+)
+
+func witnessResourceID() string {
+	rawID := ingest.ComputeNodeID("MCPResource", witnessServerIdentityID, witnessResURI)
+	return ingest.ScopedNodeID(ingest.ScopeNetworkContext, witnessScopeID, rawID)
+}
 
 func witnessExportRow(resourceID string) map[string]any {
 	evidenceIDs := []any{
@@ -32,6 +43,9 @@ func witnessExportRow(resourceID string) map[string]any {
 		"credential_merge_key":  "value_hash",
 		"server_id":             witnessServerID,
 		"server_transport":      "http",
+		"server_endpoint":       witnessEndpoint,
+		"service_scope":         string(ingest.ScopeNetworkContext),
+		"service_scope_id":      witnessScopeID,
 		"evidence_node_ids":     evidenceIDs,
 		"evidence_node_labels": []any{
 			[]any{"AgentInstance"},
@@ -45,7 +59,7 @@ func witnessExportRow(resourceID string) map[string]any {
 }
 
 func TestBuildWitnessMatchesFingerprint(t *testing.T) {
-	resID := ingest.ComputeNodeID("MCPResource", witnessServerID, witnessResURI)
+	resID := witnessResourceID()
 	mock := &graph.MockGraphDB{QueryResult: []map[string]any{witnessExportRow(resID)}}
 	findingID := findingFingerprint("CAN_REACH", witnessAgentID, resID)
 
@@ -81,7 +95,7 @@ func TestBuildWitnessMatchesFingerprint(t *testing.T) {
 }
 
 func TestBuildWitnessRejectsNonHTTPServer(t *testing.T) {
-	resID := ingest.ComputeNodeID("MCPResource", witnessServerID, witnessResURI)
+	resID := witnessResourceID()
 	row := witnessExportRow(resID)
 	row["server_transport"] = "stdio"
 	mock := &graph.MockGraphDB{QueryResult: []map[string]any{row}}
@@ -92,7 +106,7 @@ func TestBuildWitnessRejectsNonHTTPServer(t *testing.T) {
 }
 
 func TestWitnessExportContainsNoEndpoint(t *testing.T) {
-	resID := ingest.ComputeNodeID("MCPResource", witnessServerID, witnessResURI)
+	resID := witnessResourceID()
 	mock := &graph.MockGraphDB{QueryResult: []map[string]any{witnessExportRow(resID)}}
 	findingID := findingFingerprint("CAN_REACH", witnessAgentID, resID)
 	w, err := BuildWitness(context.Background(), mock, findingID)
@@ -109,7 +123,7 @@ func TestWitnessExportContainsNoEndpoint(t *testing.T) {
 }
 
 func TestBuildWitnessNoMatch(t *testing.T) {
-	resID := ingest.ComputeNodeID("MCPResource", witnessServerID, witnessResURI)
+	resID := witnessResourceID()
 	mock := &graph.MockGraphDB{QueryResult: []map[string]any{witnessExportRow(resID)}}
 	if _, err := BuildWitness(context.Background(), mock, "0000000000000000"); err == nil {
 		t.Fatal("unknown finding must produce an error")

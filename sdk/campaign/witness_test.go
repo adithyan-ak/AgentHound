@@ -14,10 +14,16 @@ const (
 	testCredID     = "sha256:credential"
 	testResURI     = "postgres://prod/customers"
 	testCredMateri = "sk-super-secret-value"
+	testScopeID    = "sha256:test-service-scope"
 )
 
+func testScopedServerID() string {
+	return ingest.ScopedNodeID(ingest.ScopeNetworkContext, testScopeID, testServerID)
+}
+
 func testResourceID() string {
-	return ingest.ComputeNodeID("MCPResource", testServerID, testResURI)
+	rawID := ingest.ComputeNodeID("MCPResource", testServerID, testResURI)
+	return ingest.ScopedNodeID(ingest.ScopeNetworkContext, testScopeID, rawID)
 }
 
 func validWitness() Witness {
@@ -33,13 +39,16 @@ func validWitness() Witness {
 		CredentialKind:               "Credential",
 		CredentialValueHash:          common.HashCredentialValue(testCredMateri),
 		CredentialMergeKey:           CredentialMergeKeyValueHash,
-		ServerID:                     testServerID,
+		ServerID:                     testScopedServerID(),
 		ServerKind:                   "MCPServer",
+		ServerIdentityID:             testServerID,
+		ServiceScope:                 ingest.ScopeNetworkContext,
+		ServiceScopeID:               testScopeID,
 		ResourceID:                   resID,
 		ResourceKind:                 "MCPResource",
 		ResourceIdentityInput:        testResURI,
 		EvidenceNodeIDs: []string{
-			testAgentID, "sha256:tool-1", testServerID, testCredID, resID,
+			testAgentID, "sha256:tool-1", testScopedServerID(), testCredID, resID,
 		},
 		EvidenceNodeKinds: []string{
 			"AgentInstance", "MCPTool", "MCPServer", "Credential", "MCPResource",
@@ -88,6 +97,9 @@ func TestWitnessValidateMissingFields(t *testing.T) {
 		"empty value_hash":          func(w *Witness) { w.CredentialValueHash = "" },
 		"empty server_id":           func(w *Witness) { w.ServerID = "" },
 		"wrong server_kind":         func(w *Witness) { w.ServerKind = "Host" },
+		"empty server identity":     func(w *Witness) { w.ServerIdentityID = "" },
+		"empty service scope":       func(w *Witness) { w.ServiceScope = "" },
+		"empty service scope id":    func(w *Witness) { w.ServiceScopeID = "" },
 		"empty resource identity":   func(w *Witness) { w.ResourceIdentityInput = "" },
 		"wrong resource_kind":       func(w *Witness) { w.ResourceKind = "Credential" },
 		"zero publication_revision": func(w *Witness) { w.PublicationRevision = 0 },

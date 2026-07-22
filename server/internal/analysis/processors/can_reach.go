@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/campaign"
+	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 )
 
@@ -32,12 +33,13 @@ SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true, e.sou
     e.evidence_relationship_ids = [id(ts), id(provides), id(access)]
 RETURN count(*) AS written`
 
-	credChainCypher := `
+	credChainCypher := fmt.Sprintf(`
 MATCH (a:AgentInstance)-[trust1:TRUSTS_SERVER]->(s1:MCPServer)-[provides1:PROVIDES_TOOL]->(t1:MCPTool)
 WHERE ANY(cap IN t1.capability_surface WHERE cap IN ['file_read', 'credential_access'])
 MATCH (s2:MCPServer)-[authenticates:AUTHENTICATES_WITH]->(i:Identity)-[uses:USES_CREDENTIAL]->(c:Credential)
 MATCH (s2)-[provides2:PROVIDES_TOOL]->(t2:MCPTool)-[access:HAS_ACCESS_TO]->(r:MCPResource)
 WHERE s1 <> s2
+  AND %s
   AND (
     (s1.effective_auth_assurance = 'unauthenticated'
       AND s1.effective_auth_source = 'observed')
@@ -73,7 +75,7 @@ SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true, e.sou
       id(winner.trust1), id(winner.provides1), id(winner.authenticates),
       id(winner.uses), id(winner.provides2), id(winner.access)
     ]
-RETURN count(*) AS written`
+RETURN count(*) AS written`, compatibleScopePredicate("s1", "s2"))
 
 	// verifiedUpgradeCypher re-correlates a persisted raw CREDENTIAL_REACH_VERIFIED
 	// edge (emitted by the campaign runner's cred-reach scenario) against the
@@ -105,7 +107,7 @@ WHERE coalesce(v.is_composite, false) = false
   AND v.server_kind = 'MCPServer'
   AND v.credential_kind = 'Credential'
   AND v.resource_kind = 'MCPResource'
-  AND v.witness_schema_version = 2
+  AND v.witness_schema_version = 3
   AND v.topology_normalization_version = 1
   AND v.publication_revision > 0
   AND v.predicted_edge_kind = 'CAN_REACH'
@@ -126,6 +128,10 @@ WHERE coalesce(v.is_composite, false) = false
   AND r.uri = v.resource_identity_input
 MATCH (s:MCPServer)-[:PROVIDES_RESOURCE]->(r)
 WHERE s.objectid = v.server_id
+  AND s.identity_scope = v.service_scope
+  AND s.identity_scope_id = v.service_scope_id
+  AND r.identity_scope = v.service_scope
+  AND r.identity_scope_id = v.service_scope_id
 MATCH (c:Credential)
 WHERE c.objectid = v.credential_id
   AND c.value_hash IS NOT NULL AND c.value_hash = v.credential_value_hash
@@ -240,6 +246,9 @@ func campaignEvidenceFromProperties(properties map[string]any) (campaign.Evidenc
 		CredentialMergeKey:           stringProperty(properties, campaign.PropCredentialMergeKey),
 		ServerID:                     stringProperty(properties, campaign.PropServerID),
 		ServerKind:                   stringProperty(properties, campaign.PropServerKind),
+		ServerIdentityID:             stringProperty(properties, campaign.PropServerIdentityID),
+		ServiceScope:                 sdkingest.IdentityScope(stringProperty(properties, campaign.PropServiceScope)),
+		ServiceScopeID:               stringProperty(properties, campaign.PropServiceScopeID),
 		ResourceID:                   stringProperty(properties, campaign.PropResourceID),
 		ResourceKind:                 stringProperty(properties, campaign.PropResourceKind),
 		ResourceIdentityInput:        stringProperty(properties, campaign.PropResourceIdentity),

@@ -146,14 +146,6 @@ func runCampaign(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("campaign: no scenario registered for --scenario %q (available: %s)",
 			scenarioID, strings.Join(available, ", "))
 	}
-	var origin ingest.CollectionOrigin
-	if commit && scenarioRequiresWitness(scenario) {
-		var err error
-		origin, err = requireCollectionOrigin()
-		if err != nil {
-			return err
-		}
-	}
 
 	stdin := cmd.InOrStdin()
 	in := campaign.RunInput{
@@ -252,7 +244,7 @@ func runCampaign(cmd *cobra.Command, args []string) error {
 		"[campaign] COMMITTED %s on %s — outcome=%s control=%s authed=%s\n",
 		scenario.ID(), targetRef, res.Outcome, res.ControlStatus, res.AuthedStatus)
 
-	envelope := buildCampaignEnvelope(origin, scenario.ID(), scenario.Version(), engagementID, res.Evidence)
+	envelope := buildCampaignEnvelope(scenario.ID(), scenario.Version(), engagementID, res.Evidence)
 
 	output := resolveCampaignOutput(cmd)
 	if output == "" {
@@ -355,10 +347,9 @@ func resolveCredentialMaterial(fromStdin bool, envName string, stdin io.Reader) 
 // same domain retires the prior verification. Non-definitive (indeterminate)
 // outcomes are marked partial so the domain is NOT promoted and prior evidence
 // is preserved.
-func buildCampaignEnvelope(origin ingest.CollectionOrigin, scenarioID string, scenarioVersion int, engagementID string, ev *campaign.Evidence) *ingest.IngestData {
+func buildCampaignEnvelope(scenarioID string, scenarioVersion int, engagementID string, ev *campaign.Evidence) *ingest.IngestData {
 	scanID := uuid.New().String()
 	env := common.NewIngestData("scan", scanID)
-	env.Meta.Origin = origin
 	env.Meta.Extra = map[string]any{
 		campaign.EvidenceArtifactMetadataKey: ev.Artifact(),
 	}

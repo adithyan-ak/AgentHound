@@ -18,9 +18,13 @@ func canReachFingerprint(sourceID, targetID string) string {
 }
 
 func TestHandleWitness_Success(t *testing.T) {
-	serverID := "sha256:wsrv"
+	endpoint := "https://witness-handler.example/mcp"
+	serverIdentityID := ingest.ResolveMCPServerIdentity("http", endpoint).ObjectID
+	serviceScopeID := "sha256:witness-handler-network"
+	serverID := ingest.ScopedNodeID(ingest.ScopeNetworkContext, serviceScopeID, serverIdentityID)
 	uri := "postgres://prod/db"
-	resID := ingest.ComputeNodeID("MCPResource", serverID, uri)
+	rawResourceID := ingest.ComputeNodeID("MCPResource", serverIdentityID, uri)
+	resID := ingest.ScopedNodeID(ingest.ScopeNetworkContext, serviceScopeID, rawResourceID)
 	agentID := "sha256:wagent"
 	credID := "sha256:wcred"
 	findingID := canReachFingerprint(agentID, resID)
@@ -34,6 +38,9 @@ func TestHandleWitness_Success(t *testing.T) {
 		"credential_merge_key":  "value_hash",
 		"server_id":             serverID,
 		"server_transport":      "http",
+		"server_endpoint":       endpoint,
+		"service_scope":         string(ingest.ScopeNetworkContext),
+		"service_scope_id":      serviceScopeID,
 		"evidence_node_ids":     []any{agentID, serverID, credID, resID},
 		"evidence_node_labels": []any{
 			[]any{"AgentInstance"},

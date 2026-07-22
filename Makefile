@@ -87,9 +87,6 @@ standard: preflight-docker
 	docker build -f docker/Dockerfile.standard -t agenthound:latest .
 
 standard-run: preflight-docker
-	@test -n "$(AGENTHOUND_HOST_ID)" || (echo "FAIL: set AGENTHOUND_HOST_ID to a stable lowercase collector-host ID" && exit 1)
-	@test -n "$(AGENTHOUND_NETWORK_REALM_ID)" || (echo "FAIL: set AGENTHOUND_NETWORK_REALM_ID to a stable lowercase private-network realm ID" && exit 1)
-	@test -n "$(AGENTHOUND_STORAGE_PAIR_ID)" || (echo "FAIL: set AGENTHOUND_STORAGE_PAIR_ID to a freshly generated canonical UUID" && exit 1)
 	# Build the image first if it doesn't exist locally. agenthound:latest
 	# is built by `make standard`; running `make standard-run` on a fresh
 	# checkout without that image would otherwise fail (or worse, pull an
@@ -101,9 +98,6 @@ standard-run: preflight-docker
 	# Bind on loopback only — the server has no application-layer auth.
 	# Override with -p 0.0.0.0:8080:8080 only inside a network you trust.
 	docker run -d --name agenthound -p 127.0.0.1:8080:8080 \
-		-e AGENTHOUND_HOST_ID="$(AGENTHOUND_HOST_ID)" \
-		-e AGENTHOUND_NETWORK_REALM_ID="$(AGENTHOUND_NETWORK_REALM_ID)" \
-		-e AGENTHOUND_STORAGE_PAIR_ID="$(AGENTHOUND_STORAGE_PAIR_ID)" \
 		-v agenthound-data:/data --restart unless-stopped agenthound:latest
 
 standard-stop: preflight-docker

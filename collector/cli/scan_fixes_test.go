@@ -364,7 +364,6 @@ func captureMCPCollectionLogs(t *testing.T, jsonLog bool, rawURL string) string 
 
 	_, _ = collectMCP(
 		context.Background(),
-		testCollectionOrigin,
 		rawURL,
 		"",
 		1,

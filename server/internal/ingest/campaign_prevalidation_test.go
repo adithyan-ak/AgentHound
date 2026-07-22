@@ -21,7 +21,10 @@ func pipelineCampaignEvidence(outcome campaign.Outcome) campaign.Evidence {
 		credentialID = "campaign-credential"
 		resourceURI  = "postgres://prod/customers"
 	)
-	resourceID := sdkingest.ComputeNodeID("MCPResource", serverID, resourceURI)
+	serviceScopeID := "sha256:prevalidation-test-network"
+	scopedServerID := sdkingest.ScopedNodeID(sdkingest.ScopeNetworkContext, serviceScopeID, serverID)
+	rawResourceID := sdkingest.ComputeNodeID("MCPResource", serverID, resourceURI)
+	resourceID := sdkingest.ScopedNodeID(sdkingest.ScopeNetworkContext, serviceScopeID, rawResourceID)
 	evidence := campaign.Evidence{
 		ScenarioID:       "cred-reach",
 		ScenarioVersion:  1,
@@ -47,13 +50,16 @@ func pipelineCampaignEvidence(outcome campaign.Outcome) campaign.Evidence {
 			CredentialKind:               "Credential",
 			CredentialValueHash:          "campaign-value-hash",
 			CredentialMergeKey:           campaign.CredentialMergeKeyValueHash,
-			ServerID:                     serverID,
+			ServerID:                     scopedServerID,
 			ServerKind:                   "MCPServer",
+			ServerIdentityID:             serverID,
+			ServiceScope:                 sdkingest.ScopeNetworkContext,
+			ServiceScopeID:               serviceScopeID,
 			ResourceID:                   resourceID,
 			ResourceKind:                 "MCPResource",
 			ResourceIdentityInput:        resourceURI,
 			EvidenceNodeIDs: []string{
-				agentID, "entry-server", "entry-tool", serverID,
+				agentID, "entry-server", "entry-tool", scopedServerID,
 				credentialID, "campaign-identity", "resource-tool", resourceID,
 			},
 			EvidenceNodeKinds: []string{
@@ -70,7 +76,7 @@ func pipelineCampaignEvidence(outcome campaign.Outcome) campaign.Evidence {
 
 func pipelineCampaignEnvelope(scanID string, evidence campaign.Evidence) *sdkingest.IngestData {
 	data := common.NewIngestData("scan", scanID)
-	data.Meta.Origin = testCollectionOrigin
+	data.Meta.Identity = testCollectionIdentity()
 	data.Meta.Extra = map[string]any{
 		campaign.EvidenceArtifactMetadataKey: evidence.Artifact(),
 	}
@@ -259,8 +265,13 @@ func TestPipelineValidatedNegativeMayRetireExactCoverage(t *testing.T) {
 			result, len(scans.creates), len(writer.nodeCalls), len(writer.edgeCalls),
 		)
 	}
-	if !equalStrings(writer.nodeCalls[0].CompleteScopes, []string{coverageKey}) ||
-		!equalStrings(writer.edgeCalls[0].CompleteScopes, []string{coverageKey}) {
+	scopedCoverageKey := sdkingest.ScopedCoverageKey(
+		sdkingest.ScopeCollectionPoint,
+		data.Meta.Identity.CollectionPointID,
+		coverageKey,
+	)
+	if !equalStrings(writer.nodeCalls[0].CompleteScopes, []string{scopedCoverageKey}) ||
+		!equalStrings(writer.edgeCalls[0].CompleteScopes, []string{scopedCoverageKey}) {
 		t.Fatalf("validated negative did not authorize exact-domain retirement")
 	}
 }

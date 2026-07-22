@@ -2,6 +2,7 @@ package processors
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
@@ -26,11 +27,12 @@ func (p *Taints) Dependencies() []string { return nil }
 func (p *Taints) Process(ctx context.Context, db graph.GraphDB, scanID string) (graph.ProcessingStats, error) {
 	start := time.Now()
 
-	cypher := `
+	cypher := fmt.Sprintf(`
 MATCH (s1:MCPServer)-[provides1:PROVIDES_TOOL]->(src:MCPTool)
 MATCH (s2:MCPServer)-[provides2:PROVIDES_TOOL]->(snk:MCPTool)
 WHERE s1 <> s2
   AND src <> snk
+  AND %s
   AND src.schema_keys IS NOT NULL
   AND snk.schema_keys IS NOT NULL
   AND size([k IN src.schema_keys WHERE k IN snk.schema_keys]) >= 2
@@ -54,7 +56,7 @@ SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true,
         WHEN input_evidence.relationship IS NULL THEN []
         ELSE [id(input_evidence.relationship)]
       END
-RETURN count(*) AS written`
+RETURN count(*) AS written`, compatibleScopePredicate("s1", "s2"))
 
 	n, err := db.ExecuteWrite(ctx, cypher, map[string]any{"scan_id": scanID})
 	if err != nil {

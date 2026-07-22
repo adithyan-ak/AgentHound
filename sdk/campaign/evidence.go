@@ -52,6 +52,9 @@ const (
 	PropCredentialMergeKey  = "credential_merge_key"
 	PropServerID            = "server_id"
 	PropServerKind          = "server_kind"
+	PropServerIdentityID    = "server_identity_id"
+	PropServiceScope        = "service_scope"
+	PropServiceScopeID      = "service_scope_id"
 	PropResourceID          = "resource_id"
 	PropResourceKind        = "resource_kind"
 	PropResourceIdentity    = "resource_identity_input"
@@ -235,6 +238,9 @@ func validateBoundedWitness(w Witness) error {
 		w.CredentialMergeKey,
 		w.ServerID,
 		w.ServerKind,
+		w.ServerIdentityID,
+		string(w.ServiceScope),
+		w.ServiceScopeID,
 		w.ResourceID,
 		w.ResourceKind,
 	}
@@ -294,6 +300,9 @@ func (e Evidence) edgeProperties(scanID string) map[string]any {
 		PropCredentialMergeKey:  w.CredentialMergeKey,
 		PropServerID:            w.ServerID,
 		PropServerKind:          w.ServerKind,
+		PropServerIdentityID:    w.ServerIdentityID,
+		PropServiceScope:        string(w.ServiceScope),
+		PropServiceScopeID:      w.ServiceScopeID,
 		PropResourceID:          w.ResourceID,
 		PropResourceKind:        w.ResourceKind,
 		PropResourceIdentity:    w.ResourceIdentityInput,

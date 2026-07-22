@@ -29,7 +29,7 @@ var indexDefs = []struct{ Label, Property string }{
 	{"Credential", "value_hash"},
 }
 
-const graphSchemaVersion = 2
+const graphSchemaVersion = 3
 
 const observationFingerprintSchemaStateCypher = `
 CALL {
@@ -89,6 +89,13 @@ func InitSchema(ctx context.Context, driver neo4j.DriverWithContext) error {
 			graphSchemaVersion,
 		)
 	}
+	if fingerprintState.Version > 0 && fingerprintState.Version < graphSchemaVersion {
+		return fmt.Errorf(
+			"Neo4j graph schema %d predates ingest v4 scoped identity; automatic upgrade to schema %d is refused: back up the existing deployment, recreate both database volumes, and recollect",
+			fingerprintState.Version,
+			graphSchemaVersion,
+		)
+	}
 	if fingerprintState.Version < graphSchemaVersion &&
 		(fingerprintState.UnfingerprintedNodes > 0 ||
 			fingerprintState.UnfingerprintedRelationships > 0) {
@@ -140,8 +147,8 @@ func InitSchema(ctx context.Context, driver neo4j.DriverWithContext) error {
 		slog.Info("created index", "label", idx.Label, "property", idx.Property)
 	}
 
-	// Schema version 2 introduces per-owner observation fingerprints. Existing
-	// schema-1 graphs are advanced only after the compatibility check above.
+	// Schema version 3 is the clean ingest-v4 boundary. Earlier graph schemas
+	// are rejected above rather than rewritten into scoped identity.
 	if err := runDDL(ctx, driver, fmt.Sprintf(
 		"MATCH (schema:SchemaVersion) SET schema.version = %d",
 		graphSchemaVersion,

@@ -28,13 +28,13 @@ import (
 
 const integrationHashedVirtualKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
-type allowOriginAdmitter struct{}
+type allowStorageVerifier struct{}
 
-func (allowOriginAdmitter) Admit(context.Context, sdkingest.CollectionOrigin) error {
+func (allowStorageVerifier) Verify(context.Context) error {
 	return nil
 }
 
-func TestLiteLLMProductionLootArtifactIsStrictV3(t *testing.T) {
+func TestLiteLLMProductionLootArtifactIsStrictV4(t *testing.T) {
 	fixture := newLiteLLMFixture(t)
 	defer fixture.Close()
 
@@ -50,7 +50,7 @@ func TestIntegrationLiteLLMFingerprintThenLootPreservesGatewayProperties(t *test
 
 	fingerprintData := runAgentHoundLiteLLMScan(t)
 	if err := serveringest.NewValidator().Validate(&fingerprintData); err != nil {
-		t.Fatalf("strict ingest-v3 validation rejected agenthound scan output: %v", err)
+		t.Fatalf("strict ingest-v4 validation rejected agenthound scan output: %v", err)
 	}
 	gatewayID := sdkingest.ComputeNodeID("LiteLLMGateway", fixture.URL)
 	fingerprintGateway := findLiteLLMGateway(t, &fingerprintData, gatewayID)
@@ -74,15 +74,6 @@ func TestIntegrationLiteLLMFingerprintThenLootPreservesGatewayProperties(t *test
 	lootData := runAgentHoundLiteLLMLoot(t, fixture.URL)
 	assertStrictLiteLLMArtifact(t, &lootData, fixture.URL)
 	lootGateway := findLiteLLMGateway(t, &lootData, gatewayID)
-	if lootGateway.ID != fingerprintGateway.ID ||
-		strings.Join(lootGateway.Kinds, ",") != strings.Join(fingerprintGateway.Kinds, ",") {
-		t.Fatalf(
-			"fingerprint/loot gateway identity differs: fingerprint=%+v loot=%+v",
-			fingerprintGateway,
-			lootGateway,
-		)
-	}
-
 	second, err := pipeline.Ingest(ctx, &lootData)
 	if err != nil {
 		t.Fatalf("pipeline ingest of validated loot output: %v", err)
@@ -92,6 +83,15 @@ func TestIntegrationLiteLLMFingerprintThenLootPreservesGatewayProperties(t *test
 		second.Outcome != sdkingest.OutcomeComplete {
 		t.Fatalf("loot publication revision 2 failed: %+v", second)
 	}
+	if lootGateway.ID != fingerprintGateway.ID ||
+		strings.Join(lootGateway.Kinds, ",") != strings.Join(fingerprintGateway.Kinds, ",") {
+		t.Fatalf(
+			"fingerprint/loot scoped gateway identity differs: fingerprint=%+v loot=%+v",
+			fingerprintGateway,
+			lootGateway,
+		)
+	}
+	scopedGatewayID := fingerprintGateway.ID
 
 	rows, err := db.Query(
 		ctx,
@@ -100,7 +100,7 @@ func TestIntegrationLiteLLMFingerprintThenLootPreservesGatewayProperties(t *test
 		        properties(gateway) AS properties,
 		        gateway.observation_tokens AS owners,
 		        gateway.observation_reference_tokens AS reference_owners`,
-		map[string]any{"gateway_id": gatewayID},
+		map[string]any{"gateway_id": scopedGatewayID},
 	)
 	if err != nil {
 		t.Fatalf("query shared LiteLLM gateway: %v", err)
@@ -142,7 +142,7 @@ func TestIntegrationLiteLLMFingerprintThenLootPreservesGatewayProperties(t *test
 	}
 	var produced []map[string]any
 	for _, row := range queryRows {
-		if row["gateway_id"] == gatewayID {
+		if row["gateway_id"] == scopedGatewayID {
 			produced = append(produced, row)
 		}
 	}
@@ -185,6 +185,7 @@ func runLiteLLMProducerQuery(
 	fixture.AssertLootRequests(t)
 
 	gatewayID := sdkingest.ComputeNodeID("LiteLLMGateway", fixture.URL)
+	gateway := findLiteLLMGateway(t, &data, gatewayID)
 	result, err := pipeline.Ingest(ctx, &data)
 	if err != nil {
 		t.Fatalf("pipeline ingest of validated loot output: %v", err)
@@ -215,7 +216,7 @@ func runLiteLLMProducerQuery(
 	}
 	producedRows := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
-		if row["gateway_id"] == gatewayID {
+		if row["gateway_id"] == gateway.ID {
 			producedRows = append(producedRows, row)
 		}
 	}
@@ -256,7 +257,7 @@ func assertStrictLiteLLMArtifact(
 ) {
 	t.Helper()
 	if err := serveringest.NewValidator().Validate(data); err != nil {
-		t.Fatalf("strict ingest-v3 validation rejected agenthound loot output: %v", err)
+		t.Fatalf("strict ingest-v4 validation rejected agenthound loot output: %v", err)
 	}
 
 	gatewayID := sdkingest.ComputeNodeID("LiteLLMGateway", fixtureURL)
@@ -515,7 +516,7 @@ func runAgentHoundArtifactCommand(
 }
 
 func integrationCommandEnv(home string) []string {
-	env := make([]string, 0, len(os.Environ())+4)
+	env := make([]string, 0, len(os.Environ())+2)
 	for _, entry := range os.Environ() {
 		if strings.HasPrefix(entry, "HOME=") ||
 			strings.HasPrefix(entry, "AGENTHOUND_QUIET=") {
@@ -527,8 +528,6 @@ func integrationCommandEnv(home string) []string {
 		env,
 		"HOME="+home,
 		"AGENTHOUND_QUIET=1",
-		"AGENTHOUND_HOST_ID=fixture-host",
-		"AGENTHOUND_NETWORK_REALM_ID=fixture-realm",
 	)
 }
 
@@ -608,6 +607,6 @@ func freshLiteLLMIntegrationHarness(
 		db,
 		scanStore,
 		findingStore,
-		allowOriginAdmitter{},
+		allowStorageVerifier{},
 	), db, findingStore
 }
