@@ -50,8 +50,6 @@ func TestProductionCLIComposesValidatorCompatibleMCPEnvelope(t *testing.T) {
 	command.Env = append(
 		os.Environ(),
 		"HOME="+home,
-		"AGENTHOUND_HOST_ID="+testCollectionOrigin.HostID,
-		"AGENTHOUND_NETWORK_REALM_ID="+testCollectionOrigin.NetworkRealmID,
 	)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("run collector: %v\n%s", err, output)

@@ -31,10 +31,19 @@ type IngestResult struct {
 	NormalizationStatus   NormalizationStatus    `json:"normalization_status"`
 	NormalizationWarnings []NormalizationWarning `json:"normalization_warnings,omitempty"`
 	Collection            CollectionReport       `json:"collection"`
+	Identity              IngestIdentityResult   `json:"identity"`
 	Stages                []StageResult          `json:"stages,omitempty"`
 	PostProcessingStats   []PostProcessingStat   `json:"post_processing_stats,omitempty"`
 	PublishedRevision     *int64                 `json:"published_revision,omitempty"`
 	Duration              time.Duration          `json:"duration"`
+}
+
+type IngestIdentityResult struct {
+	CollectionPointID string          `json:"collection_point_id"`
+	NetworkContextID  string          `json:"network_context_id"`
+	Quality           IdentityQuality `json:"quality"`
+	NetworkClass      NetworkClass    `json:"network_class"`
+	Recognition       string          `json:"recognition"`
 }
 
 type FactCounts struct {

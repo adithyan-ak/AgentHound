@@ -112,11 +112,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// the scanner runs instead of the legacy collector flow. The network path
 	// performs the port sweep and then dispatches every registered fingerprinter.
 	if len(args) == 1 {
-		origin, err := requireCollectionOrigin()
-		if err != nil {
-			return err
-		}
-		return runNetworkScan(cmd, args[0], origin)
+		return runNetworkScan(cmd, args[0])
 	}
 
 	runConfig, _ := cmd.Flags().GetBool("config")
@@ -183,14 +179,6 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("A2A requires --target, --targets, --discover-domain, or --targets-file")
 	}
 
-	// Validate command shape first so operators get the actionable usage
-	// error. The origin is still required before rules load, collection,
-	// network I/O, or output mutation.
-	origin, err := requireCollectionOrigin()
-	if err != nil {
-		return err
-	}
-
 	for _, domain := range discoverDomains {
 		targets = append(targets, fmt.Sprintf("https://%s/.well-known/agent-card.json", domain))
 	}
@@ -198,7 +186,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	rulesEngine, ruleset := loadEffectiveRules()
 
-	merged, enabled, failed := collectAll(ctx, origin, runConfig, runMCP, runA2A,
+	merged, enabled, failed := collectAll(ctx, runConfig, runMCP, runA2A,
 		path, paths, projectDir, includeCredValues,
 		url, target, targets, targetsFile, authToken,
 		concurrency, timeout, insecure, noVerifyJWKS, a2aTrustedKeys,
@@ -245,6 +233,9 @@ func allCollectorsFailed(enabled, failed int) bool {
 // os.Stdout. Used for piping into 'agenthound-server ingest -'. No atomic
 // write semantics; stdout is the operator's responsibility (e.g., via SSH).
 func writeCollectorOutputStdout(data *ingest.IngestData) error {
+	if err := prepareCollectorArtifact(data); err != nil {
+		return fmt.Errorf("prepare ingest v4 artifact: %w", err)
+	}
 	encoded, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal JSON: %w", err)
@@ -303,7 +294,7 @@ func normalizeNetworkConcurrency(value int) int {
 // the merged envelope plus the count of enabled collectors and how many of
 // them failed, so the caller can decide the exit code (total failure → non-
 // zero, partial/empty success → zero).
-func collectAll(ctx context.Context, origin ingest.CollectionOrigin, runConfig, runMCP, runA2A bool,
+func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 	path string, paths []string, projectDir string, includeCredValues bool,
 	url, target string, targets []string, targetsFile, authToken string,
 	concurrency int, timeout time.Duration, insecure bool,
@@ -312,13 +303,12 @@ func collectAll(ctx context.Context, origin ingest.CollectionOrigin, runConfig, 
 ) (data *ingest.IngestData, enabled, failed int) {
 
 	merged := common.NewIngestData("scan", uuid.New().String())
-	merged.Meta.Origin = origin
 	merged.Meta.Ruleset = ruleset
 	var reports []*ingest.CollectionReport
 
 	if runConfig {
 		enabled++
-		data, err := collectConfig(ctx, origin, path, paths, projectDir, includeCredValues, merged.Meta.ScanID, rulesEngine)
+		data, err := collectConfig(ctx, path, paths, projectDir, includeCredValues, merged.Meta.ScanID, rulesEngine)
 		if err != nil {
 			failed++
 			slog.Error("config collector failed", "error", err)
@@ -336,7 +326,7 @@ func collectAll(ctx context.Context, origin ingest.CollectionOrigin, runConfig, 
 
 	if runMCP {
 		enabled++
-		data, err := collectMCP(ctx, origin, url, projectDir, concurrency, timeout, insecure, merged.Meta.ScanID, rulesEngine)
+		data, err := collectMCP(ctx, url, projectDir, concurrency, timeout, insecure, merged.Meta.ScanID, rulesEngine)
 		if err != nil {
 			failed++
 			slog.Error("mcp collector failed", "error", err)
@@ -354,7 +344,7 @@ func collectAll(ctx context.Context, origin ingest.CollectionOrigin, runConfig, 
 
 	if runA2A {
 		enabled++
-		data, err := collectA2A(ctx, origin, target, targets, targetsFile, authToken, concurrency, timeout, insecure, noVerifyJWKS, a2aTrustedKeys, merged.Meta.ScanID, rulesEngine)
+		data, err := collectA2A(ctx, target, targets, targetsFile, authToken, concurrency, timeout, insecure, noVerifyJWKS, a2aTrustedKeys, merged.Meta.ScanID, rulesEngine)
 		if err != nil {
 			failed++
 			slog.Error("a2a collector failed", "error", err)
@@ -519,7 +509,6 @@ func failedCollectionReport(collectorName string, err error) *ingest.CollectionR
 
 func collectConfig(
 	ctx context.Context,
-	origin ingest.CollectionOrigin,
 	path string,
 	paths []string,
 	projectDir string,
@@ -529,7 +518,6 @@ func collectConfig(
 ) (*ingest.IngestData, error) {
 	c := configcollector.NewConfigCollector()
 	opts := icollector.CollectOptions{
-		Origin:                  origin,
 		Discover:                path == "" && len(paths) == 0,
 		ConfigPath:              path,
 		ConfigPaths:             paths,
@@ -544,7 +532,6 @@ func collectConfig(
 
 func collectMCP(
 	ctx context.Context,
-	origin ingest.CollectionOrigin,
 	url, projectDir string,
 	concurrency int,
 	timeout time.Duration,
@@ -562,7 +549,6 @@ func collectMCP(
 
 	c := mcpcollector.NewMCPCollector(mcpOpts...)
 	opts := icollector.CollectOptions{
-		Origin:      origin,
 		Discover:    url == "",
 		TargetURL:   url,
 		ProjectDir:  projectDir,
@@ -578,7 +564,7 @@ func collectMCP(
 	return c.Collect(ctx, opts)
 }
 
-func collectA2A(ctx context.Context, origin ingest.CollectionOrigin, target string, targets []string, targetsFile, authToken string,
+func collectA2A(ctx context.Context, target string, targets []string, targetsFile, authToken string,
 	concurrency int, timeout time.Duration, insecure bool,
 	noVerifyJWKS bool, a2aTrustedKeys, scanID string,
 	engine *rules.Engine,
@@ -602,7 +588,6 @@ func collectA2A(ctx context.Context, origin ingest.CollectionOrigin, target stri
 
 	c := a2acollector.NewA2ACollector(a2aOpts...)
 	opts := icollector.CollectOptions{
-		Origin:         origin,
 		TargetURL:      target,
 		TargetURLs:     targets,
 		TargetURLsFile: targetsFile,
@@ -628,7 +613,7 @@ func collectA2A(ctx context.Context, origin ingest.CollectionOrigin, target stri
 //     authorization document covered the scan.
 //   - Link-local and multicast addresses are refused unconditionally (no
 //     flag turns them on).
-func runNetworkScan(cmd *cobra.Command, spec string, origin ingest.CollectionOrigin) error {
+func runNetworkScan(cmd *cobra.Command, spec string) error {
 	allowPublic, _ := cmd.Flags().GetBool("allow-public-targets")
 	allowLarge, _ := cmd.Flags().GetBool("allow-large-cidr")
 	ports, _ := cmd.Flags().GetIntSlice("ports")
@@ -738,7 +723,7 @@ func runNetworkScan(cmd *cobra.Command, spec string, origin ingest.CollectionOri
 	// PortToKind is an ordering hint only, so a real service on a custom port is
 	// still discoverable. Operationally indeterminate probes make this domain
 	// partial and therefore cannot retire a previously observed service.
-	envelope := buildNetworkScanEnvelope(origin, spec, targets, authzFile, authzHash, allowPublic)
+	envelope := buildNetworkScanEnvelope(spec, targets, authzFile, authzHash, allowPublic)
 	_, ruleset := loadEffectiveRules()
 	envelope.Meta.Ruleset = ruleset
 	networkState := ingest.OutcomeComplete
@@ -792,10 +777,9 @@ func runNetworkScan(cmd *cobra.Command, spec string, origin ingest.CollectionOri
 // network scanner and subsequent fingerprint dispatch. The authorization
 // watermark lets downstream analysis tools refuse to operate on public-target
 // scans that lack an authorization record.
-func buildNetworkScanEnvelope(origin ingest.CollectionOrigin, spec string, targets []action.Target, authzFile, authzHash string, allowPublic bool) *ingest.IngestData {
+func buildNetworkScanEnvelope(spec string, targets []action.Target, authzFile, authzHash string, allowPublic bool) *ingest.IngestData {
 	scanID := uuid.New().String()
 	env := common.NewIngestData("scan", scanID)
-	env.Meta.Origin = origin
 	coverageKey := ingest.CanonicalCoverageKey("scan", "network", spec)
 	env.Meta.Collection = &ingest.CollectionReport{
 		State:        ingest.OutcomeComplete,

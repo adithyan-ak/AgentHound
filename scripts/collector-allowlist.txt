@@ -99,6 +99,7 @@ fmt
 github.com/adithyan-ak/agenthound/collector/cli
 github.com/adithyan-ak/agenthound/collector/cmd/agenthound
 github.com/adithyan-ak/agenthound/collector/internal/clientcfg
+github.com/adithyan-ak/agenthound/collector/internal/identity
 github.com/adithyan-ak/agenthound/modules/a2a
 github.com/adithyan-ak/agenthound/modules/config
 github.com/adithyan-ak/agenthound/modules/credreach

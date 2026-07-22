@@ -133,30 +133,26 @@ A new attack against a new AI service is one module away - implement an action i
 Prerequisites: Docker + Compose v2. No Go, no Node, no `git clone`.
 
 ```bash
-# 1. Name this collection vantage point and permanently pair its two DB volumes.
-export AGENTHOUND_HOST_ID=security-laptop
-export AGENTHOUND_NETWORK_REALM_ID=corp-lab
-export AGENTHOUND_STORAGE_PAIR_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
-
-# 2. Start the analysis server (Neo4j + Postgres + UI, binds 127.0.0.1:8080)
+# 1. Start the analysis server (Neo4j + Postgres + UI, binds 127.0.0.1:8080)
 curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/docker/docker-compose.public.yml | docker compose -f - -p agenthound up -d --wait
 
-# 3. Install the collector (single static binary, ~9.9 MiB → ~/.local/bin)
+# 2. Install the collector (single static binary, ~9.9 MiB → ~/.local/bin)
 curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 
-# 4. Scan your own machine - offline, read-only, secrets hashed - and stream it in
+# 3. Scan your own machine - offline, read-only, secrets hashed - and stream it in
 agenthound scan --config --output - | curl --data-binary @- -H "Content-Type: application/json" http://127.0.0.1:8080/api/v1/ingest
 
-# 5. Open the graph
+# 4. Open the graph
 open http://127.0.0.1:8080   # xdg-open on Linux
 ```
 
-Record those three values and reuse them on every restart; do not regenerate
-the storage UUID while either named volume exists. One database pair accepts
-one exact collector host/private-network realm so host-local paths, loopback
-services, RFC1918 endpoints, and lifecycle coverage cannot be merged across
-unrelated collection vantage points. The IDs are provenance, not credentials.
+Collection identity and the PostgreSQL/Neo4j storage pairing are automatic;
+there are no host, network, or storage-pair IDs to configure or preserve.
+Artifacts from multiple hosts and networks can be imported into one server.
+AgentHound derives read-only collection-point and network-context provenance
+on the target and scopes ambiguous graph identities and lifecycle coverage at
+ingest. The derived IDs are provenance, not authentication.
 
 Prefer a reproducible, pinned install? Every release is cosign-signed with an SBOM:
 

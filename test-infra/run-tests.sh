@@ -69,10 +69,6 @@ PLANNED_SCENARIOS=${#EXPECTED_PRIMARY_SCENARIOS[@]}
 # the graph endpoint uses AgentHound's canonical node-ID representation.
 EXTRACTION_SOURCE_NODE_ID='sha256:4482e450f9f605ebe76de9243b6ce516c859b29e3a173b42af8425914009bef2'
 A2A_CARD_OPERATOR_TOKEN='agenthound-a2a-card-operator-secret-sentinel-20260719'
-COLLECTION_HOST_ID='agenthound-test-workstation'
-HOST_COLLECTION_HOST_ID='agenthound-test-macos'
-COLLECTION_NETWORK_REALM_ID='agenthound-test-lab'
-STORAGE_PAIR_ID='7bc1f56e-c890-4de5-9cc5-921797176fa6'
 
 # shellcheck source=lib/assertions.sh
 source "${SCRIPT_DIR}/lib/assertions.sh"
@@ -249,14 +245,17 @@ run_json() {
     collector_failure "${name}" 'collector output is not valid JSON'
     return 0
   fi
-  if ! jq -e \
-    --arg host_id "${COLLECTION_HOST_ID}" \
-    --arg network_realm_id "${COLLECTION_NETWORK_REALM_ID}" '
-      .meta.version == 3 and
-      .meta.origin.host_id == $host_id and
-      .meta.origin.network_realm_id == $network_realm_id
+  if ! jq -e '
+      .meta.version == 4 and
+      .meta.identity.scheme == "agenthound_collection_v1" and
+      .meta.identity.version == 1 and
+      (.meta.identity.collection_point_id | test("^sha256:[0-9a-f]{64}$")) and
+      (.meta.identity.network_context_id | test("^sha256:[0-9a-f]{64}$")) and
+      (.meta.identity.quality == "strong" or .meta.identity.quality == "weak") and
+      (.meta.identity.evidence | length > 0) and
+      (.meta.identity.network_evidence | length > 0)
     ' "${artifact}" >/dev/null; then
-    collector_failure "${name}" 'artifact is not bound to the exact ingest-v3 workstation realm'
+    collector_failure "${name}" 'artifact does not contain valid automatic ingest-v4 identity'
     return 0
   fi
   if [[ -n "${AGENTHOUND_SCENARIO_POSTCHECK:-}" ]] &&
@@ -323,8 +322,6 @@ run_host_json() {
   printf '\n==> %s\n' "${name}"
   set +e
   HOME="${SCRIPT_DIR}/host-home" \
-    AGENTHOUND_HOST_ID="${HOST_COLLECTION_HOST_ID}" \
-    AGENTHOUND_NETWORK_REALM_ID="${COLLECTION_NETWORK_REALM_ID}" \
     "${HOST_COLLECTOR_BIN}" --quiet \
     scan --config --output - >"${artifact}" 2>"${stderr_path}"
   ec=$?
@@ -337,14 +334,13 @@ run_host_json() {
     collector_failure "${name}" "collector exited ${ec}; see ${stderr_path}"
     return
   fi
-  if ! jq -e \
-    --arg host_id "${HOST_COLLECTION_HOST_ID}" \
-    --arg network_realm_id "${COLLECTION_NETWORK_REALM_ID}" '
-      .meta.version == 3 and
-      .meta.origin.host_id == $host_id and
-      .meta.origin.network_realm_id == $network_realm_id
+  if ! jq -e '
+      .meta.version == 4 and
+      .meta.identity.scheme == "agenthound_collection_v1" and
+      (.meta.identity.collection_point_id | test("^sha256:[0-9a-f]{64}$")) and
+      (.meta.identity.network_context_id | test("^sha256:[0-9a-f]{64}$"))
     ' "${artifact}" >/dev/null; then
-    collector_failure "${name}" 'host-native artifact is not bound to its distinct ingest-v3 host identity'
+    collector_failure "${name}" 'host-native artifact does not contain automatic ingest-v4 identity'
     return
   fi
   if ! assert_json "${name}" "${artifact}" "${EXPECTED_DIR}/${name}.jq"; then
@@ -766,15 +762,8 @@ bash "${SCRIPT_DIR}/lib/verify-upstreams.sh" \
 # Compose interpolation or an empty host export from shadowing container state.
 CROSS_SERVICE_MASTER_MATERIAL="$(ws sh -c 'printf %s "$AGENTHOUND_LITELLM_MASTER_KEY"')"
 CROSS_SERVICE_PROOF_MATERIAL="$(ws sh -c 'printf %s "$AGENTHOUND_CROSS_SERVICE_PROOF"')"
-WORKSTATION_COLLECTION_HOST_ID="$(ws sh -c 'printf %s "$AGENTHOUND_HOST_ID"')"
-WORKSTATION_COLLECTION_REALM_ID="$(ws sh -c 'printf %s "$AGENTHOUND_NETWORK_REALM_ID"')"
-WORKSTATION_STORAGE_PAIR_ID="$(ws sh -c 'printf %s "$AGENTHOUND_STORAGE_PAIR_ID"')"
 [[ -n "${CROSS_SERVICE_MASTER_MATERIAL}" && -n "${CROSS_SERVICE_PROOF_MATERIAL}" ]] ||
   fail 'cross-service runtime credential fixtures are empty'
-[[ "${WORKSTATION_COLLECTION_HOST_ID}" == "${COLLECTION_HOST_ID}" &&
-  "${WORKSTATION_COLLECTION_REALM_ID}" == "${COLLECTION_NETWORK_REALM_ID}" &&
-  "${WORKSTATION_STORAGE_PAIR_ID}" == "${STORAGE_PAIR_ID}" ]] ||
-  fail 'workstation collection/storage binding environment disagrees with the release harness contract'
 
 # Prove that the privacy lane's reverse proxy actually enforces both URL
 # credential components before using collector completeness as wire evidence.

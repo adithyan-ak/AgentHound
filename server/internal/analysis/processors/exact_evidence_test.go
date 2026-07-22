@@ -59,9 +59,9 @@ func TestCanImpersonatePersistsExactWitnessNodes(t *testing.T) {
 	db.QueryFunc = func(_ context.Context, cypher string, params map[string]any) ([]map[string]any, error) {
 		if strings.Contains(cypher, "RETURN a.objectid AS id") {
 			return []map[string]any{
-				{"id": "agent-a", "provider": "one"},
-				{"id": "agent-b", "provider": "two"},
-				{"id": "agent-c", "provider": "three"},
+				{"id": "agent-a", "provider": "one", "scope_kind": "network_context", "scope_id": "network-a", "collection_point_id": "point-a", "network_context_id": "network-a"},
+				{"id": "agent-b", "provider": "two", "scope_kind": "network_context", "scope_id": "network-a", "collection_point_id": "point-a", "network_context_id": "network-a"},
+				{"id": "agent-c", "provider": "three", "scope_kind": "network_context", "scope_id": "network-a", "collection_point_id": "point-a", "network_context_id": "network-a"},
 			}, nil
 		}
 		if params["id"] == "agent-c" {

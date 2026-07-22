@@ -96,7 +96,7 @@ func publicationIntegrationHarness(
 		db,
 		appdb.NewScanStore(pool),
 		appdb.NewFindingStore(pool),
-		allowOriginAdmitter{},
+		allowStorageVerifier{},
 	), db, writer, pool
 }
 
@@ -134,10 +134,7 @@ func authoritativeMCPReport(
 
 func newPublicationIntegrationData(collector, scanID string) *sdkingest.IngestData {
 	data := common.NewIngestData(collector, scanID)
-	data.Meta.Origin = sdkingest.CollectionOrigin{
-		HostID:         "publication-fixture-host",
-		NetworkRealmID: "publication-fixture-realm",
-	}
+	data.Meta.Identity = testCollectionIdentity()
 	return data
 }
 
@@ -189,7 +186,7 @@ INSERT INTO posture_state (singleton) VALUES (TRUE);`); err != nil {
 		graph.NewDB(graph.NewReader(driver), writer),
 		appdb.NewScanStore(pool),
 		appdb.NewFindingStore(pool),
-		allowOriginAdmitter{},
+		allowStorageVerifier{},
 	)
 	scope := sdkingest.CanonicalCoverageKey(
 		"mcp",
@@ -379,7 +376,7 @@ func TestIntegrationCompleteEmptyRootRecoversFailedUnheadedChildAfterRestart(t *
 		db,
 		appdb.NewScanStore(pool),
 		appdb.NewFindingStore(pool),
-		allowOriginAdmitter{},
+		allowStorageVerifier{},
 	)
 	completeEmpty := newPublicationIntegrationData("mcp", "complete-empty-after-restart")
 	completeEmpty.Meta.Collection = authoritativeMCPReport(root)

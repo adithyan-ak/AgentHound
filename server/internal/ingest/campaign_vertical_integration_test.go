@@ -76,10 +76,30 @@ func TestIntegrationCompiledCampaignExportProbeIngestPromotesOnlySourceAgent(t *
 		"mcp", "target", sdkingest.CanonicalURLScope(httpServer.URL),
 	)
 	base := common.NewIngestData("mcp", "campaign-vertical-base")
-	base.Meta.Origin = sdkingest.CollectionOrigin{
-		HostID:         "campaign-fixture-host",
-		NetworkRealmID: "campaign-fixture-realm",
+	base.Meta.Identity = testCollectionIdentity()
+	pointID := func(rawID string) string {
+		return sdkingest.ScopedNodeID(
+			sdkingest.ScopeCollectionPoint,
+			base.Meta.Identity.CollectionPointID,
+			rawID,
+		)
 	}
+	networkID := func(rawID string) string {
+		return sdkingest.ScopedNodeID(
+			sdkingest.ScopeNetworkContext,
+			base.Meta.Identity.NetworkContextID,
+			rawID,
+		)
+	}
+	scopedAgentA := pointID(agentA)
+	scopedAgentB := pointID(agentB)
+	scopedAlternateServer := networkID(alternateServer)
+	scopedAlternateTool := networkID(alternateTool)
+	scopedServerID := pointID(serverID)
+	scopedIdentityID := pointID(identityID)
+	scopedCredentialID := pointID(credentialID)
+	scopedResourceTool := pointID(resourceTool)
+	scopedResourceID := pointID(resourceID)
 	base.Meta.Collection = &sdkingest.CollectionReport{
 		State:        sdkingest.OutcomeComplete,
 		CoverageKeys: []string{scope},
@@ -170,8 +190,8 @@ func TestIntegrationCompiledCampaignExportProbeIngestPromotesOnlySourceAgent(t *
 	var sourceFinding *model.Finding
 	for i := range baseFindings {
 		if baseFindings[i].EdgeKind == "CAN_REACH" &&
-			baseFindings[i].SourceID == agentA &&
-			baseFindings[i].TargetID == resourceID {
+			baseFindings[i].SourceID == scopedAgentA &&
+			baseFindings[i].TargetID == scopedResourceID {
 			sourceFinding = &baseFindings[i]
 			break
 		}
@@ -189,8 +209,8 @@ func TestIntegrationCompiledCampaignExportProbeIngestPromotesOnlySourceAgent(t *
 		t.Fatalf("exported witness invalid: %v", err)
 	}
 	wantTopology := []string{
-		agentA, entryServer, entryTool, serverID,
-		identityID, credentialID, resourceTool, resourceID,
+		scopedAgentA, scopedAlternateServer, scopedAlternateTool, scopedServerID,
+		scopedIdentityID, scopedCredentialID, scopedResourceTool, scopedResourceID,
 	}
 	if !reflect.DeepEqual(witness.EvidenceNodeIDs, wantTopology) {
 		t.Fatalf(
@@ -207,7 +227,6 @@ func TestIntegrationCompiledCampaignExportProbeIngestPromotesOnlySourceAgent(t *
 		httpServer.URL,
 		credentialMaterial,
 	)
-	campaignScope := campaignData.Meta.Collection.CoverageKeys[0]
 	compiledEvidence, _, err := campaignEvidenceFromProperties(
 		campaignData.Graph.Edges[0].Properties,
 	)
@@ -220,6 +239,7 @@ func TestIntegrationCompiledCampaignExportProbeIngestPromotesOnlySourceAgent(t *
 	if _, err := pipeline.Ingest(ctx, campaignData); err != nil {
 		t.Fatalf("campaign evidence ingest: %v", err)
 	}
+	campaignScope := campaignData.Meta.Collection.CoverageKeys[0]
 
 	findings, _, err := store.ListPublished(ctx, "", true)
 	if err != nil {
@@ -227,15 +247,15 @@ func TestIntegrationCompiledCampaignExportProbeIngestPromotesOnlySourceAgent(t *
 	}
 	var verifiedA, verifiedB int
 	for _, finding := range findings {
-		if finding.EdgeKind != "CAN_REACH" || finding.TargetID != resourceID {
+		if finding.EdgeKind != "CAN_REACH" || finding.TargetID != scopedResourceID {
 			continue
 		}
 		switch finding.SourceID {
-		case agentA:
+		case scopedAgentA:
 			if finding.Evidence.State == model.FindingEvidenceVerified {
 				verifiedA++
 			}
-		case agentB:
+		case scopedAgentB:
 			if finding.Evidence.State == model.FindingEvidenceVerified {
 				verifiedB++
 			}
@@ -248,8 +268,8 @@ func TestIntegrationCompiledCampaignExportProbeIngestPromotesOnlySourceAgent(t *
 	evidenceRows, err := db.Query(ctx, `
 MATCH (:AgentInstance {objectid: $agent_id})-[v:CREDENTIAL_REACH_VERIFIED]->
       (:MCPResource {objectid: $resource_id})
-RETURN count(v) AS count`, map[string]any{
-		"agent_id": agentA, "resource_id": resourceID,
+	RETURN count(v) AS count`, map[string]any{
+		"agent_id": scopedAgentA, "resource_id": scopedResourceID,
 	})
 	if err != nil {
 		t.Fatalf("count canonical campaign evidence: %v", err)
@@ -274,7 +294,7 @@ RETURN count(v) AS count`, map[string]any{
 		t.Fatalf("invalid positive error = %v, want campaign rejection", err)
 	}
 	assertCampaignCanonicalState(
-		t, ctx, db, pool, agentA, resourceID, campaignScope,
+		t, ctx, db, pool, scopedAgentA, scopedResourceID, campaignScope,
 		canonicalCoverageScanID,
 	)
 	assertSanitizedCampaignRejectionAudit(t, ctx, pool, positiveRejection.RejectionID)
@@ -293,7 +313,7 @@ RETURN count(v) AS count`, map[string]any{
 		t.Fatalf("invalid negative error = %v, want campaign rejection", err)
 	}
 	assertCampaignCanonicalState(
-		t, ctx, db, pool, agentA, resourceID, campaignScope,
+		t, ctx, db, pool, scopedAgentA, scopedResourceID, campaignScope,
 		canonicalCoverageScanID,
 	)
 	assertSanitizedCampaignRejectionAudit(t, ctx, pool, negativeRejection.RejectionID)
@@ -362,8 +382,6 @@ func runCompiledCampaign(
 	run.Dir = repoRoot
 	run.Env = environmentWithOverrides(map[string]string{
 		"HOME":                           homeDir,
-		"AGENTHOUND_HOST_ID":             "campaign-fixture-host",
-		"AGENTHOUND_NETWORK_REALM_ID":    "campaign-fixture-realm",
 		"AGENTHOUND_CAMPAIGN_AUTHORIZED": "AUTHORIZED",
 		"AGENTHOUND_CAMPAIGN_CREDENTIAL": credentialMaterial,
 	})

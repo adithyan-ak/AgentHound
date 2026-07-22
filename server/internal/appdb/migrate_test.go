@@ -17,7 +17,7 @@ func TestMigrationsContainCurrentSchemaAndBindingUpgrade(t *testing.T) {
 			names = append(names, entry.Name())
 		}
 	}
-	if want := []string{"001_initial.sql", "002_storage_binding.sql"}; !reflect.DeepEqual(names, want) {
+	if want := []string{"001_initial.sql", "002_storage_binding.sql", "003_zero_config_storage_binding.sql"}; !reflect.DeepEqual(names, want) {
 		t.Fatalf("migration files = %v, want %v", names, want)
 	}
 
@@ -71,6 +71,22 @@ func TestMigrationsContainCurrentSchemaAndBindingUpgrade(t *testing.T) {
 	} {
 		if !strings.Contains(upgradeSQL, expected) {
 			t.Errorf("storage-binding migration missing %q", expected)
+		}
+	}
+
+	data, err = migrationFS.ReadFile("migrations/003_zero_config_storage_binding.sql")
+	if err != nil {
+		t.Fatalf("read ingest-v4 migration: %v", err)
+	}
+	v4SQL := string(data)
+	for _, expected := range []string{
+		"DROP COLUMN IF EXISTS host_id",
+		"DROP COLUMN IF EXISTS network_realm_id",
+		"CREATE TABLE IF NOT EXISTS coverage_memberships",
+		"parent_key",
+	} {
+		if !strings.Contains(v4SQL, expected) {
+			t.Errorf("ingest-v4 migration missing %q", expected)
 		}
 	}
 }

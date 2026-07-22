@@ -2,6 +2,7 @@ package processors
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
@@ -31,9 +32,10 @@ func (p *ConfusedDeputy) Process(ctx context.Context, db graph.GraphDB, scanID s
 
 	// source_collector='a2a' records detector provenance; composite lifecycle is
 	// managed by the global derived epoch.
-	cypher := `
+	cypher := fmt.Sprintf(`
 MATCH (low:A2AAgent)-[delegation:DELEGATES_TO]->(high:A2AAgent)
-WHERE (
+WHERE %s
+  AND (
     (low.effective_auth_assurance = 'unauthenticated'
       AND low.effective_auth_source = 'observed')
     OR low.effective_auth_assurance = 'weak'
@@ -48,7 +50,7 @@ SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true,
     e.evidence_version = 1,
     e.evidence_node_ids = [low.objectid, high.objectid],
     e.evidence_relationship_ids = [id(delegation)]
-RETURN count(*) AS written`
+RETURN count(*) AS written`, compatibleScopePredicate("low", "high"))
 
 	n, err := db.ExecuteWrite(ctx, cypher, map[string]any{"scan_id": scanID})
 	if err != nil {

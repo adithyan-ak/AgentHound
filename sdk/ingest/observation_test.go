@@ -157,12 +157,6 @@ func TestCanonicalCoverageKeySeparatesScopesWithoutLeakingTarget(t *testing.T) {
 	if strings.Contains(first, "one.example") {
 		t.Fatalf("coverage key leaks target material: %q", first)
 	}
-	if got, want := ParentCollectorRootKey(first), CollectorRootCoverageKey("a2a"); got != want {
-		t.Fatalf("parent collector root = %q, want %q", got, want)
-	}
-	if got := ParentCollectorRootKey(CollectorRootCoverageKey("a2a")); got != "" {
-		t.Fatalf("collector root has parent %q, want none", got)
-	}
 }
 
 func TestCanonicalURLScopeNormalizesEquivalentTargets(t *testing.T) {

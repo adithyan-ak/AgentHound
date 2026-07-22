@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Replace configured host/network realms with automatic ingest-v4 collection
+  points and network contexts. Ambiguous graph IDs, coverage ownership, and
+  cross-observation processors are scoped per vantage; weak identities remain
+  analyzable under artifact-local additive-only scope.
+- Generate PostgreSQL/Neo4j storage pairing internally, accept valid artifacts
+  from multiple vantages, expose identity recognition in ingest results, and
+  define v4 as a clean database boundary without unsafe per-point purge.
 - Correct documentation and source comments against the v1 implementation,
   including credential-material semantics, graph variants, CLI workflows,
   contributor paths, environment requirements, and historical version labels.
@@ -96,14 +103,11 @@ real systems with evidence-backed, reversible workflows.
 - **Local-first analysis.** `agenthound-server` combines PostgreSQL, Neo4j,
   post-processing, the REST API, and an embedded React UI while binding to
   `127.0.0.1:8080` by default.
-- **Realm-safe graph ownership.** Every artifact carries a canonical host and
-  private-network realm. One PostgreSQL/Neo4j database pair admits one exact
-  collection realm, preventing host-local paths, loopback services, and private
-  endpoints from being merged across unrelated vantage points.
-- **Fail-closed storage pairing.** A versioned storage-pair binding is stamped
-  into both databases and rechecked before ingest mutation. Crossed, mismatched,
-  future-version, or unexpectedly unbound stores stop before graph lifecycle
-  writes.
+- **Realm-safe graph ownership.** The v1.0.0 wire contract used a canonical
+  host/private-network realm and admitted one collection realm per database.
+- **Fail-closed storage pairing.** The v1.0.0 server required a configured
+  versioned storage-pair binding in both databases and rechecked it before
+  ingest mutation.
 - **Strict transport defaults.** MCP and A2A TLS verification is on by default;
   insecure transport requires an explicit operator choice. Active operations
   require an `AUTHORIZED` acknowledgement and record engagement provenance.

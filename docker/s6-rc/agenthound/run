@@ -8,13 +8,6 @@ export AGENTHOUND_PG_URI="postgres://agenthound@127.0.0.1:5432/agenthound?sslmod
 # Bind on all interfaces inside the container so the host port mapping reaches us.
 export AGENTHOUND_BIND=0.0.0.0:8080
 
-# The all-in-one image cannot safely infer these identities from a container
-# hostname or IP. They must be supplied with docker -e and kept stable for the
-# lifetime of /data.
-: "${AGENTHOUND_HOST_ID:?set AGENTHOUND_HOST_ID to the one admitted collector host}"
-: "${AGENTHOUND_NETWORK_REALM_ID:?set AGENTHOUND_NETWORK_REALM_ID to its private network realm}"
-: "${AGENTHOUND_STORAGE_PAIR_ID:?set AGENTHOUND_STORAGE_PAIR_ID to a canonical UUID for this /data volume}"
-
 # Wait for Neo4j bolt port
 echo "[agenthound] Waiting for Neo4j..."
 TRIES=0

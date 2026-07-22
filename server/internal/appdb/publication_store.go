@@ -24,6 +24,7 @@ type FinalizeScanParams struct {
 	ObservationStatus     string
 	ObservationDetails    model.PostureObservationCompleteness
 	CoverageKeys          []string
+	CoverageParents       map[string]string
 	CompleteDomains       []string
 	ResolvedDirtyCoverage []string
 	AuthoritativeRoots    []sdkingest.CoverageRoot
@@ -125,9 +126,9 @@ func (s *FindingStore) FinalizeScan(
 		if domain == "" {
 			continue
 		}
-		rootKey := rootByChild[domain]
+		rootKey := params.CoverageParents[domain]
 		if rootKey == "" {
-			rootKey = sdkingest.ParentCollectorRootKey(domain)
+			rootKey = rootByChild[domain]
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO coverage_heads
 			    (coverage_key, scan_id, root_key, updated_at)

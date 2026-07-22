@@ -147,7 +147,7 @@ func TestIntegrationPublicationLifecycle(t *testing.T) {
 		StartedAt:          started,
 		ArtifactObservedAt: &observed,
 		CollectionStatus:   model.LifecyclePartial,
-	}, []string{"mcp"}); err != nil {
+	}, []string{"mcp"}, nil); err != nil {
 		t.Fatalf("BeginScan published retry: %v", err)
 	}
 	if _, err := findings.FinalizeScan(ctx, FinalizeScanParams{
@@ -405,7 +405,7 @@ func TestIntegrationAuthoritativeRootRetiresRemovedChildHeadAndDirtyKey(t *testi
 		StartedAt:          now,
 		ArtifactObservedAt: &observed,
 		CollectionStatus:   model.LifecycleComplete,
-	}, []string{root, childB, childA}); err != nil {
+	}, []string{root, childB, childA}, map[string]string{childB: root}); err != nil {
 		t.Fatalf("begin replacement scan: %v", err)
 	}
 	result, err := findings.FinalizeScan(ctx, FinalizeScanParams{
@@ -467,6 +467,7 @@ func TestIntegrationAuthoritativeRootRetiresRemovedChildHeadAndDirtyKey(t *testi
 		Scan:            finalScan(targetedID),
 		CoverageKeys:    []string{childC},
 		CompleteDomains: []string{childC},
+		CoverageParents: map[string]string{childC: root},
 		GraphAfter:      graphAfter,
 		Publish:         true,
 	}); err != nil {
@@ -479,8 +480,8 @@ func TestIntegrationAuthoritativeRootRetiresRemovedChildHeadAndDirtyKey(t *testi
 	).Scan(&headRoot); err != nil {
 		t.Fatalf("query targeted child membership: %v", err)
 	}
-	if headRoot == nil || *headRoot != sdkingest.CollectorRootCoverageKey("mcp") {
-		t.Fatalf("targeted child root = %v, want stable MCP root", headRoot)
+	if headRoot == nil || *headRoot != root {
+		t.Fatalf("targeted child root = %v, want explicit root %q", headRoot, root)
 	}
 
 	// A failed child has no promoted coverage head. Its inherited dirty key
@@ -493,7 +494,7 @@ func TestIntegrationAuthoritativeRootRetiresRemovedChildHeadAndDirtyKey(t *testi
 		StartedAt:          now,
 		ArtifactObservedAt: &observed,
 		CollectionStatus:   model.LifecycleFailed,
-	}, []string{childD}); err != nil {
+	}, []string{childD}, map[string]string{childD: root}); err != nil {
 		t.Fatalf("begin failed unheaded child: %v", err)
 	}
 	if err := scans.RecordFailure(ctx, ScanFailure{
@@ -545,7 +546,7 @@ func TestIntegrationAuthoritativeRootRetiresRemovedChildHeadAndDirtyKey(t *testi
 		StartedAt:          now,
 		ArtifactObservedAt: &observed,
 		CollectionStatus:   model.LifecycleComplete,
-	}, append([]string{emptyRoot}, retired...)); err != nil {
+	}, append([]string{emptyRoot}, retired...), nil); err != nil {
 		t.Fatalf("begin complete-empty scan: %v", err)
 	}
 	emptyResult, err := findings.FinalizeScan(ctx, FinalizeScanParams{

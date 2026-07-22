@@ -7,10 +7,25 @@ import (
 	"os"
 	"path/filepath"
 
+	collectoridentity "github.com/adithyan-ak/agenthound/collector/internal/identity"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
+var deriveCollectionIdentity = collectoridentity.Derive
+
+func prepareCollectorArtifact(data *ingest.IngestData) error {
+	if data == nil {
+		return fmt.Errorf("ingest data is nil")
+	}
+	data.Meta.Identity = deriveCollectionIdentity(data.Meta.ScanID)
+	ingest.EnsureCoverageParentage(data.Meta.Collection)
+	return data.Meta.Identity.Validate()
+}
+
 func writeCollectorOutput(data *ingest.IngestData, outputPath string) error {
+	if err := prepareCollectorArtifact(data); err != nil {
+		return fmt.Errorf("prepare ingest v4 artifact: %w", err)
+	}
 	encoded, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal JSON: %w", err)

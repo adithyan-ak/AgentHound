@@ -38,17 +38,13 @@ Or bring up the full stack (server + Neo4j + Postgres) in one command:
 ```bash
 git clone https://github.com/adithyan-ak/agenthound.git
 cd agenthound
-export AGENTHOUND_HOST_ID=security-laptop
-export AGENTHOUND_NETWORK_REALM_ID=corp-lab
-export AGENTHOUND_STORAGE_PAIR_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 docker compose -f docker/docker-compose.yml up -d
 ```
 
-The server binds `127.0.0.1:8080`. Neo4j at `bolt://localhost:7687`, Postgres at `localhost:5432`.
-Keep the three exported values in the deployment's secret/config manager or
-`.env` file and reuse them on every restart. The first two are non-secret
-collection provenance; the UUID permanently pairs the named database volumes.
-Do not regenerate it until both volumes are intentionally replaced.
+The server binds `127.0.0.1:8080`. Neo4j is at `bolt://localhost:7687` and
+Postgres at `localhost:5432`. The server creates and verifies its internal
+database-pair UUID automatically; collectors also derive their identity without
+configuration.
 
 ## Build from source
 

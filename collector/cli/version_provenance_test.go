@@ -18,7 +18,7 @@ func TestCollectionEnvelopesPreserveInjectedCollectorVersion(t *testing.T) {
 	common.SetCollectorVersion(releaseVersion)
 
 	combined, enabled, failed := collectAll(
-		context.Background(), testCollectionOrigin, false, false, false,
+		context.Background(), false, false, false,
 		"", nil, "", false,
 		"", "", nil, "", "",
 		0, 0, false, false, "",
@@ -30,11 +30,11 @@ func TestCollectionEnvelopesPreserveInjectedCollectorVersion(t *testing.T) {
 
 	envelopes := map[string]*ingest.IngestData{
 		"combined scan": combined,
-		"network scan":  buildNetworkScanEnvelope(testCollectionOrigin, "127.0.0.1:1", nil, "", "", false),
-		"discover":      buildDiscoverEnvelope(testCollectionOrigin, "127.0.0.1:1", nil, "", "", false),
-		"loot":          buildLootEnvelope(testCollectionOrigin, "http://127.0.0.1", "jupyter", "ENG", &action.LootResult{}),
-		"extract":       buildExtractEnvelope(testCollectionOrigin, ingest.ComputeNodeID("AIModel", "instance", "model"), "embedding-inversion", "ENG", &action.ExtractResult{}),
-		"campaign":      buildCampaignEnvelope(testCollectionOrigin, "cred-reach", 1, "ENG", campTestEvidence(campaign.OutcomeNotObserved)),
+		"network scan":  buildNetworkScanEnvelope("127.0.0.1:1", nil, "", "", false),
+		"discover":      buildDiscoverEnvelope("127.0.0.1:1", nil, "", "", false),
+		"loot":          buildLootEnvelope("http://127.0.0.1", "jupyter", "ENG", &action.LootResult{}),
+		"extract":       buildExtractEnvelope(ingest.ComputeNodeID("AIModel", "instance", "model"), "embedding-inversion", "ENG", &action.ExtractResult{}),
+		"campaign":      buildCampaignEnvelope("cred-reach", 1, "ENG", campTestEvidence(campaign.OutcomeNotObserved)),
 	}
 	for name, envelope := range envelopes {
 		if got := envelope.Meta.CollectorVersion; got != releaseVersion {

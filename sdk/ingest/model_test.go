@@ -88,13 +88,13 @@ func TestEdgeJSONRoundTrip(t *testing.T) {
 func TestIngestDataJSONRoundTrip(t *testing.T) {
 	input := `{
 		"meta": {
-			"version": 3,
+			"version": 4,
 			"type": "agenthound-ingest",
 			"collector": "mcp",
 			"collector_version": "0.1.0",
 			"timestamp": "2026-04-06T10:30:00Z",
 			"scan_id": "scan-001",
-			"origin": {"host_id":"host-a","network_realm_id":"realm-a"},
+			"identity": {"scheme":"agenthound_collection_v1","version":1,"collection_point_id":"sha256:point","network_context_id":"sha256:network","quality":"strong","network_class":"private","evidence":[],"network_evidence":[]},
 			"collection": {
 				"state": "complete",
 				"coverage_keys": ["mcp:target:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
@@ -145,10 +145,10 @@ func TestIngestDataJSONRoundTrip(t *testing.T) {
 		t.Errorf("edges count: got %d, want 1", len(d.Graph.Edges))
 	}
 	if d.Meta.Collection == nil || d.Meta.Ruleset == nil || len(d.Meta.IdentitySchemes) == 0 {
-		t.Fatal("strict v3 metadata was not preserved")
+		t.Fatal("strict v4 metadata was not preserved")
 	}
-	if d.Meta.Origin.HostID != "host-a" || d.Meta.Origin.NetworkRealmID != "realm-a" {
-		t.Fatalf("origin = %+v", d.Meta.Origin)
+	if d.Meta.Identity.Scheme != CollectionIdentityScheme {
+		t.Fatalf("identity = %+v", d.Meta.Identity)
 	}
 }
 

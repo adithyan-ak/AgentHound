@@ -50,6 +50,13 @@ export interface IngestResult {
   };
   warnings?: string[];
   collection: IngestCollectionReport;
+  identity: {
+    collection_point_id: string;
+    network_context_id: string;
+    quality: "strong" | "weak";
+    network_class: "offline" | "private" | "public" | "mixed";
+    recognition: "new" | "recognized";
+  };
   stages?: Array<{
     name: string;
     state: string;

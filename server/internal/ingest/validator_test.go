@@ -14,9 +14,17 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
-var testCollectionOrigin = ingest.CollectionOrigin{
-	HostID:         "agenthound-test-workstation",
-	NetworkRealmID: "agenthound-test-lab",
+func testCollectionIdentity() ingest.CollectionIdentity {
+	return ingest.NewCollectionIdentity(
+		[]ingest.IdentityEvidence{
+			{Kind: "os_instance", Digest: "hmac-sha256:" + strings.Repeat("a", 64)},
+			{Kind: "principal", Digest: "hmac-sha256:" + strings.Repeat("b", 64)},
+		},
+		[]ingest.IdentityEvidence{
+			{Kind: "network_profile", Digest: "hmac-sha256:" + strings.Repeat("c", 64)},
+		},
+		ingest.NetworkClassPrivate,
+	)
 }
 
 func validIngestData() *ingest.IngestData {
@@ -25,7 +33,7 @@ func validIngestData() *ingest.IngestData {
 		Meta: ingest.IngestMeta{
 			Version:          ingest.CurrentVersion,
 			Type:             ingest.IngestType,
-			Origin:           testCollectionOrigin,
+			Identity:         testCollectionIdentity(),
 			Collector:        "mcp",
 			CollectorVersion: "0.1.0",
 			Timestamp:        "2026-04-06T10:30:00Z",
@@ -81,45 +89,41 @@ func TestValidatorAcceptsValid(t *testing.T) {
 	}
 }
 
-func TestValidatorRejectsNoncanonicalCollectionOrigin(t *testing.T) {
+func TestValidatorRejectsInconsistentCollectionIdentity(t *testing.T) {
 	tests := []struct {
 		name     string
-		origin   ingest.CollectionOrigin
+		mutate   func(*ingest.CollectionIdentity)
 		wantPath string
 	}{
 		{
-			name:     "missing host",
-			origin:   ingest.CollectionOrigin{NetworkRealmID: "realm-a"},
-			wantPath: "meta.origin.host_id",
+			name:     "missing evidence",
+			mutate:   func(identity *ingest.CollectionIdentity) { identity.Evidence = nil },
+			wantPath: "meta.identity",
 		},
 		{
-			name:     "missing realm",
-			origin:   ingest.CollectionOrigin{HostID: "host-a"},
-			wantPath: "meta.origin.network_realm_id",
-		},
-		{
-			name:     "uppercase host",
-			origin:   ingest.CollectionOrigin{HostID: "Host-a", NetworkRealmID: "realm-a"},
-			wantPath: "meta.origin.host_id",
-		},
-		{
-			name:     "whitespace realm",
-			origin:   ingest.CollectionOrigin{HostID: "host-a", NetworkRealmID: "realm-a "},
-			wantPath: "meta.origin.network_realm_id",
-		},
-		{
-			name: "oversized host",
-			origin: ingest.CollectionOrigin{
-				HostID:         strings.Repeat("a", ingest.MaxOriginIDLength+1),
-				NetworkRealmID: "realm-a",
+			name: "tampered collection point",
+			mutate: func(identity *ingest.CollectionIdentity) {
+				identity.CollectionPointID = "sha256:" + strings.Repeat("d", 64)
 			},
-			wantPath: "meta.origin.host_id",
+			wantPath: "meta.identity",
+		},
+		{
+			name: "tampered network context",
+			mutate: func(identity *ingest.CollectionIdentity) {
+				identity.NetworkContextID = "sha256:" + strings.Repeat("e", 64)
+			},
+			wantPath: "meta.identity",
+		},
+		{
+			name:     "tampered quality",
+			mutate:   func(identity *ingest.CollectionIdentity) { identity.Quality = ingest.IdentityQualityWeak },
+			wantPath: "meta.identity",
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			data := validIngestData()
-			data.Meta.Origin = test.origin
+			test.mutate(&data.Meta.Identity)
 			assertValidationError(t, NewValidator().Validate(data), test.wantPath)
 		})
 	}
@@ -131,7 +135,10 @@ func TestValidatorRejectsNoncanonicalCollectionOrigin(t *testing.T) {
 func campaignEvidenceIngest() *ingest.IngestData {
 	serverID := "sha256:camp-srv"
 	uri := "postgres://prod/customers"
-	resID := ingest.ComputeNodeID("MCPResource", serverID, uri)
+	serviceScopeID := "sha256:validator-test-network"
+	scopedServerID := ingest.ScopedNodeID(ingest.ScopeNetworkContext, serviceScopeID, serverID)
+	rawResourceID := ingest.ComputeNodeID("MCPResource", serverID, uri)
+	resID := ingest.ScopedNodeID(ingest.ScopeNetworkContext, serviceScopeID, rawResourceID)
 	credID := "sha256:camp-cred"
 	agentID := "sha256:camp-agent"
 	ev := campaign.Evidence{
@@ -150,9 +157,11 @@ func campaignEvidenceIngest() *ingest.IngestData {
 			CredentialID: credID, CredentialValueHash: "deadbeef",
 			CredentialKind:     "Credential",
 			CredentialMergeKey: campaign.CredentialMergeKeyValueHash,
-			ServerID:           serverID, ServerKind: "MCPServer",
-			ResourceID: resID, ResourceKind: "MCPResource", ResourceIdentityInput: uri,
-			EvidenceNodeIDs:   []string{agentID, serverID, credID, resID},
+			ServerID:           scopedServerID, ServerKind: "MCPServer",
+			ServerIdentityID: serverID, ServiceScope: ingest.ScopeNetworkContext,
+			ServiceScopeID: serviceScopeID,
+			ResourceID:     resID, ResourceKind: "MCPResource", ResourceIdentityInput: uri,
+			EvidenceNodeIDs:   []string{agentID, scopedServerID, credID, resID},
 			EvidenceNodeKinds: []string{"AgentInstance", "MCPServer", "Credential", "MCPResource"},
 		},
 	}
@@ -162,7 +171,7 @@ func campaignEvidenceIngest() *ingest.IngestData {
 	data := &ingest.IngestData{
 		Meta: ingest.IngestMeta{
 			Version: ingest.CurrentVersion, Type: ingest.IngestType,
-			Origin:    testCollectionOrigin,
+			Identity:  testCollectionIdentity(),
 			Collector: "scan", CollectorVersion: "0.9.0-dev",
 			Timestamp: "2026-07-12T00:00:00Z", ScanID: scanID,
 			Collection: &ingest.CollectionReport{
@@ -224,8 +233,6 @@ func TestValidatorRejectsCampaignMissingEndpoint(t *testing.T) {
 func TestValidatorAcceptsCollectorProducedRootCoverage(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
-	t.Setenv("AGENTHOUND_HOST_ID", testCollectionOrigin.HostID)
-	t.Setenv("AGENTHOUND_NETWORK_REALM_ID", testCollectionOrigin.NetworkRealmID)
 	configPath := filepath.Join(dir, "config.json")
 	outputPath := filepath.Join(dir, "scan.json")
 	if err := os.WriteFile(
@@ -700,7 +707,7 @@ func TestValidatorEnforcesObservedA2AAuthAtIngestBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	data.Meta.Version = ingest.CurrentVersion
-	data.Meta.Origin = testCollectionOrigin
+	data.Meta.Identity = testCollectionIdentity()
 	properties := data.Graph.Nodes[0].Properties
 	properties["observed_auth_method"] = "none"
 	properties["observed_auth_assurance"] = "unauthenticated"
@@ -779,6 +786,7 @@ func TestValidatorAcceptsAuthoritativeRootActiveSet(t *testing.T) {
 			State:       ingest.OutcomeComplete,
 		},
 	)
+	ingest.EnsureCoverageParentage(data.Meta.Collection)
 
 	if err := NewValidator().Validate(data); err != nil {
 		t.Fatalf("authoritative root active set rejected: %v", err)

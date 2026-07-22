@@ -11,7 +11,7 @@ import (
 	serveringest "github.com/adithyan-ak/agenthound/server/internal/ingest"
 )
 
-func TestStrictV3ImportedA2ANoneAuthRequiresProbeEvidence(t *testing.T) {
+func TestStrictV4ImportedA2ANoneAuthRequiresProbeEvidence(t *testing.T) {
 	for _, test := range []struct {
 		name          string
 		authEvidence  string
@@ -43,7 +43,7 @@ func TestStrictV3ImportedA2ANoneAuthRequiresProbeEvidence(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			data := strictV3A2AImport(test.authEvidence, test.observed)
+			data := strictV4A2AImport(test.authEvidence, test.observed)
 			if err := serveringest.NewValidator().Validate(data); err != nil {
 				t.Fatalf("strict-v3 A2A import rejected: %v", err)
 			}
@@ -100,7 +100,7 @@ func TestStrictV3ImportedA2ANoneAuthRequiresProbeEvidence(t *testing.T) {
 	}
 }
 
-func strictV3A2AImport(authEvidence string, observed bool) *sdkingest.IngestData {
+func strictV4A2AImport(authEvidence string, observed bool) *sdkingest.IngestData {
 	scope := sdkingest.CanonicalCoverageKey(
 		"a2a",
 		"target",
@@ -110,14 +110,18 @@ func strictV3A2AImport(authEvidence string, observed bool) *sdkingest.IngestData
 		Meta: sdkingest.IngestMeta{
 			Version: sdkingest.CurrentVersion,
 			Type:    sdkingest.IngestType,
-			Origin: sdkingest.CollectionOrigin{
-				HostID:         "fixture-host",
-				NetworkRealmID: "fixture-realm",
-			},
+			Identity: sdkingest.NewCollectionIdentity(
+				[]sdkingest.IdentityEvidence{
+					{Kind: "os_instance", Digest: "hmac-sha256:" + strings.Repeat("a", 64)},
+					{Kind: "principal", Digest: "hmac-sha256:" + strings.Repeat("b", 64)},
+				},
+				[]sdkingest.IdentityEvidence{{Kind: "network_profile", Digest: "hmac-sha256:" + strings.Repeat("c", 64)}},
+				sdkingest.NetworkClassPrivate,
+			),
 			Collector:        "a2a",
 			CollectorVersion: "import-test",
 			Timestamp:        "2026-07-12T00:00:00Z",
-			ScanID:           "strict-v3-a2a-import",
+			ScanID:           "strict-v4-a2a-import",
 			Collection: &sdkingest.CollectionReport{
 				State:        sdkingest.OutcomeComplete,
 				CoverageKeys: []string{scope},

@@ -100,29 +100,30 @@ interprets last-writer `scan_id` as ownership. The API rejects pending/running
 scans, scans referenced by active coverage heads, and the currently published
 posture revision with `409`.
 
-## Collection realm and storage-pair admission
+## Collection provenance and storage pairing
 
-Every ingest-v3 artifact declares an exact `host_id` and
-`network_realm_id`. The server accepts only the tuple configured for its one
-PostgreSQL/Neo4j database pair. This prevents accidental cross-vantage merges
-of local filesystem paths, loopback services, RFC1918 endpoints, host facts,
-and lifecycle coverage. PostgreSQL and Neo4j also carry the same immutable
-`storage_pair_id`, so combining volumes from different deployments fails
-closed.
+Every ingest-v4 artifact carries an automatically derived collection point and
+network context. Raw OS, account, platform, container, adapter, route, and DNS
+identifiers are transformed with AgentHound-specific HMACs before they enter
+the artifact. The server validates the scheme, algorithm version, digest
+consistency, and evidence classification rules. It cannot prove that a
+collector actually ran on the claimed machine: provenance is not
+authentication or attestation.
 
-Admission is the first pipeline operation, before generic validation,
-campaign-rejection auditing, scan lifecycle writes, coverage retirement, or
-graph mutation. The server rereads both storage markers for every ingest.
-Wrong-realm artifacts receive `409 COLLECTION_REALM_MISMATCH`; unverifiable
-storage receives sanitized `503 STORAGE_BINDING_UNAVAILABLE`. Startup inspects
-both stores before migrations or graph-schema changes and repairs a one-sided
-marker only when both stores are product-empty.
+The server accepts every valid artifact and scopes ambiguous evidence rather
+than admitting one configured realm. Local files, identities, credentials,
+stdio services, and loopback observations use collection-point scope. Remote
+endpoint observations use network-context scope. Weak identity artifacts are
+still analyzed, but their authoritative evidence is artifact-local and
+additive-only. Approved `value_hash` correlation may cross contexts; other
+processor joins require exact compatible scope.
 
-This is an integrity guard against operator mistakes, not a hostile-artifact
-authentication scheme. The identifiers are non-secret and unsigned; a party
-that can modify an artifact can replace them. Continue to protect the local
-server boundary and artifact transport. Never use realm admission as a
-substitute for mTLS, VPN/SSH isolation, checksums, or trusted custody.
+PostgreSQL and Neo4j carry the same server-generated internal storage-pair UUID,
+so crossed volumes fail closed. Verification remains the first ingest
+operation. Unverifiable storage receives sanitized
+`503 STORAGE_BINDING_UNAVAILABLE` before lifecycle or graph mutation. Continue
+to protect the local server boundary and artifact transport with trusted
+custody, checksums, VPN/SSH isolation, or mTLS as appropriate.
 
 ## Collector network behaviour
 
@@ -215,7 +216,7 @@ or log it. Its handling is deliberately stricter than `--include-credential-valu
   but the untouched trimmed spelling—including any query bytes—is hashed through
   `ResolveMCPServerIdentity("http", input)` and must equal the witness server ID.
   Only absolute HTTP(S) URLs with valid authority/hostname and no userinfo or
-  fragment are accepted. The clear endpoint is never stored in witness v2.
+  fragment are accepted. The clear endpoint is never stored in witness v3.
 - **Query handling is defense-in-depth, not universal detection.** Fixed
   known-sensitive decoded keys and decoded values exactly equal to the supplied
   campaign credential are rejected. Other arbitrary query bytes remain accepted
@@ -239,7 +240,7 @@ or log it. Its handling is deliberately stricter than `--include-credential-valu
   (a raw fact). Findings derive only from composite edges, so this never
   auto-creates a finding; treat it as a policy concern only where authentication
   was expected.
-- **Exact per-agent witness contract.** Witness v2 names one source
+- **Exact per-agent witness contract.** Witness v3 names one source
   `AgentInstance`, is exported only for HTTP-backed resources, and carries the
   actual ordered current `CAN_REACH` evidence node IDs with normalized concrete
   kinds. Promotion recomputes the unkeyed fingerprint and validates every

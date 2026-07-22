@@ -7,6 +7,17 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
+func normalizerFixture(data *ingest.IngestData) *ingest.IngestData {
+	data.Meta.Identity = testCollectionIdentity()
+	if data.Meta.ScanID == "" {
+		data.Meta.ScanID = "normalizer-fixture"
+	}
+	if data.Meta.Collection == nil {
+		data.Meta.Collection = &ingest.CollectionReport{}
+	}
+	return data
+}
+
 func TestNormalizerSetsObjectID(t *testing.T) {
 	n := NewNormalizer()
 	data := &ingest.IngestData{
@@ -17,9 +28,15 @@ func TestNormalizerSetsObjectID(t *testing.T) {
 			},
 		},
 	}
+	normalizerFixture(data)
 	n.Normalize(data)
 
-	if data.Graph.Nodes[0].Properties["objectid"] != "sha256:abc" {
+	wantID := ingest.ScopedNodeID(
+		ingest.ScopeNetworkContext,
+		data.Meta.Identity.NetworkContextID,
+		"sha256:abc",
+	)
+	if data.Graph.Nodes[0].Properties["objectid"] != wantID {
 		t.Errorf("objectid not set: %v", data.Graph.Nodes[0].Properties)
 	}
 }
@@ -37,6 +54,7 @@ func TestNormalizerStripsNil(t *testing.T) {
 			},
 		},
 	}
+	normalizerFixture(data)
 	n.Normalize(data)
 
 	if _, exists := data.Graph.Nodes[0].Properties["empty"]; exists {
@@ -57,6 +75,7 @@ func TestNormalizerDoesNotRepairLocalProcessAuth(t *testing.T) {
 			},
 		}}},
 	}
+	normalizerFixture(data)
 
 	NewNormalizer().Normalize(data)
 	props := data.Graph.Nodes[0].Properties
@@ -68,12 +87,17 @@ func TestNormalizerDoesNotRepairLocalProcessAuth(t *testing.T) {
 
 func TestNormalizerMigratesPreV1RawMCPAnonymousObservation(t *testing.T) {
 	data := preV1RawMCPAnonymousData()
-	originalID := data.Graph.Nodes[0].ID
+	rawID := data.Graph.Nodes[0].ID
+	wantID := ingest.ScopedNodeID(
+		ingest.ScopeNetworkContext,
+		data.Meta.Identity.NetworkContextID,
+		rawID,
+	)
 
 	warnings := NewNormalizer().Normalize(data)
 	props := data.Graph.Nodes[0].Properties
-	if data.Graph.Nodes[0].ID != originalID {
-		t.Fatalf("compatibility migration changed identity: got %q want %q", data.Graph.Nodes[0].ID, originalID)
+	if data.Graph.Nodes[0].ID != wantID {
+		t.Fatalf("normalization scoped identity incorrectly: got %q want %q", data.Graph.Nodes[0].ID, wantID)
 	}
 	for key, want := range map[string]any{
 		"observed_auth_method":    "none",
@@ -141,7 +165,7 @@ func TestNormalizerDoesNotMigrateNearMissRawAuth(t *testing.T) {
 }
 
 func preV1RawMCPAnonymousData() *ingest.IngestData {
-	return &ingest.IngestData{
+	return normalizerFixture(&ingest.IngestData{
 		Meta: ingest.IngestMeta{Collector: "mcp", ScanID: "pre-v1"},
 		Graph: ingest.GraphData{Nodes: []ingest.Node{{
 			ID:    "pre-v1-mcp-server",
@@ -152,7 +176,7 @@ func preV1RawMCPAnonymousData() *ingest.IngestData {
 				"auth_evidence": "anonymous_probe_succeeded",
 			},
 		}}},
-	}
+	})
 }
 
 func TestNormalizerSerializesComplexValues(t *testing.T) {
@@ -172,6 +196,7 @@ func TestNormalizerSerializesComplexValues(t *testing.T) {
 			},
 		},
 	}
+	normalizerFixture(data)
 	warnings := n.Normalize(data)
 
 	val := data.Graph.Nodes[0].Properties["input_schema"]
@@ -200,6 +225,7 @@ func TestNormalizerClassifiesDroppedPropertyAsPublicationUnsafe(t *testing.T) {
 			}},
 		},
 	}
+	normalizerFixture(data)
 
 	warnings := NewNormalizer().Normalize(data)
 	if len(warnings) != 1 {
@@ -218,7 +244,7 @@ func TestNormalizerClassifiesDroppedPropertyAsPublicationUnsafe(t *testing.T) {
 
 func TestNormalizerWarningsAreDeterministic(t *testing.T) {
 	makeData := func() *ingest.IngestData {
-		return &ingest.IngestData{
+		return normalizerFixture(&ingest.IngestData{
 			Graph: ingest.GraphData{Nodes: []ingest.Node{{
 				ID:    "node",
 				Kinds: []string{"MCPServer"},
@@ -227,7 +253,7 @@ func TestNormalizerWarningsAreDeterministic(t *testing.T) {
 					"a_nested": map[string]any{"a": true},
 				},
 			}}},
-		}
+		})
 	}
 
 	first := NewNormalizer().Normalize(makeData())
@@ -251,6 +277,7 @@ func TestNormalizerInitializesNilProperties(t *testing.T) {
 			},
 		},
 	}
+	normalizerFixture(data)
 	n.Normalize(data)
 
 	if data.Graph.Nodes[0].Properties == nil {
@@ -268,6 +295,7 @@ func TestNormalizerEdgeProperties(t *testing.T) {
 			},
 		},
 	}
+	normalizerFixture(data)
 	n.Normalize(data)
 
 	if data.Graph.Edges[0].Properties == nil {
@@ -290,6 +318,7 @@ func TestNormalizerDoesNotInferEndpointKinds(t *testing.T) {
 			}},
 		},
 	}
+	normalizerFixture(data)
 
 	n.Normalize(data)
 
@@ -316,6 +345,7 @@ func TestNormalizerPreservesExplicitUmbrellaEndpointKind(t *testing.T) {
 			}},
 		},
 	}
+	normalizerFixture(data)
 
 	n.Normalize(data)
 
@@ -326,7 +356,7 @@ func TestNormalizerPreservesExplicitUmbrellaEndpointKind(t *testing.T) {
 }
 
 func TestNormalizerInitializesNilGraphCollections(t *testing.T) {
-	data := &ingest.IngestData{}
+	data := normalizerFixture(&ingest.IngestData{})
 	NewNormalizer().Normalize(data)
 	if data.Graph.Nodes == nil || data.Graph.Edges == nil {
 		t.Fatal("normalizer must materialize nil graph collections as empty slices")

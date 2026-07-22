@@ -34,13 +34,74 @@ type CoverageRoot struct {
 }
 
 type CollectionOutcome struct {
-	Collector   string       `json:"collector"`
-	CoverageKey string       `json:"coverage_key,omitempty"`
-	Target      string       `json:"target,omitempty"`
-	Method      string       `json:"method,omitempty"`
-	State       OutcomeState `json:"state"`
-	Items       int          `json:"items,omitempty"`
-	Error       string       `json:"error,omitempty"`
+	Collector         string       `json:"collector"`
+	CoverageKey       string       `json:"coverage_key,omitempty"`
+	ParentCoverageKey string       `json:"parent_coverage_key,omitempty"`
+	Target            string       `json:"target,omitempty"`
+	Method            string       `json:"method,omitempty"`
+	State             OutcomeState `json:"state"`
+	Items             int          `json:"items,omitempty"`
+	Error             string       `json:"error,omitempty"`
+}
+
+// EnsureCoverageParentage serializes lifecycle ownership explicitly. It is
+// called by the collector immediately before encoding an artifact; the server
+// never reconstructs parentage by parsing opaque coverage-key strings.
+func EnsureCoverageParentage(report *CollectionReport) {
+	if report == nil {
+		return
+	}
+	declared := make(map[string]bool, len(report.CoverageKeys))
+	for _, key := range report.CoverageKeys {
+		if key != "" {
+			declared[key] = true
+		}
+	}
+	parentByChild := make(map[string]string)
+	for _, root := range report.AuthoritativeRoots {
+		for _, child := range root.ChildCoverageKeys {
+			if child != "" && parentByChild[child] == "" {
+				parentByChild[child] = root.CoverageKey
+			}
+		}
+	}
+	collectorRoots := make(map[string]string)
+	for _, outcome := range report.Outcomes {
+		if outcome.CoverageKey == CollectorRootCoverageKey(outcome.Collector) {
+			collectorRoots[outcome.Collector] = outcome.CoverageKey
+		}
+	}
+	for index := range report.Outcomes {
+		outcome := &report.Outcomes[index]
+		if outcome.ParentCoverageKey != "" || outcome.CoverageKey == "" {
+			continue
+		}
+		if parent := parentByChild[outcome.CoverageKey]; declared[parent] {
+			outcome.ParentCoverageKey = parent
+			continue
+		}
+		if root := collectorRoots[outcome.Collector]; root != "" && root != outcome.CoverageKey {
+			outcome.ParentCoverageKey = root
+		}
+	}
+}
+
+// CoverageParents returns the explicit lifecycle parent for each declaration.
+// The empty string denotes a root declaration.
+func CoverageParents(report *CollectionReport) map[string]string {
+	parents := make(map[string]string)
+	if report == nil {
+		return parents
+	}
+	for _, outcome := range report.Outcomes {
+		if outcome.CoverageKey == "" {
+			continue
+		}
+		if _, present := parents[outcome.CoverageKey]; !present {
+			parents[outcome.CoverageKey] = outcome.ParentCoverageKey
+		}
+	}
+	return parents
 }
 
 func AggregateOutcomeState(outcomes []CollectionOutcome) OutcomeState {

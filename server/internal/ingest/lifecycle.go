@@ -243,6 +243,7 @@ func buildScanMetadata(
 		"collection":               data.Meta.Collection,
 		"ruleset":                  data.Meta.Ruleset,
 		"identity_schemes":         data.Meta.IdentitySchemes,
+		"collection_identity":      data.Meta.Identity,
 		"stages":                   result.Stages,
 		"submitted":                result.Submitted,
 		"write_rows":               result.WriteRows,

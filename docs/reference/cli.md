@@ -12,8 +12,6 @@ AgentHound ships as **two binaries**: `agenthound` (collector) and `agenthound-s
 |------|-----|---------|-------------|
 | `--output` | `AGENTHOUND_OUTPUT` | `./scan-<scan_id>.json` | Write output JSON to this path. `-` for stdout. |
 | `--concurrency` | `AGENTHOUND_CONCURRENCY` | `5` | Max parallel collector workers. Used by `scan` as the fallback for `--scan-concurrency` when the latter is not set explicitly. |
-| `--host-id` | `AGENTHOUND_HOST_ID` | _(required for artifact-emitting operations)_ | Stable lowercase ID for this collector machine. |
-| `--network-realm-id` | `AGENTHOUND_NETWORK_REALM_ID` | _(required for artifact-emitting operations)_ | Stable lowercase ID for the private network visible from this machine. |
 | `--log-level` | `AGENTHOUND_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
 | `--quiet` | `AGENTHOUND_QUIET=1` | `false` | Suppress non-error log output. |
 | `--log-json` | `AGENTHOUND_LOG_JSON=1` | `false` | Emit structured JSON logs. |
@@ -28,12 +26,11 @@ and discovery, looters, poisoners, and campaigns use the protocols documented
 for those commands. Move resulting JSON to the analysis box via file copy, SSH
 pipe, an explicit curl pipeline, or the UI's drag-drop import.
 
-Both origin IDs must match `[a-z0-9][a-z0-9._-]{0,127}` and remain stable.
-They are required whenever the command emits an ingest artifact (`scan`,
-`discover`, `loot`, committed `extract`, or a witness-backed committed
-`campaign`). They scope local paths, loopback/private endpoints, and lifecycle
-coverage to one collection vantage point; they are provenance, not secrets or
-an authentication mechanism.
+Every artifact-emitting command automatically derives versioned collection-point
+and network-context provenance from native OS, principal, execution-scope, and
+network signals. Raw signals are never emitted. There are no public identity
+flags or environment variables, and the derived identity is provenance rather
+than authentication or attestation.
 
 ---
 
@@ -41,8 +38,8 @@ an authentication mechanism.
 
 Enumerate MCP servers, A2A agents, and client configs, then write the merged trust graph as JSON.
 
-Scan artifacts use strict ingest wire version `3` with required `origin`
-(`host_id` plus `network_realm_id`) and evidence
+Scan artifacts use strict ingest wire version `4` with required automatic
+`identity` and evidence
 metadata: constituent `collection` coverage/outcomes, the effective text and
 fingerprint `ruleset` semantic digest/entries with canonical matcher
 definitions and load failures, and canonical identity-scheme metadata. A
@@ -677,9 +674,6 @@ Print version string and commit hash.
 | `--neo4j-user` | `AGENTHOUND_NEO4J_USER` | `neo4j` | Neo4j username. |
 | `--neo4j-password` | `AGENTHOUND_NEO4J_PASSWORD` | `agenthound` | Neo4j password. |
 | `--pg-uri` | `AGENTHOUND_PG_URI` | `postgres://agenthound:agenthound@localhost:5432/agenthound?sslmode=disable` | PostgreSQL URI. |
-| `--host-id` | `AGENTHOUND_HOST_ID` | _(required for DB commands)_ | Exact collector host admitted by this database pair. |
-| `--network-realm-id` | `AGENTHOUND_NETWORK_REALM_ID` | _(required for DB commands)_ | Exact private-network realm admitted by this database pair. |
-| `--storage-pair-id` | `AGENTHOUND_STORAGE_PAIR_ID` | _(required for DB commands)_ | Canonical lowercase UUID permanently pairing these PostgreSQL and Neo4j volumes. |
 | `--cors-origins` | `AGENTHOUND_CORS_ORIGINS` | `http://localhost:8080,http://127.0.0.1:8080` | Comma-separated CORS origins. |
 | `--log-level` | `AGENTHOUND_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
 
@@ -695,12 +689,13 @@ Start the API server, embedded React UI, and initialize databases.
 agenthound-server serve
 ```
 
-Before any schema mutation, reads immutable binding markers from both databases
-and requires the configured host, realm, and storage-pair UUID to match. A
-one-sided missing marker is repaired only when both stores are product-empty;
-crossed pairs, legacy non-empty stores, future marker versions, and realm
-mismatches fail closed. It then initializes Neo4j schema (constraints +
-indexes) and PostgreSQL migrations on first start. Mutating HTTP endpoints are
+Before schema mutation, the server automatically generates and stamps an
+internal UUID that pairs PostgreSQL with Neo4j. A one-sided missing marker is
+repaired only when the stores are safe to repair; crossed pairs, legacy
+non-empty stores, and future marker versions fail closed. It then initializes
+Neo4j schema (constraints + indexes) and PostgreSQL migrations on first start.
+Every valid ingest-v4 artifact is accepted; provenance controls graph scope,
+not admission. Mutating HTTP endpoints are
 gated by `OriginGuard` (Origin allowlist, configured via `--cors-origins`).
 Graceful shutdown on SIGINT/SIGTERM (10s drain).
 
@@ -825,7 +820,7 @@ agenthound-server query --findings --fail-on critical --format json
 
 Export a stable, sanitized **witness** for a predicted credential-gated `CAN_REACH` finding so the collector-side `agenthound campaign` runner can verify it.
 
-Witness v2 is exported only for HTTP-backed resources. It carries the explicit source `AgentInstance`, server/credential/resource IDs and concrete kinds, credential `value_hash` + `merge_key`, resource identity input, predicted edge kind, topology-normalization version, and the actual ordered current `CAN_REACH.evidence_node_ids` with one normalized concrete kind per node. Its positive publication revision is provenance only, not an equality gate. The unkeyed fingerprint detects inconsistency but is not a signature or authorization proof. It contains no clear endpoint, Neo4j relationship ID, arbitrary node property, or secret.
+Witness v3 is exported only for HTTP-backed resources. It carries the explicit source `AgentInstance`, scoped server/credential/resource IDs and concrete kinds, the endpoint-derived server identity hash and opaque service scope, credential `value_hash` + `merge_key`, resource identity input, predicted edge kind, topology-normalization version, and the actual ordered current `CAN_REACH.evidence_node_ids` with one normalized concrete kind per node. Its positive publication revision is provenance only, not an equality gate. The unkeyed fingerprint detects inconsistency but is not a signature or authorization proof. It contains no clear endpoint, Neo4j relationship ID, arbitrary node property, or secret.
 
 ```bash
 agenthound-server witness --finding <finding-id> > witness.json
@@ -854,9 +849,6 @@ Print version string and commit hash.
 | `AGENTHOUND_OUTPUT` | collector | `./scan-<scan_id>.json` |
 | `AGENTHOUND_LOG_LEVEL` | both | `info` |
 | `AGENTHOUND_CONCURRENCY` | collector | `5` |
-| `AGENTHOUND_HOST_ID` | both | required for collector artifact output and server DB commands |
-| `AGENTHOUND_NETWORK_REALM_ID` | both | required for collector artifact output and server DB commands |
-| `AGENTHOUND_STORAGE_PAIR_ID` | server | required canonical UUID for DB commands |
 | `AGENTHOUND_QUIET` | collector | (unset) |
 | `AGENTHOUND_LOG_JSON` | collector | (unset) |
 | `AGENTHOUND_RULES_BUNDLE` | collector | (unset) |

@@ -80,8 +80,7 @@ DETACH DELETE n`, nil)
 		t.Fatalf("ensure binding constraint idempotently: %v", err)
 	}
 
-	origin := ingest.CollectionOrigin{HostID: "host-a", NetworkRealmID: "realm-a"}
-	marker, err := binding.NewMarker(origin, integrationStoragePairID)
+	marker, err := binding.NewMarker(integrationStoragePairID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +94,7 @@ DETACH DELETE n`, nil)
 	if err != nil || !actual.Equal(marker) {
 		t.Fatalf("read marker = %+v, %v", actual, err)
 	}
-	other, err := binding.NewMarker(origin, "ee2f3afe-209e-42fb-8685-af55caa7e58d")
+	other, err := binding.NewMarker("ee2f3afe-209e-42fb-8685-af55caa7e58d")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +141,7 @@ func TestIntegrationSchemaInit(t *testing.T) {
 	}
 }
 
-func TestIntegrationSchemaInitRejectsLegacyUnfingerprintedOwners(t *testing.T) {
+func TestIntegrationSchemaInitRejectsLegacySchema(t *testing.T) {
 	ctx := testDriver(t)
 	driver, err := NewDriver(
 		os.Getenv("AGENTHOUND_NEO4J_URI"),
@@ -175,16 +174,6 @@ func TestIntegrationSchemaInitRejectsLegacyUnfingerprintedOwners(t *testing.T) {
 	if err := InitSchema(ctx, driver); err != nil {
 		t.Fatalf("initialize current schema: %v", err)
 	}
-	baseline, err := readObservationFingerprintSchemaState(ctx, driver)
-	if err != nil {
-		t.Fatalf("read current schema baseline: %v", err)
-	}
-	if baseline.Version != graphSchemaVersion {
-		t.Fatalf("current schema baseline = %+v", baseline)
-	}
-	wantUnfingerprintedNodes := baseline.UnfingerprintedNodes + 1
-	wantUnfingerprintedRelationships := baseline.UnfingerprintedRelationships + 1
-
 	if _, err := integrationWrite(ctx, driver, `
 		MATCH (schema:SchemaVersion) DELETE schema
 		CREATE (:SchemaVersion {version: 1})
@@ -226,9 +215,9 @@ func TestIntegrationSchemaInitRejectsLegacyUnfingerprintedOwners(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Neo4j graph schema 1",
-		fmt.Sprintf("%d authoritative nodes", wantUnfingerprintedNodes),
-		fmt.Sprintf("%d raw relationships", wantUnfingerprintedRelationships),
-		"automatic upgrade to schema 2 cannot preserve shared-owner evidence safely",
+		"predates ingest v4 scoped identity",
+		"automatic upgrade to schema 3 is refused",
+		"recreate both database volumes",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("InitSchema error %q missing %q", err, want)
@@ -239,13 +228,11 @@ func TestIntegrationSchemaInitRejectsLegacyUnfingerprintedOwners(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read rejected schema state: %v", err)
 	}
-	if state.Version != 1 ||
-		state.UnfingerprintedNodes != wantUnfingerprintedNodes ||
-		state.UnfingerprintedRelationships != wantUnfingerprintedRelationships {
+	if state.Version != 1 {
 		t.Fatalf("rejected schema state = %+v", state)
 	}
 
-	// Once a database was created under schema 2, a deliberately invalidated
+	// Once a database was created under schema 3, a deliberately invalidated
 	// owner may have no current fingerprint. Startup must still succeed so a
 	// later joint refresh or retirement can repair that fail-closed fact.
 	if _, err := integrationWrite(ctx, driver,
@@ -255,7 +242,7 @@ func TestIntegrationSchemaInitRejectsLegacyUnfingerprintedOwners(t *testing.T) {
 		t.Fatalf("mark current schema: %v", err)
 	}
 	if err := InitSchema(ctx, driver); err != nil {
-		t.Fatalf("schema 2 rejected an intentionally invalidated owner: %v", err)
+		t.Fatalf("schema 3 rejected an intentionally invalidated owner: %v", err)
 	}
 
 	// A binary must never rewrite an unknown future schema marker down to the
@@ -270,7 +257,7 @@ func TestIntegrationSchemaInitRejectsLegacyUnfingerprintedOwners(t *testing.T) {
 	err = InitSchema(ctx, driver)
 	if err == nil || !strings.Contains(
 		err.Error(),
-		"graph schema 3 is newer than the maximum schema 2",
+		"graph schema 4 is newer than the maximum schema 3",
 	) {
 		t.Fatalf("future schema rejection = %v", err)
 	}

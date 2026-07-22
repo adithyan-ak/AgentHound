@@ -61,8 +61,11 @@ func initializeProbe(status campaign.ProbeStatus) campaign.ProbeResult {
 
 func testWitness(t *testing.T) campaign.Witness {
 	t.Helper()
-	testServerID := ingest.ResolveMCPServerIdentity("http", testHost).ObjectID
-	resID := ingest.ComputeNodeID("MCPResource", testServerID, testResURI)
+	serverIdentityID := ingest.ResolveMCPServerIdentity("http", testHost).ObjectID
+	serviceScopeID := "sha256:scenario-test-network"
+	testServerID := ingest.ScopedNodeID(ingest.ScopeNetworkContext, serviceScopeID, serverIdentityID)
+	rawResourceID := ingest.ComputeNodeID("MCPResource", serverIdentityID, testResURI)
+	resID := ingest.ScopedNodeID(ingest.ScopeNetworkContext, serviceScopeID, rawResourceID)
 	return campaign.Witness{
 		SchemaVersion:                campaign.WitnessSchemaVersion,
 		TopologyNormalizationVersion: campaign.WitnessTopologyNormalizationVersion,
@@ -76,6 +79,9 @@ func testWitness(t *testing.T) campaign.Witness {
 		CredentialMergeKey:           campaign.CredentialMergeKeyValueHash,
 		ServerID:                     testServerID,
 		ServerKind:                   "MCPServer",
+		ServerIdentityID:             serverIdentityID,
+		ServiceScope:                 ingest.ScopeNetworkContext,
+		ServiceScopeID:               serviceScopeID,
 		ResourceID:                   resID,
 		ResourceKind:                 "MCPResource",
 		ResourceIdentityInput:        testResURI,
@@ -271,8 +277,22 @@ func TestAcceptedQueryNeverAppearsInPlan(t *testing.T) {
 	prober := &fakeProber{}
 	in := commitInput(t, prober)
 	in.Host = endpoint
-	in.Witness.ServerID = ingest.ResolveMCPServerIdentity("http", endpoint).ObjectID
-	in.Witness.ResourceID = ingest.ComputeNodeID("MCPResource", in.Witness.ServerID, in.Witness.ResourceIdentityInput)
+	in.Witness.ServerIdentityID = ingest.ResolveMCPServerIdentity("http", endpoint).ObjectID
+	in.Witness.ServerID = ingest.ScopedNodeID(
+		in.Witness.ServiceScope,
+		in.Witness.ServiceScopeID,
+		in.Witness.ServerIdentityID,
+	)
+	rawResourceID := ingest.ComputeNodeID(
+		"MCPResource",
+		in.Witness.ServerIdentityID,
+		in.Witness.ResourceIdentityInput,
+	)
+	in.Witness.ResourceID = ingest.ScopedNodeID(
+		in.Witness.ServiceScope,
+		in.Witness.ServiceScopeID,
+		rawResourceID,
+	)
 	for i := range in.Witness.EvidenceNodeIDs {
 		switch in.Witness.EvidenceNodeKinds[i] {
 		case "MCPServer":

@@ -149,6 +149,7 @@ func TestRetiredCoverageKeysDiffsOnlyAuthoritativeRootChildren(t *testing.T) {
 			{Key: configPath, Root: configRoot},
 		},
 		nil,
+		nil,
 	)
 	if want := []string{targetA}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("retired coverage = %v, want %v", got, want)
@@ -168,6 +169,11 @@ func TestRetiredCoverageKeysIncludesOnlyAbsentInheritedDirtyChildren(t *testing.
 		}},
 		nil,
 		[]string{absentMCP, activeMCP, dirtyConfig},
+		map[string]string{
+			absentMCP:   mcpRoot,
+			activeMCP:   mcpRoot,
+			dirtyConfig: sdkingest.CollectorRootCoverageKey("config"),
+		},
 	)
 	if want := []string{absentMCP}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("retired inherited dirty coverage = %v, want %v", got, want)
@@ -179,7 +185,7 @@ func TestRetiredCoverageKeysTargetedRunIsNonAuthoritative(t *testing.T) {
 	targetA := sdkingest.CanonicalCoverageKey("mcp", "target", "a")
 	if got := retiredCoverageKeys(nil, []coverageHead{{
 		Key: targetA, Root: mcpRoot,
-	}}, []string{targetA}); len(got) != 0 {
+	}}, []string{targetA}, map[string]string{targetA: mcpRoot}); len(got) != 0 {
 		t.Fatalf("targeted run retired sibling coverage: %v", got)
 	}
 }

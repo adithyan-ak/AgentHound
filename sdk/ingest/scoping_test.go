@@ -1,0 +1,322 @@
+package ingest
+
+import (
+	"reflect"
+	"sort"
+	"testing"
+)
+
+func strongTestIdentity(networkHex string) CollectionIdentity {
+	return NewCollectionIdentity(
+		[]IdentityEvidence{
+			testEvidence("os_instance", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			testEvidence("principal", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+		},
+		[]IdentityEvidence{testEvidence("network_profile", networkHex)},
+		NetworkClassPrivate,
+	)
+}
+
+func scopingFixture(identity CollectionIdentity, scanID string) *IngestData {
+	remoteKey := CanonicalCoverageKey("mcp", "target", "https://service.internal")
+	loopbackKey := CanonicalCoverageKey("mcp", "target", "http://127.0.0.1:8080")
+	stdioKey := CanonicalCoverageKey("mcp", "target", "stdio-command")
+	return &IngestData{
+		Meta: IngestMeta{
+			ScanID:   scanID,
+			Identity: identity,
+			Collection: &CollectionReport{
+				State:        OutcomeComplete,
+				CoverageKeys: []string{remoteKey, loopbackKey, stdioKey},
+				Outcomes: []CollectionOutcome{
+					{Collector: "mcp", CoverageKey: remoteKey, Target: "https://service.internal", Method: "enumerate", State: OutcomeComplete},
+					{Collector: "mcp", CoverageKey: loopbackKey, Target: "http://127.0.0.1:8080", Method: "enumerate", State: OutcomeComplete},
+					{Collector: "mcp", CoverageKey: stdioKey, Target: "stdio-command", Method: "enumerate", State: OutcomeComplete},
+				},
+			},
+		},
+		Graph: GraphData{
+			Nodes: []Node{
+				{ID: "file", Kinds: []string{"ConfigFile"}, Properties: map[string]any{"path": "/tmp/config"}, ObservationDomains: []string{stdioKey}},
+				{ID: "remote", Kinds: []string{"MCPServer"}, Properties: map[string]any{"transport": "http", "endpoint": "https://service.internal"}, ObservationDomains: []string{remoteKey}},
+				{ID: "remote-tool", Kinds: []string{"MCPTool"}, Properties: map[string]any{"name": "remote"}, ObservationDomains: []string{remoteKey}},
+				{ID: "loopback", Kinds: []string{"MCPServer"}, Properties: map[string]any{"transport": "http", "endpoint": "http://127.0.0.1:8080"}, ObservationDomains: []string{loopbackKey}},
+				{ID: "stdio", Kinds: []string{"MCPServer"}, Properties: map[string]any{"transport": "stdio", "command": "server"}, ObservationDomains: []string{stdioKey}},
+				{ID: "credential", Kinds: []string{"Credential"}, Properties: map[string]any{"value_hash": "shared-hash"}, ObservationDomains: []string{stdioKey}},
+			},
+			Edges: []Edge{{Source: "remote", Target: "remote-tool", Kind: "PROVIDES_TOOL", ObservationDomains: []string{remoteKey}}},
+		},
+	}
+}
+
+func TestScopeArtifactSeparatesPointNetworkAndLoopbackIdentity(t *testing.T) {
+	identity := strongTestIdentity("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	data := scopingFixture(identity, "scan-a")
+	rawKeys := append([]string(nil), data.Meta.Collection.CoverageKeys...)
+	if err := ScopeArtifact(data); err != nil {
+		t.Fatal(err)
+	}
+
+	expectedIDs := map[string]string{
+		"file":        ScopedNodeID(ScopeCollectionPoint, identity.CollectionPointID, "file"),
+		"remote":      ScopedNodeID(ScopeNetworkContext, identity.NetworkContextID, "remote"),
+		"remote-tool": ScopedNodeID(ScopeNetworkContext, identity.NetworkContextID, "remote-tool"),
+		"loopback":    ScopedNodeID(ScopeCollectionPoint, identity.CollectionPointID, "loopback"),
+		"stdio":       ScopedNodeID(ScopeCollectionPoint, identity.CollectionPointID, "stdio"),
+		"credential":  ScopedNodeID(ScopeCollectionPoint, identity.CollectionPointID, "credential"),
+	}
+	seen := make(map[string]Node)
+	for _, node := range data.Graph.Nodes {
+		seen[node.ID] = node
+	}
+	for raw, expected := range expectedIDs {
+		if _, present := seen[expected]; !present {
+			t.Errorf("%s node missing scoped ID %q", raw, expected)
+		}
+	}
+	remote := seen[expectedIDs["remote"]]
+	if remote.Properties["collection_point_id"] != identity.CollectionPointID ||
+		remote.Properties["network_context_id"] != identity.NetworkContextID {
+		t.Fatalf("remote scope coordinates = %+v", remote.Properties)
+	}
+	if seen[expectedIDs["credential"]].Properties["value_hash"] != "shared-hash" {
+		t.Fatal("credential correlation hash changed during scoping")
+	}
+
+	wantCoverage := []string{
+		ScopedCoverageKey(ScopeNetworkContext, identity.NetworkContextID, rawKeys[0]),
+		ScopedCoverageKey(ScopeCollectionPoint, identity.CollectionPointID, rawKeys[1]),
+		ScopedCoverageKey(ScopeCollectionPoint, identity.CollectionPointID, rawKeys[2]),
+	}
+	sort.Strings(wantCoverage)
+	if !reflect.DeepEqual(data.Meta.Collection.CoverageKeys, wantCoverage) {
+		t.Fatalf("coverage = %v, want %v", data.Meta.Collection.CoverageKeys, wantCoverage)
+	}
+}
+
+func TestScopeArtifactNetworkMovePreservesOnlyPointScopedIdentity(t *testing.T) {
+	firstIdentity := strongTestIdentity("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	secondIdentity := strongTestIdentity("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	first := scopingFixture(firstIdentity, "scan-a")
+	second := scopingFixture(secondIdentity, "scan-b")
+	if err := ScopeArtifact(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := ScopeArtifact(second); err != nil {
+		t.Fatal(err)
+	}
+	ids := func(data *IngestData) map[string]string {
+		result := make(map[string]string)
+		for _, node := range data.Graph.Nodes {
+			if name, ok := node.Properties["name"].(string); ok {
+				result[name] = node.ID
+			}
+			if valueHash, ok := node.Properties["value_hash"].(string); ok {
+				result[valueHash] = node.ID
+			}
+			if transport, ok := node.Properties["transport"].(string); ok {
+				if endpoint, endpointOK := node.Properties["endpoint"].(string); endpointOK {
+					result[endpoint] = node.ID
+				} else {
+					result[transport] = node.ID
+				}
+			}
+		}
+		return result
+	}
+	firstIDs, secondIDs := ids(first), ids(second)
+	for _, stable := range []string{"http://127.0.0.1:8080", "stdio", "shared-hash"} {
+		if firstIDs[stable] != secondIDs[stable] {
+			t.Errorf("point-scoped %s changed across network contexts", stable)
+		}
+	}
+	for _, changed := range []string{"https://service.internal", "remote"} {
+		if firstIDs[changed] == secondIDs[changed] {
+			t.Errorf("network-scoped %s merged across network contexts", changed)
+		}
+	}
+}
+
+func TestScopeArtifactWeakIdentityIsArtifactLocal(t *testing.T) {
+	weak := NewCollectionIdentity(
+		[]IdentityEvidence{testEvidence("hostname", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")},
+		[]IdentityEvidence{testEvidence("offline", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")},
+		NetworkClassOffline,
+	)
+	first := scopingFixture(weak, "weak-scan-a")
+	second := scopingFixture(weak, "weak-scan-b")
+	rawCoverage := first.Meta.Collection.CoverageKeys[0]
+	if err := ScopeArtifact(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := ScopeArtifact(second); err != nil {
+		t.Fatal(err)
+	}
+	if first.Graph.Nodes[1].ID == second.Graph.Nodes[1].ID {
+		t.Fatal("weak artifacts merged an authoritative node")
+	}
+	firstArtifactScope := framedSHA256("agenthound-artifact-scope-v1", "weak-scan-a")
+	if first.Meta.Collection.CoverageKeys[0] == rawCoverage ||
+		first.Graph.Nodes[1].Properties["artifact_scope_id"] != firstArtifactScope {
+		t.Fatalf("weak artifact did not receive artifact-local scope: %+v", first.Graph.Nodes[1])
+	}
+}
+
+func TestScopeArtifactWeakIdentityLocalizesReferencesAndTheirEdges(t *testing.T) {
+	weak := NewCollectionIdentity(
+		[]IdentityEvidence{testEvidence("hostname", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")},
+		[]IdentityEvidence{testEvidence("offline", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")},
+		NetworkClassOffline,
+	)
+	data := &IngestData{
+		Meta: IngestMeta{ScanID: "weak-reference", Identity: weak, Collection: &CollectionReport{}},
+		Graph: GraphData{
+			Nodes: []Node{
+				{ID: "known-agent", Kinds: []string{"AgentInstance"}, Properties: map[string]any{}, PropertySemantics: NodePropertySemanticsReferenceOnly},
+				{ID: "known-resource", Kinds: []string{"MCPResource"}, Properties: map[string]any{}, PropertySemantics: NodePropertySemanticsReferenceOnly},
+			},
+			Edges: []Edge{{Source: "known-agent", Target: "known-resource", Kind: "CREDENTIAL_REACH_VERIFIED"}},
+		},
+	}
+	if err := ScopeArtifact(data); err != nil {
+		t.Fatal(err)
+	}
+	artifactID := framedSHA256("agenthound-artifact-scope-v1", data.Meta.ScanID)
+	wantAgent := ScopedNodeID(ScopeArtifactLocal, artifactID, "known-agent")
+	wantResource := ScopedNodeID(ScopeArtifactLocal, artifactID, "known-resource")
+	if data.Graph.Nodes[0].ID != wantAgent || data.Graph.Nodes[1].ID != wantResource {
+		t.Fatalf("weak references escaped artifact scope: %+v", data.Graph.Nodes)
+	}
+	if data.Graph.Edges[0].Source != wantAgent || data.Graph.Edges[0].Target != wantResource {
+		t.Fatalf("weak reference edge escaped artifact scope: %+v", data.Graph.Edges[0])
+	}
+}
+
+func TestScopeArtifactPreservesReferenceOnlySemantics(t *testing.T) {
+	identity := strongTestIdentity("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	data := &IngestData{
+		Meta: IngestMeta{ScanID: "reference-scan", Identity: identity, Collection: &CollectionReport{}},
+		Graph: GraphData{
+			Nodes: []Node{
+				{ID: "server", Kinds: []string{"MCPServer"}, Properties: map[string]any{"transport": "http", "endpoint": "https://service.internal"}},
+				{ID: "server", Kinds: []string{"MCPServer"}, Properties: map[string]any{}, PropertySemantics: NodePropertySemanticsReferenceOnly},
+				{ID: "external-model", Kinds: []string{"Model"}, Properties: map[string]any{}, PropertySemantics: NodePropertySemanticsReferenceOnly},
+				{ID: "signal", Kinds: []string{"ExtractedTrainingSignal"}, Properties: map[string]any{"source_model_id": "external-model"}},
+			},
+			Edges: []Edge{{Source: "external-model", Target: "signal", Kind: "EXTRACTED_FROM"}},
+		},
+	}
+	if err := ScopeArtifact(data); err != nil {
+		t.Fatal(err)
+	}
+	scopedServer := ScopedNodeID(ScopeNetworkContext, identity.NetworkContextID, "server")
+	if data.Graph.Nodes[1].ID != scopedServer || len(data.Graph.Nodes[1].Properties) != 0 {
+		t.Fatalf("reference contribution gained properties or wrong ID: %+v", data.Graph.Nodes[1])
+	}
+	if data.Graph.Nodes[2].ID != "external-model" {
+		t.Fatalf("unresolved reference identity changed: %+v", data.Graph.Nodes[2])
+	}
+	wantSignal := ScopedNodeID(ScopeReference, "external-model", "signal")
+	if data.Graph.Nodes[3].ID != wantSignal || data.Graph.Edges[0].Target != wantSignal {
+		t.Fatalf("reference-derived child scope = node %q edge target %q, want %q", data.Graph.Nodes[3].ID, data.Graph.Edges[0].Target, wantSignal)
+	}
+}
+
+func TestScopeArtifactScopesStandaloneServiceReferenceByCoverage(t *testing.T) {
+	identity := strongTestIdentity("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	coverageKey := CanonicalCoverageKey("scan", "loot", "http://127.0.0.1:4000")
+	data := &IngestData{
+		Meta: IngestMeta{
+			ScanID:   "loot-reference",
+			Identity: identity,
+			Extra:    map[string]any{"loot_type": "litellm"},
+			Collection: &CollectionReport{
+				State:        OutcomeComplete,
+				CoverageKeys: []string{coverageKey},
+				Outcomes: []CollectionOutcome{{
+					Collector: "scan", CoverageKey: coverageKey,
+					Target: "127.0.0.1:4000", Method: "loot:litellm", State: OutcomeComplete,
+				}},
+			},
+		},
+		Graph: GraphData{Nodes: []Node{{
+			ID: "gateway", Kinds: []string{"LiteLLMGateway"}, Properties: map[string]any{},
+			ObservationDomains: []string{coverageKey}, PropertySemantics: NodePropertySemanticsReferenceOnly,
+		}}},
+	}
+	if err := ScopeArtifact(data); err != nil {
+		t.Fatal(err)
+	}
+	wantID := ScopedNodeID(ScopeCollectionPoint, identity.CollectionPointID, "gateway")
+	if data.Graph.Nodes[0].ID != wantID || len(data.Graph.Nodes[0].Properties) != 0 {
+		t.Fatalf("standalone reference = %+v, want point-scoped empty reference %q", data.Graph.Nodes[0], wantID)
+	}
+}
+
+func TestScopeArtifactPreservesPreScopedCampaignReferences(t *testing.T) {
+	identity := strongTestIdentity("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	coverageKey := CanonicalCoverageKey("scan", "campaign", "campaign-proof")
+	data := &IngestData{
+		Meta: IngestMeta{
+			ScanID:   "campaign-reference",
+			Identity: identity,
+			Extra:    map[string]any{"campaign_artifact": map[string]any{}},
+			Collection: &CollectionReport{
+				State:        OutcomeComplete,
+				CoverageKeys: []string{coverageKey},
+				Outcomes: []CollectionOutcome{{
+					Collector: "scan", CoverageKey: coverageKey,
+					Target: "sha256:scoped-resource", Method: "campaign:cred-reach", State: OutcomeComplete,
+				}},
+			},
+		},
+		Graph: GraphData{Nodes: []Node{{
+			ID: "sha256:already-scoped", Kinds: []string{"MCPResource"}, Properties: map[string]any{},
+			ObservationDomains: []string{coverageKey}, PropertySemantics: NodePropertySemanticsReferenceOnly,
+		}}},
+	}
+	if err := ScopeArtifact(data); err != nil {
+		t.Fatal(err)
+	}
+	if data.Graph.Nodes[0].ID != "sha256:already-scoped" {
+		t.Fatalf("campaign reference was scoped twice: %+v", data.Graph.Nodes[0])
+	}
+}
+
+func TestScopeArtifactSplitsMCPRootByExplicitChildScope(t *testing.T) {
+	identity := strongTestIdentity("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	data := scopingFixture(identity, "root-scan")
+	remoteKey := data.Meta.Collection.CoverageKeys[0]
+	loopbackKey := data.Meta.Collection.CoverageKeys[1]
+	stdioKey := data.Meta.Collection.CoverageKeys[2]
+	root := CollectorRootCoverageKey("mcp")
+	data.Meta.Collection.CoverageKeys = append(data.Meta.Collection.CoverageKeys, root)
+	data.Meta.Collection.Outcomes = append(data.Meta.Collection.Outcomes, CollectionOutcome{
+		Collector: "mcp", CoverageKey: root, Target: "mcp", Method: "collect", State: OutcomeComplete,
+	})
+	data.Meta.Collection.AuthoritativeRoots = []CoverageRoot{{CoverageKey: root, ChildCoverageKeys: []string{remoteKey, loopbackKey, stdioKey}}}
+	EnsureCoverageParentage(data.Meta.Collection)
+	if err := ScopeArtifact(data); err != nil {
+		t.Fatal(err)
+	}
+
+	pointRoot := ScopedCoverageKey(ScopeCollectionPoint, identity.CollectionPointID, root)
+	networkRoot := ScopedCoverageKey(ScopeNetworkContext, identity.NetworkContextID, root)
+	pointChild := ScopedCoverageKey(ScopeCollectionPoint, identity.CollectionPointID, stdioKey)
+	loopbackChild := ScopedCoverageKey(ScopeCollectionPoint, identity.CollectionPointID, loopbackKey)
+	networkChild := ScopedCoverageKey(ScopeNetworkContext, identity.NetworkContextID, remoteKey)
+	pointChildren := []string{pointChild, loopbackChild}
+	sort.Strings(pointChildren)
+	wantRoots := []CoverageRoot{
+		{CoverageKey: pointRoot, ChildCoverageKeys: pointChildren},
+		{CoverageKey: networkRoot, ChildCoverageKeys: []string{networkChild}},
+	}
+	sort.Slice(wantRoots, func(i, j int) bool { return wantRoots[i].CoverageKey < wantRoots[j].CoverageKey })
+	if !reflect.DeepEqual(data.Meta.Collection.AuthoritativeRoots, wantRoots) {
+		t.Fatalf("roots = %+v, want %+v", data.Meta.Collection.AuthoritativeRoots, wantRoots)
+	}
+	parents := CoverageParents(data.Meta.Collection)
+	if parents[pointChild] != pointRoot || parents[loopbackChild] != pointRoot || parents[networkChild] != networkRoot {
+		t.Fatalf("explicit scoped parentage = %+v", parents)
+	}
+}

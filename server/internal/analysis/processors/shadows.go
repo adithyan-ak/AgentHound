@@ -2,6 +2,7 @@ package processors
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
@@ -25,11 +26,12 @@ func (p *Shadows) Process(ctx context.Context, db graph.GraphDB, scanID string) 
 	// has_cross_references still feeds tool risk scoring as a node
 	// property (server/internal/analysis/riskscore/tool.go); it just no
 	// longer manufactures SHADOWS edges.
-	shadowsCypher := `
+	shadowsCypher := fmt.Sprintf(`
 MATCH (s1:MCPServer)-[provides1:PROVIDES_TOOL]->(t1:MCPTool),
       (s2:MCPServer)-[provides2:PROVIDES_TOOL]->(t2:MCPTool)
 WHERE s1 <> s2
   AND t1 <> t2
+  AND %s
   AND t1.description IS NOT NULL
   AND t2.name IS NOT NULL
   AND toLower(t1.description) CONTAINS toLower(t2.name)
@@ -52,7 +54,7 @@ ON MATCH SET  e.scan_id = $scan_id,
               e.evidence_version = 1,
               e.evidence_node_ids = [s1.objectid, t1.objectid, t2.objectid, s2.objectid],
               e.evidence_relationship_ids = [id(provides1), id(provides2)]
-RETURN count(*) AS written`
+RETURN count(*) AS written`, compatibleScopePredicate("s1", "s2"))
 
 	shadowsN, err := db.ExecuteWrite(ctx, shadowsCypher, map[string]any{"scan_id": scanID})
 	if err != nil {
@@ -90,13 +92,14 @@ RETURN count(*) AS written`
 	// suppress the finding by registering a 21st sink. count(DISTINCT
 	// [src, snk]) reports edges actually MERGEd (one source can be reached
 	// via multiple agents, so the raw row count would over-report).
-	poisonsCypher := `
+	poisonsCypher := fmt.Sprintf(`
 MATCH (a:AgentInstance)-[source_trust:TRUSTS_SERVER]->(source_server:MCPServer)
       -[source_provides:PROVIDES_TOOL]->(src:MCPTool)
 WHERE src.has_injection_patterns = true
 MATCH (a)-[sink_trust:TRUSTS_SERVER]->(sink_server:MCPServer)
       -[sink_provides:PROVIDES_TOOL]->(snk:MCPTool)
 WHERE src <> snk
+  AND %s
   AND any(cap IN snk.capability_surface WHERE cap IN ['shell_access', 'code_execution', 'credential_access', 'email_send'])
 WITH a, source_server, source_trust, source_provides,
      src, sink_server, sink_trust, sink_provides, snk
@@ -130,7 +133,7 @@ SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true,
     e.evidence_relationship_ids = [
       id(source_trust), id(source_provides), id(sink_trust), id(sink_provides)
     ]
-RETURN count(DISTINCT [src, snk]) AS written`
+RETURN count(DISTINCT [src, snk]) AS written`, compatibleScopePredicate("source_server", "sink_server"))
 
 	poisonsN, err := db.ExecuteWrite(ctx, poisonsCypher, map[string]any{"scan_id": scanID})
 	if err != nil {

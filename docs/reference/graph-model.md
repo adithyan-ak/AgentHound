@@ -274,11 +274,22 @@ type Edge struct {
 `property_semantics` field. Omitted `property_semantics` is an authoritative
 property observation. The only explicit alternative is `reference_only`,
 which asserts node ID and kinds while requiring an empty `properties` object.
-In wire version 3, collector artifacts preserve both the collector
-host/private-network origin and the producing target/config
-scope per fact using opaque canonical keys such as `mcp:target:sha256:...`,
-`a2a:target:sha256:...`, and `config:path:sha256:...`. The server does not
-infer ownership.
+In wire version 4, the server rewrites producer-local IDs into deterministic
+scoped IDs before graph writes. The centralized policy is:
+
+| Observation | Identity scope |
+|---|---|
+| Files, environment/config data, identities, credentials, stdio and loopback services | Collection point |
+| Private/remote hosts, DNS names, and endpoint-derived service observations | Network context |
+| Authoritative facts from weak-identity artifacts | Artifact-local, additive-only |
+| Unresolved property-neutral references | Reference-local until authoritative evidence resolves them |
+
+Endpoint identity means continuity of an observation at a locator within one
+network context. It does not prove that a service was not replaced behind the
+same endpoint or that two SaaS tenants at one URL are the same instance.
+Cross-context hard merging requires a separately approved immutable identity
+scheme. Credential nodes are scoped, while `value_hash` remains the explicit
+global correlation primitive for observed credential material.
 
 ### Common Edge Properties
 
@@ -315,7 +326,11 @@ The writer derives internal `observation_tokens` from the validated
 `observation_domains` field and current scan ID. Complete-scope reconciliation
 retires only old tokens for that exact target/config key. A shared node or raw
 relationship remains while any owner token survives. Unknown, partial, failed,
-and truncated coverage is non-destructive.
+and truncated coverage is non-destructive. Coverage root and child keys use the
+same applicable identity scope. Each child outcome serializes its
+`parent_coverage_key`; PostgreSQL records that membership explicitly.
+Lifecycle code never reconstructs parentage by parsing an opaque key, so one
+vantage cannot retire another vantage's evidence.
 Node reference owners are tracked internally as a subset of
 `observation_tokens`. A `reference_only` write adds ownership without merging
 properties or lowering a complete authoritative observation. If the last
@@ -568,15 +583,26 @@ New modules emit nodes and edges via the `sdk/ingest` wire format:
 ```json
 {
   "meta": {
-    "version": 3,
+    "version": 4,
     "type": "agenthound-ingest",
     "collector": "mcp|a2a|config|scan",
     "collector_version": "1.0.0",
     "timestamp": "2025-01-15T10:30:00Z",
     "scan_id": "scan-abc123",
-    "origin": {
-      "host_id": "security-laptop",
-      "network_realm_id": "corp-lab"
+    "identity": {
+      "scheme": "agenthound_collection_v1",
+      "version": 1,
+      "collection_point_id": "sha256:...",
+      "network_context_id": "sha256:...",
+      "quality": "strong",
+      "network_class": "private",
+      "evidence": [
+        {"kind": "os_instance", "digest": "hmac-sha256:..."},
+        {"kind": "principal", "digest": "hmac-sha256:..."}
+      ],
+      "network_evidence": [
+        {"kind": "route_private", "digest": "hmac-sha256:..."}
+      ]
     },
     "collection": {
       "state": "complete",
@@ -612,10 +638,12 @@ New modules emit nodes and edges via the `sdk/ingest` wire format:
 }
 ```
 
-Wire version `3` is strict: collection origin, collection, ruleset, current
+Wire version `4` is strict: derived collection identity, collection, ruleset, current
 identity metadata, explicit edge endpoint kinds, and per-fact observation
-domains are required. One database pair admits one exact host/realm origin;
-these non-secret fields scope graph meaning and do not authenticate an artifact.
+domains are required. The server validates the identity schema, algorithm
+version, digest consistency, and evidence classification rules; it cannot prove
+that a collector ran on the claimed machine. Identity scopes graph meaning and
+does not authenticate an artifact.
 Ruleset digests identify effective text/fingerprint semantics but do not claim
 cryptographic authenticity.
 

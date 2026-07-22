@@ -40,6 +40,30 @@ can_impersonate
 | 14 | cross_protocol | auth_strength, has_access_to |
 | 15 | risk_score | all of 1-14 |
 
+## Scope compatibility policy
+
+Ingest v4 permits evidence from many collection points in one graph. Any
+processor that compares otherwise unrelated observations must use the shared
+exact predicate below; a prose judgment at each call site is not sufficient.
+
+- Artifact-local evidence composes only with the same weak artifact.
+- Two network-context observations compose only when both the collection point
+  and network context match.
+- Collection-point evidence composes with collection-point or network-context
+  evidence only when the collection point matches.
+- No other cross-scope join is permitted.
+
+| Processor family | Scope policy |
+|---|---|
+| `shadows` / `POISONS_CONTEXT`, `taints`, credential-derived `can_reach`, `can_exfiltrate`, `can_impersonate`, `confused_deputy` | Shared compatible-scope predicate required |
+| `auth_strength`, `has_access_to`, `can_execute`, poisoned self-edges, `ifc_violation`, `cross_protocol`, `risk_score` | Bound to one node, server, resource, host, or already-scoped graph path |
+| `cross_service_credential_chain` | The sole approved global join: observed credential material with `merge_key=value_hash` and identical `value_hash` |
+
+Positive and negative tests enforce this matrix. Endpoint-derived service
+observations are network-context scoped; that separates vantages but does not
+claim an immutable service identity across endpoint replacement or SaaS
+tenants.
+
 ## Processor Interface
 
 ```go
@@ -223,7 +247,7 @@ normalization, `BeginScan`, canonical writes, and reconciliation. Rejected
 positive or negative submissions leave canonical edges and coverage untouched;
 diagnostics are limited to a sanitized Postgres rejection audit.
 
-Before the Cypher upgrade, Go reconstructs witness v2 from each raw edge and
+Before the Cypher upgrade, Go reconstructs witness v3 from each raw edge and
 recomputes its unkeyed fingerprint; invalid evidence remains stored for
 diagnosis but is excluded from the validated relationship-ID allowlist.
 Re-correlation then requires `a.objectid = witness.agent_id`, exact live

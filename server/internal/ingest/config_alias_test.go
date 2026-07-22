@@ -25,7 +25,6 @@ func TestValidatorAcceptsCollapsedMCPConfigurationAliases(t *testing.T) {
 	artifact, err := configmodule.NewConfigCollector().Collect(
 		context.Background(),
 		collector.CollectOptions{
-			Origin:     testCollectionOrigin,
 			ConfigPath: configPath,
 			ScanID:     "config-alias-validation",
 		},
@@ -41,6 +40,7 @@ func TestValidatorAcceptsCollapsedMCPConfigurationAliases(t *testing.T) {
 	if err := json.Unmarshal(wire, &decoded); err != nil {
 		t.Fatalf("unmarshal collector artifact: %v", err)
 	}
+	decoded.Meta.Identity = testCollectionIdentity()
 	if err := NewValidator().Validate(&decoded); err != nil {
 		if validationErr, ok := err.(*ValidationError); ok {
 			t.Fatalf("strict validator rejected collapsed aliases: %+v", validationErr.Errors)

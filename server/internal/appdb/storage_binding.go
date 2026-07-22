@@ -93,14 +93,11 @@ func (s *StorageBindingStore) ReadStorageBinding(ctx context.Context) (binding.M
 	}
 	var marker binding.Marker
 	err := s.pool.QueryRow(ctx, `
-SELECT binding_version, storage_pair_id::text, host_id, network_realm_id, realm_sha256
+SELECT binding_version, storage_pair_id::text
 FROM storage_binding
 WHERE singleton = TRUE`).Scan(
 		&marker.BindingVersion,
 		&marker.StoragePairID,
-		&marker.HostID,
-		&marker.NetworkRealmID,
-		&marker.RealmSHA256,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return binding.Marker{}, binding.ErrMarkerMissing
@@ -123,14 +120,11 @@ func (s *StorageBindingStore) Install(
 	}
 	_, err := s.pool.Exec(ctx, `
 INSERT INTO storage_binding (
-  singleton, binding_version, storage_pair_id, host_id, network_realm_id, realm_sha256
-) VALUES (TRUE, $1, $2::uuid, $3, $4, $5)
+  singleton, binding_version, storage_pair_id
+) VALUES (TRUE, $1, $2::uuid)
 ON CONFLICT (singleton) DO NOTHING`,
 		marker.BindingVersion,
 		marker.StoragePairID,
-		marker.HostID,
-		marker.NetworkRealmID,
-		marker.RealmSHA256,
 	)
 	if err != nil {
 		return fmt.Errorf("install PostgreSQL storage binding: %w", err)
@@ -162,6 +156,7 @@ func postgresProductStateNonempty(ctx context.Context, pool *pgxpool.Pool) (bool
 		{"findings", "SELECT EXISTS (SELECT 1 FROM findings)"},
 		{"finding_triage", "SELECT EXISTS (SELECT 1 FROM finding_triage)"},
 		{"coverage_heads", "SELECT EXISTS (SELECT 1 FROM coverage_heads)"},
+		{"coverage_memberships", "SELECT EXISTS (SELECT 1 FROM coverage_memberships)"},
 		{"posture_publications", "SELECT EXISTS (SELECT 1 FROM posture_publications)"},
 		{"posture_state", `SELECT EXISTS (
 SELECT 1 FROM posture_state

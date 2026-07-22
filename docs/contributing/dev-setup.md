@@ -74,16 +74,13 @@ CI will reject PRs that fail any of these.
 ## Local Integration Environment
 
 ```bash
-export AGENTHOUND_HOST_ID=dev-workstation
-export AGENTHOUND_NETWORK_REALM_ID=dev-lab
-export AGENTHOUND_STORAGE_PAIR_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 make up             # docker compose: neo4j:4.4 + postgres:16 + agenthound-server
 make down           # tear down
 make seed           # Load test data into running instance
 ```
 
-Generate the storage-pair UUID once, then save and reuse it for the lifetime of
-the paired database volumes.
+Collector provenance and database storage pairing are automatic; the local
+integration stack requires no identity environment variables.
 
 ## Directory Layout
 

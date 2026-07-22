@@ -153,7 +153,6 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 	applyA2AAuthProbes(ctx, results, insecure, c.timeout, c.concurrency)
 
 	data := common.NewIngestData("a2a", scanID)
-	data.Meta.Origin = opts.Origin
 	data.Meta.Ruleset = rules.ManifestForEngine(engine)
 	nodeSeen := make(map[string]bool)
 	addNode := func(node ingest.Node) {

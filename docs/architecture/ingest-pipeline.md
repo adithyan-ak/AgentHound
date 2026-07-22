@@ -27,13 +27,24 @@ Input is the `sdk/ingest.IngestData` struct:
 ```json
 {
   "meta": {
-    "version": 3,
+    "version": 4,
     "type": "agenthound-ingest",
     "collector": "mcp",
     "scan_id": "...",
-    "origin": {
-      "host_id": "security-laptop",
-      "network_realm_id": "corp-lab"
+    "identity": {
+      "scheme": "agenthound_collection_v1",
+      "version": 1,
+      "collection_point_id": "sha256:...",
+      "network_context_id": "sha256:...",
+      "quality": "strong",
+      "network_class": "private",
+      "evidence": [
+        {"kind": "os_instance", "digest": "hmac-sha256:..."},
+        {"kind": "principal", "digest": "hmac-sha256:..."}
+      ],
+      "network_evidence": [
+        {"kind": "route_private", "digest": "hmac-sha256:..."}
+      ]
     },
     "collection": {
       "state": "complete",
@@ -73,11 +84,12 @@ Input is the `sdk/ingest.IngestData` struct:
 }
 ```
 
-Wire version `3` is the only accepted contract; v1 and v2 artifacts are
-rejected. `origin`, `collection`, `ruleset`, and `identity_schemes` are
-required. Origin IDs are exact canonical identifiers for the collector host
-and its private-network realm. Every collection outcome names a canonical
-scoped coverage key, target, method, and explicit state; complete-empty
+Wire version `4` is the only accepted contract; v1, v2, and v3 artifacts are
+rejected. `identity`, `collection`, `ruleset`, and `identity_schemes` are
+required. The server validates identity schema, version, digest consistency,
+and evidence classification—not the truth of the claimed execution origin.
+Every collection outcome names a canonical scoped coverage key, its explicit
+parent root, target, method, and state; complete-empty
 collection is represented by an outcome with `items: 0`. Ruleset entries
 persist canonical effective matcher definitions and every non-fatal load
 failure. Digests identify semantics but do not attest authenticity.
@@ -97,7 +109,7 @@ declared coverage keys. The server never infers fact ownership from a
 single-domain report. A node may set `property_semantics: "reference_only"` to
 assert only its ID and kinds; that mode requires an empty `properties` object.
 Omitting `property_semantics` remains an authoritative property observation.
-Edge endpoint kinds are likewise explicit in v3.
+Edge endpoint kinds are likewise explicit in v4.
 
 ### Eligible-rule semantic digest boundary
 
@@ -122,17 +134,21 @@ reconciled as complete-empty and their heads are retired. Targeted, partial,
 failed, and otherwise non-exhaustive runs do not declare authoritative roots
 and cannot retire sibling scopes.
 
-## Stage 0: Admit Collection Realm and Storage Pair
+Root membership is explicit: each child outcome carries
+`parent_coverage_key`, and PostgreSQL retains the mapping. Parentage is never
+recovered by parsing an opaque child hash.
 
-Before generic validation or any lifecycle/audit write, the pipeline invokes a
-mandatory admission guard. It rereads immutable binding markers from both
-PostgreSQL and Neo4j on every ingest, verifies their marker version, exact
-host/realm tuple, and shared storage-pair UUID, then compares the artifact's
-`meta.origin` with the configured tuple.
+## Stage 0: Verify Storage Pair
 
-This ordering is a security and data-integrity boundary. A wrong-realm or
-unverifiable-storage artifact cannot create a failed scan row, persist a
-campaign-rejection audit, retire lifecycle coverage, or touch the graph.
+Before generic validation or any lifecycle/audit write, the pipeline rereads
+the internal binding markers from PostgreSQL and Neo4j and verifies their
+marker version and shared storage-pair UUID. The UUID is generated and stamped
+automatically during server initialization; it is not public configuration.
+
+This ordering is a data-integrity boundary. Unverifiable storage cannot create
+a failed scan row, persist a campaign-rejection audit, retire lifecycle
+coverage, or touch the graph. Valid artifacts from every collection point are
+accepted; identity controls scope rather than admission.
 PostgreSQL stores the internal singleton binding row; Neo4j stores an internal
 `AgentHoundStorageBinding` node. Neither is part of the public graph API,
 inventory counts, search, or collector wire format.
@@ -142,8 +158,9 @@ inventory counts, search, or collector wire format.
 `Validator.Validate()` rejects malformed payloads before any graph writes.
 
 Checks performed:
-- `meta.version` must be `3`; v1 and v2 are rejected
-- `meta.origin` must contain canonical exact `host_id` and `network_realm_id`
+- `meta.version` must be `4`; v1, v2, and v3 are rejected
+- `meta.identity` must have the current scheme/version, canonical HMAC evidence,
+  internally consistent IDs, and the evidence-derived quality classification
 - `meta.type` must be `"agenthound-ingest"`
 - `meta.collector` must be in `AllowedCollectors` (mcp, a2a, config, scan)
 - collector version, RFC3339 timestamp, and scan ID must be non-empty
@@ -172,6 +189,9 @@ classified `degraded`, marked `publication_unsafe`, and prevent
 replacement/reconciliation/publication for that attempt.
 
 Transformations:
+- Rewrites producer-local node IDs and coverage keys with collection-point,
+  network-context, artifact-local, or unresolved-reference scope
+- Stamps explicit scope coordinates used by processor compatibility predicates
 - Sets `objectid` property to match node `id`
 - Migrates only exact pre-v1 direct-URL MCP anonymous observations (MCP
   envelope, concrete reachable HTTP server, exact raw anonymous tuple, and no

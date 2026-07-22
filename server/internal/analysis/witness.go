@@ -29,6 +29,8 @@ WHERE e.is_composite = true
   AND coalesce(r.is_template, false) = false
 MATCH (sr:MCPServer)-[:PROVIDES_RESOURCE]->(r)
 WHERE toLower(coalesce(sr.transport, '')) = 'http'
+  AND sr.identity_scope = r.identity_scope
+  AND sr.identity_scope_id = r.identity_scope_id
 MATCH (c:Credential)
 WHERE c.objectid IN e.evidence_node_ids
   AND c.merge_key = 'value_hash'
@@ -51,6 +53,9 @@ RETURN a.objectid AS agent_id,
        c.merge_key AS credential_merge_key,
        sr.objectid AS server_id,
        sr.transport AS server_transport,
+       sr.endpoint AS server_endpoint,
+       sr.identity_scope AS service_scope,
+       sr.identity_scope_id AS service_scope_id,
        evidence_node_ids,
        evidence_node_labels`
 
@@ -86,6 +91,10 @@ func BuildWitness(
 			continue
 		}
 		serverID := stringVal(row, "server_id")
+		serverIdentityID := ingest.ResolveMCPServerIdentity(
+			"http",
+			stringVal(row, "server_endpoint"),
+		).ObjectID
 		credentialID := stringVal(row, "credential_id")
 		if strings.ToLower(stringVal(row, "server_transport")) != "http" {
 			continue
@@ -107,6 +116,9 @@ func BuildWitness(
 			CredentialMergeKey:           stringVal(row, "credential_merge_key"),
 			ServerID:                     serverID,
 			ServerKind:                   "MCPServer",
+			ServerIdentityID:             serverIdentityID,
+			ServiceScope:                 ingest.IdentityScope(stringVal(row, "service_scope")),
+			ServiceScopeID:               stringVal(row, "service_scope_id"),
 			ResourceID:                   resourceID,
 			ResourceKind:                 "MCPResource",
 			ResourceIdentityInput:        stringVal(row, "resource_uri"),

@@ -15,19 +15,9 @@ For contributor / source-build paths see [Installation](./install.md).
 ## 1. Start the Analysis Server
 
 ```bash
-# Pick these once. Keep all three values with the deployment configuration.
-export AGENTHOUND_HOST_ID=security-laptop
-export AGENTHOUND_NETWORK_REALM_ID=corp-lab
-export AGENTHOUND_STORAGE_PAIR_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
-
 curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/docker/docker-compose.public.yml \
   | docker compose -f - -p agenthound up -d --wait
 ```
-
-Use canonical lowercase IDs that match
-`[a-z0-9][a-z0-9._-]{0,127}`. If `uuidgen` is unavailable, generate a random
-UUID v4 with your platform's trusted UUID utility and lowercase it. Never copy
-the example UUID from the reference docs.
 
 Pulls `neo4j:4.4-community`, `postgres:16-alpine`, and `ghcr.io/adithyan-ak/agenthound-server:latest`, then blocks until every healthcheck (Neo4j, Postgres, and the AgentHound server itself) reports healthy — first boot is ~30-60s while Neo4j initializes. To inspect state manually:
 
@@ -37,13 +27,10 @@ docker compose -p agenthound ps
 
 The server binds `127.0.0.1:8080`. No application-layer auth; mutating endpoints are gated by an `Origin` allowlist (`OriginGuard`) — browser CSRF is rejected, non-browser callers (curl, the agenthound CLI, cron) pass through. Protect with VPN/SSH tunnel if you need remote access.
 
-The host and realm also become required collector artifact provenance. One
-database pair accepts only that exact tuple because local paths, loopback
-services, private addresses, and lifecycle coverage are meaningful only from
-one collection vantage point. The storage UUID is stamped into both databases
-and prevents accidentally crossing a PostgreSQL volume with a different Neo4j
-volume. Keep all three values stable for the lifetime of both volumes. These
-IDs are not secrets or artifact authentication.
+The collector derives collection-point and network-context identity on the host
+where it runs. The server accepts artifacts from multiple vantages and scopes
+ambiguous evidence automatically. It also generates and verifies an internal
+UUID pairing the PostgreSQL and Neo4j volumes; no identity setup is required.
 
 ## 2. Install the Collector
 
@@ -250,9 +237,6 @@ This round-trip takes no operator-supplied mutation text. It is a standalone rev
 | `AGENTHOUND_NEO4J_USER` | `neo4j` | Neo4j username |
 | `AGENTHOUND_NEO4J_PASSWORD` | `agenthound` | Neo4j password |
 | `AGENTHOUND_PG_URI` | `postgres://agenthound:agenthound@localhost:5432/agenthound?sslmode=disable` | PostgreSQL |
-| `AGENTHOUND_HOST_ID` | _(required for artifact output and DB commands)_ | Exact lowercase collector host admitted by this database pair |
-| `AGENTHOUND_NETWORK_REALM_ID` | _(required for artifact output and DB commands)_ | Exact lowercase private-network realm admitted by this database pair |
-| `AGENTHOUND_STORAGE_PAIR_ID` | _(required for DB commands)_ | Canonical lowercase UUID generated once for the PostgreSQL/Neo4j volume pair |
 | `AGENTHOUND_BIND` | `127.0.0.1:8080` | Server bind address |
 | `AGENTHOUND_LOG_LEVEL` | `info` | Log level: debug, info, warn, error |
 | `AGENTHOUND_CORS_ORIGINS` | `http://localhost:8080,http://127.0.0.1:8080` | CORS origins for the UI |

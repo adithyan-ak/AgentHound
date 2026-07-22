@@ -30,11 +30,18 @@ const mockedUploadScan = vi.mocked(uploadScan);
 function ingestCounts(
   nodes: number,
   edges: number,
-): Pick<IngestResult, "submitted" | "write_rows" | "graph_totals" | "collection"> {
+): Pick<IngestResult, "submitted" | "write_rows" | "graph_totals" | "collection" | "identity"> {
   return {
     submitted: { nodes, edges },
     write_rows: { nodes, edges },
     graph_totals: { before: null, after: null },
+    identity: {
+      collection_point_id: `sha256:${"1".repeat(64)}`,
+      network_context_id: `sha256:${"2".repeat(64)}`,
+      quality: "strong",
+      network_class: "private",
+      recognition: "new",
+    },
     collection: {
       state: "complete",
       coverage_keys: [configCoverageKey],
@@ -83,11 +90,17 @@ function makeOversizeFile(name: string): File {
 const configCoverageKey = `config:target:sha256:${"a".repeat(64)}`;
 const validScanJSON = JSON.stringify({
   meta: {
-    version: 3,
+    version: 4,
     type: "agenthound-ingest",
-    origin: {
-      host_id: "fixture-host",
-      network_realm_id: "fixture-realm",
+    identity: {
+      scheme: "agenthound_collection_v1",
+      version: 1,
+      collection_point_id: `sha256:${"1".repeat(64)}`,
+      network_context_id: `sha256:${"2".repeat(64)}`,
+      quality: "strong",
+      network_class: "private",
+      evidence: [],
+      network_evidence: [],
     },
     collector: "config",
     collector_version: "0.1.0",
@@ -225,10 +238,10 @@ describe("ScanImport", () => {
     expect(onSuccess).not.toHaveBeenCalled();
   });
 
-  it("shows the server's collection-realm mismatch without treating it as a partial import", async () => {
+  it("shows an identity validation failure without treating it as a partial import", async () => {
     mockedUploadScan.mockRejectedValue(
       new IngestRequestError(
-        'collection realm mismatch: artifact host_id="field-laptop" network_realm_id="lab-a"; database admits host_id="analysis-laptop" network_realm_id="lab-a"',
+        "identity collection_point_id is inconsistent with the submitted evidence",
       ),
     );
     const onSuccess = vi.fn();
@@ -237,16 +250,16 @@ describe("ScanImport", () => {
       wrapper: createWrapper(),
     });
     fireEvent.drop(screen.getByTestId("dropzone"), {
-      dataTransfer: { files: [makeJSONFile("wrong-realm.json", validScanJSON)] },
+      dataTransfer: { files: [makeJSONFile("bad-identity.json", validScanJSON)] },
     });
 
     expect(await screen.findByText(/import failed/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/artifact host_id="field-laptop".*database admits host_id="analysis-laptop"/i),
+      screen.getByText(/collection_point_id is inconsistent/i),
     ).toBeInTheDocument();
     expect(onSuccess).not.toHaveBeenCalled();
     expect(
-      screen.queryByText(/imported wrong-realm\.json/i),
+      screen.queryByText(/imported bad-identity\.json/i),
     ).not.toBeInTheDocument();
   });
 

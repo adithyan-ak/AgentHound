@@ -50,7 +50,7 @@ func (s *Scenario) Run(ctx context.Context, in campaign.RunInput) (*campaign.Run
 	if err := campaign.MatchCredentialMaterial(in.Witness, in.CredentialMaterial); err != nil {
 		return nil, err
 	}
-	binding, err := campaign.BindEndpoint(in.Host, in.CredentialMaterial, in.Witness.ServerID)
+	binding, err := campaign.BindEndpoint(in.Host, in.CredentialMaterial, in.Witness.ServerIdentityID)
 	if err != nil {
 		return nil, err
 	}

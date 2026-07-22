@@ -38,7 +38,7 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 	if data.Meta.Collection == nil {
 		errs = append(errs, FieldError{
 			Path:    "meta.collection",
-			Message: "is required for ingest v3",
+			Message: "is required for ingest v4",
 		})
 	} else {
 		if !validOutcomeState(data.Meta.Collection.State) {
@@ -146,6 +146,10 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 				})
 			}
 		}
+		errs = append(errs, validateCoverageParentage(
+			data.Meta.Collection,
+			declaredCoverage,
+		)...)
 	}
 	nodeKindsByID := make(map[string][]string, len(data.Graph.Nodes))
 	nodesByID := make(map[string]ingest.Node, len(data.Graph.Nodes))
@@ -209,15 +213,9 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 	if data.Meta.ScanID == "" {
 		errs = append(errs, FieldError{Path: "meta.scan_id", Message: "must not be empty"})
 	}
-	if err := ingest.ValidateOriginID("host_id", data.Meta.Origin.HostID); err != nil {
-		errs = append(errs, FieldError{Path: "meta.origin.host_id", Message: err.Error()})
-	}
-	if err := ingest.ValidateOriginID(
-		"network_realm_id",
-		data.Meta.Origin.NetworkRealmID,
-	); err != nil {
+	if err := data.Meta.Identity.Validate(); err != nil {
 		errs = append(errs, FieldError{
-			Path:    "meta.origin.network_realm_id",
+			Path:    "meta.identity",
 			Message: err.Error(),
 		})
 	}
@@ -307,13 +305,13 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 		if edge.SourceKind == "" {
 			errs = append(errs, FieldError{
 				Path:    fmt.Sprintf("graph.edges[%d].source_kind", i),
-				Message: "must not be empty in ingest v3",
+				Message: "must not be empty in ingest v4",
 			})
 		}
 		if edge.TargetKind == "" {
 			errs = append(errs, FieldError{
 				Path:    fmt.Sprintf("graph.edges[%d].target_kind", i),
-				Message: "must not be empty in ingest v3",
+				Message: "must not be empty in ingest v4",
 			})
 		}
 		errs = append(errs, validateObservationDomains(
@@ -508,6 +506,75 @@ func validateAuthoritativeRoots(
 	return errs
 }
 
+func validateCoverageParentage(
+	report *ingest.CollectionReport,
+	declaredCoverage map[string]bool,
+) []FieldError {
+	if report == nil {
+		return nil
+	}
+	var errs []FieldError
+	parents := make(map[string]string)
+	seen := make(map[string]bool)
+	authoritativeChildren := make(map[string]map[string]bool)
+	for _, root := range report.AuthoritativeRoots {
+		children := make(map[string]bool, len(root.ChildCoverageKeys))
+		for _, child := range root.ChildCoverageKeys {
+			children[child] = true
+		}
+		authoritativeChildren[root.CoverageKey] = children
+	}
+	for index, outcome := range report.Outcomes {
+		if outcome.CoverageKey == "" {
+			continue
+		}
+		path := fmt.Sprintf("meta.collection.outcomes[%d].parent_coverage_key", index)
+		parent := outcome.ParentCoverageKey
+		if parent != "" {
+			if err := validateCoverageKey(parent); err != "" {
+				errs = append(errs, FieldError{Path: path, Message: err})
+				continue
+			}
+			if !declaredCoverage[parent] {
+				errs = append(errs, FieldError{
+					Path:    path,
+					Message: fmt.Sprintf("parent key %q is not declared in coverage_keys", parent),
+				})
+			}
+			if parent == outcome.CoverageKey {
+				errs = append(errs, FieldError{Path: path, Message: "coverage key cannot be its own parent"})
+			}
+			if strings.Split(parent, ":")[0] != outcome.Collector {
+				errs = append(errs, FieldError{Path: path, Message: "collector prefix must match outcome.collector"})
+			}
+		}
+		if prior, present := parents[outcome.CoverageKey]; present && prior != parent {
+			errs = append(errs, FieldError{Path: path, Message: "all outcomes for a coverage key must declare the same parent"})
+		} else {
+			parents[outcome.CoverageKey] = parent
+		}
+		if children, authoritative := authoritativeChildren[parent]; authoritative &&
+			!children[outcome.CoverageKey] {
+			errs = append(errs, FieldError{
+				Path:    path,
+				Message: fmt.Sprintf("child %q is missing from authoritative parent %q active set", outcome.CoverageKey, parent),
+			})
+		}
+		seen[outcome.CoverageKey] = true
+	}
+	for _, root := range report.AuthoritativeRoots {
+		for _, child := range root.ChildCoverageKeys {
+			if seen[child] && parents[child] != root.CoverageKey {
+				errs = append(errs, FieldError{
+					Path:    "meta.collection.authoritative_roots",
+					Message: fmt.Sprintf("child %q must explicitly declare parent %q", child, root.CoverageKey),
+				})
+			}
+		}
+	}
+	return errs
+}
+
 func validateObservationDomains(
 	domains []string,
 	declaredCoverage map[string]bool,
@@ -517,7 +584,7 @@ func validateObservationDomains(
 	if len(domains) == 0 {
 		return []FieldError{{
 			Path:    path,
-			Message: "must contain at least one declared domain in ingest v3",
+			Message: "must contain at least one declared domain in ingest v4",
 		}}
 	}
 	seen := make(map[string]bool, len(domains))
@@ -610,7 +677,7 @@ func validOutcomeState(state ingest.OutcomeState) bool {
 
 func validateRuleset(ruleset *ingest.RulesetManifest) []FieldError {
 	if ruleset == nil {
-		return []FieldError{{Path: "meta.ruleset", Message: "is required for ingest v3"}}
+		return []FieldError{{Path: "meta.ruleset", Message: "is required for ingest v4"}}
 	}
 	var errs []FieldError
 	if strings.TrimSpace(ruleset.Digest) == "" {

@@ -101,6 +101,8 @@ func writeIngestResult(w io.Writer, result *ingest.IngestResult) error {
 		fmt.Sprintf("  Scan ID:            %s\n", result.ScanID),
 		fmt.Sprintf("  Outcome:            %s\n", result.Outcome),
 		fmt.Sprintf("  Projection status:  %s\n", result.ProjectionStatus),
+		fmt.Sprintf("  Collection point:   %s (%s, %s)\n", result.Identity.CollectionPointID, result.Identity.Quality, result.Identity.Recognition),
+		fmt.Sprintf("  Network context:    %s (%s)\n", result.Identity.NetworkContextID, result.Identity.NetworkClass),
 	}
 	if result.PublishedRevision != nil {
 		lines = append(lines, fmt.Sprintf("  Published revision: %d\n", *result.PublishedRevision))

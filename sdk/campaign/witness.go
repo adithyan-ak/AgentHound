@@ -13,7 +13,7 @@ import (
 // on export and both the collector (Validate) and the server re-correlation
 // reject any other value, so a witness produced by an incompatible build is
 // rejected rather than silently misinterpreted (stale-schema rejection).
-const WitnessSchemaVersion = 2
+const WitnessSchemaVersion = 3
 
 // WitnessTopologyNormalizationVersion identifies the deterministic concrete-kind
 // normalization used for the ordered current CAN_REACH evidence topology.
@@ -39,10 +39,10 @@ const CredentialMergeKeyValueHash = "value_hash"
 // arbitrary node properties, and NO secrets.
 //
 // ResourceIdentityInput is the sole free-text field and is NOT arbitrary
-// metadata: it is the identity input from which ResourceID is derived. Validate
-// enforces that binding so a tampered input cannot point the read probe at a
-// different resource than the one whose ID is being verified. The HTTP endpoint
-// remains out-of-band and never enters this artifact.
+// metadata: it is the identity input from which ResourceID is derived.
+// ServerIdentityID is the endpoint-derived, pre-scope content ID. Validate uses
+// it with the opaque service scope to bind both scoped graph IDs. The HTTP
+// endpoint remains out-of-band and never enters this artifact.
 type Witness struct {
 	SchemaVersion                int    `json:"schema_version"`
 	TopologyNormalizationVersion int    `json:"topology_normalization_version"`
@@ -57,8 +57,12 @@ type Witness struct {
 	CredentialValueHash string `json:"credential_value_hash"`
 	CredentialMergeKey  string `json:"credential_merge_key"`
 
-	ServerID   string `json:"server_id"`
-	ServerKind string `json:"server_kind"`
+	ServerID         string `json:"server_id"`
+	ServerKind       string `json:"server_kind"`
+	ServerIdentityID string `json:"server_identity_id"`
+
+	ServiceScope   ingest.IdentityScope `json:"service_scope"`
+	ServiceScopeID string               `json:"service_scope_id"`
 
 	ResourceID            string `json:"resource_id"`
 	ResourceKind          string `json:"resource_kind"`
@@ -130,6 +134,20 @@ func (w Witness) ValidateStructure() error {
 	if w.ServerKind != "MCPServer" {
 		return errors.New("witness server_kind must be MCPServer")
 	}
+	if strings.TrimSpace(w.ServerIdentityID) == "" {
+		return errors.New("witness server_identity_id must not be empty")
+	}
+	switch w.ServiceScope {
+	case ingest.ScopeCollectionPoint, ingest.ScopeNetworkContext, ingest.ScopeArtifactLocal:
+	default:
+		return errors.New("witness service_scope is invalid")
+	}
+	if strings.TrimSpace(w.ServiceScopeID) == "" {
+		return errors.New("witness service_scope_id must not be empty")
+	}
+	if bound := ingest.ScopedNodeID(w.ServiceScope, w.ServiceScopeID, w.ServerIdentityID); bound != w.ServerID {
+		return errors.New("witness server_id does not bind to its service scope and endpoint identity")
+	}
 	if strings.TrimSpace(w.ResourceID) == "" {
 		return errors.New("witness resource_id must not be empty")
 	}
@@ -139,7 +157,8 @@ func (w Witness) ValidateStructure() error {
 	if strings.TrimSpace(w.ResourceIdentityInput) == "" {
 		return errors.New("witness resource_identity_input must not be empty")
 	}
-	if bound := ingest.ComputeNodeID("MCPResource", w.ServerID, w.ResourceIdentityInput); bound != w.ResourceID {
+	rawResourceID := ingest.ComputeNodeID("MCPResource", w.ServerIdentityID, w.ResourceIdentityInput)
+	if bound := ingest.ScopedNodeID(w.ServiceScope, w.ServiceScopeID, rawResourceID); bound != w.ResourceID {
 		return fmt.Errorf(
 			"witness resource_id does not bind to (server_id, resource_identity_input): forged or mismatched witness",
 		)
