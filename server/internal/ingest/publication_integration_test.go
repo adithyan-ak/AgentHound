@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -136,6 +137,156 @@ func newPublicationIntegrationData(collector, scanID string) *sdkingest.IngestDa
 	data := common.NewIngestData(collector, scanID)
 	data.Meta.Identity = testCollectionIdentity()
 	return data
+}
+
+func configLifecycleIdentity(networkDigest string, unknown bool) sdkingest.CollectionIdentity {
+	networkEvidence := []sdkingest.IdentityEvidence{{
+		Kind: "network_profile", Digest: "hmac-sha256:" + strings.Repeat(networkDigest, 64),
+	}}
+	networkClass := sdkingest.NetworkClassPrivate
+	if unknown {
+		networkEvidence = []sdkingest.IdentityEvidence{{
+			Kind: "network_visibility_unknown", Digest: "hmac-sha256:" + strings.Repeat("e", 64),
+		}}
+		networkClass = sdkingest.NetworkClassUnknown
+	}
+	return sdkingest.NewCollectionIdentity(
+		[]sdkingest.IdentityEvidence{
+			{Kind: "os_instance", Digest: "hmac-sha256:" + strings.Repeat("a", 64)},
+			{Kind: "principal", Digest: "hmac-sha256:" + strings.Repeat("b", 64)},
+		},
+		networkEvidence,
+		networkClass,
+	)
+}
+
+func configLifecycleData(
+	identity sdkingest.CollectionIdentity,
+	scanID, path, serverID, serviceName, marker string,
+) *sdkingest.IngestData {
+	scope := sdkingest.CanonicalCoverageKey("config", "path", path)
+	data := common.NewIngestData("config", scanID)
+	data.Meta.Identity = identity
+	data.Meta.Collection = &sdkingest.CollectionReport{
+		State:        sdkingest.OutcomeComplete,
+		CoverageKeys: []string{scope},
+		Outcomes: []sdkingest.CollectionOutcome{{
+			Collector: "config", CoverageKey: scope, Target: path,
+			Method: "config_discovery", State: sdkingest.OutcomeComplete, Items: 3,
+		}},
+	}
+	fileID := sdkingest.ComputeNodeID("ConfigFile", path)
+	agentID := sdkingest.ComputeNodeID("AgentInstance", fileID, "config-client")
+	data.Graph.Nodes = []sdkingest.Node{
+		{
+			ID: fileID, Kinds: []string{"ConfigFile"}, ObservationDomains: []string{scope},
+			Properties: map[string]any{"path": path, "marker": marker},
+		},
+		{
+			ID: agentID, Kinds: []string{"AgentInstance"}, ObservationDomains: []string{scope},
+			Properties: map[string]any{"name": "config-client", "framework": "test", "config_path": path},
+		},
+		{
+			ID: serverID, Kinds: []string{"MCPServer"}, ObservationDomains: []string{scope},
+			Properties: map[string]any{
+				"name": serviceName, "transport": "http", "endpoint": "https://service.internal/mcp",
+				"auth_method": "apiKey", "auth_assurance": "weak", "auth_evidence": "configured_credential",
+			},
+		},
+	}
+	data.Graph.Edges = []sdkingest.Edge{{
+		Source: agentID, Target: serverID, Kind: "TRUSTS_SERVER",
+		SourceKind: "AgentInstance", TargetKind: "MCPServer",
+		Properties: map[string]any{"risk_weight": 0.1}, ObservationDomains: []string{scope},
+	}}
+	return data
+}
+
+func TestIntegrationConfigCoveragePreservesOtherNetworksAndReconcilesPointFacts(t *testing.T) {
+	ctx, pipeline, db, _, _ := publicationIntegrationHarness(t, false)
+	path := "/tmp/network-config.json"
+	first := configLifecycleData(
+		configLifecycleIdentity("c", false),
+		"config-network-a", path, "configured-network-service", "network-config-service", "first",
+	)
+	second := configLifecycleData(
+		configLifecycleIdentity("d", false),
+		"config-network-b", path, "configured-network-service", "network-config-service", "second",
+	)
+	if _, err := pipeline.Ingest(ctx, first); err != nil {
+		t.Fatalf("ingest network A config: %v", err)
+	}
+	if _, err := pipeline.Ingest(ctx, second); err != nil {
+		t.Fatalf("ingest network B config: %v", err)
+	}
+	assertConfigLifecycleProjection(t, ctx, db, path, "network-config-service", "second", 2)
+
+	unknownPath := "/tmp/unknown-network-config.json"
+	unknownIdentity := configLifecycleIdentity("e", true)
+	unknownFirst := configLifecycleData(
+		unknownIdentity,
+		"config-unknown-a", unknownPath, "configured-unknown-service", "unknown-config-service", "first",
+	)
+	unknownSecond := configLifecycleData(
+		unknownIdentity,
+		"config-unknown-b", unknownPath, "configured-unknown-service", "unknown-config-service", "second",
+	)
+	if _, err := pipeline.Ingest(ctx, unknownFirst); err != nil {
+		t.Fatalf("ingest first unknown-network config: %v", err)
+	}
+	if _, err := pipeline.Ingest(ctx, unknownSecond); err != nil {
+		t.Fatalf("ingest second unknown-network config: %v", err)
+	}
+	assertConfigLifecycleProjection(t, ctx, db, unknownPath, "unknown-config-service", "second", 2)
+}
+
+func assertConfigLifecycleProjection(
+	t *testing.T,
+	ctx context.Context,
+	db *graph.DB,
+	path, serviceName, marker string,
+	wantRemoteServices int64,
+) {
+	t.Helper()
+	rows, err := db.Query(ctx, `
+MATCH (f:ConfigFile {path: $path})
+OPTIONAL MATCH (:AgentInstance {name: 'config-client'})-[trust:TRUSTS_SERVER]->
+               (service:MCPServer {name: $service_name})
+RETURN count(DISTINCT f) AS files,
+       collect(DISTINCT f.marker) AS markers,
+       count(DISTINCT service) AS services,
+       count(DISTINCT trust) AS trusts`, map[string]any{
+		"path": path, "service_name": serviceName,
+	})
+	if err != nil {
+		t.Fatalf("query config lifecycle projection: %v", err)
+	}
+	files, _ := int64Property(rows[0], "files")
+	services, _ := int64Property(rows[0], "services")
+	trusts, _ := int64Property(rows[0], "trusts")
+	markers := integrationStringSlice(rows[0]["markers"])
+	if files != 1 || services != wantRemoteServices || trusts != wantRemoteServices ||
+		len(markers) != 1 || markers[0] != marker {
+		t.Fatalf(
+			"config lifecycle projection = files:%d services:%d trusts:%d markers:%v, want files:1 services:%d trusts:%d markers:[%s]",
+			files, services, trusts, markers, wantRemoteServices, wantRemoteServices, marker,
+		)
+	}
+}
+
+func integrationStringSlice(value any) []string {
+	var result []string
+	switch values := value.(type) {
+	case []string:
+		return append([]string(nil), values...)
+	case []any:
+		for _, value := range values {
+			if text, ok := value.(string); ok {
+				result = append(result, text)
+			}
+		}
+	}
+	return result
 }
 
 func TestIntegrationFreshSchemaCompleteIngestPublishes(t *testing.T) {

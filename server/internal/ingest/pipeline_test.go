@@ -1854,12 +1854,14 @@ func TestPipeline_PostProcessorReceivesCompleteDomains(t *testing.T) {
 	for i := range d.Graph.Edges {
 		d.Graph.Edges[i].ObservationDomains = []string{configScope}
 	}
-	scopedConfigScope := scopedCoverageFor(d, sdkingest.ScopeCollectionPoint, configScope)
+	scopedPointScope := scopedCoverageFor(d, sdkingest.ScopeCollectionPoint, configScope)
+	scopedNetworkScope := scopedCoverageFor(d, sdkingest.ScopeNetworkContext, configScope)
 	if _, err := p.Ingest(context.Background(), d); err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
-	if len(seenDomains) != 1 || seenDomains[0] != scopedConfigScope {
-		t.Errorf("expected complete domains=[%s], got %v", scopedConfigScope, seenDomains)
+	wantDomains := mergeCoverage([]string{scopedPointScope, scopedNetworkScope})
+	if strings.Join(seenDomains, "\x00") != strings.Join(wantDomains, "\x00") {
+		t.Errorf("expected split config domains=%v, got %v", wantDomains, seenDomains)
 	}
 }
 

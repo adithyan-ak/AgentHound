@@ -125,6 +125,11 @@ additive-only. If only network visibility is incomplete, the collection point
 remains strong and only its remote/network-scoped evidence becomes artifact-local.
 Approved `value_hash` correlation may cross contexts; other processor joins
 require exact compatible scope.
+Config-file coverage follows the same boundary: files, agents, configured
+identities, and credentials reconcile at collection-point scope, while remote
+services and edges involving them reconcile under an independent network (or
+artifact-local) variant. Moving between VPNs cannot retire the previous VPN's
+configured-service observations.
 
 PostgreSQL and Neo4j carry the same server-generated internal storage-pair UUID,
 so crossed volumes fail closed. Verification remains the first ingest

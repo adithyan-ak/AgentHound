@@ -37,19 +37,34 @@ func ScopeArtifact(data *IngestData) error {
 	}
 	coverageScopes := artifactCoverageScopes(data)
 	nodeScopes := artifactNodeScopes(data, coverageScopes)
+	coverageVariants := artifactCoverageVariants(data, coverageScopes, nodeScopes)
 	for index := range data.Graph.Nodes {
+		node := &data.Graph.Nodes[index]
+		factScope, hasFactScope := nodeScopes[node.ID]
 		data.Graph.Nodes[index].ObservationDomains = scopedDomains(
-			data.Graph.Nodes[index].ObservationDomains,
+			node.ObservationDomains,
 			coverageScopes,
+			factScope,
+			hasFactScope,
 		)
 	}
 	for index := range data.Graph.Edges {
+		edge := &data.Graph.Edges[index]
+		factScope, hasFactScope := edgeLifecycleScope(*edge, nodeScopes)
 		data.Graph.Edges[index].ObservationDomains = scopedDomains(
-			data.Graph.Edges[index].ObservationDomains,
+			edge.ObservationDomains,
 			coverageScopes,
+			factScope,
+			hasFactScope,
 		)
 	}
-	scopeCoverage(data.Meta.Collection, coverageScopes, data.Meta.Identity, data.Meta.ScanID)
+	scopeCoverage(
+		data.Meta.Collection,
+		coverageScopes,
+		coverageVariants,
+		data.Meta.Identity,
+		data.Meta.ScanID,
+	)
 
 	idMap := make(map[string]string, len(nodeScopes))
 	for rawID, scope := range nodeScopes {
@@ -402,9 +417,122 @@ func endpointIsLoopback(raw string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+func artifactCoverageVariants(
+	data *IngestData,
+	base map[string]scopeRef,
+	nodeScopes map[string]scopeRef,
+) map[string]map[scopeRef]bool {
+	variants := make(map[string]map[scopeRef]bool, len(base))
+	add := func(key string, scope scopeRef) {
+		if key == "" || !isLifecycleScope(scope) {
+			return
+		}
+		if variants[key] == nil {
+			variants[key] = make(map[scopeRef]bool)
+		}
+		variants[key][scope] = true
+	}
+	for key, scope := range base {
+		add(key, scope)
+	}
+
+	// A strong collection point can author both durable local config facts and
+	// context-specific remote service facts from the same config path. Declare
+	// both lifecycle variants even when one side is complete-empty, so the
+	// current network can retire removed remote services without touching a
+	// different network. Unknown network visibility resolves only the remote
+	// side to this artifact, preserving its additive-only guarantee.
+	if data.Meta.Identity.Quality == IdentityQualityStrong {
+		artifact := scopeRef{
+			kind: ScopeArtifactLocal,
+			id:   framedSHA256("agenthound-artifact-scope-v1", data.Meta.ScanID),
+		}
+		point := scopeRef{kind: ScopeCollectionPoint, id: data.Meta.Identity.CollectionPointID}
+		network := effectiveNetworkScope(data.Meta.Identity, artifact)
+		for key := range base {
+			if isConfigPathCoverage(key) || key == CollectorRootCoverageKey("config") {
+				add(key, point)
+				add(key, network)
+			}
+		}
+	}
+
+	for _, node := range data.Graph.Nodes {
+		scope, present := nodeScopes[node.ID]
+		if !present || !isLifecycleScope(scope) {
+			continue
+		}
+		for _, domain := range node.ObservationDomains {
+			if isConfigCoverage(domain) {
+				add(domain, scope)
+			}
+		}
+	}
+	for _, edge := range data.Graph.Edges {
+		scope, present := edgeLifecycleScope(edge, nodeScopes)
+		if !present {
+			continue
+		}
+		for _, domain := range edge.ObservationDomains {
+			if isConfigCoverage(domain) {
+				add(domain, scope)
+			}
+		}
+	}
+	return variants
+}
+
+func edgeLifecycleScope(edge Edge, nodeScopes map[string]scopeRef) (scopeRef, bool) {
+	var point, network, artifact scopeRef
+	for _, nodeID := range []string{edge.Source, edge.Target} {
+		scope, present := nodeScopes[nodeID]
+		if !present {
+			continue
+		}
+		switch scope.kind {
+		case ScopeArtifactLocal:
+			artifact = scope
+		case ScopeNetworkContext:
+			network = scope
+		case ScopeCollectionPoint:
+			point = scope
+		}
+	}
+	if artifact.kind != "" {
+		return artifact, true
+	}
+	if network.kind != "" {
+		return network, true
+	}
+	if point.kind != "" {
+		return point, true
+	}
+	return scopeRef{}, false
+}
+
+func isLifecycleScope(scope scopeRef) bool {
+	switch scope.kind {
+	case ScopeCollectionPoint, ScopeNetworkContext, ScopeArtifactLocal:
+		return scope.id != ""
+	default:
+		return false
+	}
+}
+
+func isConfigCoverage(key string) bool {
+	parts := strings.Split(key, ":")
+	return len(parts) == 4 && parts[0] == "config"
+}
+
+func isConfigPathCoverage(key string) bool {
+	parts := strings.Split(key, ":")
+	return len(parts) == 4 && parts[0] == "config" && parts[1] == "path"
+}
+
 func scopeCoverage(
 	report *CollectionReport,
 	scopes map[string]scopeRef,
+	coverageVariants map[string]map[scopeRef]bool,
 	identity CollectionIdentity,
 	scanID string,
 ) {
@@ -419,7 +547,13 @@ func scopeCoverage(
 		if parentVariants[outcome.ParentCoverageKey] == nil {
 			parentVariants[outcome.ParentCoverageKey] = make(map[scopeRef]bool)
 		}
-		parentVariants[outcome.ParentCoverageKey][scopes[outcome.CoverageKey]] = true
+		for scope := range coverageScopeVariants(
+			outcome.CoverageKey,
+			coverageVariants,
+			scopes,
+		) {
+			parentVariants[outcome.ParentCoverageKey][scope] = true
+		}
 	}
 	rootKeys := make(map[string]bool, len(report.AuthoritativeRoots))
 	for _, root := range report.AuthoritativeRoots {
@@ -429,16 +563,18 @@ func scopeCoverage(
 	var outcomes []CollectionOutcome
 	variantsByKey := make(map[string]map[scopeRef]bool)
 	for _, outcome := range report.Outcomes {
-		variants := map[scopeRef]bool{scopes[outcome.CoverageKey]: true}
+		variants := coverageScopeVariants(outcome.CoverageKey, coverageVariants, scopes)
 		if parents := parentVariants[outcome.CoverageKey]; len(parents) > 0 {
-			variants = parents
+			for scope := range parents {
+				variants[scope] = true
+			}
 		}
-		if rootKeys[outcome.CoverageKey] && outcome.Collector == "mcp" &&
+		if rootKeys[outcome.CoverageKey] &&
+			(outcome.Collector == "mcp" || outcome.Collector == "config") &&
 			identity.Quality == IdentityQualityStrong {
-			// One exhaustive MCP run inventories both local stdio servers and
+			// One exhaustive MCP or config run can inventory both local facts and
 			// services visible in the current network context. Keep those roots
-			// independent so an empty run can retire both local and current-network
-			// children without touching a different network context.
+			// independent, including for a complete-empty side.
 			variants[scopeRef{kind: ScopeCollectionPoint, id: identity.CollectionPointID}] = true
 			artifact := scopeRef{kind: ScopeArtifactLocal, id: framedSHA256("agenthound-artifact-scope-v1", scanID)}
 			variants[effectiveNetworkScope(identity, artifact)] = true
@@ -470,11 +606,12 @@ func scopeCoverage(
 	for _, root := range report.AuthoritativeRoots {
 		childrenByScope := make(map[scopeRef][]string)
 		for _, child := range root.ChildCoverageKeys {
-			scope := scopes[child]
-			childrenByScope[scope] = append(
-				childrenByScope[scope],
-				ScopedCoverageKey(scope.kind, scope.id, child),
-			)
+			for scope := range coverageScopeVariants(child, coverageVariants, scopes) {
+				childrenByScope[scope] = append(
+					childrenByScope[scope],
+					ScopedCoverageKey(scope.kind, scope.id, child),
+				)
+			}
 		}
 		variants := variantsByKey[root.CoverageKey]
 		if len(variants) == 0 {
@@ -494,6 +631,25 @@ func scopeCoverage(
 
 }
 
+func coverageScopeVariants(
+	key string,
+	variants map[string]map[scopeRef]bool,
+	base map[string]scopeRef,
+) map[scopeRef]bool {
+	result := make(map[scopeRef]bool)
+	for scope := range variants[key] {
+		if isLifecycleScope(scope) {
+			result[scope] = true
+		}
+	}
+	if len(result) == 0 {
+		if scope, present := base[key]; present && isLifecycleScope(scope) {
+			result[scope] = true
+		}
+	}
+	return result
+}
+
 func effectiveNetworkScope(identity CollectionIdentity, artifact scopeRef) scopeRef {
 	if identity.NetworkQuality != IdentityQualityStrong {
 		return artifact
@@ -501,12 +657,20 @@ func effectiveNetworkScope(identity CollectionIdentity, artifact scopeRef) scope
 	return scopeRef{kind: ScopeNetworkContext, id: identity.NetworkContextID}
 }
 
-func scopedDomains(values []string, scopes map[string]scopeRef) []string {
+func scopedDomains(
+	values []string,
+	scopes map[string]scopeRef,
+	factScope scopeRef,
+	hasFactScope bool,
+) []string {
 	mapped := make([]string, 0, len(values))
 	for _, value := range values {
 		scope, present := scopes[value]
 		if !present {
 			continue
+		}
+		if isConfigCoverage(value) && hasFactScope && isLifecycleScope(factScope) {
+			scope = factScope
 		}
 		mapped = append(mapped, ScopedCoverageKey(scope.kind, scope.id, value))
 	}

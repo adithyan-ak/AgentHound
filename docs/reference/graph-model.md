@@ -332,6 +332,11 @@ same applicable identity scope. Each child outcome serializes its
 `parent_coverage_key`; PostgreSQL records that membership explicitly.
 Lifecycle code never reconstructs parentage by parsing an opaque key, so one
 vantage cannot retire another vantage's evidence.
+When one config path contributes both local configuration facts and remote
+service topology, ingest emits separate collection-point and effective-network
+coverage variants for that child and its authoritative root. A config refresh
+therefore reconciles local facts normally while retiring remote facts only in
+the same network context; unknown-network remote facts remain artifact-local.
 Node reference owners are tracked internally as a subset of
 `observation_tokens`. A `reference_only` write adds ownership without merging
 properties or lowering a complete authoritative observation. If the last

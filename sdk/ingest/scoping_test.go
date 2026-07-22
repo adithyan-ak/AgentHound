@@ -49,6 +49,59 @@ func scopingFixture(identity CollectionIdentity, scanID string) *IngestData {
 	}
 }
 
+func configScopingFixture(identity CollectionIdentity, scanID string) *IngestData {
+	pathKey := CanonicalCoverageKey("config", "path", "/tmp/mcp.json")
+	rootKey := CollectorRootCoverageKey("config")
+	data := &IngestData{
+		Meta: IngestMeta{
+			ScanID: scanID, Identity: identity,
+			Collection: &CollectionReport{
+				State:        OutcomeComplete,
+				CoverageKeys: []string{pathKey, rootKey},
+				AuthoritativeRoots: []CoverageRoot{{
+					CoverageKey: rootKey, ChildCoverageKeys: []string{pathKey},
+				}},
+				Outcomes: []CollectionOutcome{
+					{Collector: "config", CoverageKey: pathKey, ParentCoverageKey: rootKey, Target: "/tmp/mcp.json", Method: "config_discovery", State: OutcomeComplete},
+					{Collector: "config", CoverageKey: rootKey, Target: "config", Method: "collect", State: OutcomeComplete},
+				},
+			},
+		},
+		Graph: GraphData{
+			Nodes: []Node{
+				{ID: "config-file", Kinds: []string{"ConfigFile"}, Properties: map[string]any{"path": "/tmp/mcp.json"}, ObservationDomains: []string{pathKey}},
+				{ID: "agent", Kinds: []string{"AgentInstance"}, Properties: map[string]any{"name": "client"}, ObservationDomains: []string{pathKey}},
+				{ID: "server", Kinds: []string{"MCPServer"}, Properties: map[string]any{"transport": "http", "endpoint": "https://service.internal"}, ObservationDomains: []string{pathKey}},
+				{ID: "host", Kinds: []string{"Host"}, Properties: map[string]any{"hostname": "service.internal", "scope": "private"}, ObservationDomains: []string{pathKey}},
+				{ID: "identity", Kinds: []string{"Identity"}, Properties: map[string]any{"name": "configured"}, ObservationDomains: []string{pathKey}},
+				{ID: "credential", Kinds: []string{"Credential"}, Properties: map[string]any{"value_hash": "configured-hash"}, ObservationDomains: []string{pathKey}},
+			},
+			Edges: []Edge{
+				{Source: "agent", Target: "server", Kind: "TRUSTS_SERVER", ObservationDomains: []string{pathKey}},
+				{Source: "server", Target: "config-file", Kind: "CONFIGURED_IN", ObservationDomains: []string{pathKey}},
+				{Source: "server", Target: "host", Kind: "RUNS_ON", ObservationDomains: []string{pathKey}},
+				{Source: "server", Target: "identity", Kind: "AUTHENTICATES_WITH", ObservationDomains: []string{pathKey}},
+				{Source: "identity", Target: "credential", Kind: "USES_CREDENTIAL", ObservationDomains: []string{pathKey}},
+			},
+		},
+	}
+	return data
+}
+
+func unknownNetworkTestIdentity() CollectionIdentity {
+	return NewCollectionIdentity(
+		[]IdentityEvidence{
+			testEvidence("os_instance", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			testEvidence("principal", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+		},
+		[]IdentityEvidence{
+			testEvidence("network_visibility_unknown", "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+			testEvidence("route_private", "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
+		},
+		NetworkClassPrivate,
+	)
+}
+
 func TestScopeArtifactSeparatesPointNetworkAndLoopbackIdentity(t *testing.T) {
 	identity := strongTestIdentity("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 	data := scopingFixture(identity, "scan-a")
@@ -299,6 +352,113 @@ func TestScopeArtifactConfigCredentialRemainsPointScopedForRemoteService(t *test
 			t.Fatalf("configured child %q missing point scope %q", rawID, want)
 		}
 	}
+}
+
+func TestScopeArtifactConfigRemoteCoverageCoexistsAcrossNetworks(t *testing.T) {
+	firstIdentity := strongTestIdentity("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	secondIdentity := strongTestIdentity("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	first := configScopingFixture(firstIdentity, "config-network-a")
+	second := configScopingFixture(secondIdentity, "config-network-b")
+	if err := ScopeArtifact(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := ScopeArtifact(second); err != nil {
+		t.Fatal(err)
+	}
+
+	firstRemoteDomain := onlyNodeDomain(t, first, ScopedNodeID(ScopeNetworkContext, firstIdentity.NetworkContextID, "server"))
+	secondRemoteDomain := onlyNodeDomain(t, second, ScopedNodeID(ScopeNetworkContext, secondIdentity.NetworkContextID, "server"))
+	if firstRemoteDomain == secondRemoteDomain {
+		t.Fatalf("remote config coverage collapsed across networks: %q", firstRemoteDomain)
+	}
+	if containsString(CompleteCoverageDomains(second.Meta.Collection), firstRemoteDomain) {
+		t.Fatalf("network B complete domains would retire network A: %q", firstRemoteDomain)
+	}
+	pathKey := CanonicalCoverageKey("config", "path", "/tmp/mcp.json")
+	rootKey := CollectorRootCoverageKey("config")
+	pointRoot := ScopedCoverageKey(ScopeCollectionPoint, firstIdentity.CollectionPointID, rootKey)
+	networkRoot := ScopedCoverageKey(ScopeNetworkContext, firstIdentity.NetworkContextID, rootKey)
+	pointChild := ScopedCoverageKey(ScopeCollectionPoint, firstIdentity.CollectionPointID, pathKey)
+	wantRoots := []CoverageRoot{
+		{CoverageKey: pointRoot, ChildCoverageKeys: []string{pointChild}},
+		{CoverageKey: networkRoot, ChildCoverageKeys: []string{firstRemoteDomain}},
+	}
+	sort.Slice(wantRoots, func(i, j int) bool { return wantRoots[i].CoverageKey < wantRoots[j].CoverageKey })
+	if !reflect.DeepEqual(first.Meta.Collection.AuthoritativeRoots, wantRoots) {
+		t.Fatalf("split config roots = %+v, want %+v", first.Meta.Collection.AuthoritativeRoots, wantRoots)
+	}
+	for _, edge := range first.Graph.Edges[:4] {
+		if len(edge.ObservationDomains) != 1 || edge.ObservationDomains[0] != firstRemoteDomain {
+			t.Fatalf("remote config topology kept cross-context ownership: %+v", edge)
+		}
+	}
+}
+
+func TestScopeArtifactUnknownNetworkConfigRemainsAdditive(t *testing.T) {
+	identity := unknownNetworkTestIdentity()
+	first := configScopingFixture(identity, "unknown-config-a")
+	second := configScopingFixture(identity, "unknown-config-b")
+	if err := ScopeArtifact(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := ScopeArtifact(second); err != nil {
+		t.Fatal(err)
+	}
+
+	firstArtifactID := framedSHA256("agenthound-artifact-scope-v1", first.Meta.ScanID)
+	secondArtifactID := framedSHA256("agenthound-artifact-scope-v1", second.Meta.ScanID)
+	firstDomain := onlyNodeDomain(t, first, ScopedNodeID(ScopeArtifactLocal, firstArtifactID, "server"))
+	secondDomain := onlyNodeDomain(t, second, ScopedNodeID(ScopeArtifactLocal, secondArtifactID, "server"))
+	if firstDomain == secondDomain || containsString(CompleteCoverageDomains(second.Meta.Collection), firstDomain) {
+		t.Fatalf("unknown-network config was not additive: first=%q second=%q", firstDomain, secondDomain)
+	}
+	rootKey := CollectorRootCoverageKey("config")
+	firstArtifactRoot := ScopedCoverageKey(ScopeArtifactLocal, firstArtifactID, rootKey)
+	secondArtifactRoot := ScopedCoverageKey(ScopeArtifactLocal, secondArtifactID, rootKey)
+	if firstArtifactRoot == secondArtifactRoot ||
+		CoverageParents(first.Meta.Collection)[firstDomain] != firstArtifactRoot ||
+		CoverageParents(second.Meta.Collection)[secondDomain] != secondArtifactRoot {
+		t.Fatalf("unknown-network config roots crossed artifacts: first=%+v second=%+v", first.Meta.Collection.AuthoritativeRoots, second.Meta.Collection.AuthoritativeRoots)
+	}
+}
+
+func TestScopeArtifactConfigPointFactsStillReconcileAcrossNetworks(t *testing.T) {
+	firstIdentity := strongTestIdentity("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	secondIdentity := strongTestIdentity("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	first := configScopingFixture(firstIdentity, "config-point-a")
+	second := configScopingFixture(secondIdentity, "config-point-b")
+	if err := ScopeArtifact(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := ScopeArtifact(second); err != nil {
+		t.Fatal(err)
+	}
+
+	pointID := ScopedNodeID(ScopeCollectionPoint, firstIdentity.CollectionPointID, "config-file")
+	firstDomain := onlyNodeDomain(t, first, pointID)
+	secondDomain := onlyNodeDomain(t, second, pointID)
+	if firstDomain != secondDomain || !containsString(CompleteCoverageDomains(second.Meta.Collection), firstDomain) {
+		t.Fatalf("point config facts stopped reconciling: first=%q second=%q complete=%v", firstDomain, secondDomain, CompleteCoverageDomains(second.Meta.Collection))
+	}
+	uses := second.Graph.Edges[4]
+	if len(uses.ObservationDomains) != 1 || uses.ObservationDomains[0] != secondDomain {
+		t.Fatalf("point credential topology left point coverage: %+v", uses)
+	}
+}
+
+func onlyNodeDomain(t *testing.T, data *IngestData, id string) string {
+	t.Helper()
+	for _, node := range data.Graph.Nodes {
+		if node.ID != id {
+			continue
+		}
+		if len(node.ObservationDomains) != 1 {
+			t.Fatalf("node %q domains = %v, want one", id, node.ObservationDomains)
+		}
+		return node.ObservationDomains[0]
+	}
+	t.Fatalf("node %q not found", id)
+	return ""
 }
 
 func hasNodeID(nodes []Node, id string) bool {
