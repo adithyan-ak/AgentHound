@@ -157,7 +157,7 @@ ingest. The derived IDs are provenance, not authentication.
 Prefer a reproducible, pinned install? Every release is cosign-signed with an SBOM:
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/v1.0.0/install.sh | sh
+curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/v1.0.1/install.sh | sh
 ```
 
 Also available via Homebrew (`brew tap adithyan-ak/agenthound`, then

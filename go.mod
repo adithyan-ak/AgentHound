@@ -2,6 +2,10 @@ module github.com/adithyan-ak/agenthound
 
 go 1.25.12
 
+// v0.5.0 through v1.0.0 are superseded unsupported publications; v1.0.0 is
+// inconsistent across GitHub and the Go module proxy. Use v1.0.1 or later.
+retract [v0.5.0, v1.0.0]
+
 require (
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/go-chi/cors v1.2.2

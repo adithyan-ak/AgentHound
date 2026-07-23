@@ -269,7 +269,7 @@ credential material.
     "version": 4,
     "type": "agenthound-ingest",
     "collector": "mcp",
-    "collector_version": "1.0.0",
+    "collector_version": "1.0.1",
     "timestamp": "2026-07-11T00:00:00Z",
     "scan_id": "scan-abc123",
     "identity": {
