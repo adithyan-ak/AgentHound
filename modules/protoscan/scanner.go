@@ -302,7 +302,7 @@ func (s *Scanner) probeMCP(ctx context.Context, baseURL string) (string, bool) {
 			"capabilities":    map[string]any{},
 			"clientInfo": map[string]any{
 				"name":    "agenthound-protoscan",
-				"version": "0.3.0-dev",
+				"version": common.CollectorVersion(),
 			},
 		},
 	})

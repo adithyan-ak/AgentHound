@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/adithyan-ak/agenthound/collector/cli"
+	"github.com/adithyan-ak/agenthound/sdk/common"
 
 	// Blank-import modules so their init() registers them with sdk/module.
 	_ "github.com/adithyan-ak/agenthound/modules/a2a"
@@ -39,6 +40,7 @@ var (
 )
 
 func main() {
+	version, commit = common.ResolveBuildInfo(version, commit)
 	cli.SetVersion(version, commit)
 	if cli.HandleUnknownCommand() {
 		return

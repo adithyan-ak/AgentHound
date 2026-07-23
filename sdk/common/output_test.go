@@ -1,12 +1,87 @@
 package common
 
 import (
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
+
+func TestResolveBuildInfo(t *testing.T) {
+	tests := []struct {
+		name        string
+		version     string
+		commit      string
+		buildInfo   *debug.BuildInfo
+		buildInfoOK bool
+		wantVersion string
+		wantCommit  string
+	}{
+		{
+			name:        "go install version",
+			version:     "dev",
+			commit:      "none",
+			buildInfo:   &debug.BuildInfo{Main: debug.Module{Version: "v1.0.1"}},
+			buildInfoOK: true,
+			wantVersion: "1.0.1",
+			wantCommit:  "none",
+		},
+		{
+			name:        "unavailable build info",
+			version:     "dev",
+			commit:      "none",
+			buildInfoOK: false,
+			wantVersion: "dev",
+			wantCommit:  "none",
+		},
+		{
+			name:        "development build info",
+			version:     "dev",
+			commit:      "none",
+			buildInfo:   &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}},
+			buildInfoOK: true,
+			wantVersion: "dev",
+			wantCommit:  "none",
+		},
+		{
+			name:        "goreleaser linker values take precedence",
+			version:     "v1.2.3",
+			commit:      "abc123",
+			buildInfo:   &debug.BuildInfo{Main: debug.Module{Version: "v1.0.1"}},
+			buildInfoOK: true,
+			wantVersion: "1.2.3",
+			wantCommit:  "abc123",
+		},
+		{
+			name:        "partial linker override prevents fallback",
+			version:     "dev",
+			commit:      "abc123",
+			buildInfo:   &debug.BuildInfo{Main: debug.Module{Version: "v1.0.1"}},
+			buildInfoOK: true,
+			wantVersion: "dev",
+			wantCommit:  "abc123",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			readCalled := false
+			gotVersion, gotCommit := resolveBuildInfo(tt.version, tt.commit, func() (*debug.BuildInfo, bool) {
+				readCalled = true
+				return tt.buildInfo, tt.buildInfoOK
+			})
+			if gotVersion != tt.wantVersion || gotCommit != tt.wantCommit {
+				t.Errorf("resolveBuildInfo() = (%q, %q), want (%q, %q)", gotVersion, gotCommit, tt.wantVersion, tt.wantCommit)
+			}
+			wantRead := tt.version == "dev" && tt.commit == "none"
+			if readCalled != wantRead {
+				t.Errorf("ReadBuildInfo called = %v, want %v", readCalled, wantRead)
+			}
+		})
+	}
+}
 
 func TestNewIngestData(t *testing.T) {
 	t.Run("with explicit scan ID", func(t *testing.T) {

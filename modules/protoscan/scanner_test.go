@@ -2,6 +2,7 @@ package protoscan
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
@@ -74,6 +76,42 @@ func TestScan_DiscoversMCP(t *testing.T) {
 	}
 	if got := targets[0].Meta["protocol"]; got != "mcp" {
 		t.Errorf("protocol = %q, want mcp", got)
+	}
+}
+
+func TestProbeMCP_UsesCollectorVersion(t *testing.T) {
+	previousVersion := common.CollectorVersion()
+	t.Cleanup(func() { common.SetCollectorVersion(previousVersion) })
+	common.SetCollectorVersion("1.0.1")
+
+	versions := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Params struct {
+				ClientInfo struct {
+					Version string `json:"version"`
+				} `json:"clientInfo"`
+			} `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode initialize request: %v", err)
+		}
+		versions <- request.Params.ClientInfo.Version
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(initializeOK))
+	}))
+	defer srv.Close()
+
+	s := &Scanner{Mode: ModeMCP, MCPPorts: []int{portOf(t, srv)}}
+	targets, err := s.Scan(context.Background(), "127.0.0.1")
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 MCP target, got %d", len(targets))
+	}
+	if got := <-versions; got != "1.0.1" {
+		t.Errorf("clientInfo.version = %q, want %q", got, "1.0.1")
 	}
 }
 

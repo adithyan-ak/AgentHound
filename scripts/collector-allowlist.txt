@@ -253,6 +253,7 @@ regexp
 regexp/syntax
 runtime
 runtime/cgo
+runtime/debug
 slices
 sort
 strconv

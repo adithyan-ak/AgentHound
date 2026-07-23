@@ -2,6 +2,7 @@ package common
 
 import (
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -10,7 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const DefaultCollectorVersion = "0.9.0-dev"
+const DefaultCollectorVersion = "dev"
 
 var collectorVersion atomic.Value
 
@@ -30,6 +31,35 @@ func SetCollectorVersion(version string) {
 	if version = strings.TrimSpace(version); version != "" {
 		collectorVersion.Store(version)
 	}
+}
+
+// ResolveBuildInfo returns the version and commit reported by the binaries.
+// GoReleaser's linker values take precedence. A go install build has the
+// development linker defaults but records its module version in Go build
+// metadata, so use that version when available and leave the commit unknown.
+func ResolveBuildInfo(version, commit string) (string, string) {
+	return resolveBuildInfo(version, commit, debug.ReadBuildInfo)
+}
+
+func resolveBuildInfo(version, commit string, readBuildInfo func() (*debug.BuildInfo, bool)) (string, string) {
+	version = strings.TrimSpace(version)
+	commit = strings.TrimSpace(commit)
+	if version == "" {
+		version = DefaultCollectorVersion
+	}
+	if commit == "" {
+		commit = "none"
+	}
+
+	if version != DefaultCollectorVersion || commit != "none" {
+		return strings.TrimPrefix(version, "v"), commit
+	}
+
+	info, ok := readBuildInfo()
+	if !ok || info == nil || info.Main.Version == "" || info.Main.Version == "(devel)" {
+		return version, commit
+	}
+	return strings.TrimPrefix(info.Main.Version, "v"), commit
 }
 
 func NewIngestData(collector, scanID string) *ingest.IngestData {
