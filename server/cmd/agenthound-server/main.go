@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/server/cli"
 )
 
@@ -13,6 +14,7 @@ var (
 )
 
 func main() {
+	version, commit = common.ResolveBuildInfo(version, commit)
 	cli.SetVersion(version, commit)
 	if cli.HandleUnknownCommand() {
 		return

@@ -1,5 +1,9 @@
 .PHONY: build build-collector build-server build-all test lint docker docker-collector docker-server docker-standard up down clean seed release ui-build ui-dev ui-test standard standard-run standard-stop deps-check size-check slop-check version-check sync-version docs-check prerelease preflight-build preflight-collector preflight-server preflight-docker preflight-docker-compose preflight-server-running
 
+# Release tooling is pinned independently of the project's Go version.
+# Go may download the tool's newer required toolchain on the first local run.
+GORELEASER := go run github.com/goreleaser/goreleaser/v2@v2.15.4
+
 # Preflight gates. Verify required tools are present and at the expected
 # major versions BEFORE attempting a build, so newcomers get a friendly
 # error instead of a cryptic "command not found" deep in the chain.
@@ -81,7 +85,8 @@ seed: preflight-server-running
 	@bash scripts/seed-test-data.sh
 
 release: ui-build
-	goreleaser release --clean --snapshot
+	$(GORELEASER) check
+	$(GORELEASER) release --clean --snapshot
 
 standard: preflight-docker
 	docker build -f docker/Dockerfile.standard -t agenthound:latest .
@@ -119,6 +124,7 @@ slop-check:
 # it at tag time too.
 version-check:
 	@bash scripts/version-check.sh
+	@bash scripts/release-process-test.sh
 
 # Rewrite the install.sh + README version pins from the CHANGELOG top header
 # (or VERSION=). Usage: make sync-version   or   make sync-version VERSION=0.7.1
@@ -138,6 +144,7 @@ docs-check:
 prerelease:
 	@echo "=== [1/13] version-check ==="
 	@bash scripts/version-check.sh
+	@bash scripts/release-process-test.sh
 	@echo "=== [2/13] gofmt ==="
 	@test -z "$$(gofmt -l .)" || (echo "FAIL: gofmt found unformatted files:" && gofmt -l . && exit 1)
 	@echo "=== [3/13] golangci-lint ==="

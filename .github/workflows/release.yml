@@ -3,14 +3,13 @@ name: Release
 on:
   push:
     tags: ['v*']
-  # A manual run executes only the publishing preflight. It proves that the
-  # Homebrew tap token can open the tap's Git receive endpoint without
-  # creating a commit, tag, branch, release, package, or formula update.
+  # A manual run executes only the publishing preflight: release metadata,
+  # GoReleaser snapshot, and non-mutating Homebrew tap access checks.
   workflow_dispatch:
 
 concurrency:
-  group: agenthound-release-${{ github.ref }}
-  cancel-in-progress: false
+  group: agenthound-release
+  queue: max
 
 permissions:
   contents: write
@@ -28,8 +27,13 @@ jobs:
           # repository token here would send two Authorization headers.
           persist-credentials: false
 
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version: "1.25.12"
+
       - name: Verify release tag and Homebrew tap access
         env:
+          GH_TOKEN: ${{ github.token }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
         shell: bash
         run: |
@@ -37,6 +41,19 @@ jobs:
 
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             ./scripts/version-check.sh
+            git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            tag_commit="$(git rev-parse --verify "${GITHUB_REF_NAME}^{commit}")"
+            if ! git merge-base --is-ancestor "${tag_commit}" refs/remotes/origin/main; then
+              echo "Release tag ${GITHUB_REF_NAME} does not point to an ancestor of origin/main" >&2
+              exit 1
+            fi
+
+            latest_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
+            highest_tag="$(printf '%s\n' "${latest_tag}" "${GITHUB_REF_NAME}" | sort -V | tail -n 1)"
+            if [[ "${latest_tag}" == "${GITHUB_REF_NAME}" || "${highest_tag}" != "${GITHUB_REF_NAME}" ]]; then
+              echo "Release tag ${GITHUB_REF_NAME} must be newer than current latest ${latest_tag}" >&2
+              exit 1
+            fi
           fi
 
           if [[ -z "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]]; then
@@ -57,6 +74,18 @@ jobs:
           git fetch --quiet "${tap_url}" "${tap_sha}"
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
             push --dry-run "${tap_url}" "${tap_sha}:refs/heads/main"
+
+      - name: Check GoReleaser configuration
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94  # v7.2.3
+        with:
+          version: 'v2.15.4'
+          args: check
+
+      - name: Run GoReleaser snapshot preflight
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94  # v7.2.3
+        with:
+          version: 'v2.15.4'
+          args: release --clean --snapshot --skip=docker,sign,sbom
 
   release:
     needs: publishing-preflight
@@ -105,7 +134,7 @@ jobs:
 
       - name: Prepare curated release notes
         shell: bash
-        run: ./scripts/release-notes.sh > "${RUNNER_TEMP}/agenthound-release-notes.md"
+        run: ./scripts/release-notes.sh CHANGELOG.md "${GITHUB_REF_NAME}" > "${RUNNER_TEMP}/agenthound-release-notes.md"
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94  # v7.2.3
@@ -126,35 +155,168 @@ jobs:
 
           tag="${GITHUB_REF_NAME}"
           version="${tag#v}"
-          asset_count="$(gh release view "${tag}" --json assets --jq '.assets | length')"
+          repo="${GITHUB_REPOSITORY}"
+          tag_commit="$(git rev-parse --verify "${tag}^{commit}")"
+          module="github.com/adithyan-ak/agenthound"
+
+          latest_tag="$(gh api "repos/${repo}/releases/latest" --jq '.tag_name')"
+          if [[ "${latest_tag}" != "${tag}" ]]; then
+            echo "Latest GitHub release is ${latest_tag}, expected ${tag}" >&2
+            exit 1
+          fi
+
+          asset_count="$(gh release view --repo "${repo}" "${tag}" --json assets --jq '.assets | length')"
           if [[ "${asset_count}" != "26" ]]; then
             echo "Expected 26 release assets, found ${asset_count}" >&2
             exit 1
           fi
 
           expected_notes="$(cat "${RUNNER_TEMP}/agenthound-release-notes.md")"
-          published_notes="$(gh release view "${tag}" --json body --jq '.body')"
+          published_notes="$(gh release view --repo "${repo}" "${tag}" --json body --jq '.body')"
           if [[ "${published_notes}" != "${expected_notes}" ]]; then
             echo "Published release notes do not match the curated changelog section" >&2
             exit 1
           fi
 
+          verify_dir="$(mktemp -d)"
+          gh release download --repo "${repo}" "${tag}" --pattern checksums.txt --dir "${verify_dir}"
+
           for formula in agenthound agenthound-server; do
             formula_body="$(GH_TOKEN="${HOMEBREW_TAP_GITHUB_TOKEN}" gh api \
               -H 'Accept: application/vnd.github.raw+json' \
               "repos/adithyan-ak/homebrew-agenthound/contents/Formula/${formula}.rb")"
-            grep -Fq "version \"${version}\"" <<<"${formula_body}"
+            if ! grep -Fq "version \"${version}\"" <<<"${formula_body}"; then
+              echo "Homebrew formula ${formula} does not declare version ${version}" >&2
+              exit 1
+            fi
+
+            mapfile -t formula_urls < <(sed -nE 's/^[[:space:]]*url "([^"]+)".*/\1/p' <<<"${formula_body}")
+            mapfile -t formula_sums < <(sed -nE 's/^[[:space:]]*sha256 "([0-9a-f]{64})".*/\1/p' <<<"${formula_body}")
+            if (( ${#formula_urls[@]} == 0 || ${#formula_urls[@]} != ${#formula_sums[@]} )); then
+              echo "Homebrew formula ${formula} has unpaired URL/checksum entries" >&2
+              exit 1
+            fi
+
+            for index in "${!formula_urls[@]}"; do
+              formula_url="${formula_urls[$index]}"
+              formula_sum="${formula_sums[$index]}"
+              asset="${formula_url##*/}"
+              if [[ "${formula_url}" != *"/releases/download/${tag}/"* ]] ||
+                 [[ "${asset}" != "${formula}_${version}_darwin_"* ]]; then
+                echo "Unexpected Homebrew URL for ${formula}: ${formula_url}" >&2
+                exit 1
+              fi
+              release_sum="$(awk -v asset="${asset}" '$2 == asset { print $1 }' "${verify_dir}/checksums.txt")"
+              if [[ -z "${release_sum}" || "${formula_sum}" != "${release_sum}" ]]; then
+                echo "Homebrew checksum mismatch for ${asset}" >&2
+                exit 1
+              fi
+            done
           done
 
           for image in agenthound agenthound-server; do
-            manifest="$(docker buildx imagetools inspect "ghcr.io/adithyan-ak/${image}:${version}")"
+            version_image="ghcr.io/adithyan-ak/${image}:${version}"
+            latest_image="ghcr.io/adithyan-ak/${image}:latest"
+            manifest="$(docker buildx imagetools inspect "${version_image}")"
             grep -Fq 'linux/amd64' <<<"${manifest}"
             grep -Fq 'linux/arm64' <<<"${manifest}"
 
-            version_output="$(docker run --rm "ghcr.io/adithyan-ak/${image}:${version}" --version)"
-            expected_output="${image} version ${version} (commit: ${GITHUB_SHA})"
+            version_digest="$(docker buildx imagetools inspect --raw "${version_image}" | sha256sum | awk '{print $1}')"
+            latest_digest="$(docker buildx imagetools inspect --raw "${latest_image}" | sha256sum | awk '{print $1}')"
+            if [[ "${version_digest}" != "${latest_digest}" ]]; then
+              echo "GHCR ${image}:latest and :${version} resolve to different manifests" >&2
+              exit 1
+            fi
+
+            version_output="$(docker run --rm "${version_image}" --version)"
+            expected_output="${image} version ${version} (commit: ${tag_commit})"
             if [[ "${version_output}" != "${expected_output}" ]]; then
               echo "Unexpected ${image} container version: ${version_output}" >&2
+              exit 1
+            fi
+          done
+          if ! grep -Eq '^[[:space:]]*image:[[:space:]]*ghcr\.io/adithyan-ak/agenthound-server:latest[[:space:]]*$' \
+            docker/docker-compose.public.yml; then
+            echo "Public Docker Compose no longer defaults to agenthound-server:latest" >&2
+            exit 1
+          fi
+
+          installer_dir="$(mktemp -d)"
+          curl -sSfL "https://raw.githubusercontent.com/${repo}/main/install.sh" |
+            env -u AGENTHOUND_VERSION AGENTHOUND_INSTALL_DIR="${installer_dir}" sh
+          installer_output="$("${installer_dir}/agenthound" --version)"
+          expected_installer_output="agenthound version ${version} (commit: ${tag_commit})"
+          if [[ "${installer_output}" != "${expected_installer_output}" ]]; then
+            echo "Default installer resolved unexpected build: ${installer_output}" >&2
+            exit 1
+          fi
+
+          go_verify_dir="$(mktemp -d)"
+          latest_json=""
+          for attempt in $(seq 1 12); do
+            attempt_modcache="${go_verify_dir}/mod-${attempt}"
+            candidate="$(GOWORK=off GOMODCACHE="${attempt_modcache}" GOPROXY=https://proxy.golang.org \
+              GOSUMDB=sum.golang.org timeout 60s go list -m -json "${module}@latest" 2>&1 || true)"
+            candidate_version="$(jq -r '.Version // empty' <<<"${candidate}" 2>/dev/null || true)"
+            if [[ "${candidate_version}" == "${tag}" ]]; then
+              latest_json="${candidate}"
+              break
+            fi
+            echo "Go proxy latest is ${candidate_version:-unavailable}; waiting for ${tag} (${attempt}/12)"
+            sleep 10
+          done
+          if [[ -z "${latest_json}" ]]; then
+            echo "Go proxy did not resolve ${module}@latest to ${tag}" >&2
+            exit 1
+          fi
+
+          origin_hash="$(jq -r '.Origin.Hash // "not reported"' <<<"${latest_json}")"
+          echo "Go latest Origin.Hash (diagnostic only): ${origin_hash}"
+
+          versions_modcache="${go_verify_dir}/versions-modcache"
+          normal_versions="$(GOWORK=off GOMODCACHE="${versions_modcache}" GOPROXY=https://proxy.golang.org \
+            GOSUMDB=sum.golang.org timeout 60s go list -m -versions -json "${module}@latest")"
+          all_versions="$(GOWORK=off GOMODCACHE="${versions_modcache}" GOPROXY=https://proxy.golang.org \
+            GOSUMDB=sum.golang.org timeout 60s go list -m -versions -retracted -json "${module}@latest")"
+          if ! jq -e --arg latest "${tag}" \
+            '.Version == $latest and (.Versions | index($latest) != null)' <<<"${normal_versions}" >/dev/null; then
+            echo "Normal Go version listing does not select and include ${tag}" >&2
+            exit 1
+          fi
+
+          retracted_versions=(v0.5.0 v0.6.0 v0.6.1 v0.7.0 v0.8.0 v0.9.0 v1.0.0)
+          for retracted in "${retracted_versions[@]}"; do
+            if jq -e --arg version "${retracted}" '.Versions | index($version) != null' \
+              <<<"${normal_versions}" >/dev/null; then
+              echo "Normal Go version listing still includes retracted ${retracted}" >&2
+              exit 1
+            fi
+            if ! jq -e --arg version "${retracted}" '.Versions | index($version) != null' \
+              <<<"${all_versions}" >/dev/null; then
+              echo "Go -retracted version listing omits published ${retracted}" >&2
+              exit 1
+            fi
+          done
+
+          download_json="$(GOWORK=off GOMODCACHE="${go_verify_dir}/download-modcache" \
+            GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org \
+            timeout 60s go mod download -json "${module}@${tag}")"
+          if ! jq -e --arg version "${tag}" '.Version == $version' <<<"${download_json}" >/dev/null; then
+            echo "go mod download did not resolve ${module}@${tag}" >&2
+            exit 1
+          fi
+
+          mkdir -p "${go_verify_dir}/bin" "${go_verify_dir}/install-modcache" "${go_verify_dir}/build-cache"
+          for command_path in collector/cmd/agenthound server/cmd/agenthound-server; do
+            GOWORK=off GOBIN="${go_verify_dir}/bin" GOMODCACHE="${go_verify_dir}/install-modcache" \
+              GOCACHE="${go_verify_dir}/build-cache" GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org \
+              timeout 10m go install "${module}/${command_path}@latest"
+          done
+          for binary in agenthound agenthound-server; do
+            source_output="$("${go_verify_dir}/bin/${binary}" --version)"
+            expected_source_output="${binary} version ${version} (commit: none)"
+            if [[ "${source_output}" != "${expected_source_output}" ]]; then
+              echo "Unexpected go install provenance for ${binary}: ${source_output}" >&2
               exit 1
             fi
           done
