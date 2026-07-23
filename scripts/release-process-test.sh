@@ -83,4 +83,28 @@ if printf '%s\n' "$rendered" | grep -Fq '## v1.0.0'; then
 fi
 expect_failure "release-notes version mismatch" sh "$notes/scripts/release-notes.sh" "$notes/CHANGELOG.md" v1.0.2
 
+formula_fixture="$test_root/agenthound.rb"
+checksums_fixture="$test_root/checksums.txt"
+for platform in darwin linux; do
+  for arch in amd64 arm64; do
+    asset="agenthound_1.0.1_${platform}_${arch}.tar.gz"
+    checksum=$(printf '%064d' "$(( ${#platform} + ${#arch} ))")
+    printf '  url "https://github.com/adithyan-ak/AgentHound/releases/download/v1.0.1/%s"\n' "$asset" >> "$formula_fixture"
+    printf '  sha256 "%s"\n' "$checksum" >> "$formula_fixture"
+    printf '%s  %s\n' "$checksum" "$asset" >> "$checksums_fixture"
+  done
+done
+sed -i.bak '1i\
+  version "1.0.1"' "$formula_fixture"
+rm "$formula_fixture.bak"
+bash "$repo_root/scripts/verify-homebrew-formula.sh" \
+  agenthound 1.0.1 v1.0.1 "$formula_fixture" "$checksums_fixture"
+
+bad_formula="$test_root/agenthound-bad.rb"
+cp "$formula_fixture" "$bad_formula"
+sed -i.bak 's/linux_arm64/windows_arm64/' "$bad_formula"
+rm "$bad_formula.bak"
+expect_failure "unexpected Homebrew archive" bash "$repo_root/scripts/verify-homebrew-formula.sh" \
+  agenthound 1.0.1 v1.0.1 "$bad_formula" "$checksums_fixture"
+
 echo "release-process-test: all checks passed"
