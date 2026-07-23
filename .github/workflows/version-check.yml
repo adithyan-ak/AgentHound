@@ -19,6 +19,7 @@ on:
       - "scripts/release-notes.sh"
       - "scripts/release-process-test.sh"
       - "scripts/sync-version.sh"
+      - "scripts/verify-homebrew-formula.sh"
       - "scripts/version-check.sh"
       - ".github/workflows/release.yml"
       - ".github/workflows/version-check.yml"

@@ -182,36 +182,12 @@ jobs:
           gh release download --repo "${repo}" "${tag}" --pattern checksums.txt --dir "${verify_dir}"
 
           for formula in agenthound agenthound-server; do
-            formula_body="$(GH_TOKEN="${HOMEBREW_TAP_GITHUB_TOKEN}" gh api \
+            formula_file="${verify_dir}/${formula}.rb"
+            GH_TOKEN="${HOMEBREW_TAP_GITHUB_TOKEN}" gh api \
               -H 'Accept: application/vnd.github.raw+json' \
-              "repos/adithyan-ak/homebrew-agenthound/contents/Formula/${formula}.rb")"
-            if ! grep -Fq "version \"${version}\"" <<<"${formula_body}"; then
-              echo "Homebrew formula ${formula} does not declare version ${version}" >&2
-              exit 1
-            fi
-
-            mapfile -t formula_urls < <(sed -nE 's/^[[:space:]]*url "([^"]+)".*/\1/p' <<<"${formula_body}")
-            mapfile -t formula_sums < <(sed -nE 's/^[[:space:]]*sha256 "([0-9a-f]{64})".*/\1/p' <<<"${formula_body}")
-            if (( ${#formula_urls[@]} == 0 || ${#formula_urls[@]} != ${#formula_sums[@]} )); then
-              echo "Homebrew formula ${formula} has unpaired URL/checksum entries" >&2
-              exit 1
-            fi
-
-            for index in "${!formula_urls[@]}"; do
-              formula_url="${formula_urls[$index]}"
-              formula_sum="${formula_sums[$index]}"
-              asset="${formula_url##*/}"
-              if [[ "${formula_url}" != *"/releases/download/${tag}/"* ]] ||
-                 [[ "${asset}" != "${formula}_${version}_darwin_"* ]]; then
-                echo "Unexpected Homebrew URL for ${formula}: ${formula_url}" >&2
-                exit 1
-              fi
-              release_sum="$(awk -v asset="${asset}" '$2 == asset { print $1 }' "${verify_dir}/checksums.txt")"
-              if [[ -z "${release_sum}" || "${formula_sum}" != "${release_sum}" ]]; then
-                echo "Homebrew checksum mismatch for ${asset}" >&2
-                exit 1
-              fi
-            done
+              "repos/adithyan-ak/homebrew-agenthound/contents/Formula/${formula}.rb" > "${formula_file}"
+            ./scripts/verify-homebrew-formula.sh \
+              "${formula}" "${version}" "${tag}" "${formula_file}" "${verify_dir}/checksums.txt"
           done
 
           for image in agenthound agenthound-server; do
