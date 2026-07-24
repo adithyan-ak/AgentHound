@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,11 +20,17 @@ const (
 	remoteIngestResponseLimit = 16 << 20
 )
 
+type remoteIngestReceipt struct {
+	result          *ingest.IngestResult
+	raw             []byte
+	findingsPresent bool
+}
+
 func postRemoteIngest(
 	ctx context.Context,
 	serverURL string,
 	artifact []byte,
-) (*ingest.IngestResult, error) {
+) (*remoteIngestReceipt, error) {
 	endpoint, err := resolveRemoteIngestEndpoint(serverURL)
 	if err != nil {
 		return nil, err
@@ -66,7 +73,16 @@ func postRemoteIngest(
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("decode ingest response: %w", err)
 	}
-	return &result, nil
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, fmt.Errorf("decode ingest response fields: %w", err)
+	}
+	_, findingsPresent := fields["findings"]
+	return &remoteIngestReceipt{
+		result:          &result,
+		raw:             body,
+		findingsPresent: findingsPresent,
+	}, nil
 }
 
 func resolveRemoteIngestEndpoint(serverURL string) (string, error) {
@@ -112,17 +128,31 @@ func remoteIngestHTTPError(status int, body []byte) error {
 
 func writeRemoteIngestResult(
 	w io.Writer,
-	result *ingest.IngestResult,
+	receipt *remoteIngestReceipt,
 	artifactPath string,
 	fullJSON bool,
 ) error {
-	if result == nil {
+	if receipt == nil || receipt.result == nil {
 		return fmt.Errorf("ingest returned no result")
 	}
+	result := receipt.result
 	if fullJSON {
-		encoder := json.NewEncoder(w)
-		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(result); err != nil {
+		raw := receipt.raw
+		if len(raw) == 0 {
+			var err error
+			raw, err = json.Marshal(result)
+			if err != nil {
+				return fmt.Errorf("encode ingest result: %w", err)
+			}
+		}
+		var formatted bytes.Buffer
+		if err := json.Indent(&formatted, raw, "", "  "); err != nil {
+			return fmt.Errorf("format ingest result: %w", err)
+		}
+		if err := formatted.WriteByte('\n'); err != nil {
+			return fmt.Errorf("format ingest result: %w", err)
+		}
+		if _, err := w.Write(formatted.Bytes()); err != nil {
 			return fmt.Errorf("write ingest result: %w", err)
 		}
 		return nil
@@ -132,18 +162,36 @@ func writeRemoteIngestResult(
 	if !remoteIngestComplete(result) {
 		heading = "Ingest incomplete"
 	}
+	findings := "unknown"
+	if receipt.findingsPresent {
+		findings = strconv.Itoa(result.Findings)
+	}
 	if _, err := fmt.Fprintf(
 		w,
-		"%s:\n\n  Scan ID:   %s\n  Artifact:  %s\n  Nodes:     %d\n  Edges:     %d\n  Findings:  %d\n  Duration:  %s\n",
+		"%s:\n\n  Scan ID:   %s\n  Artifact:  %s\n  Nodes:     %d\n  Edges:     %d\n  Findings:  %s\n  Duration:  %s\n",
 		heading,
 		result.ScanID,
 		artifactPath,
 		result.Submitted.Nodes,
 		result.Submitted.Edges,
-		result.Findings,
+		findings,
 		result.Duration.Round(time.Millisecond),
 	); err != nil {
 		return fmt.Errorf("write ingest result: %w", err)
+	}
+	return nil
+}
+
+func validateRemoteIngestScanID(result *ingest.IngestResult, expectedScanID string) error {
+	if result == nil {
+		return fmt.Errorf("ingest returned no result")
+	}
+	if result.ScanID != expectedScanID {
+		return fmt.Errorf(
+			"ingest receipt scan_id %q does not match submitted scan_id %q",
+			result.ScanID,
+			expectedScanID,
+		)
 	}
 	return nil
 }

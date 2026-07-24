@@ -243,14 +243,17 @@ func runScan(cmd *cobra.Command, args []string) error {
 		if !quietEnabled(cmd) {
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "[scan] ingesting into %s\n", remoteURL)
 		}
-		result, err := postRemoteIngest(ctx, remoteURL, artifact)
+		receipt, err := postRemoteIngest(ctx, remoteURL, artifact)
 		if err != nil {
 			return err
 		}
-		if err := writeRemoteIngestResult(cmd.OutOrStdout(), result, output, fullReceipt); err != nil {
+		if err := validateRemoteIngestScanID(receipt.result, merged.Meta.ScanID); err != nil {
 			return err
 		}
-		return validateRemoteIngestResult(result)
+		if err := writeRemoteIngestResult(cmd.OutOrStdout(), receipt, output, fullReceipt); err != nil {
+			return err
+		}
+		return validateRemoteIngestResult(receipt.result)
 	}
 
 	// Write the (possibly empty) artifact before deciding the exit code so

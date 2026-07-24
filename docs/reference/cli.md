@@ -23,8 +23,10 @@ The collector has no DB clients, server control channel, telemetry, or
 phone-home behavior. Commands that assess configured or operator-selected
 targets do make target-scoped network requests: MCP/A2A collection, active scan
 and discovery, looters, poisoners, and campaigns use the protocols documented
-for those commands. Move resulting JSON to the analysis box via file copy, SSH
-pipe, an explicit curl pipeline, or the UI's drag-drop import.
+for those commands. `scan --ingest` also makes an explicit one-shot upload to
+the operator-selected analysis server; it is not an automatic central-service
+upload or control channel. Move resulting JSON via direct ingest, file copy,
+SSH pipe, an explicit curl pipeline, or the UI's drag-drop import.
 
 Every artifact-emitting command automatically derives versioned collection-point
 and network-context provenance from native OS, principal, execution-scope, and
@@ -220,6 +222,12 @@ Concurrency precedence for local-mode `scan`: an explicit `--scan-concurrency` a
 default path is `./scan-<scan_id>.json`; use `--output <path>` to choose another
 backup path. `--output -` is incompatible because direct ingest requires a
 recoverable artifact. Redirects are not followed.
+
+Direct-ingest HTTP is supported only for the default loopback server or an
+endpoint already protected by an operator-controlled VPN/SSH tunnel. Use HTTPS
+or a trusted tunnel for any non-loopback route; `--insecure` applies to
+collection targets, not ingest TLS. Artifacts produced with
+`--include-credential-values` can contain raw secrets.
 
 #### Example
 

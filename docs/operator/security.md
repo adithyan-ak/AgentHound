@@ -150,16 +150,32 @@ The collector makes outbound network calls to:
    collection uses `--insecure`, refuses link-local/cloud-metadata addresses,
    rejects fragments, is response- and per-card-work-bounded, and receives no
    target authorization header.
+3. **An analysis server explicitly selected by the operator** —
+   `agenthound scan --ingest <server-url>` uploads the exact scan artifact
+   already saved on disk to that server's `/api/v1/ingest` endpoint. Redirects
+   are rejected.
 
 There is no telemetry, phone-home, version-check ping, crash reporting, or
-upload to a central server.
+automatic upload to a central service. Direct ingest is an explicit one-shot
+operator action, not a server-to-collector control channel.
 
 Scan output is written to a local file (or to stdout via `--output -`).
 Transport to the operator's analysis box is the operator's
 responsibility — typically a file copy, an SSH pipe
 (`agenthound scan --output - | ssh op-box 'agenthound-server ingest -'`),
-or a drag-drop into the UI's `Scan Manager → Import scan` dialog. The
-collector does not initiate any connection back to a server.
+direct ingest, or a drag-drop into the UI's `Scan Manager → Import scan`
+dialog. Without `--ingest`, the collector does not connect to an analysis
+server.
+
+Direct ingest accepts `http://` and `https://`. Plain HTTP is supported only
+for the default loopback server or an endpoint already protected by an
+operator-controlled VPN/SSH tunnel; it adds no application-layer
+confidentiality and must not cross an untrusted network. Use HTTPS or map the
+remote server to loopback through a trusted tunnel. HTTPS certificate
+verification is strict, and the collection-target `--insecure` flag does not
+weaken ingest TLS. A scan created with `--include-credential-values` can contain
+raw secrets, so its upload requires the same custody and transport protections
+as the saved artifact.
 
 `scripts/deps-check.sh` enforces the dependency boundary: the
 collector binary cannot link `chi`, `pgx`, `neo4j-go-driver`, or any
@@ -444,6 +460,8 @@ output stored on Windows as readable by every local user account.
   card-controlled A2A `jku` always requires HTTPS with certificate and server
   identity validation. Operators assessing internal/self-signed issuers must
   pin their keys with `--a2a-trusted-keys` instead.
+- `--insecure` does not apply to `scan --ingest`. Direct-ingest HTTPS always
+  validates the server certificate and refuses redirects.
 - A regression test in `modules/{mcp,a2a}/*_test.go` asserts strict
   default verification — a code change that silently weakens this
   fails CI.
