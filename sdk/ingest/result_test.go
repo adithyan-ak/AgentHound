@@ -31,7 +31,7 @@ func TestIngestResultUsesCanonicalNestedCounts(t *testing.T) {
 	if err := json.Unmarshal(encoded, &body); err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{"submitted", "write_rows", "graph_totals", "collection"} {
+	for _, field := range []string{"submitted", "write_rows", "findings", "graph_totals", "collection"} {
 		if _, ok := body[field]; !ok {
 			t.Errorf("missing %q in %s", field, encoded)
 		}

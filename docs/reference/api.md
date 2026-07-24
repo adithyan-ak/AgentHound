@@ -313,6 +313,7 @@ credential material.
   "projection_status": "complete",
   "submitted": { "nodes": 47, "edges": 82 },
   "write_rows": { "nodes": 47, "edges": 82 },
+  "findings": 6,
   "graph_totals": {
     "before": { "node_counts": {}, "edge_counts": {}, "total_nodes": 0, "total_edges": 0 },
     "after": { "node_counts": {}, "edge_counts": {}, "total_nodes": 47, "total_edges": 82 }

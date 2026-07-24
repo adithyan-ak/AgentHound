@@ -47,17 +47,22 @@ agenthound --version
 
 ## 3. Run Your First Scan and Ingest
 
-The config scan is offline and safe. It parses all 12 supported MCP client config formats on the local machine and reports trust relationships, credentials, and instruction files. Stream straight into the running server in one pipe:
+The config scan is offline and safe. It parses all 12 supported MCP client
+config formats on the local machine and reports trust relationships,
+credentials, and instruction files. Scan and ingest in one command:
 
 ```bash
-agenthound scan --config --output - \
-  | curl --data-binary @- -H "Content-Type: application/json" \
-         http://127.0.0.1:8080/api/v1/ingest
+agenthound scan --config --ingest http://127.0.0.1:8080
 ```
 
-Or write to disk and ingest in two steps. The collector prints the
-exact filename (`./scan-<scan_id>.json`); use that, not a glob, since
-later scans accumulate alongside it:
+The collector first saves `./scan-<scan_id>.json` as a backup, uploads those
+exact bytes, then prints a compact receipt with the scan ID, artifact path,
+node, edge, and finding counts, and duration. Pass `--json` for the full server
+receipt or `--output <path>` to choose the backup path. If upload fails, the
+artifact remains available for retry.
+
+You can also scan and ingest manually. The collector prints the exact filename;
+use that, not a glob, since later scans accumulate alongside it:
 
 ```bash
 agenthound scan --config                     # prints ./scan-<scan_id>.json

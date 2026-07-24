@@ -351,6 +351,17 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	appendStage(result, "write_edges", sdkingest.OutcomeComplete, true, stageStart, nil)
 	slog.Info("edges written", "count", edgesWritten)
 
+	pristineEmptyProjection := graphBefore != nil &&
+		graphBefore.TotalNodes == 0 &&
+		graphBefore.TotalEdges == 0 &&
+		len(writeGraph.Nodes) == 0 &&
+		len(writeGraph.Edges) == 0 &&
+		result.WriteRows.Nodes == 0 &&
+		result.WriteRows.Edges == 0
+	if pristineEmptyProjection {
+		slog.Info("using pristine empty projection fast path")
+	}
+
 	// Stage 7: Promote explicitly complete raw-observation domains. Unknown or
 	// partial coverage is retained without retirement.
 	var (
@@ -358,7 +369,9 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		reconcileErr   error
 	)
 	stageStart = time.Now()
-	if len(reconciliationDomains) == 0 {
+	if pristineEmptyProjection {
+		appendStage(result, "reconcile_observations", sdkingest.OutcomeComplete, true, stageStart, nil)
+	} else if len(reconciliationDomains) == 0 {
 		appendStage(result, "reconcile_observations", sdkingest.OutcomeUnknown, true, stageStart, nil)
 	} else {
 		reconciliation, reconcileErr = graph.ReconcileObservations(
@@ -382,7 +395,9 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	// composite epoch, rebuilt from the retained current raw projection.
 	var ppErr error
 	stageStart = time.Now()
-	if p.graphDB != nil && p.runPP != nil {
+	if pristineEmptyProjection && p.graphDB != nil && p.runPP != nil {
+		appendStage(result, "analysis", sdkingest.OutcomeComplete, true, stageStart, nil)
+	} else if p.graphDB != nil && p.runPP != nil {
 		var ppStats []graph.ProcessingStats
 		ppStats, ppErr = p.runPP(
 			ctx,
@@ -415,7 +430,9 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	// composite epoch during the first reconciliation pass.
 	var pruneErr error
 	stageStart = time.Now()
-	if ppErr == nil && len(promotedDomains) > 0 {
+	if pristineEmptyProjection && ppErr == nil && len(promotedDomains) > 0 {
+		appendStage(result, "prune_observations", sdkingest.OutcomeComplete, true, stageStart, nil)
+	} else if ppErr == nil && len(promotedDomains) > 0 {
 		var deleted int
 		deleted, pruneErr = graph.PruneUnownedObservationNodes(ctx, p.graphDB)
 		reconciliation.NodesDeleted += deleted
@@ -447,7 +464,17 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		observationStatus        string
 	)
 	stageStart = time.Now()
-	if p.graphDB == nil {
+	if pristineEmptyProjection {
+		observationStatus = model.LifecycleComplete
+		appendStage(
+			result,
+			"observation_completeness",
+			sdkingest.OutcomeComplete,
+			true,
+			stageStart,
+			nil,
+		)
+	} else if p.graphDB == nil {
 		observationQueryErr = fmt.Errorf("graph database unavailable")
 		observationStatus = model.LifecycleFailed
 		appendStage(
@@ -510,7 +537,14 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		graphAfterErr error
 	)
 	stageStart = time.Now()
-	if p.graphDB == nil {
+	if pristineEmptyProjection {
+		graphAfter = &model.GraphSnapshot{
+			NodeCounts: map[string]int64{},
+			EdgeCounts: map[string]int64{},
+		}
+		result.GraphTotals.After = sdkGraphTotals(graphAfter)
+		appendStage(result, "graph_stats_after", sdkingest.OutcomeComplete, true, stageStart, nil)
+	} else if p.graphDB == nil {
 		appendStage(result, "graph_stats_after", sdkingest.OutcomeNotApplicable, false, stageStart, nil)
 	} else {
 		stats, err := p.graphDB.GetStats(ctx)
@@ -542,6 +576,9 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	case ppErr != nil:
 		snapshotErr = fmt.Errorf("analysis incomplete: %w", ppErr)
 		appendStage(result, "snapshot", sdkingest.OutcomeFailed, true, stageStart, snapshotErr)
+	case pristineEmptyProjection:
+		snapshot = []model.Finding{}
+		appendStage(result, "snapshot", sdkingest.OutcomeComplete, true, stageStart, nil)
 	default:
 		snapshot, snapshotErr = analysis.QueryFindings(ctx, p.graphDB, "")
 		if snapshotErr != nil {
@@ -556,6 +593,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	if snapshot == nil {
 		snapshot = []model.Finding{}
 	}
+	result.Findings = len(snapshot)
 
 	publicationDomains := finalizedDomains
 	if observationQueryErr != nil || observationIncompleteErr != nil {

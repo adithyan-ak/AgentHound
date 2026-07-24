@@ -152,13 +152,14 @@ export PATH="$HOME/.local/bin:$PATH"
 ```
 
 **3. Scan local configs** - offline, read-only, raw credential values omitted -
-and stream them in:
+and ingest them:
 
 ```bash
-agenthound scan --config --output - |
-  curl -sSf --data-binary @- -H "Content-Type: application/json" \
-    http://127.0.0.1:8080/api/v1/ingest
+agenthound scan --config --ingest http://127.0.0.1:8080
 ```
+
+The collector saves `./scan-<scan_id>.json` before upload, then prints a compact
+ingest receipt. Use `--json` for the full receipt.
 
 **4. Open the graph at
 [http://127.0.0.1:8080](http://127.0.0.1:8080/).**

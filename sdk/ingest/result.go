@@ -26,6 +26,7 @@ type IngestResult struct {
 	ProjectionStatus      string                 `json:"projection_status"`
 	Submitted             FactCounts             `json:"submitted"`
 	WriteRows             FactCounts             `json:"write_rows"`
+	Findings              int                    `json:"findings"`
 	GraphTotals           FrozenGraphTotals      `json:"graph_totals"`
 	Warnings              []string               `json:"warnings,omitempty"`
 	NormalizationStatus   NormalizationStatus    `json:"normalization_status"`

@@ -343,6 +343,7 @@ Dependency validation runs before the first processor executes. If a processor a
 - `Submitted` -- literal artifact contribution counts
 - `WriteRows` -- unique logical nodes/relationships affected by successful
   Neo4j writes, including matches of facts that already existed
+- `Findings` -- findings captured in the published scan snapshot
 - `GraphTotals` -- frozen public inventory totals before and after processing
 - `Warnings` -- normalizer warnings
 - `NormalizationStatus`, `NormalizationWarnings` -- deterministic

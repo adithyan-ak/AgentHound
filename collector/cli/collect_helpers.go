@@ -22,15 +22,22 @@ func prepareCollectorArtifact(data *ingest.IngestData) error {
 	return data.Meta.Identity.Validate()
 }
 
-func writeCollectorOutput(data *ingest.IngestData, outputPath string) error {
+func marshalCollectorArtifact(data *ingest.IngestData) ([]byte, error) {
 	if err := prepareCollectorArtifact(data); err != nil {
-		return fmt.Errorf("prepare ingest v4 artifact: %w", err)
+		return nil, fmt.Errorf("prepare ingest v4 artifact: %w", err)
 	}
 	encoded, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal JSON: %w", err)
+		return nil, fmt.Errorf("marshal JSON: %w", err)
 	}
+	return encoded, nil
+}
 
+func writeCollectorOutput(data *ingest.IngestData, outputPath string) error {
+	encoded, err := marshalCollectorArtifact(data)
+	if err != nil {
+		return err
+	}
 	if outputPath == "" {
 		_, err = os.Stdout.Write(encoded)
 		if err != nil {

@@ -211,14 +211,24 @@ partial, preventing lifecycle reconciliation from deleting prior service facts.
 | `--timeout` | `120s` | Timeout per server/agent (local MCP/A2A mode). In **network mode**, an explicit positive value applies independently to each TCP probe and HTTP fingerprint task. When omitted/non-positive, TCP defaults to `3s` and HTTP fingerprinting to `5s`; queue wait does not consume the task deadline. |
 | `--insecure` | `false` | Skip TLS verification (both MCP and A2A). |
 | `--scan-output` | | Explicit output path (overrides `--output`). |
+| `--ingest` | | Local mode only. Save the scan artifact, then upload those exact bytes to this AgentHound server base URL. |
+| `--json` | `false` | Print the full remote ingest receipt instead of the compact summary. Requires `--ingest`. |
 
 Concurrency precedence for local-mode `scan`: an explicit `--scan-concurrency` always wins; otherwise the root `--concurrency` / `AGENTHOUND_CONCURRENCY` value is used when positive; otherwise the `--scan-concurrency` default (`5`) holds. `--network-scan-concurrency` is a separate knob and is not affected.
+
+`--ingest` preserves the normal JSON artifact before making the request. The
+default path is `./scan-<scan_id>.json`; use `--output <path>` to choose another
+backup path. `--output -` is incompatible because direct ingest requires a
+recoverable artifact. Redirects are not followed.
 
 #### Example
 
 ```bash
 # Full local scan: config + MCP enumeration
 agenthound scan
+
+# Scan local configs, save a backup artifact, and ingest it
+agenthound scan --config --ingest http://127.0.0.1:8080
 
 # Network sweep of a /24 for exposed AI services
 agenthound scan 10.0.0.0/24 --allow-large-cidr

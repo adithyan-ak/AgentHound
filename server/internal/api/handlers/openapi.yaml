@@ -1234,7 +1234,7 @@ components:
     IngestResult:
       type: object
       additionalProperties: false
-      required: [scan_id, outcome, projection_status, submitted, write_rows, graph_totals, normalization_status, collection, identity, duration]
+      required: [scan_id, outcome, projection_status, submitted, write_rows, findings, graph_totals, normalization_status, collection, identity, duration]
       properties:
         scan_id:
           type: string
@@ -1247,6 +1247,9 @@ components:
           $ref: "#/components/schemas/FactCounts"
         write_rows:
           $ref: "#/components/schemas/FactCounts"
+        findings:
+          type: integer
+          minimum: 0
         graph_totals:
           $ref: "#/components/schemas/FrozenGraphTotals"
         warnings:
