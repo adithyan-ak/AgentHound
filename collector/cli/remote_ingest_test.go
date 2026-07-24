@@ -128,6 +128,47 @@ func TestRunScan_RemoteIngestFailurePreservesArtifact(t *testing.T) {
 	}
 }
 
+func TestRunScan_RemoteIngestRejectsUncorrelatedReceiptBeforeSuccessOutput(t *testing.T) {
+	tests := []struct {
+		name           string
+		responseScanID string
+	}{
+		{name: "different scan", responseScanID: "different-scan"},
+		{name: "missing scan"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			revision := int64(9)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(ingest.IngestResult{
+					ScanID:            test.responseScanID,
+					Outcome:           ingest.OutcomeComplete,
+					ProjectionStatus:  "complete",
+					PublishedRevision: &revision,
+				})
+			}))
+			defer server.Close()
+
+			cmd := newScanCmdForTest()
+			var stdout bytes.Buffer
+			cmd.SetOut(&stdout)
+			cmd.SetErr(io.Discard)
+			mustSetFlag(t, cmd, "config", "true")
+			mustSetFlag(t, cmd, "path", writeEmptyConfig(t))
+			mustSetFlag(t, cmd, "scan-output", filepath.Join(t.TempDir(), "backup.json"))
+			mustSetFlag(t, cmd, "ingest", server.URL)
+
+			err := runScan(cmd, nil)
+			if err == nil || !strings.Contains(err.Error(), "does not match submitted scan_id") {
+				t.Fatalf("error = %v, want scan correlation failure", err)
+			}
+			if strings.Contains(stdout.String(), "Ingest complete") {
+				t.Fatalf("uncorrelated receipt reported success:\n%s", stdout.String())
+			}
+		})
+	}
+}
+
 func TestPostRemoteIngest_ReturnsSanitizedAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -139,6 +180,42 @@ func TestPostRemoteIngest_ReturnsSanitizedAPIError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "STORAGE_BINDING_UNAVAILABLE") ||
 		!strings.Contains(err.Error(), "storage pair unavailable") {
 		t.Fatalf("error = %v, want sanitized API error", err)
+	}
+}
+
+func TestPostRemoteIngest_OlderReceiptReportsUnknownFindings(t *testing.T) {
+	revision := int64(9)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(
+			w,
+			`{"scan_id":"old-scan","outcome":"complete","projection_status":"complete","submitted":{"nodes":1,"edges":0},"published_revision":%d,"duration":1000000}`,
+			revision,
+		)
+	}))
+	defer server.Close()
+
+	receipt, err := postRemoteIngest(context.Background(), server.URL, []byte(`{}`))
+	if err != nil {
+		t.Fatalf("postRemoteIngest: %v", err)
+	}
+	var compact bytes.Buffer
+	if err := writeRemoteIngestResult(&compact, receipt, "backup.json", false); err != nil {
+		t.Fatalf("compact result: %v", err)
+	}
+	if !strings.Contains(compact.String(), "Findings:  unknown") {
+		t.Fatalf("older receipt summary = %q, want unknown findings", compact.String())
+	}
+
+	var full bytes.Buffer
+	if err := writeRemoteIngestResult(&full, receipt, "backup.json", true); err != nil {
+		t.Fatalf("full result: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(full.Bytes(), &fields); err != nil {
+		t.Fatalf("decode full result: %v", err)
+	}
+	if _, ok := fields["findings"]; ok {
+		t.Fatalf("full older receipt invented findings: %s", full.String())
 	}
 }
 
@@ -169,8 +246,17 @@ func TestWriteRemoteIngestResult_JSONAndIncompleteValidation(t *testing.T) {
 		ProjectionStatus: "incomplete",
 		Findings:         3,
 	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := &remoteIngestReceipt{
+		result:          result,
+		raw:             raw,
+		findingsPresent: true,
+	}
 	var output bytes.Buffer
-	if err := writeRemoteIngestResult(&output, result, "backup.json", true); err != nil {
+	if err := writeRemoteIngestResult(&output, receipt, "backup.json", true); err != nil {
 		t.Fatalf("writeRemoteIngestResult: %v", err)
 	}
 	var decoded ingest.IngestResult
