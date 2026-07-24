@@ -22,6 +22,15 @@ const (
 	deepInstructionWalkBudget = 60 * time.Second
 )
 
+// maxInstructionEntriesEnumerated is an I/O safety ceiling on the TOTAL entries
+// (files + directories) the recursive walk enumerates, independent of the
+// directory-descent budget. The directory budget alone does not bound a shape
+// with few directories but millions of files in them; strict scans have no
+// wall-clock budget, so this backstops readdir/callback churn. It is a high
+// ceiling that a real (post-pruning) filesystem never reaches. Declared as a var
+// so tests can lower it.
+var maxInstructionEntriesEnumerated = 5_000_000
+
 var (
 	// instructionTraversalEntryLimit and deepInstructionEntryLimit bound the
 	// number of DIRECTORIES descended while searching for .cursor/rules trees.
@@ -213,11 +222,20 @@ func discoverCursorRuleTrees(
 	traversalError := ""
 	entries := 0
 	rulesSeen := 0
+	enumerated := 0
 
 	err := filepath.WalkDir(projectRoot, func(path string, entry os.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			traversalState = ingest.OutcomePartial
 			traversalError = "collection canceled"
+			return filepath.SkipAll
+		}
+		// Total-entries I/O ceiling: every enumerated entry (file or directory)
+		// counts, independent of the directory-descent budget below.
+		enumerated++
+		if enumerated > maxInstructionEntriesEnumerated {
+			traversalState = ingest.OutcomeTruncated
+			traversalError = fmt.Sprintf("project traversal exceeds %d enumerated entries", maxInstructionEntriesEnumerated)
 			return filepath.SkipAll
 		}
 		// Prune junk/cache/trash trees, but never the explicitly-selected root
@@ -252,12 +270,12 @@ func discoverCursorRuleTrees(
 			// one traversal instead of walking the tree again.
 			return nil
 		}
-		treeState, treeErr := discoverCursorRuleTree(ctx, path, deep, entryLimit, engine, &entries, &rulesSeen, result)
+		treeState, treeErr := discoverCursorRuleTree(ctx, path, deep, entryLimit, engine, &entries, &rulesSeen, &enumerated, result)
 		if treeState != ingest.OutcomeComplete && traversalState == ingest.OutcomeComplete {
 			traversalState = treeState
 			traversalError = treeErr
 		}
-		if entries > entryLimit {
+		if entries > entryLimit || enumerated > maxInstructionEntriesEnumerated {
 			return filepath.SkipAll
 		}
 		return filepath.SkipDir
@@ -280,7 +298,7 @@ func discoverCursorRuleTree(
 	deep bool,
 	entryLimit int,
 	engine *rules.Engine,
-	entries, rulesSeen *int,
+	entries, rulesSeen, enumerated *int,
 	result *InstructionDiscovery,
 ) (ingest.OutcomeState, string) {
 	treePath = canonicalConfigPath(treePath)
@@ -300,6 +318,12 @@ func discoverCursorRuleTree(
 	err := filepath.WalkDir(treePath, func(path string, entry os.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			state, errText = ingest.OutcomePartial, "collection canceled"
+			return filepath.SkipAll
+		}
+		(*enumerated)++
+		if *enumerated > maxInstructionEntriesEnumerated {
+			state = ingest.OutcomeTruncated
+			errText = fmt.Sprintf("project traversal exceeds %d enumerated entries", maxInstructionEntriesEnumerated)
 			return filepath.SkipAll
 		}
 		// A nested rules tree is still part of the project traversal boundary.

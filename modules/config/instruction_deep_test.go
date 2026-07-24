@@ -235,6 +235,33 @@ func TestInstructionWalkBudgetCountsDirectoriesNotFiles(t *testing.T) {
 	}
 }
 
+// The total-entries I/O ceiling must fire independently of the directory
+// budget: a shape with few directories but many files still bounds readdir/
+// callback churn.
+func TestInstructionWalkTotalEntriesIOCap(t *testing.T) {
+	project := t.TempDir()
+	for i := 0; i < 30; i++ {
+		writeInstrRule(t, filepath.Join(project, "assets", "f"+strconv.Itoa(i)+".txt"), "x")
+	}
+	writeInstrRule(t, filepath.Join(project, ".cursor", "rules", "r.mdc"), "rule")
+	engine := testInstrEngine(t)
+
+	// Directory cap stays high (only ~3 dirs), but a tiny I/O cap that the 30
+	// files blow past — so any truncation here is the enumerated-entries ceiling.
+	oldIO := maxInstructionEntriesEnumerated
+	maxInstructionEntriesEnumerated = 10
+	t.Cleanup(func() { maxInstructionEntriesEnumerated = oldIO })
+
+	d := DiscoverInstructions(context.Background(), "", project, InstructionScan{RecursiveRoot: project}, engine)
+	trav := traversalOutcome(d.Outcomes)
+	if trav == nil || trav.State != ingest.OutcomeTruncated {
+		t.Fatalf("traversal = %+v, want truncated by the total-entries I/O cap", trav)
+	}
+	if !strings.Contains(trav.Error, "enumerated entries") {
+		t.Fatalf("traversal error = %q, want the enumerated-entries ceiling", trav.Error)
+	}
+}
+
 func TestInstructionWalkPrunesJunkDirs(t *testing.T) {
 	project := t.TempDir()
 	writeInstrRule(t, filepath.Join(project, "node_modules", ".cursor", "rules", "junk.mdc"), "junk")

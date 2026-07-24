@@ -114,7 +114,9 @@ best-effort. Both prune junk, cache, VCS, and trash *sub*trees — `.git`,
 Windows `$Recycle.Bin`). The search budget counts **directories descended**, not files (a folder full of
 files cannot be the target `.cursor/rules` directory, so it costs nothing): the
 strict walk bounds it at 100,000 directories while `--deep` allows 1,000,000 and
-a 60-second budget, both at 10,000 Cursor rules and 4 MiB per file.
+a 60-second budget, both at 10,000 Cursor rules and 4 MiB per file. A separate
+5,000,000 total-entries ceiling bounds raw enumeration I/O so a directory holding
+an extreme number of files cannot churn a scan that has no wall-clock budget.
 
 A `.cursor/rules` tree that cannot be fully enumerated (it hit the entry, rule,
 or file-size limit) contributes **no** graph facts — a best-effort scan keeps
