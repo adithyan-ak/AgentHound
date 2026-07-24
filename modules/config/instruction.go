@@ -23,11 +23,15 @@ const (
 )
 
 var (
-	// instructionTraversalEntryLimit caps the strict --project-dir walk. The
-	// deep sweep uses deepInstructionEntryLimit instead.
+	// instructionTraversalEntryLimit and deepInstructionEntryLimit bound the
+	// number of DIRECTORIES descended while searching for .cursor/rules trees.
+	// Files are never counted here — a file cannot be the target directory, so a
+	// folder with thousands of files costs nothing toward the search budget. The
+	// strict --project-dir walk uses the former; --deep uses the larger latter.
 	instructionTraversalEntryLimit = 100_000
 	deepInstructionEntryLimit      = 1_000_000
-	instructionRuleLimit           = 10_000
+	// instructionRuleLimit bounds the number of .mdc rule files actually read.
+	instructionRuleLimit = 10_000
 )
 
 // instructionPrunedDirNames are directory names skipped during the recursive
@@ -230,15 +234,22 @@ func discoverCursorRuleTrees(
 			}
 			return nil
 		}
-		if path != projectRoot {
+		// The budget counts directories descended, not entries: finding a
+		// .cursor/rules directory only requires walking folders, so a directory
+		// holding thousands of files does not consume the search budget.
+		if entry != nil && entry.IsDir() && path != projectRoot {
 			entries++
 			if entries > entryLimit {
 				traversalState = ingest.OutcomeTruncated
-				traversalError = fmt.Sprintf("project traversal exceeds %d entry limit", entryLimit)
+				traversalError = fmt.Sprintf("project traversal exceeds %d directory limit", entryLimit)
 				return filepath.SkipAll
 			}
 		}
 		if !entry.IsDir() || entry.Name() != "rules" || filepath.Base(filepath.Dir(path)) != ".cursor" {
+			// This non-matching fall-through is the single extension point for
+			// future nested instruction-file matchers (e.g. CLAUDE.md, AGENTS.md):
+			// add a filename check here to yield additional result kinds from this
+			// one traversal instead of walking the tree again.
 			return nil
 		}
 		treeState, treeErr := discoverCursorRuleTree(ctx, path, deep, entryLimit, engine, &entries, &rulesSeen, result)
@@ -307,13 +318,18 @@ func discoverCursorRuleTree(
 		if path == treePath {
 			return nil
 		}
-		(*entries)++
-		if *entries > entryLimit {
-			state = ingest.OutcomeTruncated
-			errText = fmt.Sprintf("project traversal exceeds %d entry limit", entryLimit)
-			return filepath.SkipAll
+		// Directories count toward the shared descent budget; .mdc files are
+		// bounded separately by the rule limit below.
+		if entry.IsDir() {
+			(*entries)++
+			if *entries > entryLimit {
+				state = ingest.OutcomeTruncated
+				errText = fmt.Sprintf("project traversal exceeds %d directory limit", entryLimit)
+				return filepath.SkipAll
+			}
+			return nil
 		}
-		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".mdc") {
+		if !strings.EqualFold(filepath.Ext(entry.Name()), ".mdc") {
 			return nil
 		}
 		if *rulesSeen >= instructionRuleLimit {

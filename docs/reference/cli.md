@@ -111,9 +111,10 @@ normally-pruned one such as `vendor`), or `--deep` to sweep the home directory
 best-effort. Both prune junk, cache, VCS, and trash *sub*trees — `.git`,
 `node_modules`, `.cache`, and trash directories on every platform (macOS
 `.Trash`, the freedesktop XDG home trash `Trash`, per-mount `.Trash-<uid>`,
-Windows `$Recycle.Bin`). The strict walk bounds traversal at 100,000 entries
-while `--deep` allows 1,000,000 entries and a 60-second budget, both at 10,000
-Cursor rules and 4 MiB per file.
+Windows `$Recycle.Bin`). The search budget counts **directories descended**, not files (a folder full of
+files cannot be the target `.cursor/rules` directory, so it costs nothing): the
+strict walk bounds it at 100,000 directories while `--deep` allows 1,000,000 and
+a 60-second budget, both at 10,000 Cursor rules and 4 MiB per file.
 
 A `.cursor/rules` tree that cannot be fully enumerated (it hit the entry, rule,
 or file-size limit) contributes **no** graph facts — a best-effort scan keeps

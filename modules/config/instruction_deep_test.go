@@ -203,6 +203,38 @@ func TestInstructionWalkPrunesCrossOSTrash(t *testing.T) {
 	}
 }
 
+// The search budget counts directories, not files: a folder with many files but
+// few subdirectories must not exhaust the budget and truncate the search.
+func TestInstructionWalkBudgetCountsDirectoriesNotFiles(t *testing.T) {
+	project := t.TempDir()
+	for i := 0; i < 50; i++ {
+		writeInstrRule(t, filepath.Join(project, "assets", "f"+strconv.Itoa(i)+".txt"), "x")
+	}
+	writeInstrRule(t, filepath.Join(project, ".cursor", "rules", "r.mdc"), "rule")
+	engine := testInstrEngine(t)
+
+	// A budget of 10 would truncate if the 50 files were counted; only ~3
+	// directories are descended, so the search must complete.
+	oldLimit := instructionTraversalEntryLimit
+	instructionTraversalEntryLimit = 10
+	t.Cleanup(func() { instructionTraversalEntryLimit = oldLimit })
+
+	d := DiscoverInstructions(context.Background(), "", project, InstructionScan{RecursiveRoot: project}, engine)
+	trav := traversalOutcome(d.Outcomes)
+	if trav == nil || trav.State != ingest.OutcomeComplete {
+		t.Fatalf("traversal = %+v, want complete (files must not consume the directory budget)", trav)
+	}
+	var found bool
+	for _, obs := range d.Observations {
+		if strings.HasSuffix(obs.Info.Path, "r.mdc") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("did not find the cursor rule under a file-heavy tree")
+	}
+}
+
 func TestInstructionWalkPrunesJunkDirs(t *testing.T) {
 	project := t.TempDir()
 	writeInstrRule(t, filepath.Join(project, "node_modules", ".cursor", "rules", "junk.mdc"), "junk")
