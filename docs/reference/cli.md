@@ -77,7 +77,9 @@ When none specified, defaults to config + MCP.
 |------|---------|-------------|
 | `--path` | | Single config file path (overrides auto-discovery). |
 | `--paths` | | Comma-separated paths to multiple config files. |
-| `--project-dir` | current working directory | Authoritative project root for project config, instruction, and MCP auto-discovery. Missing, inaccessible, or non-directory roots fail closed; they are never treated as an empty project. |
+| `--project-dir` | current working directory | Authoritative project root for project config, fixed instruction files, and MCP auto-discovery. When explicitly set, it also enables the strict recursive `.cursor/rules` walk of that tree (truncation withholds publication). Missing, inaccessible, or non-directory roots fail closed; they are never treated as an empty project. |
+| `--deep` | `false` | Best-effort recursive `.cursor/rules` sweep of the user home directory, independent of the current directory. Hardened (depth cap, junk-dir pruning, 1,000,000-entry cap, 60s budget) and advisory: a truncated sweep still publishes the rest of the graph. |
+| `--deep-root` | user home directory | Override the `--deep` sweep root. Requires `--deep`. |
 | `--include-credential-values` | `false` | Include credential values that the collector actually observes; hashes and material-status fields remain authoritative when a service masks or hashes a value. |
 
 Supported clients (12): Claude Desktop, Claude Code, Cursor, VS Code, Windsurf, Continue, Zed, Cline, JetBrains, Kiro, Amazon Q, Augment.
@@ -99,10 +101,36 @@ exact bytes, including surrounding whitespace, when computing `value_hash`
 (recognized HTTP `Authorization` schemes still remove only the protocol scheme
 before hashing).
 
-Instruction discovery covers the root project files plus every nested
-`<component>/.cursor/rules/**/*.mdc` tree beneath the effective project root.
-It does not follow directory symlinks or enter `.git`, and bounds traversal at
-100,000 entries, 10,000 Cursor rules, and 4 MiB per file. Static discovery emits
+Instruction discovery always reads the fixed root project files (`AGENTS.md`,
+`CLAUDE.md`, `.cursorrules`, `.github/copilot-instructions.md`, and
+`~/.claude/CLAUDE.md`) regardless of the current directory. The recursive
+`<component>/.cursor/rules/**/*.mdc` walk is **opt-in** — a default host scan
+never crawls the filesystem. Pass `--project-dir` to walk one project tree
+strictly (the explicitly-named root is always scanned, even if its own name is a
+normally-pruned one such as `vendor`), or `--deep` to sweep the home directory
+best-effort. Both prune junk, cache, VCS, and trash *sub*trees — `.git`,
+`node_modules`, `.cache`, and trash directories on every platform (macOS
+`.Trash`, the freedesktop XDG home trash `Trash`, per-mount `.Trash-<uid>`,
+Windows `$Recycle.Bin`). The search budget counts **directories descended**, not files (a folder full of
+files cannot be the target `.cursor/rules` directory, so it costs nothing): the
+strict walk bounds it at 100,000 directories while `--deep` allows 1,000,000 and
+a 60-second budget, both at 10,000 Cursor rules and 4 MiB per file. A separate
+5,000,000 total-entries ceiling bounds raw enumeration I/O so a directory holding
+an extreme number of files cannot churn a scan that has no wall-clock budget.
+
+A `.cursor/rules` tree that cannot be fully enumerated (it hit the entry, rule,
+or file-size limit) contributes **no** graph facts — a best-effort scan keeps
+every complete tree and records the rest as truncated coverage rather than
+emitting a partially-enumerated tree.
+
+A strict (`--project-dir`) walk that truncates withholds publication, as an
+operator-named tree is expected to finish. A `--deep` walk that truncates is
+recorded as advisory coverage: the graph still publishes, the scan's collection
+status reports `truncated`, and any agent whose instruction coverage was partial
+carries `instruction_coverage_complete=false` so risk scoring degrades that
+agent's poisoning factor to *unassessed* rather than *clean*. Because a `--deep`
+domain is never certified complete, instruction files it discovered once and
+that later disappear are not retired automatically. Static discovery emits
 instruction evidence and poisoning findings, but does not claim that every
 discovered agent loads every instruction file; `LOADS_INSTRUCTIONS` is reserved
 for future evidence that proves client and scope applicability.

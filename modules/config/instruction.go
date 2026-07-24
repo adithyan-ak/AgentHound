@@ -7,18 +7,81 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
 )
 
-const maxInstructionFileBytes int64 = 4 << 20
+const (
+	maxInstructionFileBytes int64 = 4 << 20
+	// deepInstructionWalkBudget bounds worst-case wall time for a --deep sweep
+	// (slow paths such as network homes or cloud-sync placeholder hydration do
+	// not correspond to many entries, so the entry cap alone is insufficient).
+	deepInstructionWalkBudget = 60 * time.Second
+)
+
+// maxInstructionEntriesEnumerated is an I/O safety ceiling on the TOTAL entries
+// (files + directories) the recursive walk enumerates, independent of the
+// directory-descent budget. The directory budget alone does not bound a shape
+// with few directories but millions of files in them; strict scans have no
+// wall-clock budget, so this backstops readdir/callback churn. It is a high
+// ceiling that a real (post-pruning) filesystem never reaches. Declared as a var
+// so tests can lower it.
+var maxInstructionEntriesEnumerated = 5_000_000
 
 var (
+	// instructionTraversalEntryLimit and deepInstructionEntryLimit bound the
+	// number of DIRECTORIES descended while searching for .cursor/rules trees.
+	// Files are never counted here — a file cannot be the target directory, so a
+	// folder with thousands of files costs nothing toward the search budget. The
+	// strict --project-dir walk uses the former; --deep uses the larger latter.
 	instructionTraversalEntryLimit = 100_000
-	instructionRuleLimit           = 10_000
+	deepInstructionEntryLimit      = 1_000_000
+	// instructionRuleLimit bounds the number of .mdc rule files actually read.
+	instructionRuleLimit = 10_000
 )
+
+// instructionPrunedDirNames are directory names skipped during the recursive
+// instruction walk. They are junk/cache/VCS/trash trees that never hold authored
+// .cursor/rules and would otherwise burn the entry budget (e.g. node_modules)
+// or, in the reported incident, a bloated trash directory. Trash coverage is
+// cross-OS: `.Trash`/`.Trashes` (macOS), `Trash` (the freedesktop XDG home
+// trash, normally ~/.local/share/Trash on Linux), `$Recycle.Bin` (Windows), and
+// the per-mount `.Trash-<uid>` variants matched by prefix in instructionPrunedDir.
+// Absolute pseudo-filesystem roots (/proc, /sys) and mount boundaries are
+// deferred to a later hardening pass; the entry cap plus wall-clock budget bound
+// the worst case meanwhile.
+var instructionPrunedDirNames = map[string]bool{
+	".git":          true,
+	".svn":          true,
+	".hg":           true,
+	"node_modules":  true,
+	"vendor":        true,
+	".cache":        true,
+	"Caches":        true,
+	".Trash":        true,
+	".Trashes":      true,
+	"Trash":         true,
+	"$Recycle.Bin":  true,
+	".venv":         true,
+	"venv":          true,
+	".tox":          true,
+	".mypy_cache":   true,
+	".pytest_cache": true,
+	"__pycache__":   true,
+	".terraform":    true,
+}
+
+func instructionPrunedDir(entry os.DirEntry) bool {
+	if entry == nil || !entry.IsDir() {
+		return false
+	}
+	name := entry.Name()
+	// Per-mount freedesktop trash directories are named .Trash-<uid>.
+	return instructionPrunedDirNames[name] || strings.HasPrefix(name, ".Trash-")
+}
 
 type InstructionFileInfo struct {
 	Path         string
@@ -37,6 +100,24 @@ type InstructionDiscovery struct {
 	Observations []InstructionObservation
 	CoverageKeys []string
 	Outcomes     []ingest.CollectionOutcome
+	// InstructionCoverageComplete is false only when a recursive walk ran and
+	// did not finish (truncated/partial). It is true when no recursive walk was
+	// requested or the walk completed. It surfaces as the AgentInstance
+	// instruction_coverage_complete property so risk scoring can degrade a
+	// partially-covered agent to "unassessed" instead of "clean".
+	InstructionCoverageComplete bool
+}
+
+// InstructionScan configures the recursive .cursor/rules walk. A zero value
+// (RecursiveRoot == "") disables recursion entirely; only fixed single-file
+// instruction targets are read.
+type InstructionScan struct {
+	// RecursiveRoot is the directory the recursive walk starts from. Empty
+	// disables the walk.
+	RecursiveRoot string
+	// Deep selects best-effort mode: a larger entry cap, a wall-clock budget,
+	// and advisory coverage outcomes (truncation publishes instead of wedging).
+	Deep bool
 }
 
 type instructionTarget struct {
@@ -73,9 +154,11 @@ func instructionFileKey(path string) string {
 func DiscoverInstructions(
 	ctx context.Context,
 	homeDir, projectRoot string,
+	scan InstructionScan,
 	engine *rules.Engine,
 ) InstructionDiscovery {
 	var result InstructionDiscovery
+	result.InstructionCoverageComplete = true
 	addStatic := func(path, fileType string) {
 		path = canonicalConfigPath(path)
 		key := configCoverageKey(path)
@@ -100,8 +183,14 @@ func DiscoverInstructions(
 		}
 	}
 
-	if projectRoot != "" {
-		discoverCursorRuleTrees(ctx, projectRoot, engine, &result)
+	if scan.RecursiveRoot != "" {
+		walkCtx := ctx
+		if scan.Deep {
+			var cancel context.CancelFunc
+			walkCtx, cancel = context.WithTimeout(ctx, deepInstructionWalkBudget)
+			defer cancel()
+		}
+		discoverCursorRuleTrees(walkCtx, scan.RecursiveRoot, scan.Deep, engine, &result)
 	}
 	sort.Slice(result.Observations, func(i, j int) bool {
 		return result.Observations[i].Info.Path < result.Observations[j].Info.Path
@@ -119,15 +208,21 @@ func DiscoverInstructions(
 func discoverCursorRuleTrees(
 	ctx context.Context,
 	projectRoot string,
+	deep bool,
 	engine *rules.Engine,
 	result *InstructionDiscovery,
 ) {
+	entryLimit := instructionTraversalEntryLimit
+	if deep {
+		entryLimit = deepInstructionEntryLimit
+	}
 	traversalKey := instructionTraversalKey(projectRoot)
 	result.CoverageKeys = append(result.CoverageKeys, traversalKey)
 	traversalState := ingest.OutcomeComplete
 	traversalError := ""
 	entries := 0
 	rulesSeen := 0
+	enumerated := 0
 
 	err := filepath.WalkDir(projectRoot, func(path string, entry os.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
@@ -135,7 +230,18 @@ func discoverCursorRuleTrees(
 			traversalError = "collection canceled"
 			return filepath.SkipAll
 		}
-		if entry != nil && entry.IsDir() && entry.Name() == ".git" {
+		// Total-entries I/O ceiling: every enumerated entry (file or directory)
+		// counts, independent of the directory-descent budget below.
+		enumerated++
+		if enumerated > maxInstructionEntriesEnumerated {
+			traversalState = ingest.OutcomeTruncated
+			traversalError = fmt.Sprintf("project traversal exceeds %d enumerated entries", maxInstructionEntriesEnumerated)
+			return filepath.SkipAll
+		}
+		// Prune junk/cache/trash trees, but never the explicitly-selected root
+		// itself — an operator who names `--project-dir /path/to/vendor` (or a
+		// repo literally named .cache, venv, Trash) still expects it scanned.
+		if path != projectRoot && instructionPrunedDir(entry) {
 			return filepath.SkipDir
 		}
 		if walkErr != nil {
@@ -146,23 +252,30 @@ func discoverCursorRuleTrees(
 			}
 			return nil
 		}
-		if path != projectRoot {
+		// The budget counts directories descended, not entries: finding a
+		// .cursor/rules directory only requires walking folders, so a directory
+		// holding thousands of files does not consume the search budget.
+		if entry != nil && entry.IsDir() && path != projectRoot {
 			entries++
-			if entries > instructionTraversalEntryLimit {
+			if entries > entryLimit {
 				traversalState = ingest.OutcomeTruncated
-				traversalError = fmt.Sprintf("project traversal exceeds %d entry limit", instructionTraversalEntryLimit)
+				traversalError = fmt.Sprintf("project traversal exceeds %d directory limit", entryLimit)
 				return filepath.SkipAll
 			}
 		}
 		if !entry.IsDir() || entry.Name() != "rules" || filepath.Base(filepath.Dir(path)) != ".cursor" {
+			// This non-matching fall-through is the single extension point for
+			// future nested instruction-file matchers (e.g. CLAUDE.md, AGENTS.md):
+			// add a filename check here to yield additional result kinds from this
+			// one traversal instead of walking the tree again.
 			return nil
 		}
-		treeState, treeErr := discoverCursorRuleTree(ctx, path, engine, &entries, &rulesSeen, result)
+		treeState, treeErr := discoverCursorRuleTree(ctx, path, deep, entryLimit, engine, &entries, &rulesSeen, &enumerated, result)
 		if treeState != ingest.OutcomeComplete && traversalState == ingest.OutcomeComplete {
 			traversalState = treeState
 			traversalError = treeErr
 		}
-		if entries > instructionTraversalEntryLimit {
+		if entries > entryLimit || enumerated > maxInstructionEntriesEnumerated {
 			return filepath.SkipAll
 		}
 		return filepath.SkipDir
@@ -171,16 +284,21 @@ func discoverCursorRuleTrees(
 		traversalState = ingest.OutcomePartial
 		traversalError = "project traversal incomplete"
 	}
-	result.Outcomes = append(result.Outcomes, collectionOutcome(
-		traversalKey, projectRoot, "cursor_rule_traversal", traversalState, rulesSeen, traversalError,
+	if traversalState != ingest.OutcomeComplete {
+		result.InstructionCoverageComplete = false
+	}
+	result.Outcomes = append(result.Outcomes, instructionOutcome(
+		traversalKey, projectRoot, "cursor_rule_traversal", traversalState, rulesSeen, traversalError, deep,
 	))
 }
 
 func discoverCursorRuleTree(
 	ctx context.Context,
 	treePath string,
+	deep bool,
+	entryLimit int,
 	engine *rules.Engine,
-	entries, rulesSeen *int,
+	entries, rulesSeen, enumerated *int,
 	result *InstructionDiscovery,
 ) (ingest.OutcomeState, string) {
 	treePath = canonicalConfigPath(treePath)
@@ -189,16 +307,29 @@ func discoverCursorRuleTree(
 	state := ingest.OutcomeComplete
 	errText := ""
 	items := 0
+	// A truncated/partial tree must not contribute graph nodes: the writer would
+	// mark them observation_properties_complete=false (their owning tree domain
+	// is not certified complete), which fails the graph-wide observation gate and
+	// wedges every future publication. Buffer the observation count and roll back
+	// this tree's observations unless it completes. Coverage outcomes are still
+	// recorded so partiality stays visible.
+	observationsBefore := len(result.Observations)
 
 	err := filepath.WalkDir(treePath, func(path string, entry os.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			state, errText = ingest.OutcomePartial, "collection canceled"
 			return filepath.SkipAll
 		}
+		(*enumerated)++
+		if *enumerated > maxInstructionEntriesEnumerated {
+			state = ingest.OutcomeTruncated
+			errText = fmt.Sprintf("project traversal exceeds %d enumerated entries", maxInstructionEntriesEnumerated)
+			return filepath.SkipAll
+		}
 		// A nested rules tree is still part of the project traversal boundary.
-		// Prune repository metadata before counting it, even when a .git
-		// directory happens to exist below .cursor/rules.
-		if entry != nil && entry.IsDir() && entry.Name() == ".git" {
+		// Prune junk/VCS/trash trees before counting them (but never treePath
+		// itself, an explicitly-reached .cursor/rules root).
+		if path != treePath && instructionPrunedDir(entry) {
 			return filepath.SkipDir
 		}
 		if walkErr != nil {
@@ -211,16 +342,18 @@ func discoverCursorRuleTree(
 		if path == treePath {
 			return nil
 		}
-		if entry.IsDir() && entry.Type()&os.ModeSymlink != 0 {
-			return filepath.SkipDir
+		// Directories count toward the shared descent budget; .mdc files are
+		// bounded separately by the rule limit below.
+		if entry.IsDir() {
+			(*entries)++
+			if *entries > entryLimit {
+				state = ingest.OutcomeTruncated
+				errText = fmt.Sprintf("project traversal exceeds %d directory limit", entryLimit)
+				return filepath.SkipAll
+			}
+			return nil
 		}
-		(*entries)++
-		if *entries > instructionTraversalEntryLimit {
-			state = ingest.OutcomeTruncated
-			errText = fmt.Sprintf("project traversal exceeds %d entry limit", instructionTraversalEntryLimit)
-			return filepath.SkipAll
-		}
-		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".mdc") {
+		if !strings.EqualFold(filepath.Ext(entry.Name()), ".mdc") {
 			return nil
 		}
 		if *rulesSeen >= instructionRuleLimit {
@@ -250,16 +383,23 @@ func discoverCursorRuleTree(
 			}
 			errText = fileErr
 		}
-		result.Outcomes = append(result.Outcomes, collectionOutcome(
-			fileKey, filePath, "cursor_rule_read", fileState, fileItems, fileErr,
+		result.Outcomes = append(result.Outcomes, instructionOutcome(
+			fileKey, filePath, "cursor_rule_read", fileState, fileItems, fileErr, deep,
 		))
 		return nil
 	})
 	if err != nil && state == ingest.OutcomeComplete {
 		state, errText = ingest.OutcomePartial, "rules tree traversal incomplete"
 	}
-	result.Outcomes = append(result.Outcomes, collectionOutcome(
-		treeKey, treePath, "cursor_rule_tree", state, items, errText,
+	// Discard this tree's observations unless it fully enumerated. Nodes owned by
+	// a non-complete domain would poison the graph-wide publication gate; a
+	// best-effort sweep keeps every complete tree and records the rest as
+	// truncated coverage rather than emitting property-incomplete facts.
+	if state != ingest.OutcomeComplete {
+		result.Observations = result.Observations[:observationsBefore]
+	}
+	result.Outcomes = append(result.Outcomes, instructionOutcome(
+		treeKey, treePath, "cursor_rule_tree", state, items, errText, deep,
 	))
 	return state, errText
 }
@@ -274,6 +414,22 @@ func collectionOutcome(
 		Collector: "config", CoverageKey: key, Target: target, Method: method,
 		State: state, Items: items, Error: errText,
 	}
+}
+
+// instructionOutcome builds a recursive-walk outcome. In deep mode the outcome
+// is marked advisory so a truncated best-effort sweep publishes instead of
+// wedging the projection; the strict --project-dir walk leaves it non-advisory
+// (truncation still blocks, as an operator-scoped tree is expected to finish).
+func instructionOutcome(
+	key, target, method string,
+	state ingest.OutcomeState,
+	items int,
+	errText string,
+	advisory bool,
+) ingest.CollectionOutcome {
+	outcome := collectionOutcome(key, target, method, state, items, errText)
+	outcome.Advisory = advisory
+	return outcome
 }
 
 func readBoundedInstruction(path string) ([]byte, ingest.OutcomeState, string) {
@@ -309,7 +465,13 @@ func AnalyzeInstructionFile(path string, data []byte, fileType string, engine *r
 // DiscoverInstructionFiles is retained for SDK compatibility; collection code
 // uses DiscoverInstructions so coverage failures are not discarded.
 func DiscoverInstructionFiles(homeDir, projectDir string, engine *rules.Engine) []InstructionFileInfo {
-	result := DiscoverInstructions(context.Background(), homeDir, projectDir, engine)
+	result := DiscoverInstructions(
+		context.Background(),
+		homeDir,
+		projectDir,
+		InstructionScan{RecursiveRoot: projectDir},
+		engine,
+	)
 	infos := make([]InstructionFileInfo, 0, len(result.Observations))
 	for _, observation := range result.Observations {
 		infos = append(infos, observation.Info)

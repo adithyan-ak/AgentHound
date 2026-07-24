@@ -217,7 +217,7 @@ func TestDiscoverNestedCursorRulesPrunesGitBeforeBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	discovery := DiscoverInstructions(context.Background(), "", project, engine)
+	discovery := DiscoverInstructions(context.Background(), "", project, InstructionScan{RecursiveRoot: project}, engine)
 	var cursorPaths []string
 	for _, observation := range discovery.Observations {
 		if observation.Info.Type == "cursor-rule" {
@@ -256,7 +256,7 @@ func TestCursorRuleTreeIncompleteStates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	discovery := DiscoverInstructions(context.Background(), "", project, engine)
+	discovery := DiscoverInstructions(context.Background(), "", project, InstructionScan{RecursiveRoot: project}, engine)
 	states := make(map[string]ingest.OutcomeState)
 	for _, outcome := range discovery.Outcomes {
 		states[outcome.Method] = outcome.State
@@ -269,7 +269,7 @@ func TestCursorRuleTreeIncompleteStates(t *testing.T) {
 
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	discovery = DiscoverInstructions(canceled, "", project, engine)
+	discovery = DiscoverInstructions(canceled, "", project, InstructionScan{RecursiveRoot: project}, engine)
 	for _, outcome := range discovery.Outcomes {
 		if outcome.Method == "cursor_rule_traversal" && outcome.State != ingest.OutcomePartial {
 			t.Fatalf("canceled traversal = %+v", outcome)
@@ -288,7 +288,7 @@ func TestCursorRuleTreeIncompleteStates(t *testing.T) {
 		return os.Open(path)
 	}
 	t.Cleanup(func() { openConfigFile = originalOpen })
-	discovery = DiscoverInstructions(context.Background(), "", project, engine)
+	discovery = DiscoverInstructions(context.Background(), "", project, InstructionScan{RecursiveRoot: project}, engine)
 	for _, outcome := range discovery.Outcomes {
 		if outcome.Target == canonicalConfigPath(unreadable) && outcome.State != ingest.OutcomeFailed {
 			t.Fatalf("unreadable file outcome = %+v", outcome)

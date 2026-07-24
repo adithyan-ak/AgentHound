@@ -40,10 +40,14 @@ func collectionState(report *sdkingest.CollectionReport) sdkingest.OutcomeState 
 }
 
 func incompleteCoverageDomains(report *sdkingest.CollectionReport) []string {
+	advisory := make(map[string]bool)
+	for _, key := range sdkingest.AdvisoryCoverageDomains(report) {
+		advisory[key] = true
+	}
 	states := sdkingest.CoverageStates(report)
 	domains := make([]string, 0, len(states))
 	for domain, state := range states {
-		if state != sdkingest.OutcomeComplete {
+		if state != sdkingest.OutcomeComplete && !advisory[domain] {
 			domains = append(domains, domain)
 		}
 	}

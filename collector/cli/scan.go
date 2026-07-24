@@ -76,7 +76,9 @@ func init() {
 
 	scanCmd.Flags().String("path", "", "Path to specific config file")
 	scanCmd.Flags().StringSlice("paths", nil, "Paths to multiple config files")
-	scanCmd.Flags().String("project-dir", "", "Project directory for instruction file discovery")
+	scanCmd.Flags().String("project-dir", "", "Project directory for instruction file discovery (recursively scans its .cursor/rules trees; strict — truncation withholds publication)")
+	scanCmd.Flags().Bool("deep", false, "Best-effort recursive .cursor/rules sweep of the home directory (hardened; partial results still publish). Independent of the current directory.")
+	scanCmd.Flags().String("deep-root", "", "Override the --deep sweep root (default: user home directory). Requires --deep.")
 	scanCmd.Flags().Bool("include-credential-values", false, "Include raw credential values")
 
 	scanCmd.Flags().String("url", "", "URL of a single HTTP MCP server")
@@ -122,7 +124,18 @@ func runScan(cmd *cobra.Command, args []string) error {
 	path, _ := cmd.Flags().GetString("path")
 	paths, _ := cmd.Flags().GetStringSlice("paths")
 	projectDir, _ := cmd.Flags().GetString("project-dir")
+	projectDirChanged := cmd.Flags().Changed("project-dir")
+	deep, _ := cmd.Flags().GetBool("deep")
+	deepRoot, _ := cmd.Flags().GetString("deep-root")
 	includeCredValues, _ := cmd.Flags().GetBool("include-credential-values")
+
+	if deepRoot != "" && !deep {
+		return fmt.Errorf("--deep-root requires --deep")
+	}
+	instrRoot, instrDeep, err := resolveInstructionRecursion(projectDir, projectDirChanged, deep, deepRoot)
+	if err != nil {
+		return err
+	}
 
 	url, _ := cmd.Flags().GetString("url")
 
@@ -187,7 +200,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	rulesEngine, ruleset := loadEffectiveRules()
 
 	merged, enabled, failed := collectAll(ctx, runConfig, runMCP, runA2A,
-		path, paths, projectDir, includeCredValues,
+		path, paths, projectDir, instrRoot, instrDeep, includeCredValues,
 		url, target, targets, targetsFile, authToken,
 		concurrency, timeout, insecure, noVerifyJWKS, a2aTrustedKeys,
 		rulesEngine, ruleset)
@@ -295,7 +308,7 @@ func normalizeNetworkConcurrency(value int) int {
 // them failed, so the caller can decide the exit code (total failure → non-
 // zero, partial/empty success → zero).
 func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
-	path string, paths []string, projectDir string, includeCredValues bool,
+	path string, paths []string, projectDir, instrRoot string, instrDeep bool, includeCredValues bool,
 	url, target string, targets []string, targetsFile, authToken string,
 	concurrency int, timeout time.Duration, insecure bool,
 	noVerifyJWKS bool, a2aTrustedKeys string,
@@ -308,7 +321,7 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 
 	if runConfig {
 		enabled++
-		data, err := collectConfig(ctx, path, paths, projectDir, includeCredValues, merged.Meta.ScanID, rulesEngine)
+		data, err := collectConfig(ctx, path, paths, projectDir, instrRoot, instrDeep, includeCredValues, merged.Meta.ScanID, rulesEngine)
 		if err != nil {
 			failed++
 			slog.Error("config collector failed", "error", err)
@@ -451,16 +464,43 @@ func collectorRootCoverageKey(collectorName string) string {
 	return ingest.CollectorRootCoverageKey(collectorName)
 }
 
+// authoritativeOutcomes drops advisory (best-effort) outcomes so the collect
+// root state reflects only outcomes that are allowed to withhold publication.
+func authoritativeOutcomes(outcomes []ingest.CollectionOutcome) []ingest.CollectionOutcome {
+	filtered := make([]ingest.CollectionOutcome, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		if !outcome.Advisory {
+			filtered = append(filtered, outcome)
+		}
+	}
+	return filtered
+}
+
 func rootedCollectionReport(
 	collectorName string,
 	report *ingest.CollectionReport,
 	authoritative bool,
 ) *ingest.CollectionReport {
 	state := ingest.OutcomeUnknown
+	rootState := ingest.OutcomeUnknown
 	if report != nil {
 		state = report.State
 		if state == "" {
 			state = ingest.AggregateOutcomeState(report.Outcomes)
+		}
+		// The collect root is an authoritative coverage key. When the report
+		// carries best-effort (--deep) advisory outcomes, its state must be
+		// re-aggregated from NON-advisory outcomes only — otherwise a truncated
+		// advisory instruction outcome taints the root, fails
+		// AuthoritativeCoverageComplete, and withholds publication, defeating the
+		// advisory contract. Absent any advisory outcome the authoritative report
+		// State is preserved verbatim (a partial attempt stays partial). The
+		// report-level State keeps the full aggregate so collection_status still
+		// reports truncated honestly.
+		rootState = state
+		authoritative := authoritativeOutcomes(report.Outcomes)
+		if len(authoritative) != len(report.Outcomes) {
+			rootState = ingest.AggregateOutcomeState(authoritative)
 		}
 	}
 	rootKey := collectorRootCoverageKey(collectorName)
@@ -472,7 +512,7 @@ func rootedCollectionReport(
 			CoverageKey: rootKey,
 			Target:      collectorName,
 			Method:      "collect",
-			State:       state,
+			State:       rootState,
 		}},
 	}
 	if authoritative && report != nil {
@@ -507,26 +547,56 @@ func failedCollectionReport(collectorName string, err error) *ingest.CollectionR
 	}
 }
 
+// resolveInstructionRecursion decides whether the recursive .cursor/rules walk
+// runs and from which root. The default (no flags) returns an empty root, which
+// disables the walk entirely — a host-level config scan must never recurse the
+// current working directory. --project-dir names a strict root; --deep names a
+// best-effort root defaulting to the user home directory (independent of CWD).
+func resolveInstructionRecursion(
+	projectDir string, projectDirChanged, deep bool, deepRoot string,
+) (root string, isDeep bool, err error) {
+	switch {
+	case deep:
+		root = deepRoot
+		if root == "" {
+			home, homeErr := os.UserHomeDir()
+			if homeErr != nil {
+				return "", false, fmt.Errorf("--deep needs a home directory or --deep-root: %w", homeErr)
+			}
+			root = home
+		}
+		return root, true, nil
+	case projectDirChanged:
+		return projectDir, false, nil
+	default:
+		return "", false, nil
+	}
+}
+
 func collectConfig(
 	ctx context.Context,
 	path string,
 	paths []string,
 	projectDir string,
+	instrRoot string,
+	instrDeep bool,
 	includeCredValues bool,
 	scanID string,
 	engine *rules.Engine,
 ) (*ingest.IngestData, error) {
 	c := configcollector.NewConfigCollector()
 	opts := icollector.CollectOptions{
-		Discover:                path == "" && len(paths) == 0,
-		ConfigPath:              path,
-		ConfigPaths:             paths,
-		ProjectDir:              projectDir,
-		IncludeCredentialValues: includeCredValues,
-		ScanID:                  scanID,
-		RulesEngine:             engine,
+		Discover:                 path == "" && len(paths) == 0,
+		ConfigPath:               path,
+		ConfigPaths:              paths,
+		ProjectDir:               projectDir,
+		InstructionRecursiveRoot: instrRoot,
+		InstructionDeep:          instrDeep,
+		IncludeCredentialValues:  includeCredValues,
+		ScanID:                   scanID,
+		RulesEngine:              engine,
 	}
-	slog.Info("running config collector", "discover", opts.Discover, "path", path)
+	slog.Info("running config collector", "discover", opts.Discover, "path", path, "deep", instrDeep)
 	return c.Collect(ctx, opts)
 }
 

@@ -43,7 +43,7 @@ func AgentRiskAssessment(ctx context.Context, db graph.GraphDB, objectID string)
 		weightedAssessment{weight: 0.25, value: exactAssessment(blast)},
 		weightedAssessment{weight: 0.20, value: auth},
 		weightedAssessment{weight: 0.15, value: exactAssessment(tools)},
-		weightedAssessment{weight: 0.10, value: exactAssessment(poison)},
+		weightedAssessment{weight: 0.10, value: poison},
 	), nil
 }
 
@@ -180,21 +180,33 @@ RETURN count(DISTINCT t) AS cnt`
 	return math.Min(float64(cnt)*5, 100), nil
 }
 
-func agentPoisoning(ctx context.Context, db graph.GraphDB, objectID string) (float64, error) {
+// agentPoisoning scores instruction-poisoning exposure. A suspicious instruction
+// file is an exact 100. Otherwise the score is 0 ONLY when the agent's
+// instruction coverage was complete; when coverage was partial (e.g. a --deep
+// sweep hit its budget and could not enumerate every instruction file) the
+// factor degrades to a known-unknown so an unassessed agent is never reported as
+// clean. Older nodes without the property coalesce to complete (no retroactive
+// flip).
+func agentPoisoning(ctx context.Context, db graph.GraphDB, objectID string) (Assessment, error) {
 	cypher := `
-MATCH (a {objectid: $id})-[:LOADS_INSTRUCTIONS]->(i:InstructionFile)
+MATCH (a {objectid: $id})
+OPTIONAL MATCH (a)-[:LOADS_INSTRUCTIONS]->(i:InstructionFile)
 WHERE i.is_suspicious = true
-RETURN count(i) AS cnt`
+RETURN count(i) AS cnt,
+       coalesce(a.instruction_coverage_complete, true) AS complete`
 
 	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})
 	if err != nil {
-		return 0, err
+		return Assessment{}, err
 	}
 	if len(rows) == 0 {
-		return 0, nil
+		return exactAssessment(0), nil
 	}
 	if toInt64(rows[0]["cnt"]) > 0 {
-		return 100, nil
+		return exactAssessment(100), nil
 	}
-	return 0, nil
+	if complete, _ := rows[0]["complete"].(bool); !complete {
+		return unknownAssessment("agent_instructions", 0, 100), nil
+	}
+	return exactAssessment(0), nil
 }

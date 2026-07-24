@@ -102,7 +102,10 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 		paths = append([]string{opts.ConfigPath}, paths...)
 	}
 	discovery := c.DiscoverConfigs(ctx, homeDir, projectRoot, opts.Discover, paths)
-	instructions := DiscoverInstructions(ctx, homeDir, projectRoot.Path(), engine)
+	instructions := DiscoverInstructions(ctx, homeDir, projectRoot.Path(), InstructionScan{
+		RecursiveRoot: canonicalConfigPath(opts.InstructionRecursiveRoot),
+		Deep:          opts.InstructionDeep,
+	}, engine)
 	if err := projectRoot.Validate(); err != nil {
 		discovery.ProjectRootState = ingest.OutcomeFailed
 		discovery.ProjectRootError = "project root changed or became unavailable during discovery"
@@ -192,9 +195,10 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 
 		agentID := ingest.ComputeNodeID("AgentInstance", configFileID, cfg.Client)
 		addNode(common.NewNode(agentID, []string{"AgentInstance"}, map[string]any{
-			"name":        cfg.Client,
-			"framework":   cfg.Client,
-			"config_path": absPath,
+			"name":                          cfg.Client,
+			"framework":                     cfg.Client,
+			"config_path":                   absPath,
+			"instruction_coverage_complete": instructions.InstructionCoverageComplete,
 		}), scopeKey)
 
 		for _, group := range groupServerDefinitions(cfg.Servers) {

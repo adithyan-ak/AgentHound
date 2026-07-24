@@ -42,6 +42,12 @@ type CollectionOutcome struct {
 	State             OutcomeState `json:"state"`
 	Items             int          `json:"items,omitempty"`
 	Error             string       `json:"error,omitempty"`
+	// Advisory marks a best-effort coverage domain whose incompleteness must
+	// not withhold publication of the authoritative projection or enter
+	// cross-run dirty coverage. It is set by the collector (e.g. a --deep
+	// instruction sweep) and is orthogonal to State: an advisory domain still
+	// reports truncated/partial in its outcome so partiality stays visible.
+	Advisory bool `json:"advisory,omitempty"`
 }
 
 // EnsureCoverageParentage serializes lifecycle ownership explicitly. It is

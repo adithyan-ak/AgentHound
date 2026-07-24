@@ -207,6 +207,72 @@ func CompleteAuthoritativeRoots(report *CollectionReport) []CoverageRoot {
 	return roots
 }
 
+// AdvisoryCoverageDomains returns declared coverage keys whose every recorded
+// outcome is marked advisory (best-effort). Advisory keys are excluded from the
+// blocking publication gate and from cross-run dirty coverage, so a truncated
+// best-effort sweep neither withholds publication nor wedges future scans. A key
+// with no outcomes, or with any non-advisory outcome, is not advisory.
+func AdvisoryCoverageDomains(report *CollectionReport) []string {
+	if report == nil {
+		return nil
+	}
+	allAdvisory := make(map[string]bool)
+	for _, key := range report.CoverageKeys {
+		if key = strings.TrimSpace(key); key != "" {
+			allAdvisory[key] = true
+		}
+	}
+	hasOutcome := make(map[string]bool)
+	for _, outcome := range report.Outcomes {
+		key := outcomeCoverageKey(outcome)
+		if key == "" {
+			continue
+		}
+		hasOutcome[key] = true
+		if !outcome.Advisory {
+			allAdvisory[key] = false
+		}
+	}
+	var domains []string
+	for key, advisory := range allAdvisory {
+		if advisory && hasOutcome[key] {
+			domains = append(domains, key)
+		}
+	}
+	sort.Strings(domains)
+	return domains
+}
+
+// AuthoritativeCoverageComplete reports whether every non-advisory declared
+// coverage key was observed complete. Advisory (best-effort) keys are ignored,
+// so a truncated best-effort sweep does not withhold publication. It mirrors
+// CollectionCoverageComplete for reports that declare no advisory keys.
+func AuthoritativeCoverageComplete(report *CollectionReport) bool {
+	if report == nil || len(report.CoverageKeys) == 0 {
+		return false
+	}
+	advisory := make(map[string]bool)
+	for _, key := range AdvisoryCoverageDomains(report) {
+		advisory[key] = true
+	}
+	keys := make(map[string]bool, len(report.CoverageKeys))
+	for _, key := range report.CoverageKeys {
+		if key = strings.TrimSpace(key); key != "" && !advisory[key] {
+			keys[key] = true
+		}
+	}
+	if len(keys) == 0 {
+		return false
+	}
+	states := CoverageStates(report)
+	for key := range keys {
+		if states[key] != OutcomeComplete {
+			return false
+		}
+	}
+	return true
+}
+
 func CollectionCoverageComplete(report *CollectionReport) bool {
 	if report == nil || len(report.CoverageKeys) == 0 {
 		return false
