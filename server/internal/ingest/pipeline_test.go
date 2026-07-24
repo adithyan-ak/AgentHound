@@ -928,11 +928,16 @@ func TestPipeline_CompleteEmptyRootClearsFailedUnheadedChild(t *testing.T) {
 	}
 	publisher := &fakePublisher{lifecycle: lifecycle}
 	writer := &fakeWriter{}
+	db := &graph.MockGraphDB{}
+	var ppCalls int
 	p := newTestPipeline(
 		writer,
-		&graph.MockGraphDB{},
+		db,
 		lifecycle,
-		noOpRunPP,
+		func(context.Context, graph.GraphDB, string, []string) ([]graph.ProcessingStats, error) {
+			ppCalls++
+			return nil, nil
+		},
 	)
 	p.findingStore = publisher
 
@@ -957,6 +962,49 @@ func TestPipeline_CompleteEmptyRootClearsFailedUnheadedChild(t *testing.T) {
 	}
 	if len(lifecycle.dirtyCoverage) != 0 {
 		t.Fatalf("dirty coverage after recovery = %v, want none", lifecycle.dirtyCoverage)
+	}
+	if ppCalls != 0 {
+		t.Fatalf("pristine empty projection ran post-processors %d time(s), want 0", ppCalls)
+	}
+	if got := len(db.CallsTo("GetStats")); got != 1 {
+		t.Fatalf("pristine empty projection queried graph stats %d time(s), want 1", got)
+	}
+	if calls := db.CallsTo("Query"); len(calls) != 0 {
+		t.Fatalf("pristine empty projection ran graph queries: %+v", calls)
+	}
+	if calls := db.CallsTo("ExecuteWrite"); len(calls) != 0 {
+		t.Fatalf("pristine empty projection ran graph writes: %+v", calls)
+	}
+}
+
+func TestPipeline_EmptySubmissionAgainstExistingProjectionRunsPostProcessors(t *testing.T) {
+	data := validIngestDataFor("scan-empty-existing-projection")
+	data.Graph = sdkingest.GraphData{
+		Nodes: []sdkingest.Node{},
+		Edges: []sdkingest.Edge{},
+	}
+	db := &graph.MockGraphDB{
+		StatsResult: &graph.GraphStats{
+			NodeCounts: map[string]int64{"MCPServer": 1},
+			TotalNodes: 1,
+		},
+	}
+	var ppCalls int
+	p := newTestPipeline(
+		&fakeWriter{},
+		db,
+		&fakeScanStore{},
+		func(context.Context, graph.GraphDB, string, []string) ([]graph.ProcessingStats, error) {
+			ppCalls++
+			return nil, nil
+		},
+	)
+
+	if _, err := p.Ingest(context.Background(), data); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if ppCalls != 1 {
+		t.Fatalf("empty submission against existing projection ran post-processors %d time(s), want 1", ppCalls)
 	}
 }
 

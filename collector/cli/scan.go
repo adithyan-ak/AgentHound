@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -59,6 +58,13 @@ Output goes to a file: pass --output <path> to choose the path, or pass
 'agenthound-server ingest -'). When --output is unset, the scan is written
 to ./scan-<scan_id>.json in the current working directory.
 
+Local scans can save and ingest in one command:
+
+  agenthound scan --config --ingest http://127.0.0.1:8080
+
+The artifact is saved before upload. A compact receipt is printed by default;
+pass --json for the full server receipt.
+
 Operators ingest the resulting JSON on their analysis box via either:
 
   agenthound-server ingest scan.json
@@ -94,6 +100,8 @@ func init() {
 	scanCmd.Flags().Bool("insecure", false, "Skip TLS verification")
 
 	scanCmd.Flags().String("scan-output", "", "Write scan JSON to this path. Use '-' for stdout. Defaults to ./scan-<scan_id>.json in CWD.")
+	scanCmd.Flags().String("ingest", "", "Save and ingest the scan into an AgentHound server base URL")
+	scanCmd.Flags().Bool("json", false, "Print the full remote ingest receipt as JSON (requires --ingest)")
 
 	// Network-scan mode flags.
 	scanCmd.Flags().IntSlice("ports", nil, "Override the default AI-service port set (network mode only). Default: 11434, 8000, 6333, 5000, 4000, 8888, 3000.")
@@ -108,10 +116,16 @@ func init() {
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
+	remoteURL, _ := cmd.Flags().GetString("ingest")
+	fullReceipt, _ := cmd.Flags().GetBool("json")
+
 	// Network-mode dispatch: when a positional CIDR/host/@file is supplied,
 	// the scanner runs instead of the legacy collector flow. The network path
 	// performs the port sweep and then dispatches every registered fingerprinter.
 	if len(args) == 1 {
+		if remoteURL != "" || fullReceipt {
+			return fmt.Errorf("--ingest and --json are supported only for local scans")
+		}
 		return runNetworkScan(cmd, args[0])
 	}
 
@@ -151,6 +165,17 @@ func runScan(cmd *cobra.Command, args []string) error {
 			output = cfg.Output
 		} else if v, _ := cmd.Root().PersistentFlags().GetString("output"); v != "" {
 			output = v
+		}
+	}
+	if fullReceipt && remoteURL == "" {
+		return fmt.Errorf("--json requires --ingest")
+	}
+	if remoteURL != "" && output == "-" {
+		return fmt.Errorf("--ingest cannot be combined with --output -; use a file path for the backup artifact")
+	}
+	if remoteURL != "" {
+		if _, err := resolveRemoteIngestEndpoint(remoteURL); err != nil {
+			return err
 		}
 	}
 
@@ -197,7 +222,39 @@ func runScan(cmd *cobra.Command, args []string) error {
 		output = fmt.Sprintf("scan-%s.json", merged.Meta.ScanID)
 	}
 
-	_, _ = fmt.Fprintf(os.Stderr, "Collected %d nodes, %d edges\n", len(merged.Graph.Nodes), len(merged.Graph.Edges))
+	if !quietEnabled(cmd) {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Collected %d nodes, %d edges\n", len(merged.Graph.Nodes), len(merged.Graph.Edges))
+	}
+
+	if remoteURL != "" {
+		artifact, err := marshalCollectorArtifact(merged)
+		if err != nil {
+			return err
+		}
+		if err := writeOutputAtomic(output, artifact); err != nil {
+			return fmt.Errorf("write file: %w", err)
+		}
+		if !quietEnabled(cmd) {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "[scan] saved artifact: %s\n", output)
+		}
+		if allCollectorsFailed(enabled, failed) {
+			return fmt.Errorf("all %d enabled collector(s) failed", enabled)
+		}
+		if !quietEnabled(cmd) {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "[scan] ingesting into %s\n", remoteURL)
+		}
+		receipt, err := postRemoteIngest(ctx, remoteURL, artifact)
+		if err != nil {
+			return err
+		}
+		if err := validateRemoteIngestScanID(receipt.result, merged.Meta.ScanID); err != nil {
+			return err
+		}
+		if err := writeRemoteIngestResult(cmd.OutOrStdout(), receipt, output, fullReceipt); err != nil {
+			return err
+		}
+		return validateRemoteIngestResult(receipt.result)
+	}
 
 	// Write the (possibly empty) artifact before deciding the exit code so
 	// the operator keeps the envelope and logs even on total failure.
@@ -233,12 +290,9 @@ func allCollectorsFailed(enabled, failed int) bool {
 // os.Stdout. Used for piping into 'agenthound-server ingest -'. No atomic
 // write semantics; stdout is the operator's responsibility (e.g., via SSH).
 func writeCollectorOutputStdout(data *ingest.IngestData) error {
-	if err := prepareCollectorArtifact(data); err != nil {
-		return fmt.Errorf("prepare ingest v4 artifact: %w", err)
-	}
-	encoded, err := json.MarshalIndent(data, "", "  ")
+	encoded, err := marshalCollectorArtifact(data)
 	if err != nil {
-		return fmt.Errorf("marshal JSON: %w", err)
+		return err
 	}
 	if _, err := os.Stdout.Write(encoded); err != nil {
 		return fmt.Errorf("write stdout: %w", err)

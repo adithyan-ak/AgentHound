@@ -383,6 +383,44 @@ INSERT INTO posture_state (singleton) VALUES (TRUE);`); err != nil {
 	}
 }
 
+func TestIntegrationFreshSchemaEmptyIngestPublishesUnderThreeSeconds(t *testing.T) {
+	ctx, pipeline, _, _, _ := freshPublicationIntegrationHarness(t)
+	root := sdkingest.CollectorRootCoverageKey("config")
+	data := newPublicationIntegrationData("config", "fresh-empty-publication")
+	data.Meta.Collection = &sdkingest.CollectionReport{
+		State:        sdkingest.OutcomeComplete,
+		CoverageKeys: []string{root},
+		AuthoritativeRoots: []sdkingest.CoverageRoot{{
+			CoverageKey: root,
+		}},
+		Outcomes: []sdkingest.CollectionOutcome{{
+			Collector:   "config",
+			CoverageKey: root,
+			Target:      "config",
+			Method:      "collect",
+			State:       sdkingest.OutcomeComplete,
+		}},
+	}
+
+	start := time.Now()
+	result, err := pipeline.Ingest(ctx, data)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("empty ingest: %v", err)
+	}
+	if result.Outcome != sdkingest.OutcomeComplete ||
+		result.ProjectionStatus != "complete" ||
+		result.PublishedRevision == nil {
+		t.Fatalf("empty ingest result = %+v, want complete published projection", result)
+	}
+	if len(result.PostProcessingStats) != 0 {
+		t.Fatalf("empty ingest ran post-processors: %+v", result.PostProcessingStats)
+	}
+	if elapsed >= 3*time.Second {
+		t.Fatalf("empty ingest took %s, want under 3s", elapsed)
+	}
+}
+
 func TestIntegrationExhaustiveRootRemovesMissingChildAcrossGraphAndPublication(t *testing.T) {
 	ctx, pipeline, db, _, pool := freshPublicationIntegrationHarness(t)
 	root := sdkingest.CanonicalCoverageKey("mcp", "root", "collect")
