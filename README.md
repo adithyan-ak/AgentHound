@@ -19,7 +19,7 @@
 [![Release](https://img.shields.io/github/v/release/adithyan-ak/agenthound?logo=github)](https://github.com/adithyan-ak/agenthound/releases)
 [![Go Report Card](https://goreportcard.com/badge/github.com/adithyan-ak/agenthound)](https://goreportcard.com/report/github.com/adithyan-ak/agenthound)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![cosign](https://img.shields.io/badge/releases-cosign%20signed-0b7285)](https://docs.agenthound.io/getting-started/install/)
+[![cosign](https://img.shields.io/badge/checksums-cosign%20signed-0b7285)](https://docs.agenthound.io/getting-started/install/)
 
 </div>
 
@@ -28,6 +28,10 @@
 **AgentHound is an open-source offensive security framework for AI agent infrastructure.** It runs the full engagement - recon, fingerprinting, credential looting, **modelfile / system-prompt / fine-tune inventory**, model inversion, tool and instruction poisoning, and config-implant persistence - across every layer of the modern agentic stack, then merges every fact into one Neo4j graph and proves the attack paths that tie it all together. Agenthound is BloodHound for the agentic stack.
 
 ## ⚡ Capabilities
+
+<p align="center">
+  <img src="docs/readme-assets/agenthound-attack-surface.png" alt="AgentHound attack-surface graph" width="900">
+</p>
 
 <table>
 <tr>
@@ -40,7 +44,9 @@ One framework attacks every layer - MCP, A2A, model gateways, inference servers,
 <td width="50%" valign="top">
 
 🔓 **Credential inventory across the gateway & service plane**<br/>
-Hand the LiteLLM looter one master key to inventory the observed master-key exposure, masked upstream-provider references, and hashed virtual-key references with spend metadata. Only observed credential material participates in cross-service `value_hash` correlation.
+Supply a LiteLLM master key to inventory masked upstream-provider references
+and hashed virtual-key references with spend metadata. Only actual credential
+values available to AgentHound participate in cross-service correlation.
 
 </td>
 </tr>
@@ -48,7 +54,10 @@ Hand the LiteLLM looter one master key to inventory the observed master-key expo
 <td width="50%" valign="top">
 
 🧬 **Modelfile, system-prompt & fine-tune inventory**<br/>
-Enumerate every model on an unauthenticated Ollama - names, digests, sizes, modelfiles, templates, and system prompts. Fine-tunes (SYSTEM / ADAPTER directives) get flagged; a model with observable modelfile content carries a stable content hash for cross-run comparison.
+Enumerate every model on an unauthenticated Ollama - names, digests, sizes,
+stable modelfile hashes, system-prompt presence, and fine-tune signals. Raw
+modelfiles, templates, and system prompts are available through an explicit
+opt-in.
 
 </td>
 <td width="50%" valign="top">
@@ -76,7 +85,7 @@ Inventory Qdrant collections and Jupyter sessions and notebook trees. Jupyter pr
 <td width="50%" valign="top">
 
 🕸️ **Cross-protocol & credential-chain attack paths**<br/>
-15 post-processors compute the routes raw facts can't show - credential chains, cross-protocol pivots, exfiltration paths - up to 6 hops, across MCP and A2A.
+15 post-processors compute the routes raw facts can't show - credential chains, cross-protocol pivots, and exfiltration paths across MCP and A2A.
 
 </td>
 <td width="50%" valign="top">
@@ -102,136 +111,166 @@ A new attack against a new AI service is one module away - implement an action i
 </tr>
 </table>
 
-<p align="center">
-  <img src="docs/readme-assets/agenthound-attack-surface.png" alt="AgentHound attack-surface graph" width="900">
-</p>
-
 ## 🎯 Every plane of the stack is a target
 
-| Plane | What AgentHound attacks | Modules |
+| Surface | Discovery & inventory | Validation / active operations |
 |---|---|---|
-| **Agent client** | 12 MCP client configs + instruction files (`CLAUDE.md`, `AGENTS.md`, `.cursorrules`) | `config` |
-| **Protocol** | MCP servers (stdio + HTTP/SSE), A2A agents (agent cards, JWS, delegation) | `mcp`, `a2a`, `protoscan` |
-| **Model gateway** | LiteLLM - observed master-key exposure plus masked provider and hashed virtual-key inventory | `litellmfp`, `litellmloot` |
-| **Inference** | Ollama, vLLM - model inventory, modelfiles, system prompts, fine-tune detection | `ollamafp`, `ollamaloot`, `vllmfp` |
-| **Vector / RAG** | Qdrant collections | `qdrantfp`, `qdrantloot` |
-| **MLOps** | MLflow experiments + runs | `mlflowfp`, `mlflowloot` |
-| **Notebook** | Jupyter sessions + notebook tree | `jupyterfp`, `jupyterloot` |
-| **Frontend** | Open WebUI (RAG docs, upstream keys), LangServe | `openwebuifp`, `openwebuiloot`, `langservefp` |
+| **Agent clients** | 12 MCP client config formats plus instruction files (`CLAUDE.md`, `AGENTS.md`, `.cursorrules`) | Instruction poisoning and reversible malicious-server config implants |
+| **MCP** | Stdio and HTTP/SSE servers, tools, resources, prompts, and authentication | Credential-reach verification; ContextForge tool-description poisoning and round-trip validation |
+| **A2A** | Agent cards, JWS verification, skills, delegation, and authentication | Cross-protocol and delegation-path analysis |
+| **LiteLLM** | Operator-supplied master-key record, masked provider references, and hashed virtual-key metadata with spend context | Cross-service credential correlation and path analysis |
+| **Ollama / vLLM** | Ollama model metadata, stable modelfile hashes, system-prompt presence, and fine-tune signals; vLLM fingerprinting | Optional raw modelfile, template, and system-prompt capture; local GGUF extraction |
+| **Qdrant** | Collections, point counts, and optional bounded payload samples | Read-only exposure analysis |
+| **MLflow** | Experiments, runs, registered models, artifact/storage URIs, and verified anonymous-exposure evidence | Read-only exposure analysis |
+| **Jupyter** | Sessions and bounded notebook trees | Read-only anonymous-versus-authenticated exposure analysis |
+| **Open WebUI / LangServe** | Open WebUI authentication posture plus authenticated upstream/RAG credential inventory and observed exposure evidence; LangServe fingerprinting | Read-only credential inventory and exposure evidence |
 
 ## 📦 By the numbers
 
-- **25 directories under `modules/`** - 22 `sdk/module` registrations, 2 `sdk/campaign` scenarios, and the `protoscan` discovery engine
 - **8 lifecycle CLI commands** - `scan` · `discover` · `loot` · `extract` · `poison` · `implant` · `revert` · `campaign` (`enumerate` + `fingerprint` run inside `scan`)
 - **8 fingerprinters · 6 looters · 1 model-inversion extractor · 2 poisoners · 1 implanter**
 - **Graph:** 23 node labels · 32 edge kinds (20 raw + 12 composite) · **15 post-processors**
-- **Intelligence:** 35 text-detection rules + 7 YAML fingerprint rules + 1 code-backed Jupyter detector · 19 prebuilt attack-path queries · OWASP MCP Top 10 + OWASP Agentic Top 10 + **7 MITRE ATLAS techniques**
-- **One static collector binary (~9.9 MiB, no DB/UI/server deps, offline by default).** Apache-2.0, cosign-signed releases with SBOM.
+- **Intelligence:** 35 text-detection rules + 7 YAML fingerprint rules + 1 code-backed Jupyter detector · 19 prebuilt attack-path queries · OWASP MCP Top 10 + OWASP Agentic Top 10 + MITRE ATLAS mappings
+- **One static collector binary with no DB/UI/server dependencies.** Config-only discovery can run offline. Apache-2.0 releases include a Cosign-signed checksum manifest and per-archive SPDX SBOMs.
 
 ## 🚀 Quick start
 
 Prerequisites: Docker + Compose v2. No Go, no Node, no `git clone`.
 
-```bash
-# 1. Start the analysis server (Neo4j + Postgres + UI, binds 127.0.0.1:8080)
-curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/docker/docker-compose.public.yml | docker compose -f - -p agenthound up -d --wait
+**1. Start the analysis server** - Neo4j + Postgres + UI, binds
+`127.0.0.1:8080`:
 
-# 2. Install the collector (single static binary, ~9.9 MiB → ~/.local/bin)
+```bash
+curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/docker/docker-compose.public.yml | docker compose -f - -p agenthound up -d --wait
+```
+
+**2. Install the collector** - single static binary → `~/.local/bin`:
+
+```bash
 curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
-
-# 3. Scan your own machine - offline, read-only, secrets hashed - and stream it in
-agenthound scan --config --output - | curl --data-binary @- -H "Content-Type: application/json" http://127.0.0.1:8080/api/v1/ingest
-
-# 4. Open the graph
-open http://127.0.0.1:8080   # xdg-open on Linux
 ```
 
-Collection identity and the PostgreSQL/Neo4j storage pairing are automatic;
-there are no host, network, or storage-pair IDs to configure or preserve.
-Artifacts from multiple hosts and networks can be imported into one server.
-AgentHound derives read-only collection-point and network-context provenance
-on the target and scopes ambiguous graph identities and lifecycle coverage at
-ingest. The derived IDs are provenance, not authentication.
-
-Prefer a reproducible, pinned install? Every release is cosign-signed with an SBOM:
+**3. Scan local configs** - offline, read-only, raw credential values omitted -
+and stream them in:
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/v1.0.1/install.sh | sh
+agenthound scan --config --output - |
+  curl -sSf --data-binary @- -H "Content-Type: application/json" \
+    http://127.0.0.1:8080/api/v1/ingest
 ```
 
-Also available via Homebrew (`brew tap adithyan-ak/agenthound`, then
-`brew install adithyan-ak/agenthound/agenthound adithyan-ak/agenthound/agenthound-server`),
-`go install`, and signed release binaries - see the [installation guide](https://docs.agenthound.io/getting-started/install/).
+**4. Open the graph at
+[http://127.0.0.1:8080](http://127.0.0.1:8080/).**
 
 <p align="center">
   <img src="docs/readme-assets/agenthound-dashboard.png" alt="AgentHound dashboard" width="900">
 </p>
 
+Prefer Homebrew for both binaries?
+
+```bash
+brew tap adithyan-ak/agenthound
+brew install adithyan-ak/agenthound/agenthound \
+  adithyan-ak/agenthound/agenthound-server
+```
+
+<!-- Release automation updates this hidden compatibility pin:
+https://raw.githubusercontent.com/adithyan-ak/agenthound/v1.0.1/install.sh
+-->
+
+Also available via `go install` and release archives with a Cosign-signed checksum
+manifest and per-archive SPDX SBOMs - see the
+[installation guide](https://docs.agenthound.io/getting-started/install/).
+
 ## 🔪 The offensive lifecycle
 
-One binary runs the whole offensive lifecycle. `scan`, `discover`, and `loot`
-write ingest envelopes; `extract` and the credential-reach campaign do so only
-on committed runs. `poison` and `implant` report mutation status and persist
-protected receipts; `revert` consumes those receipts and reports rollback
-status; the MCP poison round-trip campaign emits a bounded `RunReport`, not
-graph evidence. `loot`, `extract`, `poison`, and `implant` have per-action
-`AUTHORIZED` gates. `campaign` has a distinct acknowledgement, and committed
-mutation scenarios also require the poison acknowledgement. `extract`, `poison`,
-`implant`, and `campaign` default to dry-run. `poison` and `implant` record
-recovery paths for `agenthound revert`; `extract` analyzes a local artifact,
-does not mutate it, and has no Reverter - see
-[Safety & Authorization](#-safety--authorization).
+Collection commands write ingest-ready JSON. The quickstart above shows the
+ingest pattern once.
 
 **1. Recon** - find the AI estate:
 
+Scan common AI-service ports and fingerprint what responds:
+
 ```bash
 agenthound scan 10.0.0.0/24
-agenthound discover 10.0.0.0/24 --mcp --a2a
 ```
 
-**2. Loot** - inventory credential evidence and model metadata without durable
-target mutation (GET/HEAD plus documented idempotent lookup/search POSTs):
+Probe likely web ports for MCP and A2A protocol shapes:
 
 ```bash
-agenthound loot 10.0.0.20:4000 --type litellm --master-key sk-... --engagement-id ENG-1 --output -
-agenthound loot 10.0.0.10:11434 --type ollama --include-credential-values --engagement-id ENG-1
+agenthound discover 10.0.0.0/24
+```
+
+**2. Loot** - inventory credential evidence and model metadata:
+
+With `LITELLM_MASTER_KEY` set, inventory LiteLLM credential references and
+spend metadata:
+
+```bash
+agenthound loot 10.0.0.20:4000 --type litellm \
+  --master-key "$LITELLM_MASTER_KEY"
+```
+
+Opt in to raw Ollama modelfiles, templates, and system prompts:
+
+```bash
+agenthound loot 10.0.0.10:11434 --type ollama \
+  --include-credential-values
 ```
 
 Looter types: `litellm`, `ollama`, `openwebui`, `mlflow`, `qdrant`, `jupyter`.
 
-**3. Extract** - invert a locally-available GGUF weight file to recover fine-tune residue:
+**3. Extract** - with `AI_MODEL_ID` set to an AIModel ID from the graph, invert
+a locally-available GGUF weight file to recover fine-tune residue:
 
 ```bash
-agenthound extract <model-id> --type embedding-invert --artifact /path/to/model.gguf --commit --engagement-id ENG-1
+agenthound extract "$AI_MODEL_ID" --type embedding-invert \
+  --artifact /path/to/model.gguf --commit --engagement-id ENG-1
 ```
 
-**4. Exploit + persist** - sanctioned, reversible offensive actions:
+**4. Validate, exploit, persist + revert** - run sanctioned, reversible
+offensive actions:
+
+With ContextForge authentication configured, run a reversible
+poison-and-restore round trip against a managed MCP tool:
 
 ```bash
-# Optional management override; required when management is on another origin.
-export AGENTHOUND_CONTEXTFORGE_TOKEN='...'
-agenthound campaign https://gateway.example/servers/<server-uuid>/mcp \
-    --scenario mcp-poison-roundtrip --adapter contextforge \
-    --target-id support-lookup --engagement-id ENG-ROUNDTRIP --commit
-agenthound poison https://gateway.example/servers/<server-uuid>/mcp \
-    --type mcp.tool.description --adapter contextforge \
-    --target-id support-lookup --inject-file payload.txt \
-    --commit --engagement-id ENG-1
-agenthound implant --type mcp.config.malicious-server --target-id ~/.cursor/mcp.json --inject "..." --commit --engagement-id ENG-1
+agenthound campaign \
+  https://gateway.example/servers/0123456789abcdef0123456789abcdef/mcp \
+  --scenario mcp-poison-roundtrip --adapter contextforge \
+  --target-id support-lookup --engagement-id ENG-ROUNDTRIP --commit
+```
+
+Commit a targeted tool-description poison:
+
+```bash
+agenthound poison \
+  https://gateway.example/servers/0123456789abcdef0123456789abcdef/mcp \
+  --type mcp.tool.description --adapter contextforge \
+  --target-id support-lookup --inject-file payload.txt \
+  --commit --engagement-id ENG-1
+```
+
+Implant a malicious MCP server entry, then roll the engagement back:
+
+```bash
+agenthound implant localhost --type mcp.config.malicious-server \
+  --file "$HOME/.cursor/mcp.json" --inject-file server-entry.json \
+  --commit --engagement-id ENG-1
+
 agenthound revert ENG-1
 ```
 
-ContextForge management is a named provider contract, not a generic MCP update API. AgentHound derives the deployment root and server UUID from the server-scoped MCP URL; copy the v1.0.5 server ID exactly in its canonical lowercase 32-hex form. Use `--management-url` without `/v1` only when the management root differs. MCP authentication comes from `AGENTHOUND_MCP_TOKEN` or one unambiguous exact-URL client-config `Authorization` header. `AGENTHOUND_CONTEXTFORGE_TOKEN` is an independent management override; without it, same-origin management reuses the resolved MCP bearer, while cross-origin management fails closed. Use a provider session token or an API token with an empty/wildcard permission ceiling. For non-admins, AgentHound separately proves effective provider RBAC for `servers.read`, `tools.read`, and `tools.update`; restrict the account's roles to those permissions and make it the direct owner of both objects. A platform-admin bypass is accepted only from the provider-authenticated profile.
-
-**5. Analyze** - pathfind and gate:
+**5. Analyze** - pathfind and review:
 
 ```bash
-agenthound-server query --prebuilt litellm-credential-leak
-agenthound-server query --findings --fail-on critical
+curl -sSf http://127.0.0.1:8080/api/v1/analysis/prebuilt/credential-chain
+curl -sSf 'http://127.0.0.1:8080/api/v1/analysis/findings?severity=critical'
 ```
 
-See the full [CLI reference](https://docs.agenthound.io/reference/cli/) for every verb, flag, and module.
+See the full [CLI reference](https://docs.agenthound.io/reference/cli/) for
+every verb, flag, and module.
 
 ## 🔎 What AgentHound finds
 
@@ -280,30 +319,31 @@ flowchart LR
   Agent -- TRUSTS_SERVER --> Notes
   Notes -- AUTHENTICATES_WITH --> Identity
   Identity -- USES_CREDENTIAL --> ConfigCred
-  ConfigCred -. VALUE_HASH_MATCH .-> MasterCred
+  ConfigCred -. "same value_hash<br/>correlation evidence, not a stored edge" .-> MasterCred
   Gateway -- EXPOSES_CREDENTIAL --> MasterCred
   Gateway -- EXPOSES_CREDENTIAL --> ProviderRef
-  Agent -- CAN_REACH --> ProviderRef
+  Agent -- "CAN_REACH<br/>(derived)" --> ProviderRef
 ```
 
-No single config file declares this path. AgentHound correlates the two
-collector-owned credential records by `value_hash` and computes the reachability
-edge once both outputs land in the same graph. The provider target remains a
-reference-only finding: it does not assert that AgentHound obtained usable
-upstream provider secret material.
+No single config file declares this path. AgentHound hashes the supplied
+LiteLLM master key, correlates it with the matching client-config credential by
+`value_hash`, and computes the derived reachability edge once both outputs land
+in the same graph. The dotted correlation is explanatory, not a stored
+relationship. The provider target remains a reference-only finding: it does not
+assert that AgentHound obtained usable upstream provider secret material.
 
 ## 🛡️ Safety & authorization
 
 Built to be run under authorization, with the controls this audience checks for:
 
-- **Read-only looter contract** - GET/HEAD only (narrow idempotent-search carve-outs), each guarded by a `get_only_test.go` regression test.
+- **Read-only looter contract** - GET/HEAD by default, with documented lookup/search POSTs for APIs that expose no read equivalent and an opt-in Ollama embeddings compute POST via `--include-embeddings`; each looter is guarded by a `get_only_test.go` regression test.
 - **Mutating verbs dry-run by default** - `poison`, `implant`, and mutation campaigns do not modify a target without `--commit`. `extract` performs its local analysis in dry-run and uses `--commit` only to emit ingest data.
 - **Compile-time-mandatory recovery path** - `Poisoner` / `Implanter` embed `Reverter`; every destructive module must implement recovery. Runtime restoration is verified, not guaranteed across provider policy changes, conflicts, or unavailable targets.
 - **Receipt before mutation** - the undo receipt is persisted to disk *before* the write lands.
-- **AUTHORIZED gates + `--engagement-id`** - interactive first-run prompts; every receipt and edge threaded for IR coordination.
-- **Recon guardrails** - public-IP targets require opt-in + an authorization-file watermark; link-local/multicast refused outright.
+- **AUTHORIZED gates + `--engagement-id`** - interactive first-run prompts for looting and offensive actions. IDs are required for `extract`, `poison`, `implant`, and `campaign`, optional for `loot`, and recorded on the evidence or receipts those commands emit.
+- **Recon guardrails** - public-IP targets require `--allow-public-targets` plus interactive `AUTHORIZED`; `--authorization-file` optionally records a path + SHA-256 watermark. Link-local and multicast targets are refused, except for the explicit cloud-metadata address `169.254.169.254`.
 
-**It is explicitly not** a C2, not an evasion implant (EDR will flag a binary named `agenthound`), and not a multi-user SaaS. It is an authorized-assessment framework, and the design says so.
+**It is explicitly not** a C2, a stealth/evasion implant, or a multi-user SaaS. It is transparent, single-user authorized-assessment tooling, and the design says so.
 
 Read the [security posture guide](https://docs.agenthound.io/operator/security/) and [offensive actions guide](https://docs.agenthound.io/operator/offensive-actions/).
 
