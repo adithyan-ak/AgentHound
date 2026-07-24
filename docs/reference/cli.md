@@ -106,11 +106,19 @@ Instruction discovery always reads the fixed root project files (`AGENTS.md`,
 `~/.claude/CLAUDE.md`) regardless of the current directory. The recursive
 `<component>/.cursor/rules/**/*.mdc` walk is **opt-in** — a default host scan
 never crawls the filesystem. Pass `--project-dir` to walk one project tree
-strictly, or `--deep` to sweep the home directory best-effort. Both prune junk
-and cache trees (`.git`, `node_modules`, `.cache`, `.Trash`, …) and cap depth;
-the strict walk bounds traversal at 100,000 entries while `--deep` allows
-1,000,000 entries and a 60-second budget, both at 10,000 Cursor rules and 4 MiB
-per file.
+strictly (the explicitly-named root is always scanned, even if its own name is a
+normally-pruned one such as `vendor`), or `--deep` to sweep the home directory
+best-effort. Both prune junk, cache, VCS, and trash *sub*trees — `.git`,
+`node_modules`, `.cache`, and trash directories on every platform (macOS
+`.Trash`, the freedesktop XDG home trash `Trash`, per-mount `.Trash-<uid>`,
+Windows `$Recycle.Bin`). The strict walk bounds traversal at 100,000 entries
+while `--deep` allows 1,000,000 entries and a 60-second budget, both at 10,000
+Cursor rules and 4 MiB per file.
+
+A `.cursor/rules` tree that cannot be fully enumerated (it hit the entry, rule,
+or file-size limit) contributes **no** graph facts — a best-effort scan keeps
+every complete tree and records the rest as truncated coverage rather than
+emitting a partially-enumerated tree.
 
 A strict (`--project-dir`) walk that truncates withholds publication, as an
 operator-named tree is expected to finish. A `--deep` walk that truncates is

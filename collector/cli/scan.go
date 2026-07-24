@@ -464,16 +464,43 @@ func collectorRootCoverageKey(collectorName string) string {
 	return ingest.CollectorRootCoverageKey(collectorName)
 }
 
+// authoritativeOutcomes drops advisory (best-effort) outcomes so the collect
+// root state reflects only outcomes that are allowed to withhold publication.
+func authoritativeOutcomes(outcomes []ingest.CollectionOutcome) []ingest.CollectionOutcome {
+	filtered := make([]ingest.CollectionOutcome, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		if !outcome.Advisory {
+			filtered = append(filtered, outcome)
+		}
+	}
+	return filtered
+}
+
 func rootedCollectionReport(
 	collectorName string,
 	report *ingest.CollectionReport,
 	authoritative bool,
 ) *ingest.CollectionReport {
 	state := ingest.OutcomeUnknown
+	rootState := ingest.OutcomeUnknown
 	if report != nil {
 		state = report.State
 		if state == "" {
 			state = ingest.AggregateOutcomeState(report.Outcomes)
+		}
+		// The collect root is an authoritative coverage key. When the report
+		// carries best-effort (--deep) advisory outcomes, its state must be
+		// re-aggregated from NON-advisory outcomes only — otherwise a truncated
+		// advisory instruction outcome taints the root, fails
+		// AuthoritativeCoverageComplete, and withholds publication, defeating the
+		// advisory contract. Absent any advisory outcome the authoritative report
+		// State is preserved verbatim (a partial attempt stays partial). The
+		// report-level State keeps the full aggregate so collection_status still
+		// reports truncated honestly.
+		rootState = state
+		authoritative := authoritativeOutcomes(report.Outcomes)
+		if len(authoritative) != len(report.Outcomes) {
+			rootState = ingest.AggregateOutcomeState(authoritative)
 		}
 	}
 	rootKey := collectorRootCoverageKey(collectorName)
@@ -485,7 +512,7 @@ func rootedCollectionReport(
 			CoverageKey: rootKey,
 			Target:      collectorName,
 			Method:      "collect",
-			State:       state,
+			State:       rootState,
 		}},
 	}
 	if authoritative && report != nil {

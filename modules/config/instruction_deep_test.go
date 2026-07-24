@@ -102,6 +102,107 @@ func TestDiscoverInstructionsTruncationAdvisory(t *testing.T) {
 	}
 }
 
+// A tree that truncates (here, the shared rule limit) must contribute ZERO
+// observations — property-incomplete nodes would poison the graph-wide
+// publication gate and wedge every future scan. Coverage still records the
+// truncation.
+func TestDiscoverInstructionsTruncatedTreeEmitsNoObservations(t *testing.T) {
+	project := t.TempDir()
+	writeInstrRule(t, filepath.Join(project, ".cursor", "rules", "a.mdc"), "rule a")
+	writeInstrRule(t, filepath.Join(project, ".cursor", "rules", "b.mdc"), "rule b")
+	engine := testInstrEngine(t)
+
+	oldLimit := instructionRuleLimit
+	instructionRuleLimit = 1
+	t.Cleanup(func() { instructionRuleLimit = oldLimit })
+
+	d := DiscoverInstructions(context.Background(), "", project, InstructionScan{RecursiveRoot: project, Deep: true}, engine)
+
+	var treeState ingest.OutcomeState
+	for _, oc := range d.Outcomes {
+		if oc.Method == "cursor_rule_tree" {
+			treeState = oc.State
+		}
+	}
+	if treeState != ingest.OutcomeTruncated {
+		t.Fatalf("tree state = %q, want truncated", treeState)
+	}
+	if len(d.Observations) != 0 {
+		t.Fatalf("truncated tree emitted %d observations, want 0 (property-incomplete nodes wedge publication)", len(d.Observations))
+	}
+}
+
+// The depth cap was removed: a legitimately deep .cursor/rules tree must be
+// found and must NOT silently certify complete coverage while omitting it.
+func TestDiscoverInstructionsDeepNestingNotSilentlySkipped(t *testing.T) {
+	project := t.TempDir()
+	deepDir := project
+	for i := 0; i < 30; i++ {
+		deepDir = filepath.Join(deepDir, "d")
+	}
+	writeInstrRule(t, filepath.Join(deepDir, ".cursor", "rules", "deep.mdc"), "deep rule")
+	engine := testInstrEngine(t)
+
+	d := DiscoverInstructions(context.Background(), "", project, InstructionScan{RecursiveRoot: project}, engine)
+	var found bool
+	for _, obs := range d.Observations {
+		if strings.HasSuffix(obs.Info.Path, "deep.mdc") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("deeply nested rule was silently skipped")
+	}
+	if !d.InstructionCoverageComplete {
+		t.Fatal("coverage falsely reported incomplete for a fully-walked deep tree")
+	}
+}
+
+// Junk pruning must apply to subdirectories, never to the explicitly-selected
+// root itself.
+func TestDiscoverInstructionsDoesNotPruneSelectedRoot(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "vendor") // a pruned NAME, but it is the selected root
+	writeInstrRule(t, filepath.Join(root, ".cursor", "rules", "r.mdc"), "rule")
+	engine := testInstrEngine(t)
+
+	d := DiscoverInstructions(context.Background(), "", root, InstructionScan{RecursiveRoot: root}, engine)
+	var found bool
+	for _, obs := range d.Observations {
+		if strings.HasSuffix(obs.Info.Path, "r.mdc") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("explicitly selected root named 'vendor' was pruned and returned nothing")
+	}
+}
+
+// Trash is pruned cross-OS: macOS .Trash, the freedesktop XDG home trash
+// (a dir named Trash), and per-mount .Trash-<uid>.
+func TestInstructionWalkPrunesCrossOSTrash(t *testing.T) {
+	project := t.TempDir()
+	writeInstrRule(t, filepath.Join(project, ".local", "share", "Trash", "files", "gone", ".cursor", "rules", "x.mdc"), "deleted")
+	writeInstrRule(t, filepath.Join(project, ".Trash-1000", "files", "gone", ".cursor", "rules", "y.mdc"), "deleted")
+	writeInstrRule(t, filepath.Join(project, ".cursor", "rules", "keep.mdc"), "keep")
+	engine := testInstrEngine(t)
+
+	d := DiscoverInstructions(context.Background(), "", project, InstructionScan{RecursiveRoot: project, Deep: true}, engine)
+	var sawKeep bool
+	for _, obs := range d.Observations {
+		// x.mdc / y.mdc live inside the trash trees; keep.mdc does not.
+		if strings.HasSuffix(obs.Info.Path, "x.mdc") || strings.HasSuffix(obs.Info.Path, "y.mdc") {
+			t.Fatalf("collected a rule from a trash directory: %s", obs.Info.Path)
+		}
+		if strings.HasSuffix(obs.Info.Path, "keep.mdc") {
+			sawKeep = true
+		}
+	}
+	if !sawKeep {
+		t.Fatal("did not collect the non-trash rule")
+	}
+}
+
 func TestInstructionWalkPrunesJunkDirs(t *testing.T) {
 	project := t.TempDir()
 	writeInstrRule(t, filepath.Join(project, "node_modules", ".cursor", "rules", "junk.mdc"), "junk")

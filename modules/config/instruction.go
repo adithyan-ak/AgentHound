@@ -16,9 +16,6 @@ import (
 
 const (
 	maxInstructionFileBytes int64 = 4 << 20
-	// maxInstructionWalkDepth bounds directory descent so a deeply self-nesting
-	// tree cannot exhaust the entry budget regardless of total entry count.
-	maxInstructionWalkDepth = 24
 	// deepInstructionWalkBudget bounds worst-case wall time for a --deep sweep
 	// (slow paths such as network homes or cloud-sync placeholder hydration do
 	// not correspond to many entries, so the entry cap alone is insufficient).
@@ -34,11 +31,15 @@ var (
 )
 
 // instructionPrunedDirNames are directory names skipped during the recursive
-// instruction walk. They are junk/cache/VCS trees that never hold authored
+// instruction walk. They are junk/cache/VCS/trash trees that never hold authored
 // .cursor/rules and would otherwise burn the entry budget (e.g. node_modules)
-// or, in the reported incident, a bloated ~/.Trash. Absolute pseudo-filesystem
-// roots (/proc, /sys) and mount boundaries are deferred to a later hardening
-// pass; the entry cap plus wall-clock budget bound the worst case meanwhile.
+// or, in the reported incident, a bloated trash directory. Trash coverage is
+// cross-OS: `.Trash`/`.Trashes` (macOS), `Trash` (the freedesktop XDG home
+// trash, normally ~/.local/share/Trash on Linux), `$Recycle.Bin` (Windows), and
+// the per-mount `.Trash-<uid>` variants matched by prefix in instructionPrunedDir.
+// Absolute pseudo-filesystem roots (/proc, /sys) and mount boundaries are
+// deferred to a later hardening pass; the entry cap plus wall-clock budget bound
+// the worst case meanwhile.
 var instructionPrunedDirNames = map[string]bool{
 	".git":          true,
 	".svn":          true,
@@ -49,6 +50,7 @@ var instructionPrunedDirNames = map[string]bool{
 	"Caches":        true,
 	".Trash":        true,
 	".Trashes":      true,
+	"Trash":         true,
 	"$Recycle.Bin":  true,
 	".venv":         true,
 	"venv":          true,
@@ -60,20 +62,12 @@ var instructionPrunedDirNames = map[string]bool{
 }
 
 func instructionPrunedDir(entry os.DirEntry) bool {
-	return entry != nil && entry.IsDir() && instructionPrunedDirNames[entry.Name()]
-}
-
-// walkDepthExceeded reports whether path descends more than maxInstructionWalkDepth
-// directories below root.
-func walkDepthExceeded(root, path string) bool {
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
+	if entry == nil || !entry.IsDir() {
 		return false
 	}
-	if rel == "." {
-		return false
-	}
-	return strings.Count(rel, string(filepath.Separator))+1 > maxInstructionWalkDepth
+	name := entry.Name()
+	// Per-mount freedesktop trash directories are named .Trash-<uid>.
+	return instructionPrunedDirNames[name] || strings.HasPrefix(name, ".Trash-")
 }
 
 type InstructionFileInfo struct {
@@ -222,7 +216,10 @@ func discoverCursorRuleTrees(
 			traversalError = "collection canceled"
 			return filepath.SkipAll
 		}
-		if instructionPrunedDir(entry) {
+		// Prune junk/cache/trash trees, but never the explicitly-selected root
+		// itself — an operator who names `--project-dir /path/to/vendor` (or a
+		// repo literally named .cache, venv, Trash) still expects it scanned.
+		if path != projectRoot && instructionPrunedDir(entry) {
 			return filepath.SkipDir
 		}
 		if walkErr != nil {
@@ -232,9 +229,6 @@ func discoverCursorRuleTrees(
 				return filepath.SkipDir
 			}
 			return nil
-		}
-		if entry != nil && entry.IsDir() && walkDepthExceeded(projectRoot, path) {
-			return filepath.SkipDir
 		}
 		if path != projectRoot {
 			entries++
@@ -284,6 +278,13 @@ func discoverCursorRuleTree(
 	state := ingest.OutcomeComplete
 	errText := ""
 	items := 0
+	// A truncated/partial tree must not contribute graph nodes: the writer would
+	// mark them observation_properties_complete=false (their owning tree domain
+	// is not certified complete), which fails the graph-wide observation gate and
+	// wedges every future publication. Buffer the observation count and roll back
+	// this tree's observations unless it completes. Coverage outcomes are still
+	// recorded so partiality stays visible.
+	observationsBefore := len(result.Observations)
 
 	err := filepath.WalkDir(treePath, func(path string, entry os.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
@@ -291,9 +292,9 @@ func discoverCursorRuleTree(
 			return filepath.SkipAll
 		}
 		// A nested rules tree is still part of the project traversal boundary.
-		// Prune junk/VCS trees before counting them, even when they happen to
-		// exist below .cursor/rules.
-		if instructionPrunedDir(entry) {
+		// Prune junk/VCS/trash trees before counting them (but never treePath
+		// itself, an explicitly-reached .cursor/rules root).
+		if path != treePath && instructionPrunedDir(entry) {
 			return filepath.SkipDir
 		}
 		if walkErr != nil {
@@ -305,9 +306,6 @@ func discoverCursorRuleTree(
 		}
 		if path == treePath {
 			return nil
-		}
-		if entry.IsDir() && walkDepthExceeded(treePath, path) {
-			return filepath.SkipDir
 		}
 		(*entries)++
 		if *entries > entryLimit {
@@ -352,6 +350,13 @@ func discoverCursorRuleTree(
 	})
 	if err != nil && state == ingest.OutcomeComplete {
 		state, errText = ingest.OutcomePartial, "rules tree traversal incomplete"
+	}
+	// Discard this tree's observations unless it fully enumerated. Nodes owned by
+	// a non-complete domain would poison the graph-wide publication gate; a
+	// best-effort sweep keeps every complete tree and records the rest as
+	// truncated coverage rather than emitting property-incomplete facts.
+	if state != ingest.OutcomeComplete {
+		result.Observations = result.Observations[:observationsBefore]
 	}
 	result.Outcomes = append(result.Outcomes, instructionOutcome(
 		treeKey, treePath, "cursor_rule_tree", state, items, errText, deep,
