@@ -182,7 +182,7 @@ jobs:
             -run '^TestIntegrationLiteLLM(FingerprintThenLootPreservesGatewayProperties|FirstPartyProducerSatisfiesMasterExposureQuery|QueryRejectsUnobservedMasterMaterial)$'
       # Dedicated, serialized step for the destructive fresh-schema integration.
       # It runs AFTER the ordinary suite has finished (so nothing else is
-      # touching the shared DB), targets only that single test, and pins
+      # touching the shared DB), targets only the fresh-schema tests, and pins
       # `-p 1` to forbid any parallel package execution. Together with the
       # storage-binding and LiteLLM steps above, this is the only other place
       # where the reset opt-in is enabled.
@@ -191,7 +191,7 @@ jobs:
           AGENTHOUND_FRESH_DB_INTEGRATION: "1"
         run: |
           go test ./server/internal/ingest -race -p 1 \
-            -run '^TestIntegrationFreshSchemaCompleteIngestPublishes$'
+            -run '^TestIntegrationFreshSchema(CompleteIngestPublishes|EmptyIngestPublishesUnderThreeSeconds)$'
 
   govulncheck:
     if: github.event_name == 'pull_request'
