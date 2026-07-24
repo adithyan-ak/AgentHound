@@ -75,7 +75,7 @@ score = 0.30 * credential + 0.25 * blast_radius + 0.20 * auth_risk
 | `blast_radius` | `min(reachable_resource_count * 10, 100)` |
 | `auth_risk` | `(1 - avg_effective_trust_edge_weight) * 100` over complete effective assessments (weak auth = high score); incomplete edges contribute a bounded unknown factor |
 | `tool_surface` | `min(trusted_tool_count * 5, 100)` |
-| `poisoning` | 100 if any loaded instruction file is suspicious; 0 otherwise |
+| `poisoning` | 100 if any loaded instruction file is suspicious; 0 when instruction coverage was complete and nothing suspicious was found. When the agent's `instruction_coverage_complete=false` (a `--deep` sweep truncated), it degrades to a bounded unknown factor (`agent_instructions`, range 0–100) so an unassessed agent is never scored as clean. |
 
 ### A2AAgent
 

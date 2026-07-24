@@ -219,13 +219,16 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 
 	attributionComplete := prepareObservationDomains(data)
 	keys := coverageKeys(data.Meta.Collection)
+	// Advisory (best-effort, e.g. --deep instruction sweep) domains never
+	// withhold publication or enter dirty coverage even when truncated.
+	advisoryKeys := sdkingest.AdvisoryCoverageDomains(data.Meta.Collection)
 	completeDomains := sdkingest.CompleteCoverageDomains(data.Meta.Collection)
 	authoritativeRoots := sdkingest.CompleteAuthoritativeRoots(data.Meta.Collection)
 	if !attributionComplete || normalizationDegradedErr != nil {
 		completeDomains = nil
 		authoritativeRoots = nil
 	}
-	coverageComplete := sdkingest.CollectionCoverageComplete(data.Meta.Collection) &&
+	coverageComplete := sdkingest.AuthoritativeCoverageComplete(data.Meta.Collection) &&
 		attributionComplete &&
 		normalizationDegradedErr == nil
 	// Preserve owner-scoped contributions through the pipeline. The graph
@@ -287,7 +290,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	cumulativeDirtyCoverage, err := p.scanStore.BeginScan(
 		ctx,
 		initialScan,
-		mergeCoverage(keys, retiredDomains),
+		mergeCoverage(subtractCoverage(keys, advisoryKeys), retiredDomains),
 		sdkingest.CoverageParents(data.Meta.Collection),
 	)
 	if err != nil {
@@ -585,6 +588,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		dirtyCoverage = subtractCoverage(
 			cumulativeDirtyCoverage,
 			publicationDomains,
+			advisoryKeys,
 		)
 		dirtyCoverage = mergeCoverage(
 			dirtyCoverage,

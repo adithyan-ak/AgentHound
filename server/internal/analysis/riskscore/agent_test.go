@@ -322,6 +322,55 @@ func TestAgentRiskScore_Poisoning(t *testing.T) {
 	}
 }
 
+// When an agent's instruction coverage is partial (e.g. a --deep sweep hit its
+// budget) and no suspicious file was found, the poisoning factor must degrade to
+// a known-unknown rather than a clean 0 — an unassessed agent is not a clean one.
+func TestAgentRiskAssessment_PoisoningUnknownWhenCoveragePartial(t *testing.T) {
+	mock := &graph.MockGraphDB{
+		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
+			if containsSubstring(cypher, "instruction_coverage_complete") {
+				return []map[string]any{{"cnt": int64(0), "complete": false}}, nil
+			}
+			return nil, nil
+		},
+	}
+
+	assessment, err := AgentRiskAssessment(context.Background(), mock, "agent-1")
+	if err != nil {
+		t.Fatalf("AgentRiskAssessment() error = %v", err)
+	}
+	if assessment.Complete {
+		t.Fatalf("assessment must be incomplete when instruction coverage is partial: %+v", assessment)
+	}
+	if len(assessment.UnknownFactors) != 1 || assessment.UnknownFactors[0] != "agent_instructions" {
+		t.Fatalf("unknown factors = %v, want [agent_instructions]", assessment.UnknownFactors)
+	}
+	// poison Max=100 weighted 0.10 contributes up to 10 to the conservative bound.
+	if assessment.Max < 10 {
+		t.Fatalf("assessment max = %v, want >= 10 (poison upper bound included)", assessment.Max)
+	}
+}
+
+// Complete coverage with no suspicious file is an exact clean 0 — no unknown factor.
+func TestAgentRiskAssessment_PoisoningCleanWhenCoverageComplete(t *testing.T) {
+	mock := &graph.MockGraphDB{
+		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
+			if containsSubstring(cypher, "instruction_coverage_complete") {
+				return []map[string]any{{"cnt": int64(0), "complete": true}}, nil
+			}
+			return nil, nil
+		},
+	}
+
+	assessment, err := AgentRiskAssessment(context.Background(), mock, "agent-1")
+	if err != nil {
+		t.Fatalf("AgentRiskAssessment() error = %v", err)
+	}
+	if !assessment.Complete || len(assessment.UnknownFactors) != 0 {
+		t.Fatalf("assessment = %+v, want complete with no unknown factors", assessment)
+	}
+}
+
 func TestAgentRiskScore_QueryError(t *testing.T) {
 	mock := &graph.MockGraphDB{QueryError: context.Canceled}
 

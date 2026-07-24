@@ -960,6 +960,74 @@ func TestPipeline_CompleteEmptyRootClearsFailedUnheadedChild(t *testing.T) {
 	}
 }
 
+// A best-effort (--deep) instruction sweep that truncates is marked advisory
+// on its coverage outcome. It must publish the authoritative projection anyway
+// and must never enter persisted dirty coverage (no cross-run wedge).
+func TestPipeline_AdvisoryTruncatedChildPublishes(t *testing.T) {
+	root := sdkingest.CollectorRootCoverageKey("config")
+	advisoryChild := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-traversal",
+		"/home/op",
+	)
+	data := validIngestDataFor("scan-advisory-deep")
+	data.Graph = sdkingest.GraphData{
+		Nodes: []sdkingest.Node{},
+		Edges: []sdkingest.Edge{},
+	}
+	data.Meta.Collection = &sdkingest.CollectionReport{
+		State:        sdkingest.OutcomeTruncated,
+		CoverageKeys: []string{root, advisoryChild},
+		AuthoritativeRoots: []sdkingest.CoverageRoot{{
+			CoverageKey:       root,
+			ChildCoverageKeys: []string{advisoryChild},
+		}},
+		Outcomes: []sdkingest.CollectionOutcome{
+			{
+				Collector:   "config",
+				CoverageKey: root,
+				Target:      "config",
+				Method:      "collect",
+				State:       sdkingest.OutcomeComplete,
+			},
+			{
+				Collector:         "config",
+				CoverageKey:       advisoryChild,
+				ParentCoverageKey: root,
+				Target:            "/home/op",
+				Method:            "cursor_rule_traversal",
+				State:             sdkingest.OutcomeTruncated,
+				Advisory:          true,
+			},
+		},
+	}
+	sdkingest.EnsureCoverageParentage(data.Meta.Collection)
+
+	store := &fakeScanStore{}
+	lifecycle := &fakeLifecycleScanStore{fakeScanStore: store}
+	publisher := &fakePublisher{lifecycle: lifecycle}
+	writer := &fakeWriter{}
+	p := newTestPipeline(writer, &graph.MockGraphDB{}, lifecycle, noOpRunPP)
+	p.findingStore = publisher
+
+	result, err := p.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.ProjectionStatus != model.ProjectionComplete {
+		t.Fatalf("advisory-truncated projection = %q, want published/complete", result.ProjectionStatus)
+	}
+	if len(publisher.finalizations) != 1 || !publisher.finalizations[0].Publish {
+		t.Fatalf("advisory finalization = %+v, want publish", publisher.finalizations)
+	}
+	scopedAdvisory := scopedCoverageFor(data, sdkingest.ScopeCollectionPoint, advisoryChild)
+	for _, k := range lifecycle.dirtyCoverage {
+		if k == scopedAdvisory {
+			t.Fatalf("advisory key entered dirty coverage: %v", lifecycle.dirtyCoverage)
+		}
+	}
+}
+
 func TestPipeline_PartialCurrentChildPreventsRootRetirement(t *testing.T) {
 	currentChild := sdkingest.CanonicalCoverageKey(
 		"mcp",

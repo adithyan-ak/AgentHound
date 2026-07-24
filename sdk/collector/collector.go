@@ -29,4 +29,13 @@ type CollectOptions struct {
 	AuthToken               string
 	ScanID                  string
 	RulesEngine             *rules.Engine // nil = default engine constructed automatically
+	// InstructionRecursiveRoot enables the recursive .cursor/rules instruction
+	// walk and names the directory it starts from. Empty disables the walk
+	// entirely (the default host scan never crawls the filesystem). Fixed
+	// single-file instruction targets are read regardless of this field.
+	InstructionRecursiveRoot string
+	// InstructionDeep selects best-effort mode for the recursive walk: a larger
+	// entry cap plus a wall-clock budget, and advisory coverage so a truncated
+	// sweep still publishes instead of withholding the projection.
+	InstructionDeep bool
 }
