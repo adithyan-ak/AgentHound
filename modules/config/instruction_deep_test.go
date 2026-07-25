@@ -375,7 +375,7 @@ func TestDiscoverInstructionsTruncatedDeepRetainsCompleteChildren(t *testing.T) 
 	var observedAgents, observedCursor bool
 	for _, observation := range discovery.Observations {
 		observedAgents = observedAgents || strings.HasSuffix(observation.Info.Path, "AGENTS.md")
-		observedCursor = observedCursor || strings.HasSuffix(observation.Info.Path, filepath.Join("rules", "a.mdc"))
+		observedCursor = observedCursor || observation.Info.Type == "cursor-rule"
 		if observation.OwnerKey != instructionChildKey(root.CoverageKey, observation.Info.Path) {
 			t.Fatalf("truncated deep observation = %+v, want per-file child owner", observation)
 		}
