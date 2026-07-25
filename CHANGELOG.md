@@ -5,9 +5,11 @@
 - **Bounded instruction discovery by default.** Config scans now check the
   registered Claude, Cursor, GitHub Copilot, `AGENTS.md`, and `CLAUDE.md`
   sources at the canonical user and project roots. `--deep` adds a bounded
-  nested-project search under the user home and a disjoint selected project;
-  unrelated files do not consume its directory or matched-source budgets, and
-  trash, dependency, cache, and symlinked descendant trees are excluded.
+  nested-project search under the user home and an independently partitioned
+  selected project; explicit project selection overrides home pruning without
+  scanning sibling dependency or cache trees. Unrelated files do not consume
+  its directory or matched-source budgets, and trash, dependency, cache, and
+  symlinked descendant trees are excluded.
 - **Truthful independent instruction lifecycle.** Exact-user, exact-project,
   and deep observations have stable owner identities independent of registry
   evolution. Complete roots retire absent evidence; truncated deep scans

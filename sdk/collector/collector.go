@@ -30,9 +30,10 @@ type CollectOptions struct {
 	ScanID                  string
 	RulesEngine             *rules.Engine // nil = default engine constructed automatically
 	// InstructionRecursiveRoot names the canonical home boundary used by optional
-	// nested registered-source discovery. A disjoint selected project is covered
-	// by the same bounded attempt. Empty disables deep traversal; exact registered
-	// sources at user and project roots are still collected.
+	// nested registered-source discovery. The selected project receives a
+	// separately partitioned scope in the same bounded attempt. Empty disables
+	// deep traversal; exact registered sources at user and project roots are
+	// still collected.
 	InstructionRecursiveRoot string
 	// InstructionDeep enables bounded nested discovery. Directory, matched-file,
 	// byte, and wall-clock limits make its incomplete state non-blocking while

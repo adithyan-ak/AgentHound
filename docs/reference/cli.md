@@ -78,7 +78,7 @@ When none specified, defaults to config + MCP.
 | `--path` | | Single config file path (overrides auto-discovery). |
 | `--paths` | | Comma-separated paths to multiple config files. |
 | `--project-dir` | current working directory | Canonical exact project root for project config, registered root instruction sources, and MCP auto-discovery. It does not enable arbitrary recursive discovery. Missing, inaccessible, or non-directory roots fail closed; they are never treated as an empty project. |
-| `--deep` | `false` | Add a bounded best-effort search below the canonical user home and the selected project when it is outside home. Overlapping roots are canonicalized and deduplicated. A limited deep attempt publishes proven positives with an explicit coverage warning. |
+| `--deep` | `false` | Add a bounded best-effort search below the canonical user home and the selected project. Canonical overlaps are partitioned so the selected project remains independently covered even inside a pruned home subtree. A limited deep attempt publishes proven positives with an explicit coverage warning. |
 | `--include-credential-values` | `false` | Include credential values that the collector actually observes; hashes and material-status fields remain authoritative when a service masks or hashes a value. |
 
 Supported clients (12): Claude Desktop, Claude Code, Cursor, VS Code, Windsurf, Continue, Zed, Cline, JetBrains, Kiro, Amazon Q, Augment.
@@ -109,12 +109,14 @@ sources: `AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md`,
 `.github/instructions/**/*.instructions.md`. Known rule subtrees are bounded;
 the default scan does not search the rest of the home directory for projects.
 
-`--deep` adds bounded traversal below the home directory and, when the selected
-project is outside home, below that project root. Overlapping canonical or
-symlink-resolved roots are deduplicated; when the selected project contains
-home, its traversal excludes the home subtree already owned by the home deep
-root. Both roots share one 60-second wall-clock budget. Deep mode does not
-change either exact root. Discovery prunes junk, cache, VCS, and trash
+`--deep` adds bounded traversal below both the home directory and the selected
+project. Canonical or symlink-resolved overlaps are partitioned: when home
+contains the project, the home traversal excludes the project and the project
+receives its own deep root; when the project contains home, the inverse
+exclusion applies; identical roots collapse to one scope. Explicit project
+selection therefore overrides home pruning without admitting sibling
+dependency or cache trees. Both roots share one 60-second wall-clock budget.
+Deep mode does not change either exact root. Discovery prunes junk, cache, VCS, and trash
 *sub*trees — `.git`,
 `node_modules`, `.cache`, and trash directories on every platform (macOS
 `.Trash`, the freedesktop XDG home trash `Trash`, per-mount `.Trash-<uid>`,

@@ -588,8 +588,8 @@ func failedCollectionReport(collectorName string, err error) *ingest.CollectionR
 }
 
 // resolveInstructionRecursion returns the canonical home boundary for deep
-// discovery. The config collector adds a disjoint selected project while exact
-// discovery always covers both roots without a recursive filesystem sweep.
+// discovery. The config collector adds a separately partitioned selected
+// project while exact discovery covers both roots without a recursive sweep.
 func resolveInstructionRecursion(deep bool) (root string, isDeep bool, err error) {
 	if !deep {
 		return "", false, nil

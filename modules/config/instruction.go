@@ -21,7 +21,7 @@ import (
 
 const (
 	maxInstructionFileBytes       int64 = 4 << 20
-	instructionRegistryGeneration       = 2
+	instructionRegistryGeneration       = 3
 )
 
 var (
@@ -76,7 +76,7 @@ var instructionRegistry = []instructionSource{
 // instructionRegistryManifest is the canonical comparison contract for the
 // registry. Ownership keys intentionally exclude it: changing the recognized
 // source set must refresh the same owners so removed evidence can be retired.
-const instructionRegistryManifest = "agenthound-instruction-registry/v2\n" +
+const instructionRegistryManifest = "agenthound-instruction-registry/v3\n" +
 	"source:file:AGENTS.md:agents.md\n" +
 	"source:file:CLAUDE.md:claude.md\n" +
 	"source:file:.claude/CLAUDE.md:claude.md\n" +
@@ -88,7 +88,7 @@ const instructionRegistryManifest = "agenthound-instruction-registry/v2\n" +
 	"roots:exact_user,exact_project,deep\n" +
 	"ownership:file=stable-root-key+canonical-file-path\n" +
 	"ownership:registry-contract=excluded\n" +
-	"deep:canonical-home+selected-project:nested-only:overlap-home-priority\n" +
+	"deep:canonical-home+selected-project:nested-only:overlap-partitioned\n" +
 	"symlinks:root-resolved,descendants-excluded\n" +
 	"files:regular-only\n" +
 	"deep:unreadable-unmatched-descendant=truncated\n" +
@@ -131,7 +131,8 @@ type InstructionDiscovery struct {
 type InstructionScan struct {
 	// RecursiveRoot is retained as the collector option boundary. It is used
 	// only when Deep is true and names the canonical user-home boundary.
-	// DiscoverInstructions also covers a selected project outside that boundary.
+	// DiscoverInstructions also gives the selected project an independent,
+	// non-overlapping deep scope.
 	RecursiveRoot string
 	Deep          bool
 }
@@ -201,8 +202,8 @@ func instructionRegistryContract() ingest.RegistryContract {
 
 // DiscoverInstructions scans the complete bounded registry at the canonical
 // home and project roots. Deep mode additionally searches nested sources below
-// home and a selected project outside home; it never changes exact ownership or
-// reclassifies root-level sources.
+// home and the separately partitioned selected project; it never changes exact
+// ownership or reclassifies root-level sources.
 func DiscoverInstructions(
 	ctx context.Context,
 	homeDir, projectRoot string,
@@ -336,11 +337,13 @@ func deepInstructionScopes(homeRoot, projectRoot string) []deepInstructionScope 
 	homeRoot = canonicalInstructionRoot(homeRoot)
 	projectRoot = canonicalInstructionRoot(projectRoot)
 	scopes := []deepInstructionScope{{root: homeRoot}}
-	if projectRoot == "" || instructionPathWithinRoot(homeRoot, projectRoot) {
+	if projectRoot == "" || projectRoot == homeRoot {
 		return scopes
 	}
 	projectScope := deepInstructionScope{root: projectRoot}
-	if instructionPathWithinRoot(projectRoot, homeRoot) {
+	if instructionPathWithinRoot(homeRoot, projectRoot) {
+		scopes[0].excludedRoot = projectRoot
+	} else if instructionPathWithinRoot(projectRoot, homeRoot) {
 		projectScope.excludedRoot = homeRoot
 	}
 	return append(scopes, projectScope)

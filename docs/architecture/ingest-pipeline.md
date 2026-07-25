@@ -332,9 +332,12 @@ timed-out worker may finish later, but it owns only private state and cannot
 alter the returned artifact. Completed per-file observations are checkpointed
 as immutable values, so a deadline result retains proven positives under a
 partial deep root while preserving prior unseen evidence. Home and a disjoint
-selected project use independent deep roots but share the same 60-second
-attempt budget. Partial, failed, and truncated instruction attempts retain every
-complete per-file child observed before the limitation.
+or canonically partitioned selected project use independent deep roots but
+share the same 60-second attempt budget. Containing scopes exclude contained
+selected roots, so explicit project coverage cannot be defeated by home
+pruning and no file receives duplicate deep ownership. Partial, failed, and
+truncated instruction attempts retain every complete per-file child observed
+before the limitation.
 
 ## Processing Order
 
