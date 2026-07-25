@@ -675,7 +675,10 @@ is incomplete or uses an older registry contract.
 
 Returns one persisted publication revision. The export is assembled inside the
 same PostgreSQL transaction that replaces the scan's finding snapshot and
-advances publication. It includes exact scope, stage/coverage completeness,
+advances publication. Export schema version 3 adds typed
+`scope.active_coverage_roots`, so external clients can distinguish usable
+limited publications from complete registered-source coverage. It includes
+exact scope, stage/coverage completeness,
 normalization warnings, managed-observation completeness, observation and
 publication timestamps, suppression policy, frozen public graph totals,
 comparison metadata, rules provenance, active coverage-root state, and all findings with the triage state

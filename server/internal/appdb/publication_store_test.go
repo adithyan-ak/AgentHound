@@ -896,7 +896,7 @@ func TestBuildPostureExportDeclaresHealthAndCompleteState(t *testing.T) {
 		nil,
 	)
 
-	if export.SchemaVersion != 2 ||
+	if export.SchemaVersion != 3 ||
 		export.Health.State != "not_captured" ||
 		export.Health.Captured {
 		t.Fatalf("health/schema state = %+v", export)

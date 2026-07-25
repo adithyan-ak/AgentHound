@@ -1461,6 +1461,8 @@ components:
 
     ProjectionState:
       type: object
+      additionalProperties: false
+      required: [status, dirty_coverage, active_coverage_roots, updated_at]
       properties:
         status:
           type: string
@@ -1473,6 +1475,10 @@ components:
           type: array
           items:
             type: string
+        active_coverage_roots:
+          type: array
+          items:
+            $ref: "#/components/schemas/PostureCoverageRoot"
         updated_at:
           type: string
           format: date-time
@@ -1485,15 +1491,100 @@ components:
           type: string
           format: date-time
 
+    PostureCoverageRoot:
+      type: object
+      additionalProperties: false
+      required:
+        - coverage_key
+        - mode
+        - state
+        - scan_id
+        - observed_at
+        - registry_contract
+        - contract_current
+      properties:
+        coverage_key:
+          type: string
+          pattern: "^config:instruction-(exact-user|exact-project|deep):sha256:[0-9a-f]{64}$"
+        mode:
+          type: string
+          enum: [exact_user, exact_project, deep]
+        state:
+          type: string
+          enum: [complete, truncated, partial, failed]
+        scan_id:
+          type: string
+          minLength: 1
+        observed_at:
+          type: string
+          format: date-time
+        registry_contract:
+          $ref: "#/components/schemas/InstructionRegistryContractV5"
+        contract_current:
+          type: boolean
+
+    PostureScope:
+      type: object
+      additionalProperties: false
+      required:
+        - scan_id
+        - revision
+        - coverage_keys
+        - active_coverage_keys
+        - active_coverage_roots
+        - dirty_coverage
+        - projection_state
+      properties:
+        scan_id:
+          type: string
+          minLength: 1
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        coverage_keys:
+          type: array
+          items:
+            type: string
+        active_coverage_keys:
+          type: array
+          items:
+            type: string
+        active_coverage_roots:
+          type: array
+          items:
+            $ref: "#/components/schemas/PostureCoverageRoot"
+        dirty_coverage:
+          type: array
+          items:
+            type: string
+        comparison_key:
+          type: string
+        projection_state:
+          type: string
+          enum: [complete]
+
     PostureExport:
       type: object
+      additionalProperties: false
       description: Immutable persisted export of one published posture revision.
+      required:
+        - schema_version
+        - scope
+        - completeness
+        - observations
+        - health
+        - limits
+        - suppression
+        - graph_after
+        - comparison
+        - findings
       properties:
         schema_version:
           type: integer
+          enum: [3]
         scope:
-          type: object
-          additionalProperties: true
+          $ref: "#/components/schemas/PostureScope"
         completeness:
           type: object
           additionalProperties: true
@@ -1537,6 +1628,14 @@ components:
         comparison:
           type: object
           additionalProperties: true
+        collection:
+          $ref: "#/components/schemas/IngestCollectionV5"
+        ruleset:
+          $ref: "#/components/schemas/IngestRulesetV5"
+        identity_schemes:
+          type: array
+          items:
+            $ref: "#/components/schemas/IngestIdentitySchemeV5"
         findings:
           type: array
           items:
