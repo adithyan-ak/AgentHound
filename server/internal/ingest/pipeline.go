@@ -180,6 +180,12 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	}
 
 	result.Collection = *data.Meta.Collection
+	if sdkingest.InstructionCoverageLimited(data.Meta.Collection) {
+		result.Warnings = append(
+			result.Warnings,
+			sdkingest.InstructionCoverageLimitationWarning,
+		)
+	}
 	stageStart = time.Now()
 	rulesetState, rulesetErr := rulesetPublicationState(data.Meta.Ruleset)
 	appendStage(result, "ruleset", rulesetState, true, stageStart, rulesetErr)
@@ -303,7 +309,10 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	cumulativeDirtyCoverage, err := p.scanStore.BeginScan(
 		ctx,
 		initialScan,
-		mergeCoverage(subtractCoverage(keys, nonBlockingKeys), retiredDomains),
+		mergeCoverage(
+			subtractCoverage(keys, nonBlockingKeys),
+			reconciliationDomains,
+		),
 		sdkingest.CoverageParents(data.Meta.Collection),
 	)
 	if err != nil {
@@ -748,6 +757,10 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	if err != nil {
 		slog.Error("scan finalization failed", "error", err)
 		publicationErr := fmt.Errorf("publication: %w", err)
+		failureDirtyCoverage := mergeCoverage(
+			dirtyCoverage,
+			reconciliationDomains,
+		)
 		result.Stages[len(result.Stages)-1].State = sdkingest.OutcomeFailed
 		result.Stages[len(result.Stages)-1].Error = publicationErr.Error()
 		result.Outcome = sdkingest.OutcomePartial
@@ -764,7 +777,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 			AnalysisStatus:   finalScan.AnalysisStatus,
 			SnapshotStatus:   model.LifecycleFailed,
 			ProjectionStatus: model.ProjectionIncomplete,
-			DirtyCoverage:    dirtyCoverage,
+			DirtyCoverage:    failureDirtyCoverage,
 			Metadata: buildScanMetadata(
 				data,
 				result,

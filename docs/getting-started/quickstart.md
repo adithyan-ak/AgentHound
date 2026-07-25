@@ -51,7 +51,7 @@ The config scan is offline and safe. It parses all 12 supported MCP client confi
 
 ```bash
 agenthound scan --config --output - \
-  | curl --data-binary @- -H "Content-Type: application/json" \
+  | curl -sS --fail-with-body --data-binary @- -H "Content-Type: application/json" \
          http://127.0.0.1:8080/api/v1/ingest
 ```
 
@@ -61,7 +61,7 @@ later scans accumulate alongside it:
 
 ```bash
 agenthound scan --config                     # prints ./scan-<scan_id>.json
-curl --data-binary @./scan-<scan_id>.json \
+curl -sS --fail-with-body --data-binary @./scan-<scan_id>.json \
   -H "Content-Type: application/json" \
   http://127.0.0.1:8080/api/v1/ingest
 ```
@@ -108,7 +108,7 @@ collector wrote):
 
 ```bash
 agenthound discover 10.0.0.0/24 --output - \
-  | curl --data-binary @- -H "Content-Type: application/json" \
+  | curl -sS --fail-with-body --data-binary @- -H "Content-Type: application/json" \
          http://127.0.0.1:8080/api/v1/ingest
 ```
 
@@ -137,7 +137,7 @@ Ingest the loot envelope to add the model inventory and its graph evidence
 (point curl at the file the collector wrote):
 
 ```bash
-curl --data-binary @./loot-ollama.json \
+curl -sS --fail-with-body --data-binary @./loot-ollama.json \
   -H "Content-Type: application/json" \
   http://127.0.0.1:8080/api/v1/ingest
 ```

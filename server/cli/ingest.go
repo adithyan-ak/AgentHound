@@ -107,9 +107,12 @@ func writeIngestResult(w io.Writer, result *ingest.IngestResult) error {
 	complete := result.Outcome == ingest.OutcomeComplete &&
 		result.ProjectionStatus == model.ProjectionComplete &&
 		result.PublishedRevision != nil
+	limitedCoverage := complete && ingest.InstructionCoverageLimited(&result.Collection)
 	heading := "Ingest incomplete"
 	if result.Outcome == ingest.OutcomeFailed {
 		heading = "Ingest failed"
+	} else if limitedCoverage {
+		heading = "Ingest complete with coverage limitations"
 	} else if complete {
 		heading = "Ingest complete"
 	}

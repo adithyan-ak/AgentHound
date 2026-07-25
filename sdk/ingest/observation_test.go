@@ -202,3 +202,75 @@ func TestNonBlockingInstructionCoverageDomainsRequiresDeepRootContract(t *testin
 		t.Fatalf("contract-free deep-shaped root became non-blocking: %v", got)
 	}
 }
+
+func TestInstructionCoverageLimitedRequiresRecognizedIncompleteDeepRoot(t *testing.T) {
+	root := CanonicalCoverageKey("config", "instruction-deep", "/home/example")
+	contract := CurrentInstructionRegistryContract()
+	report := &CollectionReport{
+		State:        OutcomeTruncated,
+		CoverageKeys: []string{root},
+		AuthoritativeRoots: []CoverageRoot{{
+			CoverageKey:      root,
+			RegistryContract: &contract,
+		}},
+		Outcomes: []CollectionOutcome{{
+			Collector:   "config",
+			CoverageKey: root,
+			Method:      InstructionMethodDeep,
+			State:       OutcomeTruncated,
+		}},
+	}
+	if !InstructionCoverageLimited(report) {
+		t.Fatal("recognized truncated deep root was not coverage-limited")
+	}
+
+	for _, state := range []OutcomeState{OutcomePartial, OutcomeFailed} {
+		report.Outcomes[0].State = state
+		if !InstructionCoverageLimited(report) {
+			t.Fatalf("recognized %s deep root was not coverage-limited", state)
+		}
+	}
+
+	exactRoot := CanonicalCoverageKey(
+		"config",
+		"instruction-exact-user",
+		"/home/example",
+	)
+	report.CoverageKeys = append(report.CoverageKeys, exactRoot)
+	report.AuthoritativeRoots = append(report.AuthoritativeRoots, CoverageRoot{
+		CoverageKey:      exactRoot,
+		RegistryContract: &contract,
+	})
+	report.Outcomes = append(report.Outcomes, CollectionOutcome{
+		Collector:   "config",
+		CoverageKey: exactRoot,
+		Method:      InstructionMethodExactUser,
+		State:       OutcomeFailed,
+	})
+	if !InstructionCoverageLimited(report) {
+		t.Fatal("failed exact root suppressed the independent deep limitation")
+	}
+	if strings.Contains(InstructionCoverageLimitationWarning, "usable") {
+		t.Fatalf(
+			"shared warning makes an unsupported exact-coverage claim: %q",
+			InstructionCoverageLimitationWarning,
+		)
+	}
+
+	report.Outcomes[0].State = OutcomeComplete
+	if InstructionCoverageLimited(report) {
+		t.Fatal("complete deep root was coverage-limited")
+	}
+
+	report.Outcomes[0].State = OutcomeTruncated
+	report.AuthoritativeRoots[0].RegistryContract = nil
+	if InstructionCoverageLimited(report) {
+		t.Fatal("contract-free deep-shaped root was coverage-limited")
+	}
+
+	report.AuthoritativeRoots[0].RegistryContract = &contract
+	report.Outcomes[0].Method = InstructionMethodExactProject
+	if InstructionCoverageLimited(report) {
+		t.Fatal("non-deep instruction root was coverage-limited")
+	}
+}

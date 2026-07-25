@@ -119,11 +119,14 @@ pruned. Directory discovery budgets count **directories descended**, not
 ordinary files. A 10,000 matched-rule cap, 4 MiB per-file cap, and the deep
 scan's 60-second budget bound pathological enumeration without a silent depth
 cutoff. A symlink used as an explicit root is canonicalized; descendant
-symlinks are not followed.
+symlinks are not followed. Only regular files are read; matching FIFOs,
+devices, sockets, and other special files are rejected before open.
 
 A registered rule tree that cannot be fully enumerated contributes **no** graph
 facts. Deep discovery keeps complete children and records the rest as truncated
-coverage instead of emitting partially observed ownership.
+coverage instead of emitting partially observed ownership. An inaccessible
+unmatched descendant likewise truncates deep coverage while retaining already
+completed children; it never proves absence below the skipped directory.
 
 Exact-root incompleteness withholds publication. A truncated deep attempt
 publishes the exact posture plus its completely observed deep children,

@@ -258,6 +258,41 @@ func NonBlockingInstructionCoverageDomains(report *CollectionReport) []string {
 	return result
 }
 
+const InstructionCoverageLimitationWarning = "deep instruction coverage is limited; missing nested instruction evidence is not a clean absence"
+
+// InstructionCoverageLimited reports whether a recognized deep instruction
+// root completed with usable but incomplete coverage.
+func InstructionCoverageLimited(report *CollectionReport) bool {
+	if report == nil {
+		return false
+	}
+	states := CoverageStates(report)
+	for _, root := range report.AuthoritativeRoots {
+		if root.RegistryContract == nil ||
+			!InstructionRootMatchesMethod(root.CoverageKey, InstructionMethodDeep) {
+			continue
+		}
+		recognized := false
+		for _, outcome := range report.Outcomes {
+			if outcome.CoverageKey == root.CoverageKey &&
+				outcome.Collector == "config" &&
+				outcome.Method == InstructionMethodDeep &&
+				IsInstructionCoverageState(outcome.State) {
+				recognized = true
+				break
+			}
+		}
+		if !recognized {
+			continue
+		}
+		switch states[root.CoverageKey] {
+		case OutcomeTruncated, OutcomePartial, OutcomeFailed:
+			return true
+		}
+	}
+	return false
+}
+
 // AuthoritativeCoverageComplete reports whether every blocking declared
 // coverage key was observed complete. Deep instruction discovery is the only
 // recognized non-blocking coverage mode.

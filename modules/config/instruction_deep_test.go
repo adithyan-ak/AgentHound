@@ -247,6 +247,58 @@ func TestDiscoverInstructionsPartialDeepEmitsNoFacts(t *testing.T) {
 	}
 }
 
+func TestDiscoverInstructionsUnreadableUnrelatedDeepDirectoryRetainsCompleteChildren(t *testing.T) {
+	home := t.TempDir()
+	readable := filepath.Join(home, "a-readable", "AGENTS.md")
+	blocked := filepath.Join(home, "z-blocked")
+	writeInstrRule(t, readable, "complete")
+	if err := os.MkdirAll(blocked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	originalOpen := openInstructionDirectory
+	canonicalBlocked := filepath.Join(canonicalInstructionRoot(home), "z-blocked")
+	openInstructionDirectory = func(path string) (*os.File, error) {
+		if canonicalConfigPath(path) == canonicalBlocked {
+			return nil, os.ErrPermission
+		}
+		return os.Open(path)
+	}
+	t.Cleanup(func() { openInstructionDirectory = originalOpen })
+
+	discovery := DiscoverInstructions(
+		context.Background(),
+		home,
+		"",
+		InstructionScan{RecursiveRoot: home, Deep: true},
+		testInstrEngine(t),
+	)
+	root := instructionOutcomeForMethod(discovery.Outcomes, ingest.InstructionMethodDeep)
+	if root == nil || root.State != ingest.OutcomeTruncated {
+		t.Fatalf("deep root = %+v, want truncated", root)
+	}
+	if len(discovery.Observations) != 1 ||
+		discovery.Observations[0].Info.Path != filepath.Join(
+			canonicalInstructionRoot(home),
+			"a-readable",
+			"AGENTS.md",
+		) {
+		t.Fatalf("truncated deep observations = %+v, want readable child", discovery.Observations)
+	}
+	foundRoot := false
+	for _, authoritative := range discovery.AuthoritativeRoots {
+		if authoritative.CoverageKey == root.CoverageKey {
+			foundRoot = true
+			if len(authoritative.ChildCoverageKeys) != 1 {
+				t.Fatalf("truncated deep root children = %+v, want readable child", authoritative)
+			}
+		}
+	}
+	if !foundRoot {
+		t.Fatalf("deep root %q missing from authoritative roots", root.CoverageKey)
+	}
+}
+
 func TestDeepInstructionTraversalCancelsBetweenDirectoryBatches(t *testing.T) {
 	home := t.TempDir()
 	bulk := filepath.Join(home, "bulk")

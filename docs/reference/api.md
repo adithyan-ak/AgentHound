@@ -381,8 +381,11 @@ authoritative facts. `display` contains optional bounded, non-authoritative
 hostname/OS/architecture labels.
 
 Only explicitly complete, attributable target/config coverage keys can retire
-prior raw observations. Partial/failed/truncated collection never retires data
-and never replaces the latest published posture.
+prior raw observations. Incomplete blocking coverage never retires data or
+replaces the latest published posture. Registered deep instruction coverage is
+non-blocking: partial or failed deep attempts preserve prior deep evidence,
+while truncated attempts may publish exact posture plus completed deep
+children without retiring unseen deep evidence.
 Lossless normalization coercions are persisted as `warning` and may publish;
 only warnings explicitly marked `publication_unsafe` produce `degraded` and
 withhold publication.

@@ -30,6 +30,7 @@ var (
 	deepInstructionWalkBudget      = 60 * time.Second
 	instructionReadDirBatchSize    = 256
 	instructionWalkBatchHook       func(string, int)
+	openInstructionDirectory       = os.Open
 )
 
 var instructionPrunedDirNames = map[string]bool{
@@ -86,6 +87,8 @@ const instructionRegistryManifest = "agenthound-instruction-registry/v1\n" +
 	"roots:exact_user,exact_project,deep\n" +
 	"deep:canonical-home:nested-only\n" +
 	"symlinks:root-resolved,descendants-excluded\n" +
+	"files:regular-only\n" +
+	"deep:unreadable-unmatched-descendant=truncated\n" +
 	"limits:file=4194304,rule=10000,exact_dirs=100000,deep_dirs=1000000,deep_timeout=60s\n" +
 	"prune:$Recycle.Bin,.Trash,.Trash-*,.Trashes,.cache,.git,.hg,.mypy_cache,.pytest_cache,.svn,.terraform,.tox,.venv,Caches,Trash,__pycache__,node_modules,vendor,venv\n"
 
@@ -359,7 +362,11 @@ func discoverDeepInstructionRoot(
 			return filepath.SkipDir
 		}
 		if walkErr != nil {
-			rootState, rootError = ingest.OutcomePartial, "instruction traversal incomplete"
+			if path == root {
+				rootState, rootError = ingest.OutcomePartial, "instruction traversal incomplete"
+			} else if rootState == ingest.OutcomeComplete {
+				rootState, rootError = ingest.OutcomeTruncated, "instruction traversal incomplete"
+			}
 			if entry != nil && entry.IsDir() {
 				return filepath.SkipDir
 			}
@@ -408,7 +415,9 @@ func discoverDeepInstructionRoot(
 				ctx, boundary, source, child, deepInstructionEntryLimit, &directories, &rulesSeen, engine, result,
 			)
 		} else {
-			if rulesSeen >= instructionRuleLimit {
+			if fileState, fileErr := validateInstructionEntry(entry); fileState != ingest.OutcomeComplete {
+				state, errText = fileState, fileErr
+			} else if rulesSeen >= instructionRuleLimit {
 				state = ingest.OutcomeTruncated
 				errText = fmt.Sprintf("instruction discovery exceeds %d file limit", instructionRuleLimit)
 			} else {
@@ -605,6 +614,11 @@ func discoverInstructionTree(
 		if !strings.HasSuffix(entry.Name(), source.suffix) {
 			return nil
 		}
+		if fileState, fileErr := validateInstructionEntry(entry); fileState != ingest.OutcomeComplete {
+			state = ingest.OutcomePartial
+			errText = fileErr
+			return nil
+		}
 		if *rulesSeen >= instructionRuleLimit {
 			state = ingest.OutcomeTruncated
 			errText = fmt.Sprintf("instruction discovery exceeds %d file limit", instructionRuleLimit)
@@ -667,7 +681,7 @@ func walkInstructionDirectory(
 			}
 			return ctx.Err()
 		}
-		directory, openErr := os.Open(current.path)
+		directory, openErr := openInstructionDirectory(current.path)
 		if openErr != nil {
 			switch err := visit(current.path, current.entry, openErr); err {
 			case nil, filepath.SkipDir:
@@ -817,6 +831,9 @@ func collectionOutcome(
 }
 
 func readBoundedInstruction(path string) ([]byte, ingest.OutcomeState, string) {
+	if state, errText := validateInstructionFile(path); state != ingest.OutcomeComplete {
+		return nil, state, errText
+	}
 	data, state, errText := readBoundedConfig(path)
 	if data == nil && state == ingest.OutcomeComplete {
 		return nil, ingest.OutcomeFailed, "instruction source changed during discovery"
@@ -825,6 +842,31 @@ func readBoundedInstruction(path string) ([]byte, ingest.OutcomeState, string) {
 		return nil, state, fmt.Sprintf("file exceeds %d byte limit", maxInstructionFileBytes)
 	}
 	return data, state, errText
+}
+
+func validateInstructionEntry(entry os.DirEntry) (ingest.OutcomeState, string) {
+	if entry == nil {
+		return ingest.OutcomeFailed, "instruction source unavailable"
+	}
+	info, err := entry.Info()
+	if err != nil {
+		return ingest.OutcomeFailed, "instruction source unavailable"
+	}
+	if !info.Mode().IsRegular() {
+		return ingest.OutcomeFailed, "registered instruction source is not a regular file"
+	}
+	return ingest.OutcomeComplete, ""
+}
+
+func validateInstructionFile(path string) (ingest.OutcomeState, string) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return ingest.OutcomeFailed, "instruction source unavailable"
+	}
+	if !info.Mode().IsRegular() {
+		return ingest.OutcomeFailed, "registered instruction source is not a regular file"
+	}
+	return ingest.OutcomeComplete, ""
 }
 
 func AnalyzeInstructionFile(path string, data []byte, fileType string, engine *rules.Engine) InstructionFileInfo {

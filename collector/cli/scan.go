@@ -205,7 +205,8 @@ func runScan(cmd *cobra.Command, args []string) error {
 		output = fmt.Sprintf("scan-%s.json", merged.Meta.ScanID)
 	}
 
-	_, _ = fmt.Fprintf(os.Stderr, "Collected %d nodes, %d edges\n", len(merged.Graph.Nodes), len(merged.Graph.Edges))
+	stderr := cmd.ErrOrStderr()
+	_, _ = fmt.Fprintf(stderr, "Collected %d nodes, %d edges\n", len(merged.Graph.Nodes), len(merged.Graph.Edges))
 
 	// Write the (possibly empty) artifact before deciding the exit code so
 	// the operator keeps the envelope and logs even on total failure.
@@ -218,6 +219,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	if writeErr != nil {
 		return writeErr
 	}
+	writeInstructionCoverageWarning(stderr, merged.Meta.Collection)
 
 	// Total-failure exit code: when every enabled collector errored, exit
 	// non-zero. Partial success (>=1 collector succeeded) and a legitimately
@@ -227,6 +229,16 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("all %d enabled collector(s) failed", enabled)
 	}
 	return nil
+}
+
+func writeInstructionCoverageWarning(w io.Writer, report *ingest.CollectionReport) {
+	if !ingest.InstructionCoverageLimited(report) {
+		return
+	}
+	_, _ = fmt.Fprintln(
+		w,
+		"Warning: "+ingest.InstructionCoverageLimitationWarning+".",
+	)
 }
 
 // allCollectorsFailed reports whether every enabled collector errored. A scan

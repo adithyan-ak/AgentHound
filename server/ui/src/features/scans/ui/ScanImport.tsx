@@ -197,6 +197,24 @@ function completedStage(result: IngestResult, name: string): boolean {
   ) ?? false;
 }
 
+function hasLimitedDeepInstructionCoverage(result: IngestResult): boolean {
+  return (result.collection.authoritative_roots ?? []).some((root) => {
+    if (
+      !root.registry_contract ||
+      !root.coverage_key.startsWith("config:instruction-deep:sha256:")
+    ) {
+      return false;
+    }
+    return result.collection.outcomes.some(
+      (outcome) =>
+        outcome.coverage_key === root.coverage_key &&
+        outcome.collector === "config" &&
+        outcome.method === "instruction_deep" &&
+        ["truncated", "partial", "failed"].includes(outcome.state),
+    );
+  });
+}
+
 const ghostBtn =
   "inline-flex h-8 items-center rounded-[3px] border border-border bg-black/30 px-3 font-mono text-[11px] uppercase tracking-[0.08em] text-foreground/80 transition-colors hover:border-mauve-7 hover:text-foreground";
 const primaryBtn =
@@ -360,11 +378,14 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
   const incompleteStages = result ? incompleteRequiredStages(result) : [];
   const warnings = result?.warnings ?? [];
   const failedOutcome = result?.outcome === "failed";
-  const completeOutcome =
+  const publishedOutcome =
     result?.outcome === "complete" &&
     result.projection_status === "complete" &&
-    incompleteStages.length === 0 &&
-    warnings.length === 0;
+    incompleteStages.length === 0;
+  const limitedCoverage =
+    publishedOutcome && result != null && hasLimitedDeepInstructionCoverage(result);
+  const completeOutcome =
+    publishedOutcome && warnings.length === 0 && !limitedCoverage;
   const canOpenGraph =
     result?.projection_status === "complete" &&
     completedStage(result, "write_nodes") &&
@@ -541,6 +562,8 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
                     ? `Imported ${status.fileName}`
                     : failedOutcome
                       ? `Import failed after writing ${status.fileName}`
+                      : limitedCoverage
+                        ? `Imported ${status.fileName} with limited coverage`
                       : `Imported ${status.fileName} with incomplete results`}
                 </p>
                 <p className="text-xs text-muted-foreground">
@@ -550,7 +573,14 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
                     {status.result.scan_id}
                   </code>
                 </p>
-                {!completeOutcome && (
+                {limitedCoverage && (
+                  <p className="text-xs text-muted-foreground">
+                    Deep instruction discovery was limited. Published results
+                    remain usable, but missing nested evidence is not a clean
+                    absence.
+                  </p>
+                )}
+                {!completeOutcome && !limitedCoverage && (
                   <p className="text-xs text-muted-foreground">
                     Outcome: {status.result.outcome ?? "unknown"} · projection:{" "}
                     {status.result.projection_status ?? "unknown"}

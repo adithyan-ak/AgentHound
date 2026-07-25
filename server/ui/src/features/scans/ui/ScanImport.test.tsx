@@ -215,6 +215,68 @@ describe("ScanImport", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders usable deep truncation with limited coverage and keeps publication actions", async () => {
+    const counts = ingestCounts(5, 3);
+    const deepRoot = `config:instruction-deep:sha256:${"d".repeat(64)}`;
+    counts.collection = {
+      state: "truncated",
+      coverage_keys: [deepRoot],
+      authoritative_roots: [
+        {
+          coverage_key: deepRoot,
+          child_coverage_keys: [],
+          registry_contract: {
+            generation: 1,
+            digest: `sha256:${"e".repeat(64)}`,
+          },
+        },
+      ],
+      outcomes: [
+        {
+          collector: "config",
+          coverage_key: deepRoot,
+          target: "/home/example",
+          method: "instruction_deep",
+          state: "truncated",
+        },
+      ],
+    };
+    mockedUploadScan.mockResolvedValue({
+      scan_id: "deep-limited",
+      outcome: "complete",
+      projection_status: "complete",
+      ...counts,
+      published_revision: 2,
+      stages: [
+        { name: "write_nodes", state: "complete", required: true, duration: 1 },
+        { name: "write_edges", state: "complete", required: true, duration: 1 },
+        { name: "analysis", state: "complete", required: true, duration: 1 },
+        { name: "snapshot", state: "complete", required: true, duration: 1 },
+        { name: "publication", state: "complete", required: true, duration: 1 },
+      ],
+    });
+    render(<ScanImport open={true} onClose={() => {}} />, {
+      wrapper: createWrapper(),
+    });
+
+    await dropForPreview(makeJSONFile("deep.json", validScanJSON));
+    await confirmPreview();
+
+    expect(
+      await screen.findByText(/imported deep\.json with limited coverage/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveClass("border-amber-400/30");
+    expect(
+      screen.getByText(/missing nested evidence is not a clean absence/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /view findings/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /open graph/i }),
+    ).toBeInTheDocument();
+  });
+
   it("shows an error and does not upload when the file is not valid JSON", async () => {
     const onSuccess = vi.fn();
     render(<ScanImport open={true} onClose={() => {}} onSuccess={onSuccess} />, {

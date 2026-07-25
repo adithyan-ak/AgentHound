@@ -156,7 +156,7 @@ and stream them in:
 
 ```bash
 agenthound scan --config --output - |
-  curl -sSf --data-binary @- -H "Content-Type: application/json" \
+  curl -sS --fail-with-body --data-binary @- -H "Content-Type: application/json" \
     http://127.0.0.1:8080/api/v1/ingest
 ```
 

@@ -305,6 +305,10 @@ Finalization re-locks cumulative dirty state and publishes only when no inherite
 or current dirty key remains. Epoch-retirement or processor failure can leave
 the mutable Neo4j projection incomplete, but it cannot advance or overwrite the
 previous immutable PostgreSQL publication.
+If PostgreSQL finalization fails after Neo4j reconciliation, every attempted
+reconciliation domain is recorded dirty, including normally non-blocking deep
+instruction domains. A later exact-only scan cannot publish that cross-store
+inconsistency; the corresponding deep scan must reconcile it successfully.
 
 ## Processing Order
 
@@ -344,7 +348,8 @@ Dependency validation runs before the first processor executes. If a processor a
 - `WriteRows` -- unique logical nodes/relationships affected by successful
   Neo4j writes, including matches of facts that already existed
 - `GraphTotals` -- frozen public inventory totals before and after processing
-- `Warnings` -- normalizer warnings
+- `Warnings` -- operator-facing timestamp, normalization, and coverage
+  limitation warnings
 - `NormalizationStatus`, `NormalizationWarnings` -- deterministic
   `complete`/`warning`/`degraded` classification, codes, context, and the
   explicit publication-safety bit

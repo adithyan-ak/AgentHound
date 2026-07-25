@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -565,6 +566,50 @@ func TestAllCollectorsFailed(t *testing.T) {
 					tt.enabled, tt.failed, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestInstructionCoverageWarningPreservesUsableScanSuccess(t *testing.T) {
+	root := ingest.CanonicalCoverageKey("config", "instruction-deep", "/home/example")
+	contract := ingest.CurrentInstructionRegistryContract()
+	report := &ingest.CollectionReport{
+		State:        ingest.OutcomeTruncated,
+		CoverageKeys: []string{root},
+		AuthoritativeRoots: []ingest.CoverageRoot{{
+			CoverageKey:      root,
+			RegistryContract: &contract,
+		}},
+		Outcomes: []ingest.CollectionOutcome{{
+			Collector:   "config",
+			CoverageKey: root,
+			Method:      ingest.InstructionMethodDeep,
+			State:       ingest.OutcomeTruncated,
+		}},
+	}
+
+	var stderr bytes.Buffer
+	writeInstructionCoverageWarning(&stderr, report)
+	for _, want := range []string{
+		"deep instruction coverage is limited",
+		"not a clean absence",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("warning missing %q: %s", want, stderr.String())
+		}
+	}
+	if strings.Contains(stderr.String(), "usable") {
+		t.Fatalf("warning makes an unsupported exact-coverage claim: %s", stderr.String())
+	}
+	if allCollectorsFailed(1, 0) {
+		t.Fatal("usable limited coverage must retain a successful exit")
+	}
+
+	stderr.Reset()
+	report.Outcomes[0].State = ingest.OutcomeComplete
+	report.State = ingest.OutcomeComplete
+	writeInstructionCoverageWarning(&stderr, report)
+	if stderr.Len() != 0 {
+		t.Fatalf("complete deep coverage emitted warning: %s", stderr.String())
 	}
 }
 

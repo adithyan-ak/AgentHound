@@ -103,6 +103,40 @@ func TestWriteIngestResultComplete(t *testing.T) {
 	}
 }
 
+func TestWriteIngestResultLimitedDeepCoverageRemainsSuccessful(t *testing.T) {
+	revision := int64(8)
+	root := ingest.CanonicalCoverageKey("config", "instruction-deep", "/home/example")
+	contract := ingest.CurrentInstructionRegistryContract()
+	result := &ingest.IngestResult{
+		ScanID:            "scan-limited",
+		Outcome:           ingest.OutcomeComplete,
+		ProjectionStatus:  model.ProjectionComplete,
+		PublishedRevision: &revision,
+		Collection: ingest.CollectionReport{
+			State:        ingest.OutcomeTruncated,
+			CoverageKeys: []string{root},
+			AuthoritativeRoots: []ingest.CoverageRoot{{
+				CoverageKey:      root,
+				RegistryContract: &contract,
+			}},
+			Outcomes: []ingest.CollectionOutcome{{
+				Collector:   "config",
+				CoverageKey: root,
+				Method:      ingest.InstructionMethodDeep,
+				State:       ingest.OutcomeTruncated,
+			}},
+		},
+	}
+
+	var output bytes.Buffer
+	if err := writeIngestResult(&output, result); err != nil {
+		t.Fatalf("usable limited-coverage result returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "Ingest complete with coverage limitations:") {
+		t.Fatalf("output did not disclose limited coverage:\n%s", output.String())
+	}
+}
+
 func TestFinishIngestCommandRendersFailedResultAndPreservesPipelineError(t *testing.T) {
 	pipelineErr := errors.New("edge batch 2 committed 1000 rows before failure")
 	result := &ingest.IngestResult{
