@@ -1,6 +1,6 @@
 {
   "meta": {
-    "version": 4,
+    "version": 5,
     "type": "agenthound-ingest",
     "identity": {"scheme":"agenthound_collection_v1","version":1,"collection_point_id":"sha256:e6336f15741e16f96744c54acd80daf85747bbb7c2b61e50cc4427317dda797a","network_context_id":"sha256:2c5259a97214a5ab63f8838345e49160950c61f9310bb947f9cf3f3ceeca043a","quality":"strong","network_quality":"strong","network_class":"private","evidence":[{"kind":"os_instance","digest":"hmac-sha256:1111111111111111111111111111111111111111111111111111111111111111"},{"kind":"principal","digest":"hmac-sha256:2222222222222222222222222222222222222222222222222222222222222222"}],"network_evidence":[{"kind":"route_private","digest":"hmac-sha256:3333333333333333333333333333333333333333333333333333333333333333"}]},
     "collector": "config",
@@ -9,15 +9,53 @@
     "scan_id": "scan-config-001",
     "collection": {
       "state": "complete",
-      "coverage_keys": ["config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1"],
-      "outcomes": [{
-        "collector": "config",
-        "coverage_key": "config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1",
-        "target": "/Users/dev/.config/claude/claude_desktop_config.json",
-        "method": "fixture",
-        "state": "complete",
-        "items": 7
-      }]
+      "coverage_keys": [
+        "config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1",
+        "config:instruction-exact-user:sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "config:instruction-exact-project:sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      ],
+      "authoritative_roots": [
+        {
+          "coverage_key": "config:instruction-exact-user:sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "child_coverage_keys": [],
+          "registry_contract": {
+            "generation": 3,
+            "digest": "sha256:55b1802d17db8a57a59a46b43ac308e1f859e1a8c7558f0c147520cc9c9f53b0"
+          }
+        },
+        {
+          "coverage_key": "config:instruction-exact-project:sha256:2222222222222222222222222222222222222222222222222222222222222222",
+          "child_coverage_keys": [],
+          "registry_contract": {
+            "generation": 3,
+            "digest": "sha256:55b1802d17db8a57a59a46b43ac308e1f859e1a8c7558f0c147520cc9c9f53b0"
+          }
+        }
+      ],
+      "outcomes": [
+        {
+          "collector": "config",
+          "coverage_key": "config:path:sha256:c9ba9a1b447b053d931f4788ab2501f2df56c5e83c4310164ef885f5d60d65f1",
+          "target": "/Users/dev/.config/claude/claude_desktop_config.json",
+          "method": "fixture",
+          "state": "complete",
+          "items": 7
+        },
+        {
+          "collector": "config",
+          "coverage_key": "config:instruction-exact-user:sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "target": "/Users/dev",
+          "method": "instruction_exact_user",
+          "state": "complete"
+        },
+        {
+          "collector": "config",
+          "coverage_key": "config:instruction-exact-project:sha256:2222222222222222222222222222222222222222222222222222222222222222",
+          "target": "/Users/dev/project",
+          "method": "instruction_exact_project",
+          "state": "complete"
+        }
+      ]
     },
     "ruleset": {
       "digest": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e64a8f8bff093b2f5f2cf4e",

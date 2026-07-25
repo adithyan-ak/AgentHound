@@ -98,22 +98,35 @@ export interface ComparablePublishedScan extends Scan {
   };
 }
 
-function isPublishedGraphSnapshot(scan: Scan): scan is ComparablePublishedScan {
+type PublishedGraphSnapshot = Scan & {
+  publication_status: "published" | "superseded";
+  published_revision: number;
+  graph_totals: {
+    before: ScanGraphTotal | null;
+    after: ScanGraphTotal;
+  };
+};
+
+function isPublishedGraphSnapshot(scan: Scan): scan is PublishedGraphSnapshot {
   return (
     (scan.publication_status === "published" ||
       scan.publication_status === "superseded") &&
     scan.published_revision != null &&
-    !!scan.comparison_key &&
     scan.graph_totals.after != null
   );
 }
 
 /** Select only published graph snapshots comparable to the newest revision. */
 export function comparablePublishedScans(scans: Scan[]): ComparablePublishedScan[] {
-  const published = scans.filter(isPublishedGraphSnapshot);
+  const published = scans
+    .filter(isPublishedGraphSnapshot)
+    .sort((left, right) => right.published_revision - left.published_revision);
   const latestComparisonKey = published[0]?.comparison_key;
   if (!latestComparisonKey) return [];
-  return published.filter((scan) => scan.comparison_key === latestComparisonKey);
+  return published.filter(
+    (scan): scan is ComparablePublishedScan =>
+      scan.comparison_key === latestComparisonKey,
+  );
 }
 
 /** Return a frozen node-total delta only when the backend linked both scans. */

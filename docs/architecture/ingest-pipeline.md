@@ -27,7 +27,7 @@ Input is the `sdk/ingest.IngestData` struct:
 ```json
 {
   "meta": {
-    "version": 4,
+    "version": 5,
     "type": "agenthound-ingest",
     "collector": "mcp",
     "scan_id": "...",
@@ -85,7 +85,7 @@ Input is the `sdk/ingest.IngestData` struct:
 }
 ```
 
-Wire version `4` is the only accepted contract; v1, v2, and v3 artifacts are
+Wire version `5` is the only accepted contract; v1, v2, v3, and v4 artifacts are
 rejected. `identity`, `collection`, `ruleset`, and `identity_schemes` are
 required. The server validates identity schema, version, digest consistency,
 and evidence classification—not the truth of the claimed execution origin.
@@ -129,11 +129,13 @@ change `authenticity`, which remains `unverified` because a digest attests
 content identity, not source trust.
 
 Dynamic exhaustive collectors also declare `authoritative_roots`, pairing the
-stable collector-root key with the complete current child-key set. After a
+stable collector-root key with the observed current child-key set. After a
 completed root run, previously headed children absent from that set are
-reconciled as complete-empty and their heads are retired. Targeted, partial,
-failed, and otherwise non-exhaustive runs do not declare authoritative roots
-and cannot retire sibling scopes.
+reconciled as complete-empty and their heads are retired. Recognized
+registry-backed instruction roots also declare the root and complete per-file
+children when the root is partial, failed, or truncated. That limited root may
+advance as posture metadata, but it is excluded from absence reconciliation;
+targeted and other non-exhaustive roots cannot retire sibling scopes.
 
 Root membership is explicit: each child outcome carries
 `parent_coverage_key`, and PostgreSQL retains the mapping. Parentage is never
@@ -266,6 +268,12 @@ relationships, then deletes unowned isolated nodes. Facts with another active
 owner survive. Partial, failed, truncated, and unknown coverage performs no
 retirement. Stable semantic fingerprints are retired with their authoritative
 owner domain and are never returned by the public graph reader.
+Registered instruction files are independent stable child domains. Complete
+files under an incomplete recognized root may update or add their own facts,
+but the root performs no unseen-child retirement and supplies no absence
+authority. The owner key is stable root plus canonical file path, independent
+of registry-contract version, so a later complete root can reconcile the same
+owners and retire files it proves absent.
 When reconciliation retires a node's last authoritative property owner but a
 reference-only owner remains, managed properties are cleared to truthful
 reference identity instead of certifying stale rich properties.
@@ -288,9 +296,12 @@ domain was promoted, the pipeline first retires the entire prior composite
 epoch, then rebuilds every derived edge from the retained current raw
 projection. This global replacement is required because a narrow MCP, config,
 or A2A change can invalidate cross-domain evidence whose `source_collector`
-names another detector domain. Unknown, partial, and failed collection does not
-publish. An attempt with no promotably complete domain skips derived processing
-and leaves the epoch untouched. See `docs/architecture/post-processors.md`.
+names another detector domain. Blocking unknown, partial, and failed collection
+does not publish. A recognized incomplete instruction root is the narrow
+exception: its complete per-file child domains may drive a limited publication,
+but the root is excluded from absence retirement and comparison. An attempt
+with no promotably complete domain skips derived processing and leaves the epoch
+untouched. See `docs/architecture/post-processors.md`.
 
 After analysis, the pipeline checks property completeness for public managed
 raw facts. Internal nodes such as `SchemaVersion` and derived relationships are
@@ -305,6 +316,28 @@ Finalization re-locks cumulative dirty state and publishes only when no inherite
 or current dirty key remains. Epoch-retirement or processor failure can leave
 the mutable Neo4j projection incomplete, but it cannot advance or overwrite the
 previous immutable PostgreSQL publication.
+If PostgreSQL finalization fails after Neo4j reconciliation, every attempted
+reconciliation domain is recorded dirty, including normally non-blocking deep
+instruction domains. A later exact-only scan cannot publish that cross-store
+inconsistency; the corresponding deep scan must reconcile it successfully.
+Limited publication never erases an unseen dirty instruction child: only the
+limited root and complete children actually processed by a successful attempt
+can resolve their dirty keys. Analysis, snapshot, publication, or finalization
+failure resolves none of them. This preserves failure safety while allowing a
+later complete root to recover and restore authoritative comparison.
+
+Collector-side deep instruction discovery isolates its recursive result behind
+the wall-clock budget. Local filesystem calls are not portably cancelable, so a
+timed-out worker may finish later, but it owns only private state and cannot
+alter the returned artifact. Completed per-file observations are checkpointed
+as immutable values, so a deadline result retains proven positives under a
+partial deep root while preserving prior unseen evidence. Home and a disjoint
+or canonically partitioned selected project use independent deep roots but
+share the same 60-second attempt budget. Containing scopes exclude contained
+selected roots, so explicit project coverage cannot be defeated by home
+pruning and no file receives duplicate deep ownership. Partial, failed, and
+truncated instruction attempts retain every complete per-file child observed
+before the limitation.
 
 ## Processing Order
 
@@ -344,7 +377,8 @@ Dependency validation runs before the first processor executes. If a processor a
 - `WriteRows` -- unique logical nodes/relationships affected by successful
   Neo4j writes, including matches of facts that already existed
 - `GraphTotals` -- frozen public inventory totals before and after processing
-- `Warnings` -- normalizer warnings
+- `Warnings` -- operator-facing timestamp, normalization, and coverage
+  limitation warnings
 - `NormalizationStatus`, `NormalizationWarnings` -- deterministic
   `complete`/`warning`/`degraded` classification, codes, context, and the
   explicit publication-safety bit

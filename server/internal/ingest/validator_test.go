@@ -280,11 +280,14 @@ func TestValidatorAcceptsCollectorProducedRootCoverage(t *testing.T) {
 		states[pathKey] != ingest.OutcomeComplete {
 		t.Fatalf("collector coverage states = %v, want complete root and path", states)
 	}
-	if len(data.Meta.Collection.AuthoritativeRoots) != 0 {
-		t.Fatalf(
-			"targeted collector scan became authoritative: %+v",
-			data.Meta.Collection.AuthoritativeRoots,
-		)
+	if len(data.Meta.Collection.AuthoritativeRoots) != 2 {
+		t.Fatalf("instruction roots = %+v, want exact user and project", data.Meta.Collection.AuthoritativeRoots)
+	}
+	currentContract := ingest.CurrentInstructionRegistryContract()
+	for _, root := range data.Meta.Collection.AuthoritativeRoots {
+		if root.RegistryContract == nil || !root.RegistryContract.Equal(currentContract) {
+			t.Fatalf("instruction root contract = %+v, want %+v", root.RegistryContract, currentContract)
+		}
 	}
 	for _, node := range data.Graph.Nodes {
 		if len(node.ObservationDomains) != 1 || node.ObservationDomains[0] != pathKey {
@@ -797,6 +800,34 @@ func TestValidatorAcceptsAuthoritativeRootActiveSet(t *testing.T) {
 	}
 }
 
+func TestValidatorCollectorRootExcludesIndependentInstructionOwnership(t *testing.T) {
+	data, _, _ := validInstructionRootData(ingest.OutcomeComplete)
+	collectorRoot := ingest.CollectorRootCoverageKey("config")
+	data.Meta.Collection.CoverageKeys = append(
+		data.Meta.Collection.CoverageKeys,
+		collectorRoot,
+	)
+	data.Meta.Collection.AuthoritativeRoots = append(
+		data.Meta.Collection.AuthoritativeRoots,
+		ingest.CoverageRoot{
+			CoverageKey:       collectorRoot,
+			ChildCoverageKeys: []string{},
+		},
+	)
+	data.Meta.Collection.Outcomes = append(
+		data.Meta.Collection.Outcomes,
+		ingest.CollectionOutcome{
+			Collector: "config", CoverageKey: collectorRoot,
+			Target: "config", Method: "collect", State: ingest.OutcomeComplete,
+		},
+	)
+	data.Meta.Collection.State = ingest.AggregateOutcomeState(data.Meta.Collection.Outcomes)
+
+	if err := NewValidator().Validate(data); err != nil {
+		t.Fatalf("independent instruction ownership rejected: %v", err)
+	}
+}
+
 func TestValidatorRejectsAuthoritativeRootMissingDeclaredChild(t *testing.T) {
 	data := validIngestData()
 	root := ingest.CanonicalCoverageKey("mcp", "root", "collect")
@@ -870,13 +901,403 @@ func TestValidatorRejectsBadVersion(t *testing.T) {
 	data := validIngestData()
 	data.Meta.Version = 99
 	err := v.Validate(data)
-	assertValidationError(t, err, "meta.version")
+	var versionErr *UnsupportedVersionError
+	if !errors.As(err, &versionErr) {
+		t.Fatalf("error = %T %v, want UnsupportedVersionError", err, err)
+	}
+	if versionErr.Received != 99 || versionErr.Supported != ingest.CurrentVersion {
+		t.Fatalf("version error = %+v", versionErr)
+	}
+	if !strings.Contains(versionErr.Error(), "upgrade the collector and server together") {
+		t.Fatalf("version error is not actionable: %v", versionErr)
+	}
 }
 
 func TestValidatorRejectsV1(t *testing.T) {
 	data := validIngestData()
 	data.Meta.Version = 1
-	assertValidationError(t, NewValidator().Validate(data), "meta.version")
+	var versionErr *UnsupportedVersionError
+	if !errors.As(NewValidator().Validate(data), &versionErr) {
+		t.Fatal("v1 artifact did not return UnsupportedVersionError")
+	}
+}
+
+func TestValidatorInstructionRegistryContractPreflight(t *testing.T) {
+	data, root, _ := validInstructionRootData(ingest.OutcomeComplete)
+	if err := Preflight(data); err != nil {
+		t.Fatalf("current registry contract rejected: %v", err)
+	}
+
+	data.Meta.Collection.AuthoritativeRoots[0].RegistryContract = nil
+	err := Preflight(data)
+	var contractErr *RegistryContractMismatchError
+	if !errors.As(err, &contractErr) {
+		t.Fatalf("missing contract error = %T %v, want RegistryContractMismatchError", err, err)
+	}
+	if contractErr.RootCoverageKey != root || contractErr.Received != nil {
+		t.Fatalf("contract error = %+v", contractErr)
+	}
+	if !contractErr.Supported.Equal(ingest.CurrentInstructionRegistryContract()) {
+		t.Fatalf("supported contract = %+v", contractErr.Supported)
+	}
+
+	foreign := ingest.CurrentInstructionRegistryContract()
+	foreign.Digest = "sha256:" + strings.Repeat("f", 64)
+	data.Meta.Collection.AuthoritativeRoots[0].RegistryContract = &foreign
+	err = Preflight(data)
+	if !errors.As(err, &contractErr) || contractErr.Received == nil ||
+		contractErr.Received.Digest != foreign.Digest {
+		t.Fatalf("foreign contract error = %T %+v", err, contractErr)
+	}
+
+	for name, generation := range map[string]int{
+		"older": ingest.InstructionRegistryGeneration - 1,
+		"newer": ingest.InstructionRegistryGeneration + 1,
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate, _, _ := validInstructionRootData(ingest.OutcomeComplete)
+			received := ingest.CurrentInstructionRegistryContract()
+			received.Generation = generation
+			candidate.Meta.Collection.AuthoritativeRoots[0].RegistryContract = &received
+			var mismatch *RegistryContractMismatchError
+			if err := Preflight(candidate); !errors.As(err, &mismatch) {
+				t.Fatalf("generation %d error = %T %v", generation, err, err)
+			}
+		})
+	}
+}
+
+func TestValidatorRejectsContractOnNonInstructionRoot(t *testing.T) {
+	data := validIngestData()
+	child := data.Meta.Collection.CoverageKeys[0]
+	root := ingest.CanonicalCoverageKey("mcp", "root", "collect")
+	contract := ingest.CurrentInstructionRegistryContract()
+	data.Meta.Collection.CoverageKeys = append(data.Meta.Collection.CoverageKeys, root)
+	data.Meta.Collection.AuthoritativeRoots = []ingest.CoverageRoot{{
+		CoverageKey: root, ChildCoverageKeys: []string{child}, RegistryContract: &contract,
+	}}
+	data.Meta.Collection.Outcomes[0].ParentCoverageKey = root
+	data.Meta.Collection.Outcomes = append(data.Meta.Collection.Outcomes, ingest.CollectionOutcome{
+		Collector: "mcp", CoverageKey: root, Target: "mcp",
+		Method: "collect", State: ingest.OutcomeComplete,
+	})
+
+	assertValidationError(
+		t,
+		NewValidator().Validate(data),
+		"meta.collection.authoritative_roots[0].registry_contract",
+	)
+}
+
+func TestValidatorAllowsCompleteChildFactsUnderIncompleteInstructionRoot(t *testing.T) {
+	for _, mode := range []struct {
+		name   string
+		method string
+	}{
+		{"exact_user", ingest.InstructionMethodExactUser},
+		{"exact_project", ingest.InstructionMethodExactProject},
+		{"deep", ingest.InstructionMethodDeep},
+	} {
+		for _, state := range []ingest.OutcomeState{
+			ingest.OutcomeTruncated,
+			ingest.OutcomePartial,
+			ingest.OutcomeFailed,
+		} {
+			t.Run(mode.name+"/"+string(state), func(t *testing.T) {
+				data, _, _ := validInstructionRootDataFor(mode.method, state)
+				if err := NewValidator().Validate(data); err != nil {
+					t.Fatalf("complete child under limited root rejected: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestValidatorRejectsIncompleteInstructionChildAndRootOwnedFacts(t *testing.T) {
+	data, _, child := validInstructionRootDataFor(
+		ingest.InstructionMethodExactUser,
+		ingest.OutcomePartial,
+	)
+	for i := range data.Meta.Collection.Outcomes {
+		if data.Meta.Collection.Outcomes[i].CoverageKey == child {
+			data.Meta.Collection.Outcomes[i].State = ingest.OutcomePartial
+			data.Meta.Collection.Outcomes[i].Error = "file read incomplete"
+		}
+	}
+	data.Meta.Collection.State = ingest.AggregateOutcomeState(data.Meta.Collection.Outcomes)
+	assertValidationError(
+		t,
+		NewValidator().Validate(data),
+		"meta.collection.authoritative_roots[1].child_coverage_keys[0]",
+	)
+
+	data, root, _ := validInstructionRootDataFor(
+		ingest.InstructionMethodExactUser,
+		ingest.OutcomeFailed,
+	)
+	for i := range data.Graph.Nodes {
+		data.Graph.Nodes[i].ObservationDomains = []string{root}
+	}
+	for i := range data.Graph.Edges {
+		data.Graph.Edges[i].ObservationDomains = []string{root}
+	}
+	assertValidationError(
+		t,
+		NewValidator().Validate(data),
+		"graph.nodes[0].observation_domains[0]",
+	)
+}
+
+func TestValidatorRejectsFactsOwnedByIncompleteDomain(t *testing.T) {
+	data := validIngestData()
+	child := data.Meta.Collection.Outcomes[0].CoverageKey
+	data.Meta.Collection.Outcomes[0].State = ingest.OutcomePartial
+	data.Meta.Collection.Outcomes[0].Error = "read incomplete"
+	data.Meta.Collection.State = ingest.AggregateOutcomeState(data.Meta.Collection.Outcomes)
+	for i := range data.Graph.Nodes {
+		data.Graph.Nodes[i].ObservationDomains = []string{child}
+	}
+	for i := range data.Graph.Edges {
+		data.Graph.Edges[i].ObservationDomains = []string{child}
+	}
+
+	assertValidationError(
+		t,
+		NewValidator().Validate(data),
+		"graph.nodes[0].observation_domains[0]",
+	)
+}
+
+func TestValidatorRejectsOrphanInstructionSource(t *testing.T) {
+	data, _, child := validInstructionRootData(ingest.OutcomeComplete)
+	data.Meta.Collection.AuthoritativeRoots[0].ChildCoverageKeys = nil
+	data.Meta.Collection.Outcomes[1].ParentCoverageKey = ""
+
+	assertValidationError(
+		t,
+		NewValidator().Validate(data),
+		"meta.collection.outcomes[1].parent_coverage_key",
+	)
+	if data.Meta.Collection.Outcomes[1].CoverageKey != child {
+		t.Fatal("test did not mutate the intended instruction source")
+	}
+}
+
+func TestValidatorRejectsInstructionSourceWithWrongParent(t *testing.T) {
+	data, _, child := validInstructionRootDataFor(
+		ingest.InstructionMethodExactUser,
+		ingest.OutcomePartial,
+	)
+	wrongParent := ""
+	for _, outcome := range data.Meta.Collection.Outcomes {
+		if outcome.Method == ingest.InstructionMethodExactProject {
+			wrongParent = outcome.CoverageKey
+			break
+		}
+	}
+	for i := range data.Meta.Collection.Outcomes {
+		if data.Meta.Collection.Outcomes[i].CoverageKey == child {
+			data.Meta.Collection.Outcomes[i].ParentCoverageKey = wrongParent
+		}
+	}
+	assertValidationError(
+		t,
+		NewValidator().Validate(data),
+		"meta.collection.outcomes[1].parent_coverage_key",
+	)
+}
+
+func TestValidatorRejectsDescendantBelowInstructionSource(t *testing.T) {
+	data, _, child := validInstructionRootDataFor(
+		ingest.InstructionMethodDeep,
+		ingest.OutcomePartial,
+	)
+	grandchild := ingest.CanonicalCoverageKey(
+		"config",
+		"path",
+		child+"\x00descendant",
+	)
+	data.Meta.Collection.CoverageKeys = append(
+		data.Meta.Collection.CoverageKeys,
+		grandchild,
+	)
+	data.Meta.Collection.Outcomes = append(
+		data.Meta.Collection.Outcomes,
+		ingest.CollectionOutcome{
+			Collector: "config", CoverageKey: grandchild,
+			ParentCoverageKey: child, Target: "/home/example/project/descendant",
+			Method: "config_discovery", State: ingest.OutcomeComplete,
+		},
+	)
+	data.Meta.Collection.State = ingest.AggregateOutcomeState(
+		data.Meta.Collection.Outcomes,
+	)
+	for i := range data.Graph.Nodes {
+		data.Graph.Nodes[i].ObservationDomains = []string{grandchild}
+	}
+	for i := range data.Graph.Edges {
+		data.Graph.Edges[i].ObservationDomains = []string{grandchild}
+	}
+
+	assertValidationError(
+		t,
+		NewValidator().Validate(data),
+		"meta.collection.outcomes[4].parent_coverage_key",
+	)
+}
+
+func TestValidatorRejectsParentOnInstructionRoot(t *testing.T) {
+	data, root, child := validInstructionRootDataFor(
+		ingest.InstructionMethodDeep,
+		ingest.OutcomePartial,
+	)
+	for i := range data.Meta.Collection.Outcomes {
+		if data.Meta.Collection.Outcomes[i].CoverageKey == root {
+			data.Meta.Collection.Outcomes[i].ParentCoverageKey = child
+		}
+	}
+	assertValidationError(
+		t,
+		NewValidator().Validate(data),
+		"meta.collection.outcomes[0].parent_coverage_key",
+	)
+}
+
+func TestValidatorRequiresExactRootsForConfigCollection(t *testing.T) {
+	data, _, _ := validInstructionRootData(ingest.OutcomeComplete)
+	data.Meta.Collection.AuthoritativeRoots = data.Meta.Collection.AuthoritativeRoots[:1]
+	data.Meta.Collection.CoverageKeys = data.Meta.Collection.CoverageKeys[:2]
+	data.Meta.Collection.Outcomes = data.Meta.Collection.Outcomes[:2]
+	data.Meta.Collection.State = ingest.AggregateOutcomeState(data.Meta.Collection.Outcomes)
+
+	assertValidationError(
+		t,
+		NewValidator().Validate(data),
+		"meta.collection.authoritative_roots",
+	)
+}
+
+func TestValidatorAllowsFailedConfigSubreportAlongsideMCP(t *testing.T) {
+	data := validIngestData()
+	configRoot := ingest.CollectorRootCoverageKey("config")
+	data.Meta.Collector = "scan"
+	data.Meta.Collection.CoverageKeys = append(
+		data.Meta.Collection.CoverageKeys,
+		configRoot,
+	)
+	data.Meta.Collection.Outcomes = append(
+		data.Meta.Collection.Outcomes,
+		ingest.CollectionOutcome{
+			Collector: "config", CoverageKey: configRoot,
+			Target: "config", Method: "collect",
+			State: ingest.OutcomeFailed, Error: "config collection failed",
+		},
+	)
+	data.Meta.Collection.State = ingest.AggregateOutcomeState(data.Meta.Collection.Outcomes)
+
+	if err := NewValidator().Validate(data); err != nil {
+		t.Fatalf("failed config subreport rejected: %v", err)
+	}
+}
+
+func validInstructionRootData(rootState ingest.OutcomeState) (*ingest.IngestData, string, string) {
+	data := validIngestData()
+	data.Meta.Collector = "config"
+	root := ingest.CanonicalCoverageKey("config", "instruction-deep", "/home/example")
+	child := ingest.CanonicalCoverageKey("config", "instruction-source", root+"\x00/home/example/project/AGENTS.md")
+	exactUser := ingest.CanonicalCoverageKey("config", "instruction-exact-user", "/home/example")
+	exactProject := ingest.CanonicalCoverageKey("config", "instruction-exact-project", "/home/example/project")
+	contract := ingest.CurrentInstructionRegistryContract()
+	data.Meta.Collection = &ingest.CollectionReport{
+		CoverageKeys: []string{root, child, exactUser, exactProject},
+		AuthoritativeRoots: []ingest.CoverageRoot{
+			{
+				CoverageKey:       root,
+				ChildCoverageKeys: []string{child},
+				RegistryContract:  &contract,
+			},
+			{CoverageKey: exactUser, RegistryContract: &contract},
+			{CoverageKey: exactProject, RegistryContract: &contract},
+		},
+		Outcomes: []ingest.CollectionOutcome{
+			{
+				Collector: "config", CoverageKey: root, Target: "/home/example",
+				Method: ingest.InstructionMethodDeep, State: rootState,
+			},
+			{
+				Collector: "config", CoverageKey: child, ParentCoverageKey: root,
+				Target: "/home/example/project/AGENTS.md", Method: ingest.InstructionMethodSource,
+				State: ingest.OutcomeComplete, Items: len(data.Graph.Nodes),
+			},
+			{
+				Collector: "config", CoverageKey: exactUser,
+				Target: "/home/example", Method: ingest.InstructionMethodExactUser,
+				State: ingest.OutcomeComplete,
+			},
+			{
+				Collector: "config", CoverageKey: exactProject,
+				Target: "/home/example/project", Method: ingest.InstructionMethodExactProject,
+				State: ingest.OutcomeComplete,
+			},
+		},
+	}
+	data.Meta.Collection.State = ingest.AggregateOutcomeState(data.Meta.Collection.Outcomes)
+	for i := range data.Graph.Nodes {
+		data.Graph.Nodes[i].ObservationDomains = []string{child}
+	}
+	for i := range data.Graph.Edges {
+		data.Graph.Edges[i].ObservationDomains = []string{child}
+	}
+	return data, root, child
+}
+
+func validInstructionRootDataFor(
+	method string,
+	rootState ingest.OutcomeState,
+) (*ingest.IngestData, string, string) {
+	data, deepRoot, child := validInstructionRootData(ingest.OutcomeComplete)
+	if method == ingest.InstructionMethodDeep {
+		for i := range data.Meta.Collection.Outcomes {
+			if data.Meta.Collection.Outcomes[i].CoverageKey == deepRoot {
+				data.Meta.Collection.Outcomes[i].State = rootState
+			}
+		}
+		data.Meta.Collection.State = ingest.AggregateOutcomeState(data.Meta.Collection.Outcomes)
+		return data, deepRoot, child
+	}
+
+	selectedRoot := ""
+	for i := range data.Meta.Collection.Outcomes {
+		outcome := &data.Meta.Collection.Outcomes[i]
+		switch {
+		case outcome.CoverageKey == deepRoot:
+			outcome.State = ingest.OutcomeComplete
+		case outcome.Method == method:
+			outcome.State = rootState
+			selectedRoot = outcome.CoverageKey
+		case outcome.CoverageKey == child:
+			outcome.ParentCoverageKey = selectedRoot
+		}
+	}
+	if selectedRoot == "" {
+		panic("unsupported instruction root method in test")
+	}
+	for i := range data.Meta.Collection.AuthoritativeRoots {
+		root := &data.Meta.Collection.AuthoritativeRoots[i]
+		switch root.CoverageKey {
+		case deepRoot:
+			root.ChildCoverageKeys = nil
+		case selectedRoot:
+			root.ChildCoverageKeys = []string{child}
+		}
+	}
+	for i := range data.Meta.Collection.Outcomes {
+		if data.Meta.Collection.Outcomes[i].CoverageKey == child {
+			data.Meta.Collection.Outcomes[i].ParentCoverageKey = selectedRoot
+		}
+	}
+	data.Meta.Collection.State = ingest.AggregateOutcomeState(data.Meta.Collection.Outcomes)
+	return data, selectedRoot, child
 }
 
 func TestValidatorRequiresCompleteV2Metadata(t *testing.T) {
@@ -1606,7 +2027,7 @@ func TestValidatorCollectsAllErrors(t *testing.T) {
 	v := NewValidator()
 	data := &ingest.IngestData{
 		Meta: ingest.IngestMeta{
-			Version:   99,
+			Version:   ingest.CurrentVersion,
 			Type:      "wrong",
 			Collector: "bad",
 			ScanID:    "",

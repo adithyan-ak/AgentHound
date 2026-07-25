@@ -118,8 +118,8 @@ function optionalDisplayLabel(
 export function summarizeScanArtifact(value: unknown): ArtifactSummary {
   const root = objectValue(value, "artifact");
   const meta = objectValue(root.meta, "artifact.meta");
-  if (meta.version !== 4 || meta.type !== "agenthound-ingest") {
-    throw new TypeError("file must be an AgentHound ingest-v4 artifact");
+  if (meta.version !== 5 || meta.type !== "agenthound-ingest") {
+    throw new TypeError("file must be an AgentHound ingest-v5 artifact");
   }
   const identity = objectValue(meta.identity, "artifact.meta.identity");
   const quality = stringValue(identity.quality, "artifact.meta.identity.quality");
@@ -195,6 +195,31 @@ function completedStage(result: IngestResult, name: string): boolean {
   return result.stages?.some(
     (stage) => stage.name === name && stage.state === "complete",
   ) ?? false;
+}
+
+function hasLimitedInstructionCoverage(result: IngestResult): boolean {
+  const rootKinds: Record<string, string> = {
+    instruction_exact_user: "instruction-exact-user",
+    instruction_exact_project: "instruction-exact-project",
+    instruction_deep: "instruction-deep",
+  };
+  return (result.collection.authoritative_roots ?? []).some((root) => {
+    if (!root.registry_contract) {
+      return false;
+    }
+    return result.collection.outcomes.some(
+      (outcome) => {
+        const rootKind = rootKinds[outcome.method];
+        return (
+          rootKind !== undefined &&
+          root.coverage_key.startsWith(`config:${rootKind}:sha256:`) &&
+          outcome.coverage_key === root.coverage_key &&
+          outcome.collector === "config" &&
+          ["truncated", "partial", "failed"].includes(outcome.state)
+        );
+      },
+    );
+  });
 }
 
 const ghostBtn =
@@ -360,11 +385,14 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
   const incompleteStages = result ? incompleteRequiredStages(result) : [];
   const warnings = result?.warnings ?? [];
   const failedOutcome = result?.outcome === "failed";
-  const completeOutcome =
+  const publishedOutcome =
     result?.outcome === "complete" &&
     result.projection_status === "complete" &&
-    incompleteStages.length === 0 &&
-    warnings.length === 0;
+    incompleteStages.length === 0;
+  const limitedCoverage =
+    publishedOutcome && result != null && hasLimitedInstructionCoverage(result);
+  const completeOutcome =
+    publishedOutcome && warnings.length === 0 && !limitedCoverage;
   const canOpenGraph =
     result?.projection_status === "complete" &&
     completedStage(result, "write_nodes") &&
@@ -541,6 +569,8 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
                     ? `Imported ${status.fileName}`
                     : failedOutcome
                       ? `Import failed after writing ${status.fileName}`
+                      : limitedCoverage
+                        ? `Imported ${status.fileName} with limited coverage`
                       : `Imported ${status.fileName} with incomplete results`}
                 </p>
                 <p className="text-xs text-muted-foreground">
@@ -550,7 +580,13 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
                     {status.result.scan_id}
                   </code>
                 </p>
-                {!completeOutcome && (
+                {limitedCoverage && (
+                  <p className="text-xs text-muted-foreground">
+                    Observed instruction positives were published and remain
+                    usable; missing instruction evidence is not a clean absence.
+                  </p>
+                )}
+                {!completeOutcome && !limitedCoverage && (
                   <p className="text-xs text-muted-foreground">
                     Outcome: {status.result.outcome ?? "unknown"} · projection:{" "}
                     {status.result.projection_status ?? "unknown"}

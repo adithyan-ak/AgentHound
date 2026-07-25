@@ -6,6 +6,8 @@ import (
 	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
+const PostureExportSchemaVersion = 3
+
 // GraphSnapshot is a frozen public-inventory count captured in one Neo4j read
 // transaction. It is intentionally distinct from scan write-row counts.
 type GraphSnapshot struct {
@@ -16,13 +18,24 @@ type GraphSnapshot struct {
 }
 
 type PostureScope struct {
-	ScanID             string   `json:"scan_id"`
-	Revision           int64    `json:"revision"`
-	CoverageKeys       []string `json:"coverage_keys"`
-	ActiveCoverageKeys []string `json:"active_coverage_keys"`
-	DirtyCoverage      []string `json:"dirty_coverage"`
-	ComparisonKey      string   `json:"comparison_key,omitempty"`
-	ProjectionState    string   `json:"projection_state"`
+	ScanID              string                `json:"scan_id"`
+	Revision            int64                 `json:"revision"`
+	CoverageKeys        []string              `json:"coverage_keys"`
+	ActiveCoverageKeys  []string              `json:"active_coverage_keys"`
+	ActiveCoverageRoots []PostureCoverageRoot `json:"active_coverage_roots"`
+	DirtyCoverage       []string              `json:"dirty_coverage"`
+	ComparisonKey       string                `json:"comparison_key,omitempty"`
+	ProjectionState     string                `json:"projection_state"`
+}
+
+type PostureCoverageRoot struct {
+	CoverageKey      string                            `json:"coverage_key"`
+	Mode             sdkingest.InstructionCoverageMode `json:"mode"`
+	State            sdkingest.OutcomeState            `json:"state"`
+	ScanID           string                            `json:"scan_id"`
+	ObservedAt       time.Time                         `json:"observed_at"`
+	RegistryContract sdkingest.RegistryContract        `json:"registry_contract"`
+	ContractCurrent  bool                              `json:"contract_current"`
 }
 
 type PostureCompleteness struct {
@@ -105,12 +118,13 @@ type PostureExport struct {
 }
 
 type ProjectionState struct {
-	Status            string     `json:"status"`
-	ScanID            string     `json:"scan_id,omitempty"`
-	Error             string     `json:"error,omitempty"`
-	DirtyCoverage     []string   `json:"dirty_coverage"`
-	UpdatedAt         time.Time  `json:"updated_at"`
-	PublishedScanID   string     `json:"published_scan_id,omitempty"`
-	PublishedRevision *int64     `json:"published_revision,omitempty"`
-	PublishedAt       *time.Time `json:"published_at,omitempty"`
+	Status              string                `json:"status"`
+	ScanID              string                `json:"scan_id,omitempty"`
+	Error               string                `json:"error,omitempty"`
+	DirtyCoverage       []string              `json:"dirty_coverage"`
+	ActiveCoverageRoots []PostureCoverageRoot `json:"active_coverage_roots"`
+	UpdatedAt           time.Time             `json:"updated_at"`
+	PublishedScanID     string                `json:"published_scan_id,omitempty"`
+	PublishedRevision   *int64                `json:"published_revision,omitempty"`
+	PublishedAt         *time.Time            `json:"published_at,omitempty"`
 }

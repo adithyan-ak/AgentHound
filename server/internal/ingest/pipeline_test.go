@@ -310,16 +310,31 @@ func (a *rejectStorageVerifier) Verify(context.Context) error {
 
 type fakeLifecycleScanStore struct {
 	*fakeScanStore
-	dirtyCoverage []string
-	failures      []appdb.ScanFailure
+	dirtyCoverage       []string
+	beginDirtyCoverage  [][]string
+	beginCoverageParent []map[string]string
+	failures            []appdb.ScanFailure
+	recordFailureErr    error
 }
 
 func (s *fakeLifecycleScanStore) BeginScan(
 	ctx context.Context,
 	scan *model.Scan,
 	dirtyCoverage []string,
-	_ map[string]string,
+	coverageParents map[string]string,
 ) ([]string, error) {
+	s.beginDirtyCoverage = append(
+		s.beginDirtyCoverage,
+		append([]string(nil), dirtyCoverage...),
+	)
+	clonedParents := make(map[string]string, len(coverageParents))
+	for key, parent := range coverageParents {
+		clonedParents[key] = parent
+	}
+	s.beginCoverageParent = append(
+		s.beginCoverageParent,
+		clonedParents,
+	)
 	seen := make(map[string]bool)
 	merged := append([]string(nil), s.dirtyCoverage...)
 	for _, key := range merged {
@@ -339,6 +354,9 @@ func (s *fakeLifecycleScanStore) RecordFailure(
 	_ context.Context,
 	failure appdb.ScanFailure,
 ) error {
+	if s.recordFailureErr != nil {
+		return s.recordFailureErr
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, key := range failure.DirtyCoverage {
@@ -530,6 +548,230 @@ func validIngestDataFor(scanID string) *sdkingest.IngestData {
 	return data
 }
 
+func addEmptyExactInstructionRoots(
+	report *sdkingest.CollectionReport,
+	homeRoot string,
+	projectRoot string,
+) {
+	contract := sdkingest.CurrentInstructionRegistryContract()
+	for _, candidate := range []struct {
+		method string
+		kind   string
+		target string
+	}{
+		{
+			method: sdkingest.InstructionMethodExactUser,
+			kind:   "instruction-exact-user",
+			target: homeRoot,
+		},
+		{
+			method: sdkingest.InstructionMethodExactProject,
+			kind:   "instruction-exact-project",
+			target: projectRoot,
+		},
+	} {
+		present := false
+		for _, outcome := range report.Outcomes {
+			if outcome.Method == candidate.method {
+				present = true
+				break
+			}
+		}
+		if present {
+			continue
+		}
+		root := sdkingest.CanonicalCoverageKey(
+			"config",
+			candidate.kind,
+			candidate.target,
+		)
+		report.CoverageKeys = append(report.CoverageKeys, root)
+		report.AuthoritativeRoots = append(
+			report.AuthoritativeRoots,
+			sdkingest.CoverageRoot{
+				CoverageKey:      root,
+				RegistryContract: &contract,
+			},
+		)
+		report.Outcomes = append(report.Outcomes, sdkingest.CollectionOutcome{
+			Collector: "config", CoverageKey: root,
+			Target: candidate.target, Method: candidate.method,
+			State: sdkingest.OutcomeComplete,
+		})
+	}
+	report.State = sdkingest.AggregateOutcomeState(report.Outcomes)
+}
+
+func truncatedDeepInstructionIngest(
+	scanID string,
+) (*sdkingest.IngestData, string, string) {
+	exactRoot := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-exact-user",
+		"/home/op",
+	)
+	exactChild := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-source",
+		exactRoot+"\x00/home/op/AGENTS.md",
+	)
+	deepRoot := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-deep",
+		"/home/op",
+	)
+	deepChild := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-source",
+		deepRoot+"\x00/home/op/work/CLAUDE.md",
+	)
+	contract := sdkingest.CurrentInstructionRegistryContract()
+	data := validIngestDataFor(scanID)
+	data.Graph = sdkingest.GraphData{
+		Nodes: []sdkingest.Node{},
+		Edges: []sdkingest.Edge{},
+	}
+	data.Meta.Collection = &sdkingest.CollectionReport{
+		State:        sdkingest.OutcomeTruncated,
+		CoverageKeys: []string{exactRoot, exactChild, deepRoot, deepChild},
+		AuthoritativeRoots: []sdkingest.CoverageRoot{
+			{
+				CoverageKey:       exactRoot,
+				ChildCoverageKeys: []string{exactChild},
+				RegistryContract:  &contract,
+			},
+			{
+				CoverageKey:       deepRoot,
+				ChildCoverageKeys: []string{deepChild},
+				RegistryContract:  &contract,
+			},
+		},
+		Outcomes: []sdkingest.CollectionOutcome{
+			{
+				Collector:   "config",
+				CoverageKey: exactRoot,
+				Target:      "/home/op",
+				Method:      sdkingest.InstructionMethodExactUser,
+				State:       sdkingest.OutcomeComplete,
+			},
+			{
+				Collector:         "config",
+				CoverageKey:       exactChild,
+				ParentCoverageKey: exactRoot,
+				Target:            "/home/op/AGENTS.md",
+				Method:            sdkingest.InstructionMethodSource,
+				State:             sdkingest.OutcomeComplete,
+			},
+			{
+				Collector:   "config",
+				CoverageKey: deepRoot,
+				Target:      "/home/op",
+				Method:      sdkingest.InstructionMethodDeep,
+				State:       sdkingest.OutcomeTruncated,
+			},
+			{
+				Collector:         "config",
+				CoverageKey:       deepChild,
+				ParentCoverageKey: deepRoot,
+				Target:            "/home/op/work/CLAUDE.md",
+				Method:            sdkingest.InstructionMethodSource,
+				State:             sdkingest.OutcomeComplete,
+			},
+		},
+	}
+	addEmptyExactInstructionRoots(data.Meta.Collection, "/home/op", "/home/op/work")
+	sdkingest.EnsureCoverageParentage(data.Meta.Collection)
+	return data, deepRoot, deepChild
+}
+
+func exactInstructionIngest(scanID string) *sdkingest.IngestData {
+	data, deepRoot, deepChild := truncatedDeepInstructionIngest(scanID)
+	report := data.Meta.Collection
+	report.CoverageKeys = subtractCoverage(
+		report.CoverageKeys,
+		[]string{deepRoot, deepChild},
+	)
+	var roots []sdkingest.CoverageRoot
+	for _, root := range report.AuthoritativeRoots {
+		if root.CoverageKey != deepRoot {
+			roots = append(roots, root)
+		}
+	}
+	report.AuthoritativeRoots = roots
+	var outcomes []sdkingest.CollectionOutcome
+	for _, outcome := range report.Outcomes {
+		if outcome.CoverageKey != deepRoot && outcome.CoverageKey != deepChild {
+			outcomes = append(outcomes, outcome)
+		}
+	}
+	report.Outcomes = outcomes
+	report.State = sdkingest.AggregateOutcomeState(report.Outcomes)
+	sdkingest.EnsureCoverageParentage(report)
+	return data
+}
+
+func limitedExactInstructionIngest(
+	scanID string,
+	method string,
+	state sdkingest.OutcomeState,
+) (*sdkingest.IngestData, string, string) {
+	data, deepRoot, deepChild := truncatedDeepInstructionIngest(scanID)
+	report := data.Meta.Collection
+	selectedRoot := ""
+	selectedChild := deepChild
+	for _, outcome := range report.Outcomes {
+		if outcome.Method == method {
+			selectedRoot = outcome.CoverageKey
+			break
+		}
+	}
+	if selectedRoot == "" {
+		panic("unsupported exact instruction method in test")
+	}
+	if method == sdkingest.InstructionMethodExactUser {
+		for _, root := range report.AuthoritativeRoots {
+			if root.CoverageKey == selectedRoot {
+				selectedChild = root.ChildCoverageKeys[0]
+				break
+			}
+		}
+	}
+
+	report.CoverageKeys = subtractCoverage(report.CoverageKeys, []string{deepRoot})
+	if selectedChild != deepChild {
+		report.CoverageKeys = subtractCoverage(report.CoverageKeys, []string{deepChild})
+	}
+	var roots []sdkingest.CoverageRoot
+	for _, root := range report.AuthoritativeRoots {
+		if root.CoverageKey == deepRoot {
+			continue
+		}
+		if root.CoverageKey == selectedRoot {
+			root.ChildCoverageKeys = []string{selectedChild}
+		}
+		roots = append(roots, root)
+	}
+	report.AuthoritativeRoots = roots
+	var outcomes []sdkingest.CollectionOutcome
+	for _, outcome := range report.Outcomes {
+		if outcome.CoverageKey == deepRoot ||
+			outcome.CoverageKey == deepChild && selectedChild != deepChild {
+			continue
+		}
+		if outcome.CoverageKey == selectedRoot {
+			outcome.State = state
+		}
+		if outcome.CoverageKey == selectedChild {
+			outcome.ParentCoverageKey = selectedRoot
+		}
+		outcomes = append(outcomes, outcome)
+	}
+	report.Outcomes = outcomes
+	report.State = sdkingest.AggregateOutcomeState(report.Outcomes)
+	sdkingest.EnsureCoverageParentage(report)
+	return data, selectedRoot, selectedChild
+}
+
 func scopedCoverageFor(
 	data *sdkingest.IngestData,
 	kind sdkingest.IdentityScope,
@@ -540,6 +782,15 @@ func scopedCoverageFor(
 		scopeID = data.Meta.Identity.CollectionPointID
 	}
 	return sdkingest.ScopedCoverageKey(kind, scopeID, rawKey)
+}
+
+func containsCoverage(keys []string, want string) bool {
+	for _, key := range keys {
+		if key == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPipelineStorageVerificationPrecedesEveryMutationAndValidationAudit(t *testing.T) {
@@ -574,6 +825,38 @@ func TestPipelineStorageVerificationPrecedesEveryMutationAndValidationAudit(t *t
 			len(scans.rejections), len(scans.creates), len(scans.updates),
 			len(writer.nodeCalls), len(writer.edgeCalls),
 		)
+	}
+}
+
+func TestPipelineVersionPreflightPrecedesStorageAndAudit(t *testing.T) {
+	guard := &rejectStorageVerifier{err: errors.New("storage must not be read")}
+	writer := &fakeWriter{}
+	scans := &fakeScanStore{}
+	db := &graph.MockGraphDB{}
+	pipeline := newTestPipeline(writer, db, scans, noOpRunPP)
+	pipeline.storageGuard = guard
+
+	data := campaignEvidenceIngest()
+	data.Meta.Version = sdkingest.CurrentVersion - 1
+	result, err := pipeline.Ingest(context.Background(), data)
+	var versionErr *UnsupportedVersionError
+	if !errors.As(err, &versionErr) {
+		t.Fatalf("error = %T %v, want UnsupportedVersionError", err, err)
+	}
+	if result != nil {
+		t.Fatalf("version rejection returned result: %+v", result)
+	}
+	if guard.calls != 0 {
+		t.Fatalf("storage verification calls = %d, want zero", guard.calls)
+	}
+	if len(scans.rejections) != 0 ||
+		len(scans.creates) != 0 ||
+		len(scans.updates) != 0 ||
+		len(writer.nodeCalls) != 0 ||
+		len(writer.edgeCalls) != 0 ||
+		len(db.CallsTo("Query")) != 0 ||
+		len(db.CallsTo("ExecuteWrite")) != 0 {
+		t.Fatal("version rejection touched external state")
 	}
 }
 
@@ -960,6 +1243,325 @@ func TestPipeline_CompleteEmptyRootClearsFailedUnheadedChild(t *testing.T) {
 	}
 }
 
+func TestPipeline_TruncatedDeepRootPublishesAndPromotesCompleteChildren(t *testing.T) {
+	contract := sdkingest.CurrentInstructionRegistryContract()
+	data, _, _ := truncatedDeepInstructionIngest("scan-truncated-deep")
+
+	store := &fakeScanStore{}
+	lifecycle := &fakeLifecycleScanStore{fakeScanStore: store}
+	publisher := &fakePublisher{lifecycle: lifecycle}
+	writer := &fakeWriter{}
+	db := &graph.MockGraphDB{
+		QueryFunc: func(
+			_ context.Context,
+			cypher string,
+			_ map[string]any,
+		) ([]map[string]any, error) {
+			if strings.Contains(cypher, "incomplete_property_nodes") {
+				return []map[string]any{{
+					"incomplete_property_nodes":         int64(0),
+					"incomplete_property_relationships": int64(0),
+					"tokenless_nodes":                   int64(0),
+					"tokenless_incident_relationships":  int64(0),
+				}}, nil
+			}
+			return []map[string]any{{
+				"source_id": "instruction-file", "source_name": "AGENTS.md",
+				"source_kind": "InstructionFile",
+				"target_id":   "instruction-file", "target_name": "AGENTS.md",
+				"target_kind": "InstructionFile",
+				"edge_kind":   "POISONED_INSTRUCTIONS", "confidence": 1.0,
+				"cross_protocol": false, "target_sensitivity": "",
+			}}, nil
+		},
+	}
+	p := newTestPipeline(writer, db, lifecycle, noOpRunPP)
+	p.findingStore = publisher
+
+	result, err := p.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.ProjectionStatus != model.ProjectionComplete {
+		t.Fatalf("truncated-deep projection = %q, want published/complete", result.ProjectionStatus)
+	}
+	if len(result.Warnings) != 1 ||
+		result.Warnings[0] != sdkingest.InstructionCoverageLimitationWarning {
+		t.Fatalf("truncated-deep warnings = %v, want coverage limitation", result.Warnings)
+	}
+	if len(publisher.finalizations) != 1 || !publisher.finalizations[0].Publish {
+		t.Fatalf("truncated-deep finalization = %+v, want publish", publisher.finalizations)
+	}
+	finalized := publisher.finalizations[0]
+	if len(finalized.Findings) != 1 ||
+		finalized.Findings[0].EdgeKind != "POISONED_INSTRUCTIONS" {
+		t.Fatalf("limited exact findings = %+v, want positive child finding", finalized.Findings)
+	}
+	states := sdkingest.CoverageStates(finalized.Collection)
+	var truncatedRootPromoted bool
+	for _, root := range finalized.CoverageRoots {
+		if instructionRootMode(finalized.Collection, root.CoverageKey) ==
+			sdkingest.InstructionCoverageDeep {
+			truncatedRootPromoted = true
+			if states[root.CoverageKey] != sdkingest.OutcomeTruncated {
+				t.Fatalf("deep root state = %q, want truncated", states[root.CoverageKey])
+			}
+			if root.RegistryContract == nil || !root.RegistryContract.Equal(contract) {
+				t.Fatalf("deep root contract = %+v, want %+v", root.RegistryContract, contract)
+			}
+		}
+	}
+	if !truncatedRootPromoted {
+		t.Fatalf("promoted roots = %+v, want deep root", finalized.CoverageRoots)
+	}
+	for _, root := range store.resolvedRoots {
+		if instructionRootMode(finalized.Collection, root.CoverageKey) ==
+			sdkingest.InstructionCoverageDeep {
+			t.Fatalf(
+				"truncated deep root was used for absence retirement: %+v",
+				store.resolvedRoots,
+			)
+		}
+	}
+	if len(lifecycle.dirtyCoverage) != 0 {
+		t.Fatalf("deep coverage entered dirty state: %v", lifecycle.dirtyCoverage)
+	}
+}
+
+func TestPipeline_LimitedExactRootPublishesChildWithoutRootAuthority(t *testing.T) {
+	data, limitedRoot, child := limitedExactInstructionIngest(
+		"scan-limited-exact",
+		sdkingest.InstructionMethodExactUser,
+		sdkingest.OutcomeFailed,
+	)
+	scopedRoot := scopedCoverageFor(data, sdkingest.ScopeCollectionPoint, limitedRoot)
+	scopedChild := scopedCoverageFor(data, sdkingest.ScopeCollectionPoint, child)
+	store := &fakeScanStore{}
+	lifecycle := &fakeLifecycleScanStore{fakeScanStore: store}
+	publisher := &fakePublisher{lifecycle: lifecycle}
+	writer := &fakeWriter{}
+	p := newTestPipeline(writer, &graph.MockGraphDB{}, lifecycle, noOpRunPP)
+	p.findingStore = publisher
+
+	result, err := p.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.ProjectionStatus != model.ProjectionComplete ||
+		len(result.Warnings) != 1 ||
+		result.Warnings[0] != sdkingest.InstructionCoverageLimitationWarning {
+		t.Fatalf("limited exact result = %+v", result)
+	}
+	if len(publisher.finalizations) != 1 || !publisher.finalizations[0].Publish {
+		t.Fatalf("limited exact finalization = %+v", publisher.finalizations)
+	}
+	finalized := publisher.finalizations[0]
+	if finalized.Scan.ComparisonKey != "" {
+		t.Fatalf("limited exact comparison key = %q", finalized.Scan.ComparisonKey)
+	}
+	if !containsCoverage(finalized.CompleteDomains, scopedChild) ||
+		containsCoverage(finalized.CompleteDomains, scopedRoot) {
+		t.Fatalf("complete domains = %v, want child only for limited root", finalized.CompleteDomains)
+	}
+	if !containsCoverage(finalized.ResolvedDirtyCoverage, scopedRoot) ||
+		!containsCoverage(finalized.ResolvedDirtyCoverage, scopedChild) {
+		t.Fatalf(
+			"resolved dirty coverage = %v, want processed limited root and child",
+			finalized.ResolvedDirtyCoverage,
+		)
+	}
+	var promotedLimitedRoot bool
+	for _, root := range finalized.CoverageRoots {
+		if root.CoverageKey == scopedRoot {
+			promotedLimitedRoot = true
+		}
+	}
+	if !promotedLimitedRoot {
+		t.Fatalf("limited root head not promoted: %+v", finalized.CoverageRoots)
+	}
+	for _, root := range store.resolvedRoots {
+		if root.CoverageKey == scopedRoot {
+			t.Fatalf("limited root used for absence retirement: %+v", store.resolvedRoots)
+		}
+	}
+	if got := writer.nodeCalls[0].CompleteScopes; !containsCoverage(got, scopedChild) ||
+		containsCoverage(got, scopedRoot) {
+		t.Fatalf("reconciled domains = %v, want child but not limited root", got)
+	}
+}
+
+func TestPipeline_LimitedExactDirtyResolutionIsSuccessfulAndSeenOnly(t *testing.T) {
+	data, limitedRoot, child := limitedExactInstructionIngest(
+		"scan-limited-exact-dirty",
+		sdkingest.InstructionMethodExactProject,
+		sdkingest.OutcomePartial,
+	)
+	scopedRoot := scopedCoverageFor(data, sdkingest.ScopeCollectionPoint, limitedRoot)
+	scopedChild := scopedCoverageFor(data, sdkingest.ScopeCollectionPoint, child)
+	unseenSibling := sdkingest.ScopedCoverageKey(
+		sdkingest.ScopeCollectionPoint,
+		data.Meta.Identity.CollectionPointID,
+		sdkingest.CanonicalCoverageKey(
+			"config",
+			"instruction-source",
+			limitedRoot+"\x00prior/CLAUDE.md",
+		),
+	)
+	store := &fakeScanStore{}
+	lifecycle := &fakeLifecycleScanStore{
+		fakeScanStore: store,
+		dirtyCoverage: []string{scopedRoot, scopedChild, unseenSibling},
+	}
+	publisher := &fakePublisher{lifecycle: lifecycle}
+	p := newTestPipeline(
+		&fakeWriter{},
+		&graph.MockGraphDB{},
+		lifecycle,
+		noOpRunPP,
+	)
+	p.findingStore = publisher
+
+	result, err := p.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.ProjectionStatus != model.ProjectionIncomplete {
+		t.Fatalf("unseen dirty sibling unexpectedly published: %+v", result)
+	}
+	finalized := publisher.finalizations[0]
+	if !containsCoverage(finalized.ResolvedDirtyCoverage, scopedRoot) ||
+		!containsCoverage(finalized.ResolvedDirtyCoverage, scopedChild) ||
+		containsCoverage(finalized.ResolvedDirtyCoverage, unseenSibling) {
+		t.Fatalf("resolved dirty coverage = %v", finalized.ResolvedDirtyCoverage)
+	}
+	if len(finalized.DirtyCoverage) != 1 ||
+		finalized.DirtyCoverage[0] != unseenSibling {
+		t.Fatalf("final dirty coverage = %v, want unseen sibling", finalized.DirtyCoverage)
+	}
+}
+
+func TestPipeline_LimitedExactAnalysisFailureDoesNotResolveDirtyCoverage(t *testing.T) {
+	data, limitedRoot, child := limitedExactInstructionIngest(
+		"scan-limited-exact-analysis-failure",
+		sdkingest.InstructionMethodExactUser,
+		sdkingest.OutcomeTruncated,
+	)
+	scopedRoot := scopedCoverageFor(data, sdkingest.ScopeCollectionPoint, limitedRoot)
+	scopedChild := scopedCoverageFor(data, sdkingest.ScopeCollectionPoint, child)
+	lifecycle := &fakeLifecycleScanStore{
+		fakeScanStore: &fakeScanStore{},
+		dirtyCoverage: []string{scopedRoot, scopedChild},
+	}
+	publisher := &fakePublisher{lifecycle: lifecycle}
+	p := newTestPipeline(
+		&fakeWriter{},
+		&graph.MockGraphDB{},
+		lifecycle,
+		func(
+			context.Context,
+			graph.GraphDB,
+			string,
+			[]string,
+		) ([]graph.ProcessingStats, error) {
+			return nil, errors.New("analysis failed")
+		},
+	)
+	p.findingStore = publisher
+
+	result, err := p.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.ProjectionStatus != model.ProjectionIncomplete {
+		t.Fatalf("analysis failure result = %+v", result)
+	}
+	finalized := publisher.finalizations[0]
+	if containsCoverage(finalized.ResolvedDirtyCoverage, scopedRoot) ||
+		containsCoverage(finalized.ResolvedDirtyCoverage, scopedChild) {
+		t.Fatalf("failure resolved dirty coverage: %v", finalized.ResolvedDirtyCoverage)
+	}
+	if !containsCoverage(finalized.DirtyCoverage, scopedRoot) ||
+		!containsCoverage(finalized.DirtyCoverage, scopedChild) {
+		t.Fatalf("failure lost inherited dirty coverage: %v", finalized.DirtyCoverage)
+	}
+}
+
+func TestPipeline_PartialOrFailedDeepDoesNotSeedDeepDirtiness(t *testing.T) {
+	for _, state := range []sdkingest.OutcomeState{
+		sdkingest.OutcomePartial,
+		sdkingest.OutcomeFailed,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			data, deepRoot, deepChild := truncatedDeepInstructionIngest(
+				"scan-deep-" + string(state),
+			)
+			report := data.Meta.Collection
+			report.CoverageKeys = subtractCoverage(
+				report.CoverageKeys,
+				[]string{deepChild},
+			)
+			for i := range report.AuthoritativeRoots {
+				if report.AuthoritativeRoots[i].CoverageKey == deepRoot {
+					report.AuthoritativeRoots[i].ChildCoverageKeys = nil
+				}
+			}
+			var outcomes []sdkingest.CollectionOutcome
+			for _, outcome := range report.Outcomes {
+				if outcome.CoverageKey == deepChild {
+					continue
+				}
+				if outcome.CoverageKey == deepRoot {
+					outcome.State = state
+				}
+				outcomes = append(outcomes, outcome)
+			}
+			report.Outcomes = outcomes
+			report.State = sdkingest.AggregateOutcomeState(report.Outcomes)
+			sdkingest.EnsureCoverageParentage(report)
+
+			lifecycle := &fakeLifecycleScanStore{
+				fakeScanStore: &fakeScanStore{},
+			}
+			publisher := &fakePublisher{lifecycle: lifecycle}
+			p := newTestPipeline(
+				&fakeWriter{},
+				&graph.MockGraphDB{},
+				lifecycle,
+				noOpRunPP,
+			)
+			p.findingStore = publisher
+
+			result, err := p.Ingest(context.Background(), data)
+			if err != nil {
+				t.Fatalf("Ingest: %v", err)
+			}
+			if result.ProjectionStatus != model.ProjectionComplete {
+				t.Fatalf("exact posture was not published: %+v", result)
+			}
+			if len(lifecycle.beginDirtyCoverage) != 1 {
+				t.Fatalf(
+					"begin dirty calls = %d, want 1",
+					len(lifecycle.beginDirtyCoverage),
+				)
+			}
+			nonBlocking := sdkingest.NonBlockingInstructionCoverageDomains(
+				data.Meta.Collection,
+			)
+			for _, dirty := range lifecycle.beginDirtyCoverage[0] {
+				for _, deepDomain := range nonBlocking {
+					if dirty == deepDomain {
+						t.Fatalf(
+							"%s deep domain seeded dirty: %q",
+							state,
+							dirty,
+						)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestPipeline_PartialCurrentChildPreventsRootRetirement(t *testing.T) {
 	currentChild := sdkingest.CanonicalCoverageKey(
 		"mcp",
@@ -973,12 +1575,7 @@ func TestPipeline_PartialCurrentChildPreventsRootRetirement(t *testing.T) {
 	)
 	root := sdkingest.CollectorRootCoverageKey("mcp")
 	data := validIngestDataFor("scan-partial-current-child")
-	for i := range data.Graph.Nodes {
-		data.Graph.Nodes[i].ObservationDomains = []string{currentChild}
-	}
-	for i := range data.Graph.Edges {
-		data.Graph.Edges[i].ObservationDomains = []string{currentChild}
-	}
+	data.Graph = sdkingest.GraphData{Nodes: []sdkingest.Node{}, Edges: []sdkingest.Edge{}}
 	data.Meta.Collection = &sdkingest.CollectionReport{
 		State:        sdkingest.OutcomePartial,
 		CoverageKeys: []string{root, currentChild},
@@ -1154,6 +1751,7 @@ func TestPipeline_PartialCoverageNeverPublishesOrReconciles(t *testing.T) {
 	data := validIngestDataFor("scan-partial")
 	data.Meta.Collection.State = sdkingest.OutcomePartial
 	data.Meta.Collection.Outcomes[0].State = sdkingest.OutcomePartial
+	data.Graph = sdkingest.GraphData{Nodes: []sdkingest.Node{}, Edges: []sdkingest.Edge{}}
 	result, err := p.Ingest(context.Background(), data)
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
@@ -1270,6 +1868,7 @@ func TestPipeline_FailedMCPThenSuccessfulConfigKeepsMCPDirty(t *testing.T) {
 	failedMCP := validIngestDataFor("scan-failed-mcp")
 	failedMCP.Meta.Collection.State = sdkingest.OutcomeFailed
 	failedMCP.Meta.Collection.Outcomes[0].State = sdkingest.OutcomeFailed
+	failedMCP.Graph = sdkingest.GraphData{Nodes: []sdkingest.Node{}, Edges: []sdkingest.Edge{}}
 	first, err := p.Ingest(context.Background(), failedMCP)
 	if err != nil {
 		t.Fatalf("failed MCP ingest: %v", err)
@@ -1292,6 +1891,11 @@ func TestPipeline_FailedMCPThenSuccessfulConfigKeepsMCPDirty(t *testing.T) {
 			State:       sdkingest.OutcomeComplete,
 		}},
 	}
+	addEmptyExactInstructionRoots(
+		successfulConfig.Meta.Collection,
+		"/home/op",
+		"/home/op/project",
+	)
 	sdkingest.TagObservationDomain(&successfulConfig.Graph, configScope)
 	for i := range successfulConfig.Graph.Nodes {
 		successfulConfig.Graph.Nodes[i].ObservationDomains = []string{configScope}
@@ -1341,6 +1945,166 @@ func TestPipeline_PublicationFailureMarksProjectionIncomplete(t *testing.T) {
 	update, ok := ss.lastUpdate("scan-publication-fail")
 	if !ok || update.Status != model.ScanStatusCompletedWithErrors {
 		t.Fatalf("failure lifecycle update = %+v, found=%t", update, ok)
+	}
+}
+
+func TestPipeline_DeepFinalizationFailureRequiresDeepRecovery(t *testing.T) {
+	ss := &fakeLifecycleScanStore{fakeScanStore: &fakeScanStore{}}
+	publisher := &fakePublisher{
+		err:       errors.New("publication transaction failed"),
+		lifecycle: ss,
+	}
+	p := newTestPipeline(&fakeWriter{}, &graph.MockGraphDB{}, ss, noOpRunPP)
+	p.findingStore = publisher
+
+	failedDeep, _, _ := truncatedDeepInstructionIngest("scan-deep-finalize-fail")
+	first, err := p.Ingest(context.Background(), failedDeep)
+	if err != nil {
+		t.Fatalf("deep ingest: %v", err)
+	}
+	if first.Outcome != sdkingest.OutcomePartial ||
+		first.ProjectionStatus != model.ProjectionIncomplete {
+		t.Fatalf("deep finalization failure result = %+v", first)
+	}
+	var deepChild string
+	for _, outcome := range failedDeep.Meta.Collection.Outcomes {
+		if outcome.Method == sdkingest.InstructionMethodSource &&
+			outcome.Target == "/home/op/work/CLAUDE.md" {
+			deepChild = outcome.CoverageKey
+			break
+		}
+	}
+	if deepChild == "" {
+		t.Fatal("normalized deep child coverage key not found")
+	}
+	if len(ss.failures) != 1 {
+		t.Fatalf("recorded failures = %d, want 1", len(ss.failures))
+	}
+	var deepDirty bool
+	for _, key := range ss.failures[0].DirtyCoverage {
+		if key == deepChild {
+			deepDirty = true
+			break
+		}
+	}
+	if !deepDirty {
+		t.Fatalf(
+			"failure dirty coverage = %v, want deep child %q",
+			ss.failures[0].DirtyCoverage,
+			deepChild,
+		)
+	}
+
+	publisher.err = nil
+	exact, err := p.Ingest(
+		context.Background(),
+		exactInstructionIngest("scan-exact-after-deep-finalize-fail"),
+	)
+	if err != nil {
+		t.Fatalf("exact recovery ingest: %v", err)
+	}
+	if exact.Outcome != sdkingest.OutcomePartial ||
+		exact.ProjectionStatus != model.ProjectionIncomplete {
+		t.Fatalf("exact-only recovery published: %+v", exact)
+	}
+	if len(publisher.finalizations) != 2 ||
+		publisher.finalizations[1].Publish {
+		t.Fatalf(
+			"exact-only finalization = %+v, want unpublished",
+			publisher.finalizations,
+		)
+	}
+
+	deepRecovery, _, _ := truncatedDeepInstructionIngest("scan-deep-recovery")
+	recovered, err := p.Ingest(context.Background(), deepRecovery)
+	if err != nil {
+		t.Fatalf("deep recovery ingest: %v", err)
+	}
+	if recovered.Outcome != sdkingest.OutcomeComplete ||
+		recovered.ProjectionStatus != model.ProjectionComplete {
+		t.Fatalf("deep recovery result = %+v", recovered)
+	}
+	if len(ss.dirtyCoverage) != 0 {
+		t.Fatalf("dirty coverage after deep recovery = %v", ss.dirtyCoverage)
+	}
+}
+
+func TestPipeline_DeepDirtinessSurvivesFailureRecordLoss(t *testing.T) {
+	ss := &fakeLifecycleScanStore{
+		fakeScanStore:    &fakeScanStore{},
+		recordFailureErr: errors.New("failure record unavailable"),
+	}
+	publisher := &fakePublisher{
+		err:       errors.New("publication transaction failed"),
+		lifecycle: ss,
+	}
+	p := newTestPipeline(&fakeWriter{}, &graph.MockGraphDB{}, ss, noOpRunPP)
+	p.findingStore = publisher
+
+	failedDeep, _, _ := truncatedDeepInstructionIngest(
+		"scan-deep-finalize-and-record-fail",
+	)
+	first, err := p.Ingest(context.Background(), failedDeep)
+	if err != nil {
+		t.Fatalf("deep ingest: %v", err)
+	}
+	if first.ProjectionStatus != model.ProjectionIncomplete {
+		t.Fatalf("deep finalization failure result = %+v", first)
+	}
+	if len(ss.failures) != 0 {
+		t.Fatalf("failure record unexpectedly succeeded: %+v", ss.failures)
+	}
+	var deepChild string
+	for _, outcome := range failedDeep.Meta.Collection.Outcomes {
+		if outcome.Method == sdkingest.InstructionMethodSource &&
+			outcome.Target == "/home/op/work/CLAUDE.md" {
+			deepChild = outcome.CoverageKey
+			break
+		}
+	}
+	if deepChild == "" {
+		t.Fatal("normalized deep child coverage key not found")
+	}
+	var deepDirty bool
+	for _, key := range ss.dirtyCoverage {
+		if key == deepChild {
+			deepDirty = true
+			break
+		}
+	}
+	if !deepDirty {
+		t.Fatalf(
+			"pre-write dirty coverage = %v, want deep child %q",
+			ss.dirtyCoverage,
+			deepChild,
+		)
+	}
+
+	publisher.err = nil
+	exact, err := p.Ingest(
+		context.Background(),
+		exactInstructionIngest("scan-exact-after-failure-record-loss"),
+	)
+	if err != nil {
+		t.Fatalf("exact recovery ingest: %v", err)
+	}
+	if exact.ProjectionStatus != model.ProjectionIncomplete ||
+		publisher.finalizations[len(publisher.finalizations)-1].Publish {
+		t.Fatalf("exact-only recovery published: %+v", exact)
+	}
+
+	deepRecovery, _, _ := truncatedDeepInstructionIngest(
+		"scan-deep-after-failure-record-loss",
+	)
+	recovered, err := p.Ingest(context.Background(), deepRecovery)
+	if err != nil {
+		t.Fatalf("deep recovery ingest: %v", err)
+	}
+	if recovered.ProjectionStatus != model.ProjectionComplete {
+		t.Fatalf("deep recovery result = %+v", recovered)
+	}
+	if len(ss.dirtyCoverage) != 0 {
+		t.Fatalf("dirty coverage after deep recovery = %v", ss.dirtyCoverage)
 	}
 }
 
@@ -1428,7 +2192,10 @@ func TestPipeline_ValidationError_MissingMeta(t *testing.T) {
 	p := newTestPipeline(w, &graph.MockGraphDB{}, ss, noOpRunPP)
 
 	bad := &sdkingest.IngestData{
-		// Missing meta.version, type, collector, scan_id
+		Meta: sdkingest.IngestMeta{
+			Version: sdkingest.CurrentVersion,
+			// Missing type, collector, scan_id, and collection metadata.
+		},
 		Graph: sdkingest.GraphData{
 			Nodes: []sdkingest.Node{{ID: "n1", Kinds: []string{"MCPServer"}}},
 		},
@@ -1848,6 +2615,11 @@ func TestPipeline_PostProcessorReceivesCompleteDomains(t *testing.T) {
 			State:       sdkingest.OutcomeComplete,
 		}},
 	}
+	addEmptyExactInstructionRoots(
+		d.Meta.Collection,
+		"/home/op",
+		"/home/op/project",
+	)
 	for i := range d.Graph.Nodes {
 		d.Graph.Nodes[i].ObservationDomains = []string{configScope}
 	}
@@ -1856,10 +2628,25 @@ func TestPipeline_PostProcessorReceivesCompleteDomains(t *testing.T) {
 	}
 	scopedPointScope := scopedCoverageFor(d, sdkingest.ScopeCollectionPoint, configScope)
 	scopedNetworkScope := scopedCoverageFor(d, sdkingest.ScopeNetworkContext, configScope)
+	exactUser := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-exact-user",
+		"/home/op",
+	)
+	exactProject := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-exact-project",
+		"/home/op/project",
+	)
 	if _, err := p.Ingest(context.Background(), d); err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
-	wantDomains := mergeCoverage([]string{scopedPointScope, scopedNetworkScope})
+	wantDomains := mergeCoverage([]string{
+		scopedPointScope,
+		scopedNetworkScope,
+		scopedCoverageFor(d, sdkingest.ScopeCollectionPoint, exactUser),
+		scopedCoverageFor(d, sdkingest.ScopeCollectionPoint, exactProject),
+	})
 	if strings.Join(seenDomains, "\x00") != strings.Join(wantDomains, "\x00") {
 		t.Errorf("expected split config domains=%v, got %v", wantDomains, seenDomains)
 	}
@@ -1946,6 +2733,209 @@ func TestPipeline_UnsafeNormalizationWarningWithholdsPublication(t *testing.T) {
 	}
 	if warnings := publisher.finalizations[0].NormalizationWarnings; len(warnings) != 1 || !warnings[0].PublicationUnsafe {
 		t.Fatalf("unsafe warning classification was not persisted: %+v", warnings)
+	}
+}
+
+func TestPipeline_UnsafeNormalizationDoesNotResolveLimitedDirtyCoverage(t *testing.T) {
+	data, limitedRoot, child := limitedExactInstructionIngest(
+		"scan-unsafe-normalization-limited-dirty",
+		sdkingest.InstructionMethodExactUser,
+		sdkingest.OutcomePartial,
+	)
+	node := validIngestData().Graph.Nodes[0]
+	node.ObservationDomains = []string{child}
+	node.Properties["nested"] = map[string]any{
+		"unsupported": make(chan int),
+	}
+	data.Graph.Nodes = []sdkingest.Node{node}
+	scopedRoot := scopedCoverageFor(
+		data,
+		sdkingest.ScopeCollectionPoint,
+		limitedRoot,
+	)
+	scopedChild := scopedCoverageFor(
+		data,
+		sdkingest.ScopeCollectionPoint,
+		child,
+	)
+	lifecycle := &fakeLifecycleScanStore{
+		fakeScanStore: &fakeScanStore{},
+		dirtyCoverage: []string{scopedRoot, scopedChild},
+	}
+	publisher := &fakePublisher{lifecycle: lifecycle}
+	p := newTestPipeline(
+		&fakeWriter{},
+		&graph.MockGraphDB{},
+		lifecycle,
+		noOpRunPP,
+	)
+	p.findingStore = publisher
+
+	result, err := p.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.NormalizationStatus != sdkingest.NormalizationStatusDegraded ||
+		result.ProjectionStatus != model.ProjectionIncomplete {
+		t.Fatalf("unsafe normalization result = %+v", result)
+	}
+	if len(publisher.finalizations) != 1 {
+		t.Fatalf("finalizations = %d, want 1", len(publisher.finalizations))
+	}
+	finalized := publisher.finalizations[0]
+	if containsCoverage(finalized.ResolvedDirtyCoverage, scopedRoot) ||
+		containsCoverage(finalized.ResolvedDirtyCoverage, scopedChild) {
+		t.Fatalf(
+			"unsafe normalization resolved limited dirtiness: %v",
+			finalized.ResolvedDirtyCoverage,
+		)
+	}
+	if !containsCoverage(finalized.DirtyCoverage, scopedRoot) ||
+		!containsCoverage(finalized.DirtyCoverage, scopedChild) {
+		t.Fatalf(
+			"unsafe normalization lost inherited dirtiness: %v",
+			finalized.DirtyCoverage,
+		)
+	}
+}
+
+func TestPipeline_UnsafeNormalizationSeedsLimitedCompleteChildDirty(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		data func(string) (*sdkingest.IngestData, string, string)
+	}{
+		{
+			name: "exact",
+			data: func(scanID string) (*sdkingest.IngestData, string, string) {
+				return limitedExactInstructionIngest(
+					scanID,
+					sdkingest.InstructionMethodExactUser,
+					sdkingest.OutcomePartial,
+				)
+			},
+		},
+		{
+			name: "deep",
+			data: truncatedDeepInstructionIngest,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data, _, child := test.data(
+				"scan-unsafe-normalization-new-" + test.name,
+			)
+			node := validIngestData().Graph.Nodes[0]
+			node.ObservationDomains = []string{child}
+			node.Properties["nested"] = map[string]any{
+				"unsupported": make(chan int),
+			}
+			data.Graph.Nodes = []sdkingest.Node{node}
+			lifecycle := &fakeLifecycleScanStore{
+				fakeScanStore: &fakeScanStore{},
+			}
+			publisher := &fakePublisher{lifecycle: lifecycle}
+			writer := &fakeWriter{}
+			p := newTestPipeline(
+				writer,
+				&graph.MockGraphDB{},
+				lifecycle,
+				noOpRunPP,
+			)
+			p.findingStore = publisher
+
+			result, err := p.Ingest(context.Background(), data)
+			if err != nil {
+				t.Fatalf("unsafe Ingest: %v", err)
+			}
+			if result.NormalizationStatus != sdkingest.NormalizationStatusDegraded ||
+				result.ProjectionStatus != model.ProjectionIncomplete {
+				t.Fatalf("unsafe normalization result = %+v", result)
+			}
+			mutatedChild := data.Graph.Nodes[0].ObservationDomains[0]
+			mutatedParent := sdkingest.CoverageParents(
+				data.Meta.Collection,
+			)[mutatedChild]
+			if mutatedParent == "" {
+				t.Fatalf("mutated child %q has no parent", mutatedChild)
+			}
+			if len(lifecycle.beginDirtyCoverage) != 1 ||
+				!containsCoverage(
+					lifecycle.beginDirtyCoverage[0],
+					mutatedChild,
+				) {
+				t.Fatalf(
+					"begin dirty coverage = %v, want mutated child %q",
+					lifecycle.beginDirtyCoverage,
+					mutatedChild,
+				)
+			}
+			if lifecycle.beginCoverageParent[0][mutatedChild] !=
+				mutatedParent {
+				t.Fatalf(
+					"begin parent[%q] = %q, want %q",
+					mutatedChild,
+					lifecycle.beginCoverageParent[0][mutatedChild],
+					mutatedParent,
+				)
+			}
+			if len(publisher.finalizations) != 1 ||
+				publisher.finalizations[0].Publish {
+				t.Fatalf(
+					"unsafe finalization = %+v, want withheld",
+					publisher.finalizations,
+				)
+			}
+			finalized := publisher.finalizations[0]
+			if !containsCoverage(finalized.DirtyCoverage, mutatedChild) ||
+				containsCoverage(
+					finalized.ResolvedDirtyCoverage,
+					mutatedChild,
+				) ||
+				containsCoverage(finalized.CompleteDomains, mutatedChild) ||
+				len(finalized.CoverageRoots) != 0 {
+				t.Fatalf(
+					"unsafe child lifecycle dirty=%v resolved=%v complete=%v roots=%+v",
+					finalized.DirtyCoverage,
+					finalized.ResolvedDirtyCoverage,
+					finalized.CompleteDomains,
+					finalized.CoverageRoots,
+				)
+			}
+			if containsCoverage(
+				writer.nodeCalls[0].CompleteScopes,
+				mutatedChild,
+			) {
+				t.Fatalf(
+					"unsafe child reconciled: %v",
+					writer.nodeCalls[0].CompleteScopes,
+				)
+			}
+			if !containsCoverage(lifecycle.dirtyCoverage, mutatedChild) {
+				t.Fatalf(
+					"current dirty coverage = %v, want %q",
+					lifecycle.dirtyCoverage,
+					mutatedChild,
+				)
+			}
+
+			recovery, _, recoveryChild := test.data(
+				"scan-unsafe-normalization-recovery-" + test.name,
+			)
+			recoveryNode := validIngestData().Graph.Nodes[0]
+			recoveryNode.ObservationDomains = []string{recoveryChild}
+			recovery.Graph.Nodes = []sdkingest.Node{recoveryNode}
+			recovered, err := p.Ingest(context.Background(), recovery)
+			if err != nil {
+				t.Fatalf("recovery Ingest: %v", err)
+			}
+			if recovered.ProjectionStatus != model.ProjectionComplete ||
+				len(lifecycle.dirtyCoverage) != 0 {
+				t.Fatalf(
+					"recovery result=%+v dirty=%v",
+					recovered,
+					lifecycle.dirtyCoverage,
+				)
+			}
+		})
 	}
 }
 

@@ -53,6 +53,18 @@ func (h *PostureHandler) HandleExport(w http.ResponseWriter, r *http.Request) {
 		WriteNotFound(w, "no posture revision has been published")
 		return
 	}
+	if export.SchemaVersion != model.PostureExportSchemaVersion {
+		WriteInternalError(
+			w,
+			r,
+			fmt.Errorf(
+				"published posture export schema %d is unsupported; expected %d",
+				export.SchemaVersion,
+				model.PostureExportSchemaVersion,
+			),
+		)
+		return
+	}
 	w.Header().Set("Content-Disposition", `attachment; filename="agenthound-posture.json"`)
 	WriteJSON(w, http.StatusOK, export)
 }

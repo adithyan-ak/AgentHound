@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -580,6 +581,271 @@ func TestIntegrationAuthoritativeRootRetiresRemovedChildHeadAndDirtyKey(t *testi
 	}
 }
 
+func TestIntegrationIncompleteInstructionRootPreservesChildrenUntilComplete(t *testing.T) {
+	skipIfNoPG(t)
+	ctx := context.Background()
+	pgURI := os.Getenv("AGENTHOUND_PG_URI")
+	admin, err := NewPool(pgURI)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer admin.Close()
+	schema := fmt.Sprintf("agenthound_instruction_root_%d", time.Now().UnixNano())
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create isolated schema: %v", err)
+	}
+	defer func() {
+		if _, err := admin.Exec(ctx, "DROP SCHEMA "+quotedSchema+" CASCADE"); err != nil {
+			t.Errorf("drop isolated schema: %v", err)
+		}
+	}()
+	config, err := pgxpool.ParseConfig(pgURI)
+	if err != nil {
+		t.Fatalf("parse postgres config: %v", err)
+	}
+	config.ConnConfig.RuntimeParams["search_path"] = schema
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatalf("connect isolated schema: %v", err)
+	}
+	defer pool.Close()
+	if err := RunMigrations(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	scans := NewScanStore(pool)
+	findings := NewFindingStore(pool)
+	now := time.Now().UTC()
+	observed := now.Add(-time.Second)
+	graphAfter := &model.GraphSnapshot{
+		NodeCounts: map[string]int64{},
+		EdgeCounts: map[string]int64{},
+	}
+	root := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-exact-user",
+		"/home/op",
+	)
+	currentChild := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-source",
+		root+"\x00AGENTS.md",
+	)
+	priorSibling := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-source",
+		root+"\x00prior/CLAUDE.md",
+	)
+	contract := sdkingest.CurrentInstructionRegistryContract()
+	makeCollection := func(
+		state sdkingest.OutcomeState,
+		children ...string,
+	) *sdkingest.CollectionReport {
+		report := &sdkingest.CollectionReport{
+			State:        state,
+			CoverageKeys: append([]string{root}, children...),
+			AuthoritativeRoots: []sdkingest.CoverageRoot{{
+				CoverageKey:       root,
+				ChildCoverageKeys: append([]string(nil), children...),
+				RegistryContract:  &contract,
+			}},
+			Outcomes: []sdkingest.CollectionOutcome{{
+				Collector: "config", CoverageKey: root,
+				Method: sdkingest.InstructionMethodExactUser, State: state,
+			}},
+		}
+		for _, child := range children {
+			report.Outcomes = append(report.Outcomes, sdkingest.CollectionOutcome{
+				Collector: "config", CoverageKey: child, ParentCoverageKey: root,
+				Method: sdkingest.InstructionMethodSource, State: sdkingest.OutcomeComplete,
+			})
+		}
+		report.State = sdkingest.AggregateOutcomeState(report.Outcomes)
+		return report
+	}
+	createRunning := func(id string) {
+		t.Helper()
+		if err := scans.CreateScan(ctx, &model.Scan{
+			ID: id, Collector: "config", Status: model.ScanStatusRunning,
+			StartedAt: now, ArtifactObservedAt: &observed,
+		}); err != nil {
+			t.Fatalf("create scan %s: %v", id, err)
+		}
+	}
+	finalScan := func(id string) model.Scan {
+		completed := now.Add(time.Second)
+		return model.Scan{
+			ID: id, Collector: "config", Status: model.ScanStatusCompleted,
+			StartedAt: now, CompletedAt: &completed, ArtifactObservedAt: &observed,
+			CollectionStatus: model.LifecycleComplete,
+			GraphStatus:      model.LifecycleComplete,
+			AnalysisStatus:   model.LifecycleComplete,
+			SnapshotStatus:   model.LifecycleComplete,
+			ProjectionStatus: model.ProjectionComplete,
+			ComparisonKey:    "sha256:instruction-root",
+		}
+	}
+	finalize := func(
+		id string,
+		state sdkingest.OutcomeState,
+		authoritative bool,
+		children ...string,
+	) *PublicationResult {
+		t.Helper()
+		createRunning(id)
+		report := makeCollection(state, children...)
+		completeDomains := append([]string(nil), children...)
+		if state == sdkingest.OutcomeComplete {
+			completeDomains = append(completeDomains, root)
+		}
+		rootSet := []sdkingest.CoverageRoot{report.AuthoritativeRoots[0]}
+		var authoritativeRoots []sdkingest.CoverageRoot
+		if authoritative {
+			authoritativeRoots = rootSet
+		}
+		parents := make(map[string]string)
+		for _, child := range children {
+			parents[child] = root
+		}
+		scan := finalScan(id)
+		scan.CollectionStatus = string(report.State)
+		result, err := findings.FinalizeScan(ctx, FinalizeScanParams{
+			Scan:               scan,
+			Collection:         report,
+			CoverageKeys:       report.CoverageKeys,
+			CoverageParents:    parents,
+			CompleteDomains:    completeDomains,
+			CoverageRoots:      rootSet,
+			AuthoritativeRoots: authoritativeRoots,
+			GraphAfter:         graphAfter,
+			Publish:            true,
+		})
+		if err != nil {
+			t.Fatalf("finalize scan %s: %v", id, err)
+		}
+		return result
+	}
+
+	firstID := "instruction-root-first"
+	finalize(firstID, sdkingest.OutcomeComplete, true, currentChild, priorSibling)
+	partialID := "instruction-root-partial"
+	finalize(partialID, sdkingest.OutcomePartial, false, currentChild)
+
+	var (
+		rootState     sdkingest.OutcomeState
+		rootScanID    string
+		childScanID   string
+		siblingScanID string
+		comparisonKey *string
+	)
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT state, scan_id FROM coverage_heads WHERE coverage_key = $1`,
+		root,
+	).Scan(&rootState, &rootScanID); err != nil {
+		t.Fatalf("read partial root head: %v", err)
+	}
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT scan_id FROM coverage_heads WHERE coverage_key = $1`,
+		currentChild,
+	).Scan(&childScanID); err != nil {
+		t.Fatalf("read current child head: %v", err)
+	}
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT scan_id FROM coverage_heads WHERE coverage_key = $1`,
+		priorSibling,
+	).Scan(&siblingScanID); err != nil {
+		t.Fatalf("read prior sibling head: %v", err)
+	}
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT comparison_key FROM scans WHERE id = $1`,
+		partialID,
+	).Scan(&comparisonKey); err != nil {
+		t.Fatalf("read partial comparison key: %v", err)
+	}
+	if rootState != sdkingest.OutcomePartial ||
+		rootScanID != partialID ||
+		childScanID != partialID ||
+		siblingScanID != firstID ||
+		comparisonKey != nil {
+		t.Fatalf(
+			"partial heads root=(%s,%s) child=%s sibling=%s comparison=%v",
+			rootState,
+			rootScanID,
+			childScanID,
+			siblingScanID,
+			comparisonKey,
+		)
+	}
+
+	failedID := "instruction-root-failed"
+	finalize(failedID, sdkingest.OutcomeFailed, false, currentChild)
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT state FROM coverage_heads WHERE coverage_key = $1`,
+		root,
+	).Scan(&rootState); err != nil {
+		t.Fatalf("read failed root head: %v", err)
+	}
+	if rootState != sdkingest.OutcomeFailed {
+		t.Fatalf("failed root state = %q", rootState)
+	}
+
+	completeID := "instruction-root-complete"
+	finalize(completeID, sdkingest.OutcomeComplete, true, currentChild)
+	var siblingCount int
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT count(*) FROM coverage_heads WHERE coverage_key = $1`,
+		priorSibling,
+	).Scan(&siblingCount); err != nil {
+		t.Fatalf("count retired sibling: %v", err)
+	}
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT state FROM coverage_heads WHERE coverage_key = $1`,
+		root,
+	).Scan(&rootState); err != nil {
+		t.Fatalf("read complete root state: %v", err)
+	}
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT comparison_key FROM scans WHERE id = $1`,
+		completeID,
+	).Scan(&comparisonKey); err != nil {
+		t.Fatalf("read complete comparison key: %v", err)
+	}
+	if siblingCount != 0 ||
+		rootState != sdkingest.OutcomeComplete ||
+		comparisonKey == nil ||
+		*comparisonKey == "" {
+		t.Fatalf(
+			"complete root sibling_count=%d state=%q comparison=%v",
+			siblingCount,
+			rootState,
+			comparisonKey,
+		)
+	}
+
+	stable := finalize(
+		"instruction-root-stable",
+		sdkingest.OutcomeComplete,
+		true,
+		currentChild,
+	)
+	if stable.ComparableToScanID != completeID {
+		t.Fatalf(
+			"restored comparison = %q, want %q",
+			stable.ComparableToScanID,
+			completeID,
+		)
+	}
+}
+
 func TestBuildPostureExportDeclaresHealthAndCompleteState(t *testing.T) {
 	now := time.Now().UTC()
 	params := FinalizeScanParams{
@@ -627,9 +893,10 @@ func TestBuildPostureExportDeclaresHealthAndCompleteState(t *testing.T) {
 			"config:path:sha256:current",
 			"mcp:target:sha256:prior",
 		},
+		nil,
 	)
 
-	if export.SchemaVersion != 2 ||
+	if export.SchemaVersion != model.PostureExportSchemaVersion ||
 		export.Health.State != "not_captured" ||
 		export.Health.Captured {
 		t.Fatalf("health/schema state = %+v", export)
@@ -648,5 +915,65 @@ func TestBuildPostureExportDeclaresHealthAndCompleteState(t *testing.T) {
 		export.Limits.Findings.Total != 1 ||
 		!export.Limits.Findings.Complete {
 		t.Fatalf("export cardinality = %+v", export.Limits)
+	}
+}
+
+func TestCoverageRootHeadsAcceptsRegisteredInstructionRootStates(t *testing.T) {
+	contract := sdkingest.CurrentInstructionRegistryContract()
+	for _, mode := range []struct {
+		name   string
+		method string
+		kind   string
+		want   sdkingest.InstructionCoverageMode
+	}{
+		{"exact_user", sdkingest.InstructionMethodExactUser, "instruction-exact-user", sdkingest.InstructionCoverageExactUser},
+		{"exact_project", sdkingest.InstructionMethodExactProject, "instruction-exact-project", sdkingest.InstructionCoverageExactProject},
+		{"deep", sdkingest.InstructionMethodDeep, "instruction-deep", sdkingest.InstructionCoverageDeep},
+	} {
+		for _, state := range []sdkingest.OutcomeState{
+			sdkingest.OutcomeComplete,
+			sdkingest.OutcomeTruncated,
+			sdkingest.OutcomePartial,
+			sdkingest.OutcomeFailed,
+		} {
+			t.Run(mode.name+"/"+string(state), func(t *testing.T) {
+				rootKey := sdkingest.CanonicalCoverageKey("config", mode.kind, "/home/op")
+				report := &sdkingest.CollectionReport{
+					CoverageKeys: []string{rootKey},
+					Outcomes: []sdkingest.CollectionOutcome{{
+						Collector: "config", CoverageKey: rootKey,
+						Method: mode.method, State: state,
+					}},
+				}
+				heads, err := coverageRootHeads(report, []sdkingest.CoverageRoot{{
+					CoverageKey: rootKey, RegistryContract: &contract,
+				}})
+				if err != nil {
+					t.Fatalf("coverageRootHeads: %v", err)
+				}
+				head := heads[rootKey]
+				if head.Key != rootKey ||
+					head.State != state ||
+					head.Mode != mode.want ||
+					head.RegistryContract == nil ||
+					!head.RegistryContract.Equal(contract) {
+					t.Fatalf("coverage root head = %+v", head)
+				}
+			})
+		}
+	}
+
+	nonInstruction := sdkingest.CollectorRootCoverageKey("mcp")
+	report := &sdkingest.CollectionReport{
+		CoverageKeys: []string{nonInstruction},
+		Outcomes: []sdkingest.CollectionOutcome{{
+			Collector: "mcp", CoverageKey: nonInstruction,
+			Method: "collect", State: sdkingest.OutcomePartial,
+		}},
+	}
+	if _, err := coverageRootHeads(report, []sdkingest.CoverageRoot{{
+		CoverageKey: nonInstruction,
+	}}); err == nil || !strings.Contains(err.Error(), "cannot promote state") {
+		t.Fatalf("partial non-instruction root error = %v", err)
 	}
 }

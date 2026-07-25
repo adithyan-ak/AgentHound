@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
@@ -27,6 +28,7 @@ type FinalizeScanParams struct {
 	CoverageParents       map[string]string
 	CompleteDomains       []string
 	ResolvedDirtyCoverage []string
+	CoverageRoots         []sdkingest.CoverageRoot
 	AuthoritativeRoots    []sdkingest.CoverageRoot
 	DirtyCoverage         []string
 	GraphBefore           *model.GraphSnapshot
@@ -116,14 +118,50 @@ func (s *FindingStore) FinalizeScan(
 	); err != nil {
 		return nil, err
 	}
+	promotedRoots := mergeCoverageRoots(
+		params.AuthoritativeRoots,
+		params.CoverageRoots,
+	)
+	rootHeads, err := coverageRootHeads(params.Collection, promotedRoots)
+	if err != nil {
+		return nil, err
+	}
 	rootByChild := make(map[string]string)
-	for _, root := range params.AuthoritativeRoots {
+	for _, root := range promotedRoots {
 		for _, child := range root.ChildCoverageKeys {
 			rootByChild[child] = root.CoverageKey
 		}
 	}
+	for _, head := range rootHeads {
+		if _, err := tx.Exec(ctx, `INSERT INTO coverage_heads
+			    (
+			        coverage_key, scan_id, root_key, state, discovery_mode,
+			        contract_generation, contract_digest, updated_at
+			    )
+			VALUES ($1, $2, NULL, $3, NULLIF($4, ''), $5, NULLIF($6, ''), NOW())
+			ON CONFLICT (coverage_key) DO UPDATE SET
+			    scan_id = EXCLUDED.scan_id,
+			    root_key = NULL,
+			    state = EXCLUDED.state,
+			    discovery_mode = EXCLUDED.discovery_mode,
+			    contract_generation = EXCLUDED.contract_generation,
+			    contract_digest = EXCLUDED.contract_digest,
+			    updated_at = NOW()`,
+			head.Key,
+			params.Scan.ID,
+			head.State,
+			head.Mode,
+			registryContractGeneration(head.RegistryContract),
+			registryContractDigest(head.RegistryContract),
+		); err != nil {
+			return nil, fmt.Errorf("promote coverage root %s: %w", head.Key, err)
+		}
+	}
 	for _, domain := range params.CompleteDomains {
 		if domain == "" {
+			continue
+		}
+		if _, isRoot := rootHeads[domain]; isRoot {
 			continue
 		}
 		rootKey := params.CoverageParents[domain]
@@ -131,11 +169,18 @@ func (s *FindingStore) FinalizeScan(
 			rootKey = rootByChild[domain]
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO coverage_heads
-			    (coverage_key, scan_id, root_key, updated_at)
-			VALUES ($1, $2, NULLIF($3, ''), NOW())
+			    (
+			        coverage_key, scan_id, root_key, state, discovery_mode,
+			        contract_generation, contract_digest, updated_at
+			    )
+			VALUES ($1, $2, NULLIF($3, ''), NULL, NULL, NULL, NULL, NOW())
 			ON CONFLICT (coverage_key) DO UPDATE SET
 			    scan_id = EXCLUDED.scan_id,
 			    root_key = COALESCE(EXCLUDED.root_key, coverage_heads.root_key),
+			    state = NULL,
+			    discovery_mode = NULL,
+			    contract_generation = NULL,
+			    contract_digest = NULL,
 			    updated_at = NOW()`,
 			domain, params.Scan.ID, rootKey); err != nil {
 			return nil, fmt.Errorf("promote coverage head %s: %w", domain, err)
@@ -148,21 +193,22 @@ func (s *FindingStore) FinalizeScan(
 	}
 	comparison := model.PostureComparison{}
 	activeCoverageKeys := normalizeCoverageKeys(params.CoverageKeys)
+	activeCoverageRoots := []model.PostureCoverageRoot{}
+	activeHeads, err := activeCoverageHeadsTx(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	params.Scan.ComparisonKey = comparisonKeyWithCoverageHeads(
+		params.Scan.ComparisonKey,
+		params.CompleteDomains,
+		activeHeads,
+	)
 	if params.Publish {
-		var activeHeads []coverageHead
-		activeHeads, err = activeCoverageHeadsTx(ctx, tx)
-		if err != nil {
-			return nil, err
-		}
 		activeCoverageKeys = make([]string, 0, len(activeHeads))
 		for _, head := range activeHeads {
 			activeCoverageKeys = append(activeCoverageKeys, head.Key)
 		}
-		params.Scan.ComparisonKey = comparisonKeyWithCoverageHeads(
-			params.Scan.ComparisonKey,
-			params.CompleteDomains,
-			activeHeads,
-		)
+		activeCoverageRoots = activePostureCoverageRoots(activeHeads)
 		comparison, err = priorComparablePublication(
 			ctx,
 			tx,
@@ -213,6 +259,7 @@ func (s *FindingStore) FinalizeScan(
 			findings,
 			comparison,
 			activeCoverageKeys,
+			activeCoverageRoots,
 		)
 		exportJSON, err := json.Marshal(export)
 		if err != nil {
@@ -268,6 +315,131 @@ func retireAbsentCoverageHeadsTx(
 		}
 	}
 	return nil
+}
+
+func mergeCoverageRoots(
+	groups ...[]sdkingest.CoverageRoot,
+) []sdkingest.CoverageRoot {
+	byKey := make(map[string]sdkingest.CoverageRoot)
+	for _, group := range groups {
+		for _, root := range group {
+			if root.CoverageKey == "" {
+				continue
+			}
+			cloned := root
+			cloned.ChildCoverageKeys = normalizeCoverageKeys(root.ChildCoverageKeys)
+			if root.RegistryContract != nil {
+				contract := *root.RegistryContract
+				cloned.RegistryContract = &contract
+			}
+			byKey[root.CoverageKey] = cloned
+		}
+	}
+	roots := make([]sdkingest.CoverageRoot, 0, len(byKey))
+	for _, root := range byKey {
+		roots = append(roots, root)
+	}
+	sort.Slice(roots, func(i, j int) bool {
+		return roots[i].CoverageKey < roots[j].CoverageKey
+	})
+	return roots
+}
+
+func coverageRootHeads(
+	report *sdkingest.CollectionReport,
+	roots []sdkingest.CoverageRoot,
+) (map[string]coverageHead, error) {
+	states := sdkingest.CoverageStates(report)
+	heads := make(map[string]coverageHead, len(roots))
+	for _, root := range roots {
+		if root.CoverageKey == "" {
+			continue
+		}
+		head := coverageHead{
+			Key:   root.CoverageKey,
+			State: states[root.CoverageKey],
+		}
+		var outcomes []sdkingest.CollectionOutcome
+		if report != nil {
+			outcomes = report.Outcomes
+		}
+		for _, outcome := range outcomes {
+			if outcome.CoverageKey != root.CoverageKey {
+				continue
+			}
+			mode, instruction := sdkingest.InstructionCoverageModeForMethod(outcome.Method)
+			if !instruction ||
+				!sdkingest.InstructionRootMatchesMethod(
+					root.CoverageKey,
+					outcome.Method,
+				) {
+				continue
+			}
+			if head.Mode != "" && head.Mode != mode {
+				return nil, fmt.Errorf(
+					"coverage root %s has conflicting instruction modes",
+					root.CoverageKey,
+				)
+			}
+			head.Mode = mode
+		}
+		if head.State == "" && root.RegistryContract == nil {
+			// AuthoritativeRoots is itself a complete-root declaration. This
+			// fallback keeps non-instruction callers independent from the
+			// instruction-specific collection metadata used below.
+			head.State = sdkingest.OutcomeComplete
+		}
+		switch head.State {
+		case sdkingest.OutcomeComplete:
+		case sdkingest.OutcomeTruncated,
+			sdkingest.OutcomePartial,
+			sdkingest.OutcomeFailed:
+			if head.Mode == "" {
+				return nil, fmt.Errorf(
+					"coverage root %s cannot promote state %q",
+					root.CoverageKey,
+					head.State,
+				)
+			}
+		default:
+			return nil, fmt.Errorf(
+				"coverage root %s cannot promote state %q",
+				root.CoverageKey,
+				head.State,
+			)
+		}
+		if head.Mode != "" {
+			if root.RegistryContract == nil {
+				return nil, fmt.Errorf(
+					"instruction coverage root %s has no registry contract",
+					root.CoverageKey,
+				)
+			}
+			contract := *root.RegistryContract
+			head.RegistryContract = &contract
+		} else if root.RegistryContract != nil {
+			return nil, fmt.Errorf(
+				"non-instruction coverage root %s declares a registry contract",
+				root.CoverageKey,
+			)
+		}
+		heads[head.Key] = head
+	}
+	return heads, nil
+}
+
+func registryContractGeneration(contract *sdkingest.RegistryContract) any {
+	if contract == nil {
+		return nil
+	}
+	return contract.Generation
+}
+
+func registryContractDigest(contract *sdkingest.RegistryContract) string {
+	if contract == nil {
+		return ""
+	}
+	return contract.Digest
 }
 
 func finalizeScanRow(
@@ -415,10 +587,22 @@ func finalizeProjectionState(
 	return nil
 }
 
-func activeCoverageHeadsTx(ctx context.Context, tx pgx.Tx) ([]coverageHead, error) {
-	rows, err := tx.Query(ctx, `SELECT coverage_key, scan_id
-		FROM coverage_heads
-		ORDER BY coverage_key`)
+type coverageHeadQuerier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
+func activeCoverageHeads(
+	ctx context.Context,
+	querier coverageHeadQuerier,
+) ([]coverageHead, error) {
+	rows, err := querier.Query(ctx, `SELECT
+		    h.coverage_key, h.scan_id, coalesce(h.root_key, ''),
+		    coalesce(h.state, ''), coalesce(h.discovery_mode, ''),
+		    h.contract_generation, h.contract_digest,
+		    coalesce(s.artifact_observed_at, h.updated_at)
+		FROM coverage_heads h
+		JOIN scans s ON s.id = h.scan_id
+		ORDER BY h.coverage_key`)
 	if err != nil {
 		return nil, fmt.Errorf("read active coverage keys: %w", err)
 	}
@@ -426,8 +610,27 @@ func activeCoverageHeadsTx(ctx context.Context, tx pgx.Tx) ([]coverageHead, erro
 	var heads []coverageHead
 	for rows.Next() {
 		var head coverageHead
-		if err := rows.Scan(&head.Key, &head.ScanID); err != nil {
+		var (
+			contractGeneration *int
+			contractDigest     *string
+		)
+		if err := rows.Scan(
+			&head.Key,
+			&head.ScanID,
+			&head.Root,
+			&head.State,
+			&head.Mode,
+			&contractGeneration,
+			&contractDigest,
+			&head.UpdatedAt,
+		); err != nil {
 			return nil, fmt.Errorf("scan active coverage head: %w", err)
+		}
+		if contractGeneration != nil && contractDigest != nil {
+			head.RegistryContract = &sdkingest.RegistryContract{
+				Generation: *contractGeneration,
+				Digest:     *contractDigest,
+			}
 		}
 		heads = append(heads, head)
 	}
@@ -435,6 +638,10 @@ func activeCoverageHeadsTx(ctx context.Context, tx pgx.Tx) ([]coverageHead, erro
 		return nil, fmt.Errorf("read active coverage keys: %w", err)
 	}
 	return heads, nil
+}
+
+func activeCoverageHeadsTx(ctx context.Context, tx pgx.Tx) ([]coverageHead, error) {
+	return activeCoverageHeads(ctx, tx)
 }
 
 func findingsForScanTx(ctx context.Context, tx pgx.Tx, scanID string) ([]model.Finding, error) {
@@ -506,6 +713,7 @@ func buildPostureExport(
 	findings []model.Finding,
 	comparison model.PostureComparison,
 	activeCoverageKeys []string,
+	activeCoverageRoots []model.PostureCoverageRoot,
 ) model.PostureExport {
 	completedAt := publishedAt
 	if params.Scan.CompletedAt != nil {
@@ -549,15 +757,19 @@ func buildPostureExport(
 		identityStatus = model.LifecycleComplete
 	}
 	return model.PostureExport{
-		SchemaVersion: 2,
+		SchemaVersion: model.PostureExportSchemaVersion,
 		Scope: model.PostureScope{
 			ScanID:             params.Scan.ID,
 			Revision:           revision,
 			CoverageKeys:       normalizeCoverageKeys(params.CoverageKeys),
 			ActiveCoverageKeys: normalizeCoverageKeys(activeCoverageKeys),
-			DirtyCoverage:      []string{},
-			ComparisonKey:      params.Scan.ComparisonKey,
-			ProjectionState:    model.ProjectionComplete,
+			ActiveCoverageRoots: append(
+				[]model.PostureCoverageRoot{},
+				activeCoverageRoots...,
+			),
+			DirtyCoverage:   []string{},
+			ComparisonKey:   params.Scan.ComparisonKey,
+			ProjectionState: model.ProjectionComplete,
 		},
 		Completeness: model.PostureCompleteness{
 			Collection:         params.Scan.CollectionStatus,
@@ -665,5 +877,10 @@ func (s *FindingStore) GetProjectionState(ctx context.Context) (*model.Projectio
 	if state.DirtyCoverage == nil {
 		state.DirtyCoverage = []string{}
 	}
+	heads, err := activeCoverageHeads(ctx, s.pool)
+	if err != nil {
+		return nil, err
+	}
+	state.ActiveCoverageRoots = activePostureCoverageRoots(heads)
 	return &state, nil
 }

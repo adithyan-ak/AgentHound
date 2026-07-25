@@ -10,9 +10,12 @@ import (
 	"strings"
 
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
+	serveringest "github.com/adithyan-ak/agenthound/server/internal/ingest"
 	"github.com/adithyan-ak/agenthound/server/model"
 	"github.com/spf13/cobra"
 )
+
+var bootstrapForIngest = Bootstrap
 
 var ingestCmd = &cobra.Command{
 	Use:   "ingest <file.json | ->",
@@ -43,12 +46,27 @@ stdin form is the standard pipe target for 'agenthound scan --output -':
 			}
 		}
 
+		version, err := ingest.DecodeVersion(data)
+		if err != nil {
+			return fmt.Errorf("parse JSON: %w", err)
+		}
+		if version != ingest.CurrentVersion {
+			probe := ingest.IngestData{}
+			probe.Meta.Version = version
+			if err := serveringest.Preflight(&probe); err != nil {
+				return fmt.Errorf("ingest preflight: %w", err)
+			}
+		}
+
 		var ingestData ingest.IngestData
 		if err := ingest.DecodeStrict(bytes.NewReader(data), &ingestData); err != nil {
 			return fmt.Errorf("parse JSON: %w", err)
 		}
+		if err := serveringest.Preflight(&ingestData); err != nil {
+			return fmt.Errorf("ingest preflight: %w", err)
+		}
 
-		infra, cleanup, err := Bootstrap(ctx)
+		infra, cleanup, err := bootstrapForIngest(ctx)
 		if err != nil {
 			return err
 		}
@@ -89,9 +107,12 @@ func writeIngestResult(w io.Writer, result *ingest.IngestResult) error {
 	complete := result.Outcome == ingest.OutcomeComplete &&
 		result.ProjectionStatus == model.ProjectionComplete &&
 		result.PublishedRevision != nil
+	limitedCoverage := complete && ingest.InstructionCoverageLimited(&result.Collection)
 	heading := "Ingest incomplete"
 	if result.Outcome == ingest.OutcomeFailed {
 		heading = "Ingest failed"
+	} else if limitedCoverage {
+		heading = "Ingest complete with coverage limitations"
 	} else if complete {
 		heading = "Ingest complete"
 	}

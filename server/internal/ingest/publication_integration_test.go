@@ -165,15 +165,54 @@ func configLifecycleData(
 	scanID, path, serverID, serviceName, marker string,
 ) *sdkingest.IngestData {
 	scope := sdkingest.CanonicalCoverageKey("config", "path", path)
+	userInstructionRoot := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-exact-user",
+		"/tmp/agenthound-integration-user",
+	)
+	projectInstructionRoot := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-exact-project",
+		"/tmp/agenthound-integration-project",
+	)
+	registryContract := sdkingest.CurrentInstructionRegistryContract()
 	data := common.NewIngestData("config", scanID)
 	data.Meta.Identity = identity
 	data.Meta.Collection = &sdkingest.CollectionReport{
-		State:        sdkingest.OutcomeComplete,
-		CoverageKeys: []string{scope},
-		Outcomes: []sdkingest.CollectionOutcome{{
-			Collector: "config", CoverageKey: scope, Target: path,
-			Method: "config_discovery", State: sdkingest.OutcomeComplete, Items: 3,
-		}},
+		State: sdkingest.OutcomeComplete,
+		CoverageKeys: []string{
+			scope,
+			userInstructionRoot,
+			projectInstructionRoot,
+		},
+		AuthoritativeRoots: []sdkingest.CoverageRoot{
+			{
+				CoverageKey:      userInstructionRoot,
+				RegistryContract: &registryContract,
+			},
+			{
+				CoverageKey:      projectInstructionRoot,
+				RegistryContract: &registryContract,
+			},
+		},
+		Outcomes: []sdkingest.CollectionOutcome{
+			{
+				Collector: "config", CoverageKey: scope, Target: path,
+				Method: "config_discovery", State: sdkingest.OutcomeComplete, Items: 3,
+			},
+			{
+				Collector: "config", CoverageKey: userInstructionRoot,
+				Target: "/tmp/agenthound-integration-user",
+				Method: sdkingest.InstructionMethodExactUser,
+				State:  sdkingest.OutcomeComplete,
+			},
+			{
+				Collector: "config", CoverageKey: projectInstructionRoot,
+				Target: "/tmp/agenthound-integration-project",
+				Method: sdkingest.InstructionMethodExactProject,
+				State:  sdkingest.OutcomeComplete,
+			},
+		},
 	}
 	fileID := sdkingest.ComputeNodeID("ConfigFile", path)
 	agentID := sdkingest.ComputeNodeID("AgentInstance", fileID, "config-client")
@@ -200,6 +239,20 @@ func configLifecycleData(
 		Properties: map[string]any{"risk_weight": 0.1}, ObservationDomains: []string{scope},
 	}}
 	return data
+}
+
+func TestConfigLifecycleFixtureSatisfiesCurrentContract(t *testing.T) {
+	data := configLifecycleData(
+		configLifecycleIdentity("c", false),
+		"config-contract",
+		"/tmp/config-contract.json",
+		"configured-contract-service",
+		"contract-service",
+		"current",
+	)
+	if err := NewValidator().Validate(data); err != nil {
+		t.Fatalf("config lifecycle fixture violates the current ingest contract: %v", err)
+	}
 }
 
 func TestIntegrationConfigCoveragePreservesOtherNetworksAndReconcilesPointFacts(t *testing.T) {

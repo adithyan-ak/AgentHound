@@ -774,6 +774,37 @@ func TestConfigCollector_InstructionFiles(t *testing.T) {
 	}
 }
 
+func TestConfigCollectorInstructionOverlapMergesIndependentOwners(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	instructionPath := filepath.Join(root, "CLAUDE.md")
+	if err := os.WriteFile(instructionPath, []byte("shared instructions"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := NewConfigCollector().Collect(context.Background(), collector.CollectOptions{
+		ProjectDir: root,
+		ScanID:     "instruction-overlap",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := findNodesByKind(result, "InstructionFile")
+	if len(nodes) != 1 {
+		t.Fatalf("InstructionFile nodes = %d, want one physical node", len(nodes))
+	}
+	canonicalInstructionPath := filepath.Join(canonicalInstructionRoot(root), "CLAUDE.md")
+	wantOwners := []string{
+		instructionChildKey(instructionRootKey(instructionRootExactUser, root), canonicalInstructionPath),
+		instructionChildKey(instructionRootKey(instructionRootExactProject, root), canonicalInstructionPath),
+	}
+	for _, owner := range wantOwners {
+		if !containsString(nodes[0].ObservationDomains, owner) {
+			t.Fatalf("observation domains = %v, missing independent owner %q", nodes[0].ObservationDomains, owner)
+		}
+	}
+}
+
 // TestConfigCollectorInstructionCanonicalGraphContract locks the end-to-end
 // graph shape produced for a canonically-obfuscated instruction file. It pins:
 //   - the exact InstructionFile property set {objectid, path, type, hash,
@@ -809,7 +840,7 @@ func TestConfigCollectorInstructionCanonicalGraphContract(t *testing.T) {
 		t.Fatalf("Collect: %v", err)
 	}
 
-	canonicalPath := canonicalConfigPath(claudeMD)
+	canonicalPath := filepath.Join(canonicalInstructionRoot(projectDir), "CLAUDE.md")
 	var instr *ingest.Node
 	for i := range result.Graph.Nodes {
 		node := &result.Graph.Nodes[i]

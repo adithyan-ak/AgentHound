@@ -2,14 +2,61 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
+	serveringest "github.com/adithyan-ak/agenthound/server/internal/ingest"
 	"github.com/adithyan-ak/agenthound/server/model"
 )
+
+func TestIngestCommandRejectsUnsupportedVersionBeforeBootstrap(t *testing.T) {
+	data := common.NewIngestData("scan", "old-cli-artifact")
+	data.Meta.Version = ingest.CurrentVersion - 1
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy map[string]any
+	if err := json.Unmarshal(encoded, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	legacy["removed_v4_field"] = true
+	encoded, err = json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "old.json")
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	original := bootstrapForIngest
+	t.Cleanup(func() { bootstrapForIngest = original })
+	bootstrapCalled := false
+	bootstrapForIngest = func(context.Context) (*Infrastructure, func(), error) {
+		bootstrapCalled = true
+		return nil, nil, errors.New("bootstrap must not run")
+	}
+
+	err = ingestCmd.RunE(ingestCmd, []string{path})
+	if bootstrapCalled {
+		t.Fatal("Bootstrap ran before version preflight")
+	}
+	var versionErr *serveringest.UnsupportedVersionError
+	if !errors.As(err, &versionErr) ||
+		!strings.Contains(err.Error(), "unsupported") ||
+		!strings.Contains(err.Error(), "recollect") {
+		t.Fatalf("error = %T %v, want actionable unsupported-version error", err, err)
+	}
+}
 
 func TestWriteIngestResultComplete(t *testing.T) {
 	revision := int64(7)
@@ -53,6 +100,92 @@ func TestWriteIngestResultComplete(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestWriteIngestResultLimitedDeepCoverageRemainsSuccessful(t *testing.T) {
+	revision := int64(8)
+	root := ingest.CanonicalCoverageKey("config", "instruction-deep", "/home/example")
+	contract := ingest.CurrentInstructionRegistryContract()
+	result := &ingest.IngestResult{
+		ScanID:            "scan-limited",
+		Outcome:           ingest.OutcomeComplete,
+		ProjectionStatus:  model.ProjectionComplete,
+		PublishedRevision: &revision,
+		Collection: ingest.CollectionReport{
+			State:        ingest.OutcomeTruncated,
+			CoverageKeys: []string{root},
+			AuthoritativeRoots: []ingest.CoverageRoot{{
+				CoverageKey:      root,
+				RegistryContract: &contract,
+			}},
+			Outcomes: []ingest.CollectionOutcome{{
+				Collector:   "config",
+				CoverageKey: root,
+				Method:      ingest.InstructionMethodDeep,
+				State:       ingest.OutcomeTruncated,
+			}},
+		},
+	}
+
+	var output bytes.Buffer
+	if err := writeIngestResult(&output, result); err != nil {
+		t.Fatalf("usable limited-coverage result returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "Ingest complete with coverage limitations:") {
+		t.Fatalf("output did not disclose limited coverage:\n%s", output.String())
+	}
+}
+
+func TestWriteIngestResultPublishedIncompleteExactCoverageRemainsSuccessful(t *testing.T) {
+	revision := int64(9)
+	root := ingest.CanonicalCoverageKey(
+		"config",
+		"instruction-exact-user",
+		"/home/example",
+	)
+	contract := ingest.CurrentInstructionRegistryContract()
+	result := &ingest.IngestResult{
+		ScanID:            "scan-exact-limited",
+		Outcome:           ingest.OutcomeComplete,
+		ProjectionStatus:  model.ProjectionComplete,
+		PublishedRevision: &revision,
+		Warnings:          []string{ingest.InstructionCoverageLimitationWarning},
+		Collection: ingest.CollectionReport{
+			State:        ingest.OutcomePartial,
+			CoverageKeys: []string{root},
+			AuthoritativeRoots: []ingest.CoverageRoot{{
+				CoverageKey:      root,
+				RegistryContract: &contract,
+			}},
+			Outcomes: []ingest.CollectionOutcome{{
+				Collector:   "config",
+				CoverageKey: root,
+				Method:      ingest.InstructionMethodExactUser,
+				State:       ingest.OutcomePartial,
+				Error:       "permission denied",
+			}},
+		},
+	}
+
+	var output bytes.Buffer
+	if err := writeIngestResult(&output, result); err != nil {
+		t.Fatalf("published exact limited-coverage result returned error: %v", err)
+	}
+	for _, want := range []string{
+		"Ingest complete with coverage limitations:",
+		"Warnings:           1",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, output.String())
+		}
+	}
+	if strings.Contains(ingest.InstructionCoverageLimitationWarning, "deep") ||
+		!strings.Contains(ingest.InstructionCoverageLimitationWarning, "not a clean absence") {
+		t.Fatalf(
+			"warning is not generalized to incomplete instruction coverage: %q",
+			ingest.InstructionCoverageLimitationWarning,
+		)
 	}
 }
 

@@ -22,6 +22,10 @@ import {
   useSetTriage,
   SEVERITY_RANK,
 } from "@entities/finding";
+import {
+  hasLimitedPublishedInstructionCoverage,
+  useProjectionState,
+} from "@entities/posture";
 import type { Finding } from "@entities/finding/model";
 import { edgeLabel } from "@entities/edge";
 import {
@@ -102,6 +106,7 @@ export function FindingsListPage() {
     isError,
     dataUpdatedAt,
   } = useFindings(showSuppressed);
+  const postureQuery = useProjectionState();
   const setTriage = useSetTriage();
 
   // Triage status now arrives inline on each finding (server-backed). Derive
@@ -291,10 +296,20 @@ export function FindingsListPage() {
     hasCachedFindings &&
     snapshot?.available === true &&
     !isCurrentPublishedFindingScope(snapshot);
-  const canClaimCurrent =
+  const findingScopeCurrent =
     !isError && isCurrentPublishedFindingScope(snapshot);
+  const postureReadyForCurrentSnapshot =
+    findingScopeCurrent &&
+    !postureQuery.isLoading &&
+    !postureQuery.isError &&
+    postureQuery.data?.status === "complete" &&
+    postureQuery.data.published_scan_id === snapshot?.scanId &&
+    postureQuery.data.published_revision === snapshot?.revision;
   const canShowSnapshotCounts =
     hasCachedFindings && snapshot?.available === true;
+  const limitedInstructionCoverage =
+    postureReadyForCurrentSnapshot &&
+    hasLimitedPublishedInstructionCoverage(postureQuery.data, snapshot?.scanId);
 
   // Number of *secondary* filters active (everything that lives in the rail).
   const activeFacetCount =
@@ -422,8 +437,10 @@ export function FindingsListPage() {
   const emptyLabel =
     total > 0
       ? "No findings match the current filters"
-      : canClaimCurrent
-        ? "No findings detected in the current published snapshot"
+      : postureReadyForCurrentSnapshot
+        ? limitedInstructionCoverage
+          ? "No findings observed; instruction coverage is limited"
+          : "No findings detected in the current published snapshot"
         : scopeUnavailable
           ? "No published finding snapshot is available"
           : "Current finding status is unavailable";
@@ -452,7 +469,7 @@ export function FindingsListPage() {
         <p className="font-mono text-xs uppercase tracking-[0.12em] text-muted-foreground">
           {emptyLabel}
         </p>
-        {total === 0 && canClaimCurrent && (
+        {total === 0 && postureReadyForCurrentSnapshot && (
           <button
             onClick={() => navigate("/scans")}
             className="font-mono text-xs uppercase tracking-[0.08em] text-primary transition-colors hover:text-primary/80"

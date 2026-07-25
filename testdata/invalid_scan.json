@@ -1,6 +1,6 @@
 {
   "meta": {
-    "version": 3,
+    "version": 5,
     "type": "wrong",
     "origin": {"host_id": "fixture-host", "network_realm_id": "fixture-realm"},
     "collector": "config",

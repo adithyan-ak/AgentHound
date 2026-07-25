@@ -102,7 +102,10 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 		paths = append([]string{opts.ConfigPath}, paths...)
 	}
 	discovery := c.DiscoverConfigs(ctx, homeDir, projectRoot, opts.Discover, paths)
-	instructions := DiscoverInstructions(ctx, homeDir, projectRoot.Path(), engine)
+	instructions := DiscoverInstructions(ctx, homeDir, projectRoot.Path(), InstructionScan{
+		RecursiveRoot: canonicalConfigPath(opts.InstructionRecursiveRoot),
+		Deep:          opts.InstructionDeep,
+	}, engine)
 	if err := projectRoot.Validate(); err != nil {
 		discovery.ProjectRootState = ingest.OutcomeFailed
 		discovery.ProjectRootError = "project root changed or became unavailable during discovery"
@@ -121,6 +124,10 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 		))
 	}
 	data.Meta.Collection.CoverageKeys = append(data.Meta.Collection.CoverageKeys, instructions.CoverageKeys...)
+	data.Meta.Collection.AuthoritativeRoots = append(
+		data.Meta.Collection.AuthoritativeRoots,
+		instructions.AuthoritativeRoots...,
+	)
 	data.Meta.Collection.Outcomes = append(data.Meta.Collection.Outcomes, instructions.Outcomes...)
 	data.Meta.Collection.CoverageKeys = uniqueSorted(data.Meta.Collection.CoverageKeys)
 	data.Meta.Collection.State = ingest.AggregateOutcomeState(data.Meta.Collection.Outcomes)
@@ -307,8 +314,26 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 		}
 	}
 
+	type instructionContribution struct {
+		info   InstructionFileInfo
+		owners []string
+	}
+	instructionByPath := make(map[string]instructionContribution)
 	for _, observation := range instructions.Observations {
-		inst := observation.Info
+		absPath := canonicalConfigPath(observation.Info.Path)
+		contribution := instructionByPath[absPath]
+		contribution.info = observation.Info
+		contribution.owners = append(contribution.owners, observation.OwnerKey)
+		instructionByPath[absPath] = contribution
+	}
+	instructionPaths := make([]string, 0, len(instructionByPath))
+	for path := range instructionByPath {
+		instructionPaths = append(instructionPaths, path)
+	}
+	sort.Strings(instructionPaths)
+	for _, path := range instructionPaths {
+		contribution := instructionByPath[path]
+		inst := contribution.info
 		absPath := canonicalConfigPath(inst.Path)
 		instrID := ingest.ComputeNodeID("InstructionFile", absPath)
 		addNode(common.NewNode(instrID, []string{"InstructionFile"}, map[string]any{
@@ -316,7 +341,7 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 			"type":          inst.Type,
 			"hash":          inst.Hash,
 			"is_suspicious": inst.IsSuspicious,
-		}), observation.OwnerKey)
+		}), uniqueSorted(contribution.owners)...)
 	}
 
 	return data, nil

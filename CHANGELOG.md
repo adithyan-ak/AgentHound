@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **Bounded instruction discovery by default.** Config scans now check the
+  registered Claude, Cursor, GitHub Copilot, `AGENTS.md`, and `CLAUDE.md`
+  sources at the canonical user and project roots. `--deep` adds a bounded
+  nested-project search under the user home and an independently partitioned
+  selected project; explicit project selection overrides home pruning without
+  scanning sibling dependency or cache trees. Unrelated files do not consume
+  its directory or matched-source budgets, and trash, dependency, cache, and
+  symlinked descendant trees are excluded.
+- **Truthful independent instruction lifecycle.** Exact-user, exact-project,
+  and deep observations have stable owner identities independent of registry
+  evolution. Complete roots retire absent evidence; truncated deep scans
+  publish usable exact posture, retain unseen prior deep evidence, and surface
+  an explicit limitation. Failed deep attempts leave prior deep ownership
+  untouched.
+- **Strict ingest-v5 boundary.** Wire version and registered-source contract
+  mismatches are rejected before storage access with actionable upgrade
+  guidance. Storage binding v3 requires a clean paired PostgreSQL/Neo4j reset
+  instead of mixing pre-root-state evidence into the new projection.
+- **No false clean instruction score.** Agent poisoning risk uses observed
+  `LOADS_INSTRUCTIONS` relationships only; missing load relationships remain
+  an assessment limitation. Published truncated posture remains visible in the
+  dashboard with persistent deep-coverage and registry-refresh warnings, while
+  ambiguous comparisons are unavailable.
+- **Typed posture export v3.** Projection state and persisted exports expose
+  typed active instruction-root coverage. Unsupported persisted export schemas
+  fail closed instead of violating the documented response contract.
+
 ## v1.0.1 — 🚀 First Supported Public Release (2026-07-22)
 
 AgentHound v1.0.1 is the first supported public release of an offensive

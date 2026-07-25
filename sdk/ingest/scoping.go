@@ -24,7 +24,7 @@ type scopeRef struct {
 	id   string
 }
 
-// ScopeArtifact converts producer-local IDs and coverage keys into the v4
+// ScopeArtifact converts producer-local IDs and coverage keys into the current
 // graph projection. Validation must run first: this function trusts the
 // artifact's node kinds, endpoints, coverage declarations, and identity
 // record, then applies one centralized policy to all collectors.
@@ -570,7 +570,10 @@ func scopeCoverage(
 			}
 		}
 		if rootKeys[outcome.CoverageKey] &&
-			(outcome.Collector == "mcp" || outcome.Collector == "config") &&
+			(outcome.Collector == "mcp" ||
+				outcome.Collector == "config" &&
+					(outcome.CoverageKey == CollectorRootCoverageKey("config") ||
+						isConfigPathCoverage(outcome.CoverageKey))) &&
 			identity.Quality == IdentityQualityStrong {
 			// One exhaustive MCP or config run can inventory both local facts and
 			// services visible in the current network context. Keep those roots
@@ -623,6 +626,7 @@ func scopeCoverage(
 			roots = append(roots, CoverageRoot{
 				CoverageKey:       ScopedCoverageKey(scope.kind, scope.id, root.CoverageKey),
 				ChildCoverageKeys: children,
+				RegistryContract:  cloneRegistryContract(root.RegistryContract),
 			})
 		}
 	}

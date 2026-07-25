@@ -10,7 +10,9 @@ import (
 	"github.com/google/uuid"
 )
 
-const CurrentVersion = 2
+const CurrentVersion = 3
+
+const resetGuidance = "automatic upgrade is unsupported because the lifecycle ownership model changed; back up the deployment, recreate both PostgreSQL and Neo4j volumes together, restart the server, and recollect with ingest v5"
 
 var ErrMarkerMissing = errors.New("storage binding marker is missing")
 
@@ -37,9 +39,10 @@ func (m Marker) Validate() error {
 	}
 	if m.BindingVersion != CurrentVersion {
 		return fmt.Errorf(
-			"binding_version is %d, supported version is %d",
+			"binding_version is %d, supported version is %d; %s",
 			m.BindingVersion,
 			CurrentVersion,
+			resetGuidance,
 		)
 	}
 	return nil
@@ -96,9 +99,15 @@ func (g *Guard) Verify(ctx context.Context) error {
 	if err != nil {
 		return &StorageError{Message: "PostgreSQL marker read failed", Cause: err}
 	}
+	if err := postgresMarker.Validate(); err != nil {
+		return &StorageError{Message: "PostgreSQL marker is incompatible", Cause: err}
+	}
 	neo4jMarker, err := g.neo4j.ReadStorageBinding(ctx)
 	if err != nil {
 		return &StorageError{Message: "Neo4j marker read failed", Cause: err}
+	}
+	if err := neo4jMarker.Validate(); err != nil {
+		return &StorageError{Message: "Neo4j marker is incompatible", Cause: err}
 	}
 	if !postgresMarker.Equal(g.expected) || !neo4jMarker.Equal(g.expected) ||
 		!postgresMarker.Equal(neo4jMarker) {

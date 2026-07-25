@@ -5,14 +5,20 @@ import (
 	"encoding/hex"
 	"sort"
 	"strings"
+	"time"
 
 	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
+	"github.com/adithyan-ak/agenthound/server/model"
 )
 
 type coverageHead struct {
-	Key    string
-	ScanID string
-	Root   string
+	Key              string
+	ScanID           string
+	Root             string
+	State            sdkingest.OutcomeState
+	Mode             sdkingest.InstructionCoverageMode
+	RegistryContract *sdkingest.RegistryContract
+	UpdatedAt        time.Time
 }
 
 func normalizeCoverageKeys(groups ...[]string) []string {
@@ -101,6 +107,17 @@ func comparisonKeyWithCoverageHeads(
 	if strings.TrimSpace(base) == "" {
 		return ""
 	}
+	currentContract := sdkingest.CurrentInstructionRegistryContract()
+	for _, head := range heads {
+		if head.Mode == "" {
+			continue
+		}
+		if head.State != sdkingest.OutcomeComplete ||
+			head.RegistryContract == nil ||
+			!head.RegistryContract.Equal(currentContract) {
+			return ""
+		}
+	}
 	current := make(map[string]bool, len(currentCoverage))
 	for _, key := range normalizeCoverageKeys(currentCoverage) {
 		current[key] = true
@@ -115,13 +132,55 @@ func comparisonKeyWithCoverageHeads(
 	hash := sha256.New()
 	_, _ = hash.Write([]byte(base))
 	for _, head := range sortedHeads {
-		if current[head.Key] {
-			continue
-		}
 		_, _ = hash.Write([]byte{0})
 		_, _ = hash.Write([]byte(head.Key))
 		_, _ = hash.Write([]byte{0})
-		_, _ = hash.Write([]byte(head.ScanID))
+		_, _ = hash.Write([]byte(head.Root))
+		if head.Mode != "" {
+			_, _ = hash.Write([]byte{0})
+			_, _ = hash.Write([]byte(head.Mode))
+			_, _ = hash.Write([]byte{0})
+			_, _ = hash.Write([]byte(head.State))
+			_, _ = hash.Write([]byte{0})
+			_, _ = hash.Write([]byte(head.RegistryContract.Digest))
+			_, _ = hash.Write([]byte{0})
+			_, _ = hash.Write([]byte{
+				byte(head.RegistryContract.Generation >> 24),
+				byte(head.RegistryContract.Generation >> 16),
+				byte(head.RegistryContract.Generation >> 8),
+				byte(head.RegistryContract.Generation),
+			})
+		}
+		if !current[head.Key] {
+			_, _ = hash.Write([]byte{0})
+			_, _ = hash.Write([]byte(head.ScanID))
+		}
 	}
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
+
+func activePostureCoverageRoots(heads []coverageHead) []model.PostureCoverageRoot {
+	roots := make([]model.PostureCoverageRoot, 0)
+	currentContract := sdkingest.CurrentInstructionRegistryContract()
+	for _, head := range heads {
+		if head.Mode == "" || head.RegistryContract == nil {
+			continue
+		}
+		roots = append(roots, model.PostureCoverageRoot{
+			CoverageKey:      head.Key,
+			Mode:             head.Mode,
+			State:            head.State,
+			ScanID:           head.ScanID,
+			ObservedAt:       head.UpdatedAt,
+			RegistryContract: *head.RegistryContract,
+			ContractCurrent:  head.RegistryContract.Equal(currentContract),
+		})
+	}
+	sort.Slice(roots, func(i, j int) bool {
+		if roots[i].Mode == roots[j].Mode {
+			return roots[i].CoverageKey < roots[j].CoverageKey
+		}
+		return roots[i].Mode < roots[j].Mode
+	})
+	return roots
 }

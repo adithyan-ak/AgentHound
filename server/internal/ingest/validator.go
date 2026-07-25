@@ -25,20 +25,87 @@ func (e *ValidationError) Error() string {
 	return fmt.Sprintf("validation failed: %d errors", len(e.Errors))
 }
 
+const upgradeAndRecollectAction = "upgrade the collector and server together, then recollect the artifact"
+
+type UnsupportedVersionError struct {
+	Received  int    `json:"received_version"`
+	Supported int    `json:"supported_version"`
+	Action    string `json:"action"`
+}
+
+func (e *UnsupportedVersionError) Error() string {
+	return fmt.Sprintf(
+		"ingest version %d is unsupported; this server requires version %d; %s",
+		e.Received,
+		e.Supported,
+		e.Action,
+	)
+}
+
+type RegistryContractMismatchError struct {
+	RootCoverageKey string                   `json:"root_coverage_key"`
+	Received        *ingest.RegistryContract `json:"received_contract,omitempty"`
+	Supported       ingest.RegistryContract  `json:"supported_contract"`
+	Action          string                   `json:"action"`
+}
+
+func (e *RegistryContractMismatchError) Error() string {
+	received := "missing"
+	if e.Received != nil {
+		received = fmt.Sprintf(
+			"generation %d with digest %q",
+			e.Received.Generation,
+			e.Received.Digest,
+		)
+	}
+	return fmt.Sprintf(
+		"instruction registry contract for root %q is %s; this server requires generation %d with digest %q; %s",
+		e.RootCoverageKey,
+		received,
+		e.Supported.Generation,
+		e.Supported.Digest,
+		e.Action,
+	)
+}
+
 type Validator struct{}
 
 func NewValidator() *Validator {
 	return &Validator{}
 }
 
+func Preflight(data *ingest.IngestData) error {
+	if data == nil {
+		return &ValidationError{Errors: []FieldError{{
+			Path:    "",
+			Message: "ingest document must not be null",
+		}}}
+	}
+	if data.Meta.Version != ingest.CurrentVersion {
+		return &UnsupportedVersionError{
+			Received:  data.Meta.Version,
+			Supported: ingest.CurrentVersion,
+			Action:    upgradeAndRecollectAction,
+		}
+	}
+	return preflightRegistryContracts(data.Meta.Collection)
+}
+
+func (v *Validator) Preflight(data *ingest.IngestData) error {
+	return Preflight(data)
+}
+
 func (v *Validator) Validate(data *ingest.IngestData) error {
+	if err := v.Preflight(data); err != nil {
+		return err
+	}
 	var errs []FieldError
 	declaredCoverage := make(map[string]bool)
 	coverageOutcomes := make(map[string]bool)
 	if data.Meta.Collection == nil {
 		errs = append(errs, FieldError{
 			Path:    "meta.collection",
-			Message: "is required for ingest v4",
+			Message: "is required for ingest v5",
 		})
 	} else {
 		if !validOutcomeState(data.Meta.Collection.State) {
@@ -150,6 +217,17 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 			data.Meta.Collection,
 			declaredCoverage,
 		)...)
+		errs = append(
+			errs,
+			validateInstructionChildren(data.Meta.Collection)...,
+		)
+		errs = append(
+			errs,
+			validateConfigInstructionEnvelope(
+				data.Meta.Collector,
+				data.Meta.Collection,
+			)...,
+		)
 	}
 	nodeKindsByID := make(map[string][]string, len(data.Graph.Nodes))
 	nodesByID := make(map[string]ingest.Node, len(data.Graph.Nodes))
@@ -192,12 +270,6 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 		concreteKindByID[node.ID] = concreteKind
 	}
 
-	if data.Meta.Version != ingest.CurrentVersion {
-		errs = append(errs, FieldError{
-			Path:    "meta.version",
-			Message: fmt.Sprintf("must be %d, got %d", ingest.CurrentVersion, data.Meta.Version),
-		})
-	}
 	if data.Meta.Type != ingest.IngestType {
 		errs = append(errs, FieldError{Path: "meta.type", Message: fmt.Sprintf("must be %q, got %q", ingest.IngestType, data.Meta.Type)})
 	}
@@ -221,6 +293,7 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 	}
 	errs = append(errs, validateRuleset(data.Meta.Ruleset)...)
 	errs = append(errs, validateIdentitySchemes(data.Meta.IdentitySchemes)...)
+	coverageStates := ingest.CoverageStates(data.Meta.Collection)
 	if data.Graph.Nodes == nil {
 		errs = append(errs, FieldError{Path: "graph.nodes", Message: "must be a non-null array"})
 	}
@@ -258,6 +331,11 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 		errs = append(errs, validateObservationDomains(
 			node.ObservationDomains,
 			declaredCoverage,
+			fmt.Sprintf("graph.nodes[%d].observation_domains", i),
+		)...)
+		errs = append(errs, validateCompleteObservationDomains(
+			node.ObservationDomains,
+			coverageStates,
 			fmt.Sprintf("graph.nodes[%d].observation_domains", i),
 		)...)
 		errs = append(errs, validateNodePropertySemantics(node, i)...)
@@ -305,18 +383,23 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 		if edge.SourceKind == "" {
 			errs = append(errs, FieldError{
 				Path:    fmt.Sprintf("graph.edges[%d].source_kind", i),
-				Message: "must not be empty in ingest v4",
+				Message: "must not be empty in ingest v5",
 			})
 		}
 		if edge.TargetKind == "" {
 			errs = append(errs, FieldError{
 				Path:    fmt.Sprintf("graph.edges[%d].target_kind", i),
-				Message: "must not be empty in ingest v4",
+				Message: "must not be empty in ingest v5",
 			})
 		}
 		errs = append(errs, validateObservationDomains(
 			edge.ObservationDomains,
 			declaredCoverage,
+			fmt.Sprintf("graph.edges[%d].observation_domains", i),
+		)...)
+		errs = append(errs, validateCompleteObservationDomains(
+			edge.ObservationDomains,
+			coverageStates,
 			fmt.Sprintf("graph.edges[%d].observation_domains", i),
 		)...)
 		errs = append(errs, validateObservationSemantics(edge, i)...)
@@ -396,6 +479,345 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 	return nil
 }
 
+func preflightRegistryContracts(report *ingest.CollectionReport) error {
+	if report == nil {
+		return nil
+	}
+	roots := make(map[string]ingest.CoverageRoot, len(report.AuthoritativeRoots))
+	for _, root := range report.AuthoritativeRoots {
+		roots[root.CoverageKey] = root
+	}
+	methodByRoot := make(map[string]string)
+	stateByRoot := make(map[string]ingest.OutcomeState)
+	outcomeCountByRoot := make(map[string]int)
+	var errs []FieldError
+	for i, outcome := range report.Outcomes {
+		if _, recognized := ingest.InstructionCoverageModeForMethod(outcome.Method); !recognized {
+			continue
+		}
+		path := fmt.Sprintf("meta.collection.outcomes[%d]", i)
+		if outcome.Collector != "config" {
+			errs = append(errs, FieldError{
+				Path:    path + ".collector",
+				Message: "instruction coverage methods are reserved for the config collector",
+			})
+			continue
+		}
+		if outcome.ParentCoverageKey != "" {
+			errs = append(errs, FieldError{
+				Path:    path + ".parent_coverage_key",
+				Message: "instruction roots cannot have a parent",
+			})
+		}
+		if !ingest.InstructionRootMatchesMethod(outcome.CoverageKey, outcome.Method) {
+			errs = append(errs, FieldError{
+				Path:    path + ".coverage_key",
+				Message: fmt.Sprintf("must match instruction root method %q", outcome.Method),
+			})
+			continue
+		}
+		if _, exists := roots[outcome.CoverageKey]; !exists {
+			errs = append(errs, FieldError{
+				Path:    path + ".coverage_key",
+				Message: "instruction root outcome must have a matching authoritative root",
+			})
+			continue
+		}
+		outcomeCountByRoot[outcome.CoverageKey]++
+		if outcomeCountByRoot[outcome.CoverageKey] > 1 {
+			errs = append(errs, FieldError{
+				Path:    path + ".coverage_key",
+				Message: "an instruction root must declare exactly one root outcome",
+			})
+			continue
+		}
+		if prior := methodByRoot[outcome.CoverageKey]; prior != "" && prior != outcome.Method {
+			errs = append(errs, FieldError{
+				Path:    path + ".method",
+				Message: "an instruction root must declare exactly one discovery mode",
+			})
+			continue
+		}
+		methodByRoot[outcome.CoverageKey] = outcome.Method
+		stateByRoot[outcome.CoverageKey] = outcome.State
+		if !ingest.IsInstructionCoverageState(outcome.State) {
+			errs = append(errs, FieldError{
+				Path:    path + ".state",
+				Message: "instruction root state must be complete, truncated, partial, or failed",
+			})
+		}
+	}
+
+	current := ingest.CurrentInstructionRegistryContract()
+	coverageStates := ingest.CoverageStates(report)
+	for i, root := range report.AuthoritativeRoots {
+		path := fmt.Sprintf("meta.collection.authoritative_roots[%d]", i)
+		expectedInstructionMethod := ""
+		for _, method := range []string{
+			ingest.InstructionMethodExactUser,
+			ingest.InstructionMethodExactProject,
+			ingest.InstructionMethodDeep,
+		} {
+			if ingest.InstructionRootMatchesMethod(root.CoverageKey, method) {
+				expectedInstructionMethod = method
+				break
+			}
+		}
+		if expectedInstructionMethod == "" {
+			if root.RegistryContract != nil {
+				errs = append(errs, FieldError{
+					Path:    path + ".registry_contract",
+					Message: "must be omitted for non-instruction roots",
+				})
+			}
+			continue
+		}
+		if methodByRoot[root.CoverageKey] != expectedInstructionMethod {
+			errs = append(errs, FieldError{
+				Path:    path + ".coverage_key",
+				Message: fmt.Sprintf("requires root outcome method %q", expectedInstructionMethod),
+			})
+			continue
+		}
+		if root.RegistryContract == nil || !root.RegistryContract.Equal(current) {
+			return &RegistryContractMismatchError{
+				RootCoverageKey: root.CoverageKey,
+				Received:        cloneRegistryContract(root.RegistryContract),
+				Supported:       current,
+				Action:          upgradeAndRecollectAction,
+			}
+		}
+		rootState := stateByRoot[root.CoverageKey]
+		if len(root.ChildCoverageKeys) > 0 &&
+			!ingest.IsInstructionCoverageState(rootState) {
+			errs = append(errs, FieldError{
+				Path:    path + ".child_coverage_keys",
+				Message: "instruction root with active children must have a recognized coverage state",
+			})
+		}
+		for childIndex, child := range root.ChildCoverageKeys {
+			if coverageStates[child] != ingest.OutcomeComplete {
+				errs = append(errs, FieldError{
+					Path: fmt.Sprintf(
+						"%s.child_coverage_keys[%d]",
+						path,
+						childIndex,
+					),
+					Message: "active instruction child must have complete coverage",
+				})
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return &ValidationError{Errors: errs}
+	}
+	return nil
+}
+
+func validateInstructionChildren(
+	report *ingest.CollectionReport,
+) []FieldError {
+	var errs []FieldError
+	roots := make(map[string]ingest.CoverageRoot, len(report.AuthoritativeRoots))
+	for _, root := range report.AuthoritativeRoots {
+		roots[root.CoverageKey] = root
+	}
+	methodByRoot := make(map[string]string)
+	for _, outcome := range report.Outcomes {
+		if _, instructionRoot := ingest.InstructionCoverageModeForMethod(
+			outcome.Method,
+		); instructionRoot {
+			methodByRoot[outcome.CoverageKey] = outcome.Method
+		}
+	}
+	activeParents := make(map[string][]string)
+	for rootIndex, root := range report.AuthoritativeRoots {
+		if _, instructionRoot := methodByRoot[root.CoverageKey]; !instructionRoot {
+			continue
+		}
+		for childIndex, child := range root.ChildCoverageKeys {
+			activeParents[child] = append(activeParents[child], root.CoverageKey)
+			if coverageKeyKind(child) != "instruction-source" {
+				errs = append(errs, FieldError{
+					Path: fmt.Sprintf(
+						"meta.collection.authoritative_roots[%d].child_coverage_keys[%d]",
+						rootIndex,
+						childIndex,
+					),
+					Message: "registered instruction roots can own only instruction-source children",
+				})
+			}
+		}
+	}
+	outcomesByKey := make(map[string][]int)
+	for index, outcome := range report.Outcomes {
+		outcomesByKey[outcome.CoverageKey] = append(
+			outcomesByKey[outcome.CoverageKey],
+			index,
+		)
+	}
+	for child, parents := range activeParents {
+		indexes := outcomesByKey[child]
+		if len(indexes) != 1 {
+			errs = append(errs, FieldError{
+				Path:    "meta.collection.outcomes",
+				Message: fmt.Sprintf("active instruction source %q must have exactly one outcome", child),
+			})
+			continue
+		}
+		outcome := report.Outcomes[indexes[0]]
+		path := fmt.Sprintf("meta.collection.outcomes[%d]", indexes[0])
+		if len(parents) != 1 || outcome.ParentCoverageKey != parents[0] {
+			errs = append(errs, FieldError{
+				Path:    path + ".parent_coverage_key",
+				Message: "instruction source must be an active child of exactly one registered instruction root",
+			})
+		}
+		if outcome.Method != ingest.InstructionMethodSource {
+			errs = append(errs, FieldError{
+				Path:    path + ".method",
+				Message: fmt.Sprintf("instruction source method must be %q", ingest.InstructionMethodSource),
+			})
+		}
+		if outcome.State != ingest.OutcomeComplete {
+			errs = append(errs, FieldError{
+				Path:    path + ".state",
+				Message: "an active instruction source must be complete",
+			})
+		}
+	}
+	for index, outcome := range report.Outcomes {
+		if _, instructionLeaf := activeParents[outcome.ParentCoverageKey]; instructionLeaf {
+			errs = append(errs, FieldError{
+				Path: fmt.Sprintf(
+					"meta.collection.outcomes[%d].parent_coverage_key",
+					index,
+				),
+				Message: "instruction sources are terminal ownership domains",
+			})
+		}
+		if coverageKeyKind(outcome.CoverageKey) != "instruction-source" &&
+			outcome.Method != ingest.InstructionMethodSource {
+			continue
+		}
+		path := fmt.Sprintf("meta.collection.outcomes[%d]", index)
+		parents := activeParents[outcome.CoverageKey]
+		parent, rootExists := roots[outcome.ParentCoverageKey]
+		_, instructionParent := methodByRoot[outcome.ParentCoverageKey]
+		if len(parents) != 1 ||
+			outcome.ParentCoverageKey == "" ||
+			!rootExists ||
+			!instructionParent ||
+			parent.RegistryContract == nil ||
+			parents[0] != outcome.ParentCoverageKey {
+			errs = append(errs, FieldError{
+				Path:    path + ".parent_coverage_key",
+				Message: "instruction source must be an active child of exactly one registered instruction root",
+			})
+		}
+		if coverageKeyKind(outcome.CoverageKey) != "instruction-source" {
+			errs = append(errs, FieldError{
+				Path:    path + ".coverage_key",
+				Message: "instruction source method requires an instruction-source coverage key",
+			})
+		}
+		if outcome.Method != ingest.InstructionMethodSource {
+			errs = append(errs, FieldError{
+				Path:    path + ".method",
+				Message: fmt.Sprintf("instruction source method must be %q", ingest.InstructionMethodSource),
+			})
+		}
+	}
+	return errs
+}
+
+func validateConfigInstructionEnvelope(
+	metaCollector string,
+	report *ingest.CollectionReport,
+) []FieldError {
+	var errs []FieldError
+	methodByRoot := make(map[string]string)
+	for _, outcome := range report.Outcomes {
+		if _, instructionRoot := ingest.InstructionCoverageModeForMethod(
+			outcome.Method,
+		); instructionRoot {
+			methodByRoot[outcome.CoverageKey] = outcome.Method
+		}
+	}
+	configParticipated := metaCollector == "config"
+	configRootIndex := -1
+	configRootCount := 0
+	configOutcomeCount := 0
+	for index, outcome := range report.Outcomes {
+		if outcome.Collector != "config" {
+			continue
+		}
+		configParticipated = true
+		configOutcomeCount++
+		if outcome.CoverageKey == ingest.CollectorRootCoverageKey("config") &&
+			outcome.Method == "collect" {
+			configRootIndex = index
+			configRootCount++
+		}
+	}
+	if !configParticipated {
+		return nil
+	}
+	if configRootCount > 1 {
+		errs = append(errs, FieldError{
+			Path:    "meta.collection.outcomes",
+			Message: "config collection cannot declare multiple config collector-root outcomes",
+		})
+	}
+
+	if configRootCount == 1 &&
+		report.Outcomes[configRootIndex].State == ingest.OutcomeFailed {
+		if configOutcomeCount != 1 {
+			errs = append(errs, FieldError{
+				Path:    "meta.collection.outcomes",
+				Message: "a failed config collector root cannot declare additional config outcomes",
+			})
+		}
+		return errs
+	}
+
+	countByMethod := make(map[string]int)
+	for _, method := range methodByRoot {
+		countByMethod[method]++
+	}
+	for _, method := range []string{
+		ingest.InstructionMethodExactUser,
+		ingest.InstructionMethodExactProject,
+	} {
+		if countByMethod[method] != 1 {
+			errs = append(errs, FieldError{
+				Path: "meta.collection.authoritative_roots",
+				Message: fmt.Sprintf(
+					"successful or partial config collection must declare exactly one %q instruction root",
+					method,
+				),
+			})
+		}
+	}
+	return errs
+}
+
+func coverageKeyKind(key string) string {
+	parts := strings.Split(key, ":")
+	if len(parts) != 4 {
+		return ""
+	}
+	return parts[1]
+}
+
+func cloneRegistryContract(contract *ingest.RegistryContract) *ingest.RegistryContract {
+	if contract == nil {
+		return nil
+	}
+	cloned := *contract
+	return &cloned
+}
+
 func validateCoverageKey(key string) string {
 	switch {
 	case strings.TrimSpace(key) == "":
@@ -427,6 +849,16 @@ func validateAuthoritativeRoots(
 ) []FieldError {
 	var errs []FieldError
 	seenRoots := make(map[string]bool, len(roots))
+	independentlyOwned := make(map[string]bool)
+	for _, root := range roots {
+		if parts := strings.Split(root.CoverageKey, ":"); len(parts) == 4 &&
+			parts[1] != "root" {
+			independentlyOwned[root.CoverageKey] = true
+			for _, child := range root.ChildCoverageKeys {
+				independentlyOwned[child] = true
+			}
+		}
+	}
 	for i, root := range roots {
 		path := fmt.Sprintf("meta.collection.authoritative_roots[%d]", i)
 		if err := validateCoverageKey(root.CoverageKey); err != "" {
@@ -437,10 +869,13 @@ func validateAuthoritativeRoots(
 			continue
 		}
 		parts := strings.Split(root.CoverageKey, ":")
-		if parts[1] != "root" {
+		if parts[1] != "root" &&
+			parts[1] != "instruction-exact-user" &&
+			parts[1] != "instruction-exact-project" &&
+			parts[1] != "instruction-deep" {
 			errs = append(errs, FieldError{
 				Path:    path + ".coverage_key",
-				Message: "must use the root scope kind",
+				Message: "must use a recognized root scope kind",
 			})
 		}
 		if !declaredCoverage[root.CoverageKey] {
@@ -490,16 +925,21 @@ func validateAuthoritativeRoots(
 			}
 			children[child] = true
 		}
-		for key := range declaredCoverage {
-			keyParts := strings.Split(key, ":")
-			if key != root.CoverageKey && keyParts[0] == parts[0] && !children[key] {
-				errs = append(errs, FieldError{
-					Path: path + ".child_coverage_keys",
-					Message: fmt.Sprintf(
-						"must include declared child coverage key %q",
-						key,
-					),
-				})
+		if parts[1] == "root" {
+			for key := range declaredCoverage {
+				keyParts := strings.Split(key, ":")
+				if key != root.CoverageKey &&
+					keyParts[0] == parts[0] &&
+					!children[key] &&
+					!independentlyOwned[key] {
+					errs = append(errs, FieldError{
+						Path: path + ".child_coverage_keys",
+						Message: fmt.Sprintf(
+							"must include declared child coverage key %q",
+							key,
+						),
+					})
+				}
 			}
 		}
 	}
@@ -584,7 +1024,7 @@ func validateObservationDomains(
 	if len(domains) == 0 {
 		return []FieldError{{
 			Path:    path,
-			Message: "must contain at least one declared domain in ingest v4",
+			Message: "must contain at least one declared domain in ingest v5",
 		}}
 	}
 	seen := make(map[string]bool, len(domains))
@@ -609,6 +1049,25 @@ func validateObservationDomains(
 				Message: fmt.Sprintf("domain %q is not declared in meta.collection.coverage_keys", domain),
 			})
 		}
+	}
+	return errs
+}
+
+func validateCompleteObservationDomains(
+	domains []string,
+	states map[string]ingest.OutcomeState,
+	path string,
+) []FieldError {
+	var errs []FieldError
+	for i, domain := range domains {
+		state, declared := states[domain]
+		if !declared || state == ingest.OutcomeComplete {
+			continue
+		}
+		errs = append(errs, FieldError{
+			Path:    fmt.Sprintf("%s[%d]", path, i),
+			Message: fmt.Sprintf("domain %q must be complete to own graph facts, got %q", domain, state),
+		})
 	}
 	return errs
 }
@@ -677,7 +1136,7 @@ func validOutcomeState(state ingest.OutcomeState) bool {
 
 func validateRuleset(ruleset *ingest.RulesetManifest) []FieldError {
 	if ruleset == nil {
-		return []FieldError{{Path: "meta.ruleset", Message: "is required for ingest v4"}}
+		return []FieldError{{Path: "meta.ruleset", Message: "is required for ingest v5"}}
 	}
 	var errs []FieldError
 	if strings.TrimSpace(ruleset.Digest) == "" {

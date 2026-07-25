@@ -62,9 +62,9 @@ func TestOpenAPIProjectionAwareResponseContracts(t *testing.T) {
 	)
 	requireSchemaFields(t, schemas, "PathResponse", "paths", "metadata", "projection")
 	requireSchemaFields(t, schemas, "PreBuiltResult", "query", "rows", "projection")
-	requireSchemaFields(t, schemas, "IngestMetaV4", "identity", "collection")
-	requireSchemaFields(t, schemas, "CollectionIdentityV4", "collection_point_id", "network_context_id", "quality", "network_quality", "network_class", "evidence", "network_evidence")
-	requireSchemaFields(t, schemas, "IngestCollectionV4", "state", "coverage_keys", "outcomes")
+	requireSchemaFields(t, schemas, "IngestMetaV5", "identity", "collection")
+	requireSchemaFields(t, schemas, "CollectionIdentityV5", "collection_point_id", "network_context_id", "quality", "network_quality", "network_class", "evidence", "network_evidence")
+	requireSchemaFields(t, schemas, "IngestCollectionV5", "state", "coverage_keys", "outcomes")
 	requireSchemaFields(t, schemas, "IngestResult", "collection", "identity")
 	ingestResponses := nestedMap(t, spec, "paths", "/ingest", "post", "responses")
 	for _, status := range []string{"200", "400", "403", "500", "503"} {
@@ -229,6 +229,50 @@ func TestServedOpenAPICampaignParity(t *testing.T) {
 		"evidence_node_kinds",
 	)
 	requireSchemaFields(t, schemas, "FindingWitnessResponse", "witness", "projection")
+	requireSchemaFields(
+		t,
+		schemas,
+		"ProjectionState",
+		"status",
+		"dirty_coverage",
+		"active_coverage_roots",
+		"updated_at",
+	)
+	requireSchemaFields(
+		t,
+		schemas,
+		"PostureCoverageRoot",
+		"coverage_key",
+		"mode",
+		"state",
+		"scan_id",
+		"observed_at",
+		"registry_contract",
+		"contract_current",
+	)
+	requireSchemaFields(
+		t,
+		schemas,
+		"PostureScope",
+		"scan_id",
+		"revision",
+		"active_coverage_roots",
+		"projection_state",
+	)
+	postureExportProperties := nestedMap(
+		t,
+		schemas,
+		"PostureExport",
+		"properties",
+	)
+	if got := nestedMap(t, postureExportProperties, "scope")["$ref"]; got != "#/components/schemas/PostureScope" {
+		t.Fatalf("PostureExport.scope ref = %v", got)
+	}
+	schemaVersion := nestedMap(t, postureExportProperties, "schema_version")
+	versionEnum, ok := schemaVersion["enum"].([]any)
+	if !ok || !containsInt(versionEnum, 3) {
+		t.Fatalf("PostureExport.schema_version enum = %v, want 3", schemaVersion["enum"])
+	}
 
 	evidenceProperties := nestedMap(t, schemas, "FindingEvidence", "properties")
 	verification := nestedMap(t, evidenceProperties, "verification")
@@ -275,6 +319,15 @@ func TestServedOpenAPICampaignParity(t *testing.T) {
 }
 
 func containsString(values []any, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsInt(values []any, want int) bool {
 	for _, value := range values {
 		if value == want {
 			return true

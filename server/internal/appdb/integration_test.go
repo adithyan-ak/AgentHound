@@ -117,7 +117,7 @@ func TestIntegrationMigrations(t *testing.T) {
 	if err := versionRows.Err(); err != nil {
 		t.Fatalf("list migration versions: %v", err)
 	}
-	if want := []int{1, 2, 3}; !reflect.DeepEqual(versions, want) {
+	if want := []int{1, 2, 3, 4}; !reflect.DeepEqual(versions, want) {
 		t.Fatalf("migration versions = %v, want %v", versions, want)
 	}
 

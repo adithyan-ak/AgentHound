@@ -1,6 +1,6 @@
 {
   "meta": {
-    "version": 4,
+    "version": 5,
     "type": "agenthound-ingest",
     "identity": {
       "scheme": "agenthound_collection_v1",

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -565,6 +566,111 @@ func TestAllCollectorsFailed(t *testing.T) {
 					tt.enabled, tt.failed, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestInstructionCoverageWarningPreservesUsableScanSuccess(t *testing.T) {
+	root := ingest.CanonicalCoverageKey("config", "instruction-deep", "/home/example")
+	contract := ingest.CurrentInstructionRegistryContract()
+	report := &ingest.CollectionReport{
+		State:        ingest.OutcomeTruncated,
+		CoverageKeys: []string{root},
+		AuthoritativeRoots: []ingest.CoverageRoot{{
+			CoverageKey:      root,
+			RegistryContract: &contract,
+		}},
+		Outcomes: []ingest.CollectionOutcome{{
+			Collector:   "config",
+			CoverageKey: root,
+			Method:      ingest.InstructionMethodDeep,
+			State:       ingest.OutcomeTruncated,
+			Error:       "deep instruction discovery exceeded 60s budget",
+		}},
+	}
+
+	var stderr bytes.Buffer
+	writeInstructionCoverageWarnings(&stderr, report)
+	for _, want := range []string{
+		"deep instruction coverage is limited",
+		"deep instruction discovery exceeded 60s budget",
+		"observed instruction positives were retained",
+		"missing instruction evidence is not a clean absence",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("warning missing %q: %s", want, stderr.String())
+		}
+	}
+	if strings.Contains(stderr.String(), "withheld") {
+		t.Fatalf("warning claims observed positives were withheld: %s", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "usable") {
+		t.Fatalf("warning makes an unsupported exact-coverage claim: %s", stderr.String())
+	}
+	if allCollectorsFailed(1, 0) {
+		t.Fatal("usable limited coverage must retain a successful exit")
+	}
+
+	stderr.Reset()
+	report.Outcomes[0].State = ingest.OutcomeComplete
+	report.State = ingest.OutcomeComplete
+	writeInstructionCoverageWarnings(&stderr, report)
+	if stderr.Len() != 0 {
+		t.Fatalf("complete deep coverage emitted warning: %s", stderr.String())
+	}
+}
+
+func TestInstructionCoverageWarningsIncludeIncompleteExactRoots(t *testing.T) {
+	contract := ingest.CurrentInstructionRegistryContract()
+	userRoot := ingest.CanonicalCoverageKey(
+		"config",
+		"instruction-exact-user",
+		"/home/example",
+	)
+	projectRoot := ingest.CanonicalCoverageKey(
+		"config",
+		"instruction-exact-project",
+		"/home/example/project",
+	)
+	report := &ingest.CollectionReport{
+		State:        ingest.OutcomePartial,
+		CoverageKeys: []string{userRoot, projectRoot},
+		AuthoritativeRoots: []ingest.CoverageRoot{
+			{CoverageKey: userRoot, RegistryContract: &contract},
+			{CoverageKey: projectRoot, RegistryContract: &contract},
+		},
+		Outcomes: []ingest.CollectionOutcome{
+			{
+				Collector: "config", CoverageKey: userRoot,
+				Method: ingest.InstructionMethodExactUser,
+				State:  ingest.OutcomePartial,
+				Error:  "permission denied",
+			},
+			{
+				Collector: "config", CoverageKey: projectRoot,
+				Method: ingest.InstructionMethodExactProject,
+				State:  ingest.OutcomeTruncated,
+				Error:  "file exceeds 4194304 byte limit",
+			},
+		},
+	}
+
+	var stderr bytes.Buffer
+	writeInstructionCoverageWarnings(&stderr, report)
+	for _, want := range []string{
+		"exact user instruction coverage is limited (partial: permission denied)",
+		"exact project instruction coverage is limited (truncated: file exceeds 4194304 byte limit)",
+		"observed instruction positives were retained",
+		"missing instruction evidence is not a clean absence",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("warning missing %q: %s", want, stderr.String())
+		}
+	}
+	if strings.Contains(stderr.String(), "withheld") {
+		t.Fatalf("warning claims observed positives were withheld: %s", stderr.String())
+	}
+	if strings.Count(stderr.String(), "\n") != 2 {
+		t.Fatalf("exact warnings = %q, want one line per incomplete root", stderr.String())
 	}
 }
 

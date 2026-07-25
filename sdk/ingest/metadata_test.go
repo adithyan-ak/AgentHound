@@ -89,3 +89,31 @@ func TestMergeCollectionReportsPreservesAuthoritativeActiveSet(t *testing.T) {
 		t.Fatalf("merged authoritative roots = %+v", merged.AuthoritativeRoots)
 	}
 }
+
+func TestEnsureCoverageParentageKeepsIndependentInstructionRoots(t *testing.T) {
+	exactRoot := CanonicalCoverageKey("config", "instruction-exact-project", "/repo")
+	deepRoot := CanonicalCoverageKey("config", "instruction-deep", "/home/example")
+	child := CanonicalCoverageKey("config", "instruction-tree", "/home/example/repo")
+	collectorRoot := CollectorRootCoverageKey("config")
+	report := &CollectionReport{
+		CoverageKeys: []string{collectorRoot, exactRoot, deepRoot, child},
+		AuthoritativeRoots: []CoverageRoot{
+			{CoverageKey: exactRoot, ChildCoverageKeys: []string{}},
+			{CoverageKey: deepRoot, ChildCoverageKeys: []string{child}},
+		},
+		Outcomes: []CollectionOutcome{
+			{Collector: "config", CoverageKey: collectorRoot},
+			{Collector: "config", CoverageKey: exactRoot},
+			{Collector: "config", CoverageKey: deepRoot},
+			{Collector: "config", CoverageKey: child},
+		},
+	}
+
+	EnsureCoverageParentage(report)
+	if report.Outcomes[1].ParentCoverageKey != "" || report.Outcomes[2].ParentCoverageKey != "" {
+		t.Fatalf("instruction roots gained parents: %+v", report.Outcomes)
+	}
+	if report.Outcomes[3].ParentCoverageKey != deepRoot {
+		t.Fatalf("child parent = %q, want %q", report.Outcomes[3].ParentCoverageKey, deepRoot)
+	}
+}

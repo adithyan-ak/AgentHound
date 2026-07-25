@@ -40,10 +40,14 @@ func collectionState(report *sdkingest.CollectionReport) sdkingest.OutcomeState 
 }
 
 func incompleteCoverageDomains(report *sdkingest.CollectionReport) []string {
+	nonBlocking := make(map[string]bool)
+	for _, key := range sdkingest.NonBlockingInstructionCoverageDomains(report) {
+		nonBlocking[key] = true
+	}
 	states := sdkingest.CoverageStates(report)
 	domains := make([]string, 0, len(states))
 	for domain, state := range states {
-		if state != sdkingest.OutcomeComplete {
+		if state != sdkingest.OutcomeComplete && !nonBlocking[domain] {
 			domains = append(domains, domain)
 		}
 	}
@@ -86,7 +90,7 @@ func subtractCoverage(keys []string, replaced ...[]string) []string {
 	return remaining
 }
 
-// prepareObservationDomains verifies the strict-v3 ownership contract after
+// prepareObservationDomains verifies the strict-v5 ownership contract after
 // validation. It never infers ownership from report-level coverage.
 func prepareObservationDomains(data *sdkingest.IngestData) bool {
 	keys := coverageKeys(data.Meta.Collection)
@@ -115,6 +119,73 @@ func prepareObservationDomains(data *sdkingest.IngestData) bool {
 		}
 	}
 	return len(keys) > 0
+}
+
+func promotableAuthoritativeRoots(
+	report *sdkingest.CollectionReport,
+) []sdkingest.CoverageRoot {
+	if report == nil {
+		return nil
+	}
+	states := sdkingest.CoverageStates(report)
+	var roots []sdkingest.CoverageRoot
+	for _, root := range report.AuthoritativeRoots {
+		state := states[root.CoverageKey]
+		mode := instructionRootMode(report, root.CoverageKey)
+		instructionState := mode != "" &&
+			root.RegistryContract != nil &&
+			root.RegistryContract.Equal(
+				sdkingest.CurrentInstructionRegistryContract(),
+			) &&
+			sdkingest.IsInstructionCoverageState(state)
+		if state != sdkingest.OutcomeComplete && !instructionState {
+			continue
+		}
+		children := append([]string(nil), root.ChildCoverageKeys...)
+		complete := true
+		for _, child := range children {
+			if states[child] != sdkingest.OutcomeComplete {
+				complete = false
+				break
+			}
+		}
+		if !complete {
+			continue
+		}
+		sort.Strings(children)
+		cloned := root
+		cloned.ChildCoverageKeys = children
+		if root.RegistryContract != nil {
+			contract := *root.RegistryContract
+			cloned.RegistryContract = &contract
+		}
+		roots = append(roots, cloned)
+	}
+	sort.Slice(roots, func(i, j int) bool {
+		return roots[i].CoverageKey < roots[j].CoverageKey
+	})
+	return roots
+}
+
+func instructionRootMode(
+	report *sdkingest.CollectionReport,
+	rootKey string,
+) sdkingest.InstructionCoverageMode {
+	var mode sdkingest.InstructionCoverageMode
+	for _, outcome := range report.Outcomes {
+		if outcome.CoverageKey != rootKey {
+			continue
+		}
+		candidate, ok := sdkingest.InstructionCoverageModeForMethod(outcome.Method)
+		if !ok || !sdkingest.InstructionRootMatchesMethod(rootKey, outcome.Method) {
+			continue
+		}
+		if mode != "" && mode != candidate {
+			return ""
+		}
+		mode = candidate
+	}
+	return mode
 }
 
 func parseArtifactObservedAt(value string) (*time.Time, error) {
@@ -174,7 +245,8 @@ func cloneInt64Map(values map[string]int64) map[string]int64 {
 
 func comparisonKey(data *sdkingest.IngestData, attributionComplete bool) string {
 	if !attributionComplete ||
-		!sdkingest.CollectionCoverageComplete(data.Meta.Collection) ||
+		!sdkingest.AuthoritativeCoverageComplete(data.Meta.Collection) ||
+		sdkingest.InstructionCoverageLimited(data.Meta.Collection) ||
 		data.Meta.Ruleset == nil ||
 		data.Meta.Ruleset.LoadState != sdkingest.OutcomeComplete ||
 		data.Meta.Ruleset.Digest == "" ||

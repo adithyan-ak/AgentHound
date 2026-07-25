@@ -11,7 +11,7 @@ vi.mock("@entities/finding", () => ({
 }));
 
 describe("TopFindings", () => {
-  it("links Critical Alerts to critical and high findings", () => {
+  it("links Critical Alerts and describes an empty set as observed", () => {
     render(
       <MemoryRouter>
         <TopFindings />
@@ -22,5 +22,8 @@ describe("TopFindings", () => {
       "href",
       "/findings?sev=critical,high",
     );
+    expect(
+      screen.getByText("No critical or high-severity findings observed"),
+    ).toBeInTheDocument();
   });
 });

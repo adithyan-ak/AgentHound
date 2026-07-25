@@ -102,7 +102,7 @@ posture revision with `409`.
 
 ## Collection provenance and storage pairing
 
-Every ingest-v4 artifact carries an automatically derived collection point and
+Every ingest-v5 artifact carries an automatically derived collection point and
 network context. Private-route evidence binds the destination prefix to its
 observable next hop and stable native profile/link discriminator; if neither
 path signal is available, only network quality becomes unknown. Raw
@@ -130,6 +130,30 @@ identities, and credentials reconcile at collection-point scope, while remote
 services and edges involving them reconcile under an independent network (or
 artifact-local) variant. Moving between VPNs cannot retire the previous VPN's
 configured-service observations.
+
+## Limited instruction publication
+
+Instruction coverage is measured over AgentHound's registered static sources,
+not every instruction an effective client may load. Each observed registered
+file has a stable owner derived from its exact/deep root and canonical path.
+Registry-contract changes refresh those same owners rather than minting new
+ones.
+
+An incomplete recognized exact or deep root is a successful but
+coverage-limited publication when the rest of the pipeline is safe. Complete
+per-file positives remain current and are published additively, including
+poisoning findings. The incomplete root has no absence authority: it cannot
+retire unseen files, create a comparison key, or justify an empty-findings
+all-clear. CLI and UI surfaces therefore keep graph/findings access available
+while warning that missing instruction evidence is unknown, not clean.
+
+Dirty-state safety still fails closed. A limited successful attempt resolves
+only the root and complete children it actually processed; an unseen dirty
+child continues to block publication. Graph, analysis, snapshot, or
+finalization failure resolves no attempted dirty instruction coverage. A later
+complete scan of the same root reuses stable per-file owners, regains
+root-level absence authority, retires sources proven absent, and restores
+normal comparison behavior.
 
 PostgreSQL and Neo4j carry the same server-generated internal storage-pair UUID,
 so crossed volumes fail closed. Verification remains the first ingest

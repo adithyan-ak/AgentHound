@@ -27,15 +27,18 @@ effective principal, and filesystem/container execution scope. It derives a
 network context from that point plus the network visibility it can observe.
 Raw identity evidence never leaves the collection host; bounded hostname, OS,
 and architecture labels are emitted only for display. The server accepts every
-structurally valid ingest-v4 artifact and uses the derived IDs to scope local,
+structurally valid ingest-v5 artifact and uses the derived IDs to scope local,
 private, and endpoint-derived graph evidence; they are not authentication or
 attestation. If route/interface inspection fails, the point can remain strong
 while only network-scoped evidence is made artifact-local.
 
 The server also generates the storage UUID internally. Startup reads the
 versioned marker from both databases before migrations or schema writes.
-Crossed pairs, future marker versions, and unsafe unbound non-empty databases
-fail closed. A repairable one-sided missing marker is restored automatically.
+Crossed pairs, legacy or future marker versions, and unsafe unbound non-empty
+databases fail closed. Binding v3 is a clean lifecycle-ownership boundary:
+back up the deployment, recreate both database volumes together, restart, and
+recollect ingest-v5 artifacts. A repairable one-sided missing marker is
+restored automatically only for product-empty stores.
 A runtime verification failure returns a sanitized
 `503 STORAGE_BINDING_UNAVAILABLE` and writes nothing.
 
@@ -139,11 +142,12 @@ backup from one deployment incompatible with a Neo4j backup from another.
 
 ## Upgrades
 
-Ingest v4 is a clean database boundary. Existing unscoped v3 evidence cannot be
-safely rewritten into collection-point and network-context ownership, so it
-must not be mixed into the v4 projection. Preserve the old deployment or a
-coordinated backup as read-only evidence, then start v4 with fresh PostgreSQL
-and Neo4j volumes and recollect.
+Ingest v5 with storage-binding v3 is a clean paired-database boundary. Existing
+pre-v5 evidence cannot be safely rewritten into the independent exact/deep
+instruction ownership and current-only projection, so it must not be mixed
+into the v5 projection. Preserve the old deployment or a coordinated backup as
+read-only evidence, then start v5 with fresh PostgreSQL and Neo4j volumes and
+recollect.
 
 Back up the deployment, preserve any source artifacts needed for recollection,
 then recreate both development databases before starting this release:
@@ -167,12 +171,11 @@ curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/docker/
 This command is intentionally destructive and cannot be undone without a
 coordinated backup. Run the public Quickstart `up` command again afterward.
 
-Re-run the current collector after the reset. Retained v3 JSON remains evidence
-to archive, not input for rebuilding the v4 projection. Stdio MCP identity changed from
-`mcp_stdio_v2_ordered` to `mcp_stdio_v3_hashed_argv` so artifacts can prove the
-parent ID using ordered argument digests without exposing raw argv. The strict
-server rejects incompatible identity metadata rather than merging parent and
-child IDs.
+Re-run the current collector after the reset. Retained pre-v5 JSON remains
+evidence to archive, not input for rebuilding the v5 projection. The strict
+server reports an actionable unsupported-version error before current-schema
+decoding and rejects incompatible identity or instruction-registry metadata
+rather than merging incompatible ownership.
 
 Per-collection-point purge is intentionally unavailable. The graph stores a
 merged current projection, not every point's immutable normalized contribution,
@@ -187,7 +190,7 @@ perform a documented full operation reset by replacing both database volumes.
 - [ ] All ports bound to `127.0.0.1` (or behind VPN/mesh)
 - [ ] `AGENTHOUND_CORS_ORIGINS` matches the operator-facing URL(s); foreign-origin browser POSTs are rejected
 - [ ] PostgreSQL and Neo4j are backed up and restored as one coordinated pair
-- [ ] Existing unscoped v3 databases are preserved separately, never mixed into the v4 projection
+- [ ] Pre-v5 database pairs are preserved separately, never mixed into the v5 projection
 - [ ] Neo4j credentials changed from default `agenthound`
 - [ ] Postgres credentials changed from default
 - [ ] If exposed via reverse proxy: mTLS or equivalent client auth enabled

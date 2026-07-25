@@ -3,6 +3,10 @@ import { useNodes, isUnauth } from "@entities/node";
 import { useFindings, severityCounts } from "@entities/finding";
 import { comparablePublishedNodeDelta, useScans } from "@entities/scan";
 import {
+  hasLimitedPublishedInstructionCoverage,
+  useProjectionState,
+} from "@entities/posture";
+import {
   exposureScore,
   exposureBand,
   exposureColor,
@@ -53,6 +57,7 @@ export function ExposureGauge() {
   const { data: findings, isLoading: loadingFindings } = useFindings();
   const { data: nodes, isLoading: loadingNodes } = useNodes();
   const { data: scans } = useScans(20);
+  const { data: posture } = useProjectionState();
 
   const counts = severityCounts(findings ?? []);
   const critical = counts.critical ?? 0;
@@ -64,7 +69,11 @@ export function ExposureGauge() {
   const score = exposureScore({ critical, high, unauthServers });
   const pointer = exposureColor(score);
   const color = pointer;
-  const label = GAUGE_LABELS[exposureBand(score)];
+  const limitedInstructionCoverage =
+    hasLimitedPublishedInstructionCoverage(posture);
+  const label = limitedInstructionCoverage
+    ? `${GAUGE_LABELS[exposureBand(score)]} · Limited Coverage`
+    : GAUGE_LABELS[exposureBand(score)];
 
   const delta = comparablePublishedNodeDelta(scans ?? []);
 
@@ -91,7 +100,13 @@ export function ExposureGauge() {
         contentClassName="flex flex-1 flex-col justify-center gap-4"
       >
       <div className="relative flex flex-col items-center scanline">
-        <RadialGauge value={score} valueColor={pointer} caption="of 100" />
+        <RadialGauge
+          value={score}
+          valueColor={pointer}
+          caption={
+            limitedInstructionCoverage ? "observed score of 100" : "of 100"
+          }
+        />
         <div
           className="-mt-1 inline-flex items-center gap-2 rounded-[2px] px-2.5 py-1 font-mono text-[11px] font-bold uppercase tracking-[0.14em] ring-1 ring-inset"
           style={{ color, backgroundColor: `${color}14`, borderColor: `${color}40` }}

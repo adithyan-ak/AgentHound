@@ -8,7 +8,10 @@ import {
   useLatestPublishedScan,
   useScans,
 } from "@entities/scan";
-import { useProjectionState } from "@entities/posture";
+import {
+  limitedPublishedInstructionRoots,
+  useProjectionState,
+} from "@entities/posture";
 import { AsyncBoundary, DataStateNotice } from "@shared/ui/feedback";
 import { sameDashboardProjection } from "../model/projection";
 import { DashboardHeader } from "./DashboardHeader";
@@ -157,11 +160,22 @@ export function Dashboard() {
     latestPublishedQuery.data ?? latestPublishedScan(scans);
   const publishedStagesComplete =
     latestPublished != null &&
-    latestPublished.collection_status === "complete" &&
     latestPublished.graph_status === "complete" &&
     latestPublished.analysis_status === "complete" &&
     latestPublished.snapshot_status === "complete" &&
     latestPublished.projection_status === "complete";
+  const limitedCoverageRoots = limitedPublishedInstructionRoots(posture);
+  const exactCoverageNeedsRefresh = limitedCoverageRoots.some(
+    (root) => root.mode !== "deep",
+  );
+  const latestCollectionLimited =
+    latestPublished != null &&
+    latestPublished.collection_status !== "complete";
+  const coverageLimitationDetail = exactCoverageNeedsRefresh
+    ? "Registered user or project instruction coverage uses an incomplete or outdated source contract. Run a new config scan before treating missing registered sources as absent."
+    : limitedCoverageRoots.length > 0
+      ? "The current exact registered-source posture is usable, but retained nested coverage is truncated or uses an older source contract. Run a new config scan with --deep before treating missing nested evidence as absent."
+      : "The current exact registered-source posture is usable, but the latest nested discovery attempt did not complete. Retained evidence remains visible; missing nested evidence is not a clean absence.";
   const projectionIncomplete =
     posture?.status === "updating" || posture?.status === "incomplete";
   const unknownProjectionWithInventory =
@@ -241,6 +255,16 @@ export function Dashboard() {
             from {new Date(cachedAsOf).toLocaleString()} and may be stale.
           </DataStateNotice>
         )}
+
+        {publishedStagesComplete &&
+          (latestCollectionLimited || limitedCoverageRoots.length > 0) && (
+            <DataStateNotice
+              tone="warning"
+              title="Published posture has coverage limitations"
+            >
+              {coverageLimitationDetail}
+            </DataStateNotice>
+          )}
 
         <AsyncBoundary
           isLoading={isLoading}

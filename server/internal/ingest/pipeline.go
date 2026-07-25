@@ -127,9 +127,15 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	if data == nil {
 		return nil, fmt.Errorf("ingest data is nil")
 	}
-	// Storage-pair verification is the first operation after the nil check. It is
-	// read-only and deliberately precedes generic validation because invalid
-	// campaign handling writes a PostgreSQL audit row.
+	// Wire-version and registry-contract rejection is pure and must precede
+	// every external read or write. Full structural validation remains below
+	// the storage guard because invalid campaign handling may write an audit.
+	if err := Preflight(data); err != nil {
+		return nil, err
+	}
+	// Storage-pair verification is the first external operation. It is read-only
+	// and deliberately precedes full validation because invalid campaign
+	// handling writes a PostgreSQL audit row.
 	if p.storageGuard == nil {
 		return nil, fmt.Errorf("storage binding admission guard unavailable")
 	}
@@ -174,6 +180,12 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	}
 
 	result.Collection = *data.Meta.Collection
+	if sdkingest.InstructionCoverageLimited(data.Meta.Collection) {
+		result.Warnings = append(
+			result.Warnings,
+			sdkingest.InstructionCoverageLimitationWarning,
+		)
+	}
 	stageStart = time.Now()
 	rulesetState, rulesetErr := rulesetPublicationState(data.Meta.Ruleset)
 	appendStage(result, "ruleset", rulesetState, true, stageStart, rulesetErr)
@@ -219,13 +231,25 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 
 	attributionComplete := prepareObservationDomains(data)
 	keys := coverageKeys(data.Meta.Collection)
-	completeDomains := sdkingest.CompleteCoverageDomains(data.Meta.Collection)
-	authoritativeRoots := sdkingest.CompleteAuthoritativeRoots(data.Meta.Collection)
+	// Recognized incomplete instruction roots are non-blocking. Their complete
+	// children may advance without granting the root absence authority.
+	nonBlockingKeys := sdkingest.NonBlockingInstructionCoverageDomains(
+		data.Meta.Collection,
+	)
+	observedCompleteDomains := sdkingest.CompleteCoverageDomains(
+		data.Meta.Collection,
+	)
+	completeDomains := observedCompleteDomains
+	coverageRoots := promotableAuthoritativeRoots(data.Meta.Collection)
+	authoritativeRoots := sdkingest.CompleteAuthoritativeRoots(
+		data.Meta.Collection,
+	)
 	if !attributionComplete || normalizationDegradedErr != nil {
 		completeDomains = nil
+		coverageRoots = nil
 		authoritativeRoots = nil
 	}
-	coverageComplete := sdkingest.CollectionCoverageComplete(data.Meta.Collection) &&
+	coverageComplete := sdkingest.AuthoritativeCoverageComplete(data.Meta.Collection) &&
 		attributionComplete &&
 		normalizationDegradedErr == nil
 	// Preserve owner-scoped contributions through the pipeline. The graph
@@ -284,10 +308,18 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		return nil, fmt.Errorf("resolve authoritative coverage: %w", err)
 	}
 	reconciliationDomains := mergeCoverage(completeDomains, retiredDomains)
+	var normalizationDirtyDomains []string
+	if normalizationDegradedErr != nil {
+		normalizationDirtyDomains = observedCompleteDomains
+	}
 	cumulativeDirtyCoverage, err := p.scanStore.BeginScan(
 		ctx,
 		initialScan,
-		mergeCoverage(keys, retiredDomains),
+		mergeCoverage(
+			subtractCoverage(keys, nonBlockingKeys),
+			reconciliationDomains,
+			normalizationDirtyDomains,
+		),
 		sdkingest.CoverageParents(data.Meta.Collection),
 	)
 	if err != nil {
@@ -563,14 +595,16 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	}
 	publicationCompleteDomains := completeDomains
 	publicationRetiredDomains := retiredDomains
+	publicationCoverageRoots := coverageRoots
 	publicationAuthoritativeRoots := authoritativeRoots
 	if publicationDomains == nil {
 		publicationCompleteDomains = nil
 		publicationRetiredDomains = nil
+		publicationCoverageRoots = nil
 		publicationAuthoritativeRoots = nil
 	}
-	dirtyCoverage := append([]string(nil), cumulativeDirtyCoverage...)
-	if attributionComplete &&
+	projectionPrerequisitesComplete := attributionComplete &&
+		normalizationDegradedErr == nil &&
 		rulesetErr == nil &&
 		artifactObservedAt != nil &&
 		timestampErr == nil &&
@@ -581,29 +615,30 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		graphAfterErr == nil &&
 		snapshotErr == nil &&
 		observationQueryErr == nil &&
-		observationIncompleteErr == nil {
+		observationIncompleteErr == nil
+	resolvedDirtyCoverage := append(
+		[]string(nil),
+		publicationRetiredDomains...,
+	)
+	dirtyCoverage := append([]string(nil), cumulativeDirtyCoverage...)
+	if projectionPrerequisitesComplete {
 		dirtyCoverage = subtractCoverage(
 			cumulativeDirtyCoverage,
 			publicationDomains,
+			nonBlockingKeys,
 		)
 		dirtyCoverage = mergeCoverage(
 			dirtyCoverage,
 			incompleteCoverageDomains(data.Meta.Collection),
 		)
+		resolvedDirtyCoverage = mergeCoverage(
+			resolvedDirtyCoverage,
+			nonBlockingKeys,
+		)
 	}
 
 	requiredComplete := coverageComplete &&
-		rulesetErr == nil &&
-		artifactObservedAt != nil &&
-		timestampErr == nil &&
-		reconcileErr == nil &&
-		pruneErr == nil &&
-		ppErr == nil &&
-		graphBeforeErr == nil &&
-		graphAfterErr == nil &&
-		snapshotErr == nil &&
-		observationQueryErr == nil &&
-		observationIncompleteErr == nil &&
+		projectionPrerequisitesComplete &&
 		p.graphDB != nil &&
 		p.runPP != nil
 	publish := requiredComplete && len(dirtyCoverage) == 0
@@ -718,7 +753,8 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		CoverageKeys:          keys,
 		CoverageParents:       sdkingest.CoverageParents(data.Meta.Collection),
 		CompleteDomains:       publicationCompleteDomains,
-		ResolvedDirtyCoverage: publicationRetiredDomains,
+		ResolvedDirtyCoverage: resolvedDirtyCoverage,
+		CoverageRoots:         publicationCoverageRoots,
 		AuthoritativeRoots:    publicationAuthoritativeRoots,
 		DirtyCoverage:         dirtyCoverage,
 		GraphBefore:           graphBefore,
@@ -728,6 +764,10 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	if err != nil {
 		slog.Error("scan finalization failed", "error", err)
 		publicationErr := fmt.Errorf("publication: %w", err)
+		failureDirtyCoverage := mergeCoverage(
+			dirtyCoverage,
+			reconciliationDomains,
+		)
 		result.Stages[len(result.Stages)-1].State = sdkingest.OutcomeFailed
 		result.Stages[len(result.Stages)-1].Error = publicationErr.Error()
 		result.Outcome = sdkingest.OutcomePartial
@@ -744,7 +784,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 			AnalysisStatus:   finalScan.AnalysisStatus,
 			SnapshotStatus:   model.LifecycleFailed,
 			ProjectionStatus: model.ProjectionIncomplete,
-			DirtyCoverage:    dirtyCoverage,
+			DirtyCoverage:    failureDirtyCoverage,
 			Metadata: buildScanMetadata(
 				data,
 				result,

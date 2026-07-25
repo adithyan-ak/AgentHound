@@ -104,7 +104,9 @@ func TestRiskScore_ProcessPersistsBoundedAgentAuthAssessment(t *testing.T) {
 	for _, call := range mock.CallsTo("UpdateNodeProperties") {
 		properties, _ := call.Args[1].(map[string]any)
 		factors, _ := properties["risk_unknown_factors"].([]string)
-		if len(factors) == 1 && factors[0] == "agent_auth" {
+		if len(factors) == 2 &&
+			factors[0] == "agent_auth" &&
+			factors[1] == "agent_instruction_loading" {
 			agentAssessment = properties
 			break
 		}
@@ -112,11 +114,11 @@ func TestRiskScore_ProcessPersistsBoundedAgentAuthAssessment(t *testing.T) {
 	if agentAssessment == nil {
 		t.Fatal("AgentInstance update omitted agent_auth uncertainty")
 	}
-	if agentAssessment["risk_score"] != float64(20) ||
+	if agentAssessment["risk_score"] != float64(30) ||
 		agentAssessment["risk_score_min"] != float64(0) ||
-		agentAssessment["risk_score_max"] != float64(20) ||
+		agentAssessment["risk_score_max"] != float64(30) ||
 		agentAssessment["risk_assessment_complete"] != false {
-		t.Fatalf("AgentInstance assessment = %+v, want incomplete [0,20]", agentAssessment)
+		t.Fatalf("AgentInstance assessment = %+v, want incomplete [0,30]", agentAssessment)
 	}
 }
 

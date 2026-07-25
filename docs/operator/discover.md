@@ -44,7 +44,7 @@ The output file is a standard ingest envelope. `discover` emits raw `:MCPServer`
 ```json
 {
   "meta": {
-    "version": 4,
+    "version": 5,
     "type": "agenthound-ingest",
     "collector": "scan",
     "collector_version": "1.0.1",
