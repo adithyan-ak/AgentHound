@@ -34,8 +34,10 @@ A SharpHound/BloodHound-style split addresses both:
 
 - A lean **collector** drops on the target. Static binary, no DB clients,
   ~9 MiB stripped on linux/amd64. Outputs JSON for the operator to transfer or
-  explicitly pipe to the server ingest API/CLI; it has no built-in upload or
-  server control channel.
+  explicitly pipe to the server ingest API/CLI. When the operator supplies an
+  ingest endpoint, it may instead perform a one-shot upload of the completed
+  scan. It has no server-initiated control channel and no dependency on server
+  or database packages; the two-binary trust boundary remains unchanged.
 - A **server** runs on the operator's laptop or on a hardened host they
   fully control. Single user, localhost-bound by default, no auth at the
   application layer.

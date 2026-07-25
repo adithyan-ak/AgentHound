@@ -42,7 +42,7 @@ can_impersonate
 
 ## Scope compatibility policy
 
-Ingest v4 permits evidence from many collection points in one graph. Any
+The ingest v5 model permits evidence from many collection points in one graph. Any
 processor that compares otherwise unrelated observations must use the shared
 exact predicate below; a prose judgment at each call site is not sufficient.
 

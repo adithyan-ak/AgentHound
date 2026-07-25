@@ -152,28 +152,27 @@ export PATH="$HOME/.local/bin:$PATH"
 ```
 
 **3. Scan local configs** - offline, read-only, raw credential values omitted.
-Choose one coverage level and stream the result in.
+Choose one coverage level and ingest the saved artifact.
 
 Normal scan — recommended first run:
 
 ```bash
-agenthound scan --config --output - |
-  curl -sS --fail-with-body --data-binary @- -H "Content-Type: application/json" \
-    http://127.0.0.1:8080/api/v1/ingest
+agenthound scan --config --ingest http://127.0.0.1:8080
 ```
 
 Deep scan — adds bounded nested-project instruction discovery:
 
 ```bash
-agenthound scan --config --deep --output - |
-  curl -sS --fail-with-body --data-binary @- -H "Content-Type: application/json" \
-    http://127.0.0.1:8080/api/v1/ingest
+agenthound scan --config --deep --ingest http://127.0.0.1:8080
 ```
 
 Both commands check registered instruction sources at your home and selected
 project roots. Add `--project-dir /path/to/project` when the target is not the
 current directory. Deep discovery keeps that selected project independently
 covered even inside a normally pruned home subtree.
+
+The collector saves `./scan-<scan_id>.json` before upload, then prints a compact
+ingest receipt. Use `--json` for the full receipt.
 
 **4. Open the graph at
 [http://127.0.0.1:8080](http://127.0.0.1:8080/).**

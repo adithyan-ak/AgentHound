@@ -436,6 +436,78 @@ INSERT INTO posture_state (singleton) VALUES (TRUE);`); err != nil {
 	}
 }
 
+func TestIntegrationFreshSchemaEmptyIngestPublishesUnderThreeSeconds(t *testing.T) {
+	ctx, pipeline, _, _, _ := freshPublicationIntegrationHarness(t)
+	root := sdkingest.CollectorRootCoverageKey("config")
+	userInstructionRoot := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-exact-user",
+		"/tmp/agenthound-empty-user",
+	)
+	projectInstructionRoot := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-exact-project",
+		"/tmp/agenthound-empty-project",
+	)
+	registryContract := sdkingest.CurrentInstructionRegistryContract()
+	data := newPublicationIntegrationData("config", "fresh-empty-publication")
+	data.Meta.Collection = &sdkingest.CollectionReport{
+		State: sdkingest.OutcomeComplete,
+		CoverageKeys: []string{
+			root,
+			userInstructionRoot,
+			projectInstructionRoot,
+		},
+		AuthoritativeRoots: []sdkingest.CoverageRoot{
+			{CoverageKey: root},
+			{
+				CoverageKey:      userInstructionRoot,
+				RegistryContract: &registryContract,
+			},
+			{
+				CoverageKey:      projectInstructionRoot,
+				RegistryContract: &registryContract,
+			},
+		},
+		Outcomes: []sdkingest.CollectionOutcome{
+			{
+				Collector: "config", CoverageKey: root, Target: "config",
+				Method: "collect", State: sdkingest.OutcomeComplete,
+			},
+			{
+				Collector: "config", CoverageKey: userInstructionRoot,
+				Target: "/tmp/agenthound-empty-user",
+				Method: sdkingest.InstructionMethodExactUser,
+				State:  sdkingest.OutcomeComplete,
+			},
+			{
+				Collector: "config", CoverageKey: projectInstructionRoot,
+				Target: "/tmp/agenthound-empty-project",
+				Method: sdkingest.InstructionMethodExactProject,
+				State:  sdkingest.OutcomeComplete,
+			},
+		},
+	}
+
+	start := time.Now()
+	result, err := pipeline.Ingest(ctx, data)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("empty ingest: %v", err)
+	}
+	if result.Outcome != sdkingest.OutcomeComplete ||
+		result.ProjectionStatus != "complete" ||
+		result.PublishedRevision == nil {
+		t.Fatalf("empty ingest result = %+v, want complete published projection", result)
+	}
+	if len(result.PostProcessingStats) != 0 {
+		t.Fatalf("empty ingest ran post-processors: %+v", result.PostProcessingStats)
+	}
+	if elapsed >= 3*time.Second {
+		t.Fatalf("empty ingest took %s, want under 3s", elapsed)
+	}
+}
+
 func TestIntegrationExhaustiveRootRemovesMissingChildAcrossGraphAndPublication(t *testing.T) {
 	ctx, pipeline, db, _, pool := freshPublicationIntegrationHarness(t)
 	root := sdkingest.CanonicalCoverageKey("mcp", "root", "collect")
