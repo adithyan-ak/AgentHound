@@ -79,6 +79,43 @@ describe("published graph comparability", () => {
       ]),
     ).toBeNull();
   });
+
+  it("does not fall back to stale trends when the newest publication is incomparable", () => {
+    const scans = [
+      scan({
+        id: "older-comparable",
+        publication_status: "superseded",
+        published_revision: 2,
+        comparison_key: "key-a",
+        graph_totals: {
+          before: null,
+          after: { total_nodes: 12, total_edges: 8 },
+        },
+      }),
+      scan({
+        id: "newest-incomparable",
+        publication_status: "published",
+        published_revision: 3,
+        graph_totals: {
+          before: null,
+          after: { total_nodes: 13, total_edges: 9 },
+        },
+      }),
+      scan({
+        id: "oldest-comparable",
+        publication_status: "superseded",
+        published_revision: 1,
+        comparison_key: "key-a",
+        graph_totals: {
+          before: null,
+          after: { total_nodes: 10, total_edges: 7 },
+        },
+      }),
+    ];
+
+    expect(comparablePublishedScans(scans)).toEqual([]);
+    expect(comparablePublishedNodeDelta(scans)).toBeNull();
+  });
 });
 
 describe("scan freshness selection", () => {

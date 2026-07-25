@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -627,6 +628,7 @@ func TestBuildPostureExportDeclaresHealthAndCompleteState(t *testing.T) {
 			"config:path:sha256:current",
 			"mcp:target:sha256:prior",
 		},
+		nil,
 	)
 
 	if export.SchemaVersion != 2 ||
@@ -648,5 +650,46 @@ func TestBuildPostureExportDeclaresHealthAndCompleteState(t *testing.T) {
 		export.Limits.Findings.Total != 1 ||
 		!export.Limits.Findings.Complete {
 		t.Fatalf("export cardinality = %+v", export.Limits)
+	}
+}
+
+func TestCoverageRootHeadsDerivesStateModeAndSeparateContract(t *testing.T) {
+	rootKey := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-deep",
+		"/home/op",
+	)
+	contract := sdkingest.CurrentInstructionRegistryContract()
+	report := &sdkingest.CollectionReport{
+		CoverageKeys: []string{rootKey},
+		Outcomes: []sdkingest.CollectionOutcome{{
+			Collector:   "config",
+			CoverageKey: rootKey,
+			Method:      sdkingest.InstructionMethodDeep,
+			State:       sdkingest.OutcomeTruncated,
+		}},
+	}
+	heads, err := coverageRootHeads(report, []sdkingest.CoverageRoot{{
+		CoverageKey:      rootKey,
+		RegistryContract: &contract,
+	}})
+	if err != nil {
+		t.Fatalf("coverageRootHeads: %v", err)
+	}
+	head := heads[rootKey]
+	if head.Key != rootKey ||
+		head.State != sdkingest.OutcomeTruncated ||
+		head.Mode != sdkingest.InstructionCoverageDeep ||
+		head.RegistryContract == nil ||
+		!head.RegistryContract.Equal(contract) {
+		t.Fatalf("coverage root head = %+v", head)
+	}
+
+	report.Outcomes[0].Method = sdkingest.InstructionMethodExactUser
+	if _, err := coverageRootHeads(report, []sdkingest.CoverageRoot{{
+		CoverageKey:      rootKey,
+		RegistryContract: &contract,
+	}}); err == nil || !strings.Contains(err.Error(), "cannot promote truncated") {
+		t.Fatalf("truncated exact root error = %v", err)
 	}
 }

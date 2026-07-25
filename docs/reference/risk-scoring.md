@@ -75,7 +75,7 @@ score = 0.30 * credential + 0.25 * blast_radius + 0.20 * auth_risk
 | `blast_radius` | `min(reachable_resource_count * 10, 100)` |
 | `auth_risk` | `(1 - avg_effective_trust_edge_weight) * 100` over complete effective assessments (weak auth = high score); incomplete edges contribute a bounded unknown factor |
 | `tool_surface` | `min(trusted_tool_count * 5, 100)` |
-| `poisoning` | 100 if any loaded instruction file is suspicious; 0 otherwise |
+| `poisoning` | 100 when evidence-backed `LOADS_INSTRUCTIONS` connects the agent to a suspicious current instruction file. Without complete load-relationship evidence, the factor is a bounded unknown (`agent_instruction_loading`, range 0–100). Registered-source inventory coverage alone never certifies a clean zero. |
 
 ### A2AAgent
 

@@ -7,10 +7,24 @@ export interface ProjectionState {
   scan_id?: string;
   error?: string;
   dirty_coverage: string[];
+  active_coverage_roots: PostureCoverageRoot[];
   updated_at: string;
   published_scan_id?: string;
   published_revision?: number;
   published_at?: string;
+}
+
+export interface PostureCoverageRoot {
+  coverage_key: string;
+  mode: "exact_user" | "exact_project" | "deep";
+  state: "unknown" | "complete" | "partial" | "failed" | "truncated";
+  scan_id: string;
+  observed_at: string;
+  registry_contract: {
+    generation: number;
+    digest: string;
+  };
+  contract_current: boolean;
 }
 
 function stringArray(value: unknown, field: string): string[] {
@@ -19,6 +33,68 @@ function stringArray(value: unknown, field: string): string[] {
     throw new TypeError(`${field} must be a string array`);
   }
   return value;
+}
+
+function coverageRoots(value: unknown): PostureCoverageRoot[] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) {
+    throw new TypeError("active_coverage_roots must be an array");
+  }
+  return value.map((entry, index) => {
+    if (entry == null || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new TypeError(`active_coverage_roots[${index}] must be an object`);
+    }
+    const root = entry as Record<string, unknown>;
+    const contract = root.registry_contract;
+    if (
+      contract == null ||
+      typeof contract !== "object" ||
+      Array.isArray(contract)
+    ) {
+      throw new TypeError(
+        `active_coverage_roots[${index}].registry_contract must be an object`,
+      );
+    }
+    const registry = contract as Record<string, unknown>;
+    if (
+      root.mode !== "exact_user" &&
+      root.mode !== "exact_project" &&
+      root.mode !== "deep"
+    ) {
+      throw new TypeError(`active_coverage_roots[${index}].mode is invalid`);
+    }
+    if (
+      root.state !== "unknown" &&
+      root.state !== "complete" &&
+      root.state !== "partial" &&
+      root.state !== "failed" &&
+      root.state !== "truncated"
+    ) {
+      throw new TypeError(`active_coverage_roots[${index}].state is invalid`);
+    }
+    if (
+      typeof root.coverage_key !== "string" ||
+      typeof root.scan_id !== "string" ||
+      typeof root.observed_at !== "string" ||
+      typeof root.contract_current !== "boolean" ||
+      !Number.isSafeInteger(registry.generation) ||
+      typeof registry.digest !== "string"
+    ) {
+      throw new TypeError(`active_coverage_roots[${index}] is invalid`);
+    }
+    return {
+      coverage_key: root.coverage_key,
+      mode: root.mode,
+      state: root.state,
+      scan_id: root.scan_id,
+      observed_at: root.observed_at,
+      registry_contract: {
+        generation: registry.generation as number,
+        digest: registry.digest,
+      },
+      contract_current: root.contract_current,
+    };
+  });
 }
 
 export async function fetchProjectionState(): Promise<ProjectionState> {
@@ -44,6 +120,7 @@ export async function fetchProjectionState(): Promise<ProjectionState> {
     scan_id: typeof body.scan_id === "string" ? body.scan_id : undefined,
     error: typeof body.error === "string" ? body.error : undefined,
     dirty_coverage: stringArray(body.dirty_coverage, "dirty_coverage"),
+    active_coverage_roots: coverageRoots(body.active_coverage_roots),
     updated_at: body.updated_at,
     published_scan_id:
       typeof body.published_scan_id === "string"

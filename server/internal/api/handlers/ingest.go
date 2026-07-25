@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 
@@ -23,14 +25,53 @@ const maxIngestBodySize = 100 << 20 // 100 MB
 func (h *IngestHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxIngestBodySize)
 
-	var data sdkingest.IngestData
-	if err := sdkingest.DecodeStrict(r.Body, &data); err != nil {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
 		WriteValidationError(w, "invalid JSON payload")
+		return
+	}
+	version, err := sdkingest.DecodeVersion(body)
+	if err != nil {
+		WriteValidationError(w, "invalid JSON payload")
+		return
+	}
+	if version != sdkingest.CurrentVersion {
+		probe := sdkingest.IngestData{}
+		probe.Meta.Version = version
+		if writeIngestContractError(w, ingest.Preflight(&probe)) {
+			return
+		}
+	}
+
+	var data sdkingest.IngestData
+	if err := sdkingest.DecodeStrict(bytes.NewReader(body), &data); err != nil {
+		WriteValidationError(w, "invalid JSON payload")
+		return
+	}
+	if err := ingest.Preflight(&data); err != nil {
+		if writeIngestContractError(w, err) {
+			return
+		}
+		var ve *ingest.ValidationError
+		if errors.As(err, &ve) {
+			WriteJSON(w, http.StatusBadRequest, ErrorResponse{
+				Error: ErrorDetail{
+					Code:    "VALIDATION_ERROR",
+					Message: "validation failed",
+					Details: ve.Errors,
+				},
+			})
+			return
+		}
+		WriteValidationError(w, err.Error())
 		return
 	}
 
 	result, err := h.pipeline.Ingest(r.Context(), &data)
 	if err != nil {
+		if writeIngestContractError(w, err) {
+			return
+		}
 		if binding.IsStorageError(err) {
 			slog.Error("storage binding admission failed", "error", err)
 			WriteJSON(w, http.StatusServiceUnavailable, ErrorResponse{
@@ -73,4 +114,30 @@ func (h *IngestHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteJSON(w, http.StatusOK, result)
+}
+
+func writeIngestContractError(w http.ResponseWriter, err error) bool {
+	var versionErr *ingest.UnsupportedVersionError
+	if errors.As(err, &versionErr) {
+		WriteJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error: ErrorDetail{
+				Code:    "UNSUPPORTED_INGEST_VERSION",
+				Message: versionErr.Error(),
+				Details: versionErr,
+			},
+		})
+		return true
+	}
+	var contractErr *ingest.RegistryContractMismatchError
+	if errors.As(err, &contractErr) {
+		WriteJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error: ErrorDetail{
+				Code:    "REGISTRY_CONTRACT_MISMATCH",
+				Message: contractErr.Error(),
+				Details: contractErr,
+			},
+		})
+		return true
+	}
+	return false
 }

@@ -156,8 +156,8 @@ export function DashboardHeader() {
   const running = (scans ?? []).some((s) => s.status === "running");
   const publishedScan = latestPublishedScan(freshnessCandidates);
   const publishedStagesComplete =
-    publishedScan?.id === posture?.published_scan_id &&
-    publishedScan?.collection_status === "complete" &&
+    publishedScan != null &&
+    publishedScan.id === posture?.published_scan_id &&
     publishedScan.graph_status === "complete" &&
     publishedScan.analysis_status === "complete" &&
     publishedScan.snapshot_status === "complete" &&

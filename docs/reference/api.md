@@ -193,12 +193,13 @@ Returns reachable nodes grouped by ring (1-hop, 2-hop, ...). Useful for "what ca
 
 **Max body:** 100 MB.
 
-Upload strict ingest-v4 collector JSON. Unknown structural fields, v1/v2/v3
-artifacts, missing identity/collection/rules metadata, unscoped facts, omitted
-edge endpoint kinds, legacy property aliases, and incomplete canonical
-credential/host/auth evidence are rejected before any write. Runs the
-serialized lifecycle: verify both database binding markers → validate identity
-schema and internal consistency → apply graph and coverage scopes → normalize →
+Upload strict ingest-v5 collector JSON. Unknown structural fields, older
+artifacts, registry-contract mismatches, missing identity/collection/rules
+metadata, facts owned only by incomplete domains, omitted edge endpoint kinds,
+legacy property aliases, and incomplete canonical credential/host/auth evidence
+are rejected before any mutation. Runs the serialized lifecycle: preflight the
+wire and registry contracts → verify both database binding markers → validate
+identity schema and internal consistency → apply graph and coverage scopes → normalize →
 freeze pre-write totals → write → reconcile complete observation
 domains → post-process → freeze post-analysis totals → snapshot → publish.
 
@@ -266,7 +267,7 @@ credential material.
 // Request body (abridged; see graph-model.md for the complete schema)
 {
   "meta": {
-    "version": 4,
+    "version": 5,
     "type": "agenthound-ingest",
     "collector": "mcp",
     "collector_version": "1.0.1",
@@ -655,7 +656,10 @@ The Origin gate protects against browser drive-by Cypher injection from a hostil
 Returns the mutable projection state separately from the latest published
 revision. When an ingest is updating or incomplete, `scan_id` identifies that
 attempt while `published_scan_id` / `published_revision` continue to identify
-the last complete snapshot.
+the last complete snapshot. `active_coverage_roots` reports each current exact
+or deep instruction root by hashed coverage key, mode, state, owning scan,
+observation time, and registry contract. An old, truncated, or otherwise
+incomplete deep contract is a coverage limitation rather than a clean absence.
 
 ### `GET /api/v1/posture/export`
 
@@ -664,7 +668,7 @@ same PostgreSQL transaction that replaces the scan's finding snapshot and
 advances publication. It includes exact scope, stage/coverage completeness,
 normalization warnings, managed-observation completeness, observation and
 publication timestamps, suppression policy, frozen public graph totals,
-comparison metadata, rules provenance, and all findings with the triage state
+comparison metadata, rules provenance, active coverage-root state, and all findings with the triage state
 observed at publication. `scope.dirty_coverage` is always an explicit empty
 array for a published revision; `scope.active_coverage_keys` lists all active
 coverage heads. `completeness.observation_details` reports property-incomplete
@@ -704,9 +708,15 @@ Each scan has `submitted: {nodes, edges}`, `write_rows: {nodes, edges}`, and
 `graph_totals: {before, after}`. The frozen graph totals are public-inventory
 totals, not write counts. Deltas are
 comparable only when a non-empty `comparison_key` matches. The key includes
-canonical target/config coverage, rules and identity semantics, plus the
-revisions of every other active coverage head; the server records
+canonical target/config coverage, rules and identity semantics, plus each
+active root's registry contract/state and the revisions of every other active
+coverage head. Outdated or incomplete roots make comparison unavailable. The server records
 `comparable_to_scan_id` only in that case.
+
+Collector artifacts and the server use ingest v5 in lockstep. Version mismatch
+returns `UNSUPPORTED_INGEST_VERSION`; instruction-registry mismatch returns
+`REGISTRY_CONTRACT_MISMATCH`. Both are rejected before scan lifecycle, audit,
+or graph mutation and include upgrade/recollection guidance.
 
 ### `GET /api/v1/scans`
 

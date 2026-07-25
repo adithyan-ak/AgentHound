@@ -19,7 +19,7 @@ func TestCollectionEnvelopesPreserveInjectedCollectorVersion(t *testing.T) {
 
 	combined, enabled, failed := collectAll(
 		context.Background(), false, false, false,
-		"", nil, "", false,
+		"", nil, "", "", false, false,
 		"", "", nil, "", "",
 		0, 0, false, false, "",
 		nil, ingest.EmptyRulesetManifest(),

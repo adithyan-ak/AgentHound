@@ -88,6 +88,88 @@ func configScopingFixture(identity CollectionIdentity, scanID string) *IngestDat
 	return data
 }
 
+func instructionScopingFixture(identity CollectionIdentity, scanID string) *IngestData {
+	exactRoot := CanonicalCoverageKey("config", "instruction-exact-user", "/home/example")
+	exactChild := CanonicalCoverageKey(
+		"config",
+		"instruction-source",
+		exactRoot+"\x00/home/example/AGENTS.md",
+	)
+	deepRoot := CanonicalCoverageKey("config", "instruction-deep", "/home/example")
+	deepChild := CanonicalCoverageKey(
+		"config",
+		"instruction-source",
+		deepRoot+"\x00/home/example/repo/CLAUDE.md",
+	)
+	contract := CurrentInstructionRegistryContract()
+	return &IngestData{
+		Meta: IngestMeta{
+			ScanID:   scanID,
+			Identity: identity,
+			Collection: &CollectionReport{
+				State: OutcomeComplete,
+				CoverageKeys: []string{
+					exactRoot,
+					exactChild,
+					deepRoot,
+					deepChild,
+				},
+				AuthoritativeRoots: []CoverageRoot{
+					{
+						CoverageKey:       exactRoot,
+						ChildCoverageKeys: []string{exactChild},
+						RegistryContract:  &contract,
+					},
+					{
+						CoverageKey:       deepRoot,
+						ChildCoverageKeys: []string{deepChild},
+						RegistryContract:  &contract,
+					},
+				},
+				Outcomes: []CollectionOutcome{
+					{
+						Collector: "config", CoverageKey: exactRoot,
+						Target: "/home/example",
+						Method: InstructionMethodExactUser, State: OutcomeComplete,
+					},
+					{
+						Collector: "config", CoverageKey: exactChild,
+						ParentCoverageKey: exactRoot,
+						Target:            "/home/example/AGENTS.md",
+						Method:            InstructionMethodSource, State: OutcomeComplete,
+					},
+					{
+						Collector: "config", CoverageKey: deepRoot,
+						Target: "/home/example",
+						Method: InstructionMethodDeep, State: OutcomeComplete,
+					},
+					{
+						Collector: "config", CoverageKey: deepChild,
+						ParentCoverageKey: deepRoot,
+						Target:            "/home/example/repo/CLAUDE.md",
+						Method:            InstructionMethodSource, State: OutcomeComplete,
+					},
+				},
+			},
+		},
+		Graph: GraphData{
+			Nodes: []Node{
+				{
+					ID: "exact-instruction", Kinds: []string{"InstructionFile"},
+					Properties:         map[string]any{"path": "/home/example/AGENTS.md"},
+					ObservationDomains: []string{exactChild},
+				},
+				{
+					ID: "deep-instruction", Kinds: []string{"InstructionFile"},
+					Properties:         map[string]any{"path": "/home/example/repo/CLAUDE.md"},
+					ObservationDomains: []string{deepChild},
+				},
+			},
+			Edges: []Edge{},
+		},
+	}
+}
+
 func unknownNetworkTestIdentity() CollectionIdentity {
 	return NewCollectionIdentity(
 		[]IdentityEvidence{
@@ -100,6 +182,57 @@ func unknownNetworkTestIdentity() CollectionIdentity {
 		},
 		NetworkClassPrivate,
 	)
+}
+
+func TestScopeArtifactInstructionRootsIgnoreNetworkAndScanIdentity(t *testing.T) {
+	first := instructionScopingFixture(
+		strongTestIdentity("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+		"instruction-scan-a",
+	)
+	second := instructionScopingFixture(
+		strongTestIdentity("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
+		"instruction-scan-b",
+	)
+	if err := ScopeArtifact(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := ScopeArtifact(second); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(
+		first.Meta.Collection.AuthoritativeRoots,
+		second.Meta.Collection.AuthoritativeRoots,
+	) {
+		t.Fatalf(
+			"instruction ownership changed with network/scan identity: first=%+v second=%+v",
+			first.Meta.Collection.AuthoritativeRoots,
+			second.Meta.Collection.AuthoritativeRoots,
+		)
+	}
+	if len(first.Meta.Collection.AuthoritativeRoots) != 2 {
+		t.Fatalf(
+			"instruction roots were duplicated across scopes: %+v",
+			first.Meta.Collection.AuthoritativeRoots,
+		)
+	}
+	wantRoots := []string{
+		ScopedCoverageKey(
+			ScopeCollectionPoint,
+			first.Meta.Identity.CollectionPointID,
+			CanonicalCoverageKey("config", "instruction-exact-user", "/home/example"),
+		),
+		ScopedCoverageKey(
+			ScopeCollectionPoint,
+			first.Meta.Identity.CollectionPointID,
+			CanonicalCoverageKey("config", "instruction-deep", "/home/example"),
+		),
+	}
+	sort.Strings(wantRoots)
+	for index, root := range first.Meta.Collection.AuthoritativeRoots {
+		if root.CoverageKey != wantRoots[index] {
+			t.Fatalf("instruction root = %q, want %q", root.CoverageKey, wantRoots[index])
+		}
+	}
 }
 
 func TestScopeArtifactSeparatesPointNetworkAndLoopbackIdentity(t *testing.T) {

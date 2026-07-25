@@ -88,7 +88,7 @@ func TestEdgeJSONRoundTrip(t *testing.T) {
 func TestIngestDataJSONRoundTrip(t *testing.T) {
 	input := `{
 		"meta": {
-			"version": 4,
+			"version": 5,
 			"type": "agenthound-ingest",
 			"collector": "mcp",
 			"collector_version": "0.1.0",
@@ -145,7 +145,7 @@ func TestIngestDataJSONRoundTrip(t *testing.T) {
 		t.Errorf("edges count: got %d, want 1", len(d.Graph.Edges))
 	}
 	if d.Meta.Collection == nil || d.Meta.Ruleset == nil || len(d.Meta.IdentitySchemes) == 0 {
-		t.Fatal("strict v4 metadata was not preserved")
+		t.Fatal("strict v5 metadata was not preserved")
 	}
 	if d.Meta.Identity.Scheme != CollectionIdentityScheme {
 		t.Fatalf("identity = %+v", d.Meta.Identity)

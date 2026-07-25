@@ -29,8 +29,9 @@ type CollectionReport struct {
 // exhaustive collector-root run. Targeted and otherwise non-exhaustive runs
 // must not emit this declaration.
 type CoverageRoot struct {
-	CoverageKey       string   `json:"coverage_key"`
-	ChildCoverageKeys []string `json:"child_coverage_keys"`
+	CoverageKey       string            `json:"coverage_key"`
+	ChildCoverageKeys []string          `json:"child_coverage_keys"`
+	RegistryContract  *RegistryContract `json:"registry_contract,omitempty"`
 }
 
 type CollectionOutcome struct {
@@ -58,7 +59,9 @@ func EnsureCoverageParentage(report *CollectionReport) {
 		}
 	}
 	parentByChild := make(map[string]string)
+	authoritativeRoots := make(map[string]bool, len(report.AuthoritativeRoots))
 	for _, root := range report.AuthoritativeRoots {
+		authoritativeRoots[root.CoverageKey] = true
 		for _, child := range root.ChildCoverageKeys {
 			if child != "" && parentByChild[child] == "" {
 				parentByChild[child] = root.CoverageKey
@@ -73,7 +76,8 @@ func EnsureCoverageParentage(report *CollectionReport) {
 	}
 	for index := range report.Outcomes {
 		outcome := &report.Outcomes[index]
-		if outcome.ParentCoverageKey != "" || outcome.CoverageKey == "" {
+		if outcome.ParentCoverageKey != "" || outcome.CoverageKey == "" ||
+			authoritativeRoots[outcome.CoverageKey] {
 			continue
 		}
 		if parent := parentByChild[outcome.CoverageKey]; declared[parent] {
@@ -173,6 +177,7 @@ func MergeCollectionReports(reports ...*CollectionReport) *CollectionReport {
 			roots[root.CoverageKey] = CoverageRoot{
 				CoverageKey:       root.CoverageKey,
 				ChildCoverageKeys: children,
+				RegistryContract:  cloneRegistryContract(root.RegistryContract),
 			}
 		}
 		merged.Outcomes = append(merged.Outcomes, report.Outcomes...)

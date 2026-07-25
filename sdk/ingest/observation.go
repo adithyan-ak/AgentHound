@@ -199,12 +199,92 @@ func CompleteAuthoritativeRoots(report *CollectionReport) []CoverageRoot {
 		roots = append(roots, CoverageRoot{
 			CoverageKey:       root.CoverageKey,
 			ChildCoverageKeys: children,
+			RegistryContract:  cloneRegistryContract(root.RegistryContract),
 		})
 	}
 	sort.Slice(roots, func(i, j int) bool {
 		return roots[i].CoverageKey < roots[j].CoverageKey
 	})
 	return roots
+}
+
+// NonBlockingInstructionCoverageDomains returns the deep-instruction root and
+// its descendants. Unlike a caller-controlled flag, classification requires
+// the registered config root key, method, and registry contract shape.
+func NonBlockingInstructionCoverageDomains(report *CollectionReport) []string {
+	if report == nil {
+		return nil
+	}
+	deepRoots := make(map[string]bool)
+	for _, root := range report.AuthoritativeRoots {
+		if root.RegistryContract == nil ||
+			!InstructionRootMatchesMethod(root.CoverageKey, InstructionMethodDeep) {
+			continue
+		}
+		for _, outcome := range report.Outcomes {
+			if outcome.CoverageKey == root.CoverageKey &&
+				outcome.Collector == "config" &&
+				outcome.Method == InstructionMethodDeep &&
+				IsInstructionCoverageState(outcome.State) {
+				deepRoots[root.CoverageKey] = true
+				break
+			}
+		}
+	}
+	if len(deepRoots) == 0 {
+		return nil
+	}
+	domains := make(map[string]bool, len(deepRoots))
+	for root := range deepRoots {
+		domains[root] = true
+	}
+	changed := true
+	for changed {
+		changed = false
+		for _, outcome := range report.Outcomes {
+			if domains[outcome.ParentCoverageKey] && !domains[outcome.CoverageKey] {
+				domains[outcome.CoverageKey] = true
+				changed = true
+			}
+		}
+	}
+	result := make([]string, 0, len(domains))
+	for key := range domains {
+		if key != "" {
+			result = append(result, key)
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
+// AuthoritativeCoverageComplete reports whether every blocking declared
+// coverage key was observed complete. Deep instruction discovery is the only
+// recognized non-blocking coverage mode.
+func AuthoritativeCoverageComplete(report *CollectionReport) bool {
+	if report == nil || len(report.CoverageKeys) == 0 {
+		return false
+	}
+	nonBlocking := make(map[string]bool)
+	for _, key := range NonBlockingInstructionCoverageDomains(report) {
+		nonBlocking[key] = true
+	}
+	keys := make(map[string]bool, len(report.CoverageKeys))
+	for _, key := range report.CoverageKeys {
+		if key = strings.TrimSpace(key); key != "" && !nonBlocking[key] {
+			keys[key] = true
+		}
+	}
+	if len(keys) == 0 {
+		return false
+	}
+	states := CoverageStates(report)
+	for key := range keys {
+		if states[key] != OutcomeComplete {
+			return false
+		}
+	}
+	return true
 }
 
 func CollectionCoverageComplete(report *CollectionReport) bool {

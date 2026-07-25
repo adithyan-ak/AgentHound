@@ -46,7 +46,7 @@ isolated Neo4j/PostgreSQL only after network scanning, solely to ingest the
 actual collector projections and export the campaign witness. vLLM uses its
 official CPU image.
 
-The harness asserts the automatic ingest-v4 identity schema and canonical
+The harness asserts the automatic ingest-v5 identity schema and canonical
 derived IDs on every artifact before any scenario-specific oracle runs. The
 server generates its PostgreSQL/Neo4j storage-pair UUID internally. The
 host-native macOS discovery lane remains collection-only and proves that no

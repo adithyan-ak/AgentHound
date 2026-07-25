@@ -217,7 +217,7 @@ func TestDiscoverNestedCursorRulesPrunesGitBeforeBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	discovery := DiscoverInstructions(context.Background(), "", project, engine)
+	discovery := DiscoverInstructions(context.Background(), "", project, InstructionScan{RecursiveRoot: project, Deep: true}, engine)
 	var cursorPaths []string
 	for _, observation := range discovery.Observations {
 		if observation.Info.Type == "cursor-rule" {
@@ -234,12 +234,8 @@ func TestDiscoverNestedCursorRulesPrunesGitBeforeBudget(t *testing.T) {
 	if len(cursorPaths) != 2 {
 		t.Fatalf("cursor rules = %v, want root and nested", cursorPaths)
 	}
-	for _, outcome := range discovery.Outcomes {
-		if outcome.Method == "cursor_rule_traversal" || outcome.Method == "cursor_rule_tree" {
-			if outcome.State != ingest.OutcomeComplete {
-				t.Fatalf(".git consumed traversal budget: %+v", outcome)
-			}
-		}
+	if deep := instructionOutcomeForMethod(discovery.Outcomes, ingest.InstructionMethodDeep); deep == nil || deep.State != ingest.OutcomeComplete {
+		t.Fatalf(".git consumed traversal budget: %+v", deep)
 	}
 }
 
@@ -256,22 +252,20 @@ func TestCursorRuleTreeIncompleteStates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	discovery := DiscoverInstructions(context.Background(), "", project, engine)
+	discovery := DiscoverInstructions(context.Background(), "", project, InstructionScan{}, engine)
 	states := make(map[string]ingest.OutcomeState)
 	for _, outcome := range discovery.Outcomes {
 		states[outcome.Method] = outcome.State
 	}
-	if states["cursor_rule_read"] != ingest.OutcomeTruncated ||
-		states["cursor_rule_tree"] != ingest.OutcomeTruncated ||
-		states["cursor_rule_traversal"] != ingest.OutcomeTruncated {
+	if states[ingest.InstructionMethodExactProject] != ingest.OutcomeTruncated {
 		t.Fatalf("oversized cursor states = %v", states)
 	}
 
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	discovery = DiscoverInstructions(canceled, "", project, engine)
+	discovery = DiscoverInstructions(canceled, "", project, InstructionScan{}, engine)
 	for _, outcome := range discovery.Outcomes {
-		if outcome.Method == "cursor_rule_traversal" && outcome.State != ingest.OutcomePartial {
+		if outcome.Method == ingest.InstructionMethodExactProject && outcome.State != ingest.OutcomePartial {
 			t.Fatalf("canceled traversal = %+v", outcome)
 		}
 	}
@@ -281,82 +275,21 @@ func TestCursorRuleTreeIncompleteStates(t *testing.T) {
 		t.Fatal(err)
 	}
 	originalOpen := openConfigFile
+	canonicalUnreadable := filepath.Join(canonicalInstructionRoot(project), ".cursor", "rules", "unreadable.mdc")
 	openConfigFile = func(path string) (*os.File, error) {
-		if canonicalConfigPath(path) == canonicalConfigPath(unreadable) {
+		if canonicalConfigPath(path) == canonicalUnreadable {
 			return nil, os.ErrPermission
 		}
 		return os.Open(path)
 	}
 	t.Cleanup(func() { openConfigFile = originalOpen })
-	discovery = DiscoverInstructions(context.Background(), "", project, engine)
-	for _, outcome := range discovery.Outcomes {
-		if outcome.Target == canonicalConfigPath(unreadable) && outcome.State != ingest.OutcomeFailed {
-			t.Fatalf("unreadable file outcome = %+v", outcome)
-		}
-		if outcome.Method == "cursor_rule_tree" && outcome.State == ingest.OutcomeComplete {
-			t.Fatalf("unreadable tree became complete: %+v", outcome)
-		}
+	discovery = DiscoverInstructions(context.Background(), "", project, InstructionScan{}, engine)
+	if len(discovery.Observations) != 0 {
+		t.Fatalf("incomplete tree emitted observations: %+v", discovery.Observations)
 	}
-}
-
-func TestCursorLifecycleScopeSemantics(t *testing.T) {
-	root := ingest.CollectorRootCoverageKey("config")
-	traversal := instructionTraversalKey("/project")
-	tree := instructionTreeKey("/project/.cursor/rules")
-	file := instructionFileKey("/project/.cursor/rules/deleted.mdc")
-
-	report := func(rootState, traversalState, treeState ingest.OutcomeState, includeTree bool, active []string) *ingest.CollectionReport {
-		coverageKeys := []string{root, traversal}
-		outcomes := []ingest.CollectionOutcome{
-			{Collector: "config", CoverageKey: root, State: rootState},
-			{Collector: "config", CoverageKey: traversal, State: traversalState},
-		}
-		if includeTree {
-			coverageKeys = append(coverageKeys, tree)
-			outcomes = append(outcomes, ingest.CollectionOutcome{Collector: "config", CoverageKey: tree, State: treeState})
-		}
-		return &ingest.CollectionReport{
-			State:              ingest.AggregateOutcomeState(outcomes),
-			CoverageKeys:       coverageKeys,
-			Outcomes:           outcomes,
-			AuthoritativeRoots: []ingest.CoverageRoot{{CoverageKey: root, ChildCoverageKeys: active}},
-		}
+	if state := instructionOutcomeForMethod(discovery.Outcomes, ingest.InstructionMethodExactProject); state == nil || state.State != ingest.OutcomePartial {
+		t.Fatalf("unreadable exact root outcome = %+v, want partial", state)
 	}
-
-	t.Run("complete tree retires deleted file despite unrelated traversal failure", func(t *testing.T) {
-		got := report(ingest.OutcomePartial, ingest.OutcomePartial, ingest.OutcomeComplete, true, []string{traversal, tree})
-		if !containsString(ingest.CompleteCoverageDomains(got), tree) {
-			t.Fatalf("complete domains = %v, want tree %s", ingest.CompleteCoverageDomains(got), tree)
-		}
-		if containsString(ingest.CompleteCoverageDomains(got), file) {
-			t.Fatalf("diagnostic file key unexpectedly declared complete: %s", file)
-		}
-		if len(ingest.CompleteAuthoritativeRoots(got)) != 0 {
-			t.Fatal("partial traversal completed authoritative root")
-		}
-	})
-
-	t.Run("partial tree retains missing file", func(t *testing.T) {
-		got := report(ingest.OutcomePartial, ingest.OutcomePartial, ingest.OutcomePartial, true, []string{traversal, tree})
-		if containsString(ingest.CompleteCoverageDomains(got), tree) {
-			t.Fatal("partial tree became a reconciliation domain")
-		}
-	})
-
-	t.Run("partial traversal retains absent tree", func(t *testing.T) {
-		got := report(ingest.OutcomePartial, ingest.OutcomePartial, ingest.OutcomeComplete, false, []string{traversal})
-		if len(ingest.CompleteAuthoritativeRoots(got)) != 0 {
-			t.Fatal("partial traversal retired an absent tree")
-		}
-	})
-
-	t.Run("complete traversal root retires absent tree", func(t *testing.T) {
-		got := report(ingest.OutcomeComplete, ingest.OutcomeComplete, ingest.OutcomeComplete, false, []string{traversal})
-		roots := ingest.CompleteAuthoritativeRoots(got)
-		if len(roots) != 1 || containsString(roots[0].ChildCoverageKeys, tree) {
-			t.Fatalf("completed roots = %+v, want active set without old tree", roots)
-		}
-	})
 }
 
 func TestResolveProjectRootRejectsInvalidPaths(t *testing.T) {

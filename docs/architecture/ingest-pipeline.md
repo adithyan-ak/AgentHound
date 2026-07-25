@@ -27,7 +27,7 @@ Input is the `sdk/ingest.IngestData` struct:
 ```json
 {
   "meta": {
-    "version": 4,
+    "version": 5,
     "type": "agenthound-ingest",
     "collector": "mcp",
     "scan_id": "...",
@@ -85,7 +85,7 @@ Input is the `sdk/ingest.IngestData` struct:
 }
 ```
 
-Wire version `4` is the only accepted contract; v1, v2, and v3 artifacts are
+Wire version `5` is the only accepted contract; v1, v2, v3, and v4 artifacts are
 rejected. `identity`, `collection`, `ruleset`, and `identity_schemes` are
 required. The server validates identity schema, version, digest consistency,
 and evidence classification—not the truth of the claimed execution origin.

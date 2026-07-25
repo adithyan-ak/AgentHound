@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -76,7 +77,8 @@ func init() {
 
 	scanCmd.Flags().String("path", "", "Path to specific config file")
 	scanCmd.Flags().StringSlice("paths", nil, "Paths to multiple config files")
-	scanCmd.Flags().String("project-dir", "", "Project directory for instruction file discovery")
+	scanCmd.Flags().String("project-dir", "", "Project root for bounded exact instruction and client-config discovery (default: current directory)")
+	scanCmd.Flags().Bool("deep", false, "Also search below the home directory for nested registered instruction sources")
 	scanCmd.Flags().Bool("include-credential-values", false, "Include raw credential values")
 
 	scanCmd.Flags().String("url", "", "URL of a single HTTP MCP server")
@@ -122,7 +124,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 	path, _ := cmd.Flags().GetString("path")
 	paths, _ := cmd.Flags().GetStringSlice("paths")
 	projectDir, _ := cmd.Flags().GetString("project-dir")
+	deep, _ := cmd.Flags().GetBool("deep")
 	includeCredValues, _ := cmd.Flags().GetBool("include-credential-values")
+
+	instrRoot, instrDeep, err := resolveInstructionRecursion(deep)
+	if err != nil {
+		return err
+	}
 
 	url, _ := cmd.Flags().GetString("url")
 
@@ -187,7 +195,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	rulesEngine, ruleset := loadEffectiveRules()
 
 	merged, enabled, failed := collectAll(ctx, runConfig, runMCP, runA2A,
-		path, paths, projectDir, includeCredValues,
+		path, paths, projectDir, instrRoot, instrDeep, includeCredValues,
 		url, target, targets, targetsFile, authToken,
 		concurrency, timeout, insecure, noVerifyJWKS, a2aTrustedKeys,
 		rulesEngine, ruleset)
@@ -234,7 +242,7 @@ func allCollectorsFailed(enabled, failed int) bool {
 // write semantics; stdout is the operator's responsibility (e.g., via SSH).
 func writeCollectorOutputStdout(data *ingest.IngestData) error {
 	if err := prepareCollectorArtifact(data); err != nil {
-		return fmt.Errorf("prepare ingest v4 artifact: %w", err)
+		return fmt.Errorf("prepare ingest v5 artifact: %w", err)
 	}
 	encoded, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
@@ -295,7 +303,7 @@ func normalizeNetworkConcurrency(value int) int {
 // them failed, so the caller can decide the exit code (total failure → non-
 // zero, partial/empty success → zero).
 func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
-	path string, paths []string, projectDir string, includeCredValues bool,
+	path string, paths []string, projectDir, instrRoot string, instrDeep bool, includeCredValues bool,
 	url, target string, targets []string, targetsFile, authToken string,
 	concurrency int, timeout time.Duration, insecure bool,
 	noVerifyJWKS bool, a2aTrustedKeys string,
@@ -308,7 +316,7 @@ func collectAll(ctx context.Context, runConfig, runMCP, runA2A bool,
 
 	if runConfig {
 		enabled++
-		data, err := collectConfig(ctx, path, paths, projectDir, includeCredValues, merged.Meta.ScanID, rulesEngine)
+		data, err := collectConfig(ctx, path, paths, projectDir, instrRoot, instrDeep, includeCredValues, merged.Meta.ScanID, rulesEngine)
 		if err != nil {
 			failed++
 			slog.Error("config collector failed", "error", err)
@@ -457,10 +465,26 @@ func rootedCollectionReport(
 	authoritative bool,
 ) *ingest.CollectionReport {
 	state := ingest.OutcomeUnknown
+	rootState := ingest.OutcomeUnknown
 	if report != nil {
 		state = report.State
 		if state == "" {
 			state = ingest.AggregateOutcomeState(report.Outcomes)
+		}
+		// Instruction inventory roots own their lifecycle independently from
+		// config-file discovery. Their incomplete state stays visible on the
+		// report but cannot corrupt the collector root or erase retained deep
+		// evidence.
+		instructionKeys := instructionCoverageKeys(report)
+		rootState = state
+		if len(instructionKeys) > 0 {
+			var rootOutcomes []ingest.CollectionOutcome
+			for _, outcome := range report.Outcomes {
+				if !instructionKeys[outcome.CoverageKey] {
+					rootOutcomes = append(rootOutcomes, outcome)
+				}
+			}
+			rootState = ingest.AggregateOutcomeState(rootOutcomes)
 		}
 	}
 	rootKey := collectorRootCoverageKey(collectorName)
@@ -472,13 +496,14 @@ func rootedCollectionReport(
 			CoverageKey: rootKey,
 			Target:      collectorName,
 			Method:      "collect",
-			State:       state,
+			State:       rootState,
 		}},
 	}
 	if authoritative && report != nil {
+		instructionKeys := instructionCoverageKeys(report)
 		children := make([]string, 0, len(report.CoverageKeys))
 		for _, key := range report.CoverageKeys {
-			if key != "" && key != rootKey {
+			if key != "" && key != rootKey && !instructionKeys[key] {
 				children = append(children, key)
 			}
 		}
@@ -489,6 +514,31 @@ func rootedCollectionReport(
 		}}
 	}
 	return ingest.MergeCollectionReports(report, root)
+}
+
+func instructionCoverageKeys(report *ingest.CollectionReport) map[string]bool {
+	keys := make(map[string]bool)
+	if report == nil {
+		return keys
+	}
+	for _, root := range report.AuthoritativeRoots {
+		if root.RegistryContract == nil {
+			continue
+		}
+		keys[root.CoverageKey] = true
+		for _, child := range root.ChildCoverageKeys {
+			keys[child] = true
+		}
+	}
+	for _, outcome := range report.Outcomes {
+		if _, ok := ingest.InstructionCoverageModeForMethod(outcome.Method); ok {
+			keys[outcome.CoverageKey] = true
+		}
+		if keys[outcome.ParentCoverageKey] {
+			keys[outcome.CoverageKey] = true
+		}
+	}
+	return keys
 }
 
 func failedCollectionReport(collectorName string, err error) *ingest.CollectionReport {
@@ -507,26 +557,48 @@ func failedCollectionReport(collectorName string, err error) *ingest.CollectionR
 	}
 }
 
+// resolveInstructionRecursion returns the canonical deep root. Exact discovery
+// always covers home plus the effective project root and needs no recursive
+// filesystem sweep.
+func resolveInstructionRecursion(deep bool) (root string, isDeep bool, err error) {
+	if !deep {
+		return "", false, nil
+	}
+	home, homeErr := os.UserHomeDir()
+	if homeErr != nil {
+		return "", false, fmt.Errorf("--deep needs a home directory: %w", homeErr)
+	}
+	absolute, absErr := filepath.Abs(home)
+	if absErr != nil {
+		return "", false, fmt.Errorf("resolve --deep home directory: %w", absErr)
+	}
+	return filepath.Clean(absolute), true, nil
+}
+
 func collectConfig(
 	ctx context.Context,
 	path string,
 	paths []string,
 	projectDir string,
+	instrRoot string,
+	instrDeep bool,
 	includeCredValues bool,
 	scanID string,
 	engine *rules.Engine,
 ) (*ingest.IngestData, error) {
 	c := configcollector.NewConfigCollector()
 	opts := icollector.CollectOptions{
-		Discover:                path == "" && len(paths) == 0,
-		ConfigPath:              path,
-		ConfigPaths:             paths,
-		ProjectDir:              projectDir,
-		IncludeCredentialValues: includeCredValues,
-		ScanID:                  scanID,
-		RulesEngine:             engine,
+		Discover:                 path == "" && len(paths) == 0,
+		ConfigPath:               path,
+		ConfigPaths:              paths,
+		ProjectDir:               projectDir,
+		InstructionRecursiveRoot: instrRoot,
+		InstructionDeep:          instrDeep,
+		IncludeCredentialValues:  includeCredValues,
+		ScanID:                   scanID,
+		RulesEngine:              engine,
 	}
-	slog.Info("running config collector", "discover", opts.Discover, "path", path)
+	slog.Info("running config collector", "discover", opts.Discover, "path", path, "deep", instrDeep)
 	return c.Collect(ctx, opts)
 }
 

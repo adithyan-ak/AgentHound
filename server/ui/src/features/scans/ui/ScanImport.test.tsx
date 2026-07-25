@@ -103,7 +103,7 @@ async function confirmPreview() {
 const configCoverageKey = `config:target:sha256:${"a".repeat(64)}`;
 const validScanJSON = JSON.stringify({
   meta: {
-    version: 4,
+    version: 5,
     type: "agenthound-ingest",
     identity: {
       scheme: "agenthound_collection_v1",

@@ -81,6 +81,7 @@ describe("uploadScan", () => {
 
   it("decodes the server-emitted collection report", async () => {
     const coverageKey = `mcp:target:sha256:${"a".repeat(64)}`;
+    const rootKey = `config:instruction-deep:sha256:${"b".repeat(64)}`;
     postMock.mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -93,11 +94,22 @@ describe("uploadScan", () => {
           identity: ingestIdentity(),
           collection: {
             state: "complete",
-            coverage_keys: [coverageKey],
+            coverage_keys: [rootKey, coverageKey],
+            authoritative_roots: [
+              {
+                coverage_key: rootKey,
+                child_coverage_keys: [coverageKey],
+                registry_contract: {
+                  generation: 1,
+                  digest: `sha256:${"c".repeat(64)}`,
+                },
+              },
+            ],
             outcomes: [
               {
                 collector: "mcp",
                 coverage_key: coverageKey,
+                parent_coverage_key: rootKey,
                 target: "https://mcp.example",
                 method: "initialize",
                 state: "complete",
@@ -116,11 +128,22 @@ describe("uploadScan", () => {
 
     expect(result.collection).toEqual({
       state: "complete",
-      coverage_keys: [coverageKey],
+      coverage_keys: [rootKey, coverageKey],
+      authoritative_roots: [
+        {
+          coverage_key: rootKey,
+          child_coverage_keys: [coverageKey],
+          registry_contract: {
+            generation: 1,
+            digest: `sha256:${"c".repeat(64)}`,
+          },
+        },
+      ],
       outcomes: [
         {
           collector: "mcp",
           coverage_key: coverageKey,
+          parent_coverage_key: rootKey,
           target: "https://mcp.example",
           method: "initialize",
           state: "complete",

@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -128,5 +129,127 @@ func TestPrepareObservationDomainsRejectsScopeOutsideCoverage(t *testing.T) {
 	}
 	if prepareObservationDomains(data) {
 		t.Fatal("fact scope outside declared coverage was accepted")
+	}
+}
+
+func TestPromotableAuthoritativeRootsAcceptsOnlyCompleteOrTruncatedDeep(t *testing.T) {
+	exactRoot := sdkingest.CanonicalCoverageKey("config", "instruction-exact-user", "/home/op")
+	exactChild := sdkingest.CanonicalCoverageKey("config", "instruction-source", exactRoot+"\x00AGENTS.md")
+	deepRoot := sdkingest.CanonicalCoverageKey("config", "instruction-deep", "/home/op")
+	deepChild := sdkingest.CanonicalCoverageKey("config", "instruction-source", deepRoot+"\x00work/CLAUDE.md")
+	contract := sdkingest.CurrentInstructionRegistryContract()
+	report := &sdkingest.CollectionReport{
+		State:        sdkingest.OutcomeTruncated,
+		CoverageKeys: []string{exactRoot, exactChild, deepRoot, deepChild},
+		AuthoritativeRoots: []sdkingest.CoverageRoot{
+			{
+				CoverageKey:       exactRoot,
+				ChildCoverageKeys: []string{exactChild},
+				RegistryContract:  &contract,
+			},
+			{
+				CoverageKey:       deepRoot,
+				ChildCoverageKeys: []string{deepChild},
+				RegistryContract:  &contract,
+			},
+		},
+		Outcomes: []sdkingest.CollectionOutcome{
+			{
+				Collector:   "config",
+				CoverageKey: exactRoot,
+				Method:      sdkingest.InstructionMethodExactUser,
+				State:       sdkingest.OutcomeComplete,
+			},
+			{
+				Collector:         "config",
+				CoverageKey:       exactChild,
+				ParentCoverageKey: exactRoot,
+				State:             sdkingest.OutcomeComplete,
+			},
+			{
+				Collector:   "config",
+				CoverageKey: deepRoot,
+				Method:      sdkingest.InstructionMethodDeep,
+				State:       sdkingest.OutcomeTruncated,
+			},
+			{
+				Collector:         "config",
+				CoverageKey:       deepChild,
+				ParentCoverageKey: deepRoot,
+				State:             sdkingest.OutcomeComplete,
+			},
+		},
+	}
+
+	roots := promotableAuthoritativeRoots(report)
+	if len(roots) != 2 {
+		t.Fatalf("promotable roots = %+v, want exact and deep", roots)
+	}
+	if got := []string{roots[0].CoverageKey, roots[1].CoverageKey}; !reflect.DeepEqual(
+		got,
+		[]string{deepRoot, exactRoot},
+	) {
+		t.Fatalf("promotable roots = %v", got)
+	}
+
+	report.Outcomes[3].State = sdkingest.OutcomePartial
+	roots = promotableAuthoritativeRoots(report)
+	if len(roots) != 1 || roots[0].CoverageKey != exactRoot {
+		t.Fatalf("partial deep child promoted roots = %+v, want exact only", roots)
+	}
+
+	report.Outcomes[2].State = sdkingest.OutcomeFailed
+	report.Outcomes[3].State = sdkingest.OutcomeComplete
+	roots = promotableAuthoritativeRoots(report)
+	if len(roots) != 1 || roots[0].CoverageKey != exactRoot {
+		t.Fatalf("failed deep attempt promoted roots = %+v, want exact only", roots)
+	}
+}
+
+func TestComparisonKeyAllowsNonBlockingDeepFailureButNotExactFailure(t *testing.T) {
+	exactRoot := sdkingest.CanonicalCoverageKey("config", "instruction-exact-user", "/home/op")
+	deepRoot := sdkingest.CanonicalCoverageKey("config", "instruction-deep", "/home/op")
+	contract := sdkingest.CurrentInstructionRegistryContract()
+	data := &sdkingest.IngestData{
+		Meta: sdkingest.IngestMeta{
+			Collection: &sdkingest.CollectionReport{
+				State:        sdkingest.OutcomePartial,
+				CoverageKeys: []string{exactRoot, deepRoot},
+				AuthoritativeRoots: []sdkingest.CoverageRoot{
+					{CoverageKey: exactRoot, RegistryContract: &contract},
+					{CoverageKey: deepRoot, RegistryContract: &contract},
+				},
+				Outcomes: []sdkingest.CollectionOutcome{
+					{
+						Collector:   "config",
+						CoverageKey: exactRoot,
+						Method:      sdkingest.InstructionMethodExactUser,
+						State:       sdkingest.OutcomeComplete,
+					},
+					{
+						Collector:   "config",
+						CoverageKey: deepRoot,
+						Method:      sdkingest.InstructionMethodDeep,
+						State:       sdkingest.OutcomeFailed,
+					},
+				},
+			},
+			Ruleset: &sdkingest.RulesetManifest{
+				Digest:    "sha256:rules",
+				LoadState: sdkingest.OutcomeComplete,
+			},
+			IdentitySchemes: []sdkingest.IdentityScheme{{
+				EntityKind: "InstructionFile",
+				Scheme:     "path_v1",
+				Version:    1,
+			}},
+		},
+	}
+	if got := comparisonKey(data, true); got == "" {
+		t.Fatal("failed deep attempt suppressed the stable exact comparison scope")
+	}
+	data.Meta.Collection.Outcomes[0].State = sdkingest.OutcomeFailed
+	if got := comparisonKey(data, true); got != "" {
+		t.Fatalf("failed exact root comparison key = %q, want empty", got)
 	}
 }

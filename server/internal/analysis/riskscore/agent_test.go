@@ -13,8 +13,8 @@ func TestAgentRiskScore_AllZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AgentRiskScore() error = %v", err)
 	}
-	if score != 0 {
-		t.Errorf("score = %f, want 0 (no data)", score)
+	if score != 10 {
+		t.Errorf("score = %f, want 10 (unknown instruction loading bound)", score)
 	}
 }
 
@@ -38,9 +38,9 @@ func TestAgentRiskScore_HighEntropyCreds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AgentRiskScore() error = %v", err)
 	}
-	// cred=100, rest=0. score = 0.30*100 = 30
-	if score != 30 {
-		t.Errorf("score = %f, want 30", score)
+	// cred=100 and unknown instruction loading. score = 30 + 10.
+	if score != 40 {
+		t.Errorf("score = %f, want 40", score)
 	}
 }
 
@@ -64,8 +64,8 @@ func TestAgentRiskScore_HardcodedCreds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AgentRiskScore() error = %v", err)
 	}
-	if score != 30 {
-		t.Errorf("score = %f, want 30", score)
+	if score != 40 {
+		t.Errorf("score = %f, want 40", score)
 	}
 }
 
@@ -89,9 +89,9 @@ func TestAgentRiskScore_NormalCreds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AgentRiskScore() error = %v", err)
 	}
-	// cred=60, rest=0. score = 0.30*60 = 18
-	if score != 18 {
-		t.Errorf("score = %f, want 18", score)
+	// cred=60 and unknown instruction loading. score = 18 + 10.
+	if score != 28 {
+		t.Errorf("score = %f, want 28", score)
 	}
 }
 
@@ -158,9 +158,9 @@ func TestAgentRiskScore_BlastRadius(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AgentRiskScore() error = %v", err)
 	}
-	// blast = min(5*10, 100) = 50. score = 0.25*50 = 12.5
-	if score != 12.5 {
-		t.Errorf("score = %f, want 12.5", score)
+	// blast=50 and unknown instruction loading. score = 12.5 + 10.
+	if score != 22.5 {
+		t.Errorf("score = %f, want 22.5", score)
 	}
 }
 
@@ -178,9 +178,9 @@ func TestAgentRiskScore_BlastRadiusCapped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AgentRiskScore() error = %v", err)
 	}
-	// blast = min(200, 100) = 100. score = 0.25*100 = 25
-	if score != 25 {
-		t.Errorf("score = %f, want 25", score)
+	// blast=100 and unknown instruction loading. score = 25 + 10.
+	if score != 35 {
+		t.Errorf("score = %f, want 35", score)
 	}
 }
 
@@ -203,13 +203,14 @@ func TestAgentRiskScore_AuthPosture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AgentRiskAssessment() error = %v", err)
 	}
-	// auth = (1 - 0.1) * 100 = 90. score = 0.20*90 = 18
-	if !assessment.Complete ||
-		assessment.Score != 18 ||
+	// auth=90 plus the unknown instruction-loading upper bound.
+	if assessment.Complete ||
+		assessment.Score != 28 ||
 		assessment.Min != 18 ||
-		assessment.Max != 18 ||
-		len(assessment.UnknownFactors) != 0 {
-		t.Errorf("assessment = %+v, want exact score 18", assessment)
+		assessment.Max != 28 ||
+		len(assessment.UnknownFactors) != 1 ||
+		assessment.UnknownFactors[0] != "agent_instruction_loading" {
+		t.Errorf("assessment = %+v, want bounded score [18,28]", assessment)
 	}
 	if !containsSubstring(authQuery, "t.effective_risk_weight AS rw") ||
 		!containsSubstring(authQuery, "t.effective_auth_assessment_complete AS auth_assessment_complete") ||
@@ -236,14 +237,18 @@ func TestAgentRiskAssessment_UnknownAuthIsBounded(t *testing.T) {
 		t.Fatalf("AgentRiskAssessment() error = %v", err)
 	}
 	if assessment.Complete ||
-		assessment.Score != 20 ||
+		assessment.Score != 30 ||
 		assessment.Min != 0 ||
-		assessment.Max != 20 {
-		t.Fatalf("assessment = %+v, want conservative auth bound [0,20]", assessment)
+		assessment.Max != 30 {
+		t.Fatalf("assessment = %+v, want conservative combined bound [0,30]", assessment)
 	}
-	if len(assessment.UnknownFactors) != 1 ||
-		assessment.UnknownFactors[0] != "agent_auth" {
-		t.Fatalf("unknown factors = %v, want [agent_auth]", assessment.UnknownFactors)
+	if len(assessment.UnknownFactors) != 2 ||
+		assessment.UnknownFactors[0] != "agent_auth" ||
+		assessment.UnknownFactors[1] != "agent_instruction_loading" {
+		t.Fatalf(
+			"unknown factors = %v, want [agent_auth agent_instruction_loading]",
+			assessment.UnknownFactors,
+		)
 	}
 }
 
@@ -271,14 +276,18 @@ func TestAgentRiskAssessment_MixedAuthCompletenessBoundsOnlyUnknownEdges(t *test
 		t.Fatalf("AgentRiskAssessment() error = %v", err)
 	}
 	if assessment.Complete ||
-		assessment.Score != 11 ||
+		assessment.Score != 21 ||
 		assessment.Min != 1 ||
-		assessment.Max != 11 {
-		t.Fatalf("assessment = %+v, want mixed auth bound [1,11]", assessment)
+		assessment.Max != 21 {
+		t.Fatalf("assessment = %+v, want mixed combined bound [1,21]", assessment)
 	}
-	if len(assessment.UnknownFactors) != 1 ||
-		assessment.UnknownFactors[0] != "agent_auth" {
-		t.Fatalf("unknown factors = %v, want [agent_auth]", assessment.UnknownFactors)
+	if len(assessment.UnknownFactors) != 2 ||
+		assessment.UnknownFactors[0] != "agent_auth" ||
+		assessment.UnknownFactors[1] != "agent_instruction_loading" {
+		t.Fatalf(
+			"unknown factors = %v, want [agent_auth agent_instruction_loading]",
+			assessment.UnknownFactors,
+		)
 	}
 }
 
@@ -296,9 +305,9 @@ func TestAgentRiskScore_ToolSurface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AgentRiskScore() error = %v", err)
 	}
-	// tools = min(10*5, 100) = 50. score = 0.15*50 = 7.5
-	if score != 7.5 {
-		t.Errorf("score = %f, want 7.5", score)
+	// tools=50 and unknown instruction loading. score = 7.5 + 10.
+	if score != 17.5 {
+		t.Errorf("score = %f, want 17.5", score)
 	}
 }
 
@@ -319,6 +328,62 @@ func TestAgentRiskScore_Poisoning(t *testing.T) {
 	// poison = 100. score = 0.10*100 = 10
 	if score != 10 {
 		t.Errorf("score = %f, want 10", score)
+	}
+}
+
+// Static discovery does not prove what an agent loads. With no suspicious
+// evidence-backed LOADS_INSTRUCTIONS edge, poisoning exposure stays unknown.
+func TestAgentRiskAssessment_PoisoningUnknownWithoutLoadEvidence(t *testing.T) {
+	mock := &graph.MockGraphDB{
+		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
+			if containsSubstring(cypher, "LOADS_INSTRUCTIONS") {
+				return []map[string]any{{"cnt": int64(0)}}, nil
+			}
+			return nil, nil
+		},
+	}
+
+	assessment, err := AgentRiskAssessment(context.Background(), mock, "agent-1")
+	if err != nil {
+		t.Fatalf("AgentRiskAssessment() error = %v", err)
+	}
+	if assessment.Complete {
+		t.Fatalf("assessment must be incomplete without load evidence: %+v", assessment)
+	}
+	if len(assessment.UnknownFactors) != 1 ||
+		assessment.UnknownFactors[0] != "agent_instruction_loading" {
+		t.Fatalf(
+			"unknown factors = %v, want [agent_instruction_loading]",
+			assessment.UnknownFactors,
+		)
+	}
+	// poison Max=100 weighted 0.10 contributes up to 10 to the conservative bound.
+	if assessment.Max < 10 {
+		t.Fatalf("assessment max = %v, want >= 10 (poison upper bound included)", assessment.Max)
+	}
+}
+
+func TestAgentRiskAssessment_PoisoningIgnoresInventoryCompletenessProperty(t *testing.T) {
+	mock := &graph.MockGraphDB{
+		QueryFunc: func(_ context.Context, cypher string, _ map[string]any) ([]map[string]any, error) {
+			if containsSubstring(cypher, "LOADS_INSTRUCTIONS") {
+				if containsSubstring(cypher, "instruction_coverage_complete") {
+					t.Fatal("risk query conflates inventory coverage with load evidence")
+				}
+				return []map[string]any{{"cnt": int64(0)}}, nil
+			}
+			return nil, nil
+		},
+	}
+
+	assessment, err := AgentRiskAssessment(context.Background(), mock, "agent-1")
+	if err != nil {
+		t.Fatalf("AgentRiskAssessment() error = %v", err)
+	}
+	if assessment.Complete ||
+		len(assessment.UnknownFactors) != 1 ||
+		assessment.UnknownFactors[0] != "agent_instruction_loading" {
+		t.Fatalf("assessment = %+v, want unknown load relationship", assessment)
 	}
 }
 

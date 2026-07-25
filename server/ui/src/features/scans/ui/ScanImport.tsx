@@ -118,8 +118,8 @@ function optionalDisplayLabel(
 export function summarizeScanArtifact(value: unknown): ArtifactSummary {
   const root = objectValue(value, "artifact");
   const meta = objectValue(root.meta, "artifact.meta");
-  if (meta.version !== 4 || meta.type !== "agenthound-ingest") {
-    throw new TypeError("file must be an AgentHound ingest-v4 artifact");
+  if (meta.version !== 5 || meta.type !== "agenthound-ingest") {
+    throw new TypeError("file must be an AgentHound ingest-v5 artifact");
   }
   const identity = objectValue(meta.identity, "artifact.meta.identity");
   const quality = stringValue(identity.quality, "artifact.meta.identity.quality");

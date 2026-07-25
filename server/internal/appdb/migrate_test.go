@@ -17,7 +17,12 @@ func TestMigrationsContainCurrentSchemaAndBindingUpgrade(t *testing.T) {
 			names = append(names, entry.Name())
 		}
 	}
-	if want := []string{"001_initial.sql", "002_storage_binding.sql", "003_zero_config_storage_binding.sql"}; !reflect.DeepEqual(names, want) {
+	if want := []string{
+		"001_initial.sql",
+		"002_storage_binding.sql",
+		"003_zero_config_storage_binding.sql",
+		"004_coverage_root_state.sql",
+	}; !reflect.DeepEqual(names, want) {
 		t.Fatalf("migration files = %v, want %v", names, want)
 	}
 
@@ -87,6 +92,23 @@ func TestMigrationsContainCurrentSchemaAndBindingUpgrade(t *testing.T) {
 	} {
 		if !strings.Contains(v4SQL, expected) {
 			t.Errorf("ingest-v4 migration missing %q", expected)
+		}
+	}
+
+	data, err = migrationFS.ReadFile("migrations/004_coverage_root_state.sql")
+	if err != nil {
+		t.Fatalf("read coverage-root migration: %v", err)
+	}
+	rootStateSQL := string(data)
+	for _, expected := range []string{
+		"ADD COLUMN IF NOT EXISTS state",
+		"ADD COLUMN IF NOT EXISTS discovery_mode",
+		"ADD COLUMN IF NOT EXISTS contract_generation",
+		"ADD COLUMN IF NOT EXISTS contract_digest",
+		"coverage_heads_root_metadata_check",
+	} {
+		if !strings.Contains(rootStateSQL, expected) {
+			t.Errorf("coverage-root migration missing %q", expected)
 		}
 	}
 }

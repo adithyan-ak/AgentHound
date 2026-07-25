@@ -102,7 +102,7 @@ posture revision with `409`.
 
 ## Collection provenance and storage pairing
 
-Every ingest-v4 artifact carries an automatically derived collection point and
+Every ingest-v5 artifact carries an automatically derived collection point and
 network context. Private-route evidence binds the destination prefix to its
 observable next hop and stable native profile/link discriminator; if neither
 path signal is available, only network quality becomes unknown. Raw

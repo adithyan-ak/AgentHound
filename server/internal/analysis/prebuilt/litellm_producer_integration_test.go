@@ -50,7 +50,7 @@ func TestIntegrationLiteLLMFingerprintThenLootPreservesGatewayProperties(t *test
 
 	fingerprintData := runAgentHoundLiteLLMScan(t)
 	if err := serveringest.NewValidator().Validate(&fingerprintData); err != nil {
-		t.Fatalf("strict ingest-v4 validation rejected agenthound scan output: %v", err)
+		t.Fatalf("strict ingest-v5 validation rejected agenthound scan output: %v", err)
 	}
 	gatewayID := sdkingest.ComputeNodeID("LiteLLMGateway", fixture.URL)
 	fingerprintGateway := findLiteLLMGateway(t, &fingerprintData, gatewayID)
@@ -257,7 +257,7 @@ func assertStrictLiteLLMArtifact(
 ) {
 	t.Helper()
 	if err := serveringest.NewValidator().Validate(data); err != nil {
-		t.Fatalf("strict ingest-v4 validation rejected agenthound loot output: %v", err)
+		t.Fatalf("strict ingest-v5 validation rejected agenthound loot output: %v", err)
 	}
 
 	gatewayID := sdkingest.ComputeNodeID("LiteLLMGateway", fixtureURL)

@@ -169,3 +169,36 @@ func TestCanonicalURLScopeNormalizesEquivalentTargets(t *testing.T) {
 		t.Fatalf("canonical URL scope = %q", first)
 	}
 }
+
+func TestNonBlockingInstructionCoverageDomainsRequiresDeepRootContract(t *testing.T) {
+	root := CanonicalCoverageKey("config", "instruction-deep", "/home/example")
+	child := CanonicalCoverageKey("config", "instruction-tree", "/home/example/project")
+	contract := CurrentInstructionRegistryContract()
+	report := &CollectionReport{
+		State:        OutcomeTruncated,
+		CoverageKeys: []string{root, child},
+		AuthoritativeRoots: []CoverageRoot{{
+			CoverageKey:       root,
+			ChildCoverageKeys: []string{child},
+			RegistryContract:  &contract,
+		}},
+		Outcomes: []CollectionOutcome{
+			{
+				Collector: "config", CoverageKey: root,
+				Method: InstructionMethodDeep, State: OutcomeTruncated,
+			},
+			{
+				Collector: "config", CoverageKey: child, ParentCoverageKey: root,
+				Method: InstructionMethodSource, State: OutcomeComplete,
+			},
+		},
+	}
+	if got := NonBlockingInstructionCoverageDomains(report); !reflect.DeepEqual(got, []string{root, child}) {
+		t.Fatalf("non-blocking domains = %v, want [%s %s]", got, root, child)
+	}
+
+	report.AuthoritativeRoots[0].RegistryContract = nil
+	if got := NonBlockingInstructionCoverageDomains(report); len(got) != 0 {
+		t.Fatalf("contract-free deep-shaped root became non-blocking: %v", got)
+	}
+}

@@ -44,7 +44,7 @@ network-scoped evidence.
 
 Enumerate MCP servers, A2A agents, and client configs, then write the merged trust graph as JSON.
 
-Scan artifacts use strict ingest wire version `4` with required automatic
+Scan artifacts use strict ingest wire version `5` with required automatic
 `identity` and evidence
 metadata: constituent `collection` coverage/outcomes, the effective text and
 fingerprint `ruleset` semantic digest/entries with canonical matcher
@@ -77,7 +77,8 @@ When none specified, defaults to config + MCP.
 |------|---------|-------------|
 | `--path` | | Single config file path (overrides auto-discovery). |
 | `--paths` | | Comma-separated paths to multiple config files. |
-| `--project-dir` | current working directory | Authoritative project root for project config, instruction, and MCP auto-discovery. Missing, inaccessible, or non-directory roots fail closed; they are never treated as an empty project. |
+| `--project-dir` | current working directory | Canonical exact project root for project config, registered root instruction sources, and MCP auto-discovery. It does not enable arbitrary recursive discovery. Missing, inaccessible, or non-directory roots fail closed; they are never treated as an empty project. |
+| `--deep` | `false` | Add a bounded best-effort search below the canonical user home for registered instruction sources in nested projects. The deep root is independent of the current directory. A truncated deep attempt publishes the usable current projection with an explicit coverage warning. |
 | `--include-credential-values` | `false` | Include credential values that the collector actually observes; hashes and material-status fields remain authoritative when a service masks or hashes a value. |
 
 Supported clients (12): Claude Desktop, Claude Code, Cursor, VS Code, Windsurf, Continue, Zed, Cline, JetBrains, Kiro, Amazon Q, Augment.
@@ -99,13 +100,45 @@ exact bytes, including surrounding whitespace, when computing `value_hash`
 (recognized HTTP `Authorization` schemes still remove only the protocol scheme
 before hashing).
 
-Instruction discovery covers the root project files plus every nested
-`<component>/.cursor/rules/**/*.mdc` tree beneath the effective project root.
-It does not follow directory symlinks or enter `.git`, and bounds traversal at
-100,000 entries, 10,000 Cursor rules, and 4 MiB per file. Static discovery emits
-instruction evidence and poisoning findings, but does not claim that every
-discovered agent loads every instruction file; `LOADS_INSTRUCTIONS` is reserved
-for future evidence that proves client and scope applicability.
+Instruction discovery has two exact roots in every config scan: the canonical
+user home and the canonical project root (the current directory unless
+`--project-dir` is supplied). At each root it checks only the registered static
+sources: `AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md`,
+`.claude/rules/**/*.md`, `.cursorrules`, `.cursor/rules/**/*.mdc`,
+`.github/copilot-instructions.md`, and
+`.github/instructions/**/*.instructions.md`. Known rule subtrees are bounded;
+the default scan does not search the rest of the home directory for projects.
+
+`--deep` adds one best-effort traversal below the home directory and discovers
+the same registry in nested project scopes. It does not change the exact
+project root. Discovery prunes junk, cache, VCS, and trash *sub*trees — `.git`,
+`node_modules`, `.cache`, and trash directories on every platform (macOS
+`.Trash`, the freedesktop XDG home trash `Trash`, per-mount `.Trash-<uid>`,
+Windows `$Recycle.Bin`). The explicitly selected exact root itself is never
+pruned. Directory discovery budgets count **directories descended**, not
+ordinary files. A 10,000 matched-rule cap, 4 MiB per-file cap, and the deep
+scan's 60-second budget bound pathological enumeration without a silent depth
+cutoff. A symlink used as an explicit root is canonicalized; descendant
+symlinks are not followed.
+
+A registered rule tree that cannot be fully enumerated contributes **no** graph
+facts. Deep discovery keeps complete children and records the rest as truncated
+coverage instead of emitting partially observed ownership.
+
+Exact-root incompleteness withholds publication. A truncated deep attempt
+publishes the exact posture plus its completely observed deep children,
+preserves unseen prior deep ownership, and reports
+`collection_status=truncated`. A failed or partial deep attempt contributes no
+new deep facts and leaves the prior active deep root unchanged. A later scan
+without `--deep` never refreshes, ages, or retires deep ownership.
+
+Completeness means **registered-source completeness**, not effective-client
+completeness. Dynamic/imported instructions, `GEMINI.md`, `COPILOT_HOME`,
+managed or inline policy, custom directories, auto-memory, remote client state,
+and symlink-expanded sources are not included. Static discovery emits file-level
+instruction evidence and poisoning findings but does not claim that an agent
+loads a discovered file. `LOADS_INSTRUCTIONS` is reserved for evidence that
+proves client and scope applicability.
 
 #### MCP Collector Flags
 
@@ -700,8 +733,9 @@ internal UUID that pairs PostgreSQL with Neo4j. A one-sided missing marker is
 repaired only when the stores are safe to repair; crossed pairs, legacy
 non-empty stores, and future marker versions fail closed. It then initializes
 Neo4j schema (constraints + indexes) and PostgreSQL migrations on first start.
-Every valid ingest-v4 artifact is accepted; provenance controls graph scope,
-not admission. Mutating HTTP endpoints are
+The server accepts only ingest-v5 artifacts. Version or instruction-registry
+mismatches fail before storage access with upgrade-and-rescan guidance;
+provenance controls graph scope, not admission. Mutating HTTP endpoints are
 gated by `OriginGuard` (Origin allowlist, configured via `--cors-origins`).
 Graceful shutdown on SIGINT/SIGTERM (10s drain).
 
@@ -718,7 +752,8 @@ agenthound-server ingest <file.json>
 agenthound-server ingest -
 ```
 
-Pipeline stages: reverify both storage markers, validate the strict ingest-v4
+Pipeline stages: reject incompatible wire/registry contracts, reverify both
+storage markers, validate the strict ingest-v5
 artifact, apply collection/network scope, normalize supported values,
 deduplicate (MERGE by objectid), batch write (1000 ops/txn), and post-process
 (composite edges + risk scores).

@@ -163,6 +163,16 @@ func resolveStorageBinding(
 	postgres appdb.StorageInspection,
 	neo4j graph.StorageBindingInspection,
 ) (binding.Marker, error) {
+	if postgres.Marker != nil {
+		if err := postgres.Marker.Validate(); err != nil {
+			return binding.Marker{}, fmt.Errorf("PostgreSQL storage binding is incompatible: %w", err)
+		}
+	}
+	if neo4j.Marker != nil {
+		if err := neo4j.Marker.Validate(); err != nil {
+			return binding.Marker{}, fmt.Errorf("Neo4j storage binding is incompatible: %w", err)
+		}
+	}
 	if postgres.Marker != nil && neo4j.Marker != nil &&
 		!postgres.Marker.Equal(*neo4j.Marker) {
 		return binding.Marker{}, fmt.Errorf(
@@ -172,7 +182,7 @@ func resolveStorageBinding(
 	if postgres.Marker == nil || neo4j.Marker == nil {
 		if !postgres.ProductEmpty || !neo4j.ProductEmpty {
 			return binding.Marker{}, fmt.Errorf(
-				"nonempty legacy or crossed storage is not an ingest v4 database pair; refusing all mutation: back up the existing deployment, recreate both PostgreSQL and Neo4j volumes, and recollect with ingest v4",
+				"nonempty legacy or crossed storage is not an ingest v5 database pair; refusing all mutation: back up the existing deployment, recreate both PostgreSQL and Neo4j volumes together, restart the server, and recollect with ingest v5",
 			)
 		}
 	}

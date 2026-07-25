@@ -6,8 +6,26 @@ import (
 	"io"
 )
 
-// DecodeStrict decodes exactly one ingest-v4 document and rejects unknown
-// structural fields. Collector-defined graph properties remain open maps.
+// DecodeVersion reads only the open wire-version envelope. Callers use it
+// before strict current-schema decoding so older artifacts receive actionable
+// upgrade guidance even when their schema contains now-unknown fields.
+func DecodeVersion(document []byte) (int, error) {
+	var envelope struct {
+		Meta *struct {
+			Version int `json:"version"`
+		} `json:"meta"`
+	}
+	if err := json.Unmarshal(document, &envelope); err != nil {
+		return 0, err
+	}
+	if envelope.Meta == nil {
+		return 0, fmt.Errorf("meta is required")
+	}
+	return envelope.Meta.Version, nil
+}
+
+// DecodeStrict decodes exactly one ingest document and rejects unknown
+// structural fields. Version admission is handled separately by the server.
 func DecodeStrict(reader io.Reader, data *IngestData) error {
 	decoder := json.NewDecoder(reader)
 	decoder.DisallowUnknownFields()

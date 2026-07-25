@@ -6,6 +6,7 @@ import { Dashboard } from "@features/dashboard";
 import { StatCards } from "@features/dashboard/ui/StatCards";
 import { ExposureGauge } from "@features/dashboard/ui/ExposureGauge";
 import type { Finding } from "@entities/finding/model";
+import { useProjectionState } from "@entities/posture";
 
 const publishedScan = vi.hoisted(() => ({
   id: "scan-1",
@@ -96,6 +97,26 @@ import { fetchNodeCollection } from "@entities/node/api";
 const mockedUseGraphStats = vi.mocked(useGraphStats);
 const mockedFetchFindings = vi.mocked(fetchFindings);
 const mockedFetchNodeCollection = vi.mocked(fetchNodeCollection);
+const mockedUseProjectionState = vi.mocked(useProjectionState);
+
+function completeProjectionState() {
+  return {
+    data: {
+      status: "complete" as const,
+      scan_id: "scan-1",
+      dirty_coverage: [],
+      active_coverage_roots: [],
+      updated_at: "2026-07-11T00:00:00Z",
+      published_scan_id: "scan-1",
+      published_revision: 1,
+      published_at: "2026-07-11T00:01:00Z",
+    },
+    isLoading: false,
+    isError: false,
+    error: null,
+    dataUpdatedAt: Date.parse("2026-07-11T00:00:00Z"),
+  } as unknown as ReturnType<typeof useProjectionState>;
+}
 
 function observedAnonymousNode(id: string) {
   return {
@@ -164,6 +185,7 @@ function createWrapper() {
 describe("StatCards", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    publishedScan.collection_status = "complete";
   });
 
   it("renders loading skeletons when data is loading", () => {
@@ -306,6 +328,8 @@ describe("ExposureGauge", () => {
 describe("Dashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    publishedScan.collection_status = "complete";
+    mockedUseProjectionState.mockReturnValue(completeProjectionState());
     mockedFetchNodeCollection.mockReset();
     mockedFetchNodeCollection.mockResolvedValue(nodeCollection([]));
     mockedFetchFindings.mockReset();
@@ -405,5 +429,73 @@ describe("Dashboard", () => {
 
     expect(await screen.findByText("Low Risk")).toBeInTheDocument();
     expect(screen.queryByText("Posture verdicts withheld")).not.toBeInTheDocument();
+  });
+
+  it("renders a usable published posture with a deep-coverage warning", async () => {
+    publishedScan.collection_status = "truncated";
+    mockedUseGraphStats.mockReturnValue({
+      data: {
+        node_counts: { MCPServer: 1 },
+        edge_counts: {},
+        total_nodes: 1,
+        total_edges: 0,
+        projection: { scanId: "scan-1", revision: 1 },
+      },
+      isLoading: false,
+      error: null,
+      isError: false,
+      isPending: false,
+    } as unknown as ReturnType<typeof useGraphStats>);
+
+    render(<Dashboard />, { wrapper: createWrapper() });
+
+    expect(await screen.findByText("Low Risk")).toBeInTheDocument();
+    expect(
+      screen.getByText("Published posture has coverage limitations"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Posture verdicts withheld")).not.toBeInTheDocument();
+  });
+
+  it("keeps warning after a later exact scan when retained deep coverage is truncated", async () => {
+    mockedUseProjectionState.mockReturnValue({
+      ...completeProjectionState(),
+      data: {
+        ...completeProjectionState().data,
+        active_coverage_roots: [
+          {
+            coverage_key: "config:instruction-deep:sha256:root",
+            mode: "deep",
+            state: "truncated",
+            scan_id: "scan-deep",
+            observed_at: "2026-07-10T00:00:00Z",
+            registry_contract: {
+              generation: 1,
+              digest: "sha256:registry",
+            },
+            contract_current: true,
+          },
+        ],
+      },
+    } as ReturnType<typeof useProjectionState>);
+    mockedUseGraphStats.mockReturnValue({
+      data: {
+        node_counts: { MCPServer: 1 },
+        edge_counts: {},
+        total_nodes: 1,
+        total_edges: 0,
+        projection: { scanId: "scan-1", revision: 1 },
+      },
+      isLoading: false,
+      error: null,
+      isError: false,
+      isPending: false,
+    } as unknown as ReturnType<typeof useGraphStats>);
+
+    render(<Dashboard />, { wrapper: createWrapper() });
+
+    expect(await screen.findByText("Low Risk")).toBeInTheDocument();
+    expect(
+      screen.getByText(/retained nested coverage is truncated/),
+    ).toBeInTheDocument();
   });
 });

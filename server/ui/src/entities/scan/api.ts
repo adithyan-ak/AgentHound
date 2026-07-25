@@ -15,6 +15,7 @@ export type CollectionOutcomeState =
 export interface IngestCollectionOutcome {
   collector: string;
   coverage_key: string;
+  parent_coverage_key?: string;
   target: string;
   method: string;
   state: CollectionOutcomeState;
@@ -22,9 +23,21 @@ export interface IngestCollectionOutcome {
   error?: string;
 }
 
+export interface IngestRegistryContract {
+  generation: number;
+  digest: string;
+}
+
+export interface IngestCoverageRoot {
+  coverage_key: string;
+  child_coverage_keys: string[];
+  registry_contract?: IngestRegistryContract;
+}
+
 export interface IngestCollectionReport {
   state: CollectionOutcomeState;
   coverage_keys: string[];
+  authoritative_roots?: IngestCoverageRoot[];
   outcomes: IngestCollectionOutcome[];
 }
 
@@ -330,12 +343,29 @@ function decodeCollectionOutcome(
   const outcome = record(value, path);
   assertOnlyKeys(
     outcome,
-    ["collector", "coverage_key", "target", "method", "state", "items", "error"],
+    [
+      "collector",
+      "coverage_key",
+      "parent_coverage_key",
+      "target",
+      "method",
+      "state",
+      "items",
+      "error",
+    ],
     path,
   );
   return {
     collector: requiredString(outcome.collector, `${path}.collector`),
     coverage_key: requiredString(outcome.coverage_key, `${path}.coverage_key`),
+    ...(outcome.parent_coverage_key === undefined
+      ? {}
+      : {
+          parent_coverage_key: requiredString(
+            outcome.parent_coverage_key,
+            `${path}.parent_coverage_key`,
+          ),
+        }),
     target: requiredString(outcome.target, `${path}.target`),
     method: requiredString(outcome.method, `${path}.method`),
     state: collectionOutcomeState(outcome.state, `${path}.state`),
@@ -348,12 +378,60 @@ function decodeCollectionOutcome(
   };
 }
 
+function decodeRegistryContract(
+  value: unknown,
+  path: string,
+): IngestRegistryContract {
+  const contract = record(value, path);
+  assertOnlyKeys(contract, ["generation", "digest"], path);
+  return {
+    generation: nonNegativeInteger(
+      contract.generation,
+      `${path}.generation`,
+    ),
+    digest: requiredString(contract.digest, `${path}.digest`),
+  };
+}
+
+function decodeCoverageRoot(
+  value: unknown,
+  path: string,
+): IngestCoverageRoot {
+  const root = record(value, path);
+  assertOnlyKeys(
+    root,
+    ["coverage_key", "child_coverage_keys", "registry_contract"],
+    path,
+  );
+  return {
+    coverage_key: requiredString(root.coverage_key, `${path}.coverage_key`),
+    child_coverage_keys: collection(
+      root.child_coverage_keys,
+      `${path}.child_coverage_keys`,
+    ).map((key, index) =>
+      requiredString(key, `${path}.child_coverage_keys[${index}]`),
+    ),
+    ...(root.registry_contract === undefined
+      ? {}
+      : {
+          registry_contract: decodeRegistryContract(
+            root.registry_contract,
+            `${path}.registry_contract`,
+          ),
+        }),
+  };
+}
+
 function decodeCollectionReport(
   value: unknown,
   path: string,
 ): IngestCollectionReport {
   const report = record(value, path);
-  assertOnlyKeys(report, ["state", "coverage_keys", "outcomes"], path);
+  assertOnlyKeys(
+    report,
+    ["state", "coverage_keys", "authoritative_roots", "outcomes"],
+    path,
+  );
   const coverageKeys = collection(
     report.coverage_keys,
     `${path}.coverage_keys`,
@@ -370,9 +448,24 @@ function decodeCollectionReport(
   if (outcomes.length === 0) {
     throw new TypeError(`${path}.outcomes must not be empty`);
   }
+  const authoritativeRoots =
+    report.authoritative_roots === undefined
+      ? undefined
+      : collection(
+          report.authoritative_roots,
+          `${path}.authoritative_roots`,
+        ).map((root, index) =>
+          decodeCoverageRoot(
+            root,
+            `${path}.authoritative_roots[${index}]`,
+          ),
+        );
   return {
     state: collectionOutcomeState(report.state, `${path}.state`),
     coverage_keys: coverageKeys,
+    ...(authoritativeRoots === undefined
+      ? {}
+      : { authoritative_roots: authoritativeRoots }),
     outcomes,
   };
 }

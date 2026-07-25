@@ -2,14 +2,61 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
+	serveringest "github.com/adithyan-ak/agenthound/server/internal/ingest"
 	"github.com/adithyan-ak/agenthound/server/model"
 )
+
+func TestIngestCommandRejectsUnsupportedVersionBeforeBootstrap(t *testing.T) {
+	data := common.NewIngestData("scan", "old-cli-artifact")
+	data.Meta.Version = ingest.CurrentVersion - 1
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy map[string]any
+	if err := json.Unmarshal(encoded, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	legacy["removed_v4_field"] = true
+	encoded, err = json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "old.json")
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	original := bootstrapForIngest
+	t.Cleanup(func() { bootstrapForIngest = original })
+	bootstrapCalled := false
+	bootstrapForIngest = func(context.Context) (*Infrastructure, func(), error) {
+		bootstrapCalled = true
+		return nil, nil, errors.New("bootstrap must not run")
+	}
+
+	err = ingestCmd.RunE(ingestCmd, []string{path})
+	if bootstrapCalled {
+		t.Fatal("Bootstrap ran before version preflight")
+	}
+	var versionErr *serveringest.UnsupportedVersionError
+	if !errors.As(err, &versionErr) ||
+		!strings.Contains(err.Error(), "unsupported") ||
+		!strings.Contains(err.Error(), "recollect") {
+		t.Fatalf("error = %T %v, want actionable unsupported-version error", err, err)
+	}
+}
 
 func TestWriteIngestResultComplete(t *testing.T) {
 	revision := int64(7)

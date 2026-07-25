@@ -530,6 +530,60 @@ func validIngestDataFor(scanID string) *sdkingest.IngestData {
 	return data
 }
 
+func addEmptyExactInstructionRoots(
+	report *sdkingest.CollectionReport,
+	homeRoot string,
+	projectRoot string,
+) {
+	contract := sdkingest.CurrentInstructionRegistryContract()
+	for _, candidate := range []struct {
+		method string
+		kind   string
+		target string
+	}{
+		{
+			method: sdkingest.InstructionMethodExactUser,
+			kind:   "instruction-exact-user",
+			target: homeRoot,
+		},
+		{
+			method: sdkingest.InstructionMethodExactProject,
+			kind:   "instruction-exact-project",
+			target: projectRoot,
+		},
+	} {
+		present := false
+		for _, outcome := range report.Outcomes {
+			if outcome.Method == candidate.method {
+				present = true
+				break
+			}
+		}
+		if present {
+			continue
+		}
+		root := sdkingest.CanonicalCoverageKey(
+			"config",
+			candidate.kind,
+			candidate.target,
+		)
+		report.CoverageKeys = append(report.CoverageKeys, root)
+		report.AuthoritativeRoots = append(
+			report.AuthoritativeRoots,
+			sdkingest.CoverageRoot{
+				CoverageKey:      root,
+				RegistryContract: &contract,
+			},
+		)
+		report.Outcomes = append(report.Outcomes, sdkingest.CollectionOutcome{
+			Collector: "config", CoverageKey: root,
+			Target: candidate.target, Method: candidate.method,
+			State: sdkingest.OutcomeComplete,
+		})
+	}
+	report.State = sdkingest.AggregateOutcomeState(report.Outcomes)
+}
+
 func scopedCoverageFor(
 	data *sdkingest.IngestData,
 	kind sdkingest.IdentityScope,
@@ -574,6 +628,38 @@ func TestPipelineStorageVerificationPrecedesEveryMutationAndValidationAudit(t *t
 			len(scans.rejections), len(scans.creates), len(scans.updates),
 			len(writer.nodeCalls), len(writer.edgeCalls),
 		)
+	}
+}
+
+func TestPipelineVersionPreflightPrecedesStorageAndAudit(t *testing.T) {
+	guard := &rejectStorageVerifier{err: errors.New("storage must not be read")}
+	writer := &fakeWriter{}
+	scans := &fakeScanStore{}
+	db := &graph.MockGraphDB{}
+	pipeline := newTestPipeline(writer, db, scans, noOpRunPP)
+	pipeline.storageGuard = guard
+
+	data := campaignEvidenceIngest()
+	data.Meta.Version = sdkingest.CurrentVersion - 1
+	result, err := pipeline.Ingest(context.Background(), data)
+	var versionErr *UnsupportedVersionError
+	if !errors.As(err, &versionErr) {
+		t.Fatalf("error = %T %v, want UnsupportedVersionError", err, err)
+	}
+	if result != nil {
+		t.Fatalf("version rejection returned result: %+v", result)
+	}
+	if guard.calls != 0 {
+		t.Fatalf("storage verification calls = %d, want zero", guard.calls)
+	}
+	if len(scans.rejections) != 0 ||
+		len(scans.creates) != 0 ||
+		len(scans.updates) != 0 ||
+		len(writer.nodeCalls) != 0 ||
+		len(writer.edgeCalls) != 0 ||
+		len(db.CallsTo("Query")) != 0 ||
+		len(db.CallsTo("ExecuteWrite")) != 0 {
+		t.Fatal("version rejection touched external state")
 	}
 }
 
@@ -960,6 +1046,133 @@ func TestPipeline_CompleteEmptyRootClearsFailedUnheadedChild(t *testing.T) {
 	}
 }
 
+func TestPipeline_TruncatedDeepRootPublishesAndPromotesCompleteChildren(t *testing.T) {
+	exactRoot := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-exact-user",
+		"/home/op",
+	)
+	exactChild := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-source",
+		exactRoot+"\x00/home/op/AGENTS.md",
+	)
+	deepRoot := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-deep",
+		"/home/op",
+	)
+	deepChild := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-source",
+		deepRoot+"\x00/home/op/work/CLAUDE.md",
+	)
+	contract := sdkingest.CurrentInstructionRegistryContract()
+	data := validIngestDataFor("scan-truncated-deep")
+	data.Graph = sdkingest.GraphData{
+		Nodes: []sdkingest.Node{},
+		Edges: []sdkingest.Edge{},
+	}
+	data.Meta.Collection = &sdkingest.CollectionReport{
+		State:        sdkingest.OutcomeTruncated,
+		CoverageKeys: []string{exactRoot, exactChild, deepRoot, deepChild},
+		AuthoritativeRoots: []sdkingest.CoverageRoot{
+			{
+				CoverageKey:       exactRoot,
+				ChildCoverageKeys: []string{exactChild},
+				RegistryContract:  &contract,
+			},
+			{
+				CoverageKey:       deepRoot,
+				ChildCoverageKeys: []string{deepChild},
+				RegistryContract:  &contract,
+			},
+		},
+		Outcomes: []sdkingest.CollectionOutcome{
+			{
+				Collector:   "config",
+				CoverageKey: exactRoot,
+				Target:      "/home/op",
+				Method:      sdkingest.InstructionMethodExactUser,
+				State:       sdkingest.OutcomeComplete,
+			},
+			{
+				Collector:         "config",
+				CoverageKey:       exactChild,
+				ParentCoverageKey: exactRoot,
+				Target:            "/home/op/AGENTS.md",
+				Method:            "instruction_source",
+				State:             sdkingest.OutcomeComplete,
+			},
+			{
+				Collector:   "config",
+				CoverageKey: deepRoot,
+				Target:      "/home/op",
+				Method:      sdkingest.InstructionMethodDeep,
+				State:       sdkingest.OutcomeTruncated,
+			},
+			{
+				Collector:         "config",
+				CoverageKey:       deepChild,
+				ParentCoverageKey: deepRoot,
+				Target:            "/home/op/work/CLAUDE.md",
+				Method:            "instruction_source",
+				State:             sdkingest.OutcomeComplete,
+			},
+		},
+	}
+	addEmptyExactInstructionRoots(data.Meta.Collection, "/home/op", "/home/op/work")
+	sdkingest.EnsureCoverageParentage(data.Meta.Collection)
+
+	store := &fakeScanStore{}
+	lifecycle := &fakeLifecycleScanStore{fakeScanStore: store}
+	publisher := &fakePublisher{lifecycle: lifecycle}
+	writer := &fakeWriter{}
+	p := newTestPipeline(writer, &graph.MockGraphDB{}, lifecycle, noOpRunPP)
+	p.findingStore = publisher
+
+	result, err := p.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.ProjectionStatus != model.ProjectionComplete {
+		t.Fatalf("truncated-deep projection = %q, want published/complete", result.ProjectionStatus)
+	}
+	if len(publisher.finalizations) != 1 || !publisher.finalizations[0].Publish {
+		t.Fatalf("truncated-deep finalization = %+v, want publish", publisher.finalizations)
+	}
+	finalized := publisher.finalizations[0]
+	states := sdkingest.CoverageStates(finalized.Collection)
+	var truncatedRootPromoted bool
+	for _, root := range finalized.CoverageRoots {
+		if instructionRootMode(finalized.Collection, root.CoverageKey) ==
+			sdkingest.InstructionCoverageDeep {
+			truncatedRootPromoted = true
+			if states[root.CoverageKey] != sdkingest.OutcomeTruncated {
+				t.Fatalf("deep root state = %q, want truncated", states[root.CoverageKey])
+			}
+			if root.RegistryContract == nil || !root.RegistryContract.Equal(contract) {
+				t.Fatalf("deep root contract = %+v, want %+v", root.RegistryContract, contract)
+			}
+		}
+	}
+	if !truncatedRootPromoted {
+		t.Fatalf("promoted roots = %+v, want deep root", finalized.CoverageRoots)
+	}
+	for _, root := range store.resolvedRoots {
+		if instructionRootMode(finalized.Collection, root.CoverageKey) ==
+			sdkingest.InstructionCoverageDeep {
+			t.Fatalf(
+				"truncated deep root was used for absence retirement: %+v",
+				store.resolvedRoots,
+			)
+		}
+	}
+	if len(lifecycle.dirtyCoverage) != 0 {
+		t.Fatalf("deep coverage entered dirty state: %v", lifecycle.dirtyCoverage)
+	}
+}
+
 func TestPipeline_PartialCurrentChildPreventsRootRetirement(t *testing.T) {
 	currentChild := sdkingest.CanonicalCoverageKey(
 		"mcp",
@@ -973,12 +1186,7 @@ func TestPipeline_PartialCurrentChildPreventsRootRetirement(t *testing.T) {
 	)
 	root := sdkingest.CollectorRootCoverageKey("mcp")
 	data := validIngestDataFor("scan-partial-current-child")
-	for i := range data.Graph.Nodes {
-		data.Graph.Nodes[i].ObservationDomains = []string{currentChild}
-	}
-	for i := range data.Graph.Edges {
-		data.Graph.Edges[i].ObservationDomains = []string{currentChild}
-	}
+	data.Graph = sdkingest.GraphData{Nodes: []sdkingest.Node{}, Edges: []sdkingest.Edge{}}
 	data.Meta.Collection = &sdkingest.CollectionReport{
 		State:        sdkingest.OutcomePartial,
 		CoverageKeys: []string{root, currentChild},
@@ -1154,6 +1362,7 @@ func TestPipeline_PartialCoverageNeverPublishesOrReconciles(t *testing.T) {
 	data := validIngestDataFor("scan-partial")
 	data.Meta.Collection.State = sdkingest.OutcomePartial
 	data.Meta.Collection.Outcomes[0].State = sdkingest.OutcomePartial
+	data.Graph = sdkingest.GraphData{Nodes: []sdkingest.Node{}, Edges: []sdkingest.Edge{}}
 	result, err := p.Ingest(context.Background(), data)
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
@@ -1270,6 +1479,7 @@ func TestPipeline_FailedMCPThenSuccessfulConfigKeepsMCPDirty(t *testing.T) {
 	failedMCP := validIngestDataFor("scan-failed-mcp")
 	failedMCP.Meta.Collection.State = sdkingest.OutcomeFailed
 	failedMCP.Meta.Collection.Outcomes[0].State = sdkingest.OutcomeFailed
+	failedMCP.Graph = sdkingest.GraphData{Nodes: []sdkingest.Node{}, Edges: []sdkingest.Edge{}}
 	first, err := p.Ingest(context.Background(), failedMCP)
 	if err != nil {
 		t.Fatalf("failed MCP ingest: %v", err)
@@ -1292,6 +1502,11 @@ func TestPipeline_FailedMCPThenSuccessfulConfigKeepsMCPDirty(t *testing.T) {
 			State:       sdkingest.OutcomeComplete,
 		}},
 	}
+	addEmptyExactInstructionRoots(
+		successfulConfig.Meta.Collection,
+		"/home/op",
+		"/home/op/project",
+	)
 	sdkingest.TagObservationDomain(&successfulConfig.Graph, configScope)
 	for i := range successfulConfig.Graph.Nodes {
 		successfulConfig.Graph.Nodes[i].ObservationDomains = []string{configScope}
@@ -1428,7 +1643,10 @@ func TestPipeline_ValidationError_MissingMeta(t *testing.T) {
 	p := newTestPipeline(w, &graph.MockGraphDB{}, ss, noOpRunPP)
 
 	bad := &sdkingest.IngestData{
-		// Missing meta.version, type, collector, scan_id
+		Meta: sdkingest.IngestMeta{
+			Version: sdkingest.CurrentVersion,
+			// Missing type, collector, scan_id, and collection metadata.
+		},
 		Graph: sdkingest.GraphData{
 			Nodes: []sdkingest.Node{{ID: "n1", Kinds: []string{"MCPServer"}}},
 		},
@@ -1848,6 +2066,11 @@ func TestPipeline_PostProcessorReceivesCompleteDomains(t *testing.T) {
 			State:       sdkingest.OutcomeComplete,
 		}},
 	}
+	addEmptyExactInstructionRoots(
+		d.Meta.Collection,
+		"/home/op",
+		"/home/op/project",
+	)
 	for i := range d.Graph.Nodes {
 		d.Graph.Nodes[i].ObservationDomains = []string{configScope}
 	}
@@ -1856,10 +2079,25 @@ func TestPipeline_PostProcessorReceivesCompleteDomains(t *testing.T) {
 	}
 	scopedPointScope := scopedCoverageFor(d, sdkingest.ScopeCollectionPoint, configScope)
 	scopedNetworkScope := scopedCoverageFor(d, sdkingest.ScopeNetworkContext, configScope)
+	exactUser := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-exact-user",
+		"/home/op",
+	)
+	exactProject := sdkingest.CanonicalCoverageKey(
+		"config",
+		"instruction-exact-project",
+		"/home/op/project",
+	)
 	if _, err := p.Ingest(context.Background(), d); err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
-	wantDomains := mergeCoverage([]string{scopedPointScope, scopedNetworkScope})
+	wantDomains := mergeCoverage([]string{
+		scopedPointScope,
+		scopedNetworkScope,
+		scopedCoverageFor(d, sdkingest.ScopeCollectionPoint, exactUser),
+		scopedCoverageFor(d, sdkingest.ScopeCollectionPoint, exactProject),
+	})
 	if strings.Join(seenDomains, "\x00") != strings.Join(wantDomains, "\x00") {
 		t.Errorf("expected split config domains=%v, got %v", wantDomains, seenDomains)
 	}

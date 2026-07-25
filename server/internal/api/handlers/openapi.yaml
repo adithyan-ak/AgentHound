@@ -52,6 +52,46 @@ components:
         details:
           description: Additional error context (validation errors, etc.)
 
+    UnsupportedIngestVersionDetails:
+      type: object
+      additionalProperties: false
+      required: [received_version, supported_version, action]
+      properties:
+        received_version: { type: integer }
+        supported_version: { type: integer, enum: [5] }
+        action: { type: string }
+
+    RegistryContractMismatchDetails:
+      type: object
+      additionalProperties: false
+      required: [root_coverage_key, supported_contract, action]
+      properties:
+        root_coverage_key: { type: string }
+        received_contract:
+          $ref: "#/components/schemas/InstructionRegistryContractV5"
+        supported_contract:
+          $ref: "#/components/schemas/InstructionRegistryContractV5"
+        action: { type: string }
+
+    IngestAdmissionErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              type: string
+              enum: [UNSUPPORTED_INGEST_VERSION, REGISTRY_CONTRACT_MISMATCH]
+            message: { type: string }
+            details:
+              oneOf:
+                - $ref: "#/components/schemas/UnsupportedIngestVersionDetails"
+                - $ref: "#/components/schemas/RegistryContractMismatchDetails"
+
     HealthResponse:
       type: object
       properties:
@@ -167,13 +207,13 @@ components:
         page:
           $ref: "#/components/schemas/PageMetadata"
 
-    IngestV4:
+    IngestV5:
       type: object
       additionalProperties: false
       required: [meta, graph]
       properties:
         meta:
-          $ref: "#/components/schemas/IngestMetaV4"
+          $ref: "#/components/schemas/IngestMetaV5"
         graph:
           type: object
           additionalProperties: false
@@ -182,13 +222,13 @@ components:
             nodes:
               type: array
               items:
-                $ref: "#/components/schemas/IngestNodeV4"
+                $ref: "#/components/schemas/IngestNodeV5"
             edges:
               type: array
               items:
-                $ref: "#/components/schemas/IngestEdgeV4"
+                $ref: "#/components/schemas/IngestEdgeV5"
 
-    IngestMetaV4:
+    IngestMetaV5:
       type: object
       additionalProperties: false
       required:
@@ -205,12 +245,12 @@ components:
       properties:
         version:
           type: integer
-          enum: [4]
+          enum: [5]
         type:
           type: string
           enum: [agenthound-ingest]
         identity:
-          $ref: "#/components/schemas/CollectionIdentityV4"
+          $ref: "#/components/schemas/CollectionIdentityV5"
         collector:
           type: string
           enum: [mcp, a2a, config, scan]
@@ -224,19 +264,19 @@ components:
           type: string
           minLength: 1
         collection:
-          $ref: "#/components/schemas/IngestCollectionV4"
+          $ref: "#/components/schemas/IngestCollectionV5"
         ruleset:
-          $ref: "#/components/schemas/IngestRulesetV4"
+          $ref: "#/components/schemas/IngestRulesetV5"
         identity_schemes:
           type: array
           minItems: 1
           items:
-            $ref: "#/components/schemas/IngestIdentitySchemeV4"
+            $ref: "#/components/schemas/IngestIdentitySchemeV5"
         extra:
           type: object
           additionalProperties: true
 
-    IdentityEvidenceV4:
+    IdentityEvidenceV5:
       type: object
       additionalProperties: false
       required: [kind, digest]
@@ -244,7 +284,7 @@ components:
         kind: { type: string, pattern: "^[a-z_]+$" }
         digest: { type: string, pattern: "^hmac-sha256:[0-9a-f]{64}$" }
 
-    CollectionIdentityV4:
+    CollectionIdentityV5:
       type: object
       additionalProperties: false
       required: [scheme, version, collection_point_id, network_context_id, quality, network_quality, network_class, evidence, network_evidence]
@@ -261,11 +301,11 @@ components:
         evidence:
           type: array
           minItems: 1
-          items: { $ref: "#/components/schemas/IdentityEvidenceV4" }
+          items: { $ref: "#/components/schemas/IdentityEvidenceV5" }
         network_evidence:
           type: array
           minItems: 1
-          items: { $ref: "#/components/schemas/IdentityEvidenceV4" }
+          items: { $ref: "#/components/schemas/IdentityEvidenceV5" }
 
     CollectionDisplayLabels:
       type: object
@@ -275,7 +315,7 @@ components:
         os: { type: string, maxLength: 255 }
         architecture: { type: string, maxLength: 255 }
 
-    IngestCollectionV4:
+    IngestCollectionV5:
       type: object
       additionalProperties: false
       required: [state, coverage_keys, outcomes]
@@ -300,13 +340,16 @@ components:
             properties:
               coverage_key:
                 type: string
-                pattern: "^(mcp|a2a|config|scan):root:sha256:[0-9a-f]{64}$"
+                pattern: "^(mcp|a2a|config|scan):(root|instruction-exact-user|instruction-exact-project|instruction-deep):sha256:[0-9a-f]{64}$"
               child_coverage_keys:
                 type: array
                 uniqueItems: true
                 items:
                   type: string
                   pattern: "^(mcp|a2a|config|scan):[^:]+:sha256:[0-9a-f]{64}$"
+              registry_contract:
+                $ref: "#/components/schemas/InstructionRegistryContractV5"
+                description: Required on recognized config instruction roots and forbidden on all other roots.
         outcomes:
           type: array
           minItems: 1
@@ -328,7 +371,19 @@ components:
               items: { type: integer, minimum: 0 }
               error: { type: string }
 
-    IngestRulesetV4:
+    InstructionRegistryContractV5:
+      type: object
+      additionalProperties: false
+      required: [generation, digest]
+      properties:
+        generation:
+          type: integer
+          minimum: 1
+        digest:
+          type: string
+          pattern: "^sha256:[0-9a-f]{64}$"
+
+    IngestRulesetV5:
       type: object
       additionalProperties: false
       required: [digest, load_state, authenticity]
@@ -357,7 +412,7 @@ components:
           items: { type: string }
         authenticity: { type: string, minLength: 1 }
 
-    IngestIdentitySchemeV4:
+    IngestIdentitySchemeV5:
       type: object
       additionalProperties: false
       required: [entity_kind, scheme, version]
@@ -367,7 +422,7 @@ components:
         scheme: { type: string, minLength: 1 }
         version: { type: integer, minimum: 1 }
 
-    IngestNodeV4:
+    IngestNodeV5:
       type: object
       additionalProperties: false
       required: [id, kinds, properties, observation_domains]
@@ -390,7 +445,7 @@ components:
           enum: [reference_only]
           description: Omit for an authoritative property observation. reference_only asserts only id and kinds and requires an empty properties object.
 
-    IngestEdgeV4:
+    IngestEdgeV5:
       type: object
       additionalProperties: false
       required:
@@ -1261,7 +1316,7 @@ components:
           items:
             $ref: "#/components/schemas/NormalizationWarning"
         collection:
-          $ref: "#/components/schemas/IngestCollectionV4"
+          $ref: "#/components/schemas/IngestCollectionV5"
         identity:
           $ref: "#/components/schemas/IngestIdentityResult"
         post_processing_stats:
@@ -1821,9 +1876,9 @@ paths:
     post:
       summary: Ingest collector output
       description: >-
-        Upload strict ingest-v4 collector JSON. Before generic validation or
+        Upload strict ingest-v5 collector JSON. Before generic validation or
         lifecycle/audit writes, the server reverifies the automatically paired
-        PostgreSQL and Neo4j markers. V1/V2/V3, malformed or inconsistent
+        PostgreSQL and Neo4j markers. V1/V2/V3/V4, malformed or inconsistent
         derived identity, unknown structural fields, unscoped facts, legacy
         property aliases, and incomplete canonical evidence metadata are
         rejected before graph writes. Every valid artifact is accepted; the
@@ -1836,7 +1891,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/IngestV4"
+              $ref: "#/components/schemas/IngestV5"
       responses:
         "200":
           description: Ingest successful
@@ -1845,7 +1900,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/IngestResult"
         "400":
-          $ref: "#/components/responses/ValidationError"
+          description: Invalid payload, unsupported ingest version, or instruction registry contract mismatch.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - $ref: "#/components/schemas/IngestAdmissionErrorResponse"
         "403":
           $ref: "#/components/responses/Forbidden"
         "500":

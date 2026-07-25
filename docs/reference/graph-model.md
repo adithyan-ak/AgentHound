@@ -31,7 +31,7 @@ These are the node kinds accepted in ingest input (`sdk/ingest.AllowedNodeKinds`
 | `Credential` | Config + LiteLLM/Open WebUI Looters | `type`, `name`, `source`, Config `location` (`env`, `header`, `arg:<index>`, or redacted URL component), required `merge_key` (`value_hash`/`identity`), `identity_basis` (`value_hash`/`provider_name`/`metadata`/`unknown`), `material_status` (`observed`/`masked`/`hashed`/`unobserved`/`unknown`), `exposure_status` (`exposed`/`not_observed`/`unknown`), `high_entropy`, `format`, `value_hash`, `blast_radius` |
 | `Host` | Config + A2A + MCP | `hostname`, `ip`, `scope` (`local`/`private`/`public`/`unknown`) |
 | `ConfigFile` | Config | `path`, sorted `clients`, singular `client` only for one applicable client, unique enabled `server_count` |
-| `InstructionFile` | Config | `path`, `type` (agents.md/claude.md/cursorrules/copilot-instructions/memory.md/cursor-rule), `hash`, `is_suspicious` |
+| `InstructionFile` | Config | `path`, `type` (`agents.md`, `claude.md`, `claude-rule`, `cursorrules`, `cursor-rule`, `copilot-instructions`, or `copilot-instruction`), `hash`, `is_suspicious` |
 | `OllamaInstance` | Network scan + Ollama fingerprinter + Ollama Looter + Open WebUI config | `endpoint`, `version`, observed `auth_method`/`auth_assurance`/`auth_evidence`, active-probe `probe_status` (`verified`/`failed`/`unknown`), `last_verified_at`, `loot_observed`, `configuration_observed`, `configured_via`, `configured_auth_method`, `is_anonymous_loot`, active-discovery `discovered_via`. Direct loot sets `loot_observed` and does not overwrite discovery provenance; it adds verified anonymous evidence only after a credential-free `/api/tags` response contains the canonical `models` array. Open WebUI configuration references intentionally omit probe status and active-discovery provenance so a later direct Ollama observation can merge without being overwritten. |
 | `VLLMInstance` | Network scan + vLLM fingerprinter | `endpoint`, upstream `version`, `auth_method` (`unknown` from fingerprinting) |
 | `QdrantInstance` | Network scan + Qdrant fingerprinter + Qdrant Looter | `endpoint`, `version`, `loot_observed`, successful-inventory `auth_method`/`auth_assurance`/`auth_evidence`, `probe_status`, `last_verified_at`, `is_anonymous_loot`, `collection_count`, `collections` (sorted names), `total_points`, `anonymous_listing`. The Looter adds the anonymous and inventory properties only after a credential-free `status=ok` response with a `result.collections` array. |
@@ -274,7 +274,7 @@ type Edge struct {
 `property_semantics` field. Omitted `property_semantics` is an authoritative
 property observation. The only explicit alternative is `reference_only`,
 which asserts node ID and kinds while requiring an empty `properties` object.
-In wire version 4, the server rewrites producer-local IDs into deterministic
+Since wire version 4, the server rewrites producer-local IDs into deterministic
 scoped IDs before graph writes. The centralized policy is:
 
 | Observation | Identity scope |
@@ -589,7 +589,7 @@ New modules emit nodes and edges via the `sdk/ingest` wire format:
 ```json
 {
   "meta": {
-    "version": 4,
+    "version": 5,
     "type": "agenthound-ingest",
     "collector": "mcp|a2a|config|scan",
     "collector_version": "1.0.1",
@@ -646,7 +646,7 @@ New modules emit nodes and edges via the `sdk/ingest` wire format:
 }
 ```
 
-Wire version `4` is strict: derived collection identity, collection, ruleset, current
+Wire version `5` is strict: derived collection identity, collection, ruleset, current
 identity metadata, explicit edge endpoint kinds, and per-fact observation
 domains are required. The server validates the identity schema, algorithm
 version, digest consistency, and evidence classification rules; it cannot prove

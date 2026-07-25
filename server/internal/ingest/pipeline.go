@@ -127,9 +127,15 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	if data == nil {
 		return nil, fmt.Errorf("ingest data is nil")
 	}
-	// Storage-pair verification is the first operation after the nil check. It is
-	// read-only and deliberately precedes generic validation because invalid
-	// campaign handling writes a PostgreSQL audit row.
+	// Wire-version and registry-contract rejection is pure and must precede
+	// every external read or write. Full structural validation remains below
+	// the storage guard because invalid campaign handling may write an audit.
+	if err := Preflight(data); err != nil {
+		return nil, err
+	}
+	// Storage-pair verification is the first external operation. It is read-only
+	// and deliberately precedes full validation because invalid campaign
+	// handling writes a PostgreSQL audit row.
 	if p.storageGuard == nil {
 		return nil, fmt.Errorf("storage binding admission guard unavailable")
 	}
@@ -219,13 +225,23 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 
 	attributionComplete := prepareObservationDomains(data)
 	keys := coverageKeys(data.Meta.Collection)
+	// Deep instruction discovery is the sole non-blocking coverage family.
+	// Its complete children may advance, while a failed attempt preserves the
+	// prior active root and never wedges an otherwise valid exact posture.
+	nonBlockingKeys := sdkingest.NonBlockingInstructionCoverageDomains(
+		data.Meta.Collection,
+	)
 	completeDomains := sdkingest.CompleteCoverageDomains(data.Meta.Collection)
-	authoritativeRoots := sdkingest.CompleteAuthoritativeRoots(data.Meta.Collection)
+	coverageRoots := promotableAuthoritativeRoots(data.Meta.Collection)
+	authoritativeRoots := sdkingest.CompleteAuthoritativeRoots(
+		data.Meta.Collection,
+	)
 	if !attributionComplete || normalizationDegradedErr != nil {
 		completeDomains = nil
+		coverageRoots = nil
 		authoritativeRoots = nil
 	}
-	coverageComplete := sdkingest.CollectionCoverageComplete(data.Meta.Collection) &&
+	coverageComplete := sdkingest.AuthoritativeCoverageComplete(data.Meta.Collection) &&
 		attributionComplete &&
 		normalizationDegradedErr == nil
 	// Preserve owner-scoped contributions through the pipeline. The graph
@@ -287,7 +303,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	cumulativeDirtyCoverage, err := p.scanStore.BeginScan(
 		ctx,
 		initialScan,
-		mergeCoverage(keys, retiredDomains),
+		mergeCoverage(subtractCoverage(keys, nonBlockingKeys), retiredDomains),
 		sdkingest.CoverageParents(data.Meta.Collection),
 	)
 	if err != nil {
@@ -563,10 +579,12 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	}
 	publicationCompleteDomains := completeDomains
 	publicationRetiredDomains := retiredDomains
+	publicationCoverageRoots := coverageRoots
 	publicationAuthoritativeRoots := authoritativeRoots
 	if publicationDomains == nil {
 		publicationCompleteDomains = nil
 		publicationRetiredDomains = nil
+		publicationCoverageRoots = nil
 		publicationAuthoritativeRoots = nil
 	}
 	dirtyCoverage := append([]string(nil), cumulativeDirtyCoverage...)
@@ -585,6 +603,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		dirtyCoverage = subtractCoverage(
 			cumulativeDirtyCoverage,
 			publicationDomains,
+			nonBlockingKeys,
 		)
 		dirtyCoverage = mergeCoverage(
 			dirtyCoverage,
@@ -719,6 +738,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		CoverageParents:       sdkingest.CoverageParents(data.Meta.Collection),
 		CompleteDomains:       publicationCompleteDomains,
 		ResolvedDirtyCoverage: publicationRetiredDomains,
+		CoverageRoots:         publicationCoverageRoots,
 		AuthoritativeRoots:    publicationAuthoritativeRoots,
 		DirtyCoverage:         dirtyCoverage,
 		GraphBefore:           graphBefore,
