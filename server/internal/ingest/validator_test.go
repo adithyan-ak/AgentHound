@@ -1014,7 +1014,7 @@ func TestValidatorAllowsCompleteChildFactsUnderIncompleteInstructionRoot(t *test
 }
 
 func TestValidatorRejectsIncompleteInstructionChildAndRootOwnedFacts(t *testing.T) {
-	data, root, child := validInstructionRootDataFor(
+	data, _, child := validInstructionRootDataFor(
 		ingest.InstructionMethodExactUser,
 		ingest.OutcomePartial,
 	)
@@ -1031,7 +1031,7 @@ func TestValidatorRejectsIncompleteInstructionChildAndRootOwnedFacts(t *testing.
 		"meta.collection.authoritative_roots[1].child_coverage_keys[0]",
 	)
 
-	data, root, _ = validInstructionRootDataFor(
+	data, root, _ := validInstructionRootDataFor(
 		ingest.InstructionMethodExactUser,
 		ingest.OutcomeFailed,
 	)
