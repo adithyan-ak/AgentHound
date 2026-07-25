@@ -228,6 +228,42 @@ func TestNonBlockingInstructionCoverageDomainsIncludesRecognizedIncompleteRoots(
 	}
 }
 
+func TestNonBlockingInstructionCoverageDomainsStopsAtDirectChildren(t *testing.T) {
+	contract := CurrentInstructionRegistryContract()
+	root := CanonicalCoverageKey("config", "instruction-deep", "/home/example")
+	child := CanonicalCoverageKey("config", "instruction-source", root+"\x00AGENTS.md")
+	grandchild := CanonicalCoverageKey("config", "path", child+"\x00descendant")
+	report := &CollectionReport{
+		State:        OutcomePartial,
+		CoverageKeys: []string{root, child, grandchild},
+		AuthoritativeRoots: []CoverageRoot{{
+			CoverageKey:       root,
+			ChildCoverageKeys: []string{child},
+			RegistryContract:  &contract,
+		}},
+		Outcomes: []CollectionOutcome{
+			{
+				Collector: "config", CoverageKey: root,
+				Method: InstructionMethodDeep, State: OutcomePartial,
+			},
+			{
+				Collector: "config", CoverageKey: child, ParentCoverageKey: root,
+				Method: InstructionMethodSource, State: OutcomeComplete,
+			},
+			{
+				Collector: "config", CoverageKey: grandchild, ParentCoverageKey: child,
+				Method: "config_discovery", State: OutcomeComplete,
+			},
+		},
+	}
+	if got := NonBlockingInstructionCoverageDomains(report); !reflect.DeepEqual(
+		got,
+		[]string{root, child},
+	) {
+		t.Fatalf("non-blocking domains = %v, want direct instruction ownership only", got)
+	}
+}
+
 func TestNonBlockingInstructionCoverageDomainsRejectsCompleteOrMalformedRoots(t *testing.T) {
 	root := CanonicalCoverageKey("config", "instruction-exact-user", "/home/example")
 	child := CanonicalCoverageKey("config", "instruction-source", root+"\x00AGENTS.md")

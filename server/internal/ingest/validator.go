@@ -503,6 +503,12 @@ func preflightRegistryContracts(report *ingest.CollectionReport) error {
 			})
 			continue
 		}
+		if outcome.ParentCoverageKey != "" {
+			errs = append(errs, FieldError{
+				Path:    path + ".parent_coverage_key",
+				Message: "instruction roots cannot have a parent",
+			})
+		}
 		if !ingest.InstructionRootMatchesMethod(outcome.CoverageKey, outcome.Method) {
 			errs = append(errs, FieldError{
 				Path:    path + ".coverage_key",
@@ -681,6 +687,15 @@ func validateInstructionChildren(
 		}
 	}
 	for index, outcome := range report.Outcomes {
+		if _, instructionLeaf := activeParents[outcome.ParentCoverageKey]; instructionLeaf {
+			errs = append(errs, FieldError{
+				Path: fmt.Sprintf(
+					"meta.collection.outcomes[%d].parent_coverage_key",
+					index,
+				),
+				Message: "instruction sources are terminal ownership domains",
+			})
+		}
 		if coverageKeyKind(outcome.CoverageKey) != "instruction-source" &&
 			outcome.Method != ingest.InstructionMethodSource {
 			continue

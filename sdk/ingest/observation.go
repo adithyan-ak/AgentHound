@@ -209,7 +209,7 @@ func CompleteAuthoritativeRoots(report *CollectionReport) []CoverageRoot {
 }
 
 // NonBlockingInstructionCoverageDomains returns recognized incomplete
-// instruction roots and their declared or explicitly parented descendants.
+// instruction roots and their declared direct instruction-source children.
 func NonBlockingInstructionCoverageDomains(report *CollectionReport) []string {
 	if report == nil {
 		return nil
@@ -229,16 +229,6 @@ func NonBlockingInstructionCoverageDomains(report *CollectionReport) []string {
 		for _, child := range root.ChildCoverageKeys {
 			if child = strings.TrimSpace(child); child != "" {
 				domains[child] = true
-			}
-		}
-	}
-	changed := true
-	for changed {
-		changed = false
-		for _, outcome := range report.Outcomes {
-			if domains[outcome.ParentCoverageKey] && !domains[outcome.CoverageKey] {
-				domains[outcome.CoverageKey] = true
-				changed = true
 			}
 		}
 	}

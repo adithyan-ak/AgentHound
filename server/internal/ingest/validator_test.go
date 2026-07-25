@@ -1107,6 +1107,62 @@ func TestValidatorRejectsInstructionSourceWithWrongParent(t *testing.T) {
 	)
 }
 
+func TestValidatorRejectsDescendantBelowInstructionSource(t *testing.T) {
+	data, _, child := validInstructionRootDataFor(
+		ingest.InstructionMethodDeep,
+		ingest.OutcomePartial,
+	)
+	grandchild := ingest.CanonicalCoverageKey(
+		"config",
+		"path",
+		child+"\x00descendant",
+	)
+	data.Meta.Collection.CoverageKeys = append(
+		data.Meta.Collection.CoverageKeys,
+		grandchild,
+	)
+	data.Meta.Collection.Outcomes = append(
+		data.Meta.Collection.Outcomes,
+		ingest.CollectionOutcome{
+			Collector: "config", CoverageKey: grandchild,
+			ParentCoverageKey: child, Target: "/home/example/project/descendant",
+			Method: "config_discovery", State: ingest.OutcomeComplete,
+		},
+	)
+	data.Meta.Collection.State = ingest.AggregateOutcomeState(
+		data.Meta.Collection.Outcomes,
+	)
+	for i := range data.Graph.Nodes {
+		data.Graph.Nodes[i].ObservationDomains = []string{grandchild}
+	}
+	for i := range data.Graph.Edges {
+		data.Graph.Edges[i].ObservationDomains = []string{grandchild}
+	}
+
+	assertValidationError(
+		t,
+		NewValidator().Validate(data),
+		"meta.collection.outcomes[4].parent_coverage_key",
+	)
+}
+
+func TestValidatorRejectsParentOnInstructionRoot(t *testing.T) {
+	data, root, child := validInstructionRootDataFor(
+		ingest.InstructionMethodDeep,
+		ingest.OutcomePartial,
+	)
+	for i := range data.Meta.Collection.Outcomes {
+		if data.Meta.Collection.Outcomes[i].CoverageKey == root {
+			data.Meta.Collection.Outcomes[i].ParentCoverageKey = child
+		}
+	}
+	assertValidationError(
+		t,
+		NewValidator().Validate(data),
+		"meta.collection.outcomes[0].parent_coverage_key",
+	)
+}
+
 func TestValidatorRequiresExactRootsForConfigCollection(t *testing.T) {
 	data, _, _ := validInstructionRootData(ingest.OutcomeComplete)
 	data.Meta.Collection.AuthoritativeRoots = data.Meta.Collection.AuthoritativeRoots[:1]
