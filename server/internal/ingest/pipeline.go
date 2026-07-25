@@ -383,7 +383,9 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	appendStage(result, "write_edges", sdkingest.OutcomeComplete, true, stageStart, nil)
 	slog.Info("edges written", "count", edgesWritten)
 
-	pristineEmptyProjection := graphBefore != nil &&
+	pristineEmptyProjection := coverageComplete &&
+		sdkingest.CollectionCoverageComplete(data.Meta.Collection) &&
+		graphBefore != nil &&
 		graphBefore.TotalNodes == 0 &&
 		graphBefore.TotalEdges == 0 &&
 		len(writeGraph.Nodes) == 0 &&

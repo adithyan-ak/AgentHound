@@ -110,7 +110,7 @@ declared coverage keys. The server never infers fact ownership from a
 single-domain report. A node may set `property_semantics: "reference_only"` to
 assert only its ID and kinds; that mode requires an empty `properties` object.
 Omitting `property_semantics` remains an authoritative property observation.
-Edge endpoint kinds are likewise explicit in v4.
+Edge endpoint kinds are likewise explicit in the current wire contract.
 
 ### Eligible-rule semantic digest boundary
 
@@ -161,7 +161,7 @@ inventory counts, search, or collector wire format.
 `Validator.Validate()` rejects malformed payloads before any graph writes.
 
 Checks performed:
-- `meta.version` must be `4`; v1, v2, and v3 are rejected
+- `meta.version` must be `5`; v1, v2, v3, and v4 are rejected
 - `meta.identity` must have the current scheme/version, canonical HMAC evidence,
   internally consistent IDs, independently derived collection-point and
   network quality classifications, and bounded non-authoritative display labels
@@ -286,6 +286,12 @@ successful scan of target B therefore cannot retire target A. Published
 comparison keys also include the scan revisions of every *other* active
 coverage head, so global graph deltas are withheld when an intervening target
 or config scope changed.
+
+A fully observed empty collection against an empty public graph uses a
+pristine-empty fast path: reconciliation, post-processing, duplicate graph
+statistics, property-completeness queries, and finding queries are known
+no-ops. Limited or otherwise incomplete collection reports cannot enter this
+path; they retain the full v5 lifecycle and analysis checks.
 
 ## Stages 8–12: Analyze, Snapshot, and Publish
 

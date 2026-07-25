@@ -158,9 +158,12 @@ func writeRemoteIngestResult(
 		return nil
 	}
 
+	complete := remoteIngestComplete(result)
 	heading := "Ingest complete"
-	if !remoteIngestComplete(result) {
+	if !complete {
 		heading = "Ingest incomplete"
+	} else if ingest.InstructionCoverageLimited(&result.Collection) {
+		heading = "Ingest complete with coverage limitations"
 	}
 	findings := "unknown"
 	if receipt.findingsPresent {

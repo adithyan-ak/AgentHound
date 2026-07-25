@@ -219,6 +219,51 @@ func TestPostRemoteIngest_OlderReceiptReportsUnknownFindings(t *testing.T) {
 	}
 }
 
+func TestWriteRemoteIngestResult_LimitedCoverageRemainsSuccessful(t *testing.T) {
+	revision := int64(10)
+	root := ingest.CanonicalCoverageKey(
+		"config",
+		"instruction-exact-project",
+		"/workspace/project",
+	)
+	contract := ingest.CurrentInstructionRegistryContract()
+	result := &ingest.IngestResult{
+		ScanID:            "scan-limited",
+		Outcome:           ingest.OutcomeComplete,
+		ProjectionStatus:  "complete",
+		PublishedRevision: &revision,
+		Collection: ingest.CollectionReport{
+			State:        ingest.OutcomeTruncated,
+			CoverageKeys: []string{root},
+			AuthoritativeRoots: []ingest.CoverageRoot{{
+				CoverageKey:      root,
+				RegistryContract: &contract,
+			}},
+			Outcomes: []ingest.CollectionOutcome{{
+				Collector:   "config",
+				CoverageKey: root,
+				Method:      ingest.InstructionMethodExactProject,
+				State:       ingest.OutcomeTruncated,
+			}},
+		},
+	}
+	receipt := &remoteIngestReceipt{result: result, findingsPresent: true}
+
+	var output bytes.Buffer
+	if err := writeRemoteIngestResult(&output, receipt, "backup.json", false); err != nil {
+		t.Fatalf("writeRemoteIngestResult: %v", err)
+	}
+	if !strings.Contains(
+		output.String(),
+		"Ingest complete with coverage limitations:",
+	) {
+		t.Fatalf("limited receipt did not disclose coverage:\n%s", output.String())
+	}
+	if err := validateRemoteIngestResult(result); err != nil {
+		t.Fatalf("published limited receipt returned failure: %v", err)
+	}
+}
+
 func TestPostRemoteIngest_RejectsRedirect(t *testing.T) {
 	destinationCalled := false
 	destination := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {

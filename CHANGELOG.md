@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **First-class scan upload.** `agenthound scan --ingest <server-url>` saves the
+  normal local JSON artifact before uploading those exact bytes,
+  rejects redirects, and prints a correlated ingest receipt with finding
+  counts. Normal and `--deep` config scans use the same explicit workflow.
+- **Fast fully observed empty ingests.** A complete empty collection against an
+  empty projection skips no-op reconciliation, analysis, duplicate graph
+  statistics, and finding queries. Limited or incomplete collections retain
+  the full v5 lifecycle path and cannot enter this optimization.
 - **Bounded instruction discovery by default.** Config scans now check the
   registered Claude, Cursor, GitHub Copilot, `AGENTS.md`, and `CLAUDE.md`
   sources at the canonical user and project roots. `--deep` adds a bounded
