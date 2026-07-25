@@ -83,12 +83,19 @@ func TestAuthStrength_ProcessSuccess(t *testing.T) {
 		"n.auth_probe_method = 'get_task_nonexistent'",
 		"n.auth_probe_status = 'anonymous_protocol_access'",
 		"n.auth_probe_detail IN ['task_not_found_v1', 'task_not_found_v0_3']",
-		"CASE WHEN use_observed THEN n.observed_auth_method ELSE n.auth_method END",
-		"CASE WHEN use_observed THEN n.observed_auth_evidence ELSE n.auth_evidence END",
+		"WHEN use_observed THEN n.observed_auth_method",
+		"WHEN use_configured THEN n.auth_method",
+		"WHEN use_observed THEN n.observed_auth_evidence",
+		"WHEN use_configured THEN n.auth_evidence",
+		"WHEN effective_source IS NULL THEN null",
+		"WHEN use_configured THEN 'configured'",
 	} {
 		if !contains(cypher, guard) {
 			t.Errorf("effective tuple query missing %q; query:\n%s", guard, cypher)
 		}
+	}
+	if contains(cypher, "AND n.auth_method IS NOT NULL") {
+		t.Errorf("observed-only nodes must not require configured auth; query:\n%s", cypher)
 	}
 
 	trustCypher, _ := calls[1].Args[0].(string)

@@ -93,6 +93,36 @@ func TestValidatorAcceptsValid(t *testing.T) {
 	}
 }
 
+func TestValidatorAcceptsAuthFreeMCPDiscovery(t *testing.T) {
+	data := validIngestData()
+	for _, property := range []string{"auth_method", "auth_assurance", "auth_evidence"} {
+		delete(data.Graph.Nodes[0].Properties, property)
+	}
+	data.Graph.Nodes[0].Properties["discovered_via"] = "protoscan"
+	if err := NewValidator().Validate(data); err != nil {
+		t.Fatalf("auth-free MCP discovery rejected: %v", err)
+	}
+}
+
+func TestValidatorAcceptsPostureFreeA2ADiscovery(t *testing.T) {
+	data := validIngestData()
+	scope := data.Meta.Collection.CoverageKeys[0]
+	data.Graph.Nodes = []ingest.Node{{
+		ID: "sha256:a2a-discovery", Kinds: []string{"A2AAgent"},
+		Properties: map[string]any{
+			"endpoint":       "https://agent.example",
+			"agent_card_url": "https://agent.example/.well-known/agent-card.json",
+			"discovered_via": "protoscan",
+			"protocol":       "a2a",
+		},
+		ObservationDomains: []string{scope},
+	}}
+	data.Graph.Edges = []ingest.Edge{}
+	if err := NewValidator().Validate(data); err != nil {
+		t.Fatalf("posture-free A2A discovery rejected: %v", err)
+	}
+}
+
 func TestValidatorRejectsInconsistentCollectionIdentity(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -425,6 +455,29 @@ func TestValidatorRejectsConfiguredAuthMethodAssuranceMismatch(t *testing.T) {
 	}
 }
 
+func TestValidatorRejectsPartialConfiguredAuthTuple(t *testing.T) {
+	for _, missing := range []string{"auth_method", "auth_assurance", "auth_evidence"} {
+		t.Run(missing, func(t *testing.T) {
+			properties := map[string]any{
+				"auth_method": "bearer", "auth_assurance": "moderate",
+				"auth_evidence": "configured_credential",
+			}
+			delete(properties, missing)
+			errs := validateAuthProperties(properties, 0)
+			if len(errs) == 0 {
+				t.Fatal("partial configured auth tuple was accepted")
+			}
+			wantPath := "graph.nodes[0].properties." + missing
+			for _, fieldErr := range errs {
+				if fieldErr.Path == wantPath {
+					return
+				}
+			}
+			t.Fatalf("errors = %+v, want path %q", errs, wantPath)
+		})
+	}
+}
+
 func TestValidatorAcceptsObservedMCPAuthTupleMatrix(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -561,6 +614,13 @@ func TestValidatorEnforcesObservedMCPAuthTupleAtIngestBoundary(t *testing.T) {
 	data.Graph.Nodes[0].Properties["observed_auth_evidence"] = "anonymous_probe_succeeded"
 	if err := NewValidator().Validate(data); err != nil {
 		t.Fatalf("valid observed anonymous tuple rejected: %v", err)
+	}
+
+	for _, property := range []string{"auth_method", "auth_assurance", "auth_evidence"} {
+		delete(data.Graph.Nodes[0].Properties, property)
+	}
+	if err := NewValidator().Validate(data); err != nil {
+		t.Fatalf("observed-only MCP tuple rejected: %v", err)
 	}
 
 	delete(data.Graph.Nodes[0].Properties, "observed_auth_assurance")

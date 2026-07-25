@@ -778,6 +778,42 @@ func TestMCPCollectorAmbiguousAliasesDoNotExecuteOrLeak(t *testing.T) {
 	}
 }
 
+func TestMCPCollectorMixedDirectAndConfiguredProfilesRemainFailClosed(t *testing.T) {
+	var requests atomic.Int64
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer httpServer.Close()
+
+	configPath := filepath.Join(t.TempDir(), "claude_desktop_config.json")
+	document := fmt.Sprintf(
+		`{"mcpServers":{"configured":{"url":%q,"headers":{"Authorization":"Bearer synthetic-canary"}}}}`,
+		httpServer.URL,
+	)
+	if err := os.WriteFile(configPath, []byte(document), 0o600); err != nil {
+		t.Fatalf("write mixed-profile config: %v", err)
+	}
+
+	result, err := NewMCPCollector().Collect(context.Background(), collector.CollectOptions{
+		TargetURL:  httpServer.URL,
+		ConfigPath: configPath,
+		ScanID:     "mixed-direct-config",
+	})
+	if err != nil {
+		t.Fatalf("Collect should retain a typed failed outcome: %v", err)
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("mixed direct/config profiles reached the network: requests=%d", requests.Load())
+	}
+	if len(result.Graph.Nodes) != 0 || len(result.Graph.Edges) != 0 {
+		t.Fatalf("mixed direct/config ambiguity emitted arbitrary graph facts: %+v", result.Graph)
+	}
+	if result.Meta.Collection == nil || result.Meta.Collection.State == ingest.OutcomeComplete {
+		t.Fatalf("mixed direct/config ambiguity reported complete: %+v", result.Meta.Collection)
+	}
+}
+
 func TestMCPCollectorSanitizesLiveHTTPURLSecretsAcrossEntireEnvelope(t *testing.T) {
 	server := mcp.NewServer(&mcp.Implementation{Name: "safe-server", Version: "1.0.0"}, nil)
 	const userinfoSecret = "sk-RAW-LIVE-USERINFO-SECRET-123456789"

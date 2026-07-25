@@ -20,11 +20,11 @@ These are the node kinds accepted in ingest input (`sdk/ingest.AllowedNodeKinds`
 
 | Label | Source | Key Properties |
 |-------|--------|----------------|
-| `MCPServer` | Config + MCP | deterministic safe `name`, live `server_name`, `transport` (stdio/http), configured `auth_method`/`auth_assurance`/`auth_evidence`, live `observed_auth_method`/`observed_auth_assurance`/`observed_auth_evidence`, derived paired `effective_auth_method`/`effective_auth_assurance`/`effective_auth_evidence`/`effective_auth_source`, `auth_strength` (numeric weakness only when known, post-processor), `protocol_version`, `instructions`, `instructions_hash` (SHA-256), `capabilities`, `pinning_status`, `is_pinned` (only when known), `id_scheme`; stdio `command`, ordered `arg_hashes`, `arg_count`; HTTP sanitized `endpoint`, `endpoint_userinfo_redacted`, `endpoint_query_redacted`, `endpoint_fragment_redacted` when applicable; MCP-discovery `configured_names`; `has_tasks_capability` (`true` for a non-null raw tasks object, `false` when the raw key is absent, omitted when raw presence is unavailable or ambiguous) |
+| `MCPServer` | Config + MCP + protocol discovery | deterministic safe `name`, live `server_name`, `transport` (stdio/http), optional configured `auth_method`/`auth_assurance`/`auth_evidence`, optional live `observed_auth_method`/`observed_auth_assurance`/`observed_auth_evidence`, derived paired `effective_auth_method`/`effective_auth_assurance`/`effective_auth_evidence`/`effective_auth_source`, `auth_strength` (numeric weakness only when known, post-processor), `protocol_version`, `instructions`, `instructions_hash` (SHA-256), `capabilities`, `pinning_status`, `is_pinned` (only when known), `id_scheme`; stdio `command`, ordered `arg_hashes`, `arg_count`; HTTP sanitized `endpoint`, `endpoint_userinfo_redacted`, `endpoint_query_redacted`, `endpoint_fragment_redacted` when applicable; MCP-discovery `configured_names`; protocol-discovery `discovered_via`; `has_tasks_capability` (`true` for a non-null raw tasks object, `false` when the raw key is absent, omitted when raw presence is unavailable or ambiguous) |
 | `MCPTool` | MCP | `name`, `description`, `input_schema`, `output_schema`, `annotations`, `description_hash` (SHA-256), `input_schema_hash` (SHA-256), `schema_keys[]`, `capability_surface[]`, `source_trust` (untrusted_web/email/fileshare), `has_injection_patterns`, `has_cross_references` |
 | `MCPResource` | MCP | `uri`, `name`, `mime_type`, `size` (bytes; omitted when the SDK reports zero because its scalar model cannot distinguish an omitted size from an explicit zero), `uri_scheme`, `sensitivity` (`critical`/`high`/`medium`/`low`/`none`/`unknown`), `sensitivity_rule_id`, `sensitivity_evidence` |
 | `MCPPrompt` | MCP | `name`, `description`, `arguments` |
-| `A2AAgent` | A2A | `name`, `description`, `url`, `provider`, `version`, `card_schema_version`, `card_present_fields`, `card_conformant`, `card_conformance_errors`, ordered `interfaces`, `protocol_versions`, `capabilities`, `security_schemes`, OR-of-AND `security_requirements`, configured `auth_method`/`auth_assurance`/`auth_evidence`, bounded read-only `auth_probe_method`/`auth_probe_status`/`auth_probe_detail` diagnostics and exact-positive `observed_auth_method`/`observed_auth_assurance`/`observed_auth_evidence`, derived paired `effective_auth_method`/`effective_auth_assurance`/`effective_auth_evidence`/`effective_auth_source`, `auth_strength` (numeric only when known), `is_https`, `is_signed`, `signature_verification_status`, `signature_key_source`, `signature_key_trust`, `card_hash` |
+| `A2AAgent` | A2A + protocol discovery | `name`, `description`, `url`, `provider`, `version`, `card_schema_version`, `card_present_fields`, `card_conformant`, `card_conformance_errors`, ordered `interfaces`, `protocol_versions`, `capabilities`, `security_schemes`, OR-of-AND `security_requirements`, optional declared `auth_method`/`auth_assurance`/`auth_evidence`, optional bounded read-only `auth_probe_method`/`auth_probe_status`/`auth_probe_detail` diagnostics and exact-positive `observed_auth_method`/`observed_auth_assurance`/`observed_auth_evidence`, derived paired `effective_auth_method`/`effective_auth_assurance`/`effective_auth_evidence`/`effective_auth_source`, `auth_strength` (numeric only when known), `is_https`, atomic `is_signed`/`signature_verification_status`/`signature_key_source`/`signature_key_trust` posture, `card_hash`; sparse protocol discovery emits endpoint identity and `discovered_via` without auth, probe, or signature posture |
 | `A2ASkill` | A2A | `id`, `name`, `description`, `input_modes`, `output_modes`, `security_requirements`, `conformant`, `conformance_errors`, `description_hash`, `has_injection_patterns` |
 | `AgentInstance` | Config | `name`, `framework`, `config_path` |
 | `Identity` | Config + A2A | `type` (none/apiKey/oauth/bearer/mtls), server-identity `scope`, `is_static` |
@@ -79,6 +79,12 @@ skill's `ADVERTISES_SKILL` edge and record declared `auth_method=none` where the
 requirements reduce to anonymous access; they are not runtime proof of
 anonymous access.
 
+Absence and `unknown` are distinct provenance states. A missing configured or
+declared auth tuple means that producer did not inspect that channel. A complete
+`unknown/unknown/...` tuple means it did inspect the channel but could not
+reduce the evidence to a known method. Protocol-discovery nodes therefore omit
+authentication fields instead of fabricating configured or declared posture.
+
 `is_signed` records a non-empty signature declaration.
 `signature_verification_status` is:
 
@@ -95,8 +101,10 @@ anonymous access.
 
 `signature_key_source` (`none`/`trusted_store`/`jku`) and
 `signature_key_trust` (`unknown`/`untrusted`/`trusted`) keep cryptographic
-validity separate from identity trust. Ingest rejects contradictory
-status/source/trust/`is_signed` tuples. v1.0.1 verification applies pinned
+validity separate from identity trust. These fields and `is_signed` are an
+atomic four-field posture: all are absent when no signature assessment was
+performed, otherwise all are present. Ingest rejects partial or contradictory
+tuples. v1.0.1 verification applies pinned
 ProtoJSON presence/default metadata, removes `signatures`, bounds signed-card
 size/depth/object width, then uses RFC 8785 JCS and object-form JWS. Compact
 strings, duplicate protected/unprotected JOSE parameters, inline `jwks`, and

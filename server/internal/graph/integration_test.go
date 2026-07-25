@@ -1940,6 +1940,161 @@ func TestIntegrationCompatibleDistinctOwnersRemainCompleteUntilOneRetires(t *tes
 	}
 }
 
+func TestIntegrationAuthProvenanceOwnersMergeInEitherOrder(t *testing.T) {
+	ctx := testDriver(t)
+	driver, err := NewDriver(
+		os.Getenv("AGENTHOUND_NEO4J_URI"),
+		os.Getenv("AGENTHOUND_NEO4J_USER"),
+		os.Getenv("AGENTHOUND_NEO4J_PASSWORD"),
+	)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer driver.Close(ctx)
+
+	writer := NewWriter(driver)
+	db := NewDB(NewReader(driver), writer)
+	tests := []struct {
+		name       string
+		kind       string
+		leftProps  map[string]any
+		rightProps map[string]any
+		want       map[string]any
+	}{
+		{
+			name: "configured MCP and direct live MCP",
+			kind: "MCPServer",
+			leftProps: map[string]any{
+				"name": "https://mcp.example/mcp", "endpoint": "https://mcp.example/mcp",
+				"transport": "http", "auth_method": "bearer", "auth_assurance": "moderate",
+				"auth_evidence": "configured_credential",
+			},
+			rightProps: map[string]any{
+				"name": "https://mcp.example/mcp", "endpoint": "https://mcp.example/mcp",
+				"transport": "http", "status": "reachable",
+				"observed_auth_method": "none", "observed_auth_assurance": "unauthenticated",
+				"observed_auth_evidence": "anonymous_probe_succeeded",
+			},
+			want: map[string]any{
+				"auth_method": "bearer", "observed_auth_method": "none",
+			},
+		},
+		{
+			name: "configured MCP and protocol discovery",
+			kind: "MCPServer",
+			leftProps: map[string]any{
+				"name": "https://mcp.example/discovered", "endpoint": "https://mcp.example/discovered",
+				"transport": "http", "auth_method": "bearer", "auth_assurance": "moderate",
+				"auth_evidence": "configured_credential",
+			},
+			rightProps: map[string]any{
+				"endpoint": "https://mcp.example/discovered", "transport": "http",
+				"discovered_via": "protoscan", "protocol": "mcp",
+			},
+			want: map[string]any{
+				"auth_method": "bearer", "discovered_via": "protoscan",
+			},
+		},
+		{
+			name: "full A2A and protocol discovery",
+			kind: "A2AAgent",
+			leftProps: map[string]any{
+				"name": "agent", "url": "https://agent.example",
+				"auth_method": "oauth", "auth_assurance": "strong",
+				"auth_evidence": "declared_security_scheme",
+				"is_signed":     true, "signature_verification_status": "valid_trusted",
+				"signature_key_source": "trusted_store", "signature_key_trust": "trusted",
+			},
+			rightProps: map[string]any{
+				"endpoint":       "https://agent.example",
+				"agent_card_url": "https://agent.example/.well-known/agent-card.json",
+				"discovered_via": "protoscan", "protocol": "a2a",
+			},
+			want: map[string]any{
+				"auth_method": "oauth", "signature_verification_status": "valid_trusted",
+				"discovered_via": "protoscan",
+			},
+		},
+	}
+
+	for testIndex, test := range tests {
+		for _, reverse := range []bool{false, true} {
+			order := "left-first"
+			if reverse {
+				order = "right-first"
+			}
+			t.Run(test.name+"/"+order, func(t *testing.T) {
+				nodeID := fmt.Sprintf("auth-owner-merge-%d-%t", testIndex, reverse)
+				leftScope := fmt.Sprintf("config:path:sha256:auth-owner-%d-%t", testIndex, reverse)
+				rightScope := fmt.Sprintf("scan:discover:sha256:auth-owner-%d-%t", testIndex, reverse)
+				if test.kind == "MCPServer" && test.rightProps["status"] == "reachable" {
+					rightScope = fmt.Sprintf("mcp:target:sha256:auth-owner-%d-%t", testIndex, reverse)
+				}
+				cleanup := func() {
+					_, _ = db.ExecuteWrite(ctx,
+						"MATCH (n {objectid: $id}) DETACH DELETE n",
+						map[string]any{"id": nodeID})
+				}
+				cleanup()
+				defer cleanup()
+
+				left := ingest.Node{
+					ID: nodeID, Kinds: []string{test.kind},
+					ObservationDomains: []string{leftScope},
+					Properties:         cloneProperties(test.leftProps),
+				}
+				right := ingest.Node{
+					ID: nodeID, Kinds: []string{test.kind},
+					ObservationDomains: []string{rightScope},
+					Properties:         cloneProperties(test.rightProps),
+				}
+				ordered := []struct {
+					node  ingest.Node
+					scope string
+					scan  string
+				}{
+					{node: left, scope: leftScope, scan: "left"},
+					{node: right, scope: rightScope, scan: "right"},
+				}
+				if reverse {
+					ordered[0], ordered[1] = ordered[1], ordered[0]
+				}
+				for _, item := range ordered {
+					if _, err := writer.WriteObservationNodes(
+						ctx, []ingest.Node{item.node}, item.scan, []string{item.scope},
+					); err != nil {
+						t.Fatalf("write %s owner: %v", item.scan, err)
+					}
+					if _, err := ReconcileObservations(
+						ctx, db, item.scan, []string{item.scope},
+					); err != nil {
+						t.Fatalf("reconcile %s owner: %v", item.scan, err)
+					}
+				}
+
+				rows, err := db.Query(ctx, `MATCH (n {objectid: $id})
+RETURN properties(n) AS props,
+       n.observation_properties_complete AS complete,
+       size(n.observation_fact_fingerprints) AS fingerprints`,
+					map[string]any{"id": nodeID})
+				if err != nil {
+					t.Fatalf("query merged auth owners: %v", err)
+				}
+				if len(rows) != 1 || rows[0]["complete"] != true ||
+					rows[0]["fingerprints"] != int64(2) {
+					t.Fatalf("auth owners did not remain complete: %+v", rows)
+				}
+				properties, _ := rows[0]["props"].(map[string]any)
+				for key, want := range test.want {
+					if properties[key] != want {
+						t.Fatalf("%s = %v, want %v; properties=%+v", key, properties[key], want, properties)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestIntegrationCompleteObservationReplacesOnlyManagedLabels(t *testing.T) {
 	ctx := testDriver(t)
 	driver, err := NewDriver(

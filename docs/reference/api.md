@@ -209,8 +209,10 @@ consistency, and evidence classification rules but cannot prove where the
 collector ran. A database marker that cannot be verified returns sanitized
 `503 STORAGE_BINDING_UNAVAILABLE` before any graph write.
 
-For `MCPServer` and `A2AAgent`, configured method, assurance, and evidence must
-form a producer-compatible tuple. Method-to-assurance mapping is fixed;
+For `MCPServer` and `A2AAgent`, configured method, assurance, and evidence are
+an optional atomic provenance tuple: all three may be absent when the producer
+did not inspect configuration/declarations, but a present tuple must contain
+all three producer-compatible values. Method-to-assurance mapping is fixed;
 anonymous-probe evidence requires `none/unauthenticated`, local-process
 evidence requires `unknown/unknown`, known authenticated/custom methods require
 configured-credential or declared-scheme evidence, and the documented
@@ -243,6 +245,19 @@ and inconclusive results may publish the canonical diagnostic triple but must
 omit `observed_auth_*`; orphan positive status, partial/wrongly typed metadata,
 arbitrary status/detail, generic observed tuples, and observed fields on a
 non-positive status return `400 VALIDATION_ERROR`.
+
+The A2A probe diagnostic fields `auth_probe_method`, `auth_probe_status`, and
+`auth_probe_detail` are themselves optional and atomic. Sparse protocol
+discovery may omit the entire probe/observed set. If any diagnostic is present,
+all three are required. `anonymous_protocol_access` requires the exact observed
+anonymous tuple above; `authentication_required` and `unknown` preserve their
+bounded diagnostic triple and must omit every `observed_auth_*` field.
+
+A2A signature posture is likewise optional and atomic:
+`signature_verification_status`, `signature_key_source`,
+`signature_key_trust`, and `is_signed` must be either all absent or all present
+and mutually consistent. Full A2A card collection emits all four; sparse
+protocol discovery emits none.
 
 Normalization preserves pre-v1 direct-URL MCP artifacts that predate the
 configured/observed split. Only an envelope with `meta.collector=mcp` and a

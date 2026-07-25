@@ -519,7 +519,7 @@ func buildServerNode(serverID string, spec ServerSpec, initResult *mcpsdk.Initia
 
 	authMethod, authEvidence := observedServerAuth(spec)
 	authAssessment := common.AssessAuth(string(authMethod))
-	props := config.ServerNodeProperties(serverDefForSpec(spec), engine)
+	props := serverNodePropertiesForSpec(spec, engine)
 	if serverName != "" {
 		props["server_name"] = serverName
 	}
@@ -559,7 +559,7 @@ func buildUnreachableServerNode(
 	errMsg string,
 	engine *rules.Engine,
 ) ingest.Node {
-	props := config.ServerNodeProperties(serverDefForSpec(spec), engine)
+	props := serverNodePropertiesForSpec(spec, engine)
 	props["status"] = "unreachable"
 	props["error"] = safeStoredMCPError(errMsg)
 	props["observed_auth_method"] = string(common.AuthUnknown)
@@ -586,6 +586,14 @@ func serverDefForSpec(spec ServerSpec) config.ServerDef {
 		Args: append([]string(nil), spec.Args...), Env: spec.Env, URL: spec.URL,
 		Headers: spec.Headers,
 	}
+}
+
+func serverNodePropertiesForSpec(spec ServerSpec, engine *rules.Engine) map[string]any {
+	server := serverDefForSpec(spec)
+	if spec.Configured {
+		return config.ServerNodeProperties(server, engine)
+	}
+	return config.ServerIdentityProperties(server)
 }
 
 type hostResult struct {

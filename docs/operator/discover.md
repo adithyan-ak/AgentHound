@@ -39,7 +39,17 @@ agenthound discover 198.51.100.0/24 \
 
 ## Output
 
-The output file is a standard ingest envelope. `discover` emits raw `:MCPServer` and `:A2AAgent` nodes with `discovered_via: "protoscan"` and the discovered base URL. The analysis server ingests those facts but does not enumerate the endpoints. To collect tools, resources, and prompts from MCP or skills and delegation from A2A, rerun the collector with `agenthound scan --mcp --url <url>` or `agenthound scan --a2a --target <url>` against each discovered endpoint and ingest that output.
+The output file is a standard ingest envelope. `discover` emits sparse raw
+`:MCPServer` and `:A2AAgent` nodes with `discovered_via: "protoscan"` and the
+discovered base URL. Discovery does not claim configured/declarative auth,
+runtime auth, A2A probe diagnostics, or A2A signature posture; those properties
+are absent rather than set to `unknown` because this producer does not own those
+assessment channels. The analysis server ingests the discovery facts but does
+not enumerate the endpoints. To collect tools, resources, and prompts from MCP
+or skills and delegation from A2A, rerun the collector with
+`agenthound scan --mcp --url <url>` or
+`agenthound scan --a2a --target <url>` against each discovered endpoint and
+ingest that output.
 
 ```json
 {
@@ -104,10 +114,7 @@ The output file is a standard ingest envelope. `discover` emits raw `:MCPServer`
           "endpoint": "http://10.0.0.42:3000",
           "transport": "http",
           "discovered_via": "protoscan",
-          "protocol": "mcp",
-          "auth_method": "unknown",
-          "auth_assurance": "unknown",
-          "auth_evidence": "unknown"
+          "protocol": "mcp"
         },
         "observation_domains": ["scan:discover:sha256:..."]
       }
