@@ -701,6 +701,68 @@ func exactInstructionIngest(scanID string) *sdkingest.IngestData {
 	return data
 }
 
+func limitedExactInstructionIngest(
+	scanID string,
+	method string,
+	state sdkingest.OutcomeState,
+) (*sdkingest.IngestData, string, string) {
+	data, deepRoot, deepChild := truncatedDeepInstructionIngest(scanID)
+	report := data.Meta.Collection
+	selectedRoot := ""
+	selectedChild := deepChild
+	for _, outcome := range report.Outcomes {
+		if outcome.Method == method {
+			selectedRoot = outcome.CoverageKey
+			break
+		}
+	}
+	if selectedRoot == "" {
+		panic("unsupported exact instruction method in test")
+	}
+	if method == sdkingest.InstructionMethodExactUser {
+		for _, root := range report.AuthoritativeRoots {
+			if root.CoverageKey == selectedRoot {
+				selectedChild = root.ChildCoverageKeys[0]
+				break
+			}
+		}
+	}
+
+	report.CoverageKeys = subtractCoverage(report.CoverageKeys, []string{deepRoot})
+	if selectedChild != deepChild {
+		report.CoverageKeys = subtractCoverage(report.CoverageKeys, []string{deepChild})
+	}
+	var roots []sdkingest.CoverageRoot
+	for _, root := range report.AuthoritativeRoots {
+		if root.CoverageKey == deepRoot {
+			continue
+		}
+		if root.CoverageKey == selectedRoot {
+			root.ChildCoverageKeys = []string{selectedChild}
+		}
+		roots = append(roots, root)
+	}
+	report.AuthoritativeRoots = roots
+	var outcomes []sdkingest.CollectionOutcome
+	for _, outcome := range report.Outcomes {
+		if outcome.CoverageKey == deepRoot ||
+			outcome.CoverageKey == deepChild && selectedChild != deepChild {
+			continue
+		}
+		if outcome.CoverageKey == selectedRoot {
+			outcome.State = state
+		}
+		if outcome.CoverageKey == selectedChild {
+			outcome.ParentCoverageKey = selectedRoot
+		}
+		outcomes = append(outcomes, outcome)
+	}
+	report.Outcomes = outcomes
+	report.State = sdkingest.AggregateOutcomeState(report.Outcomes)
+	sdkingest.EnsureCoverageParentage(report)
+	return data, selectedRoot, selectedChild
+}
+
 func scopedCoverageFor(
 	data *sdkingest.IngestData,
 	kind sdkingest.IdentityScope,
@@ -711,6 +773,15 @@ func scopedCoverageFor(
 		scopeID = data.Meta.Identity.CollectionPointID
 	}
 	return sdkingest.ScopedCoverageKey(kind, scopeID, rawKey)
+}
+
+func containsCoverage(keys []string, want string) bool {
+	for _, key := range keys {
+		if key == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPipelineStorageVerificationPrecedesEveryMutationAndValidationAudit(t *testing.T) {
@@ -1171,7 +1242,31 @@ func TestPipeline_TruncatedDeepRootPublishesAndPromotesCompleteChildren(t *testi
 	lifecycle := &fakeLifecycleScanStore{fakeScanStore: store}
 	publisher := &fakePublisher{lifecycle: lifecycle}
 	writer := &fakeWriter{}
-	p := newTestPipeline(writer, &graph.MockGraphDB{}, lifecycle, noOpRunPP)
+	db := &graph.MockGraphDB{
+		QueryFunc: func(
+			_ context.Context,
+			cypher string,
+			_ map[string]any,
+		) ([]map[string]any, error) {
+			if strings.Contains(cypher, "incomplete_property_nodes") {
+				return []map[string]any{{
+					"incomplete_property_nodes":         int64(0),
+					"incomplete_property_relationships": int64(0),
+					"tokenless_nodes":                   int64(0),
+					"tokenless_incident_relationships":  int64(0),
+				}}, nil
+			}
+			return []map[string]any{{
+				"source_id": "instruction-file", "source_name": "AGENTS.md",
+				"source_kind": "InstructionFile",
+				"target_id":   "instruction-file", "target_name": "AGENTS.md",
+				"target_kind": "InstructionFile",
+				"edge_kind":   "POISONED_INSTRUCTIONS", "confidence": 1.0,
+				"cross_protocol": false, "target_sensitivity": "",
+			}}, nil
+		},
+	}
+	p := newTestPipeline(writer, db, lifecycle, noOpRunPP)
 	p.findingStore = publisher
 
 	result, err := p.Ingest(context.Background(), data)
@@ -1189,6 +1284,10 @@ func TestPipeline_TruncatedDeepRootPublishesAndPromotesCompleteChildren(t *testi
 		t.Fatalf("truncated-deep finalization = %+v, want publish", publisher.finalizations)
 	}
 	finalized := publisher.finalizations[0]
+	if len(finalized.Findings) != 1 ||
+		finalized.Findings[0].EdgeKind != "POISONED_INSTRUCTIONS" {
+		t.Fatalf("limited exact findings = %+v, want positive child finding", finalized.Findings)
+	}
 	states := sdkingest.CoverageStates(finalized.Collection)
 	var truncatedRootPromoted bool
 	for _, root := range finalized.CoverageRoots {
@@ -1217,6 +1316,164 @@ func TestPipeline_TruncatedDeepRootPublishesAndPromotesCompleteChildren(t *testi
 	}
 	if len(lifecycle.dirtyCoverage) != 0 {
 		t.Fatalf("deep coverage entered dirty state: %v", lifecycle.dirtyCoverage)
+	}
+}
+
+func TestPipeline_LimitedExactRootPublishesChildWithoutRootAuthority(t *testing.T) {
+	data, limitedRoot, child := limitedExactInstructionIngest(
+		"scan-limited-exact",
+		sdkingest.InstructionMethodExactUser,
+		sdkingest.OutcomeFailed,
+	)
+	scopedRoot := scopedCoverageFor(data, sdkingest.ScopeCollectionPoint, limitedRoot)
+	scopedChild := scopedCoverageFor(data, sdkingest.ScopeCollectionPoint, child)
+	store := &fakeScanStore{}
+	lifecycle := &fakeLifecycleScanStore{fakeScanStore: store}
+	publisher := &fakePublisher{lifecycle: lifecycle}
+	writer := &fakeWriter{}
+	p := newTestPipeline(writer, &graph.MockGraphDB{}, lifecycle, noOpRunPP)
+	p.findingStore = publisher
+
+	result, err := p.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.ProjectionStatus != model.ProjectionComplete ||
+		len(result.Warnings) != 1 ||
+		result.Warnings[0] != sdkingest.InstructionCoverageLimitationWarning {
+		t.Fatalf("limited exact result = %+v", result)
+	}
+	if len(publisher.finalizations) != 1 || !publisher.finalizations[0].Publish {
+		t.Fatalf("limited exact finalization = %+v", publisher.finalizations)
+	}
+	finalized := publisher.finalizations[0]
+	if finalized.Scan.ComparisonKey != "" {
+		t.Fatalf("limited exact comparison key = %q", finalized.Scan.ComparisonKey)
+	}
+	if !containsCoverage(finalized.CompleteDomains, scopedChild) ||
+		containsCoverage(finalized.CompleteDomains, scopedRoot) {
+		t.Fatalf("complete domains = %v, want child only for limited root", finalized.CompleteDomains)
+	}
+	if !containsCoverage(finalized.ResolvedDirtyCoverage, scopedRoot) ||
+		!containsCoverage(finalized.ResolvedDirtyCoverage, scopedChild) {
+		t.Fatalf(
+			"resolved dirty coverage = %v, want processed limited root and child",
+			finalized.ResolvedDirtyCoverage,
+		)
+	}
+	var promotedLimitedRoot bool
+	for _, root := range finalized.CoverageRoots {
+		if root.CoverageKey == scopedRoot {
+			promotedLimitedRoot = true
+		}
+	}
+	if !promotedLimitedRoot {
+		t.Fatalf("limited root head not promoted: %+v", finalized.CoverageRoots)
+	}
+	for _, root := range store.resolvedRoots {
+		if root.CoverageKey == scopedRoot {
+			t.Fatalf("limited root used for absence retirement: %+v", store.resolvedRoots)
+		}
+	}
+	if got := writer.nodeCalls[0].CompleteScopes; !containsCoverage(got, scopedChild) ||
+		containsCoverage(got, scopedRoot) {
+		t.Fatalf("reconciled domains = %v, want child but not limited root", got)
+	}
+}
+
+func TestPipeline_LimitedExactDirtyResolutionIsSuccessfulAndSeenOnly(t *testing.T) {
+	data, limitedRoot, child := limitedExactInstructionIngest(
+		"scan-limited-exact-dirty",
+		sdkingest.InstructionMethodExactProject,
+		sdkingest.OutcomePartial,
+	)
+	scopedRoot := scopedCoverageFor(data, sdkingest.ScopeCollectionPoint, limitedRoot)
+	scopedChild := scopedCoverageFor(data, sdkingest.ScopeCollectionPoint, child)
+	unseenSibling := sdkingest.ScopedCoverageKey(
+		sdkingest.ScopeCollectionPoint,
+		data.Meta.Identity.CollectionPointID,
+		sdkingest.CanonicalCoverageKey(
+			"config",
+			"instruction-source",
+			limitedRoot+"\x00prior/CLAUDE.md",
+		),
+	)
+	store := &fakeScanStore{}
+	lifecycle := &fakeLifecycleScanStore{
+		fakeScanStore: store,
+		dirtyCoverage: []string{scopedRoot, scopedChild, unseenSibling},
+	}
+	publisher := &fakePublisher{lifecycle: lifecycle}
+	p := newTestPipeline(
+		&fakeWriter{},
+		&graph.MockGraphDB{},
+		lifecycle,
+		noOpRunPP,
+	)
+	p.findingStore = publisher
+
+	result, err := p.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.ProjectionStatus != model.ProjectionIncomplete {
+		t.Fatalf("unseen dirty sibling unexpectedly published: %+v", result)
+	}
+	finalized := publisher.finalizations[0]
+	if !containsCoverage(finalized.ResolvedDirtyCoverage, scopedRoot) ||
+		!containsCoverage(finalized.ResolvedDirtyCoverage, scopedChild) ||
+		containsCoverage(finalized.ResolvedDirtyCoverage, unseenSibling) {
+		t.Fatalf("resolved dirty coverage = %v", finalized.ResolvedDirtyCoverage)
+	}
+	if len(finalized.DirtyCoverage) != 1 ||
+		finalized.DirtyCoverage[0] != unseenSibling {
+		t.Fatalf("final dirty coverage = %v, want unseen sibling", finalized.DirtyCoverage)
+	}
+}
+
+func TestPipeline_LimitedExactAnalysisFailureDoesNotResolveDirtyCoverage(t *testing.T) {
+	data, limitedRoot, child := limitedExactInstructionIngest(
+		"scan-limited-exact-analysis-failure",
+		sdkingest.InstructionMethodExactUser,
+		sdkingest.OutcomeTruncated,
+	)
+	scopedRoot := scopedCoverageFor(data, sdkingest.ScopeCollectionPoint, limitedRoot)
+	scopedChild := scopedCoverageFor(data, sdkingest.ScopeCollectionPoint, child)
+	lifecycle := &fakeLifecycleScanStore{
+		fakeScanStore: &fakeScanStore{},
+		dirtyCoverage: []string{scopedRoot, scopedChild},
+	}
+	publisher := &fakePublisher{lifecycle: lifecycle}
+	p := newTestPipeline(
+		&fakeWriter{},
+		&graph.MockGraphDB{},
+		lifecycle,
+		func(
+			context.Context,
+			graph.GraphDB,
+			string,
+			[]string,
+		) ([]graph.ProcessingStats, error) {
+			return nil, errors.New("analysis failed")
+		},
+	)
+	p.findingStore = publisher
+
+	result, err := p.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.ProjectionStatus != model.ProjectionIncomplete {
+		t.Fatalf("analysis failure result = %+v", result)
+	}
+	finalized := publisher.finalizations[0]
+	if containsCoverage(finalized.ResolvedDirtyCoverage, scopedRoot) ||
+		containsCoverage(finalized.ResolvedDirtyCoverage, scopedChild) {
+		t.Fatalf("failure resolved dirty coverage: %v", finalized.ResolvedDirtyCoverage)
+	}
+	if !containsCoverage(finalized.DirtyCoverage, scopedRoot) ||
+		!containsCoverage(finalized.DirtyCoverage, scopedChild) {
+		t.Fatalf("failure lost inherited dirty coverage: %v", finalized.DirtyCoverage)
 	}
 }
 

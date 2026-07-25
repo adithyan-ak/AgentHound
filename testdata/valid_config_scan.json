@@ -19,16 +19,16 @@
           "coverage_key": "config:instruction-exact-user:sha256:1111111111111111111111111111111111111111111111111111111111111111",
           "child_coverage_keys": [],
           "registry_contract": {
-            "generation": 1,
-            "digest": "sha256:ea704921120fe026f9e62dc60ee0c95fd8e00e767fe84457e91038cf59c1a329"
+            "generation": 2,
+            "digest": "sha256:f3c3172ae8d854b865fe140756343511a4ff7314c67c66a7bbb30b52b737f30e"
           }
         },
         {
           "coverage_key": "config:instruction-exact-project:sha256:2222222222222222222222222222222222222222222222222222222222222222",
           "child_coverage_keys": [],
           "registry_contract": {
-            "generation": 1,
-            "digest": "sha256:ea704921120fe026f9e62dc60ee0c95fd8e00e767fe84457e91038cf59c1a329"
+            "generation": 2,
+            "digest": "sha256:f3c3172ae8d854b865fe140756343511a4ff7314c67c66a7bbb30b52b737f30e"
           }
         }
       ],

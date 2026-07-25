@@ -106,6 +106,7 @@ func TestMigrationsContainCurrentSchemaAndBindingUpgrade(t *testing.T) {
 		"ADD COLUMN IF NOT EXISTS contract_generation",
 		"ADD COLUMN IF NOT EXISTS contract_digest",
 		"coverage_heads_root_metadata_check",
+		"'complete', 'truncated', 'partial', 'failed'",
 	} {
 		if !strings.Contains(rootStateSQL, expected) {
 			t.Errorf("coverage-root migration missing %q", expected)

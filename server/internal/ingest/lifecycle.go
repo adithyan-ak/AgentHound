@@ -132,9 +132,13 @@ func promotableAuthoritativeRoots(
 	for _, root := range report.AuthoritativeRoots {
 		state := states[root.CoverageKey]
 		mode := instructionRootMode(report, root.CoverageKey)
-		if state != sdkingest.OutcomeComplete &&
-			(state != sdkingest.OutcomeTruncated ||
-				mode != sdkingest.InstructionCoverageDeep) {
+		instructionState := mode != "" &&
+			root.RegistryContract != nil &&
+			root.RegistryContract.Equal(
+				sdkingest.CurrentInstructionRegistryContract(),
+			) &&
+			sdkingest.IsInstructionCoverageState(state)
+		if state != sdkingest.OutcomeComplete && !instructionState {
 			continue
 		}
 		children := append([]string(nil), root.ChildCoverageKeys...)
@@ -242,6 +246,7 @@ func cloneInt64Map(values map[string]int64) map[string]int64 {
 func comparisonKey(data *sdkingest.IngestData, attributionComplete bool) string {
 	if !attributionComplete ||
 		!sdkingest.AuthoritativeCoverageComplete(data.Meta.Collection) ||
+		sdkingest.InstructionCoverageLimited(data.Meta.Collection) ||
 		data.Meta.Ruleset == nil ||
 		data.Meta.Ruleset.LoadState != sdkingest.OutcomeComplete ||
 		data.Meta.Ruleset.Digest == "" ||

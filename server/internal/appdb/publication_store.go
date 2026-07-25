@@ -194,22 +194,21 @@ func (s *FindingStore) FinalizeScan(
 	comparison := model.PostureComparison{}
 	activeCoverageKeys := normalizeCoverageKeys(params.CoverageKeys)
 	activeCoverageRoots := []model.PostureCoverageRoot{}
+	activeHeads, err := activeCoverageHeadsTx(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	params.Scan.ComparisonKey = comparisonKeyWithCoverageHeads(
+		params.Scan.ComparisonKey,
+		params.CompleteDomains,
+		activeHeads,
+	)
 	if params.Publish {
-		var activeHeads []coverageHead
-		activeHeads, err = activeCoverageHeadsTx(ctx, tx)
-		if err != nil {
-			return nil, err
-		}
 		activeCoverageKeys = make([]string, 0, len(activeHeads))
 		for _, head := range activeHeads {
 			activeCoverageKeys = append(activeCoverageKeys, head.Key)
 		}
 		activeCoverageRoots = activePostureCoverageRoots(activeHeads)
-		params.Scan.ComparisonKey = comparisonKeyWithCoverageHeads(
-			params.Scan.ComparisonKey,
-			params.CompleteDomains,
-			activeHeads,
-		)
 		comparison, err = priorComparablePublication(
 			ctx,
 			tx,
@@ -392,11 +391,14 @@ func coverageRootHeads(
 		}
 		switch head.State {
 		case sdkingest.OutcomeComplete:
-		case sdkingest.OutcomeTruncated:
-			if head.Mode != sdkingest.InstructionCoverageDeep {
+		case sdkingest.OutcomeTruncated,
+			sdkingest.OutcomePartial,
+			sdkingest.OutcomeFailed:
+			if head.Mode == "" {
 				return nil, fmt.Errorf(
-					"coverage root %s cannot promote truncated state",
+					"coverage root %s cannot promote state %q",
 					root.CoverageKey,
+					head.State,
 				)
 			}
 		default:

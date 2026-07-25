@@ -231,9 +231,8 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 
 	attributionComplete := prepareObservationDomains(data)
 	keys := coverageKeys(data.Meta.Collection)
-	// Deep instruction discovery is the sole non-blocking coverage family.
-	// Its complete children may advance, while a failed attempt preserves the
-	// prior active root and never wedges an otherwise valid exact posture.
+	// Recognized incomplete instruction roots are non-blocking. Their complete
+	// children may advance without granting the root absence authority.
 	nonBlockingKeys := sdkingest.NonBlockingInstructionCoverageDomains(
 		data.Meta.Collection,
 	)
@@ -596,8 +595,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		publicationCoverageRoots = nil
 		publicationAuthoritativeRoots = nil
 	}
-	dirtyCoverage := append([]string(nil), cumulativeDirtyCoverage...)
-	if attributionComplete &&
+	projectionPrerequisitesComplete := attributionComplete &&
 		rulesetErr == nil &&
 		artifactObservedAt != nil &&
 		timestampErr == nil &&
@@ -608,7 +606,13 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		graphAfterErr == nil &&
 		snapshotErr == nil &&
 		observationQueryErr == nil &&
-		observationIncompleteErr == nil {
+		observationIncompleteErr == nil
+	resolvedDirtyCoverage := append(
+		[]string(nil),
+		publicationRetiredDomains...,
+	)
+	dirtyCoverage := append([]string(nil), cumulativeDirtyCoverage...)
+	if projectionPrerequisitesComplete {
 		dirtyCoverage = subtractCoverage(
 			cumulativeDirtyCoverage,
 			publicationDomains,
@@ -618,20 +622,14 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 			dirtyCoverage,
 			incompleteCoverageDomains(data.Meta.Collection),
 		)
+		resolvedDirtyCoverage = mergeCoverage(
+			resolvedDirtyCoverage,
+			nonBlockingKeys,
+		)
 	}
 
 	requiredComplete := coverageComplete &&
-		rulesetErr == nil &&
-		artifactObservedAt != nil &&
-		timestampErr == nil &&
-		reconcileErr == nil &&
-		pruneErr == nil &&
-		ppErr == nil &&
-		graphBeforeErr == nil &&
-		graphAfterErr == nil &&
-		snapshotErr == nil &&
-		observationQueryErr == nil &&
-		observationIncompleteErr == nil &&
+		projectionPrerequisitesComplete &&
 		p.graphDB != nil &&
 		p.runPP != nil
 	publish := requiredComplete && len(dirtyCoverage) == 0
@@ -746,7 +744,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		CoverageKeys:          keys,
 		CoverageParents:       sdkingest.CoverageParents(data.Meta.Collection),
 		CompleteDomains:       publicationCompleteDomains,
-		ResolvedDirtyCoverage: publicationRetiredDomains,
+		ResolvedDirtyCoverage: resolvedDirtyCoverage,
 		CoverageRoots:         publicationCoverageRoots,
 		AuthoritativeRoots:    publicationAuthoritativeRoots,
 		DirtyCoverage:         dirtyCoverage,

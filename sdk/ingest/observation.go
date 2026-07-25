@@ -208,35 +208,29 @@ func CompleteAuthoritativeRoots(report *CollectionReport) []CoverageRoot {
 	return roots
 }
 
-// NonBlockingInstructionCoverageDomains returns the deep-instruction root and
-// its descendants. Unlike a caller-controlled flag, classification requires
-// the registered config root key, method, and registry contract shape.
+// NonBlockingInstructionCoverageDomains returns recognized incomplete
+// instruction roots and their declared or explicitly parented descendants.
 func NonBlockingInstructionCoverageDomains(report *CollectionReport) []string {
 	if report == nil {
 		return nil
 	}
-	deepRoots := make(map[string]bool)
-	for _, root := range report.AuthoritativeRoots {
-		if root.RegistryContract == nil ||
-			!InstructionRootMatchesMethod(root.CoverageKey, InstructionMethodDeep) {
-			continue
-		}
-		for _, outcome := range report.Outcomes {
-			if outcome.CoverageKey == root.CoverageKey &&
-				outcome.Collector == "config" &&
-				outcome.Method == InstructionMethodDeep &&
-				IsInstructionCoverageState(outcome.State) {
-				deepRoots[root.CoverageKey] = true
-				break
-			}
-		}
-	}
-	if len(deepRoots) == 0 {
+	incompleteRoots := IncompleteInstructionRoots(report)
+	if len(incompleteRoots) == 0 {
 		return nil
 	}
-	domains := make(map[string]bool, len(deepRoots))
-	for root := range deepRoots {
-		domains[root] = true
+	domains := make(map[string]bool, len(incompleteRoots))
+	for _, outcome := range incompleteRoots {
+		domains[outcome.CoverageKey] = true
+	}
+	for _, root := range report.AuthoritativeRoots {
+		if !domains[root.CoverageKey] {
+			continue
+		}
+		for _, child := range root.ChildCoverageKeys {
+			if child = strings.TrimSpace(child); child != "" {
+				domains[child] = true
+			}
+		}
 	}
 	changed := true
 	for changed {
@@ -258,7 +252,7 @@ func NonBlockingInstructionCoverageDomains(report *CollectionReport) []string {
 	return result
 }
 
-const InstructionCoverageLimitationWarning = "deep instruction coverage is limited; missing nested instruction evidence is not a clean absence"
+const InstructionCoverageLimitationWarning = "instruction coverage is limited; missing instruction evidence is not a clean absence"
 
 // IncompleteInstructionRoots returns recognized registry-backed instruction
 // roots whose observed state is partial, failed, or truncated.
@@ -266,9 +260,11 @@ func IncompleteInstructionRoots(report *CollectionReport) []CollectionOutcome {
 	if report == nil {
 		return nil
 	}
+	currentContract := CurrentInstructionRegistryContract()
 	roots := make(map[string]CoverageRoot, len(report.AuthoritativeRoots))
 	for _, root := range report.AuthoritativeRoots {
-		if root.RegistryContract != nil {
+		if root.RegistryContract != nil &&
+			root.RegistryContract.Equal(currentContract) {
 			roots[root.CoverageKey] = root
 		}
 	}
@@ -298,20 +294,15 @@ func IncompleteInstructionRoots(report *CollectionReport) []CollectionOutcome {
 	return incomplete
 }
 
-// InstructionCoverageLimited reports whether a recognized deep instruction
-// root has incomplete coverage.
+// InstructionCoverageLimited reports whether a recognized instruction root
+// has incomplete coverage.
 func InstructionCoverageLimited(report *CollectionReport) bool {
-	for _, outcome := range IncompleteInstructionRoots(report) {
-		if outcome.Method == InstructionMethodDeep {
-			return true
-		}
-	}
-	return false
+	return len(IncompleteInstructionRoots(report)) > 0
 }
 
 // AuthoritativeCoverageComplete reports whether every blocking declared
-// coverage key was observed complete. Deep instruction discovery is the only
-// recognized non-blocking coverage mode.
+// coverage key was observed complete. Recognized incomplete instruction roots
+// and their descendants are non-blocking.
 func AuthoritativeCoverageComplete(report *CollectionReport) bool {
 	if report == nil || len(report.CoverageKeys) == 0 {
 		return false

@@ -170,12 +170,70 @@ func TestCanonicalURLScopeNormalizesEquivalentTargets(t *testing.T) {
 	}
 }
 
-func TestNonBlockingInstructionCoverageDomainsRequiresDeepRootContract(t *testing.T) {
-	root := CanonicalCoverageKey("config", "instruction-deep", "/home/example")
-	child := CanonicalCoverageKey("config", "instruction-tree", "/home/example/project")
+func TestNonBlockingInstructionCoverageDomainsIncludesRecognizedIncompleteRoots(t *testing.T) {
+	contract := CurrentInstructionRegistryContract()
+	for _, mode := range []struct {
+		name   string
+		method string
+		kind   string
+	}{
+		{"exact_user", InstructionMethodExactUser, "instruction-exact-user"},
+		{"exact_project", InstructionMethodExactProject, "instruction-exact-project"},
+		{"deep", InstructionMethodDeep, "instruction-deep"},
+	} {
+		for _, state := range []OutcomeState{
+			OutcomeTruncated,
+			OutcomePartial,
+			OutcomeFailed,
+		} {
+			t.Run(mode.name+"/"+string(state), func(t *testing.T) {
+				root := CanonicalCoverageKey("config", mode.kind, "/home/example")
+				child := CanonicalCoverageKey("config", "instruction-source", root+"\x00AGENTS.md")
+				report := &CollectionReport{
+					State:        state,
+					CoverageKeys: []string{root, child},
+					AuthoritativeRoots: []CoverageRoot{{
+						CoverageKey:       root,
+						ChildCoverageKeys: []string{child},
+						RegistryContract:  &contract,
+					}},
+					Outcomes: []CollectionOutcome{
+						{
+							Collector: "config", CoverageKey: root,
+							Method: mode.method, State: state,
+						},
+						{
+							Collector: "config", CoverageKey: child, ParentCoverageKey: root,
+							Method: InstructionMethodSource, State: OutcomeComplete,
+						},
+					},
+				}
+				if got := NonBlockingInstructionCoverageDomains(report); !reflect.DeepEqual(
+					got,
+					[]string{root, child},
+				) {
+					t.Fatalf("non-blocking domains = %v, want [%s %s]", got, root, child)
+				}
+				if !InstructionCoverageLimited(report) {
+					t.Fatal("recognized incomplete instruction root was not coverage-limited")
+				}
+				if got := CompleteAuthoritativeRoots(report); len(got) != 0 {
+					t.Fatalf("incomplete root became authoritative: %+v", got)
+				}
+			})
+		}
+	}
+	if strings.Contains(InstructionCoverageLimitationWarning, "deep") {
+		t.Fatalf("coverage warning remains deep-specific: %q", InstructionCoverageLimitationWarning)
+	}
+}
+
+func TestNonBlockingInstructionCoverageDomainsRejectsCompleteOrMalformedRoots(t *testing.T) {
+	root := CanonicalCoverageKey("config", "instruction-exact-user", "/home/example")
+	child := CanonicalCoverageKey("config", "instruction-source", root+"\x00AGENTS.md")
 	contract := CurrentInstructionRegistryContract()
 	report := &CollectionReport{
-		State:        OutcomeTruncated,
+		State:        OutcomeComplete,
 		CoverageKeys: []string{root, child},
 		AuthoritativeRoots: []CoverageRoot{{
 			CoverageKey:       root,
@@ -185,7 +243,7 @@ func TestNonBlockingInstructionCoverageDomainsRequiresDeepRootContract(t *testin
 		Outcomes: []CollectionOutcome{
 			{
 				Collector: "config", CoverageKey: root,
-				Method: InstructionMethodDeep, State: OutcomeTruncated,
+				Method: InstructionMethodExactUser, State: OutcomeComplete,
 			},
 			{
 				Collector: "config", CoverageKey: child, ParentCoverageKey: root,
@@ -193,90 +251,62 @@ func TestNonBlockingInstructionCoverageDomainsRequiresDeepRootContract(t *testin
 			},
 		},
 	}
-	if got := NonBlockingInstructionCoverageDomains(report); !reflect.DeepEqual(got, []string{root, child}) {
-		t.Fatalf("non-blocking domains = %v, want [%s %s]", got, root, child)
+	if got := NonBlockingInstructionCoverageDomains(report); len(got) != 0 {
+		t.Fatalf("complete exact root became non-blocking: %v", got)
+	}
+	if InstructionCoverageLimited(report) {
+		t.Fatal("complete exact root was coverage-limited")
 	}
 
+	report.Outcomes[0].State = OutcomePartial
 	report.AuthoritativeRoots[0].RegistryContract = nil
 	if got := NonBlockingInstructionCoverageDomains(report); len(got) != 0 {
-		t.Fatalf("contract-free deep-shaped root became non-blocking: %v", got)
+		t.Fatalf("contractless root became non-blocking: %v", got)
+	}
+	if InstructionCoverageLimited(report) {
+		t.Fatal("contractless root was coverage-limited")
+	}
+
+	malformed := contract
+	malformed.Digest = "sha256:forged"
+	report.AuthoritativeRoots[0].RegistryContract = &malformed
+	if got := NonBlockingInstructionCoverageDomains(report); len(got) != 0 {
+		t.Fatalf("malformed-contract root became non-blocking: %v", got)
+	}
+	if InstructionCoverageLimited(report) {
+		t.Fatal("malformed-contract root was coverage-limited")
 	}
 }
 
-func TestInstructionCoverageLimitedRequiresRecognizedIncompleteDeepRoot(t *testing.T) {
-	root := CanonicalCoverageKey("config", "instruction-deep", "/home/example")
+func TestAuthoritativeCoverageCompleteIgnoresLimitedInstructionFamily(t *testing.T) {
+	root := CanonicalCoverageKey("config", "instruction-exact-project", "/work/project")
+	child := CanonicalCoverageKey("config", "instruction-source", root+"\x00AGENTS.md")
+	config := CanonicalCoverageKey("config", "path", "/work/project/config.json")
 	contract := CurrentInstructionRegistryContract()
 	report := &CollectionReport{
-		State:        OutcomeTruncated,
-		CoverageKeys: []string{root},
+		State:        OutcomePartial,
+		CoverageKeys: []string{root, child, config},
 		AuthoritativeRoots: []CoverageRoot{{
-			CoverageKey:      root,
-			RegistryContract: &contract,
+			CoverageKey:       root,
+			ChildCoverageKeys: []string{child},
+			RegistryContract:  &contract,
 		}},
-		Outcomes: []CollectionOutcome{{
-			Collector:   "config",
-			CoverageKey: root,
-			Method:      InstructionMethodDeep,
-			State:       OutcomeTruncated,
-		}},
+		Outcomes: []CollectionOutcome{
+			{
+				Collector: "config", CoverageKey: root,
+				Method: InstructionMethodExactProject, State: OutcomeFailed,
+			},
+			{
+				Collector: "config", CoverageKey: child, ParentCoverageKey: root,
+				Method: InstructionMethodSource, State: OutcomeComplete,
+			},
+			{
+				Collector: "config", CoverageKey: config,
+				Method: "config_discovery", State: OutcomeComplete,
+			},
+		},
 	}
-	if !InstructionCoverageLimited(report) {
-		t.Fatal("recognized truncated deep root was not coverage-limited")
-	}
-
-	for _, state := range []OutcomeState{OutcomePartial, OutcomeFailed} {
-		report.Outcomes[0].State = state
-		if !InstructionCoverageLimited(report) {
-			t.Fatalf("recognized %s deep root was not coverage-limited", state)
-		}
-	}
-
-	exactRoot := CanonicalCoverageKey(
-		"config",
-		"instruction-exact-user",
-		"/home/example",
-	)
-	report.CoverageKeys = append(report.CoverageKeys, exactRoot)
-	report.AuthoritativeRoots = append(report.AuthoritativeRoots, CoverageRoot{
-		CoverageKey:      exactRoot,
-		RegistryContract: &contract,
-	})
-	report.Outcomes = append(report.Outcomes, CollectionOutcome{
-		Collector:   "config",
-		CoverageKey: exactRoot,
-		Method:      InstructionMethodExactUser,
-		State:       OutcomeFailed,
-	})
-	incomplete := IncompleteInstructionRoots(report)
-	if len(incomplete) != 2 ||
-		incomplete[0].State == OutcomeComplete ||
-		incomplete[1].State == OutcomeComplete {
-		t.Fatalf("incomplete instruction roots = %+v, want deep and exact", incomplete)
-	}
-	if !InstructionCoverageLimited(report) {
-		t.Fatal("failed exact root suppressed the independent deep limitation")
-	}
-	if strings.Contains(InstructionCoverageLimitationWarning, "usable") {
-		t.Fatalf(
-			"shared warning makes an unsupported exact-coverage claim: %q",
-			InstructionCoverageLimitationWarning,
-		)
-	}
-
-	report.Outcomes[0].State = OutcomeComplete
-	if InstructionCoverageLimited(report) {
-		t.Fatal("complete deep root was coverage-limited")
-	}
-
-	report.Outcomes[0].State = OutcomeTruncated
-	report.AuthoritativeRoots[0].RegistryContract = nil
-	if InstructionCoverageLimited(report) {
-		t.Fatal("contract-free deep-shaped root was coverage-limited")
-	}
-
-	report.AuthoritativeRoots[0].RegistryContract = &contract
-	report.Outcomes[0].Method = InstructionMethodExactProject
-	if InstructionCoverageLimited(report) {
-		t.Fatal("non-deep instruction root was coverage-limited")
+	if !AuthoritativeCoverageComplete(report) {
+		t.Fatal("complete blocking config domain was suppressed by limited instruction coverage")
 	}
 }

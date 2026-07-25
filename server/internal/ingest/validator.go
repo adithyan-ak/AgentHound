@@ -583,12 +583,10 @@ func preflightRegistryContracts(report *ingest.CollectionReport) error {
 		}
 		rootState := stateByRoot[root.CoverageKey]
 		if len(root.ChildCoverageKeys) > 0 &&
-			rootState != ingest.OutcomeComplete &&
-			(expectedInstructionMethod != ingest.InstructionMethodDeep ||
-				rootState != ingest.OutcomeTruncated) {
+			!ingest.IsInstructionCoverageState(rootState) {
 			errs = append(errs, FieldError{
 				Path:    path + ".child_coverage_keys",
-				Message: "only complete instruction roots or truncated deep roots can declare active children",
+				Message: "instruction root with active children must have a recognized coverage state",
 			})
 		}
 		for childIndex, child := range root.ChildCoverageKeys {

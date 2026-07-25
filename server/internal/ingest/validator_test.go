@@ -989,27 +989,63 @@ func TestValidatorRejectsContractOnNonInstructionRoot(t *testing.T) {
 	)
 }
 
-func TestValidatorAllowsCompleteChildFactsUnderTruncatedDeepRoot(t *testing.T) {
-	data, _, _ := validInstructionRootData(ingest.OutcomeTruncated)
-	if err := NewValidator().Validate(data); err != nil {
-		t.Fatalf("complete child facts under truncated deep root rejected: %v", err)
+func TestValidatorAllowsCompleteChildFactsUnderIncompleteInstructionRoot(t *testing.T) {
+	for _, mode := range []struct {
+		name   string
+		method string
+	}{
+		{"exact_user", ingest.InstructionMethodExactUser},
+		{"exact_project", ingest.InstructionMethodExactProject},
+		{"deep", ingest.InstructionMethodDeep},
+	} {
+		for _, state := range []ingest.OutcomeState{
+			ingest.OutcomeTruncated,
+			ingest.OutcomePartial,
+			ingest.OutcomeFailed,
+		} {
+			t.Run(mode.name+"/"+string(state), func(t *testing.T) {
+				data, _, _ := validInstructionRootDataFor(mode.method, state)
+				if err := NewValidator().Validate(data); err != nil {
+					t.Fatalf("complete child under limited root rejected: %v", err)
+				}
+			})
+		}
 	}
 }
 
-func TestValidatorRejectsChildrenUnderFailedOrPartialDeepRoot(t *testing.T) {
-	for _, state := range []ingest.OutcomeState{
+func TestValidatorRejectsIncompleteInstructionChildAndRootOwnedFacts(t *testing.T) {
+	data, root, child := validInstructionRootDataFor(
+		ingest.InstructionMethodExactUser,
 		ingest.OutcomePartial,
-		ingest.OutcomeFailed,
-	} {
-		t.Run(string(state), func(t *testing.T) {
-			data, _, _ := validInstructionRootData(state)
-			assertValidationError(
-				t,
-				NewValidator().Validate(data),
-				"meta.collection.authoritative_roots[0].child_coverage_keys",
-			)
-		})
+	)
+	for i := range data.Meta.Collection.Outcomes {
+		if data.Meta.Collection.Outcomes[i].CoverageKey == child {
+			data.Meta.Collection.Outcomes[i].State = ingest.OutcomePartial
+			data.Meta.Collection.Outcomes[i].Error = "file read incomplete"
+		}
 	}
+	data.Meta.Collection.State = ingest.AggregateOutcomeState(data.Meta.Collection.Outcomes)
+	assertValidationError(
+		t,
+		NewValidator().Validate(data),
+		"meta.collection.authoritative_roots[1].child_coverage_keys[0]",
+	)
+
+	data, root, _ = validInstructionRootDataFor(
+		ingest.InstructionMethodExactUser,
+		ingest.OutcomeFailed,
+	)
+	for i := range data.Graph.Nodes {
+		data.Graph.Nodes[i].ObservationDomains = []string{root}
+	}
+	for i := range data.Graph.Edges {
+		data.Graph.Edges[i].ObservationDomains = []string{root}
+	}
+	assertValidationError(
+		t,
+		NewValidator().Validate(data),
+		"graph.nodes[0].observation_domains[0]",
+	)
 }
 
 func TestValidatorRejectsFactsOwnedByIncompleteDomain(t *testing.T) {
@@ -1045,6 +1081,30 @@ func TestValidatorRejectsOrphanInstructionSource(t *testing.T) {
 	if data.Meta.Collection.Outcomes[1].CoverageKey != child {
 		t.Fatal("test did not mutate the intended instruction source")
 	}
+}
+
+func TestValidatorRejectsInstructionSourceWithWrongParent(t *testing.T) {
+	data, _, child := validInstructionRootDataFor(
+		ingest.InstructionMethodExactUser,
+		ingest.OutcomePartial,
+	)
+	wrongParent := ""
+	for _, outcome := range data.Meta.Collection.Outcomes {
+		if outcome.Method == ingest.InstructionMethodExactProject {
+			wrongParent = outcome.CoverageKey
+			break
+		}
+	}
+	for i := range data.Meta.Collection.Outcomes {
+		if data.Meta.Collection.Outcomes[i].CoverageKey == child {
+			data.Meta.Collection.Outcomes[i].ParentCoverageKey = wrongParent
+		}
+	}
+	assertValidationError(
+		t,
+		NewValidator().Validate(data),
+		"meta.collection.outcomes[1].parent_coverage_key",
+	)
 }
 
 func TestValidatorRequiresExactRootsForConfigCollection(t *testing.T) {
@@ -1133,6 +1193,55 @@ func validInstructionRootData(rootState ingest.OutcomeState) (*ingest.IngestData
 		data.Graph.Edges[i].ObservationDomains = []string{child}
 	}
 	return data, root, child
+}
+
+func validInstructionRootDataFor(
+	method string,
+	rootState ingest.OutcomeState,
+) (*ingest.IngestData, string, string) {
+	data, deepRoot, child := validInstructionRootData(ingest.OutcomeComplete)
+	if method == ingest.InstructionMethodDeep {
+		for i := range data.Meta.Collection.Outcomes {
+			if data.Meta.Collection.Outcomes[i].CoverageKey == deepRoot {
+				data.Meta.Collection.Outcomes[i].State = rootState
+			}
+		}
+		data.Meta.Collection.State = ingest.AggregateOutcomeState(data.Meta.Collection.Outcomes)
+		return data, deepRoot, child
+	}
+
+	selectedRoot := ""
+	for i := range data.Meta.Collection.Outcomes {
+		outcome := &data.Meta.Collection.Outcomes[i]
+		switch {
+		case outcome.CoverageKey == deepRoot:
+			outcome.State = ingest.OutcomeComplete
+		case outcome.Method == method:
+			outcome.State = rootState
+			selectedRoot = outcome.CoverageKey
+		case outcome.CoverageKey == child:
+			outcome.ParentCoverageKey = selectedRoot
+		}
+	}
+	if selectedRoot == "" {
+		panic("unsupported instruction root method in test")
+	}
+	for i := range data.Meta.Collection.AuthoritativeRoots {
+		root := &data.Meta.Collection.AuthoritativeRoots[i]
+		switch root.CoverageKey {
+		case deepRoot:
+			root.ChildCoverageKeys = nil
+		case selectedRoot:
+			root.ChildCoverageKeys = []string{child}
+		}
+	}
+	for i := range data.Meta.Collection.Outcomes {
+		if data.Meta.Collection.Outcomes[i].CoverageKey == child {
+			data.Meta.Collection.Outcomes[i].ParentCoverageKey = selectedRoot
+		}
+	}
+	data.Meta.Collection.State = ingest.AggregateOutcomeState(data.Meta.Collection.Outcomes)
+	return data, selectedRoot, child
 }
 
 func TestValidatorRequiresCompleteV2Metadata(t *testing.T) {

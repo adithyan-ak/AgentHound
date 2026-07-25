@@ -7,7 +7,7 @@ ALTER TABLE coverage_heads
 ALTER TABLE coverage_heads
     DROP CONSTRAINT IF EXISTS coverage_heads_root_state_check,
     ADD CONSTRAINT coverage_heads_root_state_check
-        CHECK (state IS NULL OR state IN ('complete', 'truncated'));
+        CHECK (state IS NULL OR state IN ('complete', 'truncated', 'partial', 'failed'));
 
 ALTER TABLE coverage_heads
     DROP CONSTRAINT IF EXISTS coverage_heads_discovery_mode_check,
