@@ -296,12 +296,19 @@ export function FindingsListPage() {
     hasCachedFindings &&
     snapshot?.available === true &&
     !isCurrentPublishedFindingScope(snapshot);
-  const canClaimCurrent =
+  const findingScopeCurrent =
     !isError && isCurrentPublishedFindingScope(snapshot);
+  const postureReadyForCurrentSnapshot =
+    findingScopeCurrent &&
+    !postureQuery.isLoading &&
+    !postureQuery.isError &&
+    postureQuery.data?.status === "complete" &&
+    postureQuery.data.published_scan_id === snapshot?.scanId &&
+    postureQuery.data.published_revision === snapshot?.revision;
   const canShowSnapshotCounts =
     hasCachedFindings && snapshot?.available === true;
   const limitedInstructionCoverage =
-    canClaimCurrent &&
+    postureReadyForCurrentSnapshot &&
     hasLimitedPublishedInstructionCoverage(postureQuery.data, snapshot?.scanId);
 
   // Number of *secondary* filters active (everything that lives in the rail).
@@ -430,7 +437,7 @@ export function FindingsListPage() {
   const emptyLabel =
     total > 0
       ? "No findings match the current filters"
-      : canClaimCurrent
+      : postureReadyForCurrentSnapshot
         ? limitedInstructionCoverage
           ? "No findings observed; instruction coverage is limited"
           : "No findings detected in the current published snapshot"
@@ -462,7 +469,7 @@ export function FindingsListPage() {
         <p className="font-mono text-xs uppercase tracking-[0.12em] text-muted-foreground">
           {emptyLabel}
         </p>
-        {total === 0 && canClaimCurrent && (
+        {total === 0 && postureReadyForCurrentSnapshot && (
           <button
             onClick={() => navigate("/scans")}
             className="font-mono text-xs uppercase tracking-[0.08em] text-primary transition-colors hover:text-primary/80"

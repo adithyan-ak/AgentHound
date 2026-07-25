@@ -163,7 +163,50 @@ describe("FindingsListPage request and snapshot states", () => {
     expect(screen.queryByText(/No findings detected/i)).not.toBeInTheDocument();
   });
 
-  it("does not apply limited posture from a different published scan", () => {
+  it("withholds a clean empty claim while posture is loading", () => {
+    mocks.useProjectionState.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+    });
+    mocks.useFindings.mockReturnValue({
+      data: [],
+      snapshot: currentScope,
+      isLoading: false,
+      isError: false,
+      dataUpdatedAt: Date.now(),
+    });
+
+    renderPage();
+
+    expect(
+      screen.getByText("Current finding status is unavailable"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/No findings detected/i)).not.toBeInTheDocument();
+  });
+
+  it("withholds a clean empty claim after posture refresh fails", () => {
+    mocks.useProjectionState.mockReturnValue({
+      ...completePosture,
+      isError: true,
+    });
+    mocks.useFindings.mockReturnValue({
+      data: [],
+      snapshot: currentScope,
+      isLoading: false,
+      isError: false,
+      dataUpdatedAt: Date.now(),
+    });
+
+    renderPage();
+
+    expect(
+      screen.getByText("Current finding status is unavailable"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/No findings detected/i)).not.toBeInTheDocument();
+  });
+
+  it("withholds a clean empty claim for a different published posture scan", () => {
     mocks.useProjectionState.mockReturnValue({
       ...completePosture,
       data: {
@@ -190,11 +233,33 @@ describe("FindingsListPage request and snapshot states", () => {
     renderPage();
 
     expect(
-      screen.getByText("No findings detected in the current published snapshot"),
+      screen.getByText("Current finding status is unavailable"),
     ).toBeInTheDocument();
+    expect(screen.queryByText(/No findings detected/i)).not.toBeInTheDocument();
+  });
+
+  it("withholds a clean empty claim for a different published posture revision", () => {
+    mocks.useProjectionState.mockReturnValue({
+      ...completePosture,
+      data: {
+        ...completePosture.data,
+        published_revision: 4,
+      },
+    });
+    mocks.useFindings.mockReturnValue({
+      data: [],
+      snapshot: currentScope,
+      isLoading: false,
+      isError: false,
+      dataUpdatedAt: Date.now(),
+    });
+
+    renderPage();
+
     expect(
-      screen.queryByText(/instruction coverage is limited/i),
-    ).not.toBeInTheDocument();
+      screen.getByText("Current finding status is unavailable"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/No findings detected/i)).not.toBeInTheDocument();
   });
 
   it("labels cached data when a refresh fails", () => {
