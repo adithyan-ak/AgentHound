@@ -234,9 +234,12 @@ behaviour:
   duplicate canonical names with distinct values, or aliases with different
   argv, environment, URL, or headers, produce a fixed ambiguity outcome before
   any subprocess or network transport is constructed.
-- `--include-credential-values` opts into raw values. Use this only
-  for offline audit work. The output file (containing raw secrets)
-  has no transport-layer protection — protect the file at rest. This opt-in may
+- `--include-credential-values` opts into raw values. Use it only when an
+  authorized workflow explicitly requires them. The output file (containing raw
+  secrets) has no transport-layer protection — protect it at rest. If the
+  artifact is transferred or uploaded with `--ingest`, use HTTPS or a loopback
+  endpoint protected by an operator-controlled VPN/SSH tunnel as described
+  above; never send it over plaintext on an untrusted network. This opt-in may
   include values extracted from argv or URL components on Config Collector
   Credential nodes, but it never restores a raw MCPServer `args` array or raw
   public endpoint.
