@@ -257,9 +257,32 @@ func discoverDeepInstructionsWithinBudget(
 	walkCtx, cancel := context.WithTimeout(ctx, deepInstructionWalkBudget)
 	defer cancel()
 
+	type scopeResult struct {
+		index     int
+		discovery InstructionDiscovery
+	}
+	completed := make(chan scopeResult, len(scopes))
+	for index, scope := range scopes {
+		go func() {
+			completed <- scopeResult{
+				index: index,
+				discovery: discoverDeepInstructionScopeWithinBudget(
+					walkCtx,
+					ctx,
+					scope,
+					engine,
+				),
+			}
+		}()
+	}
+	ordered := make([]InstructionDiscovery, len(scopes))
+	for range scopes {
+		deep := <-completed
+		ordered[deep.index] = deep.discovery
+	}
+
 	var result InstructionDiscovery
-	for _, scope := range scopes {
-		deep := discoverDeepInstructionScopeWithinBudget(walkCtx, ctx, scope, engine)
+	for _, deep := range ordered {
 		result.Observations = append(result.Observations, deep.Observations...)
 		result.CoverageKeys = append(result.CoverageKeys, deep.CoverageKeys...)
 		result.AuthoritativeRoots = append(result.AuthoritativeRoots, deep.AuthoritativeRoots...)
