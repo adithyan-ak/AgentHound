@@ -310,21 +310,30 @@ func (a *rejectStorageVerifier) Verify(context.Context) error {
 
 type fakeLifecycleScanStore struct {
 	*fakeScanStore
-	dirtyCoverage      []string
-	beginDirtyCoverage [][]string
-	failures           []appdb.ScanFailure
-	recordFailureErr   error
+	dirtyCoverage       []string
+	beginDirtyCoverage  [][]string
+	beginCoverageParent []map[string]string
+	failures            []appdb.ScanFailure
+	recordFailureErr    error
 }
 
 func (s *fakeLifecycleScanStore) BeginScan(
 	ctx context.Context,
 	scan *model.Scan,
 	dirtyCoverage []string,
-	_ map[string]string,
+	coverageParents map[string]string,
 ) ([]string, error) {
 	s.beginDirtyCoverage = append(
 		s.beginDirtyCoverage,
 		append([]string(nil), dirtyCoverage...),
+	)
+	clonedParents := make(map[string]string, len(coverageParents))
+	for key, parent := range coverageParents {
+		clonedParents[key] = parent
+	}
+	s.beginCoverageParent = append(
+		s.beginCoverageParent,
+		clonedParents,
 	)
 	seen := make(map[string]bool)
 	merged := append([]string(nil), s.dirtyCoverage...)
@@ -2787,6 +2796,146 @@ func TestPipeline_UnsafeNormalizationDoesNotResolveLimitedDirtyCoverage(t *testi
 			"unsafe normalization lost inherited dirtiness: %v",
 			finalized.DirtyCoverage,
 		)
+	}
+}
+
+func TestPipeline_UnsafeNormalizationSeedsLimitedCompleteChildDirty(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		data func(string) (*sdkingest.IngestData, string, string)
+	}{
+		{
+			name: "exact",
+			data: func(scanID string) (*sdkingest.IngestData, string, string) {
+				return limitedExactInstructionIngest(
+					scanID,
+					sdkingest.InstructionMethodExactUser,
+					sdkingest.OutcomePartial,
+				)
+			},
+		},
+		{
+			name: "deep",
+			data: truncatedDeepInstructionIngest,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data, _, child := test.data(
+				"scan-unsafe-normalization-new-" + test.name,
+			)
+			node := validIngestData().Graph.Nodes[0]
+			node.ObservationDomains = []string{child}
+			node.Properties["nested"] = map[string]any{
+				"unsupported": make(chan int),
+			}
+			data.Graph.Nodes = []sdkingest.Node{node}
+			lifecycle := &fakeLifecycleScanStore{
+				fakeScanStore: &fakeScanStore{},
+			}
+			publisher := &fakePublisher{lifecycle: lifecycle}
+			writer := &fakeWriter{}
+			p := newTestPipeline(
+				writer,
+				&graph.MockGraphDB{},
+				lifecycle,
+				noOpRunPP,
+			)
+			p.findingStore = publisher
+
+			result, err := p.Ingest(context.Background(), data)
+			if err != nil {
+				t.Fatalf("unsafe Ingest: %v", err)
+			}
+			if result.NormalizationStatus != sdkingest.NormalizationStatusDegraded ||
+				result.ProjectionStatus != model.ProjectionIncomplete {
+				t.Fatalf("unsafe normalization result = %+v", result)
+			}
+			mutatedChild := data.Graph.Nodes[0].ObservationDomains[0]
+			mutatedParent := sdkingest.CoverageParents(
+				data.Meta.Collection,
+			)[mutatedChild]
+			if mutatedParent == "" {
+				t.Fatalf("mutated child %q has no parent", mutatedChild)
+			}
+			if len(lifecycle.beginDirtyCoverage) != 1 ||
+				!containsCoverage(
+					lifecycle.beginDirtyCoverage[0],
+					mutatedChild,
+				) {
+				t.Fatalf(
+					"begin dirty coverage = %v, want mutated child %q",
+					lifecycle.beginDirtyCoverage,
+					mutatedChild,
+				)
+			}
+			if lifecycle.beginCoverageParent[0][mutatedChild] !=
+				mutatedParent {
+				t.Fatalf(
+					"begin parent[%q] = %q, want %q",
+					mutatedChild,
+					lifecycle.beginCoverageParent[0][mutatedChild],
+					mutatedParent,
+				)
+			}
+			if len(publisher.finalizations) != 1 ||
+				publisher.finalizations[0].Publish {
+				t.Fatalf(
+					"unsafe finalization = %+v, want withheld",
+					publisher.finalizations,
+				)
+			}
+			finalized := publisher.finalizations[0]
+			if !containsCoverage(finalized.DirtyCoverage, mutatedChild) ||
+				containsCoverage(
+					finalized.ResolvedDirtyCoverage,
+					mutatedChild,
+				) ||
+				containsCoverage(finalized.CompleteDomains, mutatedChild) ||
+				len(finalized.CoverageRoots) != 0 {
+				t.Fatalf(
+					"unsafe child lifecycle dirty=%v resolved=%v complete=%v roots=%+v",
+					finalized.DirtyCoverage,
+					finalized.ResolvedDirtyCoverage,
+					finalized.CompleteDomains,
+					finalized.CoverageRoots,
+				)
+			}
+			if containsCoverage(
+				writer.nodeCalls[0].CompleteScopes,
+				mutatedChild,
+			) {
+				t.Fatalf(
+					"unsafe child reconciled: %v",
+					writer.nodeCalls[0].CompleteScopes,
+				)
+			}
+			if !containsCoverage(lifecycle.dirtyCoverage, mutatedChild) {
+				t.Fatalf(
+					"current dirty coverage = %v, want %q",
+					lifecycle.dirtyCoverage,
+					mutatedChild,
+				)
+			}
+
+			recovery, _, recoveryChild := test.data(
+				"scan-unsafe-normalization-recovery-" + test.name,
+			)
+			recoveryNode := validIngestData().Graph.Nodes[0]
+			recoveryNode.ObservationDomains = []string{recoveryChild}
+			recovery.Graph.Nodes = []sdkingest.Node{recoveryNode}
+			recovered, err := p.Ingest(context.Background(), recovery)
+			if err != nil {
+				t.Fatalf("recovery Ingest: %v", err)
+			}
+			if recovered.ProjectionStatus != model.ProjectionComplete ||
+				len(lifecycle.dirtyCoverage) != 0 {
+				t.Fatalf(
+					"recovery result=%+v dirty=%v",
+					recovered,
+					lifecycle.dirtyCoverage,
+				)
+			}
+		})
 	}
 }
 

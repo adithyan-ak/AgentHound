@@ -236,7 +236,10 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	nonBlockingKeys := sdkingest.NonBlockingInstructionCoverageDomains(
 		data.Meta.Collection,
 	)
-	completeDomains := sdkingest.CompleteCoverageDomains(data.Meta.Collection)
+	observedCompleteDomains := sdkingest.CompleteCoverageDomains(
+		data.Meta.Collection,
+	)
+	completeDomains := observedCompleteDomains
 	coverageRoots := promotableAuthoritativeRoots(data.Meta.Collection)
 	authoritativeRoots := sdkingest.CompleteAuthoritativeRoots(
 		data.Meta.Collection,
@@ -305,12 +308,17 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		return nil, fmt.Errorf("resolve authoritative coverage: %w", err)
 	}
 	reconciliationDomains := mergeCoverage(completeDomains, retiredDomains)
+	var normalizationDirtyDomains []string
+	if normalizationDegradedErr != nil {
+		normalizationDirtyDomains = observedCompleteDomains
+	}
 	cumulativeDirtyCoverage, err := p.scanStore.BeginScan(
 		ctx,
 		initialScan,
 		mergeCoverage(
 			subtractCoverage(keys, nonBlockingKeys),
 			reconciliationDomains,
+			normalizationDirtyDomains,
 		),
 		sdkingest.CoverageParents(data.Meta.Collection),
 	)
