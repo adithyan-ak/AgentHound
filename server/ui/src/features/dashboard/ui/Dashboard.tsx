@@ -8,7 +8,10 @@ import {
   useLatestPublishedScan,
   useScans,
 } from "@entities/scan";
-import { useProjectionState } from "@entities/posture";
+import {
+  limitedPublishedInstructionRoots,
+  useProjectionState,
+} from "@entities/posture";
 import { AsyncBoundary, DataStateNotice } from "@shared/ui/feedback";
 import { sameDashboardProjection } from "../model/projection";
 import { DashboardHeader } from "./DashboardHeader";
@@ -161,9 +164,7 @@ export function Dashboard() {
     latestPublished.analysis_status === "complete" &&
     latestPublished.snapshot_status === "complete" &&
     latestPublished.projection_status === "complete";
-  const limitedCoverageRoots = (posture?.active_coverage_roots ?? []).filter(
-    (root) => root.state !== "complete" || !root.contract_current,
-  );
+  const limitedCoverageRoots = limitedPublishedInstructionRoots(posture);
   const exactCoverageNeedsRefresh = limitedCoverageRoots.some(
     (root) => root.mode !== "deep",
   );

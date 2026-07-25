@@ -65,7 +65,7 @@ export function CategoryBreakdown() {
         loading={<Skeleton className="h-56 w-full" />}
         empty={
           <div className="flex h-56 items-center justify-center font-mono text-xs uppercase tracking-wider text-muted-foreground">
-            No findings yet
+            No findings observed yet
           </div>
         }
       >

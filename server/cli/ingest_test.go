@@ -137,6 +137,58 @@ func TestWriteIngestResultLimitedDeepCoverageRemainsSuccessful(t *testing.T) {
 	}
 }
 
+func TestWriteIngestResultPublishedIncompleteExactCoverageRemainsSuccessful(t *testing.T) {
+	revision := int64(9)
+	root := ingest.CanonicalCoverageKey(
+		"config",
+		"instruction-exact-user",
+		"/home/example",
+	)
+	contract := ingest.CurrentInstructionRegistryContract()
+	result := &ingest.IngestResult{
+		ScanID:            "scan-exact-limited",
+		Outcome:           ingest.OutcomeComplete,
+		ProjectionStatus:  model.ProjectionComplete,
+		PublishedRevision: &revision,
+		Warnings:          []string{ingest.InstructionCoverageLimitationWarning},
+		Collection: ingest.CollectionReport{
+			State:        ingest.OutcomePartial,
+			CoverageKeys: []string{root},
+			AuthoritativeRoots: []ingest.CoverageRoot{{
+				CoverageKey:      root,
+				RegistryContract: &contract,
+			}},
+			Outcomes: []ingest.CollectionOutcome{{
+				Collector:   "config",
+				CoverageKey: root,
+				Method:      ingest.InstructionMethodExactUser,
+				State:       ingest.OutcomePartial,
+				Error:       "permission denied",
+			}},
+		},
+	}
+
+	var output bytes.Buffer
+	if err := writeIngestResult(&output, result); err != nil {
+		t.Fatalf("published exact limited-coverage result returned error: %v", err)
+	}
+	for _, want := range []string{
+		"Ingest complete with coverage limitations:",
+		"Warnings:           1",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, output.String())
+		}
+	}
+	if strings.Contains(ingest.InstructionCoverageLimitationWarning, "deep") ||
+		!strings.Contains(ingest.InstructionCoverageLimitationWarning, "not a clean absence") {
+		t.Fatalf(
+			"warning is not generalized to incomplete instruction coverage: %q",
+			ingest.InstructionCoverageLimitationWarning,
+		)
+	}
+}
+
 func TestFinishIngestCommandRendersFailedResultAndPreservesPipelineError(t *testing.T) {
 	pipelineErr := errors.New("edge batch 2 committed 1000 rows before failure")
 	result := &ingest.IngestResult{

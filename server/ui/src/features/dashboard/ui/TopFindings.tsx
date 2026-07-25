@@ -55,7 +55,7 @@ export function TopFindings() {
           <div className="flex h-56 flex-col items-center justify-center gap-1 text-center">
             <p className="font-mono text-sm font-medium text-foreground">No critical alerts</p>
             <p className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
-              No critical or high-severity findings
+              No critical or high-severity findings observed
             </p>
           </div>
         }

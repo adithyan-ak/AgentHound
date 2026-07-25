@@ -27,6 +27,29 @@ export interface PostureCoverageRoot {
   contract_current: boolean;
 }
 
+export function limitedPublishedInstructionRoots(
+  posture: ProjectionState | undefined,
+  scanID = posture?.published_scan_id,
+): PostureCoverageRoot[] {
+  if (
+    posture?.status !== "complete" ||
+    !posture.published_scan_id ||
+    scanID !== posture.published_scan_id
+  ) {
+    return [];
+  }
+  return (posture.active_coverage_roots ?? []).filter(
+    (root) => root.state !== "complete" || !root.contract_current,
+  );
+}
+
+export function hasLimitedPublishedInstructionCoverage(
+  posture: ProjectionState | undefined,
+  scanID = posture?.published_scan_id,
+): boolean {
+  return limitedPublishedInstructionRoots(posture, scanID).length > 0;
+}
+
 function stringArray(value: unknown, field: string): string[] {
   if (value == null) return [];
   if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {

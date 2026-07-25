@@ -267,7 +267,72 @@ describe("ScanImport", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveClass("border-amber-400/30");
     expect(
-      screen.getByText(/missing nested evidence is not a clean absence/i),
+      screen.getByText(/missing instruction evidence is not a clean absence/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /view findings/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /open graph/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders published exact partial coverage as amber success with actions", async () => {
+    const counts = ingestCounts(2, 1);
+    const exactRoot = `config:instruction-exact-user:sha256:${"f".repeat(64)}`;
+    counts.collection = {
+      state: "partial",
+      coverage_keys: [exactRoot],
+      authoritative_roots: [
+        {
+          coverage_key: exactRoot,
+          child_coverage_keys: [],
+          registry_contract: {
+            generation: 1,
+            digest: `sha256:${"e".repeat(64)}`,
+          },
+        },
+      ],
+      outcomes: [
+        {
+          collector: "config",
+          coverage_key: exactRoot,
+          target: "/home/example/.claude/CLAUDE.md",
+          method: "instruction_exact_user",
+          state: "partial",
+          error: "permission denied",
+        },
+      ],
+    };
+    mockedUploadScan.mockResolvedValue({
+      scan_id: "exact-limited",
+      outcome: "complete",
+      projection_status: "complete",
+      ...counts,
+      published_revision: 3,
+      stages: [
+        { name: "write_nodes", state: "complete", required: true, duration: 1 },
+        { name: "write_edges", state: "complete", required: true, duration: 1 },
+        { name: "analysis", state: "complete", required: true, duration: 1 },
+        { name: "snapshot", state: "complete", required: true, duration: 1 },
+        { name: "publication", state: "complete", required: true, duration: 1 },
+      ],
+    });
+    render(<ScanImport open={true} onClose={() => {}} />, {
+      wrapper: createWrapper(),
+    });
+
+    await dropForPreview(makeJSONFile("exact.json", validScanJSON));
+    await confirmPreview();
+
+    expect(
+      await screen.findByText(/imported exact\.json with limited coverage/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveClass("border-amber-400/30");
+    expect(
+      screen.getByText(
+        /observed instruction positives were published.*missing instruction evidence is not a clean absence/i,
+      ),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /view findings/i }),

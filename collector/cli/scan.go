@@ -233,29 +233,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 func writeInstructionCoverageWarnings(w io.Writer, report *ingest.CollectionReport) {
 	for _, outcome := range ingest.IncompleteInstructionRoots(report) {
-		if outcome.Method == ingest.InstructionMethodDeep {
-			if outcome.Error == "" {
-				_, _ = fmt.Fprintln(
-					w,
-					"Warning: "+ingest.InstructionCoverageLimitationWarning+".",
-				)
-			} else {
-				_, _ = fmt.Fprintf(
-					w,
-					"Warning: deep instruction coverage is limited (%s: %s); missing nested instruction evidence is not a clean absence.\n",
-					outcome.State,
-					outcome.Error,
-				)
-			}
-			continue
-		}
 		detail := string(outcome.State)
 		if outcome.Error != "" {
 			detail += ": " + outcome.Error
 		}
 		_, _ = fmt.Fprintf(
 			w,
-			"Warning: %s coverage %s; registered-source evidence from this root was withheld.\n",
+			"Warning: %s coverage is limited (%s); observed instruction positives were retained, and missing instruction evidence is not a clean absence.\n",
 			instructionCoverageLabel(outcome.Method),
 			detail,
 		)
@@ -268,6 +252,8 @@ func instructionCoverageLabel(method string) string {
 		return "exact user instruction"
 	case ingest.InstructionMethodExactProject:
 		return "exact project instruction"
+	case ingest.InstructionMethodDeep:
+		return "deep instruction"
 	default:
 		return "instruction"
 	}

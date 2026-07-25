@@ -347,6 +347,16 @@ If an evidence-backed collector emits `LOADS_INSTRUCTIONS`, it must declare the
 actual client and applicability scopes needed to reconcile that relationship;
 the static config collector does not infer them.
 
+Registered instruction files use stable per-file owners derived from the
+stable exact/deep root key and canonical path; the registry contract is not
+part of the owner key. A recognized incomplete instruction root may publish
+complete child facts additively, but only a complete root has absence authority
+over its current child set. Limited roots perform no unseen-child retirement,
+produce no comparison key, and cannot support an all-clear. A later complete
+root refreshes the same owners and can retire children it authoritatively
+proves absent. This is registered-source coverage only; it does not claim which
+effective client loads a file.
+
 A complete exact re-observation replaces stale managed properties. Observation
 completeness considers only public collector-produced nodes and managed raw
 relationships, so internal graph state such as `SchemaVersion` and derived
@@ -402,8 +412,12 @@ domain is promoted, the server retires the entire derived epoch and rebuilds
 all processors from retained current raw facts in dependency order. Global
 replacement prevents a narrow-domain change from preserving cross-domain
 evidence merely because its `source_collector` names another detector.
-Unknown, partial, and failed collection cannot publish. When no domain is
-promotably complete, derived processing is skipped and the epoch is untouched.
+Blocking unknown, partial, and failed collection cannot publish. When no
+domain is promotably complete, derived processing is skipped and the epoch is
+untouched. The narrow exception is a recognized incomplete instruction root
+with complete per-file children: those children are promotable and may drive a
+limited publication, while the root remains non-authoritative for absence and
+retirement.
 
 ---
 
@@ -571,7 +585,10 @@ registered processor recomputes from the retained raw projection. This covers
 transitive, cross-protocol, credential-chain, and other multi-domain evidence
 without relying on the single-valued `source_collector` provenance field.
 Attempts with no promotably complete domain perform no epoch retirement;
-partial and failed collection never publishes.
+partial and failed blocking collection never publishes. A recognized limited
+instruction root can publish only because its complete per-file domains are
+promotable; its incomplete root is never used for absence retirement or
+comparison.
 
 ### Neo4j Version Compatibility
 

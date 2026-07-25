@@ -382,10 +382,14 @@ hostname/OS/architecture labels.
 
 Only explicitly complete, attributable target/config coverage keys can retire
 prior raw observations. Incomplete blocking coverage never retires data or
-replaces the latest published posture. Registered deep instruction coverage is
-non-blocking: partial or failed deep attempts preserve prior deep evidence,
-while truncated attempts may publish exact posture plus completed deep
-children without retiring unseen deep evidence.
+replaces the latest published posture. Recognized registry-backed exact and
+deep instruction roots are the narrow non-blocking exception: complete
+per-file children publish additively under stable owners while an incomplete
+root has no absence authority. It cannot retire unseen sources or produce a
+comparison/all-clear claim. Partial, failed, and truncated roots may therefore
+publish observed positives while preserving unseen prior instruction evidence.
+A later complete root reuses those owners and restores normal absence
+reconciliation.
 Lossless normalization coercions are persisted as `warning` and may publish;
 only warnings explicitly marked `publication_unsafe` produce `degraded` and
 withhold publication.
@@ -662,7 +666,10 @@ attempt while `published_scan_id` / `published_revision` continue to identify
 the last complete snapshot. `active_coverage_roots` reports each current exact
 or deep instruction root by hashed coverage key, mode, state, owning scan,
 observation time, and registry contract. An old, truncated, or otherwise
-incomplete deep contract is a coverage limitation rather than a clean absence.
+incomplete exact or deep contract is a coverage limitation rather than a clean
+absence. Positive findings and graph facts remain usable; consumers must not
+interpret an empty finding set as an all-clear while any active published root
+is incomplete or uses an older registry contract.
 
 ### `GET /api/v1/posture/export`
 
@@ -681,8 +688,9 @@ publication.
 `health.state` is
 `not_captured` because publication does not
 perform a timestamped dependency health probe. `limits.findings` declares
-returned/total counts and whether the finding set is complete. It never
-combines fresh reads from Neo4j, finding history, and scan history.
+returned/total counts and whether the finding result-set cardinality is
+complete. It does not assert complete collection coverage or an all-clear. The
+export never combines fresh reads from Neo4j, finding history, and scan history.
 
 Returns `404` until a complete posture has been published.
 
@@ -697,7 +705,7 @@ Scan records serialize `model.Scan` verbatim. The `status` field is one of:
 | `pending` | Registered but not yet started. |
 | `running` | Ingest in progress. |
 | `completed` | Required collection, graph, analysis, stats, snapshot, and publication stages succeeded. |
-| `completed_with_errors` | Graph writes completed, but coverage or a required later stage was incomplete/failed; the prior published posture remains available. |
+| `completed_with_errors` | Graph writes completed, but blocking coverage or a required later stage was incomplete/failed; the prior published posture remains available. Recognized limited instruction-root publication remains `completed`. |
 | `failed` | A graph write failed. `write_rows` preserves rows committed before failure. |
 
 Additive lifecycle fields expose `collection_status`, `graph_status`,

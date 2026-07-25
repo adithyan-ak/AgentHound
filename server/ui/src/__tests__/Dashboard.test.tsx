@@ -63,18 +63,11 @@ vi.mock("@entities/scan/api", () => ({
   fetchLatestPublishedScan: vi.fn().mockResolvedValue(publishedScan),
 }));
 
-vi.mock("@entities/posture/api", () => ({
-  fetchProjectionState: vi.fn().mockResolvedValue({
-    status: "complete",
-    scan_id: "scan-1",
-    dirty_coverage: [],
-    updated_at: "2026-07-11T00:00:00Z",
-    published_scan_id: "scan-1",
-    published_revision: 1,
-    published_at: "2026-07-11T00:01:00Z",
-  }),
-  useProjectionState: vi.fn(() => ({
-    data: {
+vi.mock("@entities/posture/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@entities/posture/api")>();
+  return {
+    ...actual,
+    fetchProjectionState: vi.fn().mockResolvedValue({
       status: "complete",
       scan_id: "scan-1",
       dirty_coverage: [],
@@ -82,13 +75,24 @@ vi.mock("@entities/posture/api", () => ({
       published_scan_id: "scan-1",
       published_revision: 1,
       published_at: "2026-07-11T00:01:00Z",
-    },
-    isLoading: false,
-    isError: false,
-    error: null,
-    dataUpdatedAt: Date.parse("2026-07-11T00:00:00Z"),
-  })),
-}));
+    }),
+    useProjectionState: vi.fn(() => ({
+      data: {
+        status: "complete",
+        scan_id: "scan-1",
+        dirty_coverage: [],
+        updated_at: "2026-07-11T00:00:00Z",
+        published_scan_id: "scan-1",
+        published_revision: 1,
+        published_at: "2026-07-11T00:01:00Z",
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      dataUpdatedAt: Date.parse("2026-07-11T00:00:00Z"),
+    })),
+  };
+});
 
 import { useGraphStats } from "@entities/graph-stats/api";
 import { fetchFindings } from "@entities/finding/api";
@@ -428,7 +432,64 @@ describe("Dashboard", () => {
     render(<Dashboard />, { wrapper: createWrapper() });
 
     expect(await screen.findByText("Low Risk")).toBeInTheDocument();
+    expect(
+      within(screen.getByText("Threat").closest("div") as HTMLElement).getByText(
+        "Low",
+      ),
+    ).toBeInTheDocument();
     expect(screen.queryByText("Posture verdicts withheld")).not.toBeInTheDocument();
+  });
+
+  it("qualifies low threat and exposure labels when published roots are limited", async () => {
+    mockedUseProjectionState.mockReturnValue({
+      ...completeProjectionState(),
+      data: {
+        ...completeProjectionState().data,
+        active_coverage_roots: [
+          {
+            coverage_key: "config:instruction-exact-user:sha256:root",
+            mode: "exact_user",
+            state: "partial",
+            scan_id: "scan-1",
+            observed_at: "2026-07-11T00:00:00Z",
+            registry_contract: {
+              generation: 1,
+              digest: "sha256:registry",
+            },
+            contract_current: true,
+          },
+        ],
+      },
+    } as ReturnType<typeof useProjectionState>);
+    mockedUseGraphStats.mockReturnValue({
+      data: {
+        node_counts: { MCPServer: 1 },
+        edge_counts: {},
+        total_nodes: 1,
+        total_edges: 0,
+        projection: { scanId: "scan-1", revision: 1 },
+      },
+      isLoading: false,
+      error: null,
+      isError: false,
+      isPending: false,
+    } as unknown as ReturnType<typeof useGraphStats>);
+
+    render(<Dashboard />, { wrapper: createWrapper() });
+
+    expect(
+      await within(
+        screen.getByText("Threat").closest("div") as HTMLElement,
+      ).findByText("Low · Limited"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Low Risk · Limited Coverage")).toBeInTheDocument();
+    expect(screen.getByText("observed score of 100")).toBeInTheDocument();
+    expect(
+      within(
+        screen.getByText("Threat").closest("div") as HTMLElement,
+      ).queryByText(/^Low$/),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Low Risk$/)).not.toBeInTheDocument();
   });
 
   it("renders a usable published posture with a deep-coverage warning", async () => {
@@ -493,7 +554,9 @@ describe("Dashboard", () => {
 
     render(<Dashboard />, { wrapper: createWrapper() });
 
-    expect(await screen.findByText("Low Risk")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Low Risk · Limited Coverage"),
+    ).toBeInTheDocument();
     expect(
       screen.getByText(/retained nested coverage is truncated/),
     ).toBeInTheDocument();

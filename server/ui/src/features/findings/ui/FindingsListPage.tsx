@@ -22,6 +22,10 @@ import {
   useSetTriage,
   SEVERITY_RANK,
 } from "@entities/finding";
+import {
+  hasLimitedPublishedInstructionCoverage,
+  useProjectionState,
+} from "@entities/posture";
 import type { Finding } from "@entities/finding/model";
 import { edgeLabel } from "@entities/edge";
 import {
@@ -102,6 +106,7 @@ export function FindingsListPage() {
     isError,
     dataUpdatedAt,
   } = useFindings(showSuppressed);
+  const postureQuery = useProjectionState();
   const setTriage = useSetTriage();
 
   // Triage status now arrives inline on each finding (server-backed). Derive
@@ -295,6 +300,9 @@ export function FindingsListPage() {
     !isError && isCurrentPublishedFindingScope(snapshot);
   const canShowSnapshotCounts =
     hasCachedFindings && snapshot?.available === true;
+  const limitedInstructionCoverage =
+    canClaimCurrent &&
+    hasLimitedPublishedInstructionCoverage(postureQuery.data, snapshot?.scanId);
 
   // Number of *secondary* filters active (everything that lives in the rail).
   const activeFacetCount =
@@ -423,7 +431,9 @@ export function FindingsListPage() {
     total > 0
       ? "No findings match the current filters"
       : canClaimCurrent
-        ? "No findings detected in the current published snapshot"
+        ? limitedInstructionCoverage
+          ? "No findings observed; instruction coverage is limited"
+          : "No findings detected in the current published snapshot"
         : scopeUnavailable
           ? "No published finding snapshot is available"
           : "Current finding status is unavailable";

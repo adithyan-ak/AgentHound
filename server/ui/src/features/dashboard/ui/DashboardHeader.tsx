@@ -15,7 +15,10 @@ import { useFindings, severityCounts } from "@entities/finding";
 import { useGraphStats } from "@entities/graph-stats";
 import { useNodes, isUnauth } from "@entities/node";
 import { useHealth } from "@entities/health";
-import { useProjectionState } from "@entities/posture";
+import {
+  hasLimitedPublishedInstructionCoverage,
+  useProjectionState,
+} from "@entities/posture";
 import {
   exposureScore,
   exposureBand,
@@ -110,6 +113,8 @@ export function DashboardHeader() {
   const findings = findingsQuery.data;
   const nodes = nodesQuery.data;
   const posture = postureQuery.data;
+  const limitedInstructionCoverage =
+    hasLimitedPublishedInstructionCoverage(posture);
 
   const componentStatus = (
     component: "neo4j" | "postgres",
@@ -342,7 +347,13 @@ export function DashboardHeader() {
           />
           <StripSeg
             label="Threat"
-            value={verdictAvailable ? threatLabel : "withheld"}
+            value={
+              verdictAvailable
+                ? limitedInstructionCoverage
+                  ? `${threatLabel} · Limited`
+                  : threatLabel
+                : "withheld"
+            }
             color={
               verdictAvailable
                 ? exposureColor(exposure)
@@ -351,7 +362,9 @@ export function DashboardHeader() {
             pulse={verdictAvailable && exposure >= 50}
             title={
               verdictAvailable
-                ? "Calculated from the complete published snapshot"
+                ? limitedInstructionCoverage
+                  ? "Calculated from observed positives in the published snapshot; instruction coverage is limited"
+                  : "Calculated from the complete published snapshot"
                 : "Unavailable until collection, projection, analysis, and publication are complete"
             }
           />

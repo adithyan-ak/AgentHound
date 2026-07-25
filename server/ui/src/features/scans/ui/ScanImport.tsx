@@ -197,20 +197,27 @@ function completedStage(result: IngestResult, name: string): boolean {
   ) ?? false;
 }
 
-function hasLimitedDeepInstructionCoverage(result: IngestResult): boolean {
+function hasLimitedInstructionCoverage(result: IngestResult): boolean {
+  const rootKinds: Record<string, string> = {
+    instruction_exact_user: "instruction-exact-user",
+    instruction_exact_project: "instruction-exact-project",
+    instruction_deep: "instruction-deep",
+  };
   return (result.collection.authoritative_roots ?? []).some((root) => {
-    if (
-      !root.registry_contract ||
-      !root.coverage_key.startsWith("config:instruction-deep:sha256:")
-    ) {
+    if (!root.registry_contract) {
       return false;
     }
     return result.collection.outcomes.some(
-      (outcome) =>
-        outcome.coverage_key === root.coverage_key &&
-        outcome.collector === "config" &&
-        outcome.method === "instruction_deep" &&
-        ["truncated", "partial", "failed"].includes(outcome.state),
+      (outcome) => {
+        const rootKind = rootKinds[outcome.method];
+        return (
+          rootKind !== undefined &&
+          root.coverage_key.startsWith(`config:${rootKind}:sha256:`) &&
+          outcome.coverage_key === root.coverage_key &&
+          outcome.collector === "config" &&
+          ["truncated", "partial", "failed"].includes(outcome.state)
+        );
+      },
     );
   });
 }
@@ -383,7 +390,7 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
     result.projection_status === "complete" &&
     incompleteStages.length === 0;
   const limitedCoverage =
-    publishedOutcome && result != null && hasLimitedDeepInstructionCoverage(result);
+    publishedOutcome && result != null && hasLimitedInstructionCoverage(result);
   const completeOutcome =
     publishedOutcome && warnings.length === 0 && !limitedCoverage;
   const canOpenGraph =
@@ -575,9 +582,8 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
                 </p>
                 {limitedCoverage && (
                   <p className="text-xs text-muted-foreground">
-                    Deep instruction discovery was limited. Published results
-                    remain usable, but missing nested evidence is not a clean
-                    absence.
+                    Observed instruction positives were published and remain
+                    usable; missing instruction evidence is not a clean absence.
                   </p>
                 )}
                 {!completeOutcome && !limitedCoverage && (

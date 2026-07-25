@@ -5,6 +5,7 @@ import type { Finding } from "@entities/finding/model";
 
 const mocks = vi.hoisted(() => ({
   useFindings: vi.fn(),
+  useProjectionState: vi.fn(),
   mutate: vi.fn(),
 }));
 
@@ -14,6 +15,14 @@ vi.mock("@entities/finding", async (importOriginal) => {
     ...actual,
     useFindings: mocks.useFindings,
     useSetTriage: () => ({ mutate: mocks.mutate }),
+  };
+});
+
+vi.mock("@entities/posture", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@entities/posture")>();
+  return {
+    ...actual,
+    useProjectionState: mocks.useProjectionState,
   };
 });
 
@@ -28,6 +37,34 @@ const currentScope = {
   snapshotStatus: "complete",
   available: true,
   stale: false,
+};
+
+const completePosture = {
+  data: {
+    status: "complete",
+    scan_id: "scan-1",
+    dirty_coverage: [],
+    active_coverage_roots: [
+      {
+        coverage_key: "config:instruction-exact-user:sha256:root",
+        mode: "exact_user",
+        state: "complete",
+        scan_id: "scan-1",
+        observed_at: "2026-07-11T00:00:00Z",
+        registry_contract: {
+          generation: 1,
+          digest: "sha256:registry",
+        },
+        contract_current: true,
+      },
+    ],
+    updated_at: "2026-07-11T00:00:00Z",
+    published_scan_id: "scan-1",
+    published_revision: 3,
+    published_at: "2026-07-11T00:00:00Z",
+  },
+  isLoading: false,
+  isError: false,
 };
 
 function renderPage(initialEntry = "/findings") {
@@ -64,6 +101,7 @@ describe("FindingsListPage request and snapshot states", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     Element.prototype.scrollIntoView = vi.fn();
+    mocks.useProjectionState.mockReturnValue(completePosture);
   });
 
   it("withholds the empty verdict after a cold request failure", () => {
@@ -92,6 +130,71 @@ describe("FindingsListPage request and snapshot states", () => {
     expect(
       screen.getByText("No findings detected in the current published snapshot"),
     ).toBeInTheDocument();
+  });
+
+  it("qualifies an empty current snapshot when published instruction coverage is limited", () => {
+    mocks.useProjectionState.mockReturnValue({
+      ...completePosture,
+      data: {
+        ...completePosture.data,
+        active_coverage_roots: [
+          {
+            ...completePosture.data.active_coverage_roots[0],
+            state: "partial",
+          },
+        ],
+      },
+    });
+    mocks.useFindings.mockReturnValue({
+      data: [],
+      snapshot: currentScope,
+      isLoading: false,
+      isError: false,
+      dataUpdatedAt: Date.now(),
+    });
+
+    renderPage();
+
+    expect(
+      screen.getByText(
+        "No findings observed; instruction coverage is limited",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/No findings detected/i)).not.toBeInTheDocument();
+  });
+
+  it("does not apply limited posture from a different published scan", () => {
+    mocks.useProjectionState.mockReturnValue({
+      ...completePosture,
+      data: {
+        ...completePosture.data,
+        scan_id: "scan-2",
+        published_scan_id: "scan-2",
+        active_coverage_roots: [
+          {
+            ...completePosture.data.active_coverage_roots[0],
+            scan_id: "scan-2",
+            state: "partial",
+          },
+        ],
+      },
+    });
+    mocks.useFindings.mockReturnValue({
+      data: [],
+      snapshot: currentScope,
+      isLoading: false,
+      isError: false,
+      dataUpdatedAt: Date.now(),
+    });
+
+    renderPage();
+
+    expect(
+      screen.getByText("No findings detected in the current published snapshot"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/instruction coverage is limited/i),
+    ).not.toBeInTheDocument();
   });
 
   it("labels cached data when a refresh fails", () => {

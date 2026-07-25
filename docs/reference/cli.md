@@ -122,26 +122,33 @@ cutoff. A symlink used as an explicit root is canonicalized; descendant
 symlinks are not followed. Only regular files are read; matching FIFOs,
 devices, sockets, and other special files are rejected before open.
 
-A registered rule tree that cannot be fully enumerated contributes **no** graph
-facts. Deep discovery keeps complete children and records the rest as truncated
-coverage instead of emitting partially observed ownership. An inaccessible
-unmatched descendant likewise truncates deep coverage while retaining already
-completed children; it never proves absence below the skipped directory.
+A registered rule tree that cannot be fully enumerated retains every
+successfully read file as a complete per-file observation and marks the root
+incomplete. Each file owner is stable across scans and registry-contract
+changes: it is derived from the stable root key plus canonical file path.
+Deep discovery likewise keeps complete children and records the rest as
+truncated or partial coverage. An inaccessible unmatched descendant limits deep
+coverage while retaining already completed children; it never proves absence
+below the skipped directory.
 Deep traversal runs in isolated state and returns at its 60-second deadline
 even when a filesystem open or directory read is stalled. A deadline returns a
 partial deep root with no new deep facts; the blocked work cannot mutate the
 returned exact result.
 
-Exact-root incompleteness withholds publication. A truncated deep attempt
-publishes the exact posture plus its completely observed deep children,
-preserves unseen prior deep ownership, and reports
-`collection_status=truncated`. A failed or partial deep attempt contributes no
-new deep facts and leaves the prior active deep root unchanged. A later scan
-without `--deep` never refreshes, ages, or retires deep ownership.
+Recognized incomplete exact and deep roots are coverage-limited publications.
+Complete per-file positives are additive and current; the root has no absence
+authority, so it cannot retire, compare, or certify unseen registered sources
+as absent. Prior unseen ownership is preserved. Partial, failed, and truncated
+roots can therefore publish their successfully read children, while a deadline
+that returns no children publishes only the retained prior projection. A later
+scan without `--deep` never refreshes, ages, or retires deep ownership. A later
+complete scan of the same root reuses the stable per-file owners, regains
+root-level absence authority, and may retire sources proven absent.
 The collector reports every incomplete exact or deep instruction root on
 stderr, including its state and sanitized cause when available. These
-coverage limitations retain exit zero so the typed artifact can still be
-ingested; stdout remains machine-readable.
+warnings state that observed positives were retained and missing instruction
+evidence is not a clean absence. Coverage limitations retain exit zero so the
+typed artifact can still be ingested; stdout remains machine-readable.
 
 Completeness means **registered-source completeness**, not effective-client
 completeness. Dynamic/imported instructions, `GEMINI.md`, `COPILOT_HOME`,
@@ -775,9 +782,12 @@ The CLI prints the display label (or a short `Point <digest>` alias), full IDs,
 new/recognized state, separate point/network qualities, network class, pipeline
 outcome, projection status, and publication revision. It exits successfully
 only when the ingest produced a complete,
-published projection. If a required stage is partial or failed, or publication
-is withheld, it exits non-zero and reports the first unhealthy required stage;
-write-row counts remain visible for diagnosis.
+published projection. A published projection with an incomplete recognized
+instruction root is headed `Ingest complete with coverage limitations` and
+reports the generalized instruction-coverage warning. If a required stage is
+partial or failed, or publication is withheld for any blocking reason, the CLI
+exits non-zero and reports the first unhealthy required stage; write-row counts
+remain visible for diagnosis.
 
 #### Example
 

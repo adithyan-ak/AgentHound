@@ -593,11 +593,15 @@ func TestInstructionCoverageWarningPreservesUsableScanSuccess(t *testing.T) {
 	for _, want := range []string{
 		"deep instruction coverage is limited",
 		"deep instruction discovery exceeded 60s budget",
-		"not a clean absence",
+		"observed instruction positives were retained",
+		"missing instruction evidence is not a clean absence",
 	} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("warning missing %q: %s", want, stderr.String())
 		}
+	}
+	if strings.Contains(stderr.String(), "withheld") {
+		t.Fatalf("warning claims observed positives were withheld: %s", stderr.String())
 	}
 	if strings.Contains(stderr.String(), "usable") {
 		t.Fatalf("warning makes an unsupported exact-coverage claim: %s", stderr.String())
@@ -653,13 +657,17 @@ func TestInstructionCoverageWarningsIncludeIncompleteExactRoots(t *testing.T) {
 	var stderr bytes.Buffer
 	writeInstructionCoverageWarnings(&stderr, report)
 	for _, want := range []string{
-		"exact user instruction coverage partial: permission denied",
-		"exact project instruction coverage truncated: file exceeds 4194304 byte limit",
-		"registered-source evidence from this root was withheld",
+		"exact user instruction coverage is limited (partial: permission denied)",
+		"exact project instruction coverage is limited (truncated: file exceeds 4194304 byte limit)",
+		"observed instruction positives were retained",
+		"missing instruction evidence is not a clean absence",
 	} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("warning missing %q: %s", want, stderr.String())
 		}
+	}
+	if strings.Contains(stderr.String(), "withheld") {
+		t.Fatalf("warning claims observed positives were withheld: %s", stderr.String())
 	}
 	if strings.Count(stderr.String(), "\n") != 2 {
 		t.Fatalf("exact warnings = %q, want one line per incomplete root", stderr.String())
