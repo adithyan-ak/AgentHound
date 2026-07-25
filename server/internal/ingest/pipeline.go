@@ -596,6 +596,7 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		publicationAuthoritativeRoots = nil
 	}
 	projectionPrerequisitesComplete := attributionComplete &&
+		normalizationDegradedErr == nil &&
 		rulesetErr == nil &&
 		artifactObservedAt != nil &&
 		timestampErr == nil &&

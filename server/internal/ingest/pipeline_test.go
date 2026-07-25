@@ -2727,6 +2727,69 @@ func TestPipeline_UnsafeNormalizationWarningWithholdsPublication(t *testing.T) {
 	}
 }
 
+func TestPipeline_UnsafeNormalizationDoesNotResolveLimitedDirtyCoverage(t *testing.T) {
+	data, limitedRoot, child := limitedExactInstructionIngest(
+		"scan-unsafe-normalization-limited-dirty",
+		sdkingest.InstructionMethodExactUser,
+		sdkingest.OutcomePartial,
+	)
+	node := validIngestData().Graph.Nodes[0]
+	node.ObservationDomains = []string{child}
+	node.Properties["nested"] = map[string]any{
+		"unsupported": make(chan int),
+	}
+	data.Graph.Nodes = []sdkingest.Node{node}
+	scopedRoot := scopedCoverageFor(
+		data,
+		sdkingest.ScopeCollectionPoint,
+		limitedRoot,
+	)
+	scopedChild := scopedCoverageFor(
+		data,
+		sdkingest.ScopeCollectionPoint,
+		child,
+	)
+	lifecycle := &fakeLifecycleScanStore{
+		fakeScanStore: &fakeScanStore{},
+		dirtyCoverage: []string{scopedRoot, scopedChild},
+	}
+	publisher := &fakePublisher{lifecycle: lifecycle}
+	p := newTestPipeline(
+		&fakeWriter{},
+		&graph.MockGraphDB{},
+		lifecycle,
+		noOpRunPP,
+	)
+	p.findingStore = publisher
+
+	result, err := p.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if result.NormalizationStatus != sdkingest.NormalizationStatusDegraded ||
+		result.ProjectionStatus != model.ProjectionIncomplete {
+		t.Fatalf("unsafe normalization result = %+v", result)
+	}
+	if len(publisher.finalizations) != 1 {
+		t.Fatalf("finalizations = %d, want 1", len(publisher.finalizations))
+	}
+	finalized := publisher.finalizations[0]
+	if containsCoverage(finalized.ResolvedDirtyCoverage, scopedRoot) ||
+		containsCoverage(finalized.ResolvedDirtyCoverage, scopedChild) {
+		t.Fatalf(
+			"unsafe normalization resolved limited dirtiness: %v",
+			finalized.ResolvedDirtyCoverage,
+		)
+	}
+	if !containsCoverage(finalized.DirtyCoverage, scopedRoot) ||
+		!containsCoverage(finalized.DirtyCoverage, scopedChild) {
+		t.Fatalf(
+			"unsafe normalization lost inherited dirtiness: %v",
+			finalized.DirtyCoverage,
+		)
+	}
+}
+
 func TestPipeline_PropertyIncompleteObservationWithholdsPublication(t *testing.T) {
 	db := &graph.MockGraphDB{
 		QueryFunc: func(
