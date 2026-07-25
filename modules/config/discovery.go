@@ -148,9 +148,9 @@ func ResolveProjectRoot(projectDir string) (*ValidatedProjectRoot, error) {
 	return &ValidatedProjectRoot{path: abs, dir: dir, info: openedInfo}, nil
 }
 
-// DiscoveryPathsForRoot returns the de-duplicated physical path inventory for
-// exhaustive discovery, rebasing every project-relative parser path onto the
-// validated effective project root.
+// DiscoveryPathsForRoot returns the de-duplicated registered-path inventory
+// for exhaustive discovery, rebasing every project-relative parser path onto
+// the validated effective project root.
 func (c *ConfigCollector) DiscoveryPathsForRoot(homeDir, projectRoot string) []string {
 	registry := c.discoveryRegistry(homeDir, projectRoot)
 	paths := make([]string, 0, len(registry))
@@ -193,10 +193,10 @@ func (c *ConfigCollector) discoveryRegistry(homeDir, projectRoot string) map[str
 	return registry
 }
 
-// DiscoverConfigs reads every physical file at most once. Exhaustive mode
-// uses the parser path registry; explicitly supplied unknown paths are tested
-// against every parser compatible with the file syntax so no valid view is
-// silently discarded.
+// DiscoverConfigs reads every registered lexical absolute path at most once.
+// Exhaustive mode uses the parser path registry; explicitly supplied unknown
+// paths retain their own logical identity and are tested against every parser
+// compatible with the file syntax so no valid view is silently discarded.
 func (c *ConfigCollector) DiscoverConfigs(
 	ctx context.Context,
 	homeDir string,
@@ -292,11 +292,11 @@ func discoverPhysicalFile(path string, parsers []ConfigParser, preferredClients 
 		parsedViews = append(parsedViews, *cfg)
 	}
 	if preferredClients == nil {
-		// Exhaustive registry discovery has physical-path provenance for every
+		// Exhaustive registry discovery has registered-path provenance for every
 		// parser selected for this file, including genuinely shared settings.
 		file.Configs = append(file.Configs, parsedViews...)
 	} else if len(preferredClients) > 0 {
-		// Explicit files still run every parser, but a documented physical path
+		// Explicit files still run every parser, but a documented registered path
 		// is stronger client-identity evidence than a shared JSON shape.
 		for _, cfg := range parsedViews {
 			if preferredClients[cfg.Client] {

@@ -724,6 +724,84 @@ func TestConfigCollector_MultipleConfigPaths(t *testing.T) {
 	}
 }
 
+func TestConfigCollector_ExplicitSymlinkPreservesLogicalPathIdentity(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	original := filepath.Join(tmp, ".vscode", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(original), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON(t, original, `{"servers":{"shared":{"command":"node","args":["server.js"]}}}`)
+	alias := filepath.Join(tmp, "duplicate-config.json")
+	if err := os.Symlink(original, alias); err != nil {
+		t.Skipf("create config symlink: %v", err)
+	}
+
+	result, err := NewConfigCollector().Collect(
+		context.Background(),
+		collector.CollectOptions{
+			ConfigPaths: []string{original, alias},
+			ProjectDir:  tmp,
+			ScanID:      "logical-path-aliases",
+		},
+	)
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	configIDs := make(map[string]bool)
+	agentIDs := make(map[string]bool)
+	serverIDs := make(map[string]bool)
+	configPaths := make(map[string]bool)
+	for _, node := range result.Graph.Nodes {
+		switch {
+		case hasNodeKind(node, "ConfigFile"):
+			configIDs[node.ID] = true
+			if path, _ := node.Properties["path"].(string); path != "" {
+				configPaths[path] = true
+			}
+		case hasNodeKind(node, "AgentInstance"):
+			agentIDs[node.ID] = true
+		case hasNodeKind(node, "MCPServer"):
+			serverIDs[node.ID] = true
+		}
+	}
+	if len(configIDs) != 2 || len(agentIDs) != 2 {
+		t.Fatalf(
+			"logical path identities: ConfigFile=%d AgentInstance=%d, want 2 each",
+			len(configIDs),
+			len(agentIDs),
+		)
+	}
+	if !configPaths[canonicalConfigPath(original)] ||
+		!configPaths[canonicalConfigPath(alias)] {
+		t.Fatalf("config paths = %v, want original and explicit alias", configPaths)
+	}
+	if len(serverIDs) != 1 {
+		t.Fatalf("MCPServer identities = %v, want one shared server identity", serverIDs)
+	}
+
+	configuredTargets := make(map[string]bool)
+	for _, edge := range result.Graph.Edges {
+		if edge.Kind == "CONFIGURED_IN" {
+			configuredTargets[edge.Target] = true
+			if !serverIDs[edge.Source] {
+				t.Fatalf("CONFIGURED_IN source %q is not the shared MCPServer", edge.Source)
+			}
+		}
+	}
+	if len(configuredTargets) != 2 {
+		t.Fatalf(
+			"CONFIGURED_IN logical locations = %v, want both ConfigFile identities",
+			configuredTargets,
+		)
+	}
+}
+
 func TestConfigCollector_InstructionFiles(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	tmp := t.TempDir()

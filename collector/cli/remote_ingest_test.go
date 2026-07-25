@@ -93,6 +93,57 @@ func TestRunScan_RemoteIngestSavesExactArtifactAndPrintsSummary(t *testing.T) {
 	}
 }
 
+func TestRunScan_RemoteIngestWarnsBeforeUploadingPartialArtifact(t *testing.T) {
+	dir := t.TempDir()
+	malformed := filepath.Join(dir, "malformed.json")
+	if err := os.WriteFile(malformed, []byte(`{"mcpServers":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	uploaded := false
+	warnedBeforeUpload := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		uploaded = true
+		warnedBeforeUpload = strings.Contains(
+			stderr.String(),
+			"WARNING: Scan artifact is partial",
+		)
+		var artifact ingest.IngestData
+		if err := json.NewDecoder(r.Body).Decode(&artifact); err != nil {
+			t.Errorf("decode artifact: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(ingest.IngestResult{
+			ScanID:           artifact.Meta.ScanID,
+			Outcome:          ingest.OutcomePartial,
+			ProjectionStatus: "incomplete",
+		})
+	}))
+	defer server.Close()
+
+	outputPath := filepath.Join(dir, "partial-backup.json")
+	cmd := newScanCmdForTest()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(&stderr)
+	mustSetFlag(t, cmd, "config", "true")
+	mustSetFlag(t, cmd, "path", malformed)
+	mustSetFlag(t, cmd, "project-dir", dir)
+	mustSetFlag(t, cmd, "scan-output", outputPath)
+	mustSetFlag(t, cmd, "ingest", server.URL)
+
+	if err := runScan(cmd, nil); err == nil {
+		t.Fatal("partial server receipt must remain a non-zero --ingest result")
+	}
+	if !uploaded {
+		t.Fatal("explicit --ingest did not upload the partial artifact")
+	}
+	if !warnedBeforeUpload {
+		t.Fatalf("partial artifact was uploaded before its warning:\n%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "may withhold graph publication") {
+		t.Fatalf("partial ingest warning omitted publication consequence:\n%s", stderr.String())
+	}
+}
+
 func TestRunScan_RemoteIngestFailurePreservesArtifact(t *testing.T) {
 	var uploaded []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

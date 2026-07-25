@@ -34,24 +34,39 @@ func marshalCollectorArtifact(data *ingest.IngestData) ([]byte, error) {
 }
 
 func writeCollectorOutput(data *ingest.IngestData, outputPath string) error {
-	encoded, err := marshalCollectorArtifact(data)
-	if err != nil {
-		return err
-	}
 	if outputPath == "" {
-		_, err = os.Stdout.Write(encoded)
+		encoded, err := marshalCollectorArtifact(data)
 		if err != nil {
+			return err
+		}
+		if _, err := os.Stdout.Write(encoded); err != nil {
 			return fmt.Errorf("write stdout: %w", err)
 		}
 		fmt.Println()
 		return nil
 	}
 
+	if err := writeCollectorOutputFile(data, outputPath); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(os.Stderr, "Next: agenthound-server ingest %s\n", outputPath)
+	return nil
+}
+
+// writeCollectorOutputFile persists an artifact without printing workflow
+// guidance. The scan command uses this path so it can qualify or suppress its
+// ingest hint based on collection completeness. Other collector verbs retain
+// writeCollectorOutput's existing unconditional hint.
+func writeCollectorOutputFile(data *ingest.IngestData, outputPath string) error {
+	encoded, err := marshalCollectorArtifact(data)
+	if err != nil {
+		return err
+	}
+
 	if err := writeOutputAtomic(outputPath, encoded); err != nil {
 		return fmt.Errorf("write file: %w", err)
 	}
 	slog.Info("output written", "path", outputPath, "nodes", len(data.Graph.Nodes), "edges", len(data.Graph.Edges))
-	_, _ = fmt.Fprintf(os.Stderr, "Next: agenthound-server ingest %s\n", outputPath)
 	return nil
 }
 
