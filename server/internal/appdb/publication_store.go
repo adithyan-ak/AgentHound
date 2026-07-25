@@ -757,7 +757,7 @@ func buildPostureExport(
 		identityStatus = model.LifecycleComplete
 	}
 	return model.PostureExport{
-		SchemaVersion: 3,
+		SchemaVersion: model.PostureExportSchemaVersion,
 		Scope: model.PostureScope{
 			ScanID:             params.Scan.ID,
 			Revision:           revision,

@@ -6,6 +6,8 @@ import (
 	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
+const PostureExportSchemaVersion = 3
+
 // GraphSnapshot is a frozen public-inventory count captured in one Neo4j read
 // transaction. It is intentionally distinct from scan write-row counts.
 type GraphSnapshot struct {

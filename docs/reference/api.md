@@ -677,7 +677,9 @@ Returns one persisted publication revision. The export is assembled inside the
 same PostgreSQL transaction that replaces the scan's finding snapshot and
 advances publication. Export schema version 3 adds typed
 `scope.active_coverage_roots`, so external clients can distinguish usable
-limited publications from complete registered-source coverage. It includes
+limited publications from complete registered-source coverage. The endpoint
+serves only schema version 3; unsupported persisted schemas fail closed rather
+than returning a response outside the OpenAPI contract. It includes
 exact scope, stage/coverage completeness,
 normalization warnings, managed-observation completeness, observation and
 publication timestamps, suppression policy, frozen public graph totals,

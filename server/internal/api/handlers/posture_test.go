@@ -27,10 +27,11 @@ func (f *fakePostureReader) GetProjectionState(context.Context) (*model.Projecti
 func TestPostureExportServesPersistedRevision(t *testing.T) {
 	handler := &PostureHandler{store: &fakePostureReader{
 		export: &model.PostureExport{
-			SchemaVersion: 1,
+			SchemaVersion: model.PostureExportSchemaVersion,
 			Scope: model.PostureScope{
-				ScanID:   "scan-published",
-				Revision: 42,
+				ScanID:              "scan-published",
+				Revision:            42,
+				ActiveCoverageRoots: []model.PostureCoverageRoot{},
 			},
 			Findings: []model.Finding{},
 		},
@@ -50,8 +51,28 @@ func TestPostureExportServesPersistedRevision(t *testing.T) {
 	if export.Scope.Revision != 42 || export.Scope.ScanID != "scan-published" {
 		t.Fatalf("export scope = %+v", export.Scope)
 	}
+	if export.Scope.ActiveCoverageRoots == nil {
+		t.Fatal("current export emitted null active_coverage_roots")
+	}
 	if got := w.Header().Get("Content-Disposition"); got == "" {
 		t.Fatal("missing download content disposition")
+	}
+}
+
+func TestPostureExportRejectsUnsupportedPersistedSchema(t *testing.T) {
+	handler := &PostureHandler{store: &fakePostureReader{
+		export: &model.PostureExport{SchemaVersion: 1},
+	}}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/posture/export", nil)
+
+	handler.HandleExport(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Content-Disposition"); got != "" {
+		t.Fatalf("unsupported export received download header %q", got)
 	}
 }
 

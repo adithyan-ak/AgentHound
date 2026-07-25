@@ -5,9 +5,9 @@
 - **Bounded instruction discovery by default.** Config scans now check the
   registered Claude, Cursor, GitHub Copilot, `AGENTS.md`, and `CLAUDE.md`
   sources at the canonical user and project roots. `--deep` adds a bounded
-  nested-project search under the user home; unrelated files do not consume
-  its directory or matched-source budgets, and trash, dependency, cache, and
-  symlinked descendant trees are excluded.
+  nested-project search under the user home and a disjoint selected project;
+  unrelated files do not consume its directory or matched-source budgets, and
+  trash, dependency, cache, and symlinked descendant trees are excluded.
 - **Truthful independent instruction lifecycle.** Exact-user, exact-project,
   and deep observations have stable owner identities independent of registry
   evolution. Complete roots retire absent evidence; truncated deep scans
@@ -23,6 +23,9 @@
   an assessment limitation. Published truncated posture remains visible in the
   dashboard with persistent deep-coverage and registry-refresh warnings, while
   ambiguous comparisons are unavailable.
+- **Typed posture export v3.** Projection state and persisted exports expose
+  typed active instruction-root coverage. Unsupported persisted export schemas
+  fail closed instead of violating the documented response contract.
 
 ## v1.0.1 — 🚀 First Supported Public Release (2026-07-22)
 
