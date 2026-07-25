@@ -154,6 +154,7 @@ func strictV5A2AImport(authEvidence string, observed bool) *sdkingest.IngestData
 					"signature_verification_status": "unknown",
 					"signature_key_source":          "none",
 					"signature_key_trust":           "unknown",
+					"is_signed":                     false,
 				},
 			}},
 			Edges: []sdkingest.Edge{},

@@ -17,7 +17,8 @@ import (
 // auth_* properties remain immutable collection provenance. A valid, known
 // MCP or A2A runtime observation wins for node posture only under its strict
 // protocol-specific evidence contract; unknown/unavailable runtime
-// observations fall back to the complete configured tuple.
+// observations fall back to the complete configured tuple. When neither
+// provenance channel has a usable tuple, derived properties are cleared.
 //
 // The pre-pass also materializes derived effective_* properties on incoming
 // TRUSTS_SERVER relationships. Only confirmed observed anonymous access can
@@ -63,20 +64,57 @@ func (p *AuthStrength) Process(ctx context.Context, db graph.GraphDB, _ string) 
    n.observed_auth_evidence = 'anonymous_probe_succeeded')
 )`
 
+	validConfigured := `(
+  (n.auth_method = 'unknown' AND
+   n.auth_assurance = 'unknown' AND
+   n.auth_evidence IN ['unknown', 'declared_security_scheme', 'configured_credential', 'local_process']) OR
+  (n.auth_method = 'none' AND
+   n.auth_assurance = 'unauthenticated' AND
+   n.auth_evidence IN ['unknown', 'declared_security_scheme', 'anonymous_probe_succeeded']) OR
+  (n.auth_method IN ['basic', 'apiKey'] AND
+   n.auth_assurance = 'weak' AND
+   n.auth_evidence IN ['configured_credential', 'declared_security_scheme']) OR
+  (n.auth_method = 'bearer' AND
+   n.auth_assurance = 'moderate' AND
+   n.auth_evidence IN ['configured_credential', 'declared_security_scheme']) OR
+  (n.auth_method IN ['oauth', 'oidc', 'mtls'] AND
+   n.auth_assurance = 'strong' AND
+   n.auth_evidence IN ['configured_credential', 'declared_security_scheme']) OR
+  (n.auth_method = 'custom' AND
+   n.auth_assurance = 'unknown' AND
+   n.auth_evidence IN ['configured_credential', 'declared_security_scheme'])
+)`
+
 	nodeCypher := fmt.Sprintf(`MATCH (n)
-WHERE (n:MCPServer OR n:A2AAgent) AND n.auth_method IS NOT NULL
-WITH n, %s AS use_observed
+WHERE n:MCPServer OR n:A2AAgent
+WITH n, %s AS use_observed, %s AS use_configured
 WITH n,
-     CASE WHEN use_observed THEN n.observed_auth_method ELSE n.auth_method END AS effective_method,
-     CASE WHEN use_observed THEN n.observed_auth_evidence ELSE n.auth_evidence END AS effective_evidence,
-     CASE WHEN use_observed THEN 'observed' ELSE 'configured' END AS effective_source
+     CASE
+       WHEN use_observed THEN n.observed_auth_method
+       WHEN use_configured THEN n.auth_method
+       ELSE null
+     END AS effective_method,
+     CASE
+       WHEN use_observed THEN n.observed_auth_evidence
+       WHEN use_configured THEN n.auth_evidence
+       ELSE null
+     END AS effective_evidence,
+     CASE
+       WHEN use_observed THEN 'observed'
+       WHEN use_configured THEN 'configured'
+       ELSE null
+     END AS effective_source
 SET n.effective_auth_method = effective_method,
-    n.effective_auth_assurance = %s,
+    n.effective_auth_assurance = CASE
+      WHEN effective_source IS NULL THEN null
+      ELSE %s
+    END,
     n.effective_auth_evidence = effective_evidence,
     n.effective_auth_source = effective_source,
     n.auth_strength = %s
 RETURN count(n) AS updated`,
 		validKnownObserved,
+		validConfigured,
 		authAssuranceCase("effective_method", "effective_evidence", "effective_source"),
 		authStrengthCase("effective_method", "effective_evidence", "effective_source"))
 

@@ -1392,82 +1392,125 @@ func validateCanonicalNodeProperties(node ingest.Node, index int) []FieldError {
 	}
 	if hasKind(node.Kinds, "A2AAgent") {
 		errs = append(errs, validateObservedA2AAuthProperties(node.Properties, index)...)
-		status, _ := node.Properties["signature_verification_status"].(string)
-		switch status {
-		case "unknown",
-			"unsigned",
-			"unsupported_version",
-			"malformed",
-			"key_unavailable",
-			"invalid",
-			"valid_untrusted",
-			"valid_trusted":
-		default:
+		errs = append(errs, validateA2ASignatureProperties(node.Properties, index)...)
+	}
+	return errs
+}
+
+func validateA2ASignatureProperties(properties map[string]any, index int) []FieldError {
+	const (
+		statusKey = "signature_verification_status"
+		sourceKey = "signature_key_source"
+		trustKey  = "signature_key_trust"
+		signedKey = "is_signed"
+	)
+	_, statusPresent := properties[statusKey]
+	_, sourcePresent := properties[sourceKey]
+	_, trustPresent := properties[trustKey]
+	_, signedPresent := properties[signedKey]
+	if !statusPresent && !sourcePresent && !trustPresent && !signedPresent {
+		return nil
+	}
+
+	basePath := fmt.Sprintf("graph.nodes[%d].properties.", index)
+	status, statusOK := properties[statusKey].(string)
+	source, sourceOK := properties[sourceKey].(string)
+	trust, trustOK := properties[trustKey].(string)
+	signed, signedOK := properties[signedKey].(bool)
+	var errs []FieldError
+	for _, field := range []struct {
+		key     string
+		present bool
+		valid   bool
+	}{
+		{key: statusKey, present: statusPresent, valid: statusOK},
+		{key: sourceKey, present: sourcePresent, valid: sourceOK},
+		{key: trustKey, present: trustPresent, valid: trustOK},
+		{key: signedKey, present: signedPresent, valid: signedOK},
+	} {
+		switch {
+		case !field.present:
 			errs = append(errs, FieldError{
-				Path:    fmt.Sprintf("graph.nodes[%d].properties.signature_verification_status", index),
-				Message: fmt.Sprintf("invalid canonical signature status %q", status),
+				Path:    basePath + field.key,
+				Message: "is required when any A2A signature posture field is present",
+			})
+		case !field.valid:
+			errs = append(errs, FieldError{
+				Path:    basePath + field.key,
+				Message: "must have the canonical signature posture type",
 			})
 		}
-		source, _ := node.Properties["signature_key_source"].(string)
-		switch source {
-		case "none", "trusted_store", "jku":
-		default:
-			errs = append(errs, FieldError{
-				Path:    fmt.Sprintf("graph.nodes[%d].properties.signature_key_source", index),
-				Message: fmt.Sprintf("invalid signature key source %q", source),
-			})
-		}
-		trust, _ := node.Properties["signature_key_trust"].(string)
-		switch trust {
-		case "unknown", "untrusted", "trusted":
-		default:
-			errs = append(errs, FieldError{
-				Path:    fmt.Sprintf("graph.nodes[%d].properties.signature_key_trust", index),
-				Message: fmt.Sprintf("invalid signature key trust %q", trust),
-			})
-		}
-		if status == "valid_trusted" && (source != "trusted_store" || trust != "trusted") {
-			errs = append(errs, FieldError{
-				Path:    fmt.Sprintf("graph.nodes[%d].properties.signature_key_trust", index),
-				Message: "valid_trusted requires trusted_store source and trusted key",
-			})
-		}
-		if status == "valid_untrusted" && (source != "jku" || trust != "untrusted") {
-			errs = append(errs, FieldError{
-				Path:    fmt.Sprintf("graph.nodes[%d].properties.signature_key_trust", index),
-				Message: "valid_untrusted requires jku source and untrusted key",
-			})
-		}
-		if !validA2ASignatureProvenancePair(source, trust) ||
-			!validA2ASignatureStatusProvenance(status, source, trust) {
-			errs = append(errs, FieldError{
-				Path: fmt.Sprintf(
-					"graph.nodes[%d].properties.signature_key_source",
-					index,
-				),
-				Message: "signature status, key source, and key trust are contradictory",
-			})
-		}
-		if signed, exists := node.Properties["is_signed"]; exists {
-			signedValue, ok := signed.(bool)
-			if !ok {
-				errs = append(errs, FieldError{
-					Path:    fmt.Sprintf("graph.nodes[%d].properties.is_signed", index),
-					Message: "must be boolean when present",
-				})
-			} else {
-				expectedSigned := status != "unknown" && status != "unsigned"
-				if signedValue != expectedSigned {
-					errs = append(errs, FieldError{
-						Path: fmt.Sprintf(
-							"graph.nodes[%d].properties.is_signed",
-							index,
-						),
-						Message: "is_signed contradicts signature verification status",
-					})
-				}
-			}
-		}
+	}
+	if !statusOK || !sourceOK || !trustOK || !signedOK {
+		return errs
+	}
+
+	statusCanonical := false
+	switch status {
+	case "unknown",
+		"unsigned",
+		"unsupported_version",
+		"malformed",
+		"key_unavailable",
+		"invalid",
+		"valid_untrusted",
+		"valid_trusted":
+		statusCanonical = true
+	default:
+		errs = append(errs, FieldError{
+			Path:    basePath + statusKey,
+			Message: fmt.Sprintf("invalid canonical signature status %q", status),
+		})
+	}
+	sourceCanonical := false
+	switch source {
+	case "none", "trusted_store", "jku":
+		sourceCanonical = true
+	default:
+		errs = append(errs, FieldError{
+			Path:    basePath + sourceKey,
+			Message: fmt.Sprintf("invalid signature key source %q", source),
+		})
+	}
+	trustCanonical := false
+	switch trust {
+	case "unknown", "untrusted", "trusted":
+		trustCanonical = true
+	default:
+		errs = append(errs, FieldError{
+			Path:    basePath + trustKey,
+			Message: fmt.Sprintf("invalid signature key trust %q", trust),
+		})
+	}
+	if !statusCanonical || !sourceCanonical || !trustCanonical {
+		return errs
+	}
+
+	if status == "valid_trusted" && (source != "trusted_store" || trust != "trusted") {
+		errs = append(errs, FieldError{
+			Path:    basePath + trustKey,
+			Message: "valid_trusted requires trusted_store source and trusted key",
+		})
+	}
+	if status == "valid_untrusted" && (source != "jku" || trust != "untrusted") {
+		errs = append(errs, FieldError{
+			Path:    basePath + trustKey,
+			Message: "valid_untrusted requires jku source and untrusted key",
+		})
+	}
+	if !validA2ASignatureProvenancePair(source, trust) ||
+		!validA2ASignatureStatusProvenance(status, source, trust) {
+		errs = append(errs, FieldError{
+			Path:    basePath + sourceKey,
+			Message: "signature status, key source, and key trust are contradictory",
+		})
+	}
+	expectedSigned := status != "unknown" && status != "unsigned"
+	if signed != expectedSigned {
+		errs = append(errs, FieldError{
+			Path:    basePath + signedKey,
+			Message: "is_signed contradicts signature verification status",
+		})
 	}
 	return errs
 }
@@ -1623,26 +1666,66 @@ func stringSlice(value any) ([]string, bool) {
 }
 
 func validateAuthProperties(properties map[string]any, index int) []FieldError {
+	const (
+		methodKey    = "auth_method"
+		assuranceKey = "auth_assurance"
+		evidenceKey  = "auth_evidence"
+	)
+	_, methodPresent := properties[methodKey]
+	_, assurancePresent := properties[assuranceKey]
+	_, evidencePresent := properties[evidenceKey]
+	if !methodPresent && !assurancePresent && !evidencePresent {
+		return nil
+	}
+
 	var errs []FieldError
-	method, _ := properties["auth_method"].(string)
+	basePath := fmt.Sprintf("graph.nodes[%d].properties.", index)
+	method, methodOK := properties[methodKey].(string)
+	assurance, assuranceOK := properties[assuranceKey].(string)
+	evidence, evidenceOK := properties[evidenceKey].(string)
+	for _, field := range []struct {
+		key     string
+		present bool
+		valid   bool
+	}{
+		{key: methodKey, present: methodPresent, valid: methodOK},
+		{key: assuranceKey, present: assurancePresent, valid: assuranceOK},
+		{key: evidenceKey, present: evidencePresent, valid: evidenceOK},
+	} {
+		switch {
+		case !field.present:
+			errs = append(errs, FieldError{
+				Path:    basePath + field.key,
+				Message: "is required when any configured authentication field is present",
+			})
+		case !field.valid:
+			errs = append(errs, FieldError{
+				Path:    basePath + field.key,
+				Message: "must be a canonical string",
+			})
+		}
+	}
+	if !methodOK || !assuranceOK || !evidenceOK {
+		return errs
+	}
+
 	methodCanonical := false
 	switch method {
 	case "unknown", "none", "basic", "apiKey", "bearer", "oauth", "oidc", "mtls", "custom":
 		methodCanonical = true
 	default:
 		errs = append(errs, FieldError{
-			Path:    fmt.Sprintf("graph.nodes[%d].properties.auth_method", index),
+			Path:    basePath + methodKey,
 			Message: fmt.Sprintf("invalid canonical auth method %q", method),
 		})
 	}
-	assurance, _ := properties["auth_assurance"].(string)
 	assuranceCanonical := false
 	switch assurance {
 	case "unknown", "unauthenticated", "weak", "moderate", "strong":
 		assuranceCanonical = true
 	default:
 		errs = append(errs, FieldError{
-			Path:    fmt.Sprintf("graph.nodes[%d].properties.auth_assurance", index),
+			Path:    basePath + assuranceKey,
 			Message: fmt.Sprintf("invalid canonical auth assurance %q", assurance),
 		})
 	}
@@ -1650,7 +1733,7 @@ func validateAuthProperties(properties map[string]any, index int) []FieldError {
 		expectedAssurance := string(common.AssessAuth(method).Assurance)
 		if assurance != expectedAssurance {
 			errs = append(errs, FieldError{
-				Path: fmt.Sprintf("graph.nodes[%d].properties.auth_assurance", index),
+				Path: basePath + assuranceKey,
 				Message: fmt.Sprintf(
 					"must be %q for auth method %q",
 					expectedAssurance,
@@ -1659,7 +1742,6 @@ func validateAuthProperties(properties map[string]any, index int) []FieldError {
 			})
 		}
 	}
-	evidence, _ := properties["auth_evidence"].(string)
 	evidenceCanonical := false
 	switch evidence {
 	case "unknown", "declared_security_scheme", "configured_credential",
@@ -1667,7 +1749,7 @@ func validateAuthProperties(properties map[string]any, index int) []FieldError {
 		evidenceCanonical = true
 	default:
 		errs = append(errs, FieldError{
-			Path:    fmt.Sprintf("graph.nodes[%d].properties.auth_evidence", index),
+			Path:    basePath + evidenceKey,
 			Message: fmt.Sprintf("invalid canonical auth evidence %q", evidence),
 		})
 	}
@@ -1675,7 +1757,7 @@ func validateAuthProperties(properties map[string]any, index int) []FieldError {
 	if methodCanonical && assuranceCanonical && evidenceCanonical &&
 		!configuredAuthEvidenceCompatible(method, evidence) {
 		errs = append(errs, FieldError{
-			Path: fmt.Sprintf("graph.nodes[%d].properties.auth_evidence", index),
+			Path: basePath + evidenceKey,
 			Message: fmt.Sprintf(
 				"auth evidence %q is incompatible with configured auth method %q",
 				evidence,

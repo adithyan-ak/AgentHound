@@ -43,6 +43,11 @@ to every agent. Weighted traversal, direct `CAN_REACH` confidence, exact
 finding-path cost, and AgentInstance auth risk consume the effective fields;
 raw configured values remain available as provenance.
 
+An observed-only server or agent receives an exact auth factor when its runtime
+tuple satisfies the protocol evidence contract. A discovery-only or otherwise
+auth-evidence-free node has no effective auth tuple and contributes the existing
+bounded unknown auth factor; absence is not treated as anonymous or safe.
+
 ### Campaign verification evidence
 
 The [campaign runner](../operator/offensive-actions.md#campaign-runner-verify-and-validate) does not add new scored risk:

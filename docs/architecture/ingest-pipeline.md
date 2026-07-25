@@ -174,12 +174,16 @@ Checks performed:
 - Every node must have a non-empty `id` and at least one `kind` from `AllowedNodeKinds` (23 kinds)
 - Every edge must have non-empty `source`/`target` and a `kind` from `RawEdgeKinds` (20 kinds)
 - v1 property aliases are rejected; canonical status/evidence fields are
-  required for credentials, hosts, MCP servers, and A2A agents
-- configured MCP/A2A method, assurance, and evidence must form a
-  producer-compatible tuple
-- MCP observed auth must be a complete protocol-valid tuple; A2A observed auth
-  is accepted only for the exact bounded nonexistent-task positive probe with
-  its method and status metadata
+  required for credentials and hosts
+- configured MCP/A2A method, assurance, and evidence are optional as a channel,
+  but any present channel must be a complete producer-compatible tuple
+- MCP observed auth is optional and atomic; any present tuple must be
+  protocol-valid
+- A2A probe method/status/detail are optional and atomic; only the exact bounded
+  nonexistent-task positive probe may add the exact observed anonymous tuple,
+  while non-positive diagnostics must omit observed auth
+- A2A signature status/source/trust/`is_signed` are either all absent or all
+  present and mutually consistent
 
 Validation errors are structured (`FieldError` with JSON path + message) and returned as a `ValidationError` to the caller. On failure, the pipeline aborts -- no partial writes.
 

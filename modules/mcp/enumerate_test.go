@@ -331,6 +331,62 @@ func TestBuildConfiguredServerNodeSeparatesConfiguredAndObservedClaims(t *testin
 	}
 }
 
+func TestBuildDirectServerNodePublishesOnlyObservedAuth(t *testing.T) {
+	engine := testEnumerateEngine(t)
+	node := buildServerNode(
+		"sha256:direct",
+		ServerSpec{
+			Name: "direct", Transport: "http", URL: "http://mcp.example/mcp",
+		},
+		&mcpsdk.InitializeResult{
+			ProtocolVersion: "2025-06-18",
+			ServerInfo:      &mcpsdk.Implementation{Name: "direct", Version: "1.0"},
+		},
+		engine,
+	)
+
+	for _, property := range []string{"auth_method", "auth_assurance", "auth_evidence"} {
+		if _, present := node.Properties[property]; present {
+			t.Errorf("direct MCP observation authored configured %s: %+v", property, node.Properties)
+		}
+	}
+	for property, want := range map[string]any{
+		"observed_auth_method":    string(common.AuthNone),
+		"observed_auth_assurance": string(common.AuthAssuranceUnauthenticated),
+		"observed_auth_evidence":  common.AuthEvidenceAnonymousProbeSucceeded,
+	} {
+		if got := node.Properties[property]; got != want {
+			t.Errorf("%s = %v, want %v; properties=%+v", property, got, want, node.Properties)
+		}
+	}
+}
+
+func TestBuildDirectUnreachableServerNodePublishesOnlyObservedUnknown(t *testing.T) {
+	node := buildUnreachableServerNode(
+		"sha256:direct-unreachable",
+		ServerSpec{
+			Name: "direct", Transport: "http", URL: "http://mcp.example/mcp",
+		},
+		"connection failed",
+		testEnumerateEngine(t),
+	)
+
+	for _, property := range []string{"auth_method", "auth_assurance", "auth_evidence"} {
+		if _, present := node.Properties[property]; present {
+			t.Errorf("unreachable direct MCP observation authored configured %s: %+v", property, node.Properties)
+		}
+	}
+	for property, want := range map[string]any{
+		"observed_auth_method":    string(common.AuthUnknown),
+		"observed_auth_assurance": string(common.AuthAssuranceUnknown),
+		"observed_auth_evidence":  common.AuthEvidenceUnknown,
+	} {
+		if got := node.Properties[property]; got != want {
+			t.Errorf("%s = %v, want %v; properties=%+v", property, got, want, node.Properties)
+		}
+	}
+}
+
 func TestBuildServerNodeEmptyConfiguredHeadersRemainExactAnonymousObservation(t *testing.T) {
 	engine := testEnumerateEngine(t)
 	node := buildServerNode(

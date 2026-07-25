@@ -189,8 +189,13 @@ func TestEmitDiscoveryNodes_MCP(t *testing.T) {
 	if got, _ := n.Properties["discovered_via"].(string); got != "protoscan" {
 		t.Errorf("discovered_via = %q, want protoscan", got)
 	}
-	if n.Properties["auth_method"] != "unknown" || n.Properties["auth_assurance"] != "unknown" {
-		t.Errorf("sparse discovery claimed auth absence: %+v", n.Properties)
+	for _, property := range []string{
+		"auth_method", "auth_assurance", "auth_evidence",
+		"observed_auth_method", "observed_auth_assurance", "observed_auth_evidence",
+	} {
+		if _, present := n.Properties[property]; present {
+			t.Errorf("sparse MCP discovery authored %s: %+v", property, n.Properties)
+		}
 	}
 }
 
@@ -283,9 +288,16 @@ func TestEmitDiscoveryNodes_A2AUsesBaseURLID(t *testing.T) {
 	if got, _ := g.Nodes[0].Properties["endpoint"].(string); got != "https://agent.example.com" {
 		t.Errorf("endpoint = %q, want normalized base URL", got)
 	}
-	if g.Nodes[0].Properties["auth_method"] != "unknown" ||
-		g.Nodes[0].Properties["signature_verification_status"] != "unknown" {
-		t.Errorf("sparse A2A discovery claimed assessed posture: %+v", g.Nodes[0].Properties)
+	for _, property := range []string{
+		"auth_method", "auth_assurance", "auth_evidence",
+		"observed_auth_method", "observed_auth_assurance", "observed_auth_evidence",
+		"auth_probe_method", "auth_probe_status", "auth_probe_detail",
+		"is_signed", "signature_verification_status", "signature_key_source",
+		"signature_key_trust",
+	} {
+		if _, present := g.Nodes[0].Properties[property]; present {
+			t.Errorf("sparse A2A discovery authored %s: %+v", property, g.Nodes[0].Properties)
+		}
 	}
 }
 

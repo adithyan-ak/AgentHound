@@ -105,6 +105,12 @@ read-only observation `auth_probe_method=get_task_nonexistent`,
 inconclusive probe diagnostics, missing metadata, and every other A2A observed
 tuple retain configured-derived behavior.
 
+Both raw provenance channels are optional and atomic. A valid known observed
+tuple can therefore materialize effective authentication without a configured
+tuple. If neither a valid known observed tuple nor a complete valid configured
+tuple remains, the pass sets every derived `effective_auth_*` property and
+`auth_strength` to null so retired owners cannot leave stale posture behind.
+
 The evidence-aware policy is none=100/unauthenticated only for an
 `effective_auth_source=observed` tuple carrying
 `anonymous_probe_succeeded`, basic=85/weak, apiKey=70/weak,

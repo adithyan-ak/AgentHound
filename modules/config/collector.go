@@ -436,13 +436,7 @@ func ServerNodeProperties(srv ServerDef, engine *rules.Engine) map[string]any {
 }
 
 func serverNodeProperties(srv ServerDef, creds []CredentialInfo) map[string]any {
-	identity := serverIdentityFor(srv)
-	displayName := stdioServerDisplayName(srv.Command, identity.ObjectID)
-	var safeHTTP ingest.SanitizedHTTPEndpoint
-	if srv.Transport == "http" {
-		safeHTTP = ingest.SanitizeHTTPEndpoint(srv.URL)
-		displayName = safeHTTP.Display
-	}
+	props := ServerIdentityProperties(srv)
 	authMethod := deriveAuthMethod(srv.Transport, creds)
 	authAssessment := common.AssessAuth(string(authMethod))
 	authEvidence := common.AuthEvidenceConfiguredCredential
@@ -452,6 +446,24 @@ func serverNodeProperties(srv ServerDef, creds []CredentialInfo) map[string]any 
 			authEvidence = common.AuthEvidenceLocalProcess
 		}
 	}
+
+	props["auth_method"] = string(authMethod)
+	props["auth_assurance"] = string(authAssessment.Assurance)
+	props["auth_evidence"] = authEvidence
+	return props
+}
+
+// ServerIdentityProperties returns only transport identity and non-auth posture.
+// Direct live MCP observations use this boundary because they have no client
+// configuration claim to author; configured collectors add auth_* separately.
+func ServerIdentityProperties(srv ServerDef) map[string]any {
+	identity := serverIdentityFor(srv)
+	displayName := stdioServerDisplayName(srv.Command, identity.ObjectID)
+	var safeHTTP ingest.SanitizedHTTPEndpoint
+	if srv.Transport == "http" {
+		safeHTTP = ingest.SanitizeHTTPEndpoint(srv.URL)
+		displayName = safeHTTP.Display
+	}
 	pinningStatus := common.PinningNotApplicable
 	if srv.Transport == "stdio" {
 		pinningStatus = AssessPinning(srv.Command, srv.Args)
@@ -460,9 +472,6 @@ func serverNodeProperties(srv ServerDef, creds []CredentialInfo) map[string]any 
 	props := map[string]any{
 		"name":           displayName,
 		"transport":      srv.Transport,
-		"auth_method":    string(authMethod),
-		"auth_assurance": string(authAssessment.Assurance),
-		"auth_evidence":  authEvidence,
 		"pinning_status": string(pinningStatus),
 		"id_scheme":      identity.Scheme,
 	}

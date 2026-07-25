@@ -82,9 +82,43 @@ func TestIntegrationAuthStrengthEffectiveTuple(t *testing.T) {
 			},
 		},
 		{
+			ID: "auth-server-observed-only", Kinds: []string{"MCPServer"}, Properties: map[string]any{
+				"name": "observed-only anonymous runtime", "transport": "http", "status": "reachable",
+				"observed_auth_method": "none", "observed_auth_assurance": "unauthenticated",
+				"observed_auth_evidence": "anonymous_probe_succeeded", "scan_id": scanID,
+			},
+		},
+		{
+			ID: "auth-server-inconclusive-only", Kinds: []string{"MCPServer"}, Properties: map[string]any{
+				"name": "observed-only unreachable runtime", "transport": "http", "status": "unreachable",
+				"observed_auth_method": "unknown", "observed_auth_assurance": "unknown",
+				"observed_auth_evidence": "unknown", "scan_id": scanID,
+				"effective_auth_method": "bearer", "effective_auth_assurance": "moderate",
+				"effective_auth_evidence": "configured_credential",
+				"effective_auth_source":   "configured", "auth_strength": 50,
+			},
+		},
+		{
+			ID: "auth-server-discovery-only", Kinds: []string{"MCPServer"}, Properties: map[string]any{
+				"name": "discovery only", "transport": "http", "scan_id": scanID,
+				"effective_auth_method": "apiKey", "effective_auth_assurance": "weak",
+				"effective_auth_evidence": "configured_credential",
+				"effective_auth_source":   "configured", "auth_strength": 70,
+			},
+		},
+		{
 			ID: "auth-a2a", Kinds: []string{"A2AAgent"}, Properties: map[string]any{
 				"name": "A2A fallback", "auth_method": "mtls", "auth_assurance": "strong",
 				"auth_evidence": "declared_security_scheme", "scan_id": scanID,
+			},
+		},
+		{
+			ID: "auth-a2a-observed-only", Kinds: []string{"A2AAgent"}, Properties: map[string]any{
+				"name": "A2A observed-only anonymous", "scan_id": scanID,
+				"auth_probe_method": "get_task_nonexistent", "auth_probe_status": "anonymous_protocol_access",
+				"auth_probe_detail":    "task_not_found_v1",
+				"observed_auth_method": "none", "observed_auth_assurance": "unauthenticated",
+				"observed_auth_evidence": "anonymous_probe_succeeded",
 			},
 		},
 		{
@@ -142,8 +176,9 @@ RETURN n.objectid AS id,
        n.effective_auth_source AS source,
        n.auth_strength AS strength`, map[string]any{"ids": []string{
 		"auth-server-anon", "auth-server-bearer", "auth-server-fallback",
-		"auth-server-stdio", "auth-a2a", "auth-a2a-observed", "auth-a2a-forged",
-		"auth-a2a-raw-anon",
+		"auth-server-stdio", "auth-server-observed-only", "auth-server-inconclusive-only",
+		"auth-server-discovery-only", "auth-a2a", "auth-a2a-observed",
+		"auth-a2a-observed-only", "auth-a2a-forged", "auth-a2a-raw-anon",
 	}})
 	if err != nil {
 		t.Fatalf("query effective nodes: %v", err)
@@ -157,8 +192,12 @@ RETURN n.objectid AS id,
 	assertEffectiveAuthRow(t, byID["auth-server-bearer"], "strong", "bearer", "moderate", "configured_credential", "observed", 50)
 	assertEffectiveAuthRow(t, byID["auth-server-fallback"], "weak", "apiKey", "weak", "configured_credential", "configured", 70)
 	assertEffectiveAuthRow(t, byID["auth-server-stdio"], "unknown", "unknown", "unknown", "local_process", "configured", nil)
+	assertEffectiveAuthRow(t, byID["auth-server-observed-only"], nil, "none", "unauthenticated", "anonymous_probe_succeeded", "observed", 100)
+	assertEffectiveAuthRow(t, byID["auth-server-inconclusive-only"], nil, nil, nil, nil, nil, nil)
+	assertEffectiveAuthRow(t, byID["auth-server-discovery-only"], nil, nil, nil, nil, nil, nil)
 	assertEffectiveAuthRow(t, byID["auth-a2a"], "strong", "mtls", "strong", "declared_security_scheme", "configured", 10)
 	assertEffectiveAuthRow(t, byID["auth-a2a-observed"], "weak", "none", "unauthenticated", "anonymous_probe_succeeded", "observed", 100)
+	assertEffectiveAuthRow(t, byID["auth-a2a-observed-only"], nil, "none", "unauthenticated", "anonymous_probe_succeeded", "observed", 100)
 	assertEffectiveAuthRow(t, byID["auth-a2a-forged"], "moderate", "bearer", "moderate", "declared_security_scheme", "configured", 50)
 	assertEffectiveAuthRow(t, byID["auth-a2a-raw-anon"], "unauthenticated", "none", "unknown", "anonymous_probe_succeeded", "configured", nil)
 
@@ -205,7 +244,7 @@ func authTestTrust(source, target string, weight float64, complete bool) ingest.
 func assertEffectiveAuthRow(
 	t *testing.T,
 	row map[string]any,
-	configuredAssurance, method, assurance, evidence, source string,
+	configuredAssurance, method, assurance, evidence, source any,
 	strength any,
 ) {
 	t.Helper()
@@ -213,7 +252,7 @@ func assertEffectiveAuthRow(
 		row["configured_assurance"] != configuredAssurance ||
 		row["method"] != method || row["assurance"] != assurance ||
 		row["evidence"] != evidence || row["source"] != source {
-		t.Fatalf("effective auth row = %+v, want configured=%s effective=%s/%s/%s source=%s", row, configuredAssurance, method, assurance, evidence, source)
+		t.Fatalf("effective auth row = %+v, want configured=%v effective=%v/%v/%v source=%v", row, configuredAssurance, method, assurance, evidence, source)
 	}
 	if strength == nil {
 		if row["strength"] != nil {
