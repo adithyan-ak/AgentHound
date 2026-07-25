@@ -20,7 +20,7 @@ import (
 
 const (
 	maxInstructionFileBytes       int64 = 4 << 20
-	instructionRegistryGeneration       = 1
+	instructionRegistryGeneration       = 2
 )
 
 var (
@@ -75,7 +75,7 @@ var instructionRegistry = []instructionSource{
 // instructionRegistryManifest is the canonical comparison contract for the
 // registry. Ownership keys intentionally exclude it: changing the recognized
 // source set must refresh the same owners so removed evidence can be retired.
-const instructionRegistryManifest = "agenthound-instruction-registry/v1\n" +
+const instructionRegistryManifest = "agenthound-instruction-registry/v2\n" +
 	"source:file:AGENTS.md:agents.md\n" +
 	"source:file:CLAUDE.md:claude.md\n" +
 	"source:file:.claude/CLAUDE.md:claude.md\n" +
@@ -85,6 +85,8 @@ const instructionRegistryManifest = "agenthound-instruction-registry/v1\n" +
 	"source:file:.github/copilot-instructions.md:copilot-instructions\n" +
 	"source:tree:.github/instructions:**/*.instructions.md:copilot-instruction\n" +
 	"roots:exact_user,exact_project,deep\n" +
+	"ownership:file=stable-root-key+canonical-file-path\n" +
+	"ownership:registry-contract=excluded\n" +
 	"deep:canonical-home:nested-only\n" +
 	"symlinks:root-resolved,descendants-excluded\n" +
 	"files:regular-only\n" +
@@ -303,9 +305,6 @@ func discoverExactInstructionRoot(
 		appendInstructionCoverageRoot(result, rootKey, nil)
 		return
 	}
-	observationsBefore := len(result.Observations)
-	coverageBefore := len(result.CoverageKeys)
-	outcomesBefore := len(result.Outcomes)
 	var childStates []ingest.CollectionOutcome
 	var activeChildren []string
 	rulesSeen, directories := 0, 0
@@ -339,12 +338,13 @@ func discoverExactInstructionRoot(
 		var state ingest.OutcomeState
 		var items int
 		var errText string
+		var sourceChildren []string
 		if source.tree {
 			if !entry.IsDir() {
 				state, errText = ingest.OutcomeFailed, "registered instruction tree is not a directory"
 			} else {
-				state, items, errText = discoverInstructionTree(
-					ctx, boundary, source, child, instructionTraversalEntryLimit, &directories, &rulesSeen, engine, result,
+				state, items, errText, sourceChildren = discoverInstructionTree(
+					ctx, boundary, source, rootKey, instructionTraversalEntryLimit, &directories, &rulesSeen, engine, result,
 				)
 			}
 		} else {
@@ -360,7 +360,9 @@ func discoverExactInstructionRoot(
 		method := ingest.InstructionMethodSource
 		outcome := instructionChildOutcome(child, rootKey, boundary, method, state, items, errText)
 		childStates = append(childStates, outcome)
-		if state == ingest.OutcomeComplete {
+		if source.tree {
+			activeChildren = append(activeChildren, sourceChildren...)
+		} else if state == ingest.OutcomeComplete {
 			result.CoverageKeys = append(result.CoverageKeys, child)
 			result.Outcomes = append(result.Outcomes, outcome)
 			activeChildren = append(activeChildren, child)
@@ -370,12 +372,6 @@ func discoverExactInstructionRoot(
 	rootState := ingest.OutcomeComplete
 	if len(childStates) > 0 {
 		rootState = ingest.AggregateOutcomeState(childStates)
-	}
-	if rootState != ingest.OutcomeComplete {
-		result.Observations = result.Observations[:observationsBefore]
-		result.CoverageKeys = result.CoverageKeys[:coverageBefore]
-		result.Outcomes = result.Outcomes[:outcomesBefore]
-		activeChildren = nil
 	}
 	result.Outcomes = append(result.Outcomes, collectionOutcome(
 		rootKey, root, instructionRootMethod(mode), rootState, len(activeChildren), firstOutcomeError(childStates),
@@ -398,10 +394,6 @@ func discoverDeepInstructionRoot(
 		appendInstructionCoverageRoot(result, rootKey, nil)
 		return
 	}
-	observationsBefore := len(result.Observations)
-	coverageBefore := len(result.CoverageKeys)
-	outcomesBefore := len(result.Outcomes)
-	var childStates []ingest.CollectionOutcome
 	var activeChildren []string
 	seenBoundaries := make(map[string]bool)
 	directories, rulesSeen := 0, 0
@@ -465,9 +457,10 @@ func discoverDeepInstructionRoot(
 		var state ingest.OutcomeState
 		var items int
 		var errText string
+		var sourceChildren []string
 		if source.tree {
-			state, items, errText = discoverInstructionTree(
-				ctx, boundary, source, child, deepInstructionEntryLimit, &directories, &rulesSeen, engine, result,
+			state, items, errText, sourceChildren = discoverInstructionTree(
+				ctx, boundary, source, rootKey, deepInstructionEntryLimit, &directories, &rulesSeen, engine, result,
 			)
 		} else {
 			if fileState, fileErr := validateInstructionEntry(entry); fileState != ingest.OutcomeComplete {
@@ -482,12 +475,14 @@ func discoverDeepInstructionRoot(
 		}
 		method := ingest.InstructionMethodSource
 		outcome := instructionChildOutcome(child, rootKey, boundary, method, state, items, errText)
-		childStates = append(childStates, outcome)
-		if state == ingest.OutcomeComplete {
+		if source.tree {
+			activeChildren = append(activeChildren, sourceChildren...)
+		} else if state == ingest.OutcomeComplete {
 			result.CoverageKeys = append(result.CoverageKeys, child)
 			result.Outcomes = append(result.Outcomes, outcome)
 			activeChildren = append(activeChildren, child)
-		} else if state == ingest.OutcomePartial || state == ingest.OutcomeFailed {
+		}
+		if state == ingest.OutcomePartial || state == ingest.OutcomeFailed {
 			rootState, rootError = ingest.OutcomePartial, errText
 		} else if state == ingest.OutcomeTruncated && rootState == ingest.OutcomeComplete {
 			rootState, rootError = ingest.OutcomeTruncated, errText
@@ -502,12 +497,6 @@ func discoverDeepInstructionRoot(
 	})
 	if err != nil && rootState == ingest.OutcomeComplete {
 		rootState, rootError = ingest.OutcomePartial, "instruction traversal incomplete"
-	}
-	if rootState == ingest.OutcomePartial || rootState == ingest.OutcomeFailed {
-		result.Observations = result.Observations[:observationsBefore]
-		result.CoverageKeys = result.CoverageKeys[:coverageBefore]
-		result.Outcomes = result.Outcomes[:outcomesBefore]
-		activeChildren = nil
 	}
 	result.Outcomes = append(result.Outcomes, collectionOutcome(
 		rootKey, root, instructionRootMethod(instructionRootDeep), rootState, len(activeChildren), rootError,
@@ -622,16 +611,16 @@ func discoverInstructionTree(
 	ctx context.Context,
 	treePath string,
 	source instructionSource,
-	ownerKey string,
+	rootKey string,
 	directoryLimit int,
 	directories, rulesSeen *int,
 	engine *rules.Engine,
 	result *InstructionDiscovery,
-) (ingest.OutcomeState, int, string) {
+) (ingest.OutcomeState, int, string, []string) {
 	state := ingest.OutcomeComplete
 	errText := ""
 	items := 0
-	observationsBefore := len(result.Observations)
+	var activeChildren []string
 
 	err := walkInstructionDirectory(ctx, treePath, func(path string, entry os.DirEntry, walkErr error) error {
 		if ctx.Err() != nil {
@@ -690,19 +679,28 @@ func discoverInstructionTree(
 			errText = fileErr
 			return nil
 		}
-		info := AnalyzeInstructionFile(canonicalConfigPath(path), data, source.fileType, engine)
-		result.Observations = append(result.Observations, InstructionObservation{Info: info, OwnerKey: ownerKey})
+		filePath := canonicalConfigPath(path)
+		child := instructionChildKey(rootKey, filePath)
+		info := AnalyzeInstructionFile(filePath, data, source.fileType, engine)
+		result.Observations = append(result.Observations, InstructionObservation{Info: info, OwnerKey: child})
+		result.CoverageKeys = append(result.CoverageKeys, child)
+		result.Outcomes = append(result.Outcomes, instructionChildOutcome(
+			child,
+			rootKey,
+			filePath,
+			ingest.InstructionMethodSource,
+			ingest.OutcomeComplete,
+			1,
+			"",
+		))
+		activeChildren = append(activeChildren, child)
 		items++
 		return nil
 	})
 	if err != nil && state == ingest.OutcomeComplete {
 		state, errText = ingest.OutcomePartial, "instruction tree traversal incomplete"
 	}
-	if state != ingest.OutcomeComplete {
-		result.Observations = result.Observations[:observationsBefore]
-		items = 0
-	}
-	return state, items, errText
+	return state, items, errText, activeChildren
 }
 
 func walkInstructionDirectory(
