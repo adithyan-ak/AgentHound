@@ -78,7 +78,7 @@ func init() {
 	scanCmd.Flags().String("path", "", "Path to specific config file")
 	scanCmd.Flags().StringSlice("paths", nil, "Paths to multiple config files")
 	scanCmd.Flags().String("project-dir", "", "Project root for bounded exact instruction and client-config discovery (default: current directory)")
-	scanCmd.Flags().Bool("deep", false, "Also search below the home directory for nested registered instruction sources")
+	scanCmd.Flags().Bool("deep", false, "Also search below home and the selected project for nested registered instruction sources")
 	scanCmd.Flags().Bool("include-credential-values", false, "Include raw credential values")
 
 	scanCmd.Flags().String("url", "", "URL of a single HTTP MCP server")
@@ -587,9 +587,9 @@ func failedCollectionReport(collectorName string, err error) *ingest.CollectionR
 	}
 }
 
-// resolveInstructionRecursion returns the canonical deep root. Exact discovery
-// always covers home plus the effective project root and needs no recursive
-// filesystem sweep.
+// resolveInstructionRecursion returns the canonical home boundary for deep
+// discovery. The config collector adds a disjoint selected project while exact
+// discovery always covers both roots without a recursive filesystem sweep.
 func resolveInstructionRecursion(deep bool) (root string, isDeep bool, err error) {
 	if !deep {
 		return "", false, nil

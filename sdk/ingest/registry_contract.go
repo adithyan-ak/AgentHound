@@ -4,7 +4,7 @@ import "strings"
 
 const (
 	InstructionRegistryGeneration = 2
-	InstructionRegistryDigest     = "sha256:f3c3172ae8d854b865fe140756343511a4ff7314c67c66a7bbb30b52b737f30e"
+	InstructionRegistryDigest     = "sha256:b361785f18a782c92954c79d79e525636e9ba1bb77a9e3ce20e184f18d0bc1b2"
 
 	InstructionMethodExactUser    = "instruction_exact_user"
 	InstructionMethodExactProject = "instruction_exact_project"

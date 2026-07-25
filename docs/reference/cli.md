@@ -78,7 +78,7 @@ When none specified, defaults to config + MCP.
 | `--path` | | Single config file path (overrides auto-discovery). |
 | `--paths` | | Comma-separated paths to multiple config files. |
 | `--project-dir` | current working directory | Canonical exact project root for project config, registered root instruction sources, and MCP auto-discovery. It does not enable arbitrary recursive discovery. Missing, inaccessible, or non-directory roots fail closed; they are never treated as an empty project. |
-| `--deep` | `false` | Add a bounded best-effort search below the canonical user home for registered instruction sources in nested projects. The deep root is independent of the current directory. A truncated deep attempt publishes the usable current projection with an explicit coverage warning. |
+| `--deep` | `false` | Add a bounded best-effort search below the canonical user home and the selected project when it is outside home. Overlapping roots are canonicalized and deduplicated. A limited deep attempt publishes proven positives with an explicit coverage warning. |
 | `--include-credential-values` | `false` | Include credential values that the collector actually observes; hashes and material-status fields remain authoritative when a service masks or hashes a value. |
 
 Supported clients (12): Claude Desktop, Claude Code, Cursor, VS Code, Windsurf, Continue, Zed, Cline, JetBrains, Kiro, Amazon Q, Augment.
@@ -109,9 +109,13 @@ sources: `AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md`,
 `.github/instructions/**/*.instructions.md`. Known rule subtrees are bounded;
 the default scan does not search the rest of the home directory for projects.
 
-`--deep` adds one best-effort traversal below the home directory and discovers
-the same registry in nested project scopes. It does not change the exact
-project root. Discovery prunes junk, cache, VCS, and trash *sub*trees — `.git`,
+`--deep` adds bounded traversal below the home directory and, when the selected
+project is outside home, below that project root. Overlapping canonical or
+symlink-resolved roots are deduplicated; when the selected project contains
+home, its traversal excludes the home subtree already owned by the home deep
+root. Both roots share one 60-second wall-clock budget. Deep mode does not
+change either exact root. Discovery prunes junk, cache, VCS, and trash
+*sub*trees — `.git`,
 `node_modules`, `.cache`, and trash directories on every platform (macOS
 `.Trash`, the freedesktop XDG home trash `Trash`, per-mount `.Trash-<uid>`,
 Windows `$Recycle.Bin`). The explicitly selected exact root itself is never
@@ -132,15 +136,15 @@ coverage while retaining already completed children; it never proves absence
 below the skipped directory.
 Deep traversal runs in isolated state and returns at its 60-second deadline
 even when a filesystem open or directory read is stalled. A deadline returns a
-partial deep root with no new deep facts; the blocked work cannot mutate the
-returned exact result.
+partial deep root containing only immutable per-file observations completed
+before the deadline; blocked work cannot mutate the returned result.
 
 Recognized incomplete exact and deep roots are coverage-limited publications.
 Complete per-file positives are additive and current; the root has no absence
 authority, so it cannot retire, compare, or certify unseen registered sources
 as absent. Prior unseen ownership is preserved. Partial, failed, and truncated
-roots can therefore publish their successfully read children, while a deadline
-that returns no children publishes only the retained prior projection. A later
+roots can therefore publish their successfully read children. A deadline that
+completed no children publishes only the retained prior projection. A later
 scan without `--deep` never refreshes, ages, or retires deep ownership. A later
 complete scan of the same root reuses the stable per-file owners, regains
 root-level absence authority, and may retire sources proven absent.

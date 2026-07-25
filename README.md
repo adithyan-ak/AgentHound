@@ -162,7 +162,8 @@ agenthound scan --config --output - |
 
 The default scan checks registered instruction sources at your home and current
 project roots without searching unrelated directories. Add `--deep` when you
-also want bounded discovery across nested projects under your home directory.
+also want bounded discovery across nested projects under your home directory
+and the selected project when it is outside home.
 
 **4. Open the graph at
 [http://127.0.0.1:8080](http://127.0.0.1:8080/).**

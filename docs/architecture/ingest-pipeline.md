@@ -329,10 +329,12 @@ later complete root to recover and restore authoritative comparison.
 Collector-side deep instruction discovery isolates its recursive result behind
 the wall-clock budget. Local filesystem calls are not portably cancelable, so a
 timed-out worker may finish later, but it owns only private state and cannot
-alter the returned artifact. That specific deadline result contains a partial
-deep root with no new children, preserving the prior deep projection. Other
-partial, failed, or truncated instruction attempts retain every complete
-per-file child observed before the limitation.
+alter the returned artifact. Completed per-file observations are checkpointed
+as immutable values, so a deadline result retains proven positives under a
+partial deep root while preserving prior unseen evidence. Home and a disjoint
+selected project use independent deep roots but share the same 60-second
+attempt budget. Partial, failed, and truncated instruction attempts retain every
+complete per-file child observed before the limitation.
 
 ## Processing Order
 

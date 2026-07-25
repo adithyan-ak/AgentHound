@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/common"
@@ -87,7 +88,7 @@ const instructionRegistryManifest = "agenthound-instruction-registry/v2\n" +
 	"roots:exact_user,exact_project,deep\n" +
 	"ownership:file=stable-root-key+canonical-file-path\n" +
 	"ownership:registry-contract=excluded\n" +
-	"deep:canonical-home:nested-only\n" +
+	"deep:canonical-home+selected-project:nested-only:overlap-home-priority\n" +
 	"symlinks:root-resolved,descendants-excluded\n" +
 	"files:regular-only\n" +
 	"deep:unreadable-unmatched-descendant=truncated\n" +
@@ -129,9 +130,22 @@ type InstructionDiscovery struct {
 
 type InstructionScan struct {
 	// RecursiveRoot is retained as the collector option boundary. It is used
-	// only when Deep is true and must be the canonical user home.
+	// only when Deep is true and names the canonical user-home boundary.
+	// DiscoverInstructions also covers a selected project outside that boundary.
 	RecursiveRoot string
 	Deep          bool
+}
+
+type deepInstructionScope struct {
+	root         string
+	excludedRoot string
+}
+
+type deepInstructionProgress struct {
+	mu           sync.Mutex
+	root         string
+	rootKey      string
+	observations map[string]InstructionObservation
 }
 
 type instructionRootMode string
@@ -187,7 +201,8 @@ func instructionRegistryContract() ingest.RegistryContract {
 
 // DiscoverInstructions scans the complete bounded registry at the canonical
 // home and project roots. Deep mode additionally searches nested sources below
-// home; it never changes exact ownership or reclassifies root-level sources.
+// home and a selected project outside home; it never changes exact ownership or
+// reclassifies root-level sources.
 func DiscoverInstructions(
 	ctx context.Context,
 	homeDir, projectRoot string,
@@ -204,7 +219,7 @@ func DiscoverInstructions(
 	if scan.Deep && scan.RecursiveRoot != "" {
 		deep := discoverDeepInstructionsWithinBudget(
 			ctx,
-			canonicalInstructionRoot(scan.RecursiveRoot),
+			deepInstructionScopes(scan.RecursiveRoot, projectRoot),
 			engine,
 		)
 		result.Observations = append(result.Observations, deep.Observations...)
@@ -236,19 +251,46 @@ func DiscoverInstructions(
 
 func discoverDeepInstructionsWithinBudget(
 	ctx context.Context,
-	root string,
+	scopes []deepInstructionScope,
 	engine *rules.Engine,
 ) InstructionDiscovery {
 	walkCtx, cancel := context.WithTimeout(ctx, deepInstructionWalkBudget)
 	defer cancel()
 
+	var result InstructionDiscovery
+	for _, scope := range scopes {
+		deep := discoverDeepInstructionScopeWithinBudget(walkCtx, ctx, scope, engine)
+		result.Observations = append(result.Observations, deep.Observations...)
+		result.CoverageKeys = append(result.CoverageKeys, deep.CoverageKeys...)
+		result.AuthoritativeRoots = append(result.AuthoritativeRoots, deep.AuthoritativeRoots...)
+		result.Outcomes = append(result.Outcomes, deep.Outcomes...)
+	}
+	return result
+}
+
+func discoverDeepInstructionScopeWithinBudget(
+	walkCtx context.Context,
+	parentCtx context.Context,
+	scope deepInstructionScope,
+	engine *rules.Engine,
+) InstructionDiscovery {
+	progress := newDeepInstructionProgress(scope.root)
+
 	// Filesystem calls cannot be canceled portably. Keep deep mutations private
 	// so the caller can return at the deadline without a blocked worker racing
-	// with the exact result.
+	// with the returned result. Only immutable completed-file checkpoints cross
+	// that boundary.
 	completed := make(chan InstructionDiscovery, 1)
 	go func() {
 		var deep InstructionDiscovery
-		discoverDeepInstructionRoot(walkCtx, root, engine, &deep)
+		discoverDeepInstructionRoot(
+			walkCtx,
+			scope.root,
+			scope.excludedRoot,
+			engine,
+			&deep,
+			progress,
+		)
 		completed <- deep
 	}()
 
@@ -256,31 +298,116 @@ func discoverDeepInstructionsWithinBudget(
 	case deep := <-completed:
 		return deep
 	case <-walkCtx.Done():
-		rootKey := instructionRootKey(instructionRootDeep, root)
 		errText := "collection canceled"
-		if ctx.Err() == nil && walkCtx.Err() == context.DeadlineExceeded {
+		if parentCtx.Err() == nil && walkCtx.Err() == context.DeadlineExceeded {
 			errText = fmt.Sprintf(
 				"deep instruction discovery exceeded %s budget",
 				deepInstructionWalkBudget,
 			)
 		}
-		deep := InstructionDiscovery{
-			CoverageKeys: []string{rootKey},
-			Outcomes: []ingest.CollectionOutcome{collectionOutcome(
-				rootKey,
-				root,
-				instructionRootMethod(instructionRootDeep),
-				ingest.OutcomePartial,
-				0,
-				errText,
-			)},
-		}
-		appendInstructionCoverageRoot(&deep, rootKey, nil)
-		return deep
+		return progress.snapshot(errText)
 	}
 }
 
+func deepInstructionScopes(homeRoot, projectRoot string) []deepInstructionScope {
+	homeRoot = canonicalInstructionRoot(homeRoot)
+	projectRoot = canonicalInstructionRoot(projectRoot)
+	scopes := []deepInstructionScope{{root: homeRoot}}
+	if projectRoot == "" || instructionPathWithinRoot(homeRoot, projectRoot) {
+		return scopes
+	}
+	projectScope := deepInstructionScope{root: projectRoot}
+	if instructionPathWithinRoot(projectRoot, homeRoot) {
+		projectScope.excludedRoot = homeRoot
+	}
+	return append(scopes, projectScope)
+}
+
+func newDeepInstructionProgress(root string) *deepInstructionProgress {
+	return &deepInstructionProgress{
+		root:         root,
+		rootKey:      instructionRootKey(instructionRootDeep, root),
+		observations: make(map[string]InstructionObservation),
+	}
+}
+
+func (p *deepInstructionProgress) record(observation InstructionObservation) {
+	if p == nil {
+		return
+	}
+	observation.Info.Patterns = append(
+		[]common.PatternMatch(nil),
+		observation.Info.Patterns...,
+	)
+	p.mu.Lock()
+	p.observations[observation.OwnerKey] = observation
+	p.mu.Unlock()
+}
+
+func (p *deepInstructionProgress) snapshot(errText string) InstructionDiscovery {
+	p.mu.Lock()
+	observations := make([]InstructionObservation, 0, len(p.observations))
+	for _, observation := range p.observations {
+		observation.Info.Patterns = append(
+			[]common.PatternMatch(nil),
+			observation.Info.Patterns...,
+		)
+		observations = append(observations, observation)
+	}
+	p.mu.Unlock()
+	sort.Slice(observations, func(i, j int) bool {
+		return observations[i].OwnerKey < observations[j].OwnerKey
+	})
+
+	result := InstructionDiscovery{
+		Observations: observations,
+		CoverageKeys: []string{p.rootKey},
+	}
+	children := make([]string, 0, len(observations))
+	for _, observation := range observations {
+		child := observation.OwnerKey
+		children = append(children, child)
+		result.CoverageKeys = append(result.CoverageKeys, child)
+		result.Outcomes = append(result.Outcomes, instructionChildOutcome(
+			child,
+			p.rootKey,
+			observation.Info.Path,
+			ingest.InstructionMethodSource,
+			ingest.OutcomeComplete,
+			1,
+			"",
+		))
+	}
+	result.Outcomes = append(result.Outcomes, collectionOutcome(
+		p.rootKey,
+		p.root,
+		instructionRootMethod(instructionRootDeep),
+		ingest.OutcomePartial,
+		len(children),
+		errText,
+	))
+	appendInstructionCoverageRoot(&result, p.rootKey, children)
+	return result
+}
+
+func instructionPathWithinRoot(root, path string) bool {
+	if root == "" || path == "" {
+		return false
+	}
+	relative, err := filepath.Rel(root, path)
+	if err != nil || filepath.IsAbs(relative) {
+		return false
+	}
+	relative = filepath.Clean(relative)
+	return relative == "." ||
+		relative != ".." &&
+			!strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
 func canonicalInstructionRoot(root string) string {
+	if strings.TrimSpace(root) == "" {
+		return ""
+	}
 	root = canonicalConfigPath(root)
 	resolved, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -344,14 +471,14 @@ func discoverExactInstructionRoot(
 				state, errText = ingest.OutcomeFailed, "registered instruction tree is not a directory"
 			} else {
 				state, items, errText, sourceChildren = discoverInstructionTree(
-					ctx, boundary, source, rootKey, instructionTraversalEntryLimit, &directories, &rulesSeen, engine, result,
+					ctx, boundary, source, rootKey, instructionTraversalEntryLimit, &directories, &rulesSeen, engine, result, nil,
 				)
 			}
 		} else {
 			if !entry.Mode().IsRegular() {
 				state, errText = ingest.OutcomeFailed, "registered instruction source is not a regular file"
 			} else {
-				state, items, errText = discoverInstructionFile(boundary, source.fileType, child, engine, result)
+				state, items, errText = discoverInstructionFile(boundary, source.fileType, child, engine, result, nil)
 				if items > 0 {
 					rulesSeen++
 				}
@@ -382,8 +509,10 @@ func discoverExactInstructionRoot(
 func discoverDeepInstructionRoot(
 	ctx context.Context,
 	root string,
+	excludedRoot string,
 	engine *rules.Engine,
 	result *InstructionDiscovery,
+	progress *deepInstructionProgress,
 ) {
 	rootKey := instructionRootKey(instructionRootDeep, root)
 	result.CoverageKeys = append(result.CoverageKeys, rootKey)
@@ -404,6 +533,12 @@ func discoverDeepInstructionRoot(
 		if ctx.Err() != nil {
 			rootState, rootError = ingest.OutcomePartial, "collection canceled"
 			return filepath.SkipAll
+		}
+		if path != root && instructionPathWithinRoot(excludedRoot, path) {
+			if entry != nil && entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if path != root && instructionPrunedDir(entry) {
 			return filepath.SkipDir
@@ -460,7 +595,16 @@ func discoverDeepInstructionRoot(
 		var sourceChildren []string
 		if source.tree {
 			state, items, errText, sourceChildren = discoverInstructionTree(
-				ctx, boundary, source, rootKey, deepInstructionEntryLimit, &directories, &rulesSeen, engine, result,
+				ctx,
+				boundary,
+				source,
+				rootKey,
+				deepInstructionEntryLimit,
+				&directories,
+				&rulesSeen,
+				engine,
+				result,
+				progress,
 			)
 		} else {
 			if fileState, fileErr := validateInstructionEntry(entry); fileState != ingest.OutcomeComplete {
@@ -470,7 +614,14 @@ func discoverDeepInstructionRoot(
 				errText = fmt.Sprintf("instruction discovery exceeds %d file limit", instructionRuleLimit)
 			} else {
 				rulesSeen++
-				state, items, errText = discoverInstructionFile(boundary, source.fileType, child, engine, result)
+				state, items, errText = discoverInstructionFile(
+					boundary,
+					source.fileType,
+					child,
+					engine,
+					result,
+					progress,
+				)
 			}
 		}
 		method := ingest.InstructionMethodSource
@@ -616,6 +767,7 @@ func discoverInstructionTree(
 	directories, rulesSeen *int,
 	engine *rules.Engine,
 	result *InstructionDiscovery,
+	progress *deepInstructionProgress,
 ) (ingest.OutcomeState, int, string, []string) {
 	state := ingest.OutcomeComplete
 	errText := ""
@@ -682,7 +834,8 @@ func discoverInstructionTree(
 		filePath := canonicalConfigPath(path)
 		child := instructionChildKey(rootKey, filePath)
 		info := AnalyzeInstructionFile(filePath, data, source.fileType, engine)
-		result.Observations = append(result.Observations, InstructionObservation{Info: info, OwnerKey: child})
+		observation := InstructionObservation{Info: info, OwnerKey: child}
+		result.Observations = append(result.Observations, observation)
 		result.CoverageKeys = append(result.CoverageKeys, child)
 		result.Outcomes = append(result.Outcomes, instructionChildOutcome(
 			child,
@@ -694,6 +847,7 @@ func discoverInstructionTree(
 			"",
 		))
 		activeChildren = append(activeChildren, child)
+		progress.record(observation)
 		items++
 		return nil
 	})
@@ -831,13 +985,16 @@ func discoverInstructionFile(
 	path, fileType, ownerKey string,
 	engine *rules.Engine,
 	result *InstructionDiscovery,
+	progress *deepInstructionProgress,
 ) (ingest.OutcomeState, int, string) {
 	data, state, errText := readBoundedInstruction(path)
 	if state != ingest.OutcomeComplete {
 		return state, 0, errText
 	}
 	info := AnalyzeInstructionFile(path, data, fileType, engine)
-	result.Observations = append(result.Observations, InstructionObservation{Info: info, OwnerKey: ownerKey})
+	observation := InstructionObservation{Info: info, OwnerKey: ownerKey}
+	result.Observations = append(result.Observations, observation)
+	progress.record(observation)
 	return ingest.OutcomeComplete, 1, ""
 }
 
