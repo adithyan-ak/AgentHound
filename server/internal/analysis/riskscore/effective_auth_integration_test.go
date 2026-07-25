@@ -80,9 +80,16 @@ RETURN 1 AS created`, map[string]any{"scan_id": scanID})
 	if err != nil {
 		t.Fatalf("agent risk: %v", err)
 	}
-	if !agentAssessment.Complete || agentAssessment.Score != 18 ||
-		agentAssessment.Min != 18 || agentAssessment.Max != 18 {
-		t.Fatalf("agent effective auth risk = %+v, want exact 18", agentAssessment)
+	if agentAssessment.Complete ||
+		agentAssessment.Score != 28 ||
+		agentAssessment.Min != 18 ||
+		agentAssessment.Max != 28 ||
+		len(agentAssessment.UnknownFactors) != 1 ||
+		agentAssessment.UnknownFactors[0] != "agent_instruction_loading" {
+		t.Fatalf(
+			"agent effective auth risk = %+v, want auth floor 18 with instruction-loading bound [18,28]",
+			agentAssessment,
+		)
 	}
 
 	serverAssessment, err := ServerRiskAssessment(ctx, db, "risk-effective-server")
