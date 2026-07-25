@@ -47,7 +47,14 @@ agenthound --version
 
 ## 3. Run Your First Scan and Ingest
 
-The config scan is offline and safe. It parses all 12 supported MCP client config formats on the local machine and reports trust relationships, credentials, and instruction files. Stream straight into the running server in one pipe:
+The config scan is offline and read-only. It parses all 12 supported MCP
+client config formats on the local machine and reports trust relationships,
+credentials, and instruction files. Choose one coverage level and stream the
+artifact straight into the running server.
+
+**Normal scan — recommended first run.** Checks client configs and registered
+instruction sources at the canonical home and selected project roots without
+recursively searching unrelated directories:
 
 ```bash
 agenthound scan --config --output - \
@@ -55,9 +62,23 @@ agenthound scan --config --output - \
          http://127.0.0.1:8080/api/v1/ingest
 ```
 
+**Deep scan — nested project investigation.** Adds bounded discovery of
+registered instruction sources below both home and the selected project:
+
+```bash
+agenthound scan --config --deep --output - \
+  | curl -sS --fail-with-body --data-binary @- -H "Content-Type: application/json" \
+         http://127.0.0.1:8080/api/v1/ingest
+```
+
+Add `--project-dir /path/to/project` to either command when the target project
+is not the current directory. Deep discovery gives that selected project its
+own scope even when it is inside a normally pruned home subtree.
+
 Or write to disk and ingest in two steps. The collector prints the
 exact filename (`./scan-<scan_id>.json`); use that, not a glob, since
-later scans accumulate alongside it:
+later scans accumulate alongside it. Add `--deep` to the scan command for the
+same nested-project coverage:
 
 ```bash
 agenthound scan --config                     # prints ./scan-<scan_id>.json
