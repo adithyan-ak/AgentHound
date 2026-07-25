@@ -85,15 +85,19 @@ When none specified, defaults to config + MCP.
 
 Supported clients (12): Claude Desktop, Claude Code, Cursor, VS Code, Windsurf, Continue, Zed, Cline, JetBrains, Kiro, Amazon Q, Augment.
 
-Auto-discovery reads each physical configuration file once and applies every
-client format registered for that path. A shared settings file is represented
-by one `ConfigFile` with sorted `clients` and one `AgentInstance` per applicable
-client. Recognized empty server maps are valid empty configurations; malformed,
-unreadable, or oversized files produce non-authoritative failure states while
-valid views from the same file are retained. For an explicitly supplied export
-whose generic shape is shared by several clients and whose path proves none of
-them, the servers are retained under client `unknown` instead of inventing a
-specific application.
+Auto-discovery reads each registered lexical absolute path once and applies
+every client format registered for that path. A shared settings path is
+represented by one `ConfigFile` with sorted `clients` and one `AgentInstance`
+per applicable client. Explicit `--path` and `--paths` values retain the
+identity of every supplied absolute path, including symlink aliases: two
+logical client locations may point to the same underlying file without
+becoming the same `ConfigFile`. Their server definitions still converge on the
+normal deterministic `MCPServer` identity. Recognized empty server maps are
+valid empty configurations; malformed, unreadable, or oversized files produce
+non-authoritative failure states while valid views from the same path are
+retained. For an explicitly supplied export whose generic shape is shared by
+several clients and whose path proves none of them, the servers are retained
+under client `unknown` instead of inventing a specific application.
 
 Credential-named env vars, headers, arguments, and URL components with empty or
 whitespace-only values are omitted rather than emitted as exposed credentials
@@ -252,7 +256,7 @@ separate `signature_key_source` and `signature_key_trust` properties.
 
 Link-local and multicast addresses are refused unconditionally.
 
-By default network-mode `scan` prints a one-line summary (`N host(s) with at least one open port`) plus a final fingerprint summary; pass `--verbose` to list every host, which can run to thousands of lines on a large sweep. On an interactive terminal a single rewriting progress line is shown during the port sweep and fingerprint phase. `--quiet` (or `AGENTHOUND_QUIET=1`) suppresses the progress line, the per-host summary, and the fingerprint output, leaving only errors. None of this affects the JSON written to `--output`.
+By default network-mode `scan` prints a one-line summary (`N host(s) with at least one open port`) plus a final fingerprint summary; pass `--verbose` to list every host, which can run to thousands of lines on a large sweep. On an interactive terminal a single rewriting progress line is shown during the port sweep and fingerprint phase. `--quiet` (or `AGENTHOUND_QUIET=1`) suppresses routine progress, per-host summaries, and fingerprint output, but never suppresses errors or collection-coverage warnings. None of this affects the JSON written to `--output`.
 
 Every registered fingerprinter runs once against every open endpoint. Port
 mappings prioritize likely candidates but are not eligibility gates, so a real
@@ -285,6 +289,32 @@ endpoint already protected by an operator-controlled VPN/SSH tunnel. Use HTTPS
 or a trusted tunnel for any non-loopback route; `--insecure` applies to
 collection targets, not ingest TLS. Artifacts produced with
 `--include-credential-values` can contain raw secrets.
+
+#### Collection Outcome and Exit Semantics
+
+Every saved scan artifact records its aggregate state and per-target details
+under `meta.collection`. Complete scans print the normal
+`Next: agenthound-server ingest ...` instruction without a coverage warning.
+Partial, failed, truncated, or unknown artifacts print a warning on stderr,
+including the actionable blocking outcomes and a review-qualified ingest
+instruction. Full details remain in `meta.collection.outcomes`; stdout JSON is
+unchanged.
+
+Usable incomplete evidence retains exit status zero. This includes a collector
+that returned a typed artifact whose target observations all failed. The scan
+exits non-zero for collection failure only when every enabled top-level
+collector returned an error; the saved artifact is then identified as
+diagnostic evidence and no ingest instruction is printed. Output, argument,
+and remote-ingest failures retain their existing non-zero behavior.
+
+Recognized incomplete instruction roots are the non-blocking exception
+described above: their proven per-file positives may publish, so their warning
+does not claim that ingestion will be withheld. Other blocking incomplete
+coverage may cause ingestion to withhold graph publication. Review
+`meta.collection.outcomes`, correct or recollect the failed coverage, and do
+not treat missing facts as evidence of absence. With `--ingest`, the warning is
+printed after the backup artifact is saved and before the explicitly requested
+upload begins.
 
 #### Example
 

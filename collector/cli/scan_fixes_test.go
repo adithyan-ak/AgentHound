@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -569,32 +571,171 @@ func TestAllCollectorsFailed(t *testing.T) {
 	}
 }
 
-func TestInstructionCoverageWarningPreservesUsableScanSuccess(t *testing.T) {
-	root := ingest.CanonicalCoverageKey("config", "instruction-deep", "/home/example")
-	contract := ingest.CurrentInstructionRegistryContract()
+func TestScanCoverageWarningsIdentifyBlockingLeafOutcome(t *testing.T) {
+	root := ingest.CollectorRootCoverageKey("config")
+	path := ingest.CanonicalCoverageKey("config", "path", "/tmp/broken.json")
 	report := &ingest.CollectionReport{
-		State:        ingest.OutcomeTruncated,
-		CoverageKeys: []string{root},
-		AuthoritativeRoots: []ingest.CoverageRoot{{
-			CoverageKey:      root,
-			RegistryContract: &contract,
-		}},
+		State:        ingest.OutcomePartial,
+		CoverageKeys: []string{root, path},
+		Outcomes: []ingest.CollectionOutcome{
+			{
+				Collector: "config", CoverageKey: path,
+				ParentCoverageKey: root, Target: "/tmp/broken.json",
+				Method: "config_discovery", State: ingest.OutcomeFailed,
+				Error: "11 parser(s) failed",
+			},
+			{
+				Collector: "config", CoverageKey: root, Target: "config",
+				Method: "collect", State: ingest.OutcomePartial,
+			},
+		},
+	}
+
+	assessment := assessScanCoverage(report)
+	if !assessment.incomplete || !assessment.blocking {
+		t.Fatalf("assessment = %+v, want blocking incomplete", assessment)
+	}
+	if len(assessment.blockingOutcomes) != 1 ||
+		assessment.blockingOutcomes[0].Method != "config_discovery" {
+		t.Fatalf("blocking outcomes = %+v, want only leaf failure", assessment.blockingOutcomes)
+	}
+
+	var stderr bytes.Buffer
+	writeScanCoverageWarnings(&stderr, report, assessment)
+	writeScanNextStep(&stderr, "/tmp/scan.json", assessment, false)
+	for _, want := range []string{
+		"WARNING: Scan artifact is partial",
+		"config/config_discovery /tmp/broken.json — failed: 11 parser(s) failed",
+		"may withhold graph publication",
+		"Next (after reviewing incomplete coverage): agenthound-server ingest /tmp/scan.json",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("warning missing %q:\n%s", want, stderr.String())
+		}
+	}
+	if strings.Contains(stderr.String(), "config/collect") {
+		t.Fatalf("aggregate collector root duplicated the leaf failure:\n%s", stderr.String())
+	}
+}
+
+func TestNetworkScanCoverageWarningIdentifiesIncompleteFingerprint(t *testing.T) {
+	port := ingest.CanonicalCoverageKey("network", "port", "127.0.0.1:18080")
+	fingerprint := ingest.CanonicalCoverageKey(
+		"network",
+		"fingerprint",
+		"127.0.0.1:18080/http",
+	)
+	report := &ingest.CollectionReport{
+		State:        ingest.OutcomePartial,
+		CoverageKeys: []string{port, fingerprint},
+		Outcomes: []ingest.CollectionOutcome{
+			{
+				Collector: "network", CoverageKey: port,
+				Target: "127.0.0.1:18080", Method: "port_scan",
+				State: ingest.OutcomeComplete,
+			},
+			{
+				Collector: "network", CoverageKey: fingerprint,
+				ParentCoverageKey: port, Target: "127.0.0.1:18080",
+				Method: "http_fingerprint", State: ingest.OutcomePartial,
+				Error: "request timed out",
+			},
+		},
+	}
+
+	assessment := assessScanCoverage(report)
+	var stderr bytes.Buffer
+	writeScanCoverageWarnings(&stderr, report, assessment)
+	writeScanNextStep(&stderr, "/tmp/network.json", assessment, false)
+	for _, want := range []string{
+		"WARNING: Scan artifact is partial",
+		"network/http_fingerprint 127.0.0.1:18080 — partial: request timed out",
+		"Next (after reviewing incomplete coverage): agenthound-server ingest /tmp/network.json",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("network warning missing %q:\n%s", want, stderr.String())
+		}
+	}
+}
+
+func TestScanCoverageWarningsRedactSecretBearingA2AOutcome(t *testing.T) {
+	const safeTarget = "https://agents.example.test/card"
+	rawTarget := "https://" +
+		strings.Join([]string{"url-user", "url-pass"}, ":") +
+		"@agents.example.test/card?api_key=query-secret#fragment-secret"
+	scope := ingest.CanonicalCoverageKey("a2a", "target", rawTarget)
+	report := &ingest.CollectionReport{
+		State:        ingest.OutcomeFailed,
+		CoverageKeys: []string{scope},
 		Outcomes: []ingest.CollectionOutcome{{
-			Collector:   "config",
-			CoverageKey: root,
-			Method:      ingest.InstructionMethodDeep,
-			State:       ingest.OutcomeTruncated,
-			Error:       "deep instruction discovery exceeded 60s budget",
+			Collector: "a2a", CoverageKey: scope, Target: rawTarget,
+			Method: "agent_card", State: ingest.OutcomeFailed,
+			Error: "fetch " + rawTarget + "/.well-known/agent-card.json: connection refused",
 		}},
 	}
 
 	var stderr bytes.Buffer
-	writeInstructionCoverageWarnings(&stderr, report)
+	writeScanCoverageWarnings(&stderr, report, assessScanCoverage(report))
+	if !strings.Contains(stderr.String(), safeTarget) {
+		t.Fatalf("warning missing sanitized target %q:\n%s", safeTarget, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "cause omitted from terminal output") {
+		t.Fatalf("warning did not explain omitted sensitive cause:\n%s", stderr.String())
+	}
+	for _, secret := range []string{
+		rawTarget,
+		"url-user",
+		"url-pass",
+		"query-secret",
+		"fragment-secret",
+		"api_key",
+	} {
+		if strings.Contains(stderr.String(), secret) {
+			t.Fatalf("warning leaked %q:\n%s", secret, stderr.String())
+		}
+	}
+}
+
+func TestInstructionCoverageWarningPreservesUsableScanSuccess(t *testing.T) {
+	root := ingest.CanonicalCoverageKey("config", "instruction-deep", "/home/example")
+	configRoot := ingest.CollectorRootCoverageKey("config")
+	contract := ingest.CurrentInstructionRegistryContract()
+	report := &ingest.CollectionReport{
+		State:        ingest.OutcomeTruncated,
+		CoverageKeys: []string{configRoot, root},
+		AuthoritativeRoots: []ingest.CoverageRoot{{
+			CoverageKey:      root,
+			RegistryContract: &contract,
+		}},
+		Outcomes: []ingest.CollectionOutcome{
+			{
+				Collector: "config", CoverageKey: configRoot,
+				Method: "collect", State: ingest.OutcomeComplete,
+			},
+			{
+				Collector:   "config",
+				CoverageKey: root,
+				Method:      ingest.InstructionMethodDeep,
+				State:       ingest.OutcomeTruncated,
+				Error:       "deep instruction discovery exceeded 60s budget",
+			},
+		},
+	}
+
+	var stderr bytes.Buffer
+	assessment := assessScanCoverage(report)
+	if assessment.blocking {
+		t.Fatalf("instruction-only limitation became blocking: %+v", assessment)
+	}
+	writeScanCoverageWarnings(&stderr, report, assessment)
+	writeScanNextStep(&stderr, "/tmp/instructions.json", assessment, false)
 	for _, want := range []string{
+		"WARNING: Scan artifact is truncated",
 		"deep instruction coverage is limited",
 		"deep instruction discovery exceeded 60s budget",
 		"observed instruction positives were retained",
 		"missing instruction evidence is not a clean absence",
+		"Next (coverage-limited artifact; review warnings):",
 	} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("warning missing %q: %s", want, stderr.String())
@@ -611,9 +752,10 @@ func TestInstructionCoverageWarningPreservesUsableScanSuccess(t *testing.T) {
 	}
 
 	stderr.Reset()
-	report.Outcomes[0].State = ingest.OutcomeComplete
+	report.Outcomes[1].State = ingest.OutcomeComplete
 	report.State = ingest.OutcomeComplete
-	writeInstructionCoverageWarnings(&stderr, report)
+	assessment = assessScanCoverage(report)
+	writeScanCoverageWarnings(&stderr, report, assessment)
 	if stderr.Len() != 0 {
 		t.Fatalf("complete deep coverage emitted warning: %s", stderr.String())
 	}
@@ -683,6 +825,8 @@ func TestRunScan_EmptySuccessExitsZero(t *testing.T) {
 	out := filepath.Join(dir, "empty-ok.json")
 
 	cmd := newScanCmdForTest()
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
 	mustSetFlag(t, cmd, "config", "true")
 	mustSetFlag(t, cmd, "path", writeEmptyConfig(t))
 	mustSetFlag(t, cmd, "scan-output", out)
@@ -692,6 +836,96 @@ func TestRunScan_EmptySuccessExitsZero(t *testing.T) {
 	}
 	if _, err := os.Stat(out); err != nil {
 		t.Fatalf("expected artifact at %s: %v", out, err)
+	}
+	if strings.Contains(stderr.String(), "WARNING:") {
+		t.Fatalf("complete scan emitted a coverage warning:\n%s", stderr.String())
+	}
+	if !strings.Contains(
+		stderr.String(),
+		"Next: agenthound-server ingest "+out,
+	) {
+		t.Fatalf("complete scan lost the standard next step:\n%s", stderr.String())
+	}
+}
+
+func TestRunScan_MalformedConfigWarnsButExitsZero(t *testing.T) {
+	t.Setenv("AGENTHOUND_QUIET", "1")
+	dir := t.TempDir()
+	malformed := filepath.Join(dir, "malformed.json")
+	if err := os.WriteFile(malformed, []byte(`{"mcpServers":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "partial.json")
+
+	cmd := newScanCmdForTest()
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+	mustSetFlag(t, cmd, "config", "true")
+	mustSetFlag(t, cmd, "path", malformed)
+	mustSetFlag(t, cmd, "project-dir", dir)
+	mustSetFlag(t, cmd, "scan-output", out)
+
+	if err := runScan(cmd, nil); err != nil {
+		t.Fatalf("malformed target-level outcome must retain exit zero: %v", err)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var artifact ingest.IngestData
+	if err := json.Unmarshal(raw, &artifact); err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Meta.Collection == nil ||
+		artifact.Meta.Collection.State != ingest.OutcomePartial {
+		t.Fatalf("malformed config state = %+v, want partial", artifact.Meta.Collection)
+	}
+	for _, want := range []string{
+		"WARNING: Scan artifact is partial",
+		"config/config_discovery " + malformed,
+		"Next (after reviewing incomplete coverage): agenthound-server ingest " + out,
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("quiet partial scan warning missing %q:\n%s", want, stderr.String())
+		}
+	}
+	if strings.Contains(stderr.String(), "Collected ") {
+		t.Fatalf("--quiet retained routine progress:\n%s", stderr.String())
+	}
+}
+
+func TestRunScan_FailedA2AOutcomesRemainExitZeroWithQualifiedHint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	out := filepath.Join(t.TempDir(), "failed-a2a.json")
+	cmd := newScanCmdForTest()
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+	mustSetFlag(t, cmd, "a2a", "true")
+	mustSetFlag(t, cmd, "target", server.URL)
+	mustSetFlag(t, cmd, "scan-output", out)
+
+	if err := runScan(cmd, nil); err != nil {
+		t.Fatalf("collector-returned failed artifact must retain exit zero: %v", err)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var artifact ingest.IngestData
+	if err := json.Unmarshal(raw, &artifact); err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Meta.Collection == nil ||
+		artifact.Meta.Collection.State != ingest.OutcomeFailed {
+		t.Fatalf("A2A collection state = %+v, want failed", artifact.Meta.Collection)
+	}
+	if !strings.Contains(stderr.String(), "WARNING: Scan artifact is failed") ||
+		!strings.Contains(stderr.String(), "Next (after reviewing incomplete coverage):") {
+		t.Fatalf("failed artifact did not receive review-qualified guidance:\n%s", stderr.String())
 	}
 }
 
@@ -704,6 +938,8 @@ func TestRunScan_AllCollectorsFailExitsNonZero(t *testing.T) {
 	out := filepath.Join(dir, "all-fail.json")
 
 	cmd := newScanCmdForTest()
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
 	mustSetFlag(t, cmd, "config", "true")
 	mustSetFlag(t, cmd, "project-dir", filepath.Join(dir, "no-such-project"))
 	mustSetFlag(t, cmd, "scan-output", out)
@@ -729,6 +965,13 @@ func TestRunScan_AllCollectorsFailExitsNonZero(t *testing.T) {
 	}
 	if len(ingest.CompleteAuthoritativeRoots(artifact.Meta.Collection)) != 0 {
 		t.Fatalf("invalid root became authoritative: %+v", artifact.Meta.Collection.AuthoritativeRoots)
+	}
+	if strings.Contains(stderr.String(), "Next:") ||
+		strings.Contains(stderr.String(), "Next (") {
+		t.Fatalf("total collector failure emitted an ingest hint:\n%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Artifact saved for diagnostics: "+out) {
+		t.Fatalf("total failure omitted diagnostic artifact path:\n%s", stderr.String())
 	}
 }
 

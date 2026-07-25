@@ -243,11 +243,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 		if err := writeOutputAtomic(output, artifact); err != nil {
 			return fmt.Errorf("write file: %w", err)
 		}
-		writeInstructionCoverageWarnings(stderr, merged.Meta.Collection)
+		assessment := assessScanCoverage(merged.Meta.Collection)
+		writeScanCoverageWarnings(stderr, merged.Meta.Collection, assessment)
 		if !quietEnabled(cmd) {
 			_, _ = fmt.Fprintf(stderr, "[scan] saved artifact: %s\n", output)
 		}
 		if allCollectorsFailed(enabled, failed) {
+			writeScanNextStep(stderr, output, assessment, true)
 			return fmt.Errorf("all %d enabled collector(s) failed", enabled)
 		}
 		if !quietEnabled(cmd) {
@@ -272,21 +274,262 @@ func runScan(cmd *cobra.Command, args []string) error {
 	if output == "-" {
 		writeErr = writeCollectorOutputStdout(merged)
 	} else {
-		writeErr = writeCollectorOutput(merged, output)
+		writeErr = writeCollectorOutputFile(merged, output)
 	}
 	if writeErr != nil {
 		return writeErr
 	}
-	writeInstructionCoverageWarnings(stderr, merged.Meta.Collection)
+	assessment := assessScanCoverage(merged.Meta.Collection)
+	writeScanCoverageWarnings(stderr, merged.Meta.Collection, assessment)
+	totalFailure := allCollectorsFailed(enabled, failed)
+	writeScanNextStep(stderr, output, assessment, totalFailure)
 
 	// Total-failure exit code: when every enabled collector errored, exit
 	// non-zero. Partial success (>=1 collector succeeded) and a legitimately
 	// empty-but-successful scan both exit 0 — the decision keys on collector
 	// errors, not node count.
-	if allCollectorsFailed(enabled, failed) {
+	if totalFailure {
 		return fmt.Errorf("all %d enabled collector(s) failed", enabled)
 	}
 	return nil
+}
+
+const maxDisplayedScanOutcomes = 10
+
+type scanCoverageAssessment struct {
+	state               ingest.OutcomeState
+	incomplete          bool
+	blocking            bool
+	blockingOutcomes    []ingest.CollectionOutcome
+	omittedOutcomeCount int
+}
+
+func assessScanCoverage(report *ingest.CollectionReport) scanCoverageAssessment {
+	assessment := scanCoverageAssessment{state: ingest.OutcomeUnknown}
+	if report == nil {
+		assessment.incomplete = true
+		assessment.blocking = true
+		return assessment
+	}
+	assessment.state = report.State
+	if assessment.state == "" {
+		assessment.state = ingest.AggregateOutcomeState(report.Outcomes)
+	}
+	assessment.incomplete = assessment.state != ingest.OutcomeComplete
+	if !assessment.incomplete {
+		return assessment
+	}
+
+	// The server uses this predicate to decide whether collection coverage can
+	// publish. Reusing it keeps recognized instruction-only limitations
+	// non-blocking instead of reinterpreting the aggregate report state.
+	assessment.blocking = !ingest.AuthoritativeCoverageComplete(report)
+	if !assessment.blocking {
+		return assessment
+	}
+
+	nonBlocking := make(map[string]bool)
+	for _, key := range ingest.NonBlockingInstructionCoverageDomains(report) {
+		nonBlocking[key] = true
+	}
+	hasSpecificOutcome := make(map[string]bool)
+	for _, outcome := range report.Outcomes {
+		if scanOutcomeIncomplete(outcome.State) &&
+			!nonBlocking[outcome.CoverageKey] &&
+			outcome.Method != "collect" {
+			hasSpecificOutcome[outcome.Collector] = true
+		}
+	}
+
+	seen := make(map[string]bool)
+	for _, outcome := range report.Outcomes {
+		if !scanOutcomeIncomplete(outcome.State) ||
+			nonBlocking[outcome.CoverageKey] ||
+			(outcome.Method == "collect" && outcome.Error == "" &&
+				hasSpecificOutcome[outcome.Collector]) {
+			continue
+		}
+		key := strings.Join([]string{
+			outcome.Collector,
+			outcome.Method,
+			outcome.Target,
+			string(outcome.State),
+			outcome.Error,
+		}, "\x00")
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		assessment.blockingOutcomes = append(
+			assessment.blockingOutcomes,
+			outcome,
+		)
+	}
+	sort.Slice(assessment.blockingOutcomes, func(i, j int) bool {
+		left := assessment.blockingOutcomes[i]
+		right := assessment.blockingOutcomes[j]
+		return strings.Join([]string{
+			left.Collector, left.Method, left.Target,
+			string(left.State), left.Error,
+		}, "\x00") < strings.Join([]string{
+			right.Collector, right.Method, right.Target,
+			string(right.State), right.Error,
+		}, "\x00")
+	})
+	if len(assessment.blockingOutcomes) > maxDisplayedScanOutcomes {
+		assessment.omittedOutcomeCount =
+			len(assessment.blockingOutcomes) - maxDisplayedScanOutcomes
+		assessment.blockingOutcomes =
+			assessment.blockingOutcomes[:maxDisplayedScanOutcomes]
+	}
+	return assessment
+}
+
+func scanOutcomeIncomplete(state ingest.OutcomeState) bool {
+	return state != ingest.OutcomeComplete &&
+		state != ingest.OutcomeNotApplicable
+}
+
+func writeScanCoverageWarnings(
+	w io.Writer,
+	report *ingest.CollectionReport,
+	assessment scanCoverageAssessment,
+) {
+	if !assessment.incomplete {
+		return
+	}
+	_, _ = fmt.Fprintf(
+		w,
+		"WARNING: Scan artifact is %s; collection coverage is not complete.\n",
+		assessment.state,
+	)
+	if assessment.blocking {
+		_, _ = fmt.Fprintln(w, "Blocking outcomes:")
+		if len(assessment.blockingOutcomes) == 0 {
+			_, _ = fmt.Fprintln(
+				w,
+				"- no detailed blocking outcome was supplied; inspect meta.collection.outcomes",
+			)
+		}
+		for _, outcome := range assessment.blockingOutcomes {
+			writeScanOutcomeWarning(w, outcome)
+		}
+		if assessment.omittedOutcomeCount > 0 {
+			_, _ = fmt.Fprintf(
+				w,
+				"- ... %d more blocking outcome(s); inspect meta.collection.outcomes\n",
+				assessment.omittedOutcomeCount,
+			)
+		}
+		_, _ = fmt.Fprintln(
+			w,
+			"Ingesting this artifact may withhold graph publication. Review meta.collection.outcomes and recollect blocking coverage before treating absence as evidence.",
+		)
+	}
+	writeInstructionCoverageWarnings(w, report)
+}
+
+func writeScanOutcomeWarning(w io.Writer, outcome ingest.CollectionOutcome) {
+	target, cause, causeOmitted := safeScanOutcomeDiagnostic(outcome)
+	label := strings.TrimSpace(outcome.Collector)
+	if method := strings.TrimSpace(outcome.Method); method != "" {
+		if label != "" {
+			label += "/"
+		}
+		label += method
+	}
+	if label == "" {
+		label = "collection"
+	}
+	if target != "" {
+		label += " " + target
+	}
+	state := outcome.State
+	if state == "" {
+		state = ingest.OutcomeUnknown
+	}
+	_, _ = fmt.Fprintf(w, "- %s — %s", label, state)
+	switch {
+	case cause != "":
+		_, _ = fmt.Fprintf(w, ": %s", cause)
+	case causeOmitted:
+		_, _ = fmt.Fprint(
+			w,
+			": cause omitted from terminal output; inspect meta.collection.outcomes",
+		)
+	}
+	_, _ = fmt.Fprintln(w)
+}
+
+func safeScanOutcomeDiagnostic(
+	outcome ingest.CollectionOutcome,
+) (target, cause string, causeOmitted bool) {
+	target = strings.TrimSpace(outcome.Target)
+	cause = strings.Join(strings.Fields(outcome.Error), " ")
+	rawTarget := target
+	lowerTarget := strings.ToLower(target)
+	httpTarget := strings.HasPrefix(lowerTarget, "http://") ||
+		strings.HasPrefix(lowerTarget, "https://")
+	sanitizeTarget := target
+	if outcome.Collector == "a2a" && !httpTarget && target != "" {
+		sanitizeTarget = "https://" + target
+		httpTarget = true
+	}
+	if !httpTarget {
+		return target, cause, false
+	}
+
+	safe := ingest.SanitizeHTTPEndpoint(sanitizeTarget)
+	target = safe.Display
+	if safe.Redacted() {
+		return target, "", cause != ""
+	}
+	if rawTarget != "" {
+		cause = strings.ReplaceAll(cause, rawTarget, target)
+	}
+	if sanitizeTarget != rawTarget {
+		cause = strings.ReplaceAll(cause, sanitizeTarget, target)
+	}
+	return target, cause, false
+}
+
+func writeScanNextStep(
+	w io.Writer,
+	output string,
+	assessment scanCoverageAssessment,
+	totalFailure bool,
+) {
+	if output == "" || output == "-" {
+		return
+	}
+	if totalFailure {
+		_, _ = fmt.Fprintf(
+			w,
+			"Artifact saved for diagnostics: %s\n",
+			output,
+		)
+		return
+	}
+	switch {
+	case !assessment.incomplete:
+		_, _ = fmt.Fprintf(
+			w,
+			"Next: agenthound-server ingest %s\n",
+			output,
+		)
+	case assessment.blocking:
+		_, _ = fmt.Fprintf(
+			w,
+			"Next (after reviewing incomplete coverage): agenthound-server ingest %s\n",
+			output,
+		)
+	default:
+		_, _ = fmt.Fprintf(
+			w,
+			"Next (coverage-limited artifact; review warnings): agenthound-server ingest %s\n",
+			output,
+		)
+	}
 }
 
 func writeInstructionCoverageWarnings(w io.Writer, report *ingest.CollectionReport) {
@@ -924,10 +1167,19 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 	if output == "" {
 		output = fmt.Sprintf("scan-%s.json", envelope.Meta.ScanID)
 	}
+	var writeErr error
 	if output == "-" {
-		return writeCollectorOutputStdout(envelope)
+		writeErr = writeCollectorOutputStdout(envelope)
+	} else {
+		writeErr = writeCollectorOutputFile(envelope, output)
 	}
-	return writeCollectorOutput(envelope, output)
+	if writeErr != nil {
+		return writeErr
+	}
+	assessment := assessScanCoverage(envelope.Meta.Collection)
+	writeScanCoverageWarnings(cmd.ErrOrStderr(), envelope.Meta.Collection, assessment)
+	writeScanNextStep(cmd.ErrOrStderr(), output, assessment, false)
+	return nil
 }
 
 // buildNetworkScanEnvelope constructs the ingest envelope populated by the

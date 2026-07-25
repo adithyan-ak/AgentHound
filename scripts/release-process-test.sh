@@ -85,6 +85,7 @@ expect_failure "release-notes version mismatch" sh "$notes/scripts/release-notes
 
 formula_fixture="$test_root/agenthound.rb"
 checksums_fixture="$test_root/checksums.txt"
+printf '  version "1.0.1"\n' > "$formula_fixture"
 for platform in darwin linux; do
   for arch in amd64 arm64; do
     asset="agenthound_1.0.1_${platform}_${arch}.tar.gz"
@@ -94,9 +95,6 @@ for platform in darwin linux; do
     printf '%s  %s\n' "$checksum" "$asset" >> "$checksums_fixture"
   done
 done
-sed -i.bak '1i\
-  version "1.0.1"' "$formula_fixture"
-rm "$formula_fixture.bak"
 bash "$repo_root/scripts/verify-homebrew-formula.sh" \
   agenthound 1.0.1 v1.0.1 "$formula_fixture" "$checksums_fixture"
 
