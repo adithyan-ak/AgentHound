@@ -127,6 +127,10 @@ facts. Deep discovery keeps complete children and records the rest as truncated
 coverage instead of emitting partially observed ownership. An inaccessible
 unmatched descendant likewise truncates deep coverage while retaining already
 completed children; it never proves absence below the skipped directory.
+Deep traversal runs in isolated state and returns at its 60-second deadline
+even when a filesystem open or directory read is stalled. A deadline returns a
+partial deep root with no new deep facts; the blocked work cannot mutate the
+returned exact result.
 
 Exact-root incompleteness withholds publication. A truncated deep attempt
 publishes the exact posture plus its completely observed deep children,
@@ -134,6 +138,10 @@ preserves unseen prior deep ownership, and reports
 `collection_status=truncated`. A failed or partial deep attempt contributes no
 new deep facts and leaves the prior active deep root unchanged. A later scan
 without `--deep` never refreshes, ages, or retires deep ownership.
+The collector reports every incomplete exact or deep instruction root on
+stderr, including its state and sanitized cause when available. These
+coverage limitations retain exit zero so the typed artifact can still be
+ingested; stdout remains machine-readable.
 
 Completeness means **registered-source completeness**, not effective-client
 completeness. Dynamic/imported instructions, `GEMINI.md`, `COPILOT_HOME`,

@@ -247,6 +247,12 @@ func TestInstructionCoverageLimitedRequiresRecognizedIncompleteDeepRoot(t *testi
 		Method:      InstructionMethodExactUser,
 		State:       OutcomeFailed,
 	})
+	incomplete := IncompleteInstructionRoots(report)
+	if len(incomplete) != 2 ||
+		incomplete[0].State == OutcomeComplete ||
+		incomplete[1].State == OutcomeComplete {
+		t.Fatalf("incomplete instruction roots = %+v, want deep and exact", incomplete)
+	}
 	if !InstructionCoverageLimited(report) {
 		t.Fatal("failed exact root suppressed the independent deep limitation")
 	}

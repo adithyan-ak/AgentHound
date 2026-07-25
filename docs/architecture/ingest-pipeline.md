@@ -310,6 +310,12 @@ reconciliation domain is recorded dirty, including normally non-blocking deep
 instruction domains. A later exact-only scan cannot publish that cross-store
 inconsistency; the corresponding deep scan must reconcile it successfully.
 
+Collector-side deep instruction discovery isolates its recursive result behind
+the wall-clock budget. Local filesystem calls are not portably cancelable, so a
+timed-out worker may finish later, but it owns only private state and cannot
+alter the returned artifact. The returned deep root is partial with no active
+children, preserving the prior deep projection.
+
 ## Processing Order
 
 The annotations below are each processor's declared `Dependencies() []string` return — the *processor-level* ordering contract enforced by the pipeline. Raw collector edges (`INGESTS_UNTRUSTED`, `DELEGATES_TO`, `HAS_ENV_VAR`, etc.) and pre-existing node properties (`schema_keys`, `auth_method`, …) are Cypher traversal inputs, not processor dependencies — they are present from ingest, so they do not appear here.

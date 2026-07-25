@@ -219,7 +219,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	if writeErr != nil {
 		return writeErr
 	}
-	writeInstructionCoverageWarning(stderr, merged.Meta.Collection)
+	writeInstructionCoverageWarnings(stderr, merged.Meta.Collection)
 
 	// Total-failure exit code: when every enabled collector errored, exit
 	// non-zero. Partial success (>=1 collector succeeded) and a legitimately
@@ -231,14 +231,46 @@ func runScan(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func writeInstructionCoverageWarning(w io.Writer, report *ingest.CollectionReport) {
-	if !ingest.InstructionCoverageLimited(report) {
-		return
+func writeInstructionCoverageWarnings(w io.Writer, report *ingest.CollectionReport) {
+	for _, outcome := range ingest.IncompleteInstructionRoots(report) {
+		if outcome.Method == ingest.InstructionMethodDeep {
+			if outcome.Error == "" {
+				_, _ = fmt.Fprintln(
+					w,
+					"Warning: "+ingest.InstructionCoverageLimitationWarning+".",
+				)
+			} else {
+				_, _ = fmt.Fprintf(
+					w,
+					"Warning: deep instruction coverage is limited (%s: %s); missing nested instruction evidence is not a clean absence.\n",
+					outcome.State,
+					outcome.Error,
+				)
+			}
+			continue
+		}
+		detail := string(outcome.State)
+		if outcome.Error != "" {
+			detail += ": " + outcome.Error
+		}
+		_, _ = fmt.Fprintf(
+			w,
+			"Warning: %s coverage %s; registered-source evidence from this root was withheld.\n",
+			instructionCoverageLabel(outcome.Method),
+			detail,
+		)
 	}
-	_, _ = fmt.Fprintln(
-		w,
-		"Warning: "+ingest.InstructionCoverageLimitationWarning+".",
-	)
+}
+
+func instructionCoverageLabel(method string) string {
+	switch method {
+	case ingest.InstructionMethodExactUser:
+		return "exact user instruction"
+	case ingest.InstructionMethodExactProject:
+		return "exact project instruction"
+	default:
+		return "instruction"
+	}
 }
 
 // allCollectorsFailed reports whether every enabled collector errored. A scan

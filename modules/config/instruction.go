@@ -200,9 +200,18 @@ func DiscoverInstructions(
 		discoverExactInstructionRoot(ctx, canonicalInstructionRoot(projectRoot), instructionRootExactProject, engine, &result)
 	}
 	if scan.Deep && scan.RecursiveRoot != "" {
-		walkCtx, cancel := context.WithTimeout(ctx, deepInstructionWalkBudget)
-		defer cancel()
-		discoverDeepInstructionRoot(walkCtx, canonicalInstructionRoot(scan.RecursiveRoot), engine, &result)
+		deep := discoverDeepInstructionsWithinBudget(
+			ctx,
+			canonicalInstructionRoot(scan.RecursiveRoot),
+			engine,
+		)
+		result.Observations = append(result.Observations, deep.Observations...)
+		result.CoverageKeys = append(result.CoverageKeys, deep.CoverageKeys...)
+		result.AuthoritativeRoots = append(
+			result.AuthoritativeRoots,
+			deep.AuthoritativeRoots...,
+		)
+		result.Outcomes = append(result.Outcomes, deep.Outcomes...)
 	}
 	sort.Slice(result.Observations, func(i, j int) bool {
 		if result.Observations[i].Info.Path == result.Observations[j].Info.Path {
@@ -221,6 +230,52 @@ func DiscoverInstructions(
 		return result.Outcomes[i].CoverageKey < result.Outcomes[j].CoverageKey
 	})
 	return result
+}
+
+func discoverDeepInstructionsWithinBudget(
+	ctx context.Context,
+	root string,
+	engine *rules.Engine,
+) InstructionDiscovery {
+	walkCtx, cancel := context.WithTimeout(ctx, deepInstructionWalkBudget)
+	defer cancel()
+
+	// Filesystem calls cannot be canceled portably. Keep deep mutations private
+	// so the caller can return at the deadline without a blocked worker racing
+	// with the exact result.
+	completed := make(chan InstructionDiscovery, 1)
+	go func() {
+		var deep InstructionDiscovery
+		discoverDeepInstructionRoot(walkCtx, root, engine, &deep)
+		completed <- deep
+	}()
+
+	select {
+	case deep := <-completed:
+		return deep
+	case <-walkCtx.Done():
+		rootKey := instructionRootKey(instructionRootDeep, root)
+		errText := "collection canceled"
+		if ctx.Err() == nil && walkCtx.Err() == context.DeadlineExceeded {
+			errText = fmt.Sprintf(
+				"deep instruction discovery exceeded %s budget",
+				deepInstructionWalkBudget,
+			)
+		}
+		deep := InstructionDiscovery{
+			CoverageKeys: []string{rootKey},
+			Outcomes: []ingest.CollectionOutcome{collectionOutcome(
+				rootKey,
+				root,
+				instructionRootMethod(instructionRootDeep),
+				ingest.OutcomePartial,
+				0,
+				errText,
+			)},
+		}
+		appendInstructionCoverageRoot(&deep, rootKey, nil)
+		return deep
+	}
 }
 
 func canonicalInstructionRoot(root string) string {

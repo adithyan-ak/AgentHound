@@ -584,13 +584,15 @@ func TestInstructionCoverageWarningPreservesUsableScanSuccess(t *testing.T) {
 			CoverageKey: root,
 			Method:      ingest.InstructionMethodDeep,
 			State:       ingest.OutcomeTruncated,
+			Error:       "deep instruction discovery exceeded 60s budget",
 		}},
 	}
 
 	var stderr bytes.Buffer
-	writeInstructionCoverageWarning(&stderr, report)
+	writeInstructionCoverageWarnings(&stderr, report)
 	for _, want := range []string{
 		"deep instruction coverage is limited",
+		"deep instruction discovery exceeded 60s budget",
 		"not a clean absence",
 	} {
 		if !strings.Contains(stderr.String(), want) {
@@ -607,9 +609,60 @@ func TestInstructionCoverageWarningPreservesUsableScanSuccess(t *testing.T) {
 	stderr.Reset()
 	report.Outcomes[0].State = ingest.OutcomeComplete
 	report.State = ingest.OutcomeComplete
-	writeInstructionCoverageWarning(&stderr, report)
+	writeInstructionCoverageWarnings(&stderr, report)
 	if stderr.Len() != 0 {
 		t.Fatalf("complete deep coverage emitted warning: %s", stderr.String())
+	}
+}
+
+func TestInstructionCoverageWarningsIncludeIncompleteExactRoots(t *testing.T) {
+	contract := ingest.CurrentInstructionRegistryContract()
+	userRoot := ingest.CanonicalCoverageKey(
+		"config",
+		"instruction-exact-user",
+		"/home/example",
+	)
+	projectRoot := ingest.CanonicalCoverageKey(
+		"config",
+		"instruction-exact-project",
+		"/home/example/project",
+	)
+	report := &ingest.CollectionReport{
+		State:        ingest.OutcomePartial,
+		CoverageKeys: []string{userRoot, projectRoot},
+		AuthoritativeRoots: []ingest.CoverageRoot{
+			{CoverageKey: userRoot, RegistryContract: &contract},
+			{CoverageKey: projectRoot, RegistryContract: &contract},
+		},
+		Outcomes: []ingest.CollectionOutcome{
+			{
+				Collector: "config", CoverageKey: userRoot,
+				Method: ingest.InstructionMethodExactUser,
+				State:  ingest.OutcomePartial,
+				Error:  "permission denied",
+			},
+			{
+				Collector: "config", CoverageKey: projectRoot,
+				Method: ingest.InstructionMethodExactProject,
+				State:  ingest.OutcomeTruncated,
+				Error:  "file exceeds 4194304 byte limit",
+			},
+		},
+	}
+
+	var stderr bytes.Buffer
+	writeInstructionCoverageWarnings(&stderr, report)
+	for _, want := range []string{
+		"exact user instruction coverage partial: permission denied",
+		"exact project instruction coverage truncated: file exceeds 4194304 byte limit",
+		"registered-source evidence from this root was withheld",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("warning missing %q: %s", want, stderr.String())
+		}
+	}
+	if strings.Count(stderr.String(), "\n") != 2 {
+		t.Fatalf("exact warnings = %q, want one line per incomplete root", stderr.String())
 	}
 }
 

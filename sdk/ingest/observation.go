@@ -260,33 +260,49 @@ func NonBlockingInstructionCoverageDomains(report *CollectionReport) []string {
 
 const InstructionCoverageLimitationWarning = "deep instruction coverage is limited; missing nested instruction evidence is not a clean absence"
 
-// InstructionCoverageLimited reports whether a recognized deep instruction
-// root completed with usable but incomplete coverage.
-func InstructionCoverageLimited(report *CollectionReport) bool {
+// IncompleteInstructionRoots returns recognized registry-backed instruction
+// roots whose observed state is partial, failed, or truncated.
+func IncompleteInstructionRoots(report *CollectionReport) []CollectionOutcome {
 	if report == nil {
-		return false
+		return nil
+	}
+	roots := make(map[string]CoverageRoot, len(report.AuthoritativeRoots))
+	for _, root := range report.AuthoritativeRoots {
+		if root.RegistryContract != nil {
+			roots[root.CoverageKey] = root
+		}
 	}
 	states := CoverageStates(report)
-	for _, root := range report.AuthoritativeRoots {
-		if root.RegistryContract == nil ||
-			!InstructionRootMatchesMethod(root.CoverageKey, InstructionMethodDeep) {
+	seen := make(map[string]bool)
+	var incomplete []CollectionOutcome
+	for _, outcome := range report.Outcomes {
+		if seen[outcome.CoverageKey] ||
+			outcome.Collector != "config" ||
+			!InstructionRootMatchesMethod(outcome.CoverageKey, outcome.Method) {
 			continue
 		}
-		recognized := false
-		for _, outcome := range report.Outcomes {
-			if outcome.CoverageKey == root.CoverageKey &&
-				outcome.Collector == "config" &&
-				outcome.Method == InstructionMethodDeep &&
-				IsInstructionCoverageState(outcome.State) {
-				recognized = true
-				break
-			}
-		}
-		if !recognized {
+		if _, ok := roots[outcome.CoverageKey]; !ok {
 			continue
 		}
-		switch states[root.CoverageKey] {
+		state := states[outcome.CoverageKey]
+		switch state {
 		case OutcomeTruncated, OutcomePartial, OutcomeFailed:
+			outcome.State = state
+			incomplete = append(incomplete, outcome)
+			seen[outcome.CoverageKey] = true
+		}
+	}
+	sort.Slice(incomplete, func(i, j int) bool {
+		return incomplete[i].CoverageKey < incomplete[j].CoverageKey
+	})
+	return incomplete
+}
+
+// InstructionCoverageLimited reports whether a recognized deep instruction
+// root has incomplete coverage.
+func InstructionCoverageLimited(report *CollectionReport) bool {
+	for _, outcome := range IncompleteInstructionRoots(report) {
+		if outcome.Method == InstructionMethodDeep {
 			return true
 		}
 	}

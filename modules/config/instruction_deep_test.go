@@ -595,7 +595,89 @@ func TestInstructionWalkTimeoutStillBoundsDeep(t *testing.T) {
 		testInstrEngine(t),
 	)
 	root := instructionOutcomeForMethod(discovery.Outcomes, ingest.InstructionMethodDeep)
-	if root == nil || root.State != ingest.OutcomePartial || !strings.Contains(root.Error, "canceled") {
+	if root == nil ||
+		root.State != ingest.OutcomePartial ||
+		(!strings.Contains(root.Error, "canceled") &&
+			!strings.Contains(root.Error, "budget")) {
 		t.Fatalf("deep root = %+v, want timeout partial", root)
+	}
+}
+
+func TestDeepInstructionBudgetReturnsWhileDirectoryOpenIsBlocked(t *testing.T) {
+	home := t.TempDir()
+	canonicalHome := canonicalInstructionRoot(home)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	openReturned := make(chan struct{})
+
+	originalOpen := openInstructionDirectory
+	openInstructionDirectory = func(path string) (*os.File, error) {
+		if canonicalConfigPath(path) == canonicalHome {
+			close(entered)
+			<-release
+			defer close(openReturned)
+		}
+		return os.Open(path)
+	}
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(release)
+		}
+		select {
+		case <-openReturned:
+		case <-time.After(time.Second):
+			t.Error("blocked directory-open hook did not return")
+		}
+		openInstructionDirectory = originalOpen
+	})
+
+	oldBudget := deepInstructionWalkBudget
+	deepInstructionWalkBudget = 20 * time.Millisecond
+	t.Cleanup(func() { deepInstructionWalkBudget = oldBudget })
+
+	start := time.Now()
+	discovery := DiscoverInstructions(
+		context.Background(),
+		home,
+		"",
+		InstructionScan{RecursiveRoot: home, Deep: true},
+		testInstrEngine(t),
+	)
+	elapsed := time.Since(start)
+	select {
+	case <-entered:
+	default:
+		t.Fatal("deep worker did not enter the blocking directory open")
+	}
+	if elapsed >= time.Second {
+		t.Fatalf("deep discovery returned after %s, want caller-visible deadline", elapsed)
+	}
+	root := instructionOutcomeForMethod(
+		discovery.Outcomes,
+		ingest.InstructionMethodDeep,
+	)
+	if root == nil ||
+		root.State != ingest.OutcomePartial ||
+		!strings.Contains(root.Error, "budget") {
+		t.Fatalf("deep root = %+v, want budget-exceeded partial", root)
+	}
+	var activeChildren []string
+	for _, authoritative := range discovery.AuthoritativeRoots {
+		if authoritative.CoverageKey == root.CoverageKey {
+			activeChildren = authoritative.ChildCoverageKeys
+			break
+		}
+	}
+	if len(activeChildren) != 0 || len(discovery.Observations) != 0 {
+		t.Fatalf("timed-out deep discovery leaked worker facts: %+v", discovery)
+	}
+
+	close(release)
+	released = true
+	select {
+	case <-openReturned:
+	case <-time.After(time.Second):
+		t.Fatal("blocked directory-open hook did not return after release")
 	}
 }
