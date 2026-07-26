@@ -556,15 +556,19 @@ func observationEdgeRow(
 	properties := factProperties(edge.Properties)
 	tokens, dependencyTokens := edgeObservationTokens(edge, scanID)
 	row := map[string]any{
-		"source":                                  edge.Source,
-		"target":                                  edge.Target,
-		"properties":                              properties,
-		"observation_tokens":                      tokens,
-		"observation_dependency_tokens":           dependencyTokens,
-		"observation_semantics":                   string(edge.ObservationSemantics),
-		"ownership_tokens":                        ownershipTokens(tokens, dependencyTokens),
-		"observation_domain_prefixes":             observationDomainPrefixes(edge.ObservationDomains),
-		"observation_fact_fingerprints":           append([]string{}, fingerprints...),
+		"source":                        edge.Source,
+		"target":                        edge.Target,
+		"properties":                    properties,
+		"observation_tokens":            tokens,
+		"observation_dependency_tokens": dependencyTokens,
+		"observation_semantics":         string(edge.ObservationSemantics),
+		"ownership_tokens":              ownershipTokens(tokens, dependencyTokens),
+		"observation_domain_prefixes":   observationDomainPrefixes(edge.ObservationDomains),
+		"observation_fact_fingerprints": append([]string{}, fingerprints...),
+		"observation_owner_fingerprints": observationOwnerFingerprints(
+			edge.ObservationDomains,
+			fingerprints,
+		),
 		"observation_fingerprint_domain_prefixes": observationFingerprintDomainPrefixes(edge.ObservationDomains),
 		"complete_domain_prefixes":                completePrefixes,
 	}
