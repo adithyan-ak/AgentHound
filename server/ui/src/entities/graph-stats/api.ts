@@ -10,6 +10,8 @@ export interface GraphStats {
   projection: {
     scanId: string;
     revision: number;
+    coverageLimited: boolean;
+    coverageLimitationCount: number;
   };
 }
 
@@ -31,6 +33,13 @@ function positiveInteger(value: unknown, path: string): number {
   const result = nonNegativeInteger(value, path);
   if (result < 1) throw new TypeError(`${path} must be positive`);
   return result;
+}
+
+function requiredBoolean(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${path} must be a boolean`);
+  }
+  return value;
 }
 
 function counts(value: unknown, path: string): Record<string, number> {
@@ -64,6 +73,14 @@ export async function fetchGraphStats(): Promise<GraphStats> {
       revision: positiveInteger(
         projection.revision,
         "graph stats.projection.revision",
+      ),
+      coverageLimited: requiredBoolean(
+        projection.coverage_limited,
+        "graph stats.projection.coverage_limited",
+      ),
+      coverageLimitationCount: nonNegativeInteger(
+        projection.coverage_limitation_count,
+        "graph stats.projection.coverage_limitation_count",
       ),
     },
   };

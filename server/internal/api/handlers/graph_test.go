@@ -143,10 +143,16 @@ func TestGraphStatsReturnsStableProjectionIdentity(t *testing.T) {
 		EdgeCounts: map[string]int64{},
 		TotalNodes: 1,
 	}}
+	state := completeProjectionState("scan-7", 7)
+	state.ActiveCoverageLimitations = []model.PostureCoverageLimitation{{
+		CoverageKey: "mcp:target:sha256:limited",
+		State:       ingest.OutcomePartial,
+		ScanID:      "scan-7",
+	}}
 	h := &GraphHandler{
 		reader: reader,
 		projectionReader: &fakeProjectionStateReader{
-			states: []*model.ProjectionState{completeProjectionState("scan-7", 7)},
+			states: []*model.ProjectionState{state},
 		},
 	}
 	rec := httptest.NewRecorder()
@@ -163,7 +169,12 @@ func TestGraphStatsReturnsStableProjectionIdentity(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
-	if response.Projection != (projectionIdentity{ScanID: "scan-7", Revision: 7}) {
+	if response.Projection != (projectionIdentity{
+		ScanID:                  "scan-7",
+		Revision:                7,
+		CoverageLimited:         true,
+		CoverageLimitationCount: 1,
+	}) {
 		t.Fatalf("projection = %+v", response.Projection)
 	}
 }

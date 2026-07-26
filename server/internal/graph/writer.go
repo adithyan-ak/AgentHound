@@ -234,6 +234,22 @@ WITH n, node, observation_created,
       AND incoming_authoritative
       AND old_properties_complete
       AND size(old_authoritative_tokens) > 0
+      AND size(node.observation_fact_fingerprints) > 0
+      AND all(prefix IN node.observation_domain_prefixes WHERE
+          any(token IN old_authoritative_tokens WHERE token STARTS WITH prefix))
+      AND all(prefix IN node.observation_fingerprint_domain_prefixes WHERE
+          any(fingerprint IN old_fact_fingerprints WHERE
+              fingerprint STARTS WITH prefix))
+      AND any(fingerprint IN node.observation_fact_fingerprints WHERE
+          NOT fingerprint IN old_fact_fingerprints)
+      AND all(key IN keys(node.properties) WHERE
+          key IN $semantic_volatile_properties
+          OR n[key] IS NULL OR n[key] = node.properties[key])) AS compatible_owner_recovery,
+     (NOT observation_created
+      AND NOT node.reference_only
+      AND incoming_authoritative
+      AND old_properties_complete
+      AND size(old_authoritative_tokens) > 0
       AND size(node.observation_owner_fingerprints) =
           size(node.observation_domain_prefixes)
       AND any(owner IN node.observation_owner_fingerprints WHERE
@@ -279,6 +295,7 @@ FOREACH (_ IN CASE WHEN observation_created AND node.reference_only THEN [1] ELS
 FOREACH (_ IN CASE
   WHEN NOT observation_created AND NOT replace_properties AND NOT node.reference_only
        AND (compatible_new_owner OR compatible_existing_owner OR compatible_mixed_owners
+            OR compatible_owner_recovery
             OR partial_existing_owner OR partial_compatible_owner
             OR partial_reference_upgrade)
   THEN [1] ELSE [] END |
@@ -303,7 +320,8 @@ SET n.objectid = node.id,
     END,
     n.observation_fact_fingerprints = CASE
       WHEN node.reference_only THEN old_fact_fingerprints
-      WHEN observation_created OR replace_properties OR partial_existing_owner
+      WHEN observation_created OR replace_properties OR compatible_owner_recovery
+           OR partial_existing_owner
            OR partial_compatible_owner OR partial_reference_upgrade THEN
         reduce(fingerprints = [
           fingerprint IN old_fact_fingerprints
@@ -338,6 +356,7 @@ SET n.objectid = node.id,
       WHEN compatible_new_owner THEN true
       WHEN compatible_existing_owner THEN true
       WHEN compatible_mixed_owners THEN true
+      WHEN compatible_owner_recovery THEN true
       WHEN partial_existing_owner THEN true
       WHEN partial_compatible_owner THEN true
       WHEN partial_reference_upgrade THEN true
@@ -362,7 +381,7 @@ SET n.objectid = node.id,
 	for _, lbl := range extraLabels {
 		fmt.Fprintf(
 			&sb,
-			"\nFOREACH (_ IN CASE WHEN observation_created OR replace_properties OR compatible_new_owner OR compatible_existing_owner OR compatible_mixed_owners OR partial_existing_owner OR partial_compatible_owner OR partial_reference_upgrade THEN [1] ELSE [] END | SET n:%s)",
+			"\nFOREACH (_ IN CASE WHEN observation_created OR replace_properties OR compatible_new_owner OR compatible_existing_owner OR compatible_mixed_owners OR compatible_owner_recovery OR partial_existing_owner OR partial_compatible_owner OR partial_reference_upgrade THEN [1] ELSE [] END | SET n:%s)",
 			lbl,
 		)
 	}
@@ -504,6 +523,21 @@ WITH rel, edge, observation_created, old_tokens, old_dependency_tokens,
       AND incoming_authoritative
       AND old_properties_complete
       AND size(old_ownership_tokens) > 0
+      AND size(edge.observation_fact_fingerprints) > 0
+      AND all(prefix IN edge.observation_domain_prefixes WHERE
+          any(token IN old_ownership_tokens WHERE token STARTS WITH prefix))
+      AND all(prefix IN edge.observation_fingerprint_domain_prefixes WHERE
+          any(fingerprint IN old_fact_fingerprints WHERE
+              fingerprint STARTS WITH prefix))
+      AND any(fingerprint IN edge.observation_fact_fingerprints WHERE
+          NOT fingerprint IN old_fact_fingerprints)
+      AND all(key IN keys(edge.properties) WHERE
+          key IN $semantic_volatile_properties
+          OR rel[key] IS NULL OR rel[key] = edge.properties[key])) AS compatible_owner_recovery,
+     (NOT observation_created
+      AND incoming_authoritative
+      AND old_properties_complete
+      AND size(old_ownership_tokens) > 0
       AND size(edge.observation_owner_fingerprints) =
           size(edge.observation_domain_prefixes)
       AND any(owner IN edge.observation_owner_fingerprints WHERE
@@ -539,6 +573,7 @@ FOREACH (_ IN CASE WHEN NOT observation_created AND replace_properties THEN [1] 
 FOREACH (_ IN CASE
   WHEN NOT observation_created AND NOT replace_properties
        AND (compatible_new_owner OR compatible_existing_owner OR compatible_mixed_owners
+            OR compatible_owner_recovery
             OR partial_existing_owner OR partial_compatible_owner)
   THEN [1] ELSE [] END |
   SET rel += edge.properties)
@@ -548,6 +583,7 @@ SET rel.observation_properties_complete = CASE
       WHEN compatible_new_owner THEN true
       WHEN compatible_existing_owner THEN true
       WHEN compatible_mixed_owners THEN true
+      WHEN compatible_owner_recovery THEN true
       WHEN partial_existing_owner THEN true
       WHEN partial_compatible_owner THEN true
       ELSE false
@@ -562,7 +598,8 @@ SET rel.observation_properties_complete = CASE
     rel.observation_semantics = edge.observation_semantics,
     rel.observation_fact_fingerprints = CASE
       WHEN replace_dependency_set THEN edge.observation_fact_fingerprints
-      WHEN observation_created OR replace_properties OR partial_existing_owner OR partial_compatible_owner THEN
+      WHEN observation_created OR replace_properties OR compatible_owner_recovery
+           OR partial_existing_owner OR partial_compatible_owner THEN
         reduce(fingerprints = [
           fingerprint IN old_fact_fingerprints
           WHERE none(prefix IN edge.observation_fingerprint_domain_prefixes WHERE
@@ -733,6 +770,21 @@ WITH r, edge, observation_created, old_tokens, old_dependency_tokens,
       AND incoming_authoritative
       AND old_properties_complete
       AND size(old_ownership_tokens) > 0
+      AND size(edge.observation_fact_fingerprints) > 0
+      AND all(prefix IN edge.observation_domain_prefixes WHERE
+          any(token IN old_ownership_tokens WHERE token STARTS WITH prefix))
+      AND all(prefix IN edge.observation_fingerprint_domain_prefixes WHERE
+          any(fingerprint IN old_fact_fingerprints WHERE
+              fingerprint STARTS WITH prefix))
+      AND any(fingerprint IN edge.observation_fact_fingerprints WHERE
+          NOT fingerprint IN old_fact_fingerprints)
+      AND all(key IN keys(edge.properties) WHERE
+          key IN $semantic_volatile_properties
+          OR r[key] IS NULL OR r[key] = edge.properties[key])) AS compatible_owner_recovery,
+     (NOT observation_created
+      AND incoming_authoritative
+      AND old_properties_complete
+      AND size(old_ownership_tokens) > 0
       AND size(edge.observation_owner_fingerprints) =
           size(edge.observation_domain_prefixes)
       AND any(owner IN edge.observation_owner_fingerprints WHERE
@@ -768,6 +820,7 @@ FOREACH (_ IN CASE WHEN observation_created OR replace_properties THEN [1] ELSE 
 FOREACH (_ IN CASE
   WHEN NOT observation_created AND NOT replace_properties
        AND (compatible_new_owner OR compatible_existing_owner OR compatible_mixed_owners
+            OR compatible_owner_recovery
             OR partial_existing_owner OR partial_compatible_owner)
   THEN [1] ELSE [] END |
   SET r += edge.properties)
@@ -783,7 +836,8 @@ SET r.scan_id = $scan_id,
     r.observation_semantics = edge.observation_semantics,
     r.observation_fact_fingerprints = CASE
       WHEN replace_dependency_set THEN edge.observation_fact_fingerprints
-      WHEN observation_created OR replace_properties OR partial_existing_owner OR partial_compatible_owner THEN
+      WHEN observation_created OR replace_properties OR compatible_owner_recovery
+           OR partial_existing_owner OR partial_compatible_owner THEN
         reduce(fingerprints = [
           fingerprint IN old_fact_fingerprints
           WHERE none(prefix IN edge.observation_fingerprint_domain_prefixes WHERE
@@ -814,6 +868,7 @@ SET r.scan_id = $scan_id,
       WHEN compatible_new_owner THEN true
       WHEN compatible_existing_owner THEN true
       WHEN compatible_mixed_owners THEN true
+      WHEN compatible_owner_recovery THEN true
       WHEN partial_existing_owner THEN true
       WHEN partial_compatible_owner THEN true
       ELSE false

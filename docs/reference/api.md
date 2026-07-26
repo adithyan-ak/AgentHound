@@ -95,12 +95,18 @@ excluded from stats, node lists, and search results.
   "edge_counts": { "TRUSTS_SERVER": 15, "PROVIDES_TOOL": 47, "CAN_REACH": 8 },
   "total_nodes": 85,
   "total_edges": 70,
-  "projection": { "scan_id": "scan-abc123", "revision": 12 }
+  "projection": {
+    "scan_id": "scan-abc123",
+    "revision": 12,
+    "coverage_limited": false,
+    "coverage_limitation_count": 0
+  }
 }
 ```
 
 `projection` is required and identifies the immutable publication represented
-by the counts.
+by the counts. `coverage_limited` qualifies absence-based conclusions, while
+`coverage_limitation_count` reports the number of active limited scopes.
 
 ### `GET /api/v1/graph/search`
 
@@ -132,7 +138,12 @@ Node, edge, and scan lists use typed JSON envelopes. For example:
     "has_more": false,
     "complete": true,
     "revision": "...",
-    "projection": { "scan_id": "scan-abc123", "revision": 12 }
+    "projection": {
+      "scan_id": "scan-abc123",
+      "revision": 12,
+      "coverage_limited": false,
+      "coverage_limitation_count": 0
+    }
   }
 }
 ```
@@ -446,7 +457,12 @@ Use the separate `/analysis/topology/...` operations for undirected topology.
     "algorithm": "bounded-min-weight",
     "complete": true
   },
-  "projection": { "scan_id": "scan-abc123", "revision": 12 }
+  "projection": {
+    "scan_id": "scan-abc123",
+    "revision": 12,
+    "coverage_limited": false,
+    "coverage_limitation_count": 0
+  }
 }
 ```
 
@@ -589,7 +605,12 @@ non-verified findings.
     "evidence_node_ids": ["sha256:agent", "sha256:entry-server", "sha256:entry-tool", "sha256:server", "sha256:credential", "sha256:identity", "sha256:resource-tool", "sha256:resource"],
     "evidence_node_kinds": ["AgentInstance", "MCPServer", "MCPTool", "MCPServer", "Credential", "Identity", "MCPTool", "MCPResource"]
   },
-  "projection": { "scan_id": "scan-...", "revision": 7 }
+  "projection": {
+    "scan_id": "scan-...",
+    "revision": 7,
+    "coverage_limited": false,
+    "coverage_limitation_count": 0
+  }
 }
 ```
 
@@ -639,7 +660,12 @@ Execute a pre-built query and return results.
     "atlas_map": ["AML.T0051", "AML.T0110"]
   },
   "rows": [...],
-  "projection": { "scan_id": "scan-abc123", "revision": 12 }
+  "projection": {
+    "scan_id": "scan-abc123",
+    "revision": 12,
+    "coverage_limited": false,
+    "coverage_limitation_count": 0
+  }
 }
 ```
 

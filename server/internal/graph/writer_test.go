@@ -986,8 +986,11 @@ func TestPartialObservationUsesAdditivePropertyUpdates(t *testing.T) {
 	for _, fragment := range []string{
 		"AS partial_existing_owner",
 		"AS partial_compatible_owner",
+		"AS compatible_owner_recovery",
+		"NOT fingerprint IN old_fact_fingerprints",
 		"SET n += node.properties",
 		"WHEN observation_created THEN true",
+		"WHEN compatible_owner_recovery THEN true",
 		"WHEN partial_existing_owner THEN true",
 		"WHEN partial_compatible_owner THEN true",
 	} {
@@ -1023,12 +1026,57 @@ func TestPartialObservationUsesAdditivePropertyUpdates(t *testing.T) {
 	for _, fragment := range []string{
 		"AS partial_existing_owner",
 		"AS partial_compatible_owner",
+		"AS compatible_owner_recovery",
 		"SET r += edge.properties",
 		"WHEN observation_created THEN true",
+		"WHEN compatible_owner_recovery THEN true",
 	} {
 		if !strings.Contains(edgeCall.Cypher, fragment) {
 			t.Fatalf("partial edge query missing %q:\n%s", fragment, edgeCall.Cypher)
 		}
+	}
+}
+
+func TestRelationshipWritersRestoreCertifiedOwnerFingerprintAfterPartialSubset(
+	t *testing.T,
+) {
+	edge := ingest.Edge{
+		Source:             "server-recovery",
+		Target:             "host-recovery",
+		Kind:               "RUNS_ON",
+		SourceKind:         "MCPServer",
+		TargetKind:         "Host",
+		ObservationDomains: []string{"mcp:target:sha256:recovery"},
+		Properties:         map[string]any{"confidence": 1.0},
+	}
+	for _, hasAPOC := range []bool{false, true} {
+		name := "fallback"
+		if hasAPOC {
+			name = "apoc"
+		}
+		t.Run(name, func(t *testing.T) {
+			recorder := &recordedExec{}
+			writer := newTestWriter(recorder.exec, hasAPOC)
+			if _, err := writer.WriteObservationEdges(
+				context.Background(),
+				[]ingest.Edge{edge},
+				"complete-recovery",
+				edge.ObservationDomains,
+			); err != nil {
+				t.Fatalf("WriteObservationEdges: %v", err)
+			}
+			query := recorder.snapshot()[0].Cypher
+			for _, fragment := range []string{
+				"AS compatible_owner_recovery",
+				"NOT fingerprint IN old_fact_fingerprints",
+				"OR compatible_owner_recovery",
+				"WHEN compatible_owner_recovery THEN true",
+			} {
+				if !strings.Contains(query, fragment) {
+					t.Fatalf("owner recovery query missing %q:\n%s", fragment, query)
+				}
+			}
+		})
 	}
 }
 

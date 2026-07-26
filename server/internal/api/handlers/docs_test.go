@@ -37,7 +37,15 @@ func TestOpenAPIProjectionAwareResponseContracts(t *testing.T) {
 	}
 
 	schemas := nestedMap(t, spec, "components", "schemas")
-	requireSchemaFields(t, schemas, "ProjectionIdentity", "scan_id", "revision")
+	requireSchemaFields(
+		t,
+		schemas,
+		"ProjectionIdentity",
+		"scan_id",
+		"revision",
+		"coverage_limited",
+		"coverage_limitation_count",
+	)
 	requireSchemaFields(
 		t,
 		schemas,

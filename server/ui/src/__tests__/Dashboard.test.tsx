@@ -147,7 +147,12 @@ function nodeCollection(items: ReturnType<typeof observedAnonymousNode>[]) {
     total: items.length,
     complete: true,
     revision: "graph-revision",
-    projection: { scanId: "scan-1", revision: 1 },
+    projection: {
+      scanId: "scan-1",
+      revision: 1,
+      coverageLimited: false,
+      coverageLimitationCount: 0,
+    },
   };
 }
 

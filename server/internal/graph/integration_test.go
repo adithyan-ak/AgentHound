@@ -1631,6 +1631,154 @@ func TestIntegrationExactOwnerTransferPreservesOnlyRedundantFacts(t *testing.T) 
 	}
 }
 
+func TestIntegrationCompleteSharedOwnerRecoversAfterPartialSubset(t *testing.T) {
+	ctx := testDriver(t)
+	driver, err := NewDriver(
+		os.Getenv("AGENTHOUND_NEO4J_URI"),
+		os.Getenv("AGENTHOUND_NEO4J_USER"),
+		os.Getenv("AGENTHOUND_NEO4J_PASSWORD"),
+	)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer driver.Close(ctx)
+
+	writer := NewWriter(driver)
+	db := NewDB(NewReader(driver), writer)
+	const (
+		serverID = "partial-recovery-shared-server"
+		hostID   = "partial-recovery-shared-host"
+		scopeA   = "config:path:sha256:partial-recovery-a"
+		scopeB   = "mcp:target:sha256:partial-recovery-b"
+	)
+	cleanup := func() {
+		_, _ = db.ExecuteWrite(
+			ctx,
+			"MATCH (n) WHERE n.objectid IN $ids DETACH DELETE n",
+			map[string]any{"ids": []string{serverID, hostID}},
+		)
+	}
+	cleanup()
+	defer cleanup()
+
+	serverA := ingest.Node{
+		ID: serverID, Kinds: []string{"MCPServer"},
+		ObservationDomains: []string{scopeA},
+		Properties: map[string]any{
+			"endpoint": "http://mcp.example/mcp", "transport": "http",
+			"configured_name": "configured",
+		},
+	}
+	serverB := ingest.Node{
+		ID: serverID, Kinds: []string{"MCPServer"},
+		ObservationDomains: []string{scopeB},
+		Properties: map[string]any{
+			"endpoint": "http://mcp.example/mcp", "transport": "http",
+			"protocol_version": "2025-06-18",
+		},
+	}
+	host := ingest.Node{
+		ID: hostID, Kinds: []string{"Host"},
+		ObservationDomains: []string{scopeA, scopeB},
+		Properties:         map[string]any{"hostname": "mcp.example"},
+	}
+	edgeA := ingest.Edge{
+		Source: serverID, Target: hostID, Kind: "RUNS_ON",
+		SourceKind: "MCPServer", TargetKind: "Host",
+		ObservationDomains: []string{scopeA},
+		Properties: map[string]any{
+			"confidence": 1.0, "configured_evidence": "configured",
+		},
+	}
+	edgeB := edgeA
+	edgeB.ObservationDomains = []string{scopeB}
+	edgeB.Properties = map[string]any{
+		"confidence": 1.0, "live_evidence": "observed",
+	}
+
+	if _, err := writer.WriteObservationNodes(
+		ctx,
+		[]ingest.Node{serverA, serverB, host},
+		"complete-both",
+		[]string{scopeA, scopeB},
+	); err != nil {
+		t.Fatalf("write complete shared nodes: %v", err)
+	}
+	if _, err := writer.WriteObservationEdges(
+		ctx,
+		[]ingest.Edge{edgeA, edgeB},
+		"complete-both",
+		[]string{scopeA, scopeB},
+	); err != nil {
+		t.Fatalf("write complete shared edge: %v", err)
+	}
+
+	partialServerA := serverA
+	partialServerA.Properties = map[string]any{
+		"endpoint": "http://mcp.example/mcp",
+	}
+	partialEdgeA := edgeA
+	partialEdgeA.Properties = map[string]any{"confidence": 1.0}
+	if _, err := writer.WriteObservationNodes(
+		ctx, []ingest.Node{partialServerA}, "partial-a", nil,
+	); err != nil {
+		t.Fatalf("write partial owner A node: %v", err)
+	}
+	if _, err := writer.WriteObservationEdges(
+		ctx, []ingest.Edge{partialEdgeA}, "partial-a", nil,
+	); err != nil {
+		t.Fatalf("write partial owner A edge: %v", err)
+	}
+
+	if _, err := writer.WriteObservationNodes(
+		ctx, []ingest.Node{serverA}, "complete-a", []string{scopeA},
+	); err != nil {
+		t.Fatalf("restore complete owner A node: %v", err)
+	}
+	if _, err := writer.WriteObservationEdges(
+		ctx, []ingest.Edge{edgeA}, "complete-a", []string{scopeA},
+	); err != nil {
+		t.Fatalf("restore complete owner A edge: %v", err)
+	}
+	if _, err := ReconcileObservations(
+		ctx, db, "complete-a", []string{scopeA},
+	); err != nil {
+		t.Fatalf("reconcile complete owner A: %v", err)
+	}
+
+	rows, err := db.Query(ctx, `
+MATCH (server:MCPServer {objectid: $server})-[r:RUNS_ON]->
+      (:Host {objectid: $host})
+RETURN server.observation_properties_complete AS server_complete,
+       r.observation_properties_complete AS edge_complete,
+       size([fingerprint IN server.observation_fact_fingerprints
+             WHERE fingerprint STARTS WITH $scope_a]) AS server_a_fingerprints,
+       size([fingerprint IN server.observation_fact_fingerprints
+             WHERE fingerprint STARTS WITH $scope_b]) AS server_b_fingerprints,
+       size([fingerprint IN r.observation_fact_fingerprints
+             WHERE fingerprint STARTS WITH $scope_a]) AS edge_a_fingerprints,
+       size([fingerprint IN r.observation_fact_fingerprints
+             WHERE fingerprint STARTS WITH $scope_b]) AS edge_b_fingerprints`,
+		map[string]any{
+			"server":  serverID,
+			"host":    hostID,
+			"scope_a": observationFingerprintDomainPrefix(scopeA),
+			"scope_b": observationFingerprintDomainPrefix(scopeB),
+		})
+	if err != nil {
+		t.Fatalf("query recovered shared observation: %v", err)
+	}
+	if len(rows) != 1 ||
+		rows[0]["server_complete"] != true ||
+		rows[0]["edge_complete"] != true ||
+		rows[0]["server_a_fingerprints"] != int64(1) ||
+		rows[0]["server_b_fingerprints"] != int64(1) ||
+		rows[0]["edge_a_fingerprints"] != int64(1) ||
+		rows[0]["edge_b_fingerprints"] != int64(1) {
+		t.Fatalf("complete shared owner did not recover after partial subset: %+v", rows)
+	}
+}
+
 func TestIntegrationCompatibleDistinctOwnersRemainCompleteUntilOneRetires(t *testing.T) {
 	ctx := testDriver(t)
 	driver, err := NewDriver(

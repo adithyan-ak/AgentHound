@@ -129,7 +129,8 @@ components:
     ProjectionIdentity:
       type: object
       additionalProperties: false
-      required: [scan_id, revision]
+      required:
+        [scan_id, revision, coverage_limited, coverage_limitation_count]
       properties:
         scan_id:
           type: string
@@ -138,6 +139,11 @@ components:
           type: integer
           format: int64
           minimum: 1
+        coverage_limited:
+          type: boolean
+        coverage_limitation_count:
+          type: integer
+          minimum: 0
 
     Node:
       type: object

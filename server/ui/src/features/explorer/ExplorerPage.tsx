@@ -37,11 +37,13 @@ function ExplorerWorkspace() {
     (state) => state.blastRadiusSourceId,
   );
   const verdictsAvailable = vm.data?.collection.complete === true;
-  const verdictUnavailableReason = vm.error
-    ? vm.error.message
-    : vm.isLoading
-      ? "The published graph and finding snapshot are still loading."
-      : "Graph completeness or publication scope is unknown.";
+  const verdictUnavailableReason =
+    vm.data?.collection.incompleteReason ??
+    (vm.error
+      ? vm.error.message
+      : vm.isLoading
+        ? "The published graph and finding snapshot are still loading."
+        : "Graph completeness or publication scope is unknown.");
 
   return (
     <>
@@ -70,7 +72,7 @@ function ExplorerWorkspace() {
         activeLens !== "blast-radius" && (
           <DataStateNotice
             tone="warning"
-            title="Explorer conclusions withheld"
+            title="Published coverage is limited"
             className="pointer-events-auto absolute right-4 top-20 z-40 max-w-sm bg-card/95 backdrop-blur-md"
           >
             {verdictUnavailableReason}

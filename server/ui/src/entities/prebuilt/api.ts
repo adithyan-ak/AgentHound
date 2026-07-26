@@ -13,6 +13,8 @@ export interface PreBuiltQuery {
 export interface ProjectionIdentity {
   scanId: string;
   revision: number;
+  coverageLimited: boolean;
+  coverageLimitationCount: number;
 }
 
 export interface TraversalMetadata {
@@ -99,6 +101,14 @@ function decodeProjection(value: unknown): ProjectionIdentity {
       projection.revision,
       "prebuilt result.projection.revision",
       1,
+    ),
+    coverageLimited: boolean(
+      projection.coverage_limited,
+      "prebuilt result.projection.coverage_limited",
+    ),
+    coverageLimitationCount: integer(
+      projection.coverage_limitation_count,
+      "prebuilt result.projection.coverage_limitation_count",
     ),
   };
 }

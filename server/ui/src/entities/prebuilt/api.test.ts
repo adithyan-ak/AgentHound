@@ -45,7 +45,12 @@ describe("runPreBuiltQuery", () => {
         query,
         rows: [],
         metadata,
-        projection: { scan_id: "scan-7", revision: 7 },
+        projection: {
+          scan_id: "scan-7",
+          revision: 7,
+          coverage_limited: true,
+          coverage_limitation_count: 1,
+        },
       }),
     );
 
@@ -56,7 +61,12 @@ describe("runPreBuiltQuery", () => {
         expansionLimit: 100,
         incompleteReason: "expansion limit reached",
       },
-      projection: { scanId: "scan-7", revision: 7 },
+      projection: {
+        scanId: "scan-7",
+        revision: 7,
+        coverageLimited: true,
+        coverageLimitationCount: 1,
+      },
     });
   });
 
@@ -65,7 +75,12 @@ describe("runPreBuiltQuery", () => {
       response({
         query,
         rows: [],
-        projection: { scan_id: "scan-7", revision: 7 },
+        projection: {
+          scan_id: "scan-7",
+          revision: 7,
+          coverage_limited: false,
+          coverage_limitation_count: 0,
+        },
       }),
     );
 
@@ -80,7 +95,12 @@ describe("runPreBuiltQuery", () => {
         query,
         rows: [],
         metadata: { ...metadata, complete: "yes" },
-        projection: { scan_id: "scan-7", revision: 7 },
+        projection: {
+          scan_id: "scan-7",
+          revision: 7,
+          coverage_limited: false,
+          coverage_limitation_count: 0,
+        },
       }),
     );
 
