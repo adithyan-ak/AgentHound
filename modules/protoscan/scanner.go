@@ -87,7 +87,44 @@ type Scanner struct {
 	Progress func(done, total int)
 
 	httpClient *http.Client
+	reportMu   sync.RWMutex
+	report     ProbeReport
 }
+
+// ProbeReport records endpoint/protocol coverage from the most recent Scan.
+// Conclusive includes positive protocol matches and definitive negatives.
+type ProbeReport struct {
+	Total      int
+	Conclusive int
+}
+
+func (r ProbeReport) State() ingest.OutcomeState {
+	return ingest.ProbeOutcomeState(r.Total, r.Conclusive)
+}
+
+func (r ProbeReport) Unknown() int {
+	return max(0, r.Total-r.Conclusive)
+}
+
+func (s *Scanner) LastReport() ProbeReport {
+	s.reportMu.RLock()
+	defer s.reportMu.RUnlock()
+	return s.report
+}
+
+func (s *Scanner) setReport(report ProbeReport) {
+	s.reportMu.Lock()
+	s.report = report
+	s.reportMu.Unlock()
+}
+
+type probeDisposition uint8
+
+const (
+	probeUnknown probeDisposition = iota
+	probeNegative
+	probePositive
+)
 
 // Mode selects MCP, A2A, or both.
 type Mode int
@@ -107,6 +144,7 @@ const (
 //	"meta.scheme"   = "http" or "https"
 //	"meta.url"      = full base URL
 func (s *Scanner) Scan(ctx context.Context, spec string) ([]action.Target, error) {
+	s.setReport(ProbeReport{})
 	hosts, err := networkscan.Expand(spec, s.ExpandOpts)
 	if err != nil {
 		return nil, err
@@ -172,6 +210,7 @@ func (s *Scanner) Scan(ctx context.Context, spec string) ([]action.Target, error
 	// contends with the worker pool. Guarded so a nil Progress costs nothing.
 	total := len(jobs)
 	var completed atomic.Int64
+	var conclusive atomic.Int64
 	var stopReporter, reporterDone chan struct{}
 	if s.Progress != nil && total > 0 {
 		stopReporter = make(chan struct{})
@@ -201,9 +240,13 @@ func (s *Scanner) Scan(ctx context.Context, spec string) ([]action.Target, error
 				if ctx.Err() != nil {
 					return
 				}
-				if t, ok := s.probeOne(ctx, j.host, j.port, j.protocol); ok {
+				target, disposition := s.probeOne(ctx, j.host, j.port, j.protocol)
+				if disposition != probeUnknown {
+					conclusive.Add(1)
+				}
+				if disposition == probePositive {
 					mu.Lock()
-					results = append(results, t)
+					results = append(results, target)
 					mu.Unlock()
 				}
 				completed.Add(1)
@@ -231,6 +274,10 @@ dispatch:
 		<-reporterDone
 		s.Progress(int(completed.Load()), total)
 	}
+	s.setReport(ProbeReport{
+		Total:      total,
+		Conclusive: int(conclusive.Load()),
+	})
 
 	if cancelled {
 		return results, ctx.Err()
@@ -238,10 +285,16 @@ dispatch:
 	return results, nil
 }
 
-// probeOne issues the protocol-specific probe against host:port. Returns
-// (target, true) on a positive match. Network errors and protocol-shape
-// mismatches both produce (zero, false).
-func (s *Scanner) probeOne(ctx context.Context, host string, port int, protocol string) (action.Target, bool) {
+// probeOne issues the protocol-specific probe against host:port. Protocol
+// mismatches and canonical 404/405 responses are definitive negatives.
+// Authentication blocks, redirects, transient statuses, timeouts, TLS/read
+// failures, and other transport errors remain unknown.
+func (s *Scanner) probeOne(
+	ctx context.Context,
+	host string,
+	port int,
+	protocol string,
+) (action.Target, probeDisposition) {
 	// Try HTTPS first when port suggests it (443/8443), else HTTP.
 	scheme := "http"
 	if port == 443 || port == 8443 {
@@ -250,7 +303,7 @@ func (s *Scanner) probeOne(ctx context.Context, host string, port int, protocol 
 	baseURL := fmt.Sprintf("%s://%s:%d", scheme, host, port)
 	switch protocol {
 	case "mcp":
-		if matchedPath, ok := s.probeMCP(ctx, baseURL); ok {
+		if matchedPath, disposition := s.probeMCP(ctx, baseURL); disposition == probePositive {
 			// Preserve the matched path so the emitted MCPServer endpoint
 			// (and thus its deterministic ID) matches what the mcp/config
 			// collectors hash via ingest.ComputeMCPServerID. Trim a lone
@@ -267,12 +320,14 @@ func (s *Scanner) probeOne(ctx context.Context, host string, port int, protocol 
 					"scheme":   scheme,
 					"url":      endpoint,
 				},
-			}, true
+			}, probePositive
+		} else {
+			return action.Target{}, disposition
 		}
 	case "a2a":
-		card, ok := s.probeA2A(ctx, baseURL)
-		if !ok {
-			return action.Target{}, false
+		card, disposition := s.probeA2A(ctx, baseURL)
+		if disposition != probePositive {
+			return action.Target{}, disposition
 		}
 		return action.Target{
 			Kind:    "host",
@@ -283,16 +338,19 @@ func (s *Scanner) probeOne(ctx context.Context, host string, port int, protocol 
 				"url":            baseURL,
 				"agent_card_url": card,
 			},
-		}, true
+		}, probePositive
 	}
-	return action.Target{}, false
+	return action.Target{}, probeUnknown
 }
 
 // probeMCP POSTs a JSON-RPC initialize at "/" and at "/mcp" (the two
 // most-common path conventions) and, on a canonical
 // {"jsonrpc":"2.0","id":1,"result":{...}} response shape, returns the
 // matched path and true. Returns ("", false) when no path matches.
-func (s *Scanner) probeMCP(ctx context.Context, baseURL string) (string, bool) {
+func (s *Scanner) probeMCP(
+	ctx context.Context,
+	baseURL string,
+) (string, probeDisposition) {
 	payload, _ := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
@@ -306,10 +364,12 @@ func (s *Scanner) probeMCP(ctx context.Context, baseURL string) (string, bool) {
 			},
 		},
 	})
+	disposition := probeNegative
 	for _, path := range []string{"/", "/mcp"} {
 		url := strings.TrimRight(baseURL, "/") + path
 		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
 		if err != nil {
+			disposition = probeUnknown
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
@@ -318,12 +378,23 @@ func (s *Scanner) probeMCP(ctx context.Context, baseURL string) (string, bool) {
 		req.Header.Set("Accept", "application/json, text/event-stream")
 		resp, err := s.httpClient.Do(req)
 		if err != nil {
+			if classifyProbeError(err) == probeUnknown {
+				disposition = probeUnknown
+			}
 			continue
 		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		body, readErr := readProbeBody(resp.Body)
 		ctype := resp.Header.Get("Content-Type")
 		_ = resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if readErr != nil {
+			disposition = probeUnknown
+			continue
+		}
+		switch classifyHTTPProbeStatus(resp.StatusCode) {
+		case probeUnknown:
+			disposition = probeUnknown
+			continue
+		case probeNegative:
 			continue
 		}
 		// A Streamable HTTP server may frame the initialize response as a single
@@ -347,10 +418,10 @@ func (s *Scanner) probeMCP(ctx context.Context, baseURL string) (string, bool) {
 		}
 		if parsed.JSONRPC == "2.0" && parsed.Result != nil &&
 			(parsed.Result.ServerInfo != nil || parsed.Result.Capabilities != nil) {
-			return path, true
+			return path, probePositive
 		}
 	}
-	return "", false
+	return "", disposition
 }
 
 // extractSSEData concatenates the `data:` field values from an SSE event
@@ -380,21 +451,37 @@ func extractSSEData(body []byte) []byte {
 
 // probeA2A GETs /.well-known/agent-card.json and (on 404) the legacy
 // /.well-known/agent.json. Returns the card URL on a positive match.
-func (s *Scanner) probeA2A(ctx context.Context, baseURL string) (string, bool) {
+func (s *Scanner) probeA2A(
+	ctx context.Context,
+	baseURL string,
+) (string, probeDisposition) {
+	disposition := probeNegative
 	for _, path := range []string{"/.well-known/agent-card.json", "/.well-known/agent.json"} {
 		url := strings.TrimRight(baseURL, "/") + path
 		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
+			disposition = probeUnknown
 			continue
 		}
 		req.Header.Set("Accept", "application/json")
 		resp, err := s.httpClient.Do(req)
 		if err != nil {
+			if classifyProbeError(err) == probeUnknown {
+				disposition = probeUnknown
+			}
 			continue
 		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		body, readErr := readProbeBody(resp.Body)
 		_ = resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if readErr != nil {
+			disposition = probeUnknown
+			continue
+		}
+		switch classifyHTTPProbeStatus(resp.StatusCode) {
+		case probeUnknown:
+			disposition = probeUnknown
+			continue
+		case probeNegative:
 			continue
 		}
 		// Lenient agent-card shape: must have "name" AND ("url" OR
@@ -407,10 +494,40 @@ func (s *Scanner) probeA2A(ctx context.Context, baseURL string) (string, bool) {
 		_, hasURL := parsed["url"].(string)
 		_, hasIfaces := parsed["supportedInterfaces"].([]any)
 		if name != "" && (hasURL || hasIfaces) {
-			return url, true
+			return url, probePositive
 		}
 	}
-	return "", false
+	return "", disposition
+}
+
+func classifyHTTPProbeStatus(status int) probeDisposition {
+	switch {
+	case status >= 200 && status < 300:
+		return probePositive
+	case status == http.StatusNotFound || status == http.StatusMethodNotAllowed:
+		return probeNegative
+	default:
+		return probeUnknown
+	}
+}
+
+func classifyProbeError(err error) probeDisposition {
+	if common.IsConnectionRefused(err) {
+		return probeNegative
+	}
+	return probeUnknown
+}
+
+func readProbeBody(body io.Reader) ([]byte, error) {
+	const maxProbeBody = 1 << 20
+	data, err := io.ReadAll(io.LimitReader(body, maxProbeBody+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxProbeBody {
+		return nil, fmt.Errorf("probe response exceeds %d bytes", maxProbeBody)
+	}
+	return data, nil
 }
 
 // EmitDiscoveryNodes turns the Scanner's positive matches into ingest

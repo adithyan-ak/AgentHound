@@ -8,8 +8,11 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
 // fakeDialer simulates the result of a TCP connect probe without binding any
@@ -42,7 +45,15 @@ func (f *fakeDialer) DialContext(ctx context.Context, _, address string) (net.Co
 		_ = c2.Close()
 		return c1, nil
 	}
-	return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+	return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+}
+
+type outcomeDialer struct {
+	errors map[string]error
+}
+
+func (d *outcomeDialer) DialContext(_ context.Context, _, address string) (net.Conn, error) {
+	return nil, d.errors[address]
 }
 
 func TestScanner_HappyPath(t *testing.T) {
@@ -106,6 +117,51 @@ func TestScanner_NoOpenPorts(t *testing.T) {
 	if len(targets) != 0 {
 		t.Errorf("got %d targets, want 0", len(targets))
 	}
+	report := s.LastReport()
+	if report.State() != ingest.OutcomeComplete ||
+		report.Conclusive != report.Total {
+		t.Fatalf("refused-port report = %+v, want complete", report)
+	}
+}
+
+func TestScanner_ProbeOutcomeAccounting(t *testing.T) {
+	t.Run("mixed conclusive and unknown is partial", func(t *testing.T) {
+		s := &Scanner{
+			Ports: []int{7001, 7002},
+			Dialer: &outcomeDialer{errors: map[string]error{
+				"10.0.0.1:7001": syscall.ECONNREFUSED,
+				"10.0.0.1:7002": context.DeadlineExceeded,
+			}},
+		}
+		if _, err := s.Scan(context.Background(), "10.0.0.1"); err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+		report := s.LastReport()
+		if report.State() != ingest.OutcomePartial ||
+			report.Total != 2 || report.Conclusive != 1 || report.Unknown() != 1 {
+			t.Fatalf("mixed report = %+v (unknown=%d), want partial 2/1/1",
+				report, report.Unknown())
+		}
+	})
+
+	t.Run("nothing conclusive is failed", func(t *testing.T) {
+		s := &Scanner{
+			Ports: []int{7001, 7002},
+			Dialer: &outcomeDialer{errors: map[string]error{
+				"10.0.0.1:7001": context.DeadlineExceeded,
+				"10.0.0.1:7002": context.DeadlineExceeded,
+			}},
+		}
+		if _, err := s.Scan(context.Background(), "10.0.0.1"); err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+		report := s.LastReport()
+		if report.State() != ingest.OutcomeFailed ||
+			report.Total != 2 || report.Conclusive != 0 || report.Unknown() != 2 {
+			t.Fatalf("unknown-only report = %+v (unknown=%d), want failed 2/0/2",
+				report, report.Unknown())
+		}
+	})
 }
 
 func TestScanner_CustomPorts(t *testing.T) {

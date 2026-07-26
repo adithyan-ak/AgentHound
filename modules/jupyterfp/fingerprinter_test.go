@@ -116,6 +116,46 @@ func TestFingerprintRequiresPublicAPICandidate(t *testing.T) {
 	}
 }
 
+func TestFingerprintConnectionRefusedIsDefinitiveNoMatch(t *testing.T) {
+	fingerprinter, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	result, err := fingerprinter.Fingerprint(context.Background(), action.Target{
+		Kind: "host", Address: "127.0.0.1:1",
+	})
+	if err != nil {
+		t.Fatalf("connection refusal should be a definitive no-match: %v", err)
+	}
+	if result.Matched {
+		t.Fatal("connection refusal matched Jupyter")
+	}
+}
+
+func TestIndeterminateHTTPStatus(t *testing.T) {
+	for _, tt := range []struct {
+		status             int
+		allowAuthChallenge bool
+		wantErr            bool
+	}{
+		{status: http.StatusOK},
+		{status: http.StatusNotFound},
+		{status: http.StatusMethodNotAllowed},
+		{status: http.StatusUnauthorized, wantErr: true},
+		{status: http.StatusUnauthorized, allowAuthChallenge: true},
+		{status: http.StatusForbidden, allowAuthChallenge: true},
+		{status: http.StatusBadRequest, wantErr: true},
+		{status: http.StatusFound, wantErr: true},
+		{status: http.StatusServiceUnavailable, wantErr: true},
+	} {
+		err := indeterminateHTTPStatus(tt.status, tt.allowAuthChallenge)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("status %d allow-auth=%v err=%v, wantErr=%v",
+				tt.status, tt.allowAuthChallenge, err, tt.wantErr)
+		}
+	}
+}
+
 func TestFingerprintStatusDecision(t *testing.T) {
 	tests := []struct {
 		name             string

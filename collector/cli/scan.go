@@ -1071,12 +1071,12 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 		return fmt.Errorf("registered network module %q is not a Scanner", mod.ID())
 	}
 
-	// Configure runtime overrides directly on the *networkscan.Scanner if
-	// possible — avoids constructing a parallel options struct. We don't
-	// type-assert here because module.Get returns the concrete value the
-	// init() registered.
+	// Configure the registered concrete scanner and retain it so its bounded
+	// coverage counts can be attached to the artifact.
 	reporter := newProgressReporter(cmd.OutOrStderr(), "[scan] probing "+spec, quiet)
+	var networkScanner *networkscan.Scanner
 	if ns, ok := mod.(*networkscan.Scanner); ok {
+		networkScanner = ns
 		if len(ports) > 0 {
 			ns.Ports = ports
 		}
@@ -1126,9 +1126,21 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 	envelope := buildNetworkScanEnvelope(spec, targets, authzFile, authzHash, allowPublic)
 	_, ruleset := loadEffectiveRules()
 	envelope.Meta.Ruleset = ruleset
-	networkState := ingest.OutcomeComplete
-	if ctx.Err() != nil {
-		networkState = ingest.OutcomePartial
+	var networkState ingest.OutcomeState
+	networkError := ""
+	if networkScanner != nil {
+		report := networkScanner.LastReport()
+		networkState = report.State()
+		if unknown := report.Unknown(); unknown > 0 {
+			networkError = fmt.Sprintf(
+				"%d of %d TCP probe(s) inconclusive",
+				unknown,
+				report.Total,
+			)
+		}
+	} else {
+		networkState = ingest.OutcomeFailed
+		networkError = "registered scanner did not report TCP probe coverage"
 	}
 	envelope.Meta.Collection = &ingest.CollectionReport{
 		State:        networkState,
@@ -1140,6 +1152,7 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 			Method:      "port_scan",
 			State:       networkState,
 			Items:       len(targets),
+			Error:       networkError,
 		}},
 	}
 	// On cancellation (Ctrl-C), every fingerprint probe would immediately fail
@@ -1152,7 +1165,7 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 		}
 		envelope.Meta.Collection.Outcomes = append(envelope.Meta.Collection.Outcomes, ingest.CollectionOutcome{
 			Collector: "scan", CoverageKey: envelope.Meta.Collection.CoverageKeys[0],
-			Target: spec, Method: "fingerprint", State: ingest.OutcomePartial,
+			Target: spec, Method: "fingerprint", State: ingest.OutcomeFailed,
 			Error: "fingerprint phase canceled before dispatch",
 		})
 	} else {
@@ -1377,10 +1390,18 @@ func dispatchFingerprintCandidates(
 	total := len(endpoints) * len(candidates)
 	reporter := newProgressReporter(stderr, "[scan] fingerprinting", quiet)
 	coverageKey := envelope.Meta.Collection.CoverageKeys[0]
-	if total == 0 {
+	if len(endpoints) == 0 {
 		envelope.Meta.Collection.Outcomes = append(envelope.Meta.Collection.Outcomes, ingest.CollectionOutcome{
 			Collector: "scan", CoverageKey: coverageKey, Target: scopeTarget,
-			Method: "fingerprint", State: ingest.OutcomeComplete,
+			Method: "fingerprint", State: ingest.OutcomeNotApplicable,
+		})
+		return
+	}
+	if len(candidates) == 0 {
+		envelope.Meta.Collection.Outcomes = append(envelope.Meta.Collection.Outcomes, ingest.CollectionOutcome{
+			Collector: "scan", CoverageKey: coverageKey, Target: scopeTarget,
+			Method: "fingerprint", State: ingest.OutcomeFailed,
+			Error: "no registered fingerprinters; zero probes scheduled",
 		})
 		return
 	}
@@ -1496,15 +1517,21 @@ func dispatchFingerprintCandidates(
 	}
 	scheduled := <-producerDone
 	unstarted := total - scheduled
-	state := ingest.OutcomeComplete
+	conclusive := completed - failures
+	state := ingest.ProbeOutcomeState(total, conclusive)
 	errorText := ""
-	if failures > 0 || unstarted > 0 || ctx.Err() != nil {
-		state = ingest.OutcomePartial
-		errorText = fmt.Sprintf("%d probe(s) failed, %d not started", failures, max(0, unstarted))
+	if state != ingest.OutcomeComplete {
+		errorText = fmt.Sprintf(
+			"%d of %d probe(s) inconclusive (%d failed, %d not started)",
+			total-conclusive,
+			total,
+			failures,
+			max(0, unstarted),
+		)
 	}
 	envelope.Meta.Collection.Outcomes = append(envelope.Meta.Collection.Outcomes, ingest.CollectionOutcome{
 		Collector: "scan", CoverageKey: coverageKey, Target: scopeTarget,
-		Method: "fingerprint", State: state, Items: completed - failures, Error: errorText,
+		Method: "fingerprint", State: state, Items: conclusive, Error: errorText,
 	})
 	reporter.clear()
 	if !quiet {

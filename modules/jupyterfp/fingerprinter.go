@@ -109,6 +109,9 @@ func (f *Fingerprinter) Fingerprint(
 		baseURL+"/api",
 	)
 	if err != nil {
+		if common.IsConnectionRefused(err) {
+			return &action.FingerprintResult{Matched: false}, nil
+		}
 		return &action.FingerprintResult{Matched: false}, err
 	}
 	if err := indeterminateHTTPStatus(apiStatus, false); err != nil {
@@ -132,6 +135,9 @@ func (f *Fingerprinter) Fingerprint(
 		baseURL+"/api/status",
 	)
 	if err != nil {
+		if common.IsConnectionRefused(err) {
+			return &action.FingerprintResult{Matched: false}, nil
+		}
 		return &action.FingerprintResult{Matched: false}, err
 	}
 	if err := indeterminateHTTPStatus(statusCode, true); err != nil {
@@ -330,18 +336,15 @@ func probe(
 
 func indeterminateHTTPStatus(status int, allowAuthChallenge bool) error {
 	switch {
-	case status >= 300 && status < 400:
-		return fmt.Errorf("redirect response status %d", status)
-	case status == http.StatusProxyAuthRequired:
-		return fmt.Errorf("authentication challenge status %d", status)
-	case status == http.StatusRequestTimeout || status == http.StatusTooEarly ||
-		status == http.StatusTooManyRequests || status >= 500:
-		return fmt.Errorf("transient response status %d", status)
-	case !allowAuthChallenge &&
-		(status == http.StatusUnauthorized || status == http.StatusForbidden):
-		return fmt.Errorf("authentication challenge status %d", status)
-	default:
+	case status >= 200 && status < 300:
 		return nil
+	case status == http.StatusNotFound || status == http.StatusMethodNotAllowed:
+		return nil
+	case allowAuthChallenge &&
+		(status == http.StatusUnauthorized || status == http.StatusForbidden):
+		return nil
+	default:
+		return fmt.Errorf("indeterminate response status %d", status)
 	}
 }
 

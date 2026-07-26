@@ -21,9 +21,10 @@ type Fingerprinter interface {
 // return Matched=false with no error (a fingerprinter saying "this is
 // not my service" is normal, not a system failure).
 // A non-nil error means the target was not definitively evaluated (for
-// example transport, timeout, redirect, authentication challenge, bounded-body,
-// or matcher execution failure) and lifecycle-aware callers must treat the
-// corresponding coverage as incomplete.
+// example timeout, TLS/DNS/transport failure other than an explicit connection
+// refusal, redirect, authentication challenge, bounded-body, or matcher
+// execution failure) and lifecycle-aware callers must treat the corresponding
+// coverage as incomplete.
 //
 // IngestData carries the nodes and edges the fingerprinter wants merged into
 // the scan output. Current service fingerprinters emit a per-service,

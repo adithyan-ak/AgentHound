@@ -260,11 +260,21 @@ By default network-mode `scan` prints a one-line summary (`N host(s) with at lea
 
 Every registered fingerprinter runs once against every open endpoint. Port
 mappings prioritize likely candidates but are not eligibility gates, so a real
-service on a custom port remains discoverable. A complete response that fails
-its matcher is a definitive no-match. Transport/TLS/timeouts, redirects,
-authentication challenges, transient statuses, incomplete or oversized bodies,
-and matcher runtime failures are indeterminate and make fingerprint coverage
-partial, preventing lifecycle reconciliation from deleting prior service facts.
+service on a custom port remains discoverable. TCP connect success and explicit
+connection refusal are conclusive; timeout, DNS, reset, panic, cancellation,
+and unstarted TCP probes are unknown. For HTTP fingerprinting, a complete
+response that fails its matcher, canonical 404/405, or explicit connection
+refusal is a definitive no-match. TLS/timeouts and other transport failures,
+redirects, authentication challenges, other non-2xx statuses, incomplete or
+oversized bodies, and matcher runtime failures are unknown.
+
+Each port-scan, fingerprint, and protocol-discovery outcome is `complete` only
+when every scheduled probe is conclusive, `partial` when conclusive and unknown
+results are mixed, and `failed` when nothing is conclusive. Fingerprinting is
+`not_applicable` when the conclusive TCP sweep found no open endpoint. An open
+endpoint with no registered fingerprinter is a failed zero-probe condition.
+Confirmed service nodes remain in the artifact in partial runs, while the
+coverage warning prevents unchecked services from being presented as absent.
 
 #### Shared Flags
 
@@ -336,6 +346,15 @@ agenthound scan --output - | agenthound-server ingest -
 ### `agenthound discover`
 
 Protocol-shape probes against a network to discover MCP servers (JSON-RPC initialize) and A2A agents (well-known agent-card). Unlike `scan` which fingerprints fixed AI-service ports, `discover` issues protocol-specific HTTP probes against likely web ports.
+
+Discovery preserves every positive MCP/A2A match while recording truthful
+coverage. A canonical 404/405, a complete non-matching protocol response, and
+explicit connection refusal are conclusive negatives. Authentication blocks,
+redirects, other non-2xx statuses, TLS/timeouts and other transport failures,
+and incomplete or oversized responses are unknown. Mixed scans are marked
+`partial`; an all-unknown or zero-probe run is `failed`. The artifact is still
+written and the CLI prints a coverage warning so retained positives can be
+ingested without treating unchecked endpoints as absent.
 
 ```
 agenthound discover <cidr|host|@file> [flags]

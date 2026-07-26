@@ -161,17 +161,40 @@ func runDiscover(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	envelope := buildDiscoverEnvelope(spec, targets, authzFile, authzHash, allowPublic)
+	envelope := buildDiscoverEnvelope(
+		spec,
+		targets,
+		authzFile,
+		authzHash,
+		allowPublic,
+		scanner.LastReport(),
+	)
 	if output == "" {
 		output = fmt.Sprintf("discover-%s.json", envelope.Meta.ScanID)
 	}
+	var writeErr error
 	if output == "-" {
-		return writeCollectorOutputStdout(envelope)
+		writeErr = writeCollectorOutputStdout(envelope)
+	} else {
+		writeErr = writeCollectorOutput(envelope, output)
 	}
-	return writeCollectorOutput(envelope, output)
+	if writeErr != nil {
+		return writeErr
+	}
+	assessment := assessScanCoverage(envelope.Meta.Collection)
+	writeScanCoverageWarnings(cmd.ErrOrStderr(), envelope.Meta.Collection, assessment)
+	writeScanNextStep(cmd.ErrOrStderr(), output, assessment, false)
+	return nil
 }
 
-func buildDiscoverEnvelope(spec string, targets []action.Target, authzFile, authzHash string, allowPublic bool) *ingest.IngestData {
+func buildDiscoverEnvelope(
+	spec string,
+	targets []action.Target,
+	authzFile,
+	authzHash string,
+	allowPublic bool,
+	report protoscan.ProbeReport,
+) *ingest.IngestData {
 	scanID := uuid.New().String()
 	env := common.NewIngestData("scan", scanID)
 	env.Meta.Extra = map[string]any{
@@ -180,16 +203,28 @@ func buildDiscoverEnvelope(spec string, targets []action.Target, authzFile, auth
 		"allow_public_targets": allowPublic,
 	}
 	coverageKey := ingest.CanonicalCoverageKey("scan", "discover", spec)
+	state := report.State()
+	errorText := ""
+	if report.Total == 0 {
+		errorText = "zero protocol probes scheduled"
+	} else if unknown := report.Unknown(); unknown > 0 {
+		errorText = fmt.Sprintf(
+			"%d of %d protocol probe(s) inconclusive",
+			unknown,
+			report.Total,
+		)
+	}
 	env.Meta.Collection = &ingest.CollectionReport{
-		State:        ingest.OutcomeComplete,
+		State:        state,
 		CoverageKeys: []string{coverageKey},
 		Outcomes: []ingest.CollectionOutcome{{
 			Collector:   "scan",
 			CoverageKey: coverageKey,
 			Target:      spec,
 			Method:      "protocol_discovery",
-			State:       ingest.OutcomeComplete,
+			State:       state,
 			Items:       len(targets),
+			Error:       errorText,
 		}},
 	}
 	if authzFile != "" {

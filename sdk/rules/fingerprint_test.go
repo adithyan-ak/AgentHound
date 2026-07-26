@@ -164,14 +164,17 @@ func TestRunFingerprint_NoMatch_WrongStatusOrShape(t *testing.T) {
 		}
 	})
 
-	t.Run("network error is operationally indeterminate", func(t *testing.T) {
+	t.Run("connection refused is a definitive no-match", func(t *testing.T) {
 		// Use a port we know is closed.
 		rule := minimalOllamaRule()
-		_, err := RunFingerprint(context.Background(),
+		result, err := RunFingerprint(context.Background(),
 			DefaultFingerprintHTTPClient(500*time.Millisecond),
 			"http://127.0.0.1:1", rule)
-		if err == nil {
-			t.Fatal("expected an operational error for a failed connection")
+		if err != nil {
+			t.Fatalf("connection refusal returned an indeterminate error: %v", err)
+		}
+		if result.Matched {
+			t.Fatal("connection refusal matched")
 		}
 	})
 }
@@ -186,6 +189,8 @@ func TestRunFingerprint_OperationallyIndeterminateResponses(t *testing.T) {
 		{"unauthorized", http.StatusUnauthorized},
 		{"forbidden", http.StatusForbidden},
 		{"proxy authentication required", http.StatusProxyAuthRequired},
+		{"bad request", http.StatusBadRequest},
+		{"not acceptable", http.StatusNotAcceptable},
 		{"request timeout", http.StatusRequestTimeout},
 		{"too early", http.StatusTooEarly},
 		{"rate limited", http.StatusTooManyRequests},

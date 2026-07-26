@@ -53,6 +53,24 @@ type CollectionOutcome struct {
 	Error             string       `json:"error,omitempty"`
 }
 
+// ProbeOutcomeState classifies a bounded probe set from its total and
+// conclusive counts. Positive matches and definitive negatives are both
+// conclusive. Operationally indeterminate and unstarted probes are not.
+//
+// A zero-probe run is failed rather than complete: it did not establish
+// coverage. A run with no conclusive result is likewise failed. Mixed
+// conclusive and indeterminate results are partial.
+func ProbeOutcomeState(total, conclusive int) OutcomeState {
+	switch {
+	case total <= 0 || conclusive <= 0:
+		return OutcomeFailed
+	case conclusive < total:
+		return OutcomePartial
+	default:
+		return OutcomeComplete
+	}
+}
+
 // EnsureCoverageParentage serializes lifecycle ownership explicitly. It is
 // called by the collector immediately before encoding an artifact; the server
 // never reconstructs parentage by parsing opaque coverage-key strings.

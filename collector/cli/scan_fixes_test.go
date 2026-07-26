@@ -234,12 +234,59 @@ func TestFingerprintCoverageDistinguishesFailureFromNoMatch(t *testing.T) {
 		id: failure.ID(), target: failure.Target(), fp: failure,
 	}})
 	outcome = envelope.Meta.Collection.Outcomes[len(envelope.Meta.Collection.Outcomes)-1]
-	if outcome.State != ingest.OutcomePartial || outcome.Items != 0 {
+	if outcome.State != ingest.OutcomeFailed || outcome.Items != 0 {
 		t.Fatalf("operational failure outcome = %+v", outcome)
 	}
 	if len(ingest.CompleteCoverageDomains(envelope.Meta.Collection)) != 0 {
 		t.Fatalf("indeterminate fingerprint could reconcile prior services: %+v", envelope.Meta.Collection)
 	}
+}
+
+func TestFingerprintCoverageZeroProbeClassification(t *testing.T) {
+	t.Run("no open endpoint is not applicable", func(t *testing.T) {
+		envelope := fingerprintTestEnvelope()
+		dispatchFingerprintCandidates(
+			context.Background(),
+			io.Discard,
+			nil,
+			envelope,
+			true,
+			1,
+			time.Second,
+			"test",
+			[]fingerprintCandidate{{
+				id: "candidate", target: "candidate",
+				fp: &conditionalFingerprinter{targetKind: "candidate"},
+			}},
+		)
+		outcome := envelope.Meta.Collection.Outcomes[len(envelope.Meta.Collection.Outcomes)-1]
+		if outcome.State != ingest.OutcomeNotApplicable {
+			t.Fatalf("no-endpoint outcome = %+v, want not_applicable", outcome)
+		}
+	})
+
+	t.Run("open endpoint without fingerprinter is failed", func(t *testing.T) {
+		envelope := fingerprintTestEnvelope()
+		dispatchFingerprintCandidates(
+			context.Background(),
+			io.Discard,
+			[]action.Target{{
+				Kind: "host", Address: "10.0.0.9",
+				Meta: map[string]string{"open_ports": "9999"},
+			}},
+			envelope,
+			true,
+			1,
+			time.Second,
+			"test",
+			nil,
+		)
+		outcome := envelope.Meta.Collection.Outcomes[len(envelope.Meta.Collection.Outcomes)-1]
+		if outcome.State != ingest.OutcomeFailed ||
+			!strings.Contains(outcome.Error, "zero probes") {
+			t.Fatalf("no-fingerprinter outcome = %+v, want failed zero-probe error", outcome)
+		}
+	})
 }
 
 func TestFingerprintDeadlineStartsWhenWorkerDequeues(t *testing.T) {

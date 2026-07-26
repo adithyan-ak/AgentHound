@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/adithyan-ak/agenthound/modules/protoscan"
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/campaign"
 	"github.com/adithyan-ak/agenthound/sdk/common"
@@ -31,10 +32,17 @@ func TestCollectionEnvelopesPreserveInjectedCollectorVersion(t *testing.T) {
 	envelopes := map[string]*ingest.IngestData{
 		"combined scan": combined,
 		"network scan":  buildNetworkScanEnvelope("127.0.0.1:1", nil, "", "", false),
-		"discover":      buildDiscoverEnvelope("127.0.0.1:1", nil, "", "", false),
-		"loot":          buildLootEnvelope("http://127.0.0.1", "jupyter", "ENG", &action.LootResult{}),
-		"extract":       buildExtractEnvelope(ingest.ComputeNodeID("AIModel", "instance", "model"), "embedding-inversion", "ENG", &action.ExtractResult{}),
-		"campaign":      buildCampaignEnvelope("cred-reach", 1, "ENG", campTestEvidence(campaign.OutcomeNotObserved)),
+		"discover": buildDiscoverEnvelope(
+			"127.0.0.1:1",
+			nil,
+			"",
+			"",
+			false,
+			protoscan.ProbeReport{Total: 1, Conclusive: 1},
+		),
+		"loot":     buildLootEnvelope("http://127.0.0.1", "jupyter", "ENG", &action.LootResult{}),
+		"extract":  buildExtractEnvelope(ingest.ComputeNodeID("AIModel", "instance", "model"), "embedding-inversion", "ENG", &action.ExtractResult{}),
+		"campaign": buildCampaignEnvelope("cred-reach", 1, "ENG", campTestEvidence(campaign.OutcomeNotObserved)),
 	}
 	for name, envelope := range envelopes {
 		if got := envelope.Meta.CollectorVersion; got != releaseVersion {
