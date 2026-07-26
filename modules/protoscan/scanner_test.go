@@ -509,13 +509,18 @@ func TestProbe_RejectsNonMCP(t *testing.T) {
 
 func TestScan_ProtocolProbeOutcomeAccounting(t *testing.T) {
 	negative := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer negative.Close()
 	unknown := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer unknown.Close()
+	concealed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer concealed.Close()
 
 	t.Run("all definitive negatives are complete", func(t *testing.T) {
 		s := &Scanner{Mode: ModeMCP, MCPPorts: []int{portOf(t, negative)}}
@@ -553,6 +558,18 @@ func TestScan_ProtocolProbeOutcomeAccounting(t *testing.T) {
 		if report.State() != ingest.OutcomeFailed ||
 			report.Total != 1 || report.Conclusive != 0 || report.Unknown() != 1 {
 			t.Fatalf("unknown-only report = %+v, want failed 1/0", report)
+		}
+	})
+
+	t.Run("bare 404 is unknown", func(t *testing.T) {
+		s := &Scanner{Mode: ModeMCP, MCPPorts: []int{portOf(t, concealed)}}
+		if _, err := s.Scan(context.Background(), "127.0.0.1"); err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+		report := s.LastReport()
+		if report.State() != ingest.OutcomeFailed ||
+			report.Total != 1 || report.Conclusive != 0 || report.Unknown() != 1 {
+			t.Fatalf("concealed report = %+v, want failed 1/0", report)
 		}
 	})
 
@@ -598,8 +615,8 @@ func TestProtocolProbeClassifiers(t *testing.T) {
 		want   probeDisposition
 	}{
 		{status: http.StatusOK, want: probePositive},
-		{status: http.StatusNotFound, want: probeNegative},
-		{status: http.StatusMethodNotAllowed, want: probeNegative},
+		{status: http.StatusNotFound, want: probeUnknown},
+		{status: http.StatusMethodNotAllowed, want: probeUnknown},
 		{status: http.StatusFound, want: probeUnknown},
 		{status: http.StatusBadRequest, want: probeUnknown},
 		{status: http.StatusUnauthorized, want: probeUnknown},

@@ -263,10 +263,12 @@ mappings prioritize likely candidates but are not eligibility gates, so a real
 service on a custom port remains discoverable. TCP connect success and explicit
 connection refusal are conclusive; timeout, DNS, reset, panic, cancellation,
 and unstarted TCP probes are unknown. For HTTP fingerprinting, a complete
-response that fails its matcher, canonical 404/405, or explicit connection
-refusal is a definitive no-match. TLS/timeouts and other transport failures,
-redirects, authentication challenges, other non-2xx statuses, incomplete or
-oversized bodies, and matcher runtime failures are unknown.
+2xx response that fails its matcher or explicit connection refusal is a
+definitive no-match. Bare 404/405 responses are unknown because an access
+gateway can conceal a protected route and a method rejection does not prove
+the service is absent. TLS/timeouts and other transport failures, redirects,
+authentication challenges, other non-2xx statuses, incomplete or oversized
+bodies, and matcher runtime failures are also unknown.
 
 Each port-scan, fingerprint, and protocol-discovery outcome is `complete` only
 when every scheduled probe is conclusive, `partial` when conclusive and unknown
@@ -348,13 +350,13 @@ agenthound scan --output - | agenthound-server ingest -
 Protocol-shape probes against a network to discover MCP servers (JSON-RPC initialize) and A2A agents (well-known agent-card). Unlike `scan` which fingerprints fixed AI-service ports, `discover` issues protocol-specific HTTP probes against likely web ports.
 
 Discovery preserves every positive MCP/A2A match while recording truthful
-coverage. A canonical 404/405, a complete non-matching protocol response, and
-explicit connection refusal are conclusive negatives. Authentication blocks,
-redirects, other non-2xx statuses, TLS/timeouts and other transport failures,
-and incomplete or oversized responses are unknown. Mixed scans are marked
-`partial`; an all-unknown or zero-probe run is `failed`. The artifact is still
-written and the CLI prints a coverage warning so retained positives can be
-ingested without treating unchecked endpoints as absent.
+coverage. A complete non-matching 2xx protocol response and explicit connection
+refusal are conclusive negatives. Bare 404/405 responses, authentication
+blocks, redirects, other non-2xx statuses, TLS/timeouts and other transport
+failures, and incomplete or oversized responses are unknown. Mixed scans are
+marked `partial`; an all-unknown or zero-probe run is `failed`. The artifact is
+still written and the CLI prints a coverage warning so retained positives can
+be ingested without treating unchecked endpoints as absent.
 
 ```
 agenthound discover <cidr|host|@file> [flags]

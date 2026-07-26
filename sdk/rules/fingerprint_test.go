@@ -131,22 +131,6 @@ func TestRunFingerprint_OllamaHappyPath(t *testing.T) {
 }
 
 func TestRunFingerprint_NoMatch_WrongStatusOrShape(t *testing.T) {
-	t.Run("404 fails http_status matcher", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(404)
-		}))
-		defer srv.Close()
-		rule := minimalOllamaRule()
-		res, err := RunFingerprint(context.Background(),
-			DefaultFingerprintHTTPClient(2*time.Second), srv.URL, rule)
-		if err != nil {
-			t.Fatalf("err: %v", err)
-		}
-		if res.Matched {
-			t.Error("expected no match on 404")
-		}
-	})
-
 	t.Run("malformed JSON fails json_path", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(200)
@@ -189,6 +173,8 @@ func TestRunFingerprint_OperationallyIndeterminateResponses(t *testing.T) {
 		{"unauthorized", http.StatusUnauthorized},
 		{"forbidden", http.StatusForbidden},
 		{"proxy authentication required", http.StatusProxyAuthRequired},
+		{"concealed not found", http.StatusNotFound},
+		{"method not allowed", http.StatusMethodNotAllowed},
 		{"bad request", http.StatusBadRequest},
 		{"not acceptable", http.StatusNotAcceptable},
 		{"request timeout", http.StatusRequestTimeout},

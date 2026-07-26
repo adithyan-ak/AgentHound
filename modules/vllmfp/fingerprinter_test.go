@@ -83,15 +83,12 @@ func TestFingerprint_NotVLLM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	res, err := f.Fingerprint(context.Background(), action.Target{
+	_, err = f.Fingerprint(context.Background(), action.Target{
 		Kind:    "host",
 		Address: strings.TrimPrefix(srv.URL, "http://"),
 	})
-	if err != nil {
-		t.Fatalf("Fingerprint err = %v", err)
-	}
-	if res.Matched {
-		t.Error("expected no match for a generic OpenAI-compatible service")
+	if err == nil {
+		t.Fatal("concealed version route must remain indeterminate")
 	}
 }
 
@@ -113,12 +110,9 @@ func TestFingerprint_LiteLLMNearMiss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	res, err := f.Fingerprint(context.Background(), action.Target{Kind: "host", Address: strings.TrimPrefix(srv.URL, "http://")})
-	if err != nil {
-		t.Fatalf("Fingerprint: %v", err)
-	}
-	if res.Matched {
-		t.Fatal("LiteLLM-compatible OpenAI routes were misclassified as vLLM")
+	_, err = f.Fingerprint(context.Background(), action.Target{Kind: "host", Address: strings.TrimPrefix(srv.URL, "http://")})
+	if err == nil {
+		t.Fatal("concealed version route must remain indeterminate")
 	}
 }
 

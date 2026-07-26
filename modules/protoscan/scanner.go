@@ -286,8 +286,8 @@ dispatch:
 }
 
 // probeOne issues the protocol-specific probe against host:port. Protocol
-// mismatches and canonical 404/405 responses are definitive negatives.
-// Authentication blocks, redirects, transient statuses, timeouts, TLS/read
+// mismatches in complete 2xx responses are definitive negatives.
+// Authentication blocks, redirects, non-2xx statuses, timeouts, TLS/read
 // failures, and other transport errors remain unknown.
 func (s *Scanner) probeOne(
 	ctx context.Context,
@@ -504,8 +504,6 @@ func classifyHTTPProbeStatus(status int) probeDisposition {
 	switch {
 	case status >= 200 && status < 300:
 		return probePositive
-	case status == http.StatusNotFound || status == http.StatusMethodNotAllowed:
-		return probeNegative
 	default:
 		return probeUnknown
 	}

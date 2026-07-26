@@ -297,9 +297,9 @@ func validateFingerprintMatcher(prefix string, m FingerprintMatch) []ValidationE
 // "http://10.0.0.42:11434") and returns the result. The returned
 // FingerprintResult.Matched is true only when every probe and every
 // matcher succeeds. A complete, bounded response whose matcher does not
-// match, a canonical 404/405, or an explicit connection refusal yields
-// Matched=false with a nil error. Other transport failures, redirects,
-// authentication challenges, and non-2xx responses return an error so
+// match or an explicit connection refusal yields Matched=false with a nil
+// error. Other transport failures, redirects, authentication challenges,
+// and non-2xx responses return an error so
 // lifecycle-aware callers do not turn an unevaluated endpoint into
 // authoritative absence.
 //
@@ -368,8 +368,8 @@ func RunFingerprint(ctx context.Context, client *http.Client, baseURL string, ru
 // runProbe issues one HTTP request, applies its matchers, and returns
 // (matched, captures, err). A non-nil error means the endpoint was not
 // definitively evaluated (transport other than explicit refusal, redirect,
-// authentication challenge, non-2xx status other than canonical 404/405,
-// incomplete body, or matcher runtime failure). A complete response that
+// authentication challenge, non-2xx status, incomplete body, or matcher
+// runtime failure). A complete response that
 // simply fails a matcher returns (false, nil, nil).
 func runProbe(ctx context.Context, client *http.Client, baseURL string, probe FingerprintProbe) (bool, map[string]string, error) {
 	// Concatenate baseURL and probe.Path with exactly one "/" between them.
@@ -390,9 +390,7 @@ func runProbe(ctx context.Context, client *http.Client, baseURL string, probe Fi
 		return false, nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if (resp.StatusCode < 200 || resp.StatusCode >= 300) &&
-		resp.StatusCode != http.StatusNotFound &&
-		resp.StatusCode != http.StatusMethodNotAllowed {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return false, nil, fmt.Errorf("indeterminate response status %d", resp.StatusCode)
 	}
 

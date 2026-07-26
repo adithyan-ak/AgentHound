@@ -338,8 +338,6 @@ func indeterminateHTTPStatus(status int, allowAuthChallenge bool) error {
 	switch {
 	case status >= 200 && status < 300:
 		return nil
-	case status == http.StatusNotFound || status == http.StatusMethodNotAllowed:
-		return nil
 	case allowAuthChallenge &&
 		(status == http.StatusUnauthorized || status == http.StatusForbidden):
 		return nil
