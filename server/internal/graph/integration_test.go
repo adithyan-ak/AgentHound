@@ -1940,6 +1940,232 @@ func TestIntegrationCompatibleDistinctOwnersRemainCompleteUntilOneRetires(t *tes
 	}
 }
 
+func TestIntegrationMixedExistingAndNewOwnersRemainComplete(t *testing.T) {
+	ctx := testDriver(t)
+	driver, err := NewDriver(
+		os.Getenv("AGENTHOUND_NEO4J_URI"),
+		os.Getenv("AGENTHOUND_NEO4J_USER"),
+		os.Getenv("AGENTHOUND_NEO4J_PASSWORD"),
+	)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer driver.Close(ctx)
+
+	writer := NewWriter(driver)
+	db := NewDB(NewReader(driver), writer)
+	const (
+		serverID    = "mixed-owner-server"
+		hostID      = "mixed-owner-host"
+		configScope = "config:path:sha256:mixed-owner-original"
+		aliasScope  = "config:path:sha256:mixed-owner-alias"
+		liveScope   = "mcp:target:sha256:mixed-owner-live"
+	)
+	cleanup := func() {
+		_, _ = db.ExecuteWrite(
+			ctx,
+			"MATCH (n) WHERE n.objectid IN $ids DETACH DELETE n",
+			map[string]any{"ids": []string{serverID, hostID}},
+		)
+	}
+	cleanup()
+	defer cleanup()
+
+	configNodes := func(domain, configuredName string) []ingest.Node {
+		return []ingest.Node{
+			{
+				ID: serverID, Kinds: []string{"MCPServer"},
+				ObservationDomains: []string{domain},
+				Properties: map[string]any{
+					"endpoint":        "http://mcp.example/mcp",
+					"transport":       "http",
+					"configured_name": configuredName,
+				},
+			},
+			{
+				ID: hostID, Kinds: []string{"Host"},
+				ObservationDomains: []string{domain},
+				Properties:         map[string]any{"hostname": "mcp.example"},
+			},
+		}
+	}
+	configEdge := func(domain, evidence string) ingest.Edge {
+		return ingest.Edge{
+			Source: serverID, Target: hostID, Kind: "RUNS_ON",
+			SourceKind: "MCPServer", TargetKind: "Host",
+			ObservationDomains: []string{domain},
+			Properties: map[string]any{
+				"confidence": 1.0, "risk_weight": 0.0, "is_composite": false,
+				"configured_evidence": evidence,
+			},
+		}
+	}
+	liveNodes := []ingest.Node{
+		{
+			ID: serverID, Kinds: []string{"MCPServer"},
+			ObservationDomains: []string{liveScope},
+			Properties: map[string]any{
+				"endpoint":         "http://mcp.example/mcp",
+				"transport":        "http",
+				"protocol_version": "2025-06-18",
+			},
+		},
+		{
+			ID: hostID, Kinds: []string{"Host"},
+			ObservationDomains: []string{liveScope},
+			Properties: map[string]any{
+				"hostname": "mcp.example",
+				"scope":    "public",
+			},
+		},
+	}
+	liveEdge := ingest.Edge{
+		Source: serverID, Target: hostID, Kind: "RUNS_ON",
+		SourceKind: "MCPServer", TargetKind: "Host",
+		ObservationDomains: []string{liveScope},
+		Properties: map[string]any{
+			"confidence": 1.0, "risk_weight": 0.0, "is_composite": false,
+			"live_evidence": "initialize",
+		},
+	}
+	writeAndReconcile := func(
+		nodes []ingest.Node,
+		edges []ingest.Edge,
+		scanID string,
+		completeDomains []string,
+	) {
+		t.Helper()
+		if _, err := writer.WriteObservationNodes(
+			ctx, nodes, scanID, completeDomains,
+		); err != nil {
+			t.Fatalf("%s nodes: %v", scanID, err)
+		}
+		if _, err := writer.WriteObservationEdges(
+			ctx, edges, scanID, completeDomains,
+		); err != nil {
+			t.Fatalf("%s edges: %v", scanID, err)
+		}
+		if _, err := ReconcileObservations(
+			ctx, db, scanID, completeDomains,
+		); err != nil {
+			t.Fatalf("%s reconcile: %v", scanID, err)
+		}
+	}
+
+	writeAndReconcile(
+		configNodes(configScope, "configured"),
+		[]ingest.Edge{configEdge(configScope, "configured")},
+		"mixed-owner-config",
+		[]string{configScope},
+	)
+	writeAndReconcile(
+		liveNodes,
+		[]ingest.Edge{liveEdge},
+		"mixed-owner-live",
+		[]string{liveScope},
+	)
+
+	aliasNodes := append(
+		configNodes(configScope, "configured"),
+		configNodes(aliasScope, "configured")...,
+	)
+	aliasEdges := []ingest.Edge{
+		configEdge(configScope, "configured"),
+		configEdge(aliasScope, "configured"),
+	}
+	writeAndReconcile(
+		aliasNodes,
+		aliasEdges,
+		"mixed-owner-alias",
+		[]string{configScope, aliasScope},
+	)
+
+	rows, err := db.Query(ctx, `
+		MATCH (server:MCPServer {objectid: $server})-[r:RUNS_ON]->
+		      (host:Host {objectid: $host})
+		RETURN server.observation_properties_complete AS server_complete,
+		       host.observation_properties_complete AS host_complete,
+		       r.observation_properties_complete AS edge_complete,
+		       server.configured_name AS configured_name,
+		       server.protocol_version AS protocol_version,
+		       r.configured_evidence AS configured_evidence,
+		       r.live_evidence AS live_evidence,
+		       size(server.observation_tokens) AS server_tokens,
+		       size(host.observation_tokens) AS host_tokens,
+		       size(r.observation_tokens) AS edge_tokens,
+		       size(server.observation_fact_fingerprints) AS server_fingerprints,
+		       size(host.observation_fact_fingerprints) AS host_fingerprints,
+		       size(r.observation_fact_fingerprints) AS edge_fingerprints`,
+		map[string]any{"server": serverID, "host": hostID})
+	if err != nil {
+		t.Fatalf("query compatible mixed owners: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("mixed owner rows = %+v", rows)
+	}
+	row := rows[0]
+	for _, key := range []string{
+		"server_complete", "host_complete", "edge_complete",
+	} {
+		if row[key] != true {
+			t.Fatalf("mixed owner %s = %v; row=%+v", key, row[key], row)
+		}
+	}
+	if row["configured_name"] != "configured" ||
+		row["protocol_version"] != "2025-06-18" ||
+		row["configured_evidence"] != "configured" ||
+		row["live_evidence"] != "initialize" {
+		t.Fatalf("mixed owner properties were not preserved: %+v", row)
+	}
+	for _, key := range []string{
+		"server_tokens", "host_tokens", "edge_tokens",
+		"server_fingerprints", "host_fingerprints", "edge_fingerprints",
+	} {
+		if row[key] != int64(3) {
+			t.Fatalf("mixed owner %s = %v, want 3; row=%+v", key, row[key], row)
+		}
+	}
+
+	// A changed existing owner combined with a new owner must still fail closed.
+	changedNodes := append(
+		configNodes(configScope, "changed"),
+		configNodes("config:path:sha256:mixed-owner-second-alias", "changed")...,
+	)
+	changedEdges := []ingest.Edge{
+		configEdge(configScope, "changed"),
+		configEdge("config:path:sha256:mixed-owner-second-alias", "changed"),
+	}
+	writeAndReconcile(
+		changedNodes,
+		changedEdges,
+		"mixed-owner-incompatible",
+		[]string{
+			configScope,
+			"config:path:sha256:mixed-owner-second-alias",
+		},
+	)
+	rows, err = db.Query(ctx, `
+		MATCH (server:MCPServer {objectid: $server})-[r:RUNS_ON]->
+		      (host:Host {objectid: $host})
+		RETURN server.observation_properties_complete AS server_complete,
+		       host.observation_properties_complete AS host_complete,
+		       r.observation_properties_complete AS edge_complete,
+		       server.configured_name AS configured_name,
+		       r.configured_evidence AS configured_evidence`,
+		map[string]any{"server": serverID, "host": hostID})
+	if err != nil {
+		t.Fatalf("query incompatible mixed owners: %v", err)
+	}
+	if len(rows) != 1 ||
+		rows[0]["server_complete"] != false ||
+		rows[0]["host_complete"] != true ||
+		rows[0]["edge_complete"] != false ||
+		rows[0]["configured_name"] != "configured" ||
+		rows[0]["configured_evidence"] != "configured" {
+		t.Fatalf("incompatible mixed owners did not fail closed: %+v", rows)
+	}
+}
+
 func TestIntegrationAuthProvenanceOwnersMergeInEitherOrder(t *testing.T) {
 	ctx := testDriver(t)
 	driver, err := NewDriver(

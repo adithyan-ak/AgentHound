@@ -139,6 +139,10 @@ func (w *Writer) writeNodesBatched(
 					"observation_tokens":            observationTokens(n.ObservationDomains, scanID),
 					"observation_domain_prefixes":   observationDomainPrefixes(n.ObservationDomains),
 					"observation_fact_fingerprints": fingerprints,
+					"observation_owner_fingerprints": observationOwnerFingerprints(
+						n.ObservationDomains,
+						fingerprints,
+					),
 					"observation_fingerprint_domain_prefixes": observationFingerprintDomainPrefixes(n.ObservationDomains),
 					"complete_domain_prefixes":                completePrefixes,
 					"reference_only": n.PropertySemantics ==
@@ -224,7 +228,27 @@ WITH n, node, observation_created,
       AND all(prefix IN node.observation_domain_prefixes WHERE
           any(token IN old_authoritative_tokens WHERE token STARTS WITH prefix))
       AND all(fingerprint IN node.observation_fact_fingerprints WHERE
-          fingerprint IN old_fact_fingerprints)) AS compatible_existing_owner
+          fingerprint IN old_fact_fingerprints)) AS compatible_existing_owner,
+     (NOT observation_created
+      AND NOT node.reference_only
+      AND incoming_complete
+      AND old_properties_complete
+      AND size(old_authoritative_tokens) > 0
+      AND size(node.observation_owner_fingerprints) =
+          size(node.observation_domain_prefixes)
+      AND any(owner IN node.observation_owner_fingerprints WHERE
+          any(token IN old_authoritative_tokens WHERE
+              token STARTS WITH owner.token_prefix))
+      AND any(owner IN node.observation_owner_fingerprints WHERE
+          none(token IN old_authoritative_tokens WHERE
+              token STARTS WITH owner.token_prefix))
+      AND all(owner IN node.observation_owner_fingerprints WHERE
+          none(token IN old_authoritative_tokens WHERE
+              token STARTS WITH owner.token_prefix)
+          OR owner.fact_fingerprint IN old_fact_fingerprints)
+      AND all(key IN keys(node.properties) WHERE
+          key IN $semantic_volatile_properties
+          OR n[key] IS NULL OR n[key] = node.properties[key])) AS compatible_mixed_owners
 FOREACH (_ IN CASE
   WHEN (observation_created AND NOT node.reference_only) OR replace_properties
   THEN [1] ELSE [] END |
@@ -233,7 +257,7 @@ FOREACH (_ IN CASE WHEN observation_created AND node.reference_only THEN [1] ELS
   SET n = {objectid: node.id})
 FOREACH (_ IN CASE
   WHEN NOT observation_created AND NOT replace_properties AND NOT node.reference_only
-       AND (compatible_new_owner OR compatible_existing_owner)
+       AND (compatible_new_owner OR compatible_existing_owner OR compatible_mixed_owners)
   THEN [1] ELSE [] END |
   SET n += node.properties)
 SET n.objectid = node.id,
@@ -269,6 +293,11 @@ SET n.objectid = node.id,
           fingerprint IN node.observation_fact_fingerprints |
           CASE WHEN fingerprint IN fingerprints
             THEN fingerprints ELSE fingerprints + fingerprint END)
+      WHEN compatible_mixed_owners THEN
+        reduce(fingerprints = old_fact_fingerprints,
+          fingerprint IN node.observation_fact_fingerprints |
+          CASE WHEN fingerprint IN fingerprints
+            THEN fingerprints ELSE fingerprints + fingerprint END)
       WHEN compatible_existing_owner THEN old_fact_fingerprints
       WHEN incoming_complete THEN
         [fingerprint IN old_fact_fingerprints
@@ -284,6 +313,7 @@ SET n.objectid = node.id,
       WHEN replace_properties THEN true
       WHEN compatible_new_owner THEN true
       WHEN compatible_existing_owner THEN true
+      WHEN compatible_mixed_owners THEN true
       ELSE false
     END`)
 	incomingLabels := make(map[string]bool, len(extraLabels)+1)
@@ -305,7 +335,7 @@ SET n.objectid = node.id,
 	for _, lbl := range extraLabels {
 		fmt.Fprintf(
 			&sb,
-			"\nFOREACH (_ IN CASE WHEN observation_created OR replace_properties OR compatible_new_owner OR compatible_existing_owner THEN [1] ELSE [] END | SET n:%s)",
+			"\nFOREACH (_ IN CASE WHEN observation_created OR replace_properties OR compatible_new_owner OR compatible_existing_owner OR compatible_mixed_owners THEN [1] ELSE [] END | SET n:%s)",
 			lbl,
 		)
 	}
@@ -442,12 +472,31 @@ WITH rel, edge, observation_created, old_tokens, old_dependency_tokens,
       AND all(prefix IN edge.observation_domain_prefixes WHERE
           any(token IN old_ownership_tokens WHERE token STARTS WITH prefix))
       AND all(fingerprint IN edge.observation_fact_fingerprints WHERE
-          fingerprint IN old_fact_fingerprints)) AS compatible_existing_owner
+          fingerprint IN old_fact_fingerprints)) AS compatible_existing_owner,
+     (NOT observation_created
+      AND incoming_complete
+      AND old_properties_complete
+      AND size(old_ownership_tokens) > 0
+      AND size(edge.observation_owner_fingerprints) =
+          size(edge.observation_domain_prefixes)
+      AND any(owner IN edge.observation_owner_fingerprints WHERE
+          any(token IN old_ownership_tokens WHERE
+              token STARTS WITH owner.token_prefix))
+      AND any(owner IN edge.observation_owner_fingerprints WHERE
+          none(token IN old_ownership_tokens WHERE
+              token STARTS WITH owner.token_prefix))
+      AND all(owner IN edge.observation_owner_fingerprints WHERE
+          none(token IN old_ownership_tokens WHERE
+              token STARTS WITH owner.token_prefix)
+          OR owner.fact_fingerprint IN old_fact_fingerprints)
+      AND all(key IN keys(edge.properties) WHERE
+          key IN $semantic_volatile_properties
+          OR rel[key] IS NULL OR rel[key] = edge.properties[key])) AS compatible_mixed_owners
 FOREACH (_ IN CASE WHEN NOT observation_created AND replace_properties THEN [1] ELSE [] END |
   SET rel = edge.properties)
 FOREACH (_ IN CASE
   WHEN NOT observation_created AND NOT replace_properties
-       AND (compatible_new_owner OR compatible_existing_owner)
+       AND (compatible_new_owner OR compatible_existing_owner OR compatible_mixed_owners)
   THEN [1] ELSE [] END |
   SET rel += edge.properties)
 SET rel.observation_properties_complete = CASE
@@ -455,6 +504,7 @@ SET rel.observation_properties_complete = CASE
       WHEN replace_properties THEN true
       WHEN compatible_new_owner THEN true
       WHEN compatible_existing_owner THEN true
+      WHEN compatible_mixed_owners THEN true
       ELSE false
     END,
     rel.observation_tokens = reduce(tokens = old_tokens, token IN edge.observation_tokens |
@@ -476,6 +526,11 @@ SET rel.observation_properties_complete = CASE
           CASE WHEN fingerprint IN fingerprints
             THEN fingerprints ELSE fingerprints + fingerprint END)
       WHEN compatible_new_owner THEN
+        reduce(fingerprints = old_fact_fingerprints,
+          fingerprint IN edge.observation_fact_fingerprints |
+          CASE WHEN fingerprint IN fingerprints
+            THEN fingerprints ELSE fingerprints + fingerprint END)
+      WHEN compatible_mixed_owners THEN
         reduce(fingerprints = old_fact_fingerprints,
           fingerprint IN edge.observation_fact_fingerprints |
           CASE WHEN fingerprint IN fingerprints
@@ -628,12 +683,31 @@ WITH r, edge, observation_created, old_tokens, old_dependency_tokens,
       AND all(prefix IN edge.observation_domain_prefixes WHERE
           any(token IN old_ownership_tokens WHERE token STARTS WITH prefix))
       AND all(fingerprint IN edge.observation_fact_fingerprints WHERE
-          fingerprint IN old_fact_fingerprints)) AS compatible_existing_owner
+          fingerprint IN old_fact_fingerprints)) AS compatible_existing_owner,
+     (NOT observation_created
+      AND incoming_complete
+      AND old_properties_complete
+      AND size(old_ownership_tokens) > 0
+      AND size(edge.observation_owner_fingerprints) =
+          size(edge.observation_domain_prefixes)
+      AND any(owner IN edge.observation_owner_fingerprints WHERE
+          any(token IN old_ownership_tokens WHERE
+              token STARTS WITH owner.token_prefix))
+      AND any(owner IN edge.observation_owner_fingerprints WHERE
+          none(token IN old_ownership_tokens WHERE
+              token STARTS WITH owner.token_prefix))
+      AND all(owner IN edge.observation_owner_fingerprints WHERE
+          none(token IN old_ownership_tokens WHERE
+              token STARTS WITH owner.token_prefix)
+          OR owner.fact_fingerprint IN old_fact_fingerprints)
+      AND all(key IN keys(edge.properties) WHERE
+          key IN $semantic_volatile_properties
+          OR r[key] IS NULL OR r[key] = edge.properties[key])) AS compatible_mixed_owners
 FOREACH (_ IN CASE WHEN observation_created OR replace_properties THEN [1] ELSE [] END |
   SET r = edge.properties)
 FOREACH (_ IN CASE
   WHEN NOT observation_created AND NOT replace_properties
-       AND (compatible_new_owner OR compatible_existing_owner)
+       AND (compatible_new_owner OR compatible_existing_owner OR compatible_mixed_owners)
   THEN [1] ELSE [] END |
   SET r += edge.properties)
 SET r.scan_id = $scan_id,
@@ -661,6 +735,11 @@ SET r.scan_id = $scan_id,
           fingerprint IN edge.observation_fact_fingerprints |
           CASE WHEN fingerprint IN fingerprints
             THEN fingerprints ELSE fingerprints + fingerprint END)
+      WHEN compatible_mixed_owners THEN
+        reduce(fingerprints = old_fact_fingerprints,
+          fingerprint IN edge.observation_fact_fingerprints |
+          CASE WHEN fingerprint IN fingerprints
+            THEN fingerprints ELSE fingerprints + fingerprint END)
       WHEN compatible_existing_owner THEN old_fact_fingerprints
       WHEN incoming_complete THEN
         [fingerprint IN old_fact_fingerprints
@@ -673,6 +752,7 @@ SET r.scan_id = $scan_id,
       WHEN replace_properties THEN true
       WHEN compatible_new_owner THEN true
       WHEN compatible_existing_owner THEN true
+      WHEN compatible_mixed_owners THEN true
       ELSE false
     END
 REMOVE r.__agenthound_observation_created
@@ -752,6 +832,28 @@ func observationFingerprintDomainPrefixes(domains []string) []string {
 		prefixes[i] = observationFingerprintDomainPrefix(domain)
 	}
 	return prefixes
+}
+
+func observationOwnerFingerprints(
+	domains []string,
+	fingerprints []string,
+) []map[string]any {
+	domains = normalizedDomains(domains)
+	owners := make([]map[string]any, 0, len(domains))
+	for _, domain := range domains {
+		fingerprintPrefix := observationFingerprintDomainPrefix(domain)
+		for _, fingerprint := range fingerprints {
+			if !strings.HasPrefix(fingerprint, fingerprintPrefix) {
+				continue
+			}
+			owners = append(owners, map[string]any{
+				"token_prefix":     observationDomainPrefix(domain),
+				"fact_fingerprint": fingerprint,
+			})
+			break
+		}
+	}
+	return owners
 }
 
 func observationFactFingerprints(domains []string, fact any) ([]string, error) {

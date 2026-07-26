@@ -43,6 +43,45 @@ func TestObservationFactFingerprintIgnoresWriterLifecycleFields(t *testing.T) {
 	}
 }
 
+func TestObservationOwnerFingerprintsPairDomainsWithFacts(t *testing.T) {
+	const (
+		domainA = "config:path:sha256:owner-a"
+		domainB = "config:path:sha256:owner-b"
+	)
+	fingerprints, err := observationFactFingerprints(
+		[]string{domainB, domainA},
+		map[string]any{"properties": map[string]any{"endpoint": "stdio://server"}},
+	)
+	if err != nil {
+		t.Fatalf("fingerprints: %v", err)
+	}
+	owners := observationOwnerFingerprints(
+		[]string{domainB, domainA, domainA},
+		fingerprints,
+	)
+	want := []map[string]any{
+		{
+			"token_prefix":     observationDomainPrefix(domainA),
+			"fact_fingerprint": fingerprints[0],
+		},
+		{
+			"token_prefix":     observationDomainPrefix(domainB),
+			"fact_fingerprint": fingerprints[1],
+		},
+	}
+	if !reflect.DeepEqual(owners, want) {
+		t.Fatalf("owner fingerprints = %#v, want %#v", owners, want)
+	}
+
+	missing := observationOwnerFingerprints(
+		[]string{domainA, domainB},
+		fingerprints[:1],
+	)
+	if len(missing) != 1 {
+		t.Fatalf("missing owner fingerprint was fabricated: %#v", missing)
+	}
+}
+
 func TestPrepareObservationNodesFingerprintsOwnersBeforeUnion(t *testing.T) {
 	const (
 		domainA = "config:path:sha256:owner-a"
@@ -366,8 +405,12 @@ func TestWriterCarriesStableFingerprintsForExactSharedOwnerRefresh(t *testing.T)
 	}
 	for _, fragment := range []string{
 		"compatible_existing_owner",
+		"compatible_mixed_owners",
+		"size(node.observation_owner_fingerprints) =",
+		"owner.fact_fingerprint IN old_fact_fingerprints",
 		"fingerprint IN old_fact_fingerprints",
 		"WHEN compatible_existing_owner THEN true",
+		"WHEN compatible_mixed_owners THEN true",
 		"WHEN incoming_complete THEN\n        [fingerprint IN old_fact_fingerprints",
 	} {
 		if !strings.Contains(call.Cypher, fragment) {
@@ -378,8 +421,12 @@ func TestWriterCarriesStableFingerprintsForExactSharedOwnerRefresh(t *testing.T)
 	edgeQuery := edgeCypherForKinds("RUNS_ON", "MCPServer", "Host")
 	for _, fragment := range []string{
 		"compatible_existing_owner",
+		"compatible_mixed_owners",
+		"size(edge.observation_owner_fingerprints) =",
+		"owner.fact_fingerprint IN old_fact_fingerprints",
 		"edge.observation_fact_fingerprints",
 		"WHEN compatible_existing_owner THEN true",
+		"WHEN compatible_mixed_owners THEN true",
 	} {
 		if !strings.Contains(edgeQuery, fragment) {
 			t.Fatalf("edge refresh query missing %q:\n%s", fragment, edgeQuery)
@@ -389,7 +436,7 @@ func TestWriterCarriesStableFingerprintsForExactSharedOwnerRefresh(t *testing.T)
 
 func TestNodeLabelMutationIsCompatibilityGated(t *testing.T) {
 	query := nodeCypherForKindTuple("OllamaInstance", []string{"AIService"})
-	want := "FOREACH (_ IN CASE WHEN observation_created OR replace_properties OR compatible_new_owner OR compatible_existing_owner THEN [1] ELSE [] END | SET n:AIService)"
+	want := "FOREACH (_ IN CASE WHEN observation_created OR replace_properties OR compatible_new_owner OR compatible_existing_owner OR compatible_mixed_owners THEN [1] ELSE [] END | SET n:AIService)"
 	if !strings.Contains(query, want) {
 		t.Fatalf("extra label mutation is not compatibility-gated:\n%s", query)
 	}
