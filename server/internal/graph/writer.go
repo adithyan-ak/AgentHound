@@ -330,7 +330,7 @@ SET n.objectid = node.id,
       ELSE old_fact_fingerprints
     END,
     n.observation_properties_complete = CASE
-      WHEN observation_created THEN NOT node.reference_only
+      WHEN observation_created THEN true
       WHEN node.reference_only THEN
         old_properties_complete OR
         (incoming_authoritative AND size(old_authoritative_tokens) = 0)

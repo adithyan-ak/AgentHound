@@ -987,7 +987,7 @@ func TestPartialObservationUsesAdditivePropertyUpdates(t *testing.T) {
 		"AS partial_existing_owner",
 		"AS partial_compatible_owner",
 		"SET n += node.properties",
-		"WHEN observation_created THEN NOT node.reference_only",
+		"WHEN observation_created THEN true",
 		"WHEN partial_existing_owner THEN true",
 		"WHEN partial_compatible_owner THEN true",
 	} {
@@ -1065,6 +1065,7 @@ func TestReferenceOnlyObservationPreservesAuthoritativeProperties(t *testing.T) 
 		"old_authoritative_tokens",
 		"AND NOT node.reference_only",
 		"old_properties_complete OR",
+		"WHEN observation_created THEN true",
 		"n.observation_reference_tokens",
 		"NOT replace_properties AND NOT node.reference_only",
 	} {
