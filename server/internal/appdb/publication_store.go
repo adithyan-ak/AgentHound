@@ -37,12 +37,13 @@ type FinalizeScanParams struct {
 }
 
 type PublicationResult struct {
-	Revision           *int64
-	PublishedAt        *time.Time
-	ComparableToScanID string
-	Export             *model.PostureExport
-	Published          bool
-	DirtyCoverage      []string
+	Revision                  *int64
+	PublishedAt               *time.Time
+	ComparableToScanID        string
+	Export                    *model.PostureExport
+	Published                 bool
+	DirtyCoverage             []string
+	ActiveCoverageLimitations []model.PostureCoverageLimitation
 }
 
 // FinalizeScan atomically replaces the per-scan finding snapshot, advances
@@ -194,9 +195,31 @@ func (s *FindingStore) FinalizeScan(
 	comparison := model.PostureComparison{}
 	activeCoverageKeys := normalizeCoverageKeys(params.CoverageKeys)
 	activeCoverageRoots := []model.PostureCoverageRoot{}
+	activeCoverageLimitations := []model.PostureCoverageLimitation{}
 	activeHeads, err := activeCoverageHeadsTx(ctx, tx)
 	if err != nil {
 		return nil, err
+	}
+	if params.Publish {
+		if err := updateCoverageLimitationsTx(
+			ctx,
+			tx,
+			params.Scan,
+			params.Collection,
+			params.AuthoritativeRoots,
+		); err != nil {
+			return nil, err
+		}
+		activeCoverageLimitations, err = listActiveCoverageLimitations(
+			ctx,
+			tx,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if len(activeCoverageLimitations) > 0 {
+			params.Scan.ComparisonKey = ""
+		}
 	}
 	params.Scan.ComparisonKey = comparisonKeyWithCoverageHeads(
 		params.Scan.ComparisonKey,
@@ -260,6 +283,7 @@ func (s *FindingStore) FinalizeScan(
 			comparison,
 			activeCoverageKeys,
 			activeCoverageRoots,
+			activeCoverageLimitations,
 		)
 		exportJSON, err := json.Marshal(export)
 		if err != nil {
@@ -274,6 +298,10 @@ func (s *FindingStore) FinalizeScan(
 		result.Revision = &revision
 		result.PublishedAt = &publishedAt
 		result.Export = &export
+		result.ActiveCoverageLimitations = append(
+			[]model.PostureCoverageLimitation(nil),
+			activeCoverageLimitations...,
+		)
 	}
 
 	if err := finalizeScanRow(ctx, tx, params, result, preservePublishedSnapshot); err != nil {
@@ -714,6 +742,7 @@ func buildPostureExport(
 	comparison model.PostureComparison,
 	activeCoverageKeys []string,
 	activeCoverageRoots []model.PostureCoverageRoot,
+	activeCoverageLimitations []model.PostureCoverageLimitation,
 ) model.PostureExport {
 	completedAt := publishedAt
 	if params.Scan.CompletedAt != nil {
@@ -766,6 +795,10 @@ func buildPostureExport(
 			ActiveCoverageRoots: append(
 				[]model.PostureCoverageRoot{},
 				activeCoverageRoots...,
+			),
+			ActiveCoverageLimitations: append(
+				[]model.PostureCoverageLimitation{},
+				activeCoverageLimitations...,
 			),
 			DirtyCoverage:   []string{},
 			ComparisonKey:   params.Scan.ComparisonKey,
@@ -838,6 +871,14 @@ func (s *FindingStore) GetPublishedExport(ctx context.Context) (*model.PostureEx
 }
 
 func (s *FindingStore) GetProjectionState(ctx context.Context) (*model.ProjectionState, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("begin projection state read: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 	var (
 		state         model.ProjectionState
 		dirtyJSON     []byte
@@ -845,7 +886,7 @@ func (s *FindingStore) GetProjectionState(ctx context.Context) (*model.Projectio
 		projectionErr *string
 		publishedID   *string
 	)
-	err := s.pool.QueryRow(ctx, `SELECT
+	err = tx.QueryRow(ctx, `SELECT
 	    projection_status, projection_scan_id, projection_error,
 	    dirty_coverage, projection_updated_at,
 	    published_scan_id, published_revision, published_at
@@ -877,10 +918,17 @@ func (s *FindingStore) GetProjectionState(ctx context.Context) (*model.Projectio
 	if state.DirtyCoverage == nil {
 		state.DirtyCoverage = []string{}
 	}
-	heads, err := activeCoverageHeads(ctx, s.pool)
+	heads, err := activeCoverageHeads(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
 	state.ActiveCoverageRoots = activePostureCoverageRoots(heads)
+	state.ActiveCoverageLimitations, err = listActiveCoverageLimitations(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit projection state read: %w", err)
+	}
 	return &state, nil
 }

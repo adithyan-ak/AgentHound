@@ -885,7 +885,7 @@ components:
       type: object
       additionalProperties: false
       required:
-        [mode, scan_id, revision, published_at, projection_status, snapshot_status, available, stale]
+        [mode, scan_id, revision, published_at, projection_status, snapshot_status, available, stale, coverage_limited, active_coverage_limitations]
       properties:
         mode:
           type: string
@@ -908,6 +908,12 @@ components:
           type: boolean
         stale:
           type: boolean
+        coverage_limited:
+          type: boolean
+        active_coverage_limitations:
+          type: array
+          items:
+            $ref: "#/components/schemas/PostureCoverageLimitation"
 
     FindingsResponse:
       type: object
@@ -1465,7 +1471,7 @@ components:
     ProjectionState:
       type: object
       additionalProperties: false
-      required: [status, dirty_coverage, active_coverage_roots, updated_at]
+      required: [status, dirty_coverage, active_coverage_roots, active_coverage_limitations, updated_at]
       properties:
         status:
           type: string
@@ -1482,6 +1488,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/PostureCoverageRoot"
+        active_coverage_limitations:
+          type: array
+          items:
+            $ref: "#/components/schemas/PostureCoverageLimitation"
         updated_at:
           type: string
           format: date-time
@@ -1526,6 +1536,31 @@ components:
         contract_current:
           type: boolean
 
+    PostureCoverageLimitation:
+      type: object
+      additionalProperties: false
+      required:
+        - coverage_key
+        - state
+        - scan_id
+        - observed_at
+      properties:
+        coverage_key:
+          type: string
+          minLength: 1
+        parent_coverage_key:
+          type: string
+          minLength: 1
+        state:
+          type: string
+          enum: [unknown, partial, failed, truncated]
+        scan_id:
+          type: string
+          minLength: 1
+        observed_at:
+          type: string
+          format: date-time
+
     PostureScope:
       type: object
       additionalProperties: false
@@ -1535,6 +1570,7 @@ components:
         - coverage_keys
         - active_coverage_keys
         - active_coverage_roots
+        - active_coverage_limitations
         - dirty_coverage
         - projection_state
       properties:
@@ -1557,6 +1593,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/PostureCoverageRoot"
+        active_coverage_limitations:
+          type: array
+          items:
+            $ref: "#/components/schemas/PostureCoverageLimitation"
         dirty_coverage:
           type: array
           items:
@@ -1585,7 +1625,7 @@ components:
       properties:
         schema_version:
           type: integer
-          enum: [3]
+          enum: [3, 4]
         scope:
           $ref: "#/components/schemas/PostureScope"
         completeness:

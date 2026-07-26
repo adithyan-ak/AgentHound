@@ -8,6 +8,7 @@ export interface ProjectionState {
   error?: string;
   dirty_coverage: string[];
   active_coverage_roots: PostureCoverageRoot[];
+  active_coverage_limitations?: PostureCoverageLimitation[];
   updated_at: string;
   published_scan_id?: string;
   published_revision?: number;
@@ -25,6 +26,38 @@ export interface PostureCoverageRoot {
     digest: string;
   };
   contract_current: boolean;
+}
+
+export interface PostureCoverageLimitation {
+  coverage_key: string;
+  parent_coverage_key?: string;
+  state: "unknown" | "partial" | "failed" | "truncated";
+  scan_id: string;
+  observed_at: string;
+}
+
+export function activePublishedCoverageLimitations(
+  posture: ProjectionState | undefined,
+  scanID = posture?.published_scan_id,
+): PostureCoverageLimitation[] {
+  if (
+    posture?.status !== "complete" ||
+    !posture.published_scan_id ||
+    scanID !== posture.published_scan_id
+  ) {
+    return [];
+  }
+  return posture.active_coverage_limitations ?? [];
+}
+
+export function hasLimitedPublishedCoverage(
+  posture: ProjectionState | undefined,
+  scanID = posture?.published_scan_id,
+): boolean {
+  return (
+    activePublishedCoverageLimitations(posture, scanID).length > 0 ||
+    hasLimitedPublishedInstructionCoverage(posture, scanID)
+  );
 }
 
 export function limitedPublishedInstructionRoots(
@@ -120,6 +153,50 @@ function coverageRoots(value: unknown): PostureCoverageRoot[] {
   });
 }
 
+function coverageLimitations(value: unknown): PostureCoverageLimitation[] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) {
+    throw new TypeError("active_coverage_limitations must be an array");
+  }
+  return value.map((entry, index) => {
+    if (entry == null || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new TypeError(
+        `active_coverage_limitations[${index}] must be an object`,
+      );
+    }
+    const limitation = entry as Record<string, unknown>;
+    if (
+      limitation.state !== "unknown" &&
+      limitation.state !== "partial" &&
+      limitation.state !== "failed" &&
+      limitation.state !== "truncated"
+    ) {
+      throw new TypeError(
+        `active_coverage_limitations[${index}].state is invalid`,
+      );
+    }
+    if (
+      typeof limitation.coverage_key !== "string" ||
+      typeof limitation.scan_id !== "string" ||
+      typeof limitation.observed_at !== "string" ||
+      (limitation.parent_coverage_key != null &&
+        typeof limitation.parent_coverage_key !== "string")
+    ) {
+      throw new TypeError(`active_coverage_limitations[${index}] is invalid`);
+    }
+    return {
+      coverage_key: limitation.coverage_key,
+      parent_coverage_key:
+        typeof limitation.parent_coverage_key === "string"
+          ? limitation.parent_coverage_key
+          : undefined,
+      state: limitation.state,
+      scan_id: limitation.scan_id,
+      observed_at: limitation.observed_at,
+    };
+  });
+}
+
 export async function fetchProjectionState(): Promise<ProjectionState> {
   const raw = await api.get("posture").json<unknown>();
   if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
@@ -144,6 +221,9 @@ export async function fetchProjectionState(): Promise<ProjectionState> {
     error: typeof body.error === "string" ? body.error : undefined,
     dirty_coverage: stringArray(body.dirty_coverage, "dirty_coverage"),
     active_coverage_roots: coverageRoots(body.active_coverage_roots),
+    active_coverage_limitations: coverageLimitations(
+      body.active_coverage_limitations,
+    ),
     updated_at: body.updated_at,
     published_scan_id:
       typeof body.published_scan_id === "string"

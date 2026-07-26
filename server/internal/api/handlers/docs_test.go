@@ -241,6 +241,13 @@ func TestServedOpenAPICampaignParity(t *testing.T) {
 	requireSchemaFields(
 		t,
 		schemas,
+		"FindingScope",
+		"coverage_limited",
+		"active_coverage_limitations",
+	)
+	requireSchemaFields(
+		t,
+		schemas,
 		"PostureCoverageRoot",
 		"coverage_key",
 		"mode",
@@ -257,6 +264,7 @@ func TestServedOpenAPICampaignParity(t *testing.T) {
 		"scan_id",
 		"revision",
 		"active_coverage_roots",
+		"active_coverage_limitations",
 		"projection_state",
 	)
 	postureExportProperties := nestedMap(
@@ -270,8 +278,8 @@ func TestServedOpenAPICampaignParity(t *testing.T) {
 	}
 	schemaVersion := nestedMap(t, postureExportProperties, "schema_version")
 	versionEnum, ok := schemaVersion["enum"].([]any)
-	if !ok || !containsInt(versionEnum, 3) {
-		t.Fatalf("PostureExport.schema_version enum = %v, want 3", schemaVersion["enum"])
+	if !ok || !containsInt(versionEnum, 3) || !containsInt(versionEnum, 4) {
+		t.Fatalf("PostureExport.schema_version enum = %v, want 3 and 4", schemaVersion["enum"])
 	}
 
 	evidenceProperties := nestedMap(t, schemas, "FindingEvidence", "properties")

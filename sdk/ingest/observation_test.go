@@ -117,6 +117,41 @@ func TestCoverageStatesUsesTargetScopedOutcomeKey(t *testing.T) {
 	}
 }
 
+func TestCoverageLimitedSeparatesUnknownFromNotApplicable(t *testing.T) {
+	scope := CanonicalCoverageKey("a2a", "target", "https://agent.example")
+	for _, test := range []struct {
+		name  string
+		state OutcomeState
+		want  bool
+	}{
+		{name: "complete", state: OutcomeComplete, want: false},
+		{name: "not applicable", state: OutcomeNotApplicable, want: false},
+		{name: "partial", state: OutcomePartial, want: true},
+		{name: "failed", state: OutcomeFailed, want: true},
+		{name: "truncated", state: OutcomeTruncated, want: true},
+		{name: "unknown", state: OutcomeUnknown, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			report := &CollectionReport{
+				State:        AggregateOutcomeState([]CollectionOutcome{{State: test.state}}),
+				CoverageKeys: []string{scope},
+				Outcomes: []CollectionOutcome{{
+					Collector: "a2a", CoverageKey: scope, State: test.state,
+				}},
+			}
+			if got := CoverageLimited(report); got != test.want {
+				t.Fatalf("CoverageLimited(%s) = %t, want %t", test.state, got, test.want)
+			}
+		})
+	}
+	if !CoverageLimited(nil) {
+		t.Fatal("missing collection report was treated as complete coverage")
+	}
+	if !CoverageLimited(&CollectionReport{}) {
+		t.Fatal("zero declared scopes were treated as complete coverage")
+	}
+}
+
 func TestCompleteAuthoritativeRootsRequiresCompleteRootAndChildren(t *testing.T) {
 	root := CanonicalCoverageKey("mcp", "root", "collect")
 	child := CanonicalCoverageKey("mcp", "target", "server-a")

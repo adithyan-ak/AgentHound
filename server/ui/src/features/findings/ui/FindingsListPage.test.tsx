@@ -157,10 +157,39 @@ describe("FindingsListPage request and snapshot states", () => {
 
     expect(
       screen.getByText(
-        "No findings observed; instruction coverage is limited",
+        "No findings observed; collection coverage is limited",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/No findings detected/i)).not.toBeInTheDocument();
+  });
+
+  it("qualifies an empty snapshot from its persisted coverage limitations", () => {
+    mocks.useFindings.mockReturnValue({
+      data: [],
+      snapshot: {
+        ...currentScope,
+        activeCoverageLimitations: [
+          {
+            coverageKey: "mcp:target:sha256:limited",
+            state: "failed",
+            scanId: "scan-1",
+            observedAt: "2026-07-11T00:00:00Z",
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      dataUpdatedAt: Date.now(),
+    });
+
+    renderPage();
+
+    expect(
+      screen.getByText("No findings observed; collection coverage is limited"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Published coverage is limited"),
+    ).toBeInTheDocument();
   });
 
   it("withholds a clean empty claim while posture is loading", () => {

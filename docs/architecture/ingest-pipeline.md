@@ -131,11 +131,10 @@ content identity, not source trust.
 Dynamic exhaustive collectors also declare `authoritative_roots`, pairing the
 stable collector-root key with the observed current child-key set. After a
 completed root run, previously headed children absent from that set are
-reconciled as complete-empty and their heads are retired. Recognized
-registry-backed instruction roots also declare the root and complete per-file
-children when the root is partial, failed, or truncated. That limited root may
-advance as posture metadata, but it is excluded from absence reconciliation;
-targeted and other non-exhaustive roots cannot retire sibling scopes.
+reconciled as complete-empty and their heads are retired. Incomplete roots may
+still report confirmed child facts, but neither the root nor an incomplete
+child has absence authority. Targeted and other non-exhaustive roots cannot
+retire sibling scopes.
 
 Root membership is explicit: each child outcome carries
 `parent_coverage_key`, and PostgreSQL retains the mapping. Parentage is never
@@ -213,10 +212,12 @@ Transformations:
 ## Stage 3: Record Scan and Projection Start
 
 Creates or restarts a scan record with status `running` and atomically marks
-the singleton projection state `updating`. Dirty coverage is the sorted union
-of inherited dirty keys and every key attempted by this scan; beginning a
-narrow scan never erases unrelated dirty MCP, A2A, or config scope. In
-production this persistence is required before graph mutation.
+the singleton projection state `updating`. Before Neo4j changes, it marks every
+domain that can mutate a graph fact or perform absence reconciliation dirty.
+Coverage limitations are tracked separately and are not dirty merely because
+collection was incomplete. Beginning a narrow scan never erases unrelated
+dirty MCP, A2A, or config scope. In production this persistence is required
+before graph mutation.
 
 ## Stages 4–6: Freeze and Write (Neo4j Batch)
 
@@ -229,11 +230,13 @@ Implementation details:
 - 1000 operations per transaction (configurable batch size)
 - Multi-label support: nodes carry multiple `kinds` (e.g., `["OllamaInstance", "AIService"]`); the writer MERGEs on the primary label and SETs umbrella labels
 - Merge strategy: `MERGE` by `objectid`. A complete observation replaces
-  properties only when it replaces every active owner of that fact; partial,
-  shared-unreplaced, and unknown observations remain additive/non-destructive.
-  This removes omitted stale managed properties without erasing unrelated
-  owners. Additive updates are marked property-incomplete and block global
-  publication until a complete observation replaces every active owner.
+  properties only when it replaces every active owner of that fact; partial
+  observations are additive and never remove omitted properties, labels,
+  owners, or relationships. This preserves both confirmed positives and prior
+  evidence that the partial scan did not conclusively re-check. A compatible
+  partial observation can remain property-complete; an ownership or semantic
+  conflict is marked property-incomplete and blocks publication until a
+  coherent observation resolves it.
 - New facts carry length-delimited observation owner tokens. Shared facts keep
   one token per active coverage domain. Complete authoritative writes also
   retain an internal stable-domain semantic fingerprint. Collectors and the
@@ -301,17 +304,17 @@ path; they retain the full v5 lifecycle and analysis checks.
 
 `analysis.RunPostProcessors()` computes composite edges and risk scores from graph state.
 
-It runs all 15 processors in dependency-validated order. When any complete raw
-domain was promoted, the pipeline first retires the entire prior composite
-epoch, then rebuilds every derived edge from the retained current raw
-projection. This global replacement is required because a narrow MCP, config,
-or A2A change can invalidate cross-domain evidence whose `source_collector`
-names another detector domain. Blocking unknown, partial, and failed collection
-does not publish. A recognized incomplete instruction root is the narrow
-exception: its complete per-file child domains may drive a limited publication,
-but the root is excluded from absence retirement and comparison. An attempt
-with no promotably complete domain skips derived processing and leaves the epoch
-untouched. See `docs/architecture/post-processors.md`.
+It runs all 15 processors in dependency-validated order. When any raw fact was
+accepted or any complete domain was promoted, the pipeline first retires the
+entire prior composite epoch, then rebuilds every derived edge from the
+retained current raw projection. This global replacement is required because a
+narrow MCP, config, or A2A change can invalidate cross-domain evidence whose
+`source_collector` names another detector domain. A safe partial collection can
+publish its confirmed facts and rebuilt findings, but incomplete domains
+remain non-authoritative for absence and make comparison unavailable. An
+attempt with neither accepted facts nor promoted absence authority skips
+derived processing and leaves the epoch untouched. See
+`docs/architecture/post-processors.md`.
 
 After analysis, the pipeline checks property completeness for public managed
 raw facts. Internal nodes such as `SchemaVersion` and derived relationships are
@@ -322,19 +325,15 @@ finding rows for the scan (including a successful empty retry), advances
 complete coverage heads, finalizes scan state, and optionally inserts a
 persisted export/publication revision. Analysis, stats, or snapshot failure
 withholds publication and leaves the prior published revision available.
-Finalization re-locks cumulative dirty state and publishes only when no inherited
-or current dirty key remains. Epoch-retirement or processor failure can leave
-the mutable Neo4j projection incomplete, but it cannot advance or overwrite the
-previous immutable PostgreSQL publication.
-If PostgreSQL finalization fails after Neo4j reconciliation, every attempted
-reconciliation domain is recorded dirty, including normally non-blocking deep
-instruction domains. A later exact-only scan cannot publish that cross-store
-inconsistency; the corresponding deep scan must reconcile it successfully.
-Limited publication never erases an unseen dirty instruction child: only the
-limited root and complete children actually processed by a successful attempt
-can resolve their dirty keys. Analysis, snapshot, publication, or finalization
-failure resolves none of them. This preserves failure safety while allowing a
-later complete root to recover and restore authoritative comparison.
+Finalization re-locks cumulative dirty state and publishes only when no
+inherited or current dirty mutation domain remains. Epoch-retirement or
+processor failure can leave the mutable Neo4j projection incomplete, but it
+cannot advance or overwrite the previous immutable PostgreSQL publication.
+If PostgreSQL finalization fails after any Neo4j mutation, every mutated or
+reconciled domain remains dirty. A later unrelated scan cannot silently publish
+those changes; the affected domains must complete the graph, analysis,
+snapshot, and PostgreSQL finalization path successfully. Coverage limitation
+rows are updated only in that same successful publication transaction.
 
 Collector-side deep instruction discovery isolates its recursive result behind
 the wall-clock budget. Local filesystem calls are not portably cancelable, so a
@@ -411,17 +410,23 @@ Created --> Running / Projection updating --> Completed + Published
 Terminal statuses:
 - `completed` — complete attributable coverage, graph reconciliation,
   analysis, graph totals, finding snapshot, and publication succeeded.
-- `completed_with_errors` — graph writes completed but coverage or a required
-  later stage was degraded; the previous published posture remains selected.
+- `completed_with_errors` — confirmed facts may have published, but collection
+  coverage remains limited; or a required later stage failed and the previous
+  published posture remains selected. Check `publication_status` and
+  `published_revision` to distinguish those cases.
 - `failed` — a raw graph write failed; actual committed write rows and the
   failed stage are persisted.
 
 The scan row stores summary lifecycle/publication state and frozen totals;
 metadata JSONB stores detailed coverage, rules, identity, normalization
 warnings, observation completeness, stage, count, and reconciliation payloads.
-`coverage_heads` records active raw ownership.
+`coverage_heads` records active raw ownership. `coverage_limitations` records
+the latest published `unknown`, `partial`, `failed`, or `truncated` state for
+each scope. A later published `complete` or `not_applicable` outcome clears that
+scope; an authoritative root also retires stale child limitations.
 `posture_state` separates the current mutable attempt from the selected
 published revision.
 
 `DELETE /api/v1/scans/{id}` is history-only. It never mutates Neo4j and rejects
-pending/running, active coverage-head, and currently published scans.
+pending/running, active coverage-head, active coverage-limitation, and currently
+published scans.

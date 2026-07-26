@@ -206,6 +206,7 @@ func printPrebuiltResult(result prebuiltExecution, format string) error {
 		result.Projection.ScanID,
 		result.Projection.Revision,
 	)
+	printProjectionCoverageWarning(result.Projection)
 	if result.Metadata != nil {
 		_, _ = fmt.Fprintf(
 			os.Stderr,
@@ -291,6 +292,13 @@ func runFindings(ctx context.Context, severity, format, failOn string, includeSu
 		)
 		return fmt.Errorf("%d finding(s) at severity %q or above", failureCount, failOn)
 	}
+	if failOn != "" && findingScopeCoverageLimited(scope) {
+		_, _ = fmt.Fprintln(
+			os.Stderr,
+			"Failed: published coverage is limited; missing findings cannot satisfy a security gate",
+		)
+		return fmt.Errorf("published coverage is limited")
+	}
 
 	return nil
 }
@@ -347,8 +355,18 @@ func printPublishedFindings(
 		scope.ScanID,
 		*scope.Revision,
 	)
+	if findingScopeCoverageLimited(scope) {
+		_, _ = fmt.Fprintln(
+			os.Stderr,
+			"Warning: published coverage is limited; missing evidence is not proof of absence.",
+		)
+	}
 	if len(findings) == 0 {
-		fmt.Println("No findings found.")
+		if findingScopeCoverageLimited(scope) {
+			fmt.Println("No findings in observed data; coverage is limited.")
+		} else {
+			fmt.Println("No findings found.")
+		}
 		return nil
 	}
 
@@ -396,27 +414,63 @@ func runShortestPath(ctx context.Context, from, to, scopeValue, format string) e
 	}
 	defer cleanup()
 
-	result, err := findShortestPath(
+	execution, identity, err := projection.GuardedRead(
 		ctx,
-		infra.GraphDB,
-		fromKind,
-		fromName,
-		toKind,
-		toName,
-		scope,
+		infra.FindingStore,
+		func() (analysis.TraversalResult, error) {
+			return findShortestPath(
+				ctx,
+				infra.GraphDB,
+				fromKind,
+				fromName,
+				toKind,
+				toName,
+				scope,
+			)
+		},
 	)
 	if err != nil {
 		return fmt.Errorf("shortest path: %w", err)
 	}
 
-	if len(result.Paths) == 0 {
+	if format == "json" {
+		return printJSON(struct {
+			Paths      []analysis.TraversalPath   `json:"paths"`
+			Metadata   analysis.TraversalMetadata `json:"metadata"`
+			Projection projection.Identity        `json:"projection"`
+		}{
+			Paths:      execution.Paths,
+			Metadata:   execution.Metadata,
+			Projection: identity,
+		})
+	}
+	_, _ = fmt.Fprintf(
+		os.Stderr,
+		"Published projection: scan=%s revision=%d\n",
+		identity.ScanID,
+		identity.Revision,
+	)
+	printProjectionCoverageWarning(identity)
+	if len(execution.Paths) == 0 {
 		fmt.Printf("No path found from %s:%s to %s:%s\n", fromKind, fromName, toKind, toName)
 		return nil
 	}
-	if format == "json" {
-		return printJSON(result)
+	return printRows(traversalPathRows(execution), format)
+}
+
+func findingScopeCoverageLimited(scope appdb.FindingScope) bool {
+	return scope.CoverageLimited || len(scope.ActiveCoverageLimitations) > 0
+}
+
+func printProjectionCoverageWarning(identity projection.Identity) {
+	if !identity.CoverageLimited {
+		return
 	}
-	return printRows(traversalPathRows(result), format)
+	_, _ = fmt.Fprintf(
+		os.Stderr,
+		"Warning: coverage is limited in %d scope(s); missing evidence is not proof of absence.\n",
+		identity.CoverageLimitationCount,
+	)
 }
 
 func findShortestPath(

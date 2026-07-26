@@ -87,6 +87,7 @@ func TestIntegrationMigrations(t *testing.T) {
 	}
 	wantTables := []string{
 		"coverage_heads",
+		"coverage_limitations",
 		"coverage_memberships",
 		"finding_triage",
 		"findings",
@@ -117,7 +118,7 @@ func TestIntegrationMigrations(t *testing.T) {
 	if err := versionRows.Err(); err != nil {
 		t.Fatalf("list migration versions: %v", err)
 	}
-	if want := []int{1, 2, 3, 4}; !reflect.DeepEqual(versions, want) {
+	if want := []int{1, 2, 3, 4, 5}; !reflect.DeepEqual(versions, want) {
 		t.Fatalf("migration versions = %v, want %v", versions, want)
 	}
 
@@ -129,6 +130,47 @@ func TestIntegrationMigrations(t *testing.T) {
 	}
 	if postureRows != 1 {
 		t.Fatalf("posture singleton rows = %d, want 1", postureRows)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		DROP TABLE coverage_limitations;
+		DELETE FROM schema_migrations WHERE version = 5;
+		INSERT INTO scans (id, collector) VALUES ('limited-v4-publication', 'config');
+		INSERT INTO coverage_heads
+		    (
+		        coverage_key, scan_id, state, discovery_mode,
+		        contract_generation, contract_digest
+		    )
+		VALUES
+		    (
+		        'config:instruction-root:sha256:legacy',
+		        'limited-v4-publication',
+		        'partial',
+		        'deep',
+		        1,
+		        'sha256:legacy'
+		    )`); err != nil {
+		t.Fatalf("prepare coverage-limitation upgrade: %v", err)
+	}
+	if err := RunMigrations(ctx, pool); err != nil {
+		t.Fatalf("reapply coverage-limitation migration: %v", err)
+	}
+	var (
+		backfilledState  string
+		backfilledScanID string
+	)
+	if err := pool.QueryRow(ctx, `SELECT state, scan_id
+		FROM coverage_limitations
+		WHERE coverage_key = 'config:instruction-root:sha256:legacy'`).
+		Scan(&backfilledState, &backfilledScanID); err != nil {
+		t.Fatalf("read backfilled coverage limitation: %v", err)
+	}
+	if backfilledState != "partial" || backfilledScanID != "limited-v4-publication" {
+		t.Fatalf(
+			"backfilled limitation = state %q scan %q",
+			backfilledState,
+			backfilledScanID,
+		)
 	}
 }
 

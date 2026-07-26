@@ -307,9 +307,12 @@ export function FindingsListPage() {
     postureQuery.data.published_revision === snapshot?.revision;
   const canShowSnapshotCounts =
     hasCachedFindings && snapshot?.available === true;
-  const limitedInstructionCoverage =
-    postureReadyForCurrentSnapshot &&
-    hasLimitedPublishedInstructionCoverage(postureQuery.data, snapshot?.scanId);
+  const limitedCoverage =
+    (findingScopeCurrent &&
+      (snapshot?.coverageLimited === true ||
+        (snapshot?.activeCoverageLimitations?.length ?? 0) > 0)) ||
+    (postureReadyForCurrentSnapshot &&
+      hasLimitedPublishedInstructionCoverage(postureQuery.data, snapshot?.scanId));
 
   // Number of *secondary* filters active (everything that lives in the rail).
   const activeFacetCount =
@@ -438,8 +441,8 @@ export function FindingsListPage() {
     total > 0
       ? "No findings match the current filters"
       : postureReadyForCurrentSnapshot
-        ? limitedInstructionCoverage
-          ? "No findings observed; instruction coverage is limited"
+        ? limitedCoverage
+          ? "No findings observed; collection coverage is limited"
           : "No findings detected in the current published snapshot"
         : scopeUnavailable
           ? "No published finding snapshot is available"
@@ -549,6 +552,13 @@ export function FindingsListPage() {
           Showing snapshot {snapshot?.scanId ?? "with unknown scan ID"}. The live
           projection is not aligned with this revision, so these findings are not
           a current-state verdict.
+        </DataStateNotice>
+      )}
+      {!cachedRefreshError && findingScopeCurrent && limitedCoverage && (
+        <DataStateNotice tone="warning" title="Published coverage is limited">
+          Confirmed findings are retained, but missing evidence is not proof of
+          absence. Rerun the affected collection before treating an empty result
+          as clean.
         </DataStateNotice>
       )}
       {registerContent}

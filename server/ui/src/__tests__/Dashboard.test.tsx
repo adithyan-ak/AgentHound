@@ -492,6 +492,48 @@ describe("Dashboard", () => {
     expect(screen.queryByText(/^Low Risk$/)).not.toBeInTheDocument();
   });
 
+  it("qualifies posture values for a persisted non-instruction limitation", async () => {
+    mockedUseProjectionState.mockReturnValue({
+      ...completeProjectionState(),
+      data: {
+        ...completeProjectionState().data,
+        active_coverage_limitations: [
+          {
+            coverage_key: "mcp:target:sha256:limited",
+            state: "failed",
+            scan_id: "scan-1",
+            observed_at: "2026-07-11T00:00:00Z",
+          },
+        ],
+      },
+    } as ReturnType<typeof useProjectionState>);
+    mockedUseGraphStats.mockReturnValue({
+      data: {
+        node_counts: { MCPServer: 1 },
+        edge_counts: {},
+        total_nodes: 1,
+        total_edges: 0,
+        projection: { scanId: "scan-1", revision: 1 },
+      },
+      isLoading: false,
+      error: null,
+      isError: false,
+      isPending: false,
+    } as unknown as ReturnType<typeof useGraphStats>);
+
+    render(<Dashboard />, { wrapper: createWrapper() });
+
+    expect(
+      await screen.findByText("Low Risk · Limited Coverage"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Published posture has coverage limitations"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/missing evidence is not proof of absence/i),
+    ).toBeInTheDocument();
+  });
+
   it("renders a usable published posture with a deep-coverage warning", async () => {
     publishedScan.collection_status = "truncated";
     mockedUseGraphStats.mockReturnValue({

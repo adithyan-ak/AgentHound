@@ -327,7 +327,7 @@ func TestWriterEdgePreparationMatchesAPOCAndFallback(t *testing.T) {
 		}
 		if !strings.Contains(
 			calls[0].Cypher,
-			"WHEN incoming_complete THEN\n        [fingerprint IN old_fact_fingerprints",
+			"WHEN incoming_authoritative THEN\n        [fingerprint IN old_fact_fingerprints",
 		) {
 			t.Fatalf("incompatible-refresh invalidation missing (APOC=%t):\n%s", hasAPOC, calls[0].Cypher)
 		}
@@ -411,7 +411,7 @@ func TestWriterCarriesStableFingerprintsForExactSharedOwnerRefresh(t *testing.T)
 		"fingerprint IN old_fact_fingerprints",
 		"WHEN compatible_existing_owner THEN true",
 		"WHEN compatible_mixed_owners THEN true",
-		"WHEN incoming_complete THEN\n        [fingerprint IN old_fact_fingerprints",
+		"WHEN incoming_authoritative THEN\n        [fingerprint IN old_fact_fingerprints",
 	} {
 		if !strings.Contains(call.Cypher, fragment) {
 			t.Fatalf("node refresh query missing %q:\n%s", fragment, call.Cypher)
@@ -436,7 +436,7 @@ func TestWriterCarriesStableFingerprintsForExactSharedOwnerRefresh(t *testing.T)
 
 func TestNodeLabelMutationIsCompatibilityGated(t *testing.T) {
 	query := nodeCypherForKindTuple("OllamaInstance", []string{"AIService"})
-	want := "FOREACH (_ IN CASE WHEN observation_created OR replace_properties OR compatible_new_owner OR compatible_existing_owner OR compatible_mixed_owners THEN [1] ELSE [] END | SET n:AIService)"
+	want := "FOREACH (_ IN CASE WHEN observation_created OR replace_properties OR compatible_new_owner OR compatible_existing_owner OR compatible_mixed_owners OR partial_existing_owner OR partial_compatible_owner OR partial_reference_upgrade THEN [1] ELSE [] END | SET n:AIService)"
 	if !strings.Contains(query, want) {
 		t.Fatalf("extra label mutation is not compatibility-gated:\n%s", query)
 	}

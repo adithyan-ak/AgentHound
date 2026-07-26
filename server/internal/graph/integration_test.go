@@ -1161,6 +1161,118 @@ func TestIntegrationCompleteObservationReplacesStaleManagedProperties(t *testing
 	}
 }
 
+func TestIntegrationPartialObservationRetainsOmittedProperties(t *testing.T) {
+	ctx := testDriver(t)
+	driver, err := NewDriver(
+		os.Getenv("AGENTHOUND_NEO4J_URI"),
+		os.Getenv("AGENTHOUND_NEO4J_USER"),
+		os.Getenv("AGENTHOUND_NEO4J_PASSWORD"),
+	)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer driver.Close(ctx)
+
+	reader := NewReader(driver)
+	writer := NewWriter(driver)
+	scope := "mcp:target:sha256:partial-property-retention"
+	ids := []string{
+		"partial-property-existing",
+		"partial-property-new",
+	}
+	_, _ = integrationWrite(
+		ctx,
+		driver,
+		`MATCH (n) WHERE n.objectid IN $ids DETACH DELETE n`,
+		map[string]any{"ids": ids},
+	)
+	defer func() {
+		_, _ = integrationWrite(
+			ctx,
+			driver,
+			`MATCH (n) WHERE n.objectid IN $ids DETACH DELETE n`,
+			map[string]any{"ids": ids},
+		)
+	}()
+
+	first := ingest.Node{
+		ID:                 ids[0],
+		Kinds:              []string{"MCPServer"},
+		ObservationDomains: []string{scope},
+		Properties: map[string]any{
+			"name":           "before",
+			"stale_property": "retain-until-complete",
+		},
+	}
+	if _, err := writer.WriteObservationNodes(
+		ctx,
+		[]ingest.Node{first},
+		"partial-property-first",
+		[]string{scope},
+	); err != nil {
+		t.Fatalf("write complete baseline: %v", err)
+	}
+	partialExisting := first
+	partialExisting.Properties = map[string]any{"name": "observed-partial"}
+	partialNew := ingest.Node{
+		ID:                 ids[1],
+		Kinds:              []string{"MCPServer"},
+		ObservationDomains: []string{scope},
+		Properties:         map[string]any{"name": "new-partial"},
+	}
+	if _, err := writer.WriteObservationNodes(
+		ctx,
+		[]ingest.Node{partialExisting, partialNew},
+		"partial-property-second",
+		nil,
+	); err != nil {
+		t.Fatalf("write partial observations: %v", err)
+	}
+
+	rows, err := reader.Query(
+		ctx,
+		`MATCH (n) WHERE n.objectid IN $ids
+		RETURN n.objectid AS id,
+		       n.name AS name,
+		       n.stale_property AS stale_property,
+		       n.observation_properties_complete AS properties_complete
+		ORDER BY id`,
+		map[string]any{"ids": ids},
+	)
+	if err != nil {
+		t.Fatalf("read partial observations: %v", err)
+	}
+	if len(rows) != 2 ||
+		rows[0]["name"] != "observed-partial" ||
+		rows[0]["stale_property"] != "retain-until-complete" ||
+		rows[0]["properties_complete"] != true ||
+		rows[1]["name"] != "new-partial" ||
+		rows[1]["properties_complete"] != true {
+		t.Fatalf("partial property state = %+v", rows)
+	}
+
+	if _, err := writer.WriteObservationNodes(
+		ctx,
+		[]ingest.Node{partialExisting},
+		"partial-property-third",
+		[]string{scope},
+	); err != nil {
+		t.Fatalf("write complete replacement: %v", err)
+	}
+	rows, err = reader.Query(
+		ctx,
+		`MATCH (n:MCPServer {objectid: $id})
+		RETURN n.stale_property AS stale_property`,
+		map[string]any{"id": ids[0]},
+	)
+	if err != nil {
+		t.Fatalf("read complete replacement: %v", err)
+	}
+	if len(rows) != 1 || rows[0]["stale_property"] != nil {
+		t.Fatalf("complete replacement retained stale property: %+v", rows)
+	}
+}
+
 func TestIntegrationReferenceOwnerPreservesThenRetiresAuthoritativeProperties(t *testing.T) {
 	ctx := testDriver(t)
 	driver, err := NewDriver(

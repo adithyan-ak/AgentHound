@@ -242,7 +242,26 @@ func NonBlockingInstructionCoverageDomains(report *CollectionReport) []string {
 	return result
 }
 
-const InstructionCoverageLimitationWarning = "instruction coverage is limited; missing instruction evidence is not a clean absence"
+const CoverageLimitationWarning = "coverage is limited; missing evidence is not proof of absence"
+
+// InstructionCoverageLimitationWarning remains as a compatibility alias for
+// callers that used the original instruction-only limited-publication path.
+const InstructionCoverageLimitationWarning = CoverageLimitationWarning
+
+// CoverageLimited reports whether any declared scope lacks absence authority.
+// An all-not-applicable optional surface aggregates to complete because the
+// collector conclusively established that none of those operations applied.
+func CoverageLimited(report *CollectionReport) bool {
+	if report == nil || len(report.CoverageKeys) == 0 {
+		return true
+	}
+	for _, state := range CoverageStates(report) {
+		if state != OutcomeComplete {
+			return true
+		}
+	}
+	return false
+}
 
 // IncompleteInstructionRoots returns recognized registry-backed instruction
 // roots whose observed state is partial, failed, or truncated.

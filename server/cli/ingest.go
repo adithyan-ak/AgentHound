@@ -107,7 +107,7 @@ func writeIngestResult(w io.Writer, result *ingest.IngestResult) error {
 	complete := result.Outcome == ingest.OutcomeComplete &&
 		result.ProjectionStatus == model.ProjectionComplete &&
 		result.PublishedRevision != nil
-	limitedCoverage := complete && ingest.InstructionCoverageLimited(&result.Collection)
+	limitedCoverage := complete && resultCoverageLimited(result)
 	heading := "Ingest incomplete"
 	if result.Outcome == ingest.OutcomeFailed {
 		heading = "Ingest failed"
@@ -175,6 +175,21 @@ func writeIngestResult(w io.Writer, result *ingest.IngestResult) error {
 		result.ProjectionStatus,
 		detail,
 	)
+}
+
+func resultCoverageLimited(result *ingest.IngestResult) bool {
+	if result == nil {
+		return false
+	}
+	if ingest.CoverageLimited(&result.Collection) {
+		return true
+	}
+	for _, warning := range result.Warnings {
+		if warning == ingest.CoverageLimitationWarning {
+			return true
+		}
+	}
+	return false
 }
 
 func collectionPointDisplay(identity ingest.IngestIdentityResult) string {

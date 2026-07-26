@@ -307,10 +307,9 @@ collector returned an error; the saved artifact is then identified as
 diagnostic evidence and no ingest instruction is printed. Output, argument,
 and remote-ingest failures retain their existing non-zero behavior.
 
-Recognized incomplete instruction roots are the non-blocking exception
-described above: their proven per-file positives may publish, so their warning
-does not claim that ingestion will be withheld. Other blocking incomplete
-coverage may cause ingestion to withhold graph publication. Review
+When the server can safely process an incomplete artifact, it publishes the
+confirmed facts additively and persists the incomplete scopes as coverage
+limitations. Omitted data is retained rather than treated as absent. Review
 `meta.collection.outcomes`, correct or recollect the failed coverage, and do
 not treat missing facts as evidence of absence. With `--ingest`, the warning is
 printed after the backup artifact is saved and before the explicitly requested
@@ -835,13 +834,12 @@ All three ingest entry points (CLI, `POST /api/v1/ingest`, UI drag-drop) run the
 The CLI prints the display label (or a short `Point <digest>` alias), full IDs,
 new/recognized state, separate point/network qualities, network class, pipeline
 outcome, projection status, and publication revision. It exits successfully
-only when the ingest produced a complete,
-published projection. A published projection with an incomplete recognized
-instruction root is headed `Ingest complete with coverage limitations` and
-reports the generalized instruction-coverage warning. If a required stage is
-partial or failed, or publication is withheld for any blocking reason, the CLI
-exits non-zero and reports the first unhealthy required stage; write-row counts
-remain visible for diagnosis.
+when the graph, analysis, snapshot, and publication stages succeed, including a
+safe limited-coverage publication. That case is headed
+`Ingest complete with coverage limitations` and reports that missing evidence
+is not proof of absence. If a required processing stage is partial or failed,
+or publication is withheld, the CLI exits non-zero and reports the first
+unhealthy required stage; write-row counts remain visible for diagnosis.
 
 #### Example
 
@@ -890,18 +888,28 @@ agenthound-server query --shortest-path --path-mode topology --from MCPResource:
 | `--to` | | Target node (`Kind:name`). |
 | `--path-mode` | `security` | `security` uses the directed security relationship policy; `topology` explicitly selects the undirected graph view. |
 | `--format` | `table` | `table` or `json`. |
-| `--fail-on` | | Exit 1 if findings at or above severity (CI gate). Always ignores suppressed findings, even with `--all-findings`. |
+| `--fail-on` | | Exit 1 if findings are at or above severity or published coverage is limited (CI gate). Always ignores suppressed findings, even with `--all-findings`. |
 
 Positional raw Cypher is an explicit live/admin interface: it reads the mutable
 graph directly and is not guarded by published scan/revision identity. In
 contrast, `--prebuilt` fails closed when the published projection is absent,
-updating, incomplete, or changes during the read. JSON output includes a
-`projection` object with `scan_id` and `revision`; table output prints the same
-identity before the rows.
+updating, incomplete, or changes during the read. Prebuilt queries,
+shortest-path output, and published findings warn when the selected revision
+has active coverage limitations. An empty findings result is qualified as “No
+findings in observed data.” `--diff` rejects revisions without matching
+non-empty comparison keys, and `--fail-on` exits non-zero when published
+coverage is limited. Raw administrator Cypher remains an explicit unqualified
+live-graph interface. JSON output includes the corresponding scope/projection
+metadata; table output prints the published identity before the rows.
 
 #### Suppression semantics
 
-Triage decisions (`accepted-risk`, `false-positive`) suppress a finding from the default `--findings` view and from the `added` set of `--diff`. `--all-findings` reveals them. `--fail-on` *always* evaluates against the non-suppressed set, so an accepted risk can never break CI regardless of `--all-findings`.
+Triage decisions (`accepted-risk`, `false-positive`) suppress a finding from
+the default `--findings` view and from the `added` set of `--diff`.
+`--all-findings` reveals them. `--fail-on` always evaluates against the
+non-suppressed set, so an accepted risk cannot break CI regardless of
+`--all-findings`; an active coverage limitation still fails the gate because
+missing findings are inconclusive.
 
 #### Pre-Built Query IDs
 

@@ -1073,7 +1073,7 @@ func TestValidatorAllowsCompleteChildFactsUnderIncompleteInstructionRoot(t *test
 	}
 }
 
-func TestValidatorRejectsIncompleteInstructionChildAndRootOwnedFacts(t *testing.T) {
+func TestValidatorAcceptsIncompleteInstructionChildAndRootOwnedFacts(t *testing.T) {
 	data, _, child := validInstructionRootDataFor(
 		ingest.InstructionMethodExactUser,
 		ingest.OutcomePartial,
@@ -1085,11 +1085,9 @@ func TestValidatorRejectsIncompleteInstructionChildAndRootOwnedFacts(t *testing.
 		}
 	}
 	data.Meta.Collection.State = ingest.AggregateOutcomeState(data.Meta.Collection.Outcomes)
-	assertValidationError(
-		t,
-		NewValidator().Validate(data),
-		"meta.collection.authoritative_roots[1].child_coverage_keys[0]",
-	)
+	if err := NewValidator().Validate(data); err != nil {
+		t.Fatalf("partial instruction child facts rejected: %v", err)
+	}
 
 	data, root, _ := validInstructionRootDataFor(
 		ingest.InstructionMethodExactUser,
@@ -1101,14 +1099,12 @@ func TestValidatorRejectsIncompleteInstructionChildAndRootOwnedFacts(t *testing.
 	for i := range data.Graph.Edges {
 		data.Graph.Edges[i].ObservationDomains = []string{root}
 	}
-	assertValidationError(
-		t,
-		NewValidator().Validate(data),
-		"graph.nodes[0].observation_domains[0]",
-	)
+	if err := NewValidator().Validate(data); err != nil {
+		t.Fatalf("failed instruction root facts rejected: %v", err)
+	}
 }
 
-func TestValidatorRejectsFactsOwnedByIncompleteDomain(t *testing.T) {
+func TestValidatorAcceptsFactsOwnedByIncompleteDomain(t *testing.T) {
 	data := validIngestData()
 	child := data.Meta.Collection.Outcomes[0].CoverageKey
 	data.Meta.Collection.Outcomes[0].State = ingest.OutcomePartial
@@ -1121,11 +1117,9 @@ func TestValidatorRejectsFactsOwnedByIncompleteDomain(t *testing.T) {
 		data.Graph.Edges[i].ObservationDomains = []string{child}
 	}
 
-	assertValidationError(
-		t,
-		NewValidator().Validate(data),
-		"graph.nodes[0].observation_domains[0]",
-	)
+	if err := NewValidator().Validate(data); err != nil {
+		t.Fatalf("partial-domain facts rejected: %v", err)
+	}
 }
 
 func TestValidatorRejectsOrphanInstructionSource(t *testing.T) {

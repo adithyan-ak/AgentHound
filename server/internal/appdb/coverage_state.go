@@ -184,3 +184,12 @@ func activePostureCoverageRoots(heads []coverageHead) []model.PostureCoverageRoo
 	})
 	return roots
 }
+
+func postureCoverageRootsLimited(roots []model.PostureCoverageRoot) bool {
+	for _, root := range roots {
+		if root.State != sdkingest.OutcomeComplete || !root.ContractCurrent {
+			return true
+		}
+	}
+	return false
+}

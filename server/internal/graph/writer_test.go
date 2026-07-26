@@ -905,7 +905,7 @@ func TestWriterReplacesCompleteAllDependencyOwnerSetAtomically(t *testing.T) {
 			}
 			for _, fragment := range []string{
 				"AS replace_dependency_set",
-				"AND incoming_complete",
+				"AND incoming_authoritative",
 				"AND (replace_dependency_set",
 				"WHEN replace_dependency_set THEN edge.observation_dependency_tokens",
 				"WHEN replace_dependency_set THEN edge.observation_fact_fingerprints",
@@ -956,6 +956,79 @@ func TestCompleteObservationReplacesManagedProperties(t *testing.T) {
 	}
 	if strings.Contains(call.Cypher, "REMOVE n:SchemaVersion") {
 		t.Fatal("managed replacement removes internal labels")
+	}
+}
+
+func TestPartialObservationUsesAdditivePropertyUpdates(t *testing.T) {
+	scope := "mcp:target:sha256:server-partial"
+	recorder := &recordedExec{}
+	writer := newTestWriter(recorder.exec, false)
+	node := ingest.Node{
+		ID:                 "server-partial",
+		Kinds:              []string{"MCPServer"},
+		ObservationDomains: []string{scope},
+		Properties:         map[string]any{"name": "observed"},
+	}
+
+	if _, err := writer.WriteObservationNodes(
+		context.Background(),
+		[]ingest.Node{node},
+		"scan-partial",
+		nil,
+	); err != nil {
+		t.Fatalf("WriteObservationNodes: %v", err)
+	}
+	call := recorder.snapshot()[0]
+	row := rowsAt(t, call.Params, "nodes")[0]
+	if prefixes, _ := row["complete_domain_prefixes"].([]string); len(prefixes) != 0 {
+		t.Fatalf("partial observation has authoritative prefixes: %v", prefixes)
+	}
+	for _, fragment := range []string{
+		"AS partial_existing_owner",
+		"AS partial_compatible_owner",
+		"SET n += node.properties",
+		"WHEN observation_created THEN NOT node.reference_only",
+		"WHEN partial_existing_owner THEN true",
+		"WHEN partial_compatible_owner THEN true",
+	} {
+		if !strings.Contains(call.Cypher, fragment) {
+			t.Fatalf("partial merge query missing %q:\n%s", fragment, call.Cypher)
+		}
+	}
+	if strings.Contains(
+		call.Cypher,
+		"CASE WHEN partial_existing_owner THEN [1] ELSE [] END | REMOVE",
+	) {
+		t.Fatalf("partial observation can remove labels:\n%s", call.Cypher)
+	}
+
+	edge := ingest.Edge{
+		Source:             "server-partial",
+		Target:             "host-partial",
+		Kind:               "RUNS_ON",
+		SourceKind:         "MCPServer",
+		TargetKind:         "Host",
+		ObservationDomains: []string{scope},
+		Properties:         map[string]any{"confidence": 0.8},
+	}
+	if _, err := writer.WriteObservationEdges(
+		context.Background(),
+		[]ingest.Edge{edge},
+		"scan-partial",
+		nil,
+	); err != nil {
+		t.Fatalf("WriteObservationEdges: %v", err)
+	}
+	edgeCall := recorder.snapshot()[1]
+	for _, fragment := range []string{
+		"AS partial_existing_owner",
+		"AS partial_compatible_owner",
+		"SET r += edge.properties",
+		"WHEN observation_created THEN true",
+	} {
+		if !strings.Contains(edgeCall.Cypher, fragment) {
+			t.Fatalf("partial edge query missing %q:\n%s", fragment, edgeCall.Cypher)
+		}
 	}
 }
 

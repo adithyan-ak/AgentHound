@@ -54,8 +54,39 @@ func TestPostureExportServesPersistedRevision(t *testing.T) {
 	if export.Scope.ActiveCoverageRoots == nil {
 		t.Fatal("current export emitted null active_coverage_roots")
 	}
+	if export.Scope.ActiveCoverageLimitations == nil {
+		t.Fatal("current export emitted null active_coverage_limitations")
+	}
 	if got := w.Header().Get("Content-Disposition"); got == "" {
 		t.Fatal("missing download content disposition")
+	}
+}
+
+func TestPostureExportServesPreviousPersistedSchema(t *testing.T) {
+	handler := &PostureHandler{store: &fakePostureReader{
+		export: &model.PostureExport{
+			SchemaVersion: model.PostureExportPreviousSchemaVersion,
+			Scope: model.PostureScope{
+				ScanID:   "scan-v3",
+				Revision: 3,
+			},
+		},
+	}}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/posture/export", nil)
+
+	handler.HandleExport(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	var export model.PostureExport
+	if err := json.NewDecoder(w.Body).Decode(&export); err != nil {
+		t.Fatal(err)
+	}
+	if export.SchemaVersion != model.PostureExportPreviousSchemaVersion ||
+		export.Scope.ActiveCoverageLimitations == nil {
+		t.Fatalf("normalized previous export = %+v", export)
 	}
 }
 

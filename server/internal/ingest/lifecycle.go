@@ -39,22 +39,6 @@ func collectionState(report *sdkingest.CollectionReport) sdkingest.OutcomeState 
 	return report.State
 }
 
-func incompleteCoverageDomains(report *sdkingest.CollectionReport) []string {
-	nonBlocking := make(map[string]bool)
-	for _, key := range sdkingest.NonBlockingInstructionCoverageDomains(report) {
-		nonBlocking[key] = true
-	}
-	states := sdkingest.CoverageStates(report)
-	domains := make([]string, 0, len(states))
-	for domain, state := range states {
-		if state != sdkingest.OutcomeComplete && !nonBlocking[domain] {
-			domains = append(domains, domain)
-		}
-	}
-	sort.Strings(domains)
-	return domains
-}
-
 func mergeCoverage(groups ...[]string) []string {
 	seen := make(map[string]bool)
 	var merged []string
@@ -88,6 +72,26 @@ func subtractCoverage(keys []string, replaced ...[]string) []string {
 		}
 	}
 	return remaining
+}
+
+func graphObservationDomains(graph sdkingest.GraphData) []string {
+	var groups [][]string
+	for _, node := range graph.Nodes {
+		groups = append(groups, node.ObservationDomains)
+	}
+	for _, edge := range graph.Edges {
+		groups = append(groups, edge.ObservationDomains)
+	}
+	return mergeCoverage(groups...)
+}
+
+func appendWarningOnce(warnings []string, warning string) []string {
+	for _, existing := range warnings {
+		if existing == warning {
+			return warnings
+		}
+	}
+	return append(warnings, warning)
 }
 
 // prepareObservationDomains verifies the strict-v5 ownership contract after
