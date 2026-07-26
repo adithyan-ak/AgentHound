@@ -34,6 +34,14 @@ type CoverageRoot struct {
 	RegistryContract  *RegistryContract `json:"registry_contract,omitempty"`
 }
 
+func (r CoverageRoot) MarshalJSON() ([]byte, error) {
+	type coverageRoot CoverageRoot
+	if r.ChildCoverageKeys == nil {
+		r.ChildCoverageKeys = []string{}
+	}
+	return json.Marshal(coverageRoot(r))
+}
+
 type CollectionOutcome struct {
 	Collector         string       `json:"collector"`
 	CoverageKey       string       `json:"coverage_key,omitempty"`

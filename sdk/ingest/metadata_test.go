@@ -1,6 +1,24 @@
 package ingest
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestCoverageRootMarshalsEmptyChildrenAsArray(t *testing.T) {
+	data, err := json.Marshal(CoverageRoot{CoverageKey: "config:root:sha256:test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(decoded["child_coverage_keys"]); got != "[]" {
+		t.Fatalf("child_coverage_keys = %s, want []", got)
+	}
+}
 
 func TestMergeCollectionReportsPreservesCompleteEmptyState(t *testing.T) {
 	scope := CanonicalCoverageKey("config", "path", "/tmp/missing.json")
