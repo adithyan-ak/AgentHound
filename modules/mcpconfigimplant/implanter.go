@@ -34,7 +34,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -214,26 +213,23 @@ func (i *Implanter) Revert(ctx context.Context, receipt action.Receipt) error {
 		return nil
 	}
 	path := strings.TrimSpace(r.TargetID)
-	if legacyPath, _ := r.Extra["file"].(string); path == "" {
-		path = strings.TrimSpace(legacyPath)
-	}
 	serversKey, _ := r.Extra["servers_key"].(string)
 	serverName, _ := r.Extra["server_name"].(string)
-	if path == "" || serversKey == "" || serverName == "" {
+	if path == "" || !filepath.IsAbs(path) || serversKey == "" || serverName == "" {
 		return errors.New("mcp config implant revert: receipt missing path / servers_key / server_name")
 	}
-	// file_existed defaults to true for receipts written before this
-	// field existed, matching the prior behavior of always leaving the
-	// file behind.
-	fileExisted := true
-	if v, ok := r.Extra["file_existed"].(bool); ok {
-		fileExisted = v
+	entryHash, _ := r.Extra["entry_sha256"].(string)
+	if !validReceiptEntrySHA256(entryHash) {
+		return errors.New("mcp config implant revert: receipt entry_sha256 is required")
 	}
-	modeValue := r.Extra["original_mode"]
-	if modeValue == nil {
-		modeValue = r.Extra["orig_mode"]
+	fileExisted, ok := r.Extra["file_existed"].(bool)
+	if !ok {
+		return errors.New("mcp config implant revert: receipt file_existed is required")
 	}
-	origMode := parseMode(modeValue, 0o600)
+	origMode, ok := parseMode(r.Extra["original_mode"])
+	if !ok {
+		return errors.New("mcp config implant revert: receipt original_mode is required")
+	}
 	if !fileExisted && origMode == 0 {
 		origMode = 0o600
 	}
@@ -368,16 +364,16 @@ func modeStr(m os.FileMode) string {
 	return fmt.Sprintf("%o", m.Perm())
 }
 
-func parseMode(v any, fallback os.FileMode) os.FileMode {
-	switch s := v.(type) {
-	case string:
-		if n, err := strconv.ParseUint(s, 8, 32); err == nil {
-			return os.FileMode(n).Perm()
-		}
-	case float64:
-		return os.FileMode(uint32(s)).Perm()
+func parseMode(v any) (os.FileMode, bool) {
+	s, ok := v.(string)
+	if !ok {
+		return 0, false
 	}
-	return fallback
+	n, err := strconv.ParseUint(s, 8, 32)
+	if err != nil || n > 0o777 {
+		return 0, false
+	}
+	return os.FileMode(n), true
 }
 
 func sha256Hex(b []byte) string {
@@ -394,22 +390,22 @@ func canonicalEntrySHA256(entry any) (string, error) {
 }
 
 func receiptEntryMatches(r *action.ImplantReceipt, currentEntry any) (bool, error) {
-	if entryHash, _ := r.Extra["entry_sha256"].(string); entryHash != "" {
-		currentHash, err := canonicalEntrySHA256(currentEntry)
-		if err != nil {
-			return false, errors.New("mcp config implant revert: live server entry is not canonicalizable")
-		}
-		return currentHash == entryHash, nil
+	entryHash, _ := r.Extra["entry_sha256"].(string)
+	if !validReceiptEntrySHA256(entryHash) {
+		return false, errors.New("mcp config implant revert: receipt entry_sha256 is required")
 	}
+	currentHash, err := canonicalEntrySHA256(currentEntry)
+	if err != nil {
+		return false, errors.New("mcp config implant revert: live server entry is not canonicalizable")
+	}
+	return currentHash == entryHash, nil
+}
 
-	// Legacy receipts stored the plaintext injected JSON. Keep this decode path
-	// so existing protected receipt files remain revertible after the minimized
-	// hash-only receipt format is deployed.
-	var injectedEntry map[string]any
-	if err := json.Unmarshal([]byte(r.InjectionContent), &injectedEntry); err != nil {
-		return false, errors.New("mcp config implant revert: legacy receipt injection state is invalid")
-	}
-	return reflect.DeepEqual(currentEntry, injectedEntry), nil
+func validReceiptEntrySHA256(value string) bool {
+	decoded, err := hex.DecodeString(value)
+	return err == nil &&
+		len(decoded) == sha256.Size &&
+		value == strings.ToLower(value)
 }
 
 func normalizeReceipt(r action.Receipt) (*action.ImplantReceipt, bool) {

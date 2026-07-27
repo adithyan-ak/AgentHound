@@ -70,9 +70,9 @@ func TestOpenAPIProjectionAwareResponseContracts(t *testing.T) {
 	)
 	requireSchemaFields(t, schemas, "PathResponse", "paths", "metadata", "projection")
 	requireSchemaFields(t, schemas, "PreBuiltResult", "query", "rows", "projection")
-	requireSchemaFields(t, schemas, "IngestMetaV5", "identity", "collection")
-	requireSchemaFields(t, schemas, "CollectionIdentityV5", "collection_point_id", "network_context_id", "quality", "network_quality", "network_class", "evidence", "network_evidence")
-	requireSchemaFields(t, schemas, "IngestCollectionV5", "state", "coverage_keys", "outcomes")
+	requireSchemaFields(t, schemas, "IngestMetaV1", "identity", "collection")
+	requireSchemaFields(t, schemas, "CollectionIdentityV1", "collection_point_id", "network_context_id", "quality", "network_quality", "network_class", "evidence", "network_evidence")
+	requireSchemaFields(t, schemas, "IngestCollectionV1", "state", "coverage_keys", "outcomes")
 	requireSchemaFields(t, schemas, "IngestResult", "collection", "identity", "findings")
 	ingestResponses := nestedMap(t, spec, "paths", "/ingest", "post", "responses")
 	for _, status := range []string{"200", "400", "403", "500", "503"} {
@@ -286,8 +286,8 @@ func TestServedOpenAPICampaignParity(t *testing.T) {
 	}
 	schemaVersion := nestedMap(t, postureExportProperties, "schema_version")
 	versionEnum, ok := schemaVersion["enum"].([]any)
-	if !ok || !containsInt(versionEnum, 3) || !containsInt(versionEnum, 4) {
-		t.Fatalf("PostureExport.schema_version enum = %v, want 3 and 4", schemaVersion["enum"])
+	if !ok || len(versionEnum) != 1 || !containsInt(versionEnum, 1) {
+		t.Fatalf("PostureExport.schema_version enum = %v, want only 1", schemaVersion["enum"])
 	}
 
 	evidenceProperties := nestedMap(t, schemas, "FindingEvidence", "properties")

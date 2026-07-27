@@ -73,16 +73,76 @@ CREATE TABLE IF NOT EXISTS finding_triage (
 );
 
 CREATE TABLE IF NOT EXISTS coverage_heads (
-    coverage_key TEXT PRIMARY KEY,
-    scan_id      TEXT NOT NULL REFERENCES scans(id) ON DELETE RESTRICT,
-    root_key     TEXT,
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    coverage_key        TEXT PRIMARY KEY,
+    scan_id             TEXT NOT NULL REFERENCES scans(id) ON DELETE RESTRICT,
+    root_key            TEXT,
+    state               TEXT
+                        CHECK (state IS NULL OR state IN ('complete', 'truncated', 'partial', 'failed')),
+    discovery_mode      TEXT
+                        CHECK (
+                            discovery_mode IS NULL OR
+                            discovery_mode IN ('exact_user', 'exact_project', 'deep')
+                        ),
+    contract_generation INTEGER,
+    contract_digest     TEXT,
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT coverage_heads_contract_pair_check
+        CHECK (
+            (contract_generation IS NULL AND contract_digest IS NULL) OR
+            (
+                contract_generation IS NOT NULL AND
+                contract_generation > 0 AND
+                contract_digest IS NOT NULL AND
+                contract_digest <> ''
+            )
+        ),
+    CONSTRAINT coverage_heads_root_metadata_check
+        CHECK (
+            root_key IS NULL OR
+            (
+                state IS NULL AND
+                discovery_mode IS NULL AND
+                contract_generation IS NULL AND
+                contract_digest IS NULL
+            )
+        )
 );
 
 CREATE INDEX IF NOT EXISTS idx_coverage_heads_scan_id
     ON coverage_heads(scan_id);
 CREATE INDEX IF NOT EXISTS idx_coverage_heads_root_key
     ON coverage_heads(root_key);
+
+CREATE TABLE IF NOT EXISTS coverage_memberships (
+    coverage_key TEXT PRIMARY KEY,
+    parent_key   TEXT NOT NULL,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_coverage_memberships_parent_key
+    ON coverage_memberships(parent_key);
+
+CREATE TABLE IF NOT EXISTS coverage_limitations (
+    coverage_key        TEXT PRIMARY KEY,
+    parent_coverage_key TEXT,
+    state               TEXT NOT NULL
+                        CHECK (state IN ('unknown', 'partial', 'failed', 'truncated')),
+    scan_id             TEXT NOT NULL REFERENCES scans(id) ON DELETE RESTRICT,
+    observed_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_coverage_limitations_scan_id
+    ON coverage_limitations(scan_id);
+
+CREATE INDEX IF NOT EXISTS idx_coverage_limitations_parent
+    ON coverage_limitations(parent_coverage_key);
+
+CREATE TABLE IF NOT EXISTS storage_binding (
+    singleton       BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+    binding_version SMALLINT NOT NULL,
+    storage_pair_id UUID NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 CREATE TABLE IF NOT EXISTS posture_publications (
     revision       BIGSERIAL PRIMARY KEY,

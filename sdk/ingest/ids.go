@@ -10,8 +10,7 @@ import (
 
 const (
 	MCPHTTPIdentitySchemeV1      = "mcp_http_v1"
-	MCPStdioIdentitySchemeV2     = "mcp_stdio_v2_ordered"
-	MCPStdioIdentitySchemeV3     = "mcp_stdio_v3_hashed_argv"
+	MCPStdioIdentitySchemeV1     = "mcp_stdio_v1_hashed_argv"
 	MCPStdioArgumentHashSchemeV1 = "mcp_stdio_argument_v1"
 )
 
@@ -48,7 +47,7 @@ func IsCanonicalNodeID(value string) bool {
 
 // ComputeMCPServerID produces the current deterministic ID for an MCPServer.
 // HTTP retains the v1 identity byte-for-byte. Stdio hashes each raw argument
-// in memory, then uses the ordered hashes as the validator-recomputable v3
+// in memory, then uses the ordered hashes as the validator-recomputable v1
 // identity input. Raw argv therefore never needs to be serialized merely to
 // prove the server ID.
 func ComputeMCPServerID(transport string, endpoint string, args ...string) string {
@@ -94,7 +93,7 @@ func ComputeMCPStdioArgumentHashes(args ...string) []string {
 func ComputeMCPServerIDFromArgumentHashes(command string, argumentHashes ...string) string {
 	h := sha256.New()
 	writeIDFrame(h, "MCPServer")
-	writeIDFrame(h, MCPStdioIdentitySchemeV3)
+	writeIDFrame(h, MCPStdioIdentitySchemeV1)
 	writeIDFrame(h, strings.TrimSpace(command))
 	for _, argumentHash := range argumentHashes {
 		writeIDFrame(h, argumentHash)
@@ -120,8 +119,8 @@ func ResolveMCPServerIdentity(transport, endpoint string, args ...string) MCPSer
 	argumentHashes := ComputeMCPStdioArgumentHashes(args...)
 	return MCPServerIdentity{
 		ObjectID:       ComputeMCPServerIDFromArgumentHashes(endpoint, argumentHashes...),
-		Scheme:         MCPStdioIdentitySchemeV3,
-		Version:        3,
+		Scheme:         MCPStdioIdentitySchemeV1,
+		Version:        1,
 		ArgumentHashes: argumentHashes,
 	}
 }

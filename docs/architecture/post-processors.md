@@ -42,7 +42,7 @@ can_impersonate
 
 ## Scope compatibility policy
 
-The ingest v5 model permits evidence from many collection points in one graph. Any
+The ingest v1 model permits evidence from many collection points in one graph. Any
 processor that compares otherwise unrelated observations must use the shared
 exact predicate below; a prose judgment at each call site is not sufficient.
 
@@ -253,7 +253,7 @@ normalization, `BeginScan`, canonical writes, and reconciliation. Rejected
 positive or negative submissions leave canonical edges and coverage untouched;
 diagnostics are limited to a sanitized Postgres rejection audit.
 
-Before the Cypher upgrade, Go reconstructs witness v3 from each raw edge and
+Before the Cypher upgrade, Go reconstructs witness V1 from each raw edge and
 recomputes its unkeyed fingerprint; invalid evidence remains stored for
 diagnosis but is excluded from the validated relationship-ID allowlist.
 Re-correlation then requires `a.objectid = witness.agent_id`, exact live

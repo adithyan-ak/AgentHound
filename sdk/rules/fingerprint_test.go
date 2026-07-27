@@ -480,6 +480,9 @@ func TestLoadFingerprints_EmbeddedRulesValid(t *testing.T) {
 	found := make(map[string]bool)
 	for _, r := range rules {
 		found[r.ServiceKind] = true
+		if r.Version != 1 {
+			t.Errorf("builtin fingerprint %q version = %d, want V1", r.ID, r.Version)
+		}
 	}
 	for _, k := range wantKinds {
 		if !found[k] {

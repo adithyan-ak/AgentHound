@@ -20,7 +20,7 @@
 id: mlflow
 name: MLflow Tracking Server
 description: 'Identifies MLflow by GET /api/2.0/mlflow/experiments/search?max_results=1 returning the canonical experiments JSON'
-version: 3
+version: 1
 service_kind: mlflow
 probes:
   - method: GET

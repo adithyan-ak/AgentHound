@@ -1,7 +1,7 @@
 package ingest
 
 const (
-	CurrentVersion = 5
+	CurrentVersion = 1
 	IngestType     = "agenthound-ingest"
 )
 

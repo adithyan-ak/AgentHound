@@ -90,7 +90,9 @@ describe("uploadScan", () => {
           projection_status: "complete",
           submitted: { nodes: 1, edges: 0 },
           write_rows: { nodes: 1, edges: 0 },
+          findings: 0,
           graph_totals: { before: null, after: null },
+          normalization_status: "complete",
           identity: ingestIdentity(),
           collection: {
             state: "complete",
@@ -117,6 +119,8 @@ describe("uploadScan", () => {
               },
             ],
           },
+          published_revision: 1,
+          duration: 1,
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
@@ -163,7 +167,9 @@ describe("uploadScan", () => {
           projection_status: "complete",
           submitted: { nodes: 0, edges: 0 },
           write_rows: { nodes: 0, edges: 0 },
+          findings: 0,
           graph_totals: { before: null, after: null },
+          normalization_status: "complete",
           identity: ingestIdentity(),
           collection: {
             state: "complete",
@@ -179,6 +185,8 @@ describe("uploadScan", () => {
             ],
             legacy_scope: "mcp.example",
           },
+          published_revision: 1,
+          duration: 1,
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
@@ -200,8 +208,12 @@ describe("uploadScan", () => {
           projection_status: "complete",
           submitted: { nodes: 0, edges: 0 },
           write_rows: { nodes: 0, edges: 0 },
+          findings: 0,
           graph_totals: { before: null, after: null },
+          normalization_status: "complete",
           identity: ingestIdentity(),
+          published_revision: 1,
+          duration: 1,
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
@@ -212,6 +224,47 @@ describe("uploadScan", () => {
         new File(["{}"], "scan.json", { type: "application/json" }),
       ),
     ).rejects.toThrow("ingest result.collection must be an object");
+  });
+
+  it.each([
+    ["findings", "ingest result.findings must be a non-negative integer"],
+    [
+      "normalization_status",
+      "ingest result.normalization_status is invalid",
+    ],
+    ["duration", "ingest result.duration must be a non-negative integer"],
+    [
+      "published_revision",
+      "ingest result.published_revision is required for a successful publication",
+    ],
+  ])("rejects a successful result missing %s", async (field, expected) => {
+    const response: Record<string, unknown> = {
+      scan_id: "missing-current-field",
+      outcome: "complete",
+      projection_status: "complete",
+      submitted: { nodes: 0, edges: 0 },
+      write_rows: { nodes: 0, edges: 0 },
+      findings: 0,
+      graph_totals: { before: null, after: null },
+      normalization_status: "complete",
+      identity: ingestIdentity(),
+      collection: ingestCollection("e"),
+      published_revision: 1,
+      duration: 1,
+    };
+    delete response[field];
+    postMock.mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(
+      uploadScan(
+        new File(["{}"], "scan.json", { type: "application/json" }),
+      ),
+    ).rejects.toThrow(expected);
   });
 
   it("preserves failed-stage details from a partial ingest response", async () => {
@@ -227,7 +280,9 @@ describe("uploadScan", () => {
               projection_status: "incomplete",
               submitted: { nodes: 1000, edges: 0 },
               write_rows: { nodes: 1000, edges: 0 },
+              findings: 0,
               graph_totals: { before: null, after: null },
+              normalization_status: "complete",
               identity: ingestIdentity(),
               collection: ingestCollection("d"),
               stages: [
@@ -239,6 +294,7 @@ describe("uploadScan", () => {
                   error: "neo4j failed",
                 },
               ],
+              duration: 1,
             },
           },
         }),
@@ -286,8 +342,11 @@ describe("uploadScan", () => {
               projection_status: "incomplete",
               submitted: { nodes: 1, edges: 0 },
               write_rows: { nodes: 1, edges: 0 },
+              findings: 0,
               graph_totals: { before: null, after: null },
+              normalization_status: "complete",
               identity: ingestIdentity(),
+              duration: 1,
             },
           },
         }),

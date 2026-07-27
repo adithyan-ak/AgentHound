@@ -21,14 +21,14 @@ func testEnumerateEngine(t *testing.T) *rules.Engine {
 }
 
 func TestFinalizeServerResultRecordsMethodFailure(t *testing.T) {
-	serverID := "server-v2"
+	serverID := "server-current"
 	result := &ServerResult{
 		Nodes: []ingest.Node{{
 			ID:         serverID,
 			Kinds:      []string{"MCPServer"},
 			Properties: map[string]any{},
 		}, {
-			ID:    "tool-v2",
+			ID:    "tool-current",
 			Kinds: []string{"MCPTool"},
 			Properties: map[string]any{
 				"name": "tool",

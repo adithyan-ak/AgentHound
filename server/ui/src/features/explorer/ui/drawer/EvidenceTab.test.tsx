@@ -83,6 +83,10 @@ describe("EvidenceTab A2A authentication probe evidence", () => {
           observed_auth_method: "none",
           observed_auth_assurance: "unauthenticated",
           observed_auth_evidence: "anonymous_probe_succeeded",
+          effective_auth_method: "none",
+          effective_auth_assurance: "unauthenticated",
+          effective_auth_evidence: "anonymous_probe_succeeded",
+          effective_auth_source: "observed",
           signature_verification_status: "valid_trusted",
           signature_key_source: "trusted_store",
           signature_key_trust: "trusted",
@@ -138,6 +142,24 @@ describe("EvidenceTab A2A authentication probe evidence", () => {
         node={agent({
           auth_probe_method: "get_task_nonexistent",
           auth_probe_status: "anonymous_protocol_access",
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Verification status unknown")).toBeInTheDocument();
+    expect(screen.queryByText("Directly verified")).not.toBeInTheDocument();
+  });
+
+  it("does not reconstruct anonymous access when the effective tuple is missing", () => {
+    render(
+      <EvidenceTab
+        node={agent({
+          auth_probe_method: "get_task_nonexistent",
+          auth_probe_status: "anonymous_protocol_access",
+          auth_probe_detail: "task_not_found_v1",
+          observed_auth_method: "none",
+          observed_auth_assurance: "unauthenticated",
+          observed_auth_evidence: "anonymous_probe_succeeded",
         })}
       />,
     );

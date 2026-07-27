@@ -32,20 +32,17 @@ func (h *IngestHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 	version, err := sdkingest.DecodeVersion(body)
 	if err != nil {
-		WriteValidationError(w, "invalid JSON payload")
+		writeUnsupportedV1Contract(w)
 		return
 	}
 	if version != sdkingest.CurrentVersion {
-		probe := sdkingest.IngestData{}
-		probe.Meta.Version = version
-		if writeIngestContractError(w, ingest.Preflight(&probe)) {
-			return
-		}
+		writeUnsupportedV1Contract(w)
+		return
 	}
 
 	var data sdkingest.IngestData
 	if err := sdkingest.DecodeStrict(bytes.NewReader(body), &data); err != nil {
-		WriteValidationError(w, "invalid JSON payload")
+		writeUnsupportedV1Contract(w)
 		return
 	}
 	if err := ingest.Preflight(&data); err != nil {
@@ -116,16 +113,19 @@ func (h *IngestHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, result)
 }
 
+func writeUnsupportedV1Contract(w http.ResponseWriter) {
+	WriteJSON(w, http.StatusBadRequest, ErrorResponse{
+		Error: ErrorDetail{
+			Code:    "UNSUPPORTED_V1_CONTRACT",
+			Message: "unsupported V1 ingest contract",
+		},
+	})
+}
+
 func writeIngestContractError(w http.ResponseWriter, err error) bool {
 	var versionErr *ingest.UnsupportedVersionError
 	if errors.As(err, &versionErr) {
-		WriteJSON(w, http.StatusBadRequest, ErrorResponse{
-			Error: ErrorDetail{
-				Code:    "UNSUPPORTED_INGEST_VERSION",
-				Message: versionErr.Error(),
-				Details: versionErr,
-			},
-		})
+		writeUnsupportedV1Contract(w)
 		return true
 	}
 	var contractErr *ingest.RegistryContractMismatchError

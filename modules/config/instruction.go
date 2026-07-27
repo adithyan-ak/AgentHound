@@ -21,7 +21,7 @@ import (
 
 const (
 	maxInstructionFileBytes       int64 = 4 << 20
-	instructionRegistryGeneration       = 3
+	instructionRegistryGeneration       = 1
 )
 
 var (
@@ -76,7 +76,7 @@ var instructionRegistry = []instructionSource{
 // instructionRegistryManifest is the canonical comparison contract for the
 // registry. Ownership keys intentionally exclude it: changing the recognized
 // source set must refresh the same owners so removed evidence can be retired.
-const instructionRegistryManifest = "agenthound-instruction-registry/v3\n" +
+const instructionRegistryManifest = "agenthound-instruction-registry/v1\n" +
 	"source:file:AGENTS.md:agents.md\n" +
 	"source:file:CLAUDE.md:claude.md\n" +
 	"source:file:.claude/CLAUDE.md:claude.md\n" +

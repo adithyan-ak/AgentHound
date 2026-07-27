@@ -5,7 +5,7 @@ import (
 	"sort"
 )
 
-// Assessment keeps the legacy rankable score while disclosing uncertainty.
+// Assessment keeps a rankable score while disclosing uncertainty.
 // Score is conservative (the upper bound) whenever an input is unknown.
 type Assessment struct {
 	Score          float64

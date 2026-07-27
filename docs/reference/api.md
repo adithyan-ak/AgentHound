@@ -204,10 +204,10 @@ Returns reachable nodes grouped by ring (1-hop, 2-hop, ...). Useful for "what ca
 
 **Max body:** 100 MB.
 
-Upload strict ingest-v5 collector JSON. Unknown structural fields, older
+Upload strict ingest-v1 collector JSON. Unknown structural fields, non-V1
 artifacts, registry-contract mismatches, missing identity/collection/rules
 metadata, facts owned only by incomplete domains, omitted edge endpoint kinds,
-legacy property aliases, and incomplete canonical credential/host/auth evidence
+property aliases, and incomplete canonical credential/host/auth evidence
 are rejected before any mutation. Runs the serialized lifecycle: preflight the
 wire and registry contracts → verify both database binding markers → validate
 identity schema and internal consistency → apply graph and coverage scopes → normalize →
@@ -270,15 +270,6 @@ A2A signature posture is likewise optional and atomic:
 and mutually consistent. Full A2A card collection emits all four; sparse
 protocol discovery emits none.
 
-Normalization preserves pre-v1 direct-URL MCP artifacts that predate the
-configured/observed split. Only an envelope with `meta.collector=mcp` and a
-concrete reachable HTTP `MCPServer` whose raw tuple is exactly
-`none/unauthenticated/anonymous_probe_succeeded` and whose three
-`observed_auth_*` fields are all absent is migrated. The tuple is copied to
-`observed_auth_*` and marked `auth_observation_compat=pre_v1_raw_mcp`; Config,
-A2A, declaration-only, unknown, unreachable, stdio, reference-only, and partial
-observed near-misses are never migrated.
-
 Campaign submissions add a scenario-specific prevalidation stage immediately
 after generic validation and before normalization, `BeginScan`, graph writes, or
 coverage reconciliation. Both positive and negative artifacts must match their
@@ -293,7 +284,7 @@ credential material.
 // Request body (abridged; see graph-model.md for the complete schema)
 {
   "meta": {
-    "version": 5,
+    "version": 1,
     "type": "agenthound-ingest",
     "collector": "mcp",
     "collector_version": "1.0.1",
@@ -346,7 +337,7 @@ credential material.
     "after": { "node_counts": {}, "edge_counts": {}, "total_nodes": 47, "total_edges": 82 }
   },
   "stages": [
-    { "name": "write_nodes", "state": "complete", "required": true }
+    { "name": "write_nodes", "state": "complete", "required": true, "duration": 1200000 }
   ],
   "published_revision": 12,
   "warnings": [],
@@ -494,7 +485,7 @@ fails the request; negative or non-finite values also fail. The response
 includes `metadata.algorithm: "bounded-min-weight"` and traversal completeness
 metadata. On a `TRUSTS_SERVER` hop, the returned edge `risk_weight` is the
 derived effective trust weight (falling back to the raw configured weight only
-for a pre-materialization legacy relationship), and the path `weight` sums
+when the effective weight is unavailable), and the path `weight` sums
 that same returned value. Exact finding-detail path costs follow the same rule
 while retaining both raw `risk_weight` and `effective_risk_weight` in edge
 properties for provenance.
@@ -569,7 +560,7 @@ Export a stable, sanitized **campaign witness** for a predicted credential-gated
 `CAN_REACH` finding (16-char fingerprint), so the collector-side campaign runner
 (`agenthound campaign --scenario cred-reach`) can verify it.
 
-Witness v3 is built under a guarded read and is runnable only when the providing
+Witness V1 is built under a guarded read and is runnable only when the providing
 `MCPServer` transport is HTTP. It carries the explicit source agent, explicit
 agent/server/credential/resource kinds and IDs, credential `value_hash` +
 `merge_key`, the endpoint-derived server identity hash, opaque service scope,
@@ -590,7 +581,7 @@ non-verified findings.
 ```json
 {
   "witness": {
-    "schema_version": 3,
+    "schema_version": 1,
     "topology_normalization_version": 1,
     "publication_revision": 7,
     "predicted_edge_kind": "CAN_REACH",
@@ -720,18 +711,16 @@ observation time, and registry contract.
 `partial`, `failed`, or `truncated` collection scope with its optional parent,
 owning scan, and observation time. Positive findings and graph facts remain
 usable; consumers must not interpret an empty finding set as an all-clear while
-that list is non-empty or an active instruction root uses an older registry
+that list is non-empty or an active instruction root uses a non-current registry
 contract.
 
 ### `GET /api/v1/posture/export`
 
 Returns one persisted publication revision. The export is assembled inside the
 same PostgreSQL transaction that replaces the scan's finding snapshot and
-advances publication. Export schema version 4 adds typed
-`scope.active_coverage_limitations`, while schema version 3 introduced
-`scope.active_coverage_roots`. The endpoint serves persisted schema versions 3
-and 4; unsupported schemas fail closed rather than returning a response outside
-the OpenAPI contract. It includes
+advances publication. The endpoint serves schema version 1 only; missing,
+null, or unsupported required fields fail closed rather than returning a
+response outside the OpenAPI contract. The V1 export includes
 exact scope, stage/coverage completeness,
 normalization warnings, managed-observation completeness, observation and
 publication timestamps, suppression policy, frozen public graph totals,
@@ -783,8 +772,8 @@ coverage head. Any active coverage limitation or outdated/incomplete
 instruction root makes comparison unavailable. The server records
 `comparable_to_scan_id` only for matching non-empty comparison keys.
 
-Collector artifacts and the server use ingest v5 in lockstep. Version mismatch
-returns `UNSUPPORTED_INGEST_VERSION`; instruction-registry mismatch returns
+Collector artifacts and the server use ingest v1 in lockstep. Version mismatch
+returns `UNSUPPORTED_V1_CONTRACT`; instruction-registry mismatch returns
 `REGISTRY_CONTRACT_MISMATCH`. Both are rejected before scan lifecycle, audit,
 or graph mutation and include upgrade/recollection guidance.
 

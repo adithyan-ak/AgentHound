@@ -84,7 +84,7 @@ AgentHound does not create, retrieve, or elevate ContextForge management credent
 
 ### Automatic storage binding and multi-vantage ingest
 
-The server accepts every structurally valid ingest-v5 artifact whose registered
+The server accepts every structurally valid ingest-v1 artifact whose registered
 instruction-source contract matches the server. It does not
 bind a database to one host or network and has no collection-origin admission
 configuration. Ambiguous graph identities and coverage ownership are scoped by
@@ -98,11 +98,10 @@ product-empty, covering a crash during first initialization. Crossed volumes,
 invalid markers, or a missing marker beside non-empty product data fail closed.
 There is no public storage-pair flag or environment variable.
 
-Back up and restore PostgreSQL and Neo4j together. Storage binding v3 and ingest
-v5 form a clean lifecycle-ownership boundary: preserve an older deployment or
-backup as read-only, recreate both database volumes together, restart, and
-recollect. Existing pre-root-state graph evidence is never mixed into the v5
-projection automatically.
+Back up and restore PostgreSQL and Neo4j together. Storage binding V1 and ingest
+V1 require freshly initialized paired stores. This development baseline has no
+in-place upgrade or artifact-conversion path: recreate both database volumes
+together, restart, and recollect.
 
 ---
 

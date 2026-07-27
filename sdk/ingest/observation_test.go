@@ -258,8 +258,8 @@ func TestNonBlockingInstructionCoverageDomainsIncludesRecognizedIncompleteRoots(
 			})
 		}
 	}
-	if strings.Contains(InstructionCoverageLimitationWarning, "deep") {
-		t.Fatalf("coverage warning remains deep-specific: %q", InstructionCoverageLimitationWarning)
+	if strings.Contains(CoverageLimitationWarning, "deep") {
+		t.Fatalf("coverage warning remains deep-specific: %q", CoverageLimitationWarning)
 	}
 }
 

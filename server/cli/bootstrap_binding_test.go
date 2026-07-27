@@ -18,8 +18,8 @@ func TestResolveStorageBindingMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := expected
-	legacy.BindingVersion--
+	unsupported := expected
+	unsupported.BindingVersion++
 
 	marker := func(value binding.Marker) *binding.Marker {
 		copy := value
@@ -57,18 +57,18 @@ func TestResolveStorageBindingMatrix(t *testing.T) {
 			wantMarker: marker(expected),
 		},
 		{
-			name:       "legacy PostgreSQL data",
+			name:       "unbound PostgreSQL data",
 			postgres:   appdb.StorageInspection{ProductEmpty: false},
 			neo4j:      graph.StorageBindingInspection{ProductEmpty: true},
 			wantErr:    true,
-			wantPhrase: "not an ingest v5 database pair",
+			wantPhrase: "not an ingest v1 database pair",
 		},
 		{
-			name:       "legacy Neo4j data",
+			name:       "unbound Neo4j data",
 			postgres:   appdb.StorageInspection{ProductEmpty: true},
 			neo4j:      graph.StorageBindingInspection{ProductEmpty: false},
 			wantErr:    true,
-			wantPhrase: "not an ingest v5 database pair",
+			wantPhrase: "not an ingest v1 database pair",
 		},
 		{
 			name:       "crossed storage pair",
@@ -78,9 +78,9 @@ func TestResolveStorageBindingMatrix(t *testing.T) {
 			wantPhrase: "different volume pairs",
 		},
 		{
-			name:       "matching legacy bindings",
-			postgres:   appdb.StorageInspection{Marker: marker(legacy)},
-			neo4j:      graph.StorageBindingInspection{Marker: marker(legacy)},
+			name:       "matching unsupported bindings",
+			postgres:   appdb.StorageInspection{Marker: marker(unsupported)},
+			neo4j:      graph.StorageBindingInspection{Marker: marker(unsupported)},
 			wantErr:    true,
 			wantPhrase: "recreate both PostgreSQL and Neo4j volumes",
 		},

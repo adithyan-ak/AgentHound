@@ -187,6 +187,8 @@ describe("published finding scope", () => {
         snapshot_status: "complete",
         available: true,
         stale: false,
+        coverage_limited: false,
+        active_coverage_limitations: [],
       },
     });
     const result = await fetchFindings();
@@ -215,10 +217,34 @@ describe("published finding scope", () => {
         snapshot_status: "complete",
         available: true,
         stale: false,
+        coverage_limited: false,
+        active_coverage_limitations: [],
       },
     });
     await expect(fetchFindings()).rejects.toThrow(
       "findings[0].evidence.verification is required",
+    );
+  });
+
+  it("rejects a missing coverage-limitation array", async () => {
+    const response = await mocks.json();
+    const scope = { ...response.scope };
+    delete scope.active_coverage_limitations;
+    mocks.json.mockResolvedValue({ ...response, scope });
+
+    await expect(fetchFindings()).rejects.toThrow(
+      "findings response.scope.active_coverage_limitations must be an array",
+    );
+  });
+
+  it("rejects a missing coverage-limited assessment", async () => {
+    const response = await mocks.json();
+    const scope = { ...response.scope };
+    delete scope.coverage_limited;
+    mocks.json.mockResolvedValue({ ...response, scope });
+
+    await expect(fetchFindings()).rejects.toThrow(
+      "findings response.scope.coverage_limited must be a boolean",
     );
   });
 

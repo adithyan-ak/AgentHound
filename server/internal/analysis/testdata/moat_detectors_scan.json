@@ -1,6 +1,6 @@
 {
   "meta": {
-    "version": 5,
+    "version": 1,
     "type": "agenthound-ingest",
     "identity": {
       "scheme": "agenthound_collection_v1",
@@ -44,8 +44,8 @@
     "identity_schemes": [{
       "entity_kind": "MCPServer",
       "transport": "stdio",
-      "scheme": "mcp_stdio_v3_hashed_argv",
-      "version": 3
+      "scheme": "mcp_stdio_v1_hashed_argv",
+      "version": 1
     }]
   },
   "graph": {

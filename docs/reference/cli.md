@@ -46,7 +46,7 @@ network-scoped evidence.
 
 Enumerate MCP servers, A2A agents, and client configs, then write the merged trust graph as JSON.
 
-Scan artifacts use strict ingest wire version `5` with required automatic
+Scan artifacts use strict ingest wire version `1` with required automatic
 `identity` and evidence
 metadata: constituent `collection` coverage/outcomes, the effective text and
 fingerprint `ruleset` semantic digest/entries with canonical matcher
@@ -309,7 +309,15 @@ Concurrency precedence for local-mode `scan`: an explicit `--scan-concurrency` a
 `--ingest` preserves the normal JSON artifact before making the request. The
 default path is `./scan-<scan_id>.json`; use `--output <path>` to choose another
 backup path. `--output -` is incompatible because direct ingest requires a
-recoverable artifact. Redirects are not followed.
+recoverable artifact. Redirects are not followed. The collector validates the
+remote receipt against the exact V1 response contract before printing success;
+missing coverage, malformed identity or totals, invalid states, unknown fields,
+non-positive publication revisions, and contradictory required-stage or
+publication outcomes fail closed. Supplied stages, normalization warnings, and
+post-processing statistics are validated field-by-field. A coherent incomplete
+receipt remains valid diagnostic evidence: the collector prints
+`Ingest incomplete`, preserves the receipt, and exits non-zero. Safe partial
+collection evidence may still publish successfully with a coverage warning.
 
 Direct-ingest HTTP is supported only for the default loopback server or an
 endpoint already protected by an operator-controlled VPN/SSH tunnel. Use HTTPS
@@ -609,7 +617,7 @@ Retries are conflict-aware: each Reverter checks live target state before writin
 
 Receipts live at `~/.agenthound/state/<module-id>/<engagement-id>.json` and are NOT deleted after revert — they are the audit trail.
 
-Engagement recovery processes every receipt schema supported by its owning module and keeps per-module/per-file LIFO while continuing across independent module failures. ContextForge tool-description recovery supports only its new typed receipt type, version, and provider profile; missing, unknown, or older variants are rejected before networking. Because immutable ContextForge version/User-Agent attribution cannot safely unwind stacked writes to one row, the adapter rejects any new mutation—including dry-run eligibility—while the row carries an AgentHound forward-operation attribution, regardless of engagement. Within one engagement it also rejects a historical same-row receipt whose original description is not yet live; a verified restoration makes the older receipt a safe no-op and permits reuse. It may restore provider-normalized landed text when the receipt's exact tool UUID is still at `V+1` with the forward operation User-Agent; outbound-text equality is not an ownership requirement. When normalization lands text equal to the original but retains `V+1` and the forward User-Agent, recovery issues the one restore PUT so the row reaches `V+2` with the restore User-Agent instead of falsely reporting a no-op. Proven server/tool association drift does not block restoration of that exact attributed row; standalone recovery reports `PARTIALLY VERIFIED` because the management row is verified while MCP verification is unavailable. An association-read error is not detachment proof and cannot select management-only verification. ContextForge and intervening proxies must preserve AgentHound's operation User-Agent. This differs from an active campaign's run-scoped cleanup, which selects one exact run, orders all modules globally by `step_sequence`, and fail-stops on the first unsafe dependent step.
+Engagement recovery accepts only the V1 receipt envelopes supported by each owning module and keeps per-module/per-file LIFO while continuing across independent module failures. ContextForge tool-description recovery requires its typed V1 receipt, provider profile, and contract; missing, unknown, or non-V1 forms are rejected before networking. Because immutable ContextForge version/User-Agent attribution cannot safely unwind stacked writes to one row, the adapter rejects any new mutation—including dry-run eligibility—while the row carries an AgentHound forward-operation attribution, regardless of engagement. Within one engagement it also rejects a prior same-row receipt whose original description is not yet live; a verified restoration makes that earlier receipt a safe no-op and permits reuse. It may restore provider-normalized landed text when the receipt's exact tool UUID is still at `V+1` with the forward operation User-Agent; outbound-text equality is not an ownership requirement. When normalization lands text equal to the original but retains `V+1` and the forward User-Agent, recovery issues the one restore PUT so the row reaches `V+2` with the restore User-Agent instead of falsely reporting a no-op. Proven server/tool association drift does not block restoration of that exact attributed row; standalone recovery reports `PARTIALLY VERIFIED` because the management row is verified while MCP verification is unavailable. An association-read error is not detachment proof and cannot select management-only verification. ContextForge and intervening proxies must preserve AgentHound's operation User-Agent. This differs from an active campaign's run-scoped cleanup, which selects one exact run, orders all modules globally by `step_sequence`, and fail-stops on the first unsafe dependent step.
 
 #### Example
 
@@ -837,11 +845,11 @@ agenthound-server serve
 
 Before schema mutation, the server automatically generates and stamps an
 internal UUID that pairs PostgreSQL with Neo4j. A one-sided missing marker is
-repaired only when the stores are safe to repair; crossed pairs, legacy
+repaired only when the stores are safe to repair; crossed pairs, unbound
 non-empty stores, and future marker versions fail closed. It then initializes
 Neo4j schema (constraints + indexes) and PostgreSQL migrations on first start.
-The server accepts only ingest-v5 artifacts. Version or instruction-registry
-mismatches fail before storage access with upgrade-and-rescan guidance;
+The server accepts only ingest-v1 artifacts. Version or instruction-registry
+mismatches fail before storage access with reset-and-rescan guidance;
 provenance controls graph scope, not admission. Mutating HTTP endpoints are
 gated by `OriginGuard` (Origin allowlist, configured via `--cors-origins`).
 Graceful shutdown on SIGINT/SIGTERM (10s drain).
@@ -860,7 +868,7 @@ agenthound-server ingest -
 ```
 
 Pipeline stages: reject incompatible wire/registry contracts, reverify both
-storage markers, validate the strict ingest-v5
+storage markers, validate the strict ingest-v1
 artifact, apply collection/network scope, normalize supported values,
 deduplicate (MERGE by objectid), batch write (1000 ops/txn), and post-process
 (composite edges + risk scores).
@@ -983,7 +991,7 @@ agenthound-server query --findings --fail-on critical --format json
 
 Export a stable, sanitized **witness** for a predicted credential-gated `CAN_REACH` finding so the collector-side `agenthound campaign` runner can verify it.
 
-Witness v3 is exported only for HTTP-backed resources. It carries the explicit source `AgentInstance`, scoped server/credential/resource IDs and concrete kinds, the endpoint-derived server identity hash and opaque service scope, credential `value_hash` + `merge_key`, resource identity input, predicted edge kind, topology-normalization version, and the actual ordered current `CAN_REACH.evidence_node_ids` with one normalized concrete kind per node. Its positive publication revision is provenance only, not an equality gate. The unkeyed fingerprint detects inconsistency but is not a signature or authorization proof. It contains no clear endpoint, Neo4j relationship ID, arbitrary node property, or secret.
+Witness V1 is exported only for HTTP-backed resources. It carries the explicit source `AgentInstance`, scoped server/credential/resource IDs and concrete kinds, the endpoint-derived server identity hash and opaque service scope, credential `value_hash` + `merge_key`, resource identity input, predicted edge kind, topology-normalization version, and the actual ordered current `CAN_REACH.evidence_node_ids` with one normalized concrete kind per node. Its positive publication revision is provenance only, not an equality gate. The unkeyed fingerprint detects inconsistency but is not a signature or authorization proof. It contains no clear endpoint, Neo4j relationship ID, arbitrary node property, or secret.
 
 ```bash
 agenthound-server witness --finding <finding-id> > witness.json

@@ -107,7 +107,7 @@ WHERE coalesce(v.is_composite, false) = false
   AND v.server_kind = 'MCPServer'
   AND v.credential_kind = 'Credential'
   AND v.resource_kind = 'MCPResource'
-  AND v.witness_schema_version = 3
+  AND v.witness_schema_version = $witness_schema_version
   AND v.topology_normalization_version = 1
   AND v.publication_revision > 0
   AND v.predicted_edge_kind = 'CAN_REACH'
@@ -171,6 +171,7 @@ RETURN count(e) AS upgraded`
 	params := map[string]any{
 		"scan_id":                scanID,
 		"validated_evidence_ids": validatedEvidenceIDs,
+		"witness_schema_version": campaign.WitnessSchemaVersion,
 	}
 	var total int
 

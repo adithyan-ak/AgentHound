@@ -10,9 +10,9 @@ import (
 	"github.com/google/uuid"
 )
 
-const CurrentVersion = 3
+const CurrentVersion = 1
 
-const resetGuidance = "automatic upgrade is unsupported because the lifecycle ownership model changed; back up the deployment, recreate both PostgreSQL and Neo4j volumes together, restart the server, and recollect with ingest v5"
+const resetGuidance = "recreate both PostgreSQL and Neo4j volumes together, restart the server, and recollect with ingest v1"
 
 var ErrMarkerMissing = errors.New("storage binding marker is missing")
 

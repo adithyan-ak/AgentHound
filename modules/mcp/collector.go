@@ -110,8 +110,8 @@ func (c *MCPCollector) Collect(ctx context.Context, opts collector.CollectOption
 	data.Meta.IdentitySchemes = []ingest.IdentityScheme{{
 		EntityKind: "MCPServer",
 		Transport:  "stdio",
-		Scheme:     ingest.MCPStdioIdentitySchemeV3,
-		Version:    3,
+		Scheme:     ingest.MCPStdioIdentitySchemeV1,
+		Version:    1,
 	}}
 
 	results := c.enumerateAll(ctx, specs, scanID)

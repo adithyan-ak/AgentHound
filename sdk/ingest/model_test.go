@@ -88,7 +88,7 @@ func TestEdgeJSONRoundTrip(t *testing.T) {
 func TestIngestDataJSONRoundTrip(t *testing.T) {
 	input := `{
 		"meta": {
-			"version": 5,
+			"version": 1,
 			"type": "agenthound-ingest",
 			"collector": "mcp",
 			"collector_version": "0.1.0",
@@ -114,8 +114,8 @@ func TestIngestDataJSONRoundTrip(t *testing.T) {
 			"identity_schemes": [{
 				"entity_kind": "MCPServer",
 				"transport": "stdio",
-				"scheme": "mcp_stdio_v3_hashed_argv",
-				"version": 3
+				"scheme": "mcp_stdio_v1_hashed_argv",
+				"version": 1
 			}]
 		},
 		"graph": {
@@ -145,19 +145,19 @@ func TestIngestDataJSONRoundTrip(t *testing.T) {
 		t.Errorf("edges count: got %d, want 1", len(d.Graph.Edges))
 	}
 	if d.Meta.Collection == nil || d.Meta.Ruleset == nil || len(d.Meta.IdentitySchemes) == 0 {
-		t.Fatal("strict v5 metadata was not preserved")
+		t.Fatal("strict v1 metadata was not preserved")
 	}
 	if d.Meta.Identity.Scheme != CollectionIdentityScheme {
 		t.Fatalf("identity = %+v", d.Meta.Identity)
 	}
 }
 
-func TestCurrentIdentitySchemesUsesHashedArgvV3(t *testing.T) {
+func TestCurrentIdentitySchemesUsesHashedArgvV1(t *testing.T) {
 	schemes := CurrentIdentitySchemes()
 	if len(schemes) != 1 || schemes[0].EntityKind != "MCPServer" ||
 		schemes[0].Transport != "stdio" ||
-		schemes[0].Scheme != MCPStdioIdentitySchemeV3 || schemes[0].Version != 3 {
-		t.Fatalf("current identity schemes = %+v, want stdio MCPServer hashed-argv v3", schemes)
+		schemes[0].Scheme != MCPStdioIdentitySchemeV1 || schemes[0].Version != 1 {
+		t.Fatalf("current identity schemes = %+v, want stdio MCPServer hashed-argv v1", schemes)
 	}
 }
 
@@ -196,8 +196,8 @@ func TestIngestEvidenceMetadataJSONRoundTrip(t *testing.T) {
 			IdentitySchemes: []IdentityScheme{{
 				EntityKind: "MCPServer",
 				Transport:  "stdio",
-				Scheme:     MCPStdioIdentitySchemeV3,
-				Version:    3,
+				Scheme:     MCPStdioIdentitySchemeV1,
+				Version:    1,
 			}},
 		},
 		Graph: GraphData{Nodes: []Node{}, Edges: []Edge{}},
@@ -223,7 +223,7 @@ func TestIngestEvidenceMetadataJSONRoundTrip(t *testing.T) {
 		t.Fatalf("effective matcher metadata lost: %+v", got.Meta.Ruleset)
 	}
 	if len(got.Meta.IdentitySchemes) != 1 ||
-		got.Meta.IdentitySchemes[0].Scheme != MCPStdioIdentitySchemeV3 {
+		got.Meta.IdentitySchemes[0].Scheme != MCPStdioIdentitySchemeV1 {
 		t.Fatalf("identity metadata lost: %+v", got.Meta.IdentitySchemes)
 	}
 }

@@ -11,7 +11,7 @@
 id: ollama
 name: Ollama LLM inference server
 description: 'Identifies Ollama from its version and model-inventory response shapes'
-version: 3
+version: 1
 service_kind: ollama
 probes:
   - method: GET

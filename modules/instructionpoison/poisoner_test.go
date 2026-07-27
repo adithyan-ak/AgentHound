@@ -440,3 +440,76 @@ func TestRevert_IndeterminateWhenUnreadable_NoWrite(t *testing.T) {
 		t.Errorf("revert modified the file on an indeterminate read (size %d -> %d)", before.Size(), after.Size())
 	}
 }
+
+func TestRevert_RejectsInvalidV1RestoreMetadataBeforeMutation(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+		want   string
+	}{
+		{
+			name:   "missing file existed",
+			mutate: func(extra map[string]any) { delete(extra, "file_existed") },
+			want:   "file_existed",
+		},
+		{
+			name:   "non-boolean file existed",
+			mutate: func(extra map[string]any) { extra["file_existed"] = "true" },
+			want:   "file_existed",
+		},
+		{
+			name:   "missing original mode",
+			mutate: func(extra map[string]any) { delete(extra, "orig_mode") },
+			want:   "orig_mode",
+		},
+		{
+			name:   "numeric original mode",
+			mutate: func(extra map[string]any) { extra["orig_mode"] = float64(0o600) },
+			want:   "orig_mode",
+		},
+		{
+			name:   "malformed original mode",
+			mutate: func(extra map[string]any) { extra["orig_mode"] = "not-octal" },
+			want:   "orig_mode",
+		},
+		{
+			name:   "non-canonical original mode",
+			mutate: func(extra map[string]any) { extra["orig_mode"] = "0600" },
+			want:   "orig_mode",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newPoisoner(t)
+			path := filepath.Join(t.TempDir(), "CLAUDE.md")
+			writeOriginal(t, path)
+
+			receipt, err := p.Poison(context.Background(), action.Target{}, action.PoisonPayload{
+				InjectionContent: injection,
+				EngagementID:     "ENG-STRICT-V1",
+				Extras:           map[string]any{"file": path},
+			})
+			if err != nil {
+				t.Fatalf("Poison: %v", err)
+			}
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			tt.mutate(receipt.Extra)
+			err = p.Revert(context.Background(), receipt)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Revert error = %v, want error containing %q", err, tt.want)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
+				t.Fatal("invalid receipt metadata mutated the target")
+			}
+		})
+	}
+}

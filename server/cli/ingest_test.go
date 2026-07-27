@@ -13,28 +13,22 @@ import (
 
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
-	serveringest "github.com/adithyan-ak/agenthound/server/internal/ingest"
 	"github.com/adithyan-ak/agenthound/server/model"
 )
 
-func TestIngestCommandRejectsUnsupportedVersionBeforeBootstrap(t *testing.T) {
-	data := common.NewIngestData("scan", "old-cli-artifact")
-	data.Meta.Version = ingest.CurrentVersion - 1
-	encoded, err := json.Marshal(data)
+func TestIngestCommandRejectsUnsupportedV1ContractBeforeBootstrap(t *testing.T) {
+	current := common.NewIngestData("scan", "unsupported-cli-artifact")
+	currentEncoded, err := json.Marshal(current)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var legacy map[string]any
-	if err := json.Unmarshal(encoded, &legacy); err != nil {
+	var unknownField map[string]any
+	if err := json.Unmarshal(currentEncoded, &unknownField); err != nil {
 		t.Fatal(err)
 	}
-	legacy["removed_v4_field"] = true
-	encoded, err = json.Marshal(legacy)
+	unknownField["unrecognized_field"] = true
+	unknownEncoded, err := json.Marshal(unknownField)
 	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "old.json")
-	if err := os.WriteFile(path, encoded, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -46,15 +40,37 @@ func TestIngestCommandRejectsUnsupportedVersionBeforeBootstrap(t *testing.T) {
 		return nil, nil, errors.New("bootstrap must not run")
 	}
 
-	err = ingestCmd.RunE(ingestCmd, []string{path})
-	if bootstrapCalled {
-		t.Fatal("Bootstrap ran before version preflight")
+	nonV1 := common.NewIngestData("scan", "non-v1-cli-artifact")
+	nonV1.Meta.Version = ingest.CurrentVersion + 1
+	nonV1Encoded, err := json.Marshal(nonV1)
+	if err != nil {
+		t.Fatal(err)
 	}
-	var versionErr *serveringest.UnsupportedVersionError
-	if !errors.As(err, &versionErr) ||
-		!strings.Contains(err.Error(), "unsupported") ||
-		!strings.Contains(err.Error(), "recollect") {
-		t.Fatalf("error = %T %v, want actionable unsupported-version error", err, err)
+	for name, encoded := range map[string][]byte{
+		"malformed":     []byte(`{"meta":`),
+		"missing":       []byte(`{"graph":{"nodes":[],"edges":[]}}`),
+		"zero":          []byte(`{"meta":{"version":0}}`),
+		"non-v1":        nonV1Encoded,
+		"unknown field": unknownEncoded,
+	} {
+		t.Run(name, func(t *testing.T) {
+			bootstrapCalled = false
+			path := filepath.Join(t.TempDir(), "unsupported.json")
+			if err := os.WriteFile(path, encoded, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err := ingestCmd.RunE(ingestCmd, []string{path})
+			if bootstrapCalled {
+				t.Fatal("Bootstrap ran before contract preflight")
+			}
+			if err == nil || err.Error() != "unsupported V1 ingest contract" {
+				t.Fatalf(
+					"error = %T %v, want generic unsupported V1 contract error",
+					err,
+					err,
+				)
+			}
+		})
 	}
 }
 
@@ -160,7 +176,7 @@ func TestWriteIngestResultPublishedIncompleteExactCoverageRemainsSuccessful(t *t
 		Outcome:           ingest.OutcomeComplete,
 		ProjectionStatus:  model.ProjectionComplete,
 		PublishedRevision: &revision,
-		Warnings:          []string{ingest.InstructionCoverageLimitationWarning},
+		Warnings:          []string{ingest.CoverageLimitationWarning},
 		Collection: ingest.CollectionReport{
 			State:        ingest.OutcomePartial,
 			CoverageKeys: []string{root},

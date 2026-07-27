@@ -13,7 +13,7 @@
 id: langserve
 name: LangServe (LangChain HTTP API)
 description: 'Identifies LangServe by its canonical documentation page title'
-version: 3
+version: 1
 service_kind: langserve
 probes:
   - method: GET

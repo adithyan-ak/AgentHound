@@ -96,7 +96,7 @@ export function decodePublishedFindingScope(
           "findings response.scope.published_at",
         );
   const activeCoverageLimitations = collection(
-    scope.active_coverage_limitations ?? [],
+    scope.active_coverage_limitations,
     "findings response.scope.active_coverage_limitations",
   ).map((value, index): PublishedCoverageLimitation => {
     const path = `findings response.scope.active_coverage_limitations[${index}]`;
@@ -141,13 +141,10 @@ export function decodePublishedFindingScope(
       "findings response.scope.available",
     ),
     stale: requiredBoolean(scope.stale, "findings response.scope.stale"),
-    coverageLimited:
-      scope.coverage_limited == null
-        ? activeCoverageLimitations.length > 0
-        : requiredBoolean(
-            scope.coverage_limited,
-            "findings response.scope.coverage_limited",
-          ),
+    coverageLimited: requiredBoolean(
+      scope.coverage_limited,
+      "findings response.scope.coverage_limited",
+    ),
     activeCoverageLimitations,
   };
 }

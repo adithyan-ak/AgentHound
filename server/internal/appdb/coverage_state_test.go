@@ -228,30 +228,30 @@ func TestComparisonKeyIncludesOtherCoverageHeadRevisions(t *testing.T) {
 	}
 }
 
-func TestRegistryUpgradeRetiresChildrenUnderStableRoot(t *testing.T) {
+func TestRegistryContractChangeRetiresChildrenUnderStableRoot(t *testing.T) {
 	root := "config:instruction-deep:sha256:stable-root"
-	v1Only := "config:instruction-source:sha256:v1-only"
+	previousOnly := "config:instruction-source:sha256:previous-only"
 	shared := "config:instruction-source:sha256:shared"
-	v2Only := "config:instruction-source:sha256:v2-only"
+	currentOnly := "config:instruction-source:sha256:current-only"
 
 	retired := retiredCoverageKeys(
 		[]sdkingest.CoverageRoot{{
 			CoverageKey:       root,
-			ChildCoverageKeys: []string{shared, v2Only},
+			ChildCoverageKeys: []string{shared, currentOnly},
 			RegistryContract: &sdkingest.RegistryContract{
-				Generation: 2,
-				Digest:     "sha256:v2",
+				Generation: sdkingest.InstructionRegistryGeneration + 1,
+				Digest:     "sha256:changed-contract",
 			},
 		}},
 		[]coverageHead{
-			{Key: v1Only, Root: root},
+			{Key: previousOnly, Root: root},
 			{Key: shared, Root: root},
 		},
 		nil,
 		nil,
 	)
-	if want := []string{v1Only}; !reflect.DeepEqual(retired, want) {
-		t.Fatalf("retired v1 children = %v, want %v", retired, want)
+	if want := []string{previousOnly}; !reflect.DeepEqual(retired, want) {
+		t.Fatalf("retired previous children = %v, want %v", retired, want)
 	}
 }
 

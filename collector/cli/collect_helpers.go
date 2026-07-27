@@ -24,7 +24,7 @@ func prepareCollectorArtifact(data *ingest.IngestData) error {
 
 func marshalCollectorArtifact(data *ingest.IngestData) ([]byte, error) {
 	if err := prepareCollectorArtifact(data); err != nil {
-		return nil, fmt.Errorf("prepare ingest v5 artifact: %w", err)
+		return nil, fmt.Errorf("prepare ingest v1 artifact: %w", err)
 	}
 	encoded, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {

@@ -3,8 +3,8 @@ package ingest
 import "strings"
 
 const (
-	InstructionRegistryGeneration = 3
-	InstructionRegistryDigest     = "sha256:55b1802d17db8a57a59a46b43ac308e1f859e1a8c7558f0c147520cc9c9f53b0"
+	InstructionRegistryGeneration = 1
+	InstructionRegistryDigest     = "sha256:773fcf9a5c1dd003edc2f631c55258f701e7b1dbd9a2add59b16905efa214e9b"
 
 	InstructionMethodExactUser    = "instruction_exact_user"
 	InstructionMethodExactProject = "instruction_exact_project"

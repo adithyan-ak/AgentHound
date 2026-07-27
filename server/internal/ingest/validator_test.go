@@ -783,6 +783,10 @@ func TestValidatorEnforcesObservedA2AAuthAtIngestBoundary(t *testing.T) {
 	properties["auth_probe_status"] = "anonymous_protocol_access"
 	properties["auth_probe_detail"] = "task_not_found_v1"
 	if err := NewValidator().Validate(&data); err != nil {
+		var validationErr *ValidationError
+		if errors.As(err, &validationErr) {
+			t.Fatalf("valid A2A runtime observation rejected: %+v", validationErr.Errors)
+		}
 		t.Fatalf("valid A2A runtime observation rejected: %v", err)
 	}
 
@@ -968,17 +972,17 @@ func TestValidatorRejectsBadVersion(t *testing.T) {
 	if versionErr.Received != 99 || versionErr.Supported != ingest.CurrentVersion {
 		t.Fatalf("version error = %+v", versionErr)
 	}
-	if !strings.Contains(versionErr.Error(), "upgrade the collector and server together") {
+	if !strings.Contains(versionErr.Error(), "requires version 1") {
 		t.Fatalf("version error is not actionable: %v", versionErr)
 	}
 }
 
-func TestValidatorRejectsV1(t *testing.T) {
+func TestValidatorRejectsMissingVersion(t *testing.T) {
 	data := validIngestData()
-	data.Meta.Version = 1
+	data.Meta.Version = 0
 	var versionErr *UnsupportedVersionError
 	if !errors.As(NewValidator().Validate(data), &versionErr) {
-		t.Fatal("v1 artifact did not return UnsupportedVersionError")
+		t.Fatal("missing version did not return UnsupportedVersionError")
 	}
 }
 
@@ -1011,8 +1015,8 @@ func TestValidatorInstructionRegistryContractPreflight(t *testing.T) {
 	}
 
 	for name, generation := range map[string]int{
-		"older": ingest.InstructionRegistryGeneration - 1,
-		"newer": ingest.InstructionRegistryGeneration + 1,
+		"zero":   0,
+		"future": ingest.InstructionRegistryGeneration + 1,
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate, _, _ := validInstructionRootData(ingest.OutcomeComplete)
@@ -1405,7 +1409,7 @@ func TestValidatorRejectsRemovedGraphCompatibilityProperties(t *testing.T) {
 func TestValidatorRequiresHashedArgvStdioIdentity(t *testing.T) {
 	t.Run("metadata", func(t *testing.T) {
 		data := validIngestData()
-		data.Meta.IdentitySchemes[0].Scheme = ingest.MCPStdioIdentitySchemeV2
+		data.Meta.IdentitySchemes[0].Scheme = "mcp_stdio_unsupported"
 		data.Meta.IdentitySchemes[0].Version = 2
 		assertValidationError(
 			t,
@@ -1443,7 +1447,7 @@ func TestValidatorRequiresCurrentStdioParentAndChildIDs(t *testing.T) {
 		data.Graph.Nodes[0].Properties["command"] = "npx"
 		data.Graph.Nodes[0].Properties["arg_hashes"] = identity.ArgumentHashes
 		data.Graph.Nodes[0].Properties["arg_count"] = len(identity.ArgumentHashes)
-		data.Graph.Nodes[0].Properties["id_scheme"] = ingest.MCPStdioIdentitySchemeV3
+		data.Graph.Nodes[0].Properties["id_scheme"] = ingest.MCPStdioIdentitySchemeV1
 		data.Graph.Nodes[1].ID = childID
 		data.Graph.Edges[0].Source = parentID
 		data.Graph.Edges[0].Target = childID
@@ -1477,7 +1481,7 @@ func TestValidatorRejectsRawOrUnverifiableStdioArgv(t *testing.T) {
 		data.Graph.Nodes[0].Properties["command"] = "node"
 		data.Graph.Nodes[0].Properties["arg_hashes"] = identity.ArgumentHashes
 		data.Graph.Nodes[0].Properties["arg_count"] = len(identity.ArgumentHashes)
-		data.Graph.Nodes[0].Properties["id_scheme"] = ingest.MCPStdioIdentitySchemeV3
+		data.Graph.Nodes[0].Properties["id_scheme"] = ingest.MCPStdioIdentitySchemeV1
 		data.Graph.Nodes[1].ID = ingest.ComputeNodeID("MCPTool", identity.ObjectID, "tool")
 		data.Graph.Edges[0].Source = identity.ObjectID
 		data.Graph.Edges[0].Target = data.Graph.Nodes[1].ID

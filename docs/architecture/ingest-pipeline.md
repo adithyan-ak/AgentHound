@@ -27,7 +27,7 @@ Input is the `sdk/ingest.IngestData` struct:
 ```json
 {
   "meta": {
-    "version": 5,
+    "version": 1,
     "type": "agenthound-ingest",
     "collector": "mcp",
     "scan_id": "...",
@@ -74,8 +74,8 @@ Input is the `sdk/ingest.IngestData` struct:
     "identity_schemes": [{
       "entity_kind": "MCPServer",
       "transport": "stdio",
-      "scheme": "mcp_stdio_v3_hashed_argv",
-      "version": 3
+      "scheme": "mcp_stdio_v1_hashed_argv",
+      "version": 1
     }]
   },
   "graph": {
@@ -85,8 +85,8 @@ Input is the `sdk/ingest.IngestData` struct:
 }
 ```
 
-Wire version `5` is the only accepted contract; v1, v2, v3, and v4 artifacts are
-rejected. `identity`, `collection`, `ruleset`, and `identity_schemes` are
+Wire version `1` is the only accepted contract. Missing, malformed, zero, or
+non-V1 versions are rejected. `identity`, `collection`, `ruleset`, and `identity_schemes` are
 required. The server validates identity schema, version, digest consistency,
 and evidence classification—not the truth of the claimed execution origin.
 Every collection outcome names a canonical scoped coverage key, its explicit
@@ -160,7 +160,8 @@ inventory counts, search, or collector wire format.
 `Validator.Validate()` rejects malformed payloads before any graph writes.
 
 Checks performed:
-- `meta.version` must be `5`; v1, v2, v3, and v4 are rejected
+- `meta.version` must be exactly `1`; missing, malformed, zero, and non-V1
+  contracts are rejected generically before storage access
 - `meta.identity` must have the current scheme/version, canonical HMAC evidence,
   internally consistent IDs, independently derived collection-point and
   network quality classifications, and bounded non-authoritative display labels
@@ -172,7 +173,7 @@ Checks performed:
 - every raw fact must carry explicit declared observation domains
 - Every node must have a non-empty `id` and at least one `kind` from `AllowedNodeKinds` (23 kinds)
 - Every edge must have non-empty `source`/`target` and a `kind` from `RawEdgeKinds` (20 kinds)
-- v1 property aliases are rejected; canonical status/evidence fields are
+- removed property aliases are rejected; canonical status/evidence fields are
   required for credentials and hosts
 - configured MCP/A2A method, assurance, and evidence are optional as a channel,
   but any present channel must be a complete producer-compatible tuple
@@ -200,10 +201,6 @@ Transformations:
   network-context, artifact-local, or unresolved-reference scope
 - Stamps explicit scope coordinates used by processor compatibility predicates
 - Sets `objectid` property to match node `id`
-- Migrates only exact pre-v1 direct-URL MCP anonymous observations (MCP
-  envelope, concrete reachable HTTP server, exact raw anonymous tuple, and no
-  observed fields) into `observed_auth_*`, retaining
-  `auth_observation_compat=pre_v1_raw_mcp` provenance and a typed warning
 - Strips nil values
 - Serializes complex values (nested maps, heterogeneous arrays) to JSON strings
 - Preserves homogeneous arrays (all-string, all-number, all-bool) as native Neo4j lists
@@ -306,7 +303,7 @@ A fully observed empty collection against an empty public graph uses a
 pristine-empty fast path: reconciliation, post-processing, duplicate graph
 statistics, property-completeness queries, and finding queries are known
 no-ops. Limited or otherwise incomplete collection reports cannot enter this
-path; they retain the full v5 lifecycle and analysis checks.
+path; they retain the full V1 lifecycle and analysis checks.
 
 ## Stages 8–12: Analyze, Snapshot, and Publish
 

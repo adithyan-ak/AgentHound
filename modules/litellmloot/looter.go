@@ -81,7 +81,7 @@ func (l *Looter) Loot(ctx context.Context, t action.Target, opts action.LootOpti
 	}
 
 	// Emit a property-neutral edge-source reference so the production CLI
-	// envelope is independently valid ingest v3. The looter knows the canonical
+	// envelope is independently valid ingest v1. The looter knows the canonical
 	// node identity and kinds, but does not own discovery or auth posture.
 	res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, ingest.Node{
 		ID:                gatewayObjectID,

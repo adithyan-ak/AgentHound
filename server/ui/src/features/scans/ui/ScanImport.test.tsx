@@ -30,11 +30,23 @@ const mockedUploadScan = vi.mocked(uploadScan);
 function ingestCounts(
   nodes: number,
   edges: number,
-): Pick<IngestResult, "submitted" | "write_rows" | "graph_totals" | "collection" | "identity"> {
+): Pick<
+  IngestResult,
+  | "submitted"
+  | "write_rows"
+  | "findings"
+  | "graph_totals"
+  | "normalization_status"
+  | "collection"
+  | "identity"
+  | "duration"
+> {
   return {
     submitted: { nodes, edges },
     write_rows: { nodes, edges },
+    findings: 0,
     graph_totals: { before: null, after: null },
+    normalization_status: "complete",
     identity: {
       collection_point_id: `sha256:${"1".repeat(64)}`,
       network_context_id: `sha256:${"2".repeat(64)}`,
@@ -57,6 +69,7 @@ function ingestCounts(
         },
       ],
     },
+    duration: 1,
   };
 }
 
@@ -103,7 +116,7 @@ async function confirmPreview() {
 const configCoverageKey = `config:target:sha256:${"a".repeat(64)}`;
 const validScanJSON = JSON.stringify({
   meta: {
-    version: 5,
+    version: 1,
     type: "agenthound-ingest",
     identity: {
       scheme: "agenthound_collection_v1",
@@ -151,8 +164,8 @@ const validScanJSON = JSON.stringify({
       {
         entity_kind: "MCPServer",
         transport: "stdio",
-        scheme: "mcp_stdio_v3_hashed_argv",
-        version: 3,
+        scheme: "mcp_stdio_v1_hashed_argv",
+        version: 1,
       },
     ],
   },

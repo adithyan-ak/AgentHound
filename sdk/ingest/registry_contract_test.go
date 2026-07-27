@@ -8,8 +8,8 @@ import (
 
 func TestCurrentInstructionRegistryContractIsStableAndValid(t *testing.T) {
 	contract := CurrentInstructionRegistryContract()
-	if contract.Generation != 3 {
-		t.Fatalf("generation = %d, want selected-project partition generation 3", contract.Generation)
+	if contract.Generation != 1 {
+		t.Fatalf("generation = %d, want V1", contract.Generation)
 	}
 	if contract.Generation != InstructionRegistryGeneration {
 		t.Fatalf("generation = %d, want %d", contract.Generation, InstructionRegistryGeneration)

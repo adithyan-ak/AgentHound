@@ -218,10 +218,9 @@ func revertReceipt(baseCtx context.Context, reverter action.Reverter, r action.R
 	return reverter.Revert(ctx, r)
 }
 
-// isDryRun checks both pointer and value forms of the known receipt
-// types. Unknown receipt types default to "not dry-run" so the
-// reverter still gets a chance to handle them — better to attempt and
-// have the module's Revert() short-circuit than to silently skip.
+// isDryRun checks both pointer and value forms of the V1 receipt types.
+// Persisted unknown types are rejected by the state reader before dispatch;
+// the false default is only a defensive value for in-process callers.
 func isDryRun(r action.Receipt) bool {
 	switch v := r.(type) {
 	case *action.PoisonReceipt:

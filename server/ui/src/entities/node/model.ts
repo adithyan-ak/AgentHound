@@ -76,17 +76,15 @@ export interface EffectiveAuthTuple {
   method: DeclaredAuthMethod;
   evidence: string;
   assurance: string;
-  source: "observed" | "configured";
+  source: "observed" | "configured" | "unknown";
 }
 
 /**
  * Selects one paired authentication assessment without mixing method,
  * evidence, or assurance from different collectors.
  *
- * New projections materialize `effective_auth_*` server-side. The observed
- * fallback keeps the UI truthful when viewing an older projection that still
- * carries the raw dual-lane MCP evidence, while unknown observed methods defer
- * to the configured tuple.
+ * Current projections materialize `effective_auth_*` server-side. Missing or
+ * incomplete derived evidence stays explicitly unknown.
  */
 export function effectiveAuthTupleFromProperties(
   properties: Record<string, unknown>,
@@ -106,49 +104,11 @@ export function effectiveAuthTupleFromProperties(
     };
   }
 
-  const observedMethod = declaredAuthMethod(properties.observed_auth_method);
-  const observedEvidence = properties.observed_auth_evidence;
-  const observedAssurance = properties.observed_auth_assurance;
-  const exactMCPAnonymousObservation =
-    properties.transport === "http" &&
-    properties.status === "reachable" &&
-    observedMethod === "none" &&
-    observedAssurance === "unauthenticated" &&
-    observedEvidence === "anonymous_probe_succeeded";
-  const exactA2AAnonymousObservation =
-    properties.auth_probe_method === "get_task_nonexistent" &&
-    properties.auth_probe_status === "anonymous_protocol_access" &&
-    (properties.auth_probe_detail === "task_not_found_v1" ||
-      properties.auth_probe_detail === "task_not_found_v0_3") &&
-    observedMethod === "none" &&
-    observedAssurance === "unauthenticated" &&
-    observedEvidence === "anonymous_probe_succeeded";
-  const exactAuthenticatedObservation =
-    observedEvidence === "configured_credential" &&
-    ((["basic", "apiKey"].includes(observedMethod) &&
-      observedAssurance === "weak") ||
-      (observedMethod === "bearer" && observedAssurance === "moderate") ||
-      (["oauth", "oidc", "mtls"].includes(observedMethod) &&
-        observedAssurance === "strong") ||
-      (observedMethod === "custom" && observedAssurance === "unknown"));
-  const observedIsUsable =
-    exactMCPAnonymousObservation ||
-    exactA2AAnonymousObservation ||
-    exactAuthenticatedObservation;
-  if (observedIsUsable) {
-    return {
-      method: observedMethod,
-      evidence: String(observedEvidence),
-      assurance: String(observedAssurance),
-      source: "observed",
-    };
-  }
-
   return {
-    method: declaredAuthMethod(properties.auth_method),
-    evidence: String(properties.auth_evidence ?? "unknown"),
-    assurance: String(properties.auth_assurance ?? "unknown"),
-    source: "configured",
+    method: "unknown",
+    evidence: "unknown",
+    assurance: "unknown",
+    source: "unknown",
   };
 }
 

@@ -47,7 +47,7 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
 			continue
 		}
-		// Parse version from filename: 001_initial.sql -> 1
+		// Parse version from filename: 001_initial_v1.sql -> 1
 		parts := strings.SplitN(entry.Name(), "_", 2)
 		if len(parts) < 2 {
 			continue

@@ -15,7 +15,7 @@
 id: litellm
 name: LiteLLM proxy / gateway
 description: Identifies LiteLLM by GET /health/liveliness returning "I'm alive!"
-version: 2
+version: 1
 service_kind: litellm
 probes:
   - method: GET

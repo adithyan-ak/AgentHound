@@ -270,7 +270,7 @@ func CurrentIdentitySchemes() []IdentityScheme {
 	return []IdentityScheme{{
 		EntityKind: "MCPServer",
 		Transport:  "stdio",
-		Scheme:     MCPStdioIdentitySchemeV3,
-		Version:    3,
+		Scheme:     MCPStdioIdentitySchemeV1,
+		Version:    1,
 	}}
 }

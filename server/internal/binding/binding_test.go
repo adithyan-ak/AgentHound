@@ -56,20 +56,19 @@ func TestGuardRejectsStorageDisagreement(t *testing.T) {
 	}
 }
 
-func TestLegacyBindingVersionFailsWithResetGuidance(t *testing.T) {
-	legacy := Marker{
-		BindingVersion: CurrentVersion - 1,
+func TestUnsupportedBindingVersionFailsWithResetGuidance(t *testing.T) {
+	unsupported := Marker{
+		BindingVersion: CurrentVersion + 1,
 		StoragePairID:  pairID,
 	}
-	err := legacy.Validate()
+	err := unsupported.Validate()
 	for _, phrase := range []string{
-		"binding_version is 2, supported version is 3",
-		"automatic upgrade is unsupported",
+		"binding_version is 2, supported version is 1",
 		"recreate both PostgreSQL and Neo4j volumes together",
-		"recollect with ingest v5",
+		"recollect with ingest v1",
 	} {
 		if err == nil || !strings.Contains(err.Error(), phrase) {
-			t.Fatalf("legacy marker error = %v, want phrase %q", err, phrase)
+			t.Fatalf("unsupported marker error = %v, want phrase %q", err, phrase)
 		}
 	}
 
@@ -79,7 +78,7 @@ func TestLegacyBindingVersionFailsWithResetGuidance(t *testing.T) {
 	}
 	guard, err := NewGuard(
 		current,
-		markerReader{marker: legacy},
+		markerReader{marker: unsupported},
 		markerReader{marker: current},
 	)
 	if err != nil {
@@ -87,6 +86,6 @@ func TestLegacyBindingVersionFailsWithResetGuidance(t *testing.T) {
 	}
 	err = guard.Verify(context.Background())
 	if !IsStorageError(err) || !strings.Contains(err.Error(), resetGuidance) {
-		t.Fatalf("legacy guard error = %v", err)
+		t.Fatalf("unsupported guard error = %v", err)
 	}
 }

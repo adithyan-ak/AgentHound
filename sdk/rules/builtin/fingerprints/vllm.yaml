@@ -4,7 +4,7 @@
 id: vllm
 name: vLLM inference server
 description: 'Identifies vLLM by its service-specific GET /version response'
-version: 3
+version: 1
 service_kind: vllm
 probes:
   - method: GET

@@ -8,7 +8,7 @@ export interface ProjectionState {
   error?: string;
   dirty_coverage: string[];
   active_coverage_roots: PostureCoverageRoot[];
-  active_coverage_limitations?: PostureCoverageLimitation[];
+  active_coverage_limitations: PostureCoverageLimitation[];
   updated_at: string;
   published_scan_id?: string;
   published_revision?: number;
@@ -47,7 +47,7 @@ export function activePublishedCoverageLimitations(
   ) {
     return [];
   }
-  return posture.active_coverage_limitations ?? [];
+  return posture.active_coverage_limitations;
 }
 
 export function hasLimitedPublishedCoverage(
@@ -71,7 +71,7 @@ export function limitedPublishedInstructionRoots(
   ) {
     return [];
   }
-  return (posture.active_coverage_roots ?? []).filter(
+  return posture.active_coverage_roots.filter(
     (root) => root.state !== "complete" || !root.contract_current,
   );
 }
@@ -84,7 +84,6 @@ export function hasLimitedPublishedInstructionCoverage(
 }
 
 function stringArray(value: unknown, field: string): string[] {
-  if (value == null) return [];
   if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
     throw new TypeError(`${field} must be a string array`);
   }
@@ -92,7 +91,6 @@ function stringArray(value: unknown, field: string): string[] {
 }
 
 function coverageRoots(value: unknown): PostureCoverageRoot[] {
-  if (value == null) return [];
   if (!Array.isArray(value)) {
     throw new TypeError("active_coverage_roots must be an array");
   }
@@ -154,7 +152,6 @@ function coverageRoots(value: unknown): PostureCoverageRoot[] {
 }
 
 function coverageLimitations(value: unknown): PostureCoverageLimitation[] {
-  if (value == null) return [];
   if (!Array.isArray(value)) {
     throw new TypeError("active_coverage_limitations must be an array");
   }

@@ -246,7 +246,7 @@ run_json() {
     return 0
   fi
   if ! jq -e '
-      .meta.version == 5 and
+      .meta.version == 1 and
       .meta.identity.scheme == "agenthound_collection_v1" and
       .meta.identity.version == 1 and
       (.meta.identity.collection_point_id | test("^sha256:[0-9a-f]{64}$")) and
@@ -255,7 +255,7 @@ run_json() {
       (.meta.identity.evidence | length > 0) and
       (.meta.identity.network_evidence | length > 0)
     ' "${artifact}" >/dev/null; then
-    collector_failure "${name}" 'artifact does not contain valid automatic ingest-v5 identity'
+    collector_failure "${name}" 'artifact does not contain valid automatic ingest-v1 identity'
     return 0
   fi
   if [[ -n "${AGENTHOUND_SCENARIO_POSTCHECK:-}" ]] &&
@@ -335,12 +335,12 @@ run_host_json() {
     return
   fi
   if ! jq -e '
-      .meta.version == 5 and
+      .meta.version == 1 and
       .meta.identity.scheme == "agenthound_collection_v1" and
       (.meta.identity.collection_point_id | test("^sha256:[0-9a-f]{64}$")) and
       (.meta.identity.network_context_id | test("^sha256:[0-9a-f]{64}$"))
     ' "${artifact}" >/dev/null; then
-    collector_failure "${name}" 'host-native artifact does not contain automatic ingest-v5 identity'
+    collector_failure "${name}" 'host-native artifact does not contain automatic ingest-v1 identity'
     return
   fi
   if ! assert_json "${name}" "${artifact}" "${EXPECTED_DIR}/${name}.jq"; then

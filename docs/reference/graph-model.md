@@ -197,9 +197,7 @@ unknown/unavailable runtime method falls back to the configured tuple. The
 configured and observed fields remain visible for provenance. A raw configured
 `none/unauthenticated/anonymous_probe_succeeded` tuple is retained as
 provenance but is not assigned unauthenticated assurance or numeric weakness;
-anonymous access requires `effective_auth_source=observed`. The bounded pre-v1
-MCP normalization described in the ingest pipeline promotes only genuine old
-direct-URL runtime observations before this selection.
+anonymous access requires `effective_auth_source=observed`.
 
 ---
 
@@ -237,7 +235,7 @@ This enables queries like `MATCH (n:AIService)` to find all AI infrastructure re
 | `PROVIDES_MODEL` | OllamaInstance | AIModel | Ollama Looter | Instance serves this model |
 | `EXTRACTED_FROM` | AIModel | ExtractedTrainingSignal | Extractors | Extracted signal was derived from this model |
 | `INGESTS_UNTRUSTED` | MCPTool | MCPResource | MCP | Tool with rule-derived `source_trust` (web/email/fileshare) ingests untrusted input that taints same-server resources. **Raw edge** — not swept by composite cleanup (see post-processors doc) |
-| `CREDENTIAL_REACH_VERIFIED` | AgentInstance | MCPResource | scan (campaign runner) | Per-agent campaign evidence that a supplied credential enabled a read of the exact predicted resource. It means “campaign verification associated with this source agent,” **not** observed agent invocation. Carries witness-v2 identity/topology, staged status, and credential hash metadata; NEVER the endpoint or raw credential. On ingest the server validates the complete contract and upgrades only the matching source-agent `CAN_REACH` finding. **Raw edge.** |
+| `CREDENTIAL_REACH_VERIFIED` | AgentInstance | MCPResource | scan (campaign runner) | Per-agent campaign evidence that a supplied credential enabled a read of the exact predicted resource. It means “campaign verification associated with this source agent,” **not** observed agent invocation. Carries witness-V1 identity/topology, staged status, and credential hash metadata; NEVER the endpoint or raw credential. On ingest the server validates the complete contract and upgrades only the matching source-agent `CAN_REACH` finding. **Raw edge.** |
 | `PUBLIC_ACCESS_OBSERVED` | MCPServer | MCPResource | scan (campaign runner) | A campaign probe read this resource with no credential. A recorded fact, not an auto-finding (findings derive only from composite edges) — only a policy concern where authentication was expected. **Raw edge.** |
 
 > The campaign runner's second scenario, `mcp-poison-roundtrip` (a STANDALONE reversible-mutation validation), deliberately emits **no** graph edge. Its oracle/cleanup evidence stays in the bounded CLI `campaign.RunReport` rather than a scored edge, so a finding-free validation never pollutes the graph. See [offensive-actions.md](../operator/offensive-actions.md#mcp-poison-roundtrip-standalone-target-mutation-validation).
@@ -282,8 +280,8 @@ type Edge struct {
 `property_semantics` field. Omitted `property_semantics` is an authoritative
 property observation. The only explicit alternative is `reference_only`,
 which asserts node ID and kinds while requiring an empty `properties` object.
-Since wire version 4, the server rewrites producer-local IDs into deterministic
-scoped IDs before graph writes. The centralized policy is:
+In ingest V1, the server rewrites producer-local IDs into deterministic scoped
+IDs before graph writes. The centralized policy is:
 
 | Observation | Identity scope |
 |---|---|
@@ -407,12 +405,11 @@ observed evidence. When a prior coherent group exists, a partial replacement
 keeps those semantic properties, records no fingerprint for an incomplete new
 dependency, and marks the relationship property-incomplete until a complete
 group replaces it.
-This metadata is Neo4j graph schema 2. Startup rejects a schema-1 graph that
-contains authoritative owner tokens without matching fingerprints instead of
-silently accepting a projection that later cannot prove per-owner equality.
-Empty schema-1 graphs and pre-release graphs with complete fingerprint coverage
-advance automatically; older populated development graphs must be reset and
-recollected as described in the deployment guide.
+This metadata is part of Neo4j graph schema V1. Startup accepts either a fresh
+graph with no schema marker or exactly one V1 marker. Missing-version,
+duplicate, malformed, and non-V1 markers fail closed; there is no graph
+conversion path. Development stores that are not the current V1 baseline must
+be reset and recollected as described in the deployment guide.
 When a previously unseen complete domain adds only properties compatible with
 an already complete fact, the union remains complete. Any overlapping conflict
 still makes it incomplete. If one of those authoritative co-owner domains later
@@ -446,7 +443,7 @@ All node IDs are deterministic, content-based SHA-256 hashes. This ensures ident
 | Node Kind | ID Computation |
 |-----------|----------------|
 | `MCPServer` (HTTP) | `SHA-256("MCPServer:" + transport + ":" + endpoint)` |
-| `MCPServer` (stdio) | SHA-256 over domain-separated, length-framed command plus the ordered domain-separated SHA-256 digest of each exact argv element (`mcp_stdio_v3_hashed_argv`) |
+| `MCPServer` (stdio) | SHA-256 over domain-separated, length-framed command plus the ordered domain-separated SHA-256 digest of each exact argv element (`mcp_stdio_v1_hashed_argv`) |
 | `MCPTool` | `SHA-256("MCPTool:" + server_id + ":" + tool_name)` |
 | `MCPResource` | `SHA-256("MCPResource:" + server_id + ":" + resource_uri)` |
 | `MCPPrompt` | `SHA-256("MCPPrompt:" + server_id + ":" + prompt_name)` |
@@ -464,7 +461,7 @@ All node IDs are deterministic, content-based SHA-256 hashes. This ensures ident
 Stdio identity preserves argv order and exact bytes because process behavior can
 depend on them, but raw argv never needs to leave collector memory. Each raw
 argument is first hashed with the `mcp_stdio_argument_v1` domain and length
-framing; the ordered digest strings are then framed into the v3 server ID. The
+framing; the ordered digest strings are then framed into the V1 server ID. The
 artifact publishes those `arg_hashes` and `arg_count`, allowing strict ingest to
 recompute the parent ID while rejecting a raw `args` property. Argument hashes
 are deterministic identifiers, not password hashing or encryption: a consumer
@@ -484,9 +481,8 @@ exempt. The fixed invalid placeholder is not accepted. Raw `args`, `env`,
 `headers`, and `url` properties are rejected on every authoritative MCP server,
 even when `transport` is missing or malformed.
 
-Stdio v2 artifacts are not aliases for v3 and are rejected. Recollect with the
-current collector after resetting an older pre-release projection; child MCP
-tool/resource/prompt IDs also change because they include the parent ID.
+Only the V1 stdio identity is accepted. Child MCP tool/resource/prompt IDs
+include the V1 parent ID.
 
 ---
 
@@ -623,7 +619,7 @@ New modules emit nodes and edges via the `sdk/ingest` wire format:
 ```json
 {
   "meta": {
-    "version": 5,
+    "version": 1,
     "type": "agenthound-ingest",
     "collector": "mcp|a2a|config|scan",
     "collector_version": "1.0.1",
@@ -669,8 +665,8 @@ New modules emit nodes and edges via the `sdk/ingest` wire format:
     "identity_schemes": [{
       "entity_kind": "MCPServer",
       "transport": "stdio",
-      "scheme": "mcp_stdio_v3_hashed_argv",
-      "version": 3
+      "scheme": "mcp_stdio_v1_hashed_argv",
+      "version": 1
     }]
   },
   "graph": {
@@ -680,7 +676,7 @@ New modules emit nodes and edges via the `sdk/ingest` wire format:
 }
 ```
 
-Wire version `5` is strict: derived collection identity, collection, ruleset, current
+Wire version `1` is strict: derived collection identity, collection, ruleset, current
 identity metadata, explicit edge endpoint kinds, and per-fact observation
 domains are required. The server validates the identity schema, algorithm
 version, digest consistency, and evidence classification rules; it cannot prove

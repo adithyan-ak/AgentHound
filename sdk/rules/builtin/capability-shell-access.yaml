@@ -3,7 +3,7 @@ name: Shell Access Capability
 description: >
   Classifies tools with shell/command execution capability based on
   keywords in tool name, description, and input schema properties.
-version: 2
+version: 1
 enabled: true
 scope:
   collector: mcp

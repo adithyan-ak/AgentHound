@@ -128,7 +128,7 @@ func (e *Extractor) Extract(ctx context.Context, t action.Target, opts action.Ex
 	// Build ingest payload.
 	out := &ingest.IngestData{}
 	if len(signals) > 0 {
-		// Strict ingest-v3 requires every relationship endpoint to be present in
+		// Strict ingest-v1 requires every relationship endpoint to be present in
 		// the same envelope. The extractor only knows the already-established
 		// model identity, so carry it as a reference without claiming or
 		// replacing any model properties.

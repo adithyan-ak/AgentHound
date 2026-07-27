@@ -47,6 +47,7 @@ export interface IngestResult {
   projection_status: string;
   submitted: { nodes: number; edges: number };
   write_rows: { nodes: number; edges: number };
+  findings: number;
   graph_totals: {
     before: {
       node_counts: Record<string, number>;
@@ -62,6 +63,7 @@ export interface IngestResult {
     } | null;
   };
   warnings?: string[];
+  normalization_status: "complete" | "warning" | "degraded";
   collection: IngestCollectionReport;
   identity: {
     collection_point_id: string;
@@ -91,7 +93,7 @@ export interface IngestResult {
     error?: string;
   }>;
   published_revision?: number;
-  duration?: number;
+  duration: number;
 }
 
 export interface ScanPage {
@@ -307,6 +309,14 @@ function nonNegativeInteger(value: unknown, path: string): number {
   return value as number;
 }
 
+function positiveInteger(value: unknown, path: string): number {
+  const parsed = nonNegativeInteger(value, path);
+  if (parsed === 0) {
+    throw new TypeError(`${path} must be a positive integer`);
+  }
+  return parsed;
+}
+
 function collectionOutcomeState(
   value: unknown,
   path: string,
@@ -488,8 +498,31 @@ function decodeIngestResult(value: unknown, path: string): IngestResult {
   ) {
     throw new TypeError(`${path}.outcome is invalid`);
   }
+  if (
+    result.normalization_status !== "complete" &&
+    result.normalization_status !== "warning" &&
+    result.normalization_status !== "degraded"
+  ) {
+    throw new TypeError(`${path}.normalization_status is invalid`);
+  }
   const graphTotals = record(result.graph_totals, `${path}.graph_totals`);
   const identity = decodeIngestIdentity(result.identity, `${path}.identity`);
+  const publishedRevision =
+    result.published_revision === undefined
+      ? undefined
+      : positiveInteger(
+          result.published_revision,
+          `${path}.published_revision`,
+        );
+  if (
+    result.outcome === "complete" &&
+    result.projection_status === "complete" &&
+    publishedRevision === undefined
+  ) {
+    throw new TypeError(
+      `${path}.published_revision is required for a successful publication`,
+    );
+  }
   return {
     ...(result as unknown as IngestResult),
     scan_id: requiredString(result.scan_id, `${path}.scan_id`),
@@ -500,6 +533,8 @@ function decodeIngestResult(value: unknown, path: string): IngestResult {
     ),
     submitted: decodeCounts(result.submitted, `${path}.submitted`),
     write_rows: decodeCounts(result.write_rows, `${path}.write_rows`),
+    findings: nonNegativeInteger(result.findings, `${path}.findings`),
+    normalization_status: result.normalization_status,
     collection: decodeCollectionReport(
       result.collection,
       `${path}.collection`,
@@ -515,6 +550,18 @@ function decodeIngestResult(value: unknown, path: string): IngestResult {
         `${path}.graph_totals.after`,
       ),
     },
+    ...(result.warnings === undefined
+      ? {}
+      : {
+          warnings: collection(result.warnings, `${path}.warnings`).map(
+            (warning, index) =>
+              requiredString(warning, `${path}.warnings[${index}]`),
+          ),
+        }),
+    ...(publishedRevision === undefined
+      ? {}
+      : { published_revision: publishedRevision }),
+    duration: nonNegativeInteger(result.duration, `${path}.duration`),
   };
 }
 

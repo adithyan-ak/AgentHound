@@ -25,7 +25,7 @@ func (e *ValidationError) Error() string {
 	return fmt.Sprintf("validation failed: %d errors", len(e.Errors))
 }
 
-const upgradeAndRecollectAction = "upgrade the collector and server together, then recollect the artifact"
+const produceV1ArtifactAction = "produce a V1 artifact with the same collector and server build"
 
 type UnsupportedVersionError struct {
 	Received  int    `json:"received_version"`
@@ -85,7 +85,7 @@ func Preflight(data *ingest.IngestData) error {
 		return &UnsupportedVersionError{
 			Received:  data.Meta.Version,
 			Supported: ingest.CurrentVersion,
-			Action:    upgradeAndRecollectAction,
+			Action:    produceV1ArtifactAction,
 		}
 	}
 	return preflightRegistryContracts(data.Meta.Collection)
@@ -105,7 +105,7 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 	if data.Meta.Collection == nil {
 		errs = append(errs, FieldError{
 			Path:    "meta.collection",
-			Message: "is required for ingest v5",
+			Message: "is required for ingest v1",
 		})
 	} else {
 		if !validOutcomeState(data.Meta.Collection.State) {
@@ -377,13 +377,13 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 		if edge.SourceKind == "" {
 			errs = append(errs, FieldError{
 				Path:    fmt.Sprintf("graph.edges[%d].source_kind", i),
-				Message: "must not be empty in ingest v5",
+				Message: "must not be empty in ingest v1",
 			})
 		}
 		if edge.TargetKind == "" {
 			errs = append(errs, FieldError{
 				Path:    fmt.Sprintf("graph.edges[%d].target_kind", i),
-				Message: "must not be empty in ingest v5",
+				Message: "must not be empty in ingest v1",
 			})
 		}
 		errs = append(errs, validateObservationDomains(
@@ -572,7 +572,7 @@ func preflightRegistryContracts(report *ingest.CollectionReport) error {
 				RootCoverageKey: root.CoverageKey,
 				Received:        cloneRegistryContract(root.RegistryContract),
 				Supported:       current,
-				Action:          upgradeAndRecollectAction,
+				Action:          produceV1ArtifactAction,
 			}
 		}
 		rootState := stateByRoot[root.CoverageKey]
@@ -994,7 +994,7 @@ func validateObservationDomains(
 	if len(domains) == 0 {
 		return []FieldError{{
 			Path:    path,
-			Message: "must contain at least one declared domain in ingest v5",
+			Message: "must contain at least one declared domain in ingest v1",
 		}}
 	}
 	seen := make(map[string]bool, len(domains))
@@ -1087,7 +1087,7 @@ func validOutcomeState(state ingest.OutcomeState) bool {
 
 func validateRuleset(ruleset *ingest.RulesetManifest) []FieldError {
 	if ruleset == nil {
-		return []FieldError{{Path: "meta.ruleset", Message: "is required for ingest v5"}}
+		return []FieldError{{Path: "meta.ruleset", Message: "is required for ingest v1"}}
 	}
 	var errs []FieldError
 	if strings.TrimSpace(ruleset.Digest) == "" {
@@ -1138,10 +1138,10 @@ func validateIdentitySchemes(schemes []ingest.IdentityScheme) []FieldError {
 			errs = append(errs, FieldError{Path: path + ".version", Message: "must be positive"})
 		}
 		if scheme.EntityKind == "MCPServer" && scheme.Transport == "stdio" &&
-			(scheme.Scheme != ingest.MCPStdioIdentitySchemeV3 || scheme.Version != 3) {
+			(scheme.Scheme != ingest.MCPStdioIdentitySchemeV1 || scheme.Version != 1) {
 			errs = append(errs, FieldError{
 				Path:    path,
-				Message: "stdio MCPServer identity must use mcp_stdio_v3_hashed_argv version 3",
+				Message: "stdio MCPServer identity must use mcp_stdio_v1_hashed_argv version 1",
 			})
 		}
 	}
@@ -1276,10 +1276,10 @@ func validateCanonicalNodeProperties(node ingest.Node, index int) []FieldError {
 		}
 	}
 	if hasKind(node.Kinds, "MCPServer") && node.Properties["transport"] == "stdio" {
-		if scheme, _ := node.Properties["id_scheme"].(string); scheme != ingest.MCPStdioIdentitySchemeV3 {
+		if scheme, _ := node.Properties["id_scheme"].(string); scheme != ingest.MCPStdioIdentitySchemeV1 {
 			errs = append(errs, FieldError{
 				Path:    fmt.Sprintf("graph.nodes[%d].properties.id_scheme", index),
-				Message: "stdio MCPServer nodes require mcp_stdio_v3_hashed_argv",
+				Message: "stdio MCPServer nodes require mcp_stdio_v1_hashed_argv",
 			})
 		}
 		command, _ := node.Properties["command"].(string)

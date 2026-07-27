@@ -23,7 +23,7 @@ func TestMaxIngestBodySizeValue(t *testing.T) {
 
 // TestIngestRejectsInvalidJSON is a regression for the early-return path
 // that prevented unparseable bodies from reaching the validator.
-func TestIngestRejectsInvalidJSON(t *testing.T) {
+func TestIngestRejectsInvalidJSONAsGenericV1ContractError(t *testing.T) {
 	h := NewIngestHandler(nil)
 
 	body := strings.NewReader(`{"bad json`)
@@ -36,53 +36,73 @@ func TestIngestRejectsInvalidJSON(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
-	if !strings.Contains(rec.Body.String(), "VALIDATION_ERROR") {
-		t.Errorf("body should contain VALIDATION_ERROR, got %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "UNSUPPORTED_V1_CONTRACT") {
+		t.Errorf("body should contain UNSUPPORTED_V1_CONTRACT, got %s", rec.Body.String())
 	}
 }
 
-func TestIngestRejectsUnsupportedVersionWithStructuredDetails(t *testing.T) {
-	data := common.NewIngestData("scan", "old-version")
-	data.Meta.Version = sdkingest.CurrentVersion - 1
-	body, err := json.Marshal(data)
+func TestIngestRejectsUnsupportedShapesAsGenericV1ContractError(t *testing.T) {
+	current := common.NewIngestData("scan", "unsupported-shape")
+	currentBody, err := json.Marshal(current)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var legacy map[string]any
-	if err := json.Unmarshal(body, &legacy); err != nil {
+	var unsupported map[string]any
+	if err := json.Unmarshal(currentBody, &unsupported); err != nil {
 		t.Fatal(err)
 	}
-	legacy["removed_v4_field"] = true
-	body, err = json.Marshal(legacy)
+	unsupported["unknown_contract_field"] = true
+	unknownBody, err := json.Marshal(unsupported)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := httptest.NewRecorder()
-	NewIngestHandler(nil).Handle(
-		rec,
-		httptest.NewRequest(http.MethodPost, "/api/v1/ingest", bytes.NewReader(body)),
-	)
+	missingVersion := common.NewIngestData("scan", "missing-version")
+	missingVersion.Meta.Version = 0
+	missingBody, err := json.Marshal(missingVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonV1 := common.NewIngestData("scan", "non-v1-version")
+	nonV1.Meta.Version = sdkingest.CurrentVersion + 1
+	nonV1Body, err := json.Marshal(nonV1)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
-	}
-	var response ErrorResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-		t.Fatal(err)
-	}
-	if response.Error.Code != "UNSUPPORTED_INGEST_VERSION" {
-		t.Fatalf("error code = %q", response.Error.Code)
-	}
-	details, ok := response.Error.Details.(map[string]any)
-	if !ok {
-		t.Fatalf("details = %T %+v", response.Error.Details, response.Error.Details)
-	}
-	if details["received_version"] != float64(sdkingest.CurrentVersion-1) ||
-		details["supported_version"] != float64(sdkingest.CurrentVersion) {
-		t.Fatalf("details = %+v", details)
-	}
-	if !strings.Contains(response.Error.Message, "recollect") {
-		t.Fatalf("message is not actionable: %q", response.Error.Message)
+	for name, body := range map[string][]byte{
+		"missing version": missingBody,
+		"non-v1 version":  nonV1Body,
+		"unknown field":   unknownBody,
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			NewIngestHandler(nil).Handle(
+				rec,
+				httptest.NewRequest(
+					http.MethodPost,
+					"/api/v1/ingest",
+					bytes.NewReader(body),
+				),
+			)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			var response ErrorResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Error.Code != "UNSUPPORTED_V1_CONTRACT" {
+				t.Fatalf("error code = %q", response.Error.Code)
+			}
+			if response.Error.Message != "unsupported V1 ingest contract" ||
+				response.Error.Details != nil {
+				t.Fatalf(
+					"error = %+v, want generic V1 contract rejection",
+					response.Error,
+				)
+			}
+		})
 	}
 }
 
@@ -122,7 +142,7 @@ func TestIngestRejectsRegistryContractMismatchWithStructuredDetails(t *testing.T
 	if response.Error.Code != "REGISTRY_CONTRACT_MISMATCH" {
 		t.Fatalf("error code = %q", response.Error.Code)
 	}
-	if !strings.Contains(response.Error.Message, "upgrade the collector and server together") {
+	if !strings.Contains(response.Error.Message, "V1 artifact") {
 		t.Fatalf("message is not actionable: %q", response.Error.Message)
 	}
 }

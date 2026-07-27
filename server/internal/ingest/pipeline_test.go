@@ -59,7 +59,12 @@ func TestValidateTestDataFiles(t *testing.T) {
 		}
 
 		if err := v.Validate(&d); err != nil {
-			t.Errorf("%s: validation failed: %v", tc.file, err)
+			var validationErr *ValidationError
+			if errors.As(err, &validationErr) {
+				t.Errorf("%s: validation failed: %+v", tc.file, validationErr.Errors)
+			} else {
+				t.Errorf("%s: validation failed: %v", tc.file, err)
+			}
 			continue
 		}
 
@@ -1410,7 +1415,7 @@ func TestPipeline_TruncatedDeepRootPublishesAndPromotesCompleteChildren(t *testi
 		t.Fatalf("truncated-deep projection = %q, want published/complete", result.ProjectionStatus)
 	}
 	if len(result.Warnings) != 1 ||
-		result.Warnings[0] != sdkingest.InstructionCoverageLimitationWarning {
+		result.Warnings[0] != sdkingest.CoverageLimitationWarning {
 		t.Fatalf("truncated-deep warnings = %v, want coverage limitation", result.Warnings)
 	}
 	if len(publisher.finalizations) != 1 || !publisher.finalizations[0].Publish {
@@ -1473,7 +1478,7 @@ func TestPipeline_LimitedExactRootPublishesChildWithoutRootAuthority(t *testing.
 	}
 	if result.ProjectionStatus != model.ProjectionComplete ||
 		len(result.Warnings) != 1 ||
-		result.Warnings[0] != sdkingest.InstructionCoverageLimitationWarning {
+		result.Warnings[0] != sdkingest.CoverageLimitationWarning {
 		t.Fatalf("limited exact result = %+v", result)
 	}
 	if len(publisher.finalizations) != 1 || !publisher.finalizations[0].Publish {
@@ -2614,7 +2619,7 @@ func TestPipeline_PostProcessorFailureMarksScanCompletedWithErrors(t *testing.T)
 	}
 }
 
-func TestPipeline_RejectsLegacyV1Artifact(t *testing.T) {
+func TestPipelineRejectsIncompleteV1Artifact(t *testing.T) {
 	w := &fakeWriter{}
 	ss := &fakeScanStore{}
 	p := newTestPipeline(w, &graph.MockGraphDB{}, ss, noOpRunPP)
@@ -2633,13 +2638,13 @@ func TestPipeline_RejectsLegacyV1Artifact(t *testing.T) {
 
 	res, err := p.Ingest(context.Background(), empty)
 	if err == nil {
-		t.Fatal("legacy v1 artifact was accepted")
+		t.Fatal("incomplete V1 artifact was accepted")
 	}
 	if res != nil {
-		t.Fatalf("legacy validation failure returned result: %+v", res)
+		t.Fatalf("V1 validation failure returned result: %+v", res)
 	}
 	if len(ss.updates) != 0 {
-		t.Fatalf("legacy artifact mutated lifecycle state: %+v", ss.updates)
+		t.Fatalf("invalid V1 artifact mutated lifecycle state: %+v", ss.updates)
 	}
 }
 

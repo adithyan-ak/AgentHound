@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestMigrationsContainCurrentSchemaAndBindingUpgrade(t *testing.T) {
+func TestMigrationsContainCanonicalV1Schema(t *testing.T) {
 	entries, err := migrationFS.ReadDir("migrations")
 	if err != nil {
 		t.Fatalf("read migrations: %v", err)
@@ -17,19 +17,13 @@ func TestMigrationsContainCurrentSchemaAndBindingUpgrade(t *testing.T) {
 			names = append(names, entry.Name())
 		}
 	}
-	if want := []string{
-		"001_initial.sql",
-		"002_storage_binding.sql",
-		"003_zero_config_storage_binding.sql",
-		"004_coverage_root_state.sql",
-		"005_coverage_limitations.sql",
-	}; !reflect.DeepEqual(names, want) {
+	if want := []string{"001_initial_v1.sql"}; !reflect.DeepEqual(names, want) {
 		t.Fatalf("migration files = %v, want %v", names, want)
 	}
 
-	data, err := migrationFS.ReadFile("migrations/001_initial.sql")
+	data, err := migrationFS.ReadFile("migrations/001_initial_v1.sql")
 	if err != nil {
-		t.Fatalf("read initial migration: %v", err)
+		t.Fatalf("read initial V1 migration: %v", err)
 	}
 	sql := string(data)
 	for _, expected := range []string{
@@ -37,98 +31,31 @@ func TestMigrationsContainCurrentSchemaAndBindingUpgrade(t *testing.T) {
 		"artifact_observed_at",
 		"publication_status",
 		"CREATE TABLE IF NOT EXISTS findings",
-		"atlas_map",
 		"exact_evidence",
 		"CREATE TABLE IF NOT EXISTS finding_triage",
 		"CREATE TABLE IF NOT EXISTS coverage_heads",
-		"root_key",
+		"coverage_heads_root_metadata_check",
+		"contract_generation",
+		"CREATE TABLE IF NOT EXISTS coverage_memberships",
+		"CREATE TABLE IF NOT EXISTS coverage_limitations",
+		"parent_coverage_key",
+		"CREATE TABLE IF NOT EXISTS storage_binding",
+		"storage_pair_id",
 		"CREATE TABLE IF NOT EXISTS posture_publications",
 		"CREATE TABLE IF NOT EXISTS posture_state",
 		"ON CONFLICT (singleton) DO NOTHING",
 	} {
 		if !strings.Contains(sql, expected) {
-			t.Errorf("initial migration missing %q", expected)
+			t.Errorf("initial V1 migration missing %q", expected)
 		}
 	}
 	for _, forbidden := range []string{
 		"ALTER TABLE",
 		"DROP TABLE",
-		"\nUPDATE ",
-		"CREATE TABLE IF NOT EXISTS users",
-		"CREATE TABLE IF NOT EXISTS api_tokens",
-		"CREATE TABLE IF NOT EXISTS audit_log",
-		"CREATE TABLE storage_binding",
-	} {
-		if strings.Contains(sql, forbidden) {
-			t.Errorf("initial migration contains historical schema operation %q", forbidden)
-		}
-	}
-
-	data, err = migrationFS.ReadFile("migrations/002_storage_binding.sql")
-	if err != nil {
-		t.Fatalf("read storage-binding migration: %v", err)
-	}
-	upgradeSQL := string(data)
-	for _, expected := range []string{
-		"CREATE TABLE IF NOT EXISTS storage_binding",
-		"storage_pair_id",
-		"network_realm_id",
-		"realm_sha256",
-	} {
-		if !strings.Contains(upgradeSQL, expected) {
-			t.Errorf("storage-binding migration missing %q", expected)
-		}
-	}
-
-	data, err = migrationFS.ReadFile("migrations/003_zero_config_storage_binding.sql")
-	if err != nil {
-		t.Fatalf("read ingest-v4 migration: %v", err)
-	}
-	v4SQL := string(data)
-	for _, expected := range []string{
-		"DROP COLUMN IF EXISTS host_id",
-		"DROP COLUMN IF EXISTS network_realm_id",
-		"CREATE TABLE IF NOT EXISTS coverage_memberships",
-		"parent_key",
-	} {
-		if !strings.Contains(v4SQL, expected) {
-			t.Errorf("ingest-v4 migration missing %q", expected)
-		}
-	}
-
-	data, err = migrationFS.ReadFile("migrations/004_coverage_root_state.sql")
-	if err != nil {
-		t.Fatalf("read coverage-root migration: %v", err)
-	}
-	rootStateSQL := string(data)
-	for _, expected := range []string{
-		"ADD COLUMN IF NOT EXISTS state",
-		"ADD COLUMN IF NOT EXISTS discovery_mode",
-		"ADD COLUMN IF NOT EXISTS contract_generation",
-		"ADD COLUMN IF NOT EXISTS contract_digest",
-		"coverage_heads_root_metadata_check",
-		"'complete', 'truncated', 'partial', 'failed'",
-	} {
-		if !strings.Contains(rootStateSQL, expected) {
-			t.Errorf("coverage-root migration missing %q", expected)
-		}
-	}
-
-	data, err = migrationFS.ReadFile("migrations/005_coverage_limitations.sql")
-	if err != nil {
-		t.Fatalf("read coverage-limitations migration: %v", err)
-	}
-	limitationsSQL := string(data)
-	for _, expected := range []string{
-		"CREATE TABLE IF NOT EXISTS coverage_limitations",
-		"parent_coverage_key",
-		"'unknown', 'partial', 'failed', 'truncated'",
-		"REFERENCES scans(id) ON DELETE RESTRICT",
-		"INSERT INTO coverage_limitations",
 		"FROM coverage_heads",
 	} {
-		if !strings.Contains(limitationsSQL, expected) {
-			t.Errorf("coverage-limitations migration missing %q", expected)
+		if strings.Contains(sql, forbidden) {
+			t.Errorf("initial V1 migration contains non-initialization operation %q", forbidden)
 		}
 	}
 }

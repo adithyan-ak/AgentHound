@@ -212,7 +212,7 @@ func parseBundleRule(data []byte, source string) (*FingerprintRule, error) {
 	}
 	r.Source = source
 	if r.Version == 0 {
-		r.Version = 2
+		r.Version = 1
 	}
 	return &r, nil
 }

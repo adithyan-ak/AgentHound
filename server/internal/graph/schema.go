@@ -29,45 +29,20 @@ var indexDefs = []struct{ Label, Property string }{
 	{"Credential", "value_hash"},
 }
 
-const graphSchemaVersion = 3
+const graphSchemaVersion = 1
 
-const observationFingerprintSchemaStateCypher = `
-CALL {
-  MATCH (n)
-  WHERE any(label IN labels(n) WHERE label IN $public_kinds)
-  WITH n, [
-    token IN coalesce(n.observation_tokens, [])
-    WHERE NOT token IN coalesce(n.observation_reference_tokens, [])
-  ] AS ownership_tokens
-  WHERE any(token IN ownership_tokens WHERE
-    none(fingerprint IN coalesce(n.observation_fact_fingerprints, []) WHERE
-      fingerprint STARTS WITH
-        split(token, $token_separator)[0] + $fingerprint_separator))
-  RETURN count(n) AS unfingerprinted_nodes
-}
-CALL {
-  MATCH ()-[r]->()
-  WHERE type(r) IN $raw_edge_kinds
-  WITH r, CASE
-    WHEN r.observation_semantics = $all_dependencies_semantics
-    THEN coalesce(r.observation_dependency_tokens, [])
-    ELSE coalesce(r.observation_tokens, [])
-  END AS ownership_tokens
-  WHERE any(token IN ownership_tokens WHERE
-    none(fingerprint IN coalesce(r.observation_fact_fingerprints, []) WHERE
-      fingerprint STARTS WITH
-        split(token, $token_separator)[0] + $fingerprint_separator))
-  RETURN count(r) AS unfingerprinted_relationships
-}
+const graphSchemaVersionCypher = `
 OPTIONAL MATCH (schema:SchemaVersion)
-RETURN coalesce(max(schema.version), 0) AS version,
-       unfingerprinted_nodes,
-       unfingerprinted_relationships`
+RETURN count(schema) AS marker_count,
+       count(schema.version) AS version_count,
+       coalesce(min(schema.version), 0) AS min_version,
+       coalesce(max(schema.version), 0) AS max_version`
 
-type observationFingerprintSchemaState struct {
-	Version                      int64
-	UnfingerprintedNodes         int64
-	UnfingerprintedRelationships int64
+type graphSchemaState struct {
+	MarkerCount  int64
+	VersionCount int64
+	MinVersion   int64
+	MaxVersion   int64
 }
 
 func InitSchema(ctx context.Context, driver neo4j.DriverWithContext) error {
@@ -78,32 +53,22 @@ func InitSchema(ctx context.Context, driver neo4j.DriverWithContext) error {
 	}
 	slog.Info("detected neo4j version", "major", major, "minor", minor)
 
-	fingerprintState, err := readObservationFingerprintSchemaState(ctx, driver)
+	schemaState, err := readGraphSchemaState(ctx, driver)
 	if err != nil {
-		return fmt.Errorf("inspect observation fingerprint schema: %w", err)
+		return fmt.Errorf("inspect graph schema version: %w", err)
 	}
-	if fingerprintState.Version > graphSchemaVersion {
+	if schemaState.MarkerCount > 1 ||
+		schemaState.VersionCount != schemaState.MarkerCount ||
+		schemaState.MinVersion != schemaState.MaxVersion {
 		return fmt.Errorf(
-			"Neo4j graph schema %d is newer than the maximum schema %d supported by this server; refusing to downgrade the database",
-			fingerprintState.Version,
-			graphSchemaVersion,
+			"Neo4j graph schema marker is malformed; this server requires exactly one V1 marker",
 		)
 	}
-	if fingerprintState.Version > 0 && fingerprintState.Version < graphSchemaVersion {
+	if schemaState.MarkerCount == 1 &&
+		schemaState.MinVersion != graphSchemaVersion {
 		return fmt.Errorf(
-			"Neo4j graph schema %d predates ingest v4 scoped identity; automatic upgrade to schema %d is refused: back up the existing deployment, recreate both database volumes, and recollect",
-			fingerprintState.Version,
-			graphSchemaVersion,
-		)
-	}
-	if fingerprintState.Version < graphSchemaVersion &&
-		(fingerprintState.UnfingerprintedNodes > 0 ||
-			fingerprintState.UnfingerprintedRelationships > 0) {
-		return fmt.Errorf(
-			"Neo4j graph schema %d contains %d authoritative nodes and %d raw relationships without per-owner observation fingerprints; automatic upgrade to schema %d cannot preserve shared-owner evidence safely: back up the deployment, recreate the Neo4j and PostgreSQL volumes, and recollect before starting this release",
-			fingerprintState.Version,
-			fingerprintState.UnfingerprintedNodes,
-			fingerprintState.UnfingerprintedRelationships,
+			"Neo4j graph schema %d is unsupported; this server requires schema %d",
+			schemaState.MinVersion,
 			graphSchemaVersion,
 		)
 	}
@@ -147,14 +112,8 @@ func InitSchema(ctx context.Context, driver neo4j.DriverWithContext) error {
 		slog.Info("created index", "label", idx.Label, "property", idx.Property)
 	}
 
-	// Schema version 3 is the clean ingest-v4 boundary. Earlier graph schemas
-	// are rejected above rather than rewritten into scoped identity.
-	if err := runDDL(ctx, driver, fmt.Sprintf(
-		"MATCH (schema:SchemaVersion) SET schema.version = %d",
-		graphSchemaVersion,
-	)); err != nil {
-		return fmt.Errorf("update schema version: %w", err)
-	}
+	// A fresh graph and an already-initialized V1 graph converge on the same
+	// single schema marker.
 	if err := runDDL(ctx, driver, fmt.Sprintf(
 		"MERGE (:SchemaVersion {version: %d})",
 		graphSchemaVersion,
@@ -166,23 +125,15 @@ func InitSchema(ctx context.Context, driver neo4j.DriverWithContext) error {
 	return nil
 }
 
-func readObservationFingerprintSchemaState(
+func readGraphSchemaState(
 	ctx context.Context,
 	driver neo4j.DriverWithContext,
-) (observationFingerprintSchemaState, error) {
+) (graphSchemaState, error) {
 	session := driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
 	defer session.Close(ctx)
 
 	result, err := session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
-		rows, err := tx.Run(ctx, observationFingerprintSchemaStateCypher, map[string]any{
-			"public_kinds":          ingest.PublicNodeLabels,
-			"raw_edge_kinds":        rawEdgeKinds(),
-			"token_separator":       observationTokenSeparator,
-			"fingerprint_separator": observationFactFingerprintSeparator,
-			"all_dependencies_semantics": string(
-				ingest.ObservationSemanticsAllDependencies,
-			),
-		})
+		rows, err := tx.Run(ctx, graphSchemaVersionCypher, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -196,39 +147,44 @@ func readObservationFingerprintSchemaState(
 		readCount := func(key string) (int64, error) {
 			value, exists := record.Get(key)
 			if !exists {
-				return 0, fmt.Errorf("schema state missing %s", key)
+				return 0, fmt.Errorf("schema version query omitted %s", key)
 			}
 			count, ok := value.(int64)
 			if !ok {
-				return 0, fmt.Errorf("schema state %s has type %T", key, value)
+				return 0, fmt.Errorf("schema version %s has type %T", key, value)
 			}
 			return count, nil
 		}
-		version, err := readCount("version")
+		markerCount, err := readCount("marker_count")
 		if err != nil {
 			return nil, err
 		}
-		nodes, err := readCount("unfingerprinted_nodes")
+		versionCount, err := readCount("version_count")
 		if err != nil {
 			return nil, err
 		}
-		relationships, err := readCount("unfingerprinted_relationships")
+		minVersion, err := readCount("min_version")
 		if err != nil {
 			return nil, err
 		}
-		return observationFingerprintSchemaState{
-			Version:                      version,
-			UnfingerprintedNodes:         nodes,
-			UnfingerprintedRelationships: relationships,
+		maxVersion, err := readCount("max_version")
+		if err != nil {
+			return nil, err
+		}
+		return graphSchemaState{
+			MarkerCount:  markerCount,
+			VersionCount: versionCount,
+			MinVersion:   minVersion,
+			MaxVersion:   maxVersion,
 		}, nil
 	})
 	if err != nil {
-		return observationFingerprintSchemaState{}, err
+		return graphSchemaState{}, err
 	}
-	state, ok := result.(observationFingerprintSchemaState)
+	state, ok := result.(graphSchemaState)
 	if !ok {
-		return observationFingerprintSchemaState{}, fmt.Errorf(
-			"unexpected schema state type %T",
+		return graphSchemaState{}, fmt.Errorf(
+			"unexpected graph schema state type %T",
 			result,
 		)
 	}

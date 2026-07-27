@@ -277,7 +277,7 @@ func TestBuildManifestInstructionCanonicalizerVersionAtomic(t *testing.T) {
 		entries[entry.Type+":"+entry.ID] = entry
 	}
 
-	legacyDigest := func(r Rule) string {
+	unversionedDigest := func(r Rule) string {
 		r.Source = ""
 		r.Tests = nil
 		return semanticDigest(r)
@@ -288,9 +288,9 @@ func TestBuildManifestInstructionCanonicalizerVersionAtomic(t *testing.T) {
 	fingerprintEntry := entries["fingerprint:canonical-fingerprint"]
 
 	// Eligible text semantic hash includes the canonicalizer version.
-	if eligibleEntry.SemanticSHA256 == legacyDigest(eligible) {
+	if eligibleEntry.SemanticSHA256 == unversionedDigest(eligible) {
 		t.Fatalf(
-			"eligible digest is still legacy (no version): %s",
+			"eligible digest omitted the canonicalizer version: %s",
 			eligibleEntry.SemanticSHA256,
 		)
 	}
@@ -309,10 +309,10 @@ func TestBuildManifestInstructionCanonicalizerVersionAtomic(t *testing.T) {
 		)
 	}
 
-	// Ineligible text and fingerprint hashes remain legacy-identical.
-	if ineligibleEntry.SemanticSHA256 != legacyDigest(ineligible) {
+	// Ineligible text and fingerprint hashes do not use instruction canonicalization.
+	if ineligibleEntry.SemanticSHA256 != unversionedDigest(ineligible) {
 		t.Fatalf(
-			"ineligible digest changed from legacy: %s",
+			"ineligible digest unexpectedly changed: %s",
 			ineligibleEntry.SemanticSHA256,
 		)
 	}
@@ -324,14 +324,14 @@ func TestBuildManifestInstructionCanonicalizerVersionAtomic(t *testing.T) {
 	}
 
 	// Aggregate digest incorporates the versioned eligible entry.
-	legacyEntries := append([]sdkingest.RuleManifestEntry(nil), manifest.Entries...)
-	for i := range legacyEntries {
-		if legacyEntries[i].Type == "text" &&
-			legacyEntries[i].ID == eligible.ID {
-			legacyEntries[i].SemanticSHA256 = legacyDigest(eligible)
+	unversionedEntries := append([]sdkingest.RuleManifestEntry(nil), manifest.Entries...)
+	for i := range unversionedEntries {
+		if unversionedEntries[i].Type == "text" &&
+			unversionedEntries[i].ID == eligible.ID {
+			unversionedEntries[i].SemanticSHA256 = unversionedDigest(eligible)
 		}
 	}
-	if manifest.Digest == semanticDigest(legacyEntries) {
+	if manifest.Digest == semanticDigest(unversionedEntries) {
 		t.Fatal("aggregate digest did not incorporate versioned eligible entry")
 	}
 

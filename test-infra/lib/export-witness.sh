@@ -86,7 +86,7 @@ jq -e \
   .credential_id as $credential_id |
   .server_id as $witness_server_id |
   .resource_id as $witness_resource_id |
-  .schema_version == 3 and
+  .schema_version == 1 and
   .topology_normalization_version == 1 and
   .publication_revision == $revision and
   .predicted_edge_kind == "CAN_REACH" and
