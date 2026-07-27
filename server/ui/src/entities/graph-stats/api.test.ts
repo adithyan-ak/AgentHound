@@ -23,13 +23,23 @@ describe("fetchGraphStats", () => {
         edge_counts: {},
         total_nodes: 1,
         total_edges: 0,
-        projection: { scan_id: "scan-4", revision: 4 },
+        projection: {
+          scan_id: "scan-4",
+          revision: 4,
+          coverage_limited: true,
+          coverage_limitation_count: 2,
+        },
       }),
     );
 
     await expect(fetchGraphStats()).resolves.toMatchObject({
       total_nodes: 1,
-      projection: { scanId: "scan-4", revision: 4 },
+      projection: {
+        scanId: "scan-4",
+        revision: 4,
+        coverageLimited: true,
+        coverageLimitationCount: 2,
+      },
     });
   });
 

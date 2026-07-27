@@ -328,6 +328,37 @@ func TestPrintPublishedFindingsCurrentEmptyIncludesProjectionIdentity(t *testing
 	}
 }
 
+func TestPrintPublishedFindingsQualifiesLimitedEmptyResult(t *testing.T) {
+	revision := int64(7)
+	scope := appdb.FindingScope{
+		Mode:             "published",
+		ScanID:           "scan-7",
+		Revision:         &revision,
+		ProjectionStatus: model.ProjectionComplete,
+		SnapshotStatus:   model.LifecycleComplete,
+		Available:        true,
+		ActiveCoverageLimitations: []model.PostureCoverageLimitation{{
+			CoverageKey: "mcp:target:sha256:limited",
+			State:       "partial",
+			ScanID:      "scan-7",
+		}},
+	}
+	var stderr string
+	stdout := captureStdout(t, func() {
+		stderr = captureStderr(t, func() {
+			if err := printPublishedFindings(nil, scope, "table"); err != nil {
+				t.Fatal(err)
+			}
+		})
+	})
+	if !strings.Contains(stderr, "missing evidence is not proof of absence") {
+		t.Fatalf("stderr missing coverage warning: %q", stderr)
+	}
+	if !strings.Contains(stdout, "No findings in observed data; coverage is limited.") {
+		t.Fatalf("stdout contains unqualified empty result: %q", stdout)
+	}
+}
+
 func TestPrintPublishedFindingsJSONIncludesProjectionIdentity(t *testing.T) {
 	revision := int64(7)
 	scope := appdb.FindingScope{
@@ -529,6 +560,43 @@ func TestExecutePrebuiltQueryAndOutputIncludeProjectionIdentity(t *testing.T) {
 	})
 	if !strings.Contains(tableStderr, "scan=scan-7 revision=7") {
 		t.Fatalf("table output missing projection identity: %q", tableStderr)
+	}
+}
+
+func TestPrebuiltOutputWarnsForLimitedPublishedProjection(t *testing.T) {
+	query, ok := prebuilt.Get("no-auth-servers")
+	if !ok {
+		t.Fatal("no-auth-servers query missing")
+	}
+	state := completeCLIProjection("scan-limited", 8)
+	state.ActiveCoverageLimitations = []model.PostureCoverageLimitation{{
+		CoverageKey: "mcp:target:sha256:limited",
+		State:       "partial",
+		ScanID:      "scan-limited",
+	}}
+	result, err := executePrebuiltQuery(
+		context.Background(),
+		query.ID,
+		query,
+		&graph.MockGraphDB{},
+		&fakeCLIProjectionReader{states: []*model.ProjectionState{state}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Projection.CoverageLimited ||
+		result.Projection.CoverageLimitationCount != 1 {
+		t.Fatalf("projection limitation = %+v", result.Projection)
+	}
+	stderr := captureStderr(t, func() {
+		_ = captureStdout(t, func() {
+			if err := printPrebuiltResult(result, "table"); err != nil {
+				t.Fatal(err)
+			}
+		})
+	})
+	if !strings.Contains(stderr, "missing evidence is not proof of absence") {
+		t.Fatalf("stderr missing coverage warning: %q", stderr)
 	}
 }
 

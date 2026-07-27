@@ -1161,6 +1161,118 @@ func TestIntegrationCompleteObservationReplacesStaleManagedProperties(t *testing
 	}
 }
 
+func TestIntegrationPartialObservationRetainsOmittedProperties(t *testing.T) {
+	ctx := testDriver(t)
+	driver, err := NewDriver(
+		os.Getenv("AGENTHOUND_NEO4J_URI"),
+		os.Getenv("AGENTHOUND_NEO4J_USER"),
+		os.Getenv("AGENTHOUND_NEO4J_PASSWORD"),
+	)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer driver.Close(ctx)
+
+	reader := NewReader(driver)
+	writer := NewWriter(driver)
+	scope := "mcp:target:sha256:partial-property-retention"
+	ids := []string{
+		"partial-property-existing",
+		"partial-property-new",
+	}
+	_, _ = integrationWrite(
+		ctx,
+		driver,
+		`MATCH (n) WHERE n.objectid IN $ids DETACH DELETE n`,
+		map[string]any{"ids": ids},
+	)
+	defer func() {
+		_, _ = integrationWrite(
+			ctx,
+			driver,
+			`MATCH (n) WHERE n.objectid IN $ids DETACH DELETE n`,
+			map[string]any{"ids": ids},
+		)
+	}()
+
+	first := ingest.Node{
+		ID:                 ids[0],
+		Kinds:              []string{"MCPServer"},
+		ObservationDomains: []string{scope},
+		Properties: map[string]any{
+			"name":           "before",
+			"stale_property": "retain-until-complete",
+		},
+	}
+	if _, err := writer.WriteObservationNodes(
+		ctx,
+		[]ingest.Node{first},
+		"partial-property-first",
+		[]string{scope},
+	); err != nil {
+		t.Fatalf("write complete baseline: %v", err)
+	}
+	partialExisting := first
+	partialExisting.Properties = map[string]any{"name": "observed-partial"}
+	partialNew := ingest.Node{
+		ID:                 ids[1],
+		Kinds:              []string{"MCPServer"},
+		ObservationDomains: []string{scope},
+		Properties:         map[string]any{"name": "new-partial"},
+	}
+	if _, err := writer.WriteObservationNodes(
+		ctx,
+		[]ingest.Node{partialExisting, partialNew},
+		"partial-property-second",
+		nil,
+	); err != nil {
+		t.Fatalf("write partial observations: %v", err)
+	}
+
+	rows, err := reader.Query(
+		ctx,
+		`MATCH (n) WHERE n.objectid IN $ids
+		RETURN n.objectid AS id,
+		       n.name AS name,
+		       n.stale_property AS stale_property,
+		       n.observation_properties_complete AS properties_complete
+		ORDER BY id`,
+		map[string]any{"ids": ids},
+	)
+	if err != nil {
+		t.Fatalf("read partial observations: %v", err)
+	}
+	if len(rows) != 2 ||
+		rows[0]["name"] != "observed-partial" ||
+		rows[0]["stale_property"] != "retain-until-complete" ||
+		rows[0]["properties_complete"] != true ||
+		rows[1]["name"] != "new-partial" ||
+		rows[1]["properties_complete"] != true {
+		t.Fatalf("partial property state = %+v", rows)
+	}
+
+	if _, err := writer.WriteObservationNodes(
+		ctx,
+		[]ingest.Node{partialExisting},
+		"partial-property-third",
+		[]string{scope},
+	); err != nil {
+		t.Fatalf("write complete replacement: %v", err)
+	}
+	rows, err = reader.Query(
+		ctx,
+		`MATCH (n:MCPServer {objectid: $id})
+		RETURN n.stale_property AS stale_property`,
+		map[string]any{"id": ids[0]},
+	)
+	if err != nil {
+		t.Fatalf("read complete replacement: %v", err)
+	}
+	if len(rows) != 1 || rows[0]["stale_property"] != nil {
+		t.Fatalf("complete replacement retained stale property: %+v", rows)
+	}
+}
+
 func TestIntegrationReferenceOwnerPreservesThenRetiresAuthoritativeProperties(t *testing.T) {
 	ctx := testDriver(t)
 	driver, err := NewDriver(
@@ -1516,6 +1628,302 @@ func TestIntegrationExactOwnerTransferPreservesOnlyRedundantFacts(t *testing.T) 
 				t.Fatalf("owner transfer fabricated retired-only evidence: %+v", row)
 			}
 		})
+	}
+}
+
+func TestIntegrationCompleteSharedOwnerRecoversAfterPartialSubset(t *testing.T) {
+	ctx := testDriver(t)
+	driver, err := NewDriver(
+		os.Getenv("AGENTHOUND_NEO4J_URI"),
+		os.Getenv("AGENTHOUND_NEO4J_USER"),
+		os.Getenv("AGENTHOUND_NEO4J_PASSWORD"),
+	)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer driver.Close(ctx)
+
+	writer := NewWriter(driver)
+	db := NewDB(NewReader(driver), writer)
+	const (
+		serverID = "partial-recovery-shared-server"
+		hostID   = "partial-recovery-shared-host"
+		scopeA   = "config:path:sha256:partial-recovery-a"
+		scopeB   = "mcp:target:sha256:partial-recovery-b"
+	)
+	cleanup := func() {
+		_, _ = db.ExecuteWrite(
+			ctx,
+			"MATCH (n) WHERE n.objectid IN $ids DETACH DELETE n",
+			map[string]any{"ids": []string{serverID, hostID}},
+		)
+	}
+	cleanup()
+	defer cleanup()
+
+	serverA := ingest.Node{
+		ID: serverID, Kinds: []string{"MCPServer"},
+		ObservationDomains: []string{scopeA},
+		Properties: map[string]any{
+			"endpoint": "http://mcp.example/mcp", "transport": "http",
+			"configured_name": "configured",
+		},
+	}
+	serverB := ingest.Node{
+		ID: serverID, Kinds: []string{"MCPServer"},
+		ObservationDomains: []string{scopeB},
+		Properties: map[string]any{
+			"endpoint": "http://mcp.example/mcp", "transport": "http",
+			"protocol_version": "2025-06-18",
+		},
+	}
+	host := ingest.Node{
+		ID: hostID, Kinds: []string{"Host"},
+		ObservationDomains: []string{scopeA, scopeB},
+		Properties:         map[string]any{"hostname": "mcp.example"},
+	}
+	edgeA := ingest.Edge{
+		Source: serverID, Target: hostID, Kind: "RUNS_ON",
+		SourceKind: "MCPServer", TargetKind: "Host",
+		ObservationDomains: []string{scopeA},
+		Properties: map[string]any{
+			"confidence": 1.0, "configured_evidence": "configured",
+		},
+	}
+	edgeB := edgeA
+	edgeB.ObservationDomains = []string{scopeB}
+	edgeB.Properties = map[string]any{
+		"confidence": 1.0, "live_evidence": "observed",
+	}
+
+	if _, err := writer.WriteObservationNodes(
+		ctx,
+		[]ingest.Node{serverA, serverB, host},
+		"complete-both",
+		[]string{scopeA, scopeB},
+	); err != nil {
+		t.Fatalf("write complete shared nodes: %v", err)
+	}
+	if _, err := writer.WriteObservationEdges(
+		ctx,
+		[]ingest.Edge{edgeA, edgeB},
+		"complete-both",
+		[]string{scopeA, scopeB},
+	); err != nil {
+		t.Fatalf("write complete shared edge: %v", err)
+	}
+
+	partialServerA := serverA
+	partialServerA.Properties = map[string]any{
+		"endpoint": "http://mcp.example/mcp",
+	}
+	partialEdgeA := edgeA
+	partialEdgeA.Properties = map[string]any{"confidence": 1.0}
+	if _, err := writer.WriteObservationNodes(
+		ctx, []ingest.Node{partialServerA}, "partial-a", nil,
+	); err != nil {
+		t.Fatalf("write partial owner A node: %v", err)
+	}
+	if _, err := writer.WriteObservationEdges(
+		ctx, []ingest.Edge{partialEdgeA}, "partial-a", nil,
+	); err != nil {
+		t.Fatalf("write partial owner A edge: %v", err)
+	}
+
+	if _, err := writer.WriteObservationNodes(
+		ctx, []ingest.Node{serverA}, "complete-a", []string{scopeA},
+	); err != nil {
+		t.Fatalf("restore complete owner A node: %v", err)
+	}
+	if _, err := writer.WriteObservationEdges(
+		ctx, []ingest.Edge{edgeA}, "complete-a", []string{scopeA},
+	); err != nil {
+		t.Fatalf("restore complete owner A edge: %v", err)
+	}
+	if _, err := ReconcileObservations(
+		ctx, db, "complete-a", []string{scopeA},
+	); err != nil {
+		t.Fatalf("reconcile complete owner A: %v", err)
+	}
+
+	rows, err := db.Query(ctx, `
+MATCH (server:MCPServer {objectid: $server})-[r:RUNS_ON]->
+      (:Host {objectid: $host})
+RETURN server.observation_properties_complete AS server_complete,
+       r.observation_properties_complete AS edge_complete,
+       size([fingerprint IN server.observation_fact_fingerprints
+             WHERE fingerprint STARTS WITH $scope_a]) AS server_a_fingerprints,
+       size([fingerprint IN server.observation_fact_fingerprints
+             WHERE fingerprint STARTS WITH $scope_b]) AS server_b_fingerprints,
+       size([fingerprint IN r.observation_fact_fingerprints
+             WHERE fingerprint STARTS WITH $scope_a]) AS edge_a_fingerprints,
+       size([fingerprint IN r.observation_fact_fingerprints
+             WHERE fingerprint STARTS WITH $scope_b]) AS edge_b_fingerprints`,
+		map[string]any{
+			"server":  serverID,
+			"host":    hostID,
+			"scope_a": observationFingerprintDomainPrefix(scopeA),
+			"scope_b": observationFingerprintDomainPrefix(scopeB),
+		})
+	if err != nil {
+		t.Fatalf("query recovered shared observation: %v", err)
+	}
+	if len(rows) != 1 ||
+		rows[0]["server_complete"] != true ||
+		rows[0]["edge_complete"] != true ||
+		rows[0]["server_a_fingerprints"] != int64(1) ||
+		rows[0]["server_b_fingerprints"] != int64(1) ||
+		rows[0]["edge_a_fingerprints"] != int64(1) ||
+		rows[0]["edge_b_fingerprints"] != int64(1) {
+		t.Fatalf("complete shared owner did not recover after partial subset: %+v", rows)
+	}
+
+	partialAdditionA := serverA
+	partialAdditionA.Properties = map[string]any{
+		"endpoint":     "http://mcp.example/mcp",
+		"new_property": "confirmed-partial",
+	}
+	partialEdgeAdditionA := edgeA
+	partialEdgeAdditionA.Properties = map[string]any{
+		"confidence":   1.0,
+		"new_property": "confirmed-partial",
+	}
+	if _, err := writer.WriteObservationNodes(
+		ctx, []ingest.Node{partialAdditionA}, "partial-addition-a", nil,
+	); err != nil {
+		t.Fatalf("write partial owner A addition: %v", err)
+	}
+	if _, err := writer.WriteObservationEdges(
+		ctx, []ingest.Edge{partialEdgeAdditionA}, "partial-addition-a", nil,
+	); err != nil {
+		t.Fatalf("write partial owner A edge addition: %v", err)
+	}
+
+	assertAdditionQuarantined := func(stage string) {
+		t.Helper()
+		additionRows, queryErr := db.Query(ctx, `
+MATCH (server:MCPServer {objectid: $server})-[r:RUNS_ON]->
+      (:Host {objectid: $host})
+RETURN server.observation_properties_complete AS server_complete,
+       r.observation_properties_complete AS edge_complete,
+       server.configured_name AS configured_name,
+       server.new_property AS server_new_property,
+       r.configured_evidence AS configured_evidence,
+       r.new_property AS edge_new_property,
+       size([fingerprint IN server.observation_fact_fingerprints
+             WHERE fingerprint STARTS WITH $scope_a]) AS server_a_fingerprints,
+       size([fingerprint IN server.observation_fact_fingerprints
+             WHERE fingerprint STARTS WITH $scope_b]) AS server_b_fingerprints,
+       size([fingerprint IN r.observation_fact_fingerprints
+             WHERE fingerprint STARTS WITH $scope_a]) AS edge_a_fingerprints,
+       size([fingerprint IN r.observation_fact_fingerprints
+             WHERE fingerprint STARTS WITH $scope_b]) AS edge_b_fingerprints`,
+			map[string]any{
+				"server":  serverID,
+				"host":    hostID,
+				"scope_a": observationFingerprintDomainPrefix(scopeA),
+				"scope_b": observationFingerprintDomainPrefix(scopeB),
+			})
+		if queryErr != nil {
+			t.Fatalf("%s query partial addition: %v", stage, queryErr)
+		}
+		if len(additionRows) != 1 ||
+			additionRows[0]["server_complete"] != false ||
+			additionRows[0]["edge_complete"] != false ||
+			additionRows[0]["configured_name"] != "configured" ||
+			additionRows[0]["server_new_property"] != "confirmed-partial" ||
+			additionRows[0]["configured_evidence"] != "configured" ||
+			additionRows[0]["edge_new_property"] != "confirmed-partial" ||
+			additionRows[0]["server_a_fingerprints"] != int64(0) ||
+			additionRows[0]["server_b_fingerprints"] != int64(1) ||
+			additionRows[0]["edge_a_fingerprints"] != int64(0) ||
+			additionRows[0]["edge_b_fingerprints"] != int64(1) {
+			t.Fatalf("%s partial addition escaped quarantine: %+v", stage, additionRows)
+		}
+	}
+	assertAdditionQuarantined("partial")
+
+	// A later complete refresh with the partial shape must not certify the
+	// retained configured_name/configured_evidence values that it omitted.
+	if _, err := writer.WriteObservationNodes(
+		ctx,
+		[]ingest.Node{partialAdditionA},
+		"complete-partial-shape-a",
+		[]string{scopeA},
+	); err != nil {
+		t.Fatalf("write complete partial-shape owner A node: %v", err)
+	}
+	if _, err := writer.WriteObservationEdges(
+		ctx,
+		[]ingest.Edge{partialEdgeAdditionA},
+		"complete-partial-shape-a",
+		[]string{scopeA},
+	); err != nil {
+		t.Fatalf("write complete partial-shape owner A edge: %v", err)
+	}
+	if _, err := ReconcileObservations(
+		ctx, db, "complete-partial-shape-a", []string{scopeA},
+	); err != nil {
+		t.Fatalf("reconcile complete partial-shape owner A: %v", err)
+	}
+	assertAdditionQuarantined("complete partial-shape retry")
+
+	restoredA := serverA
+	restoredA.Properties = cloneProperties(serverA.Properties)
+	restoredA.Properties["new_property"] = "confirmed-partial"
+	restoredEdgeA := edgeA
+	restoredEdgeA.Properties = cloneProperties(edgeA.Properties)
+	restoredEdgeA.Properties["new_property"] = "confirmed-partial"
+	if _, err := writer.WriteObservationNodes(
+		ctx,
+		[]ingest.Node{restoredA, serverB, host},
+		"complete-joint-restore",
+		[]string{scopeA, scopeB},
+	); err != nil {
+		t.Fatalf("write complete joint restore nodes: %v", err)
+	}
+	if _, err := writer.WriteObservationEdges(
+		ctx,
+		[]ingest.Edge{restoredEdgeA, edgeB},
+		"complete-joint-restore",
+		[]string{scopeA, scopeB},
+	); err != nil {
+		t.Fatalf("write complete joint restore edge: %v", err)
+	}
+	if _, err := ReconcileObservations(
+		ctx, db, "complete-joint-restore", []string{scopeA, scopeB},
+	); err != nil {
+		t.Fatalf("reconcile complete joint restore: %v", err)
+	}
+	rows, err = db.Query(ctx, `
+MATCH (server:MCPServer {objectid: $server})-[r:RUNS_ON]->
+      (:Host {objectid: $host})
+RETURN server.observation_properties_complete AS server_complete,
+       r.observation_properties_complete AS edge_complete,
+       server.configured_name AS configured_name,
+       server.protocol_version AS protocol_version,
+       server.new_property AS server_new_property,
+       r.configured_evidence AS configured_evidence,
+       r.live_evidence AS live_evidence,
+       r.new_property AS edge_new_property,
+       size(server.observation_fact_fingerprints) AS server_fingerprints,
+       size(r.observation_fact_fingerprints) AS edge_fingerprints`,
+		map[string]any{"server": serverID, "host": hostID})
+	if err != nil {
+		t.Fatalf("query complete joint restore: %v", err)
+	}
+	if len(rows) != 1 ||
+		rows[0]["server_complete"] != true ||
+		rows[0]["edge_complete"] != true ||
+		rows[0]["configured_name"] != "configured" ||
+		rows[0]["protocol_version"] != "2025-06-18" ||
+		rows[0]["server_new_property"] != "confirmed-partial" ||
+		rows[0]["configured_evidence"] != "configured" ||
+		rows[0]["live_evidence"] != "observed" ||
+		rows[0]["edge_new_property"] != "confirmed-partial" ||
+		rows[0]["server_fingerprints"] != int64(2) ||
+		rows[0]["edge_fingerprints"] != int64(2) {
+		t.Fatalf("joint complete refresh did not recover exact union: %+v", rows)
 	}
 }
 

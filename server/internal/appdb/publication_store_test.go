@@ -2,6 +2,7 @@ package appdb
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -34,11 +35,13 @@ func TestIntegrationPublicationLifecycle(t *testing.T) {
 	comparableID := prefix + "-comparable"
 	headID := prefix + "-head"
 	pendingID := prefix + "-pending"
+	limitationID := prefix + "-limitation"
 	cleanup := func() {
 		_, _ = pool.Exec(ctx, `UPDATE posture_state SET
 		    published_revision = NULL, published_scan_id = NULL, published_at = NULL,
 		    dirty_coverage = '[]'::jsonb, projection_error = NULL
 		    WHERE singleton = TRUE`)
+		_, _ = pool.Exec(ctx, `DELETE FROM coverage_limitations WHERE scan_id LIKE $1`, prefix+"%")
 		_, _ = pool.Exec(ctx, `DELETE FROM coverage_heads WHERE scan_id LIKE $1`, prefix+"%")
 		_, _ = pool.Exec(ctx, `DELETE FROM scans WHERE id LIKE $1`, prefix+"%")
 	}
@@ -261,6 +264,64 @@ func TestIntegrationPublicationLifecycle(t *testing.T) {
 		t.Fatalf("prior publication status = %q, want superseded", priorScan.PublicationStatus)
 	}
 
+	mustCreateScan(limitationID, model.ScanStatusRunning)
+	limitedScope := sdkingest.CanonicalCoverageKey(
+		"mcp",
+		"target",
+		"https://limited.example",
+	)
+	limitedReport := &sdkingest.CollectionReport{
+		State:        sdkingest.OutcomePartial,
+		CoverageKeys: []string{limitedScope},
+		Outcomes: []sdkingest.CollectionOutcome{{
+			Collector:   "mcp",
+			CoverageKey: limitedScope,
+			Method:      "enumerate",
+			State:       sdkingest.OutcomePartial,
+		}},
+	}
+	limitedScan := model.Scan{
+		ID:                 limitationID,
+		Collector:          "mcp",
+		Status:             model.ScanStatusCompletedWithErrors,
+		StartedAt:          started,
+		CompletedAt:        &completed,
+		ArtifactObservedAt: &observed,
+		CollectionStatus:   model.LifecyclePartial,
+		GraphStatus:        model.LifecycleComplete,
+		AnalysisStatus:     model.LifecycleComplete,
+		SnapshotStatus:     model.LifecycleComplete,
+		ProjectionStatus:   model.ProjectionComplete,
+		ComparisonKey:      "sha256:limited",
+	}
+	limitedResult, err := findings.FinalizeScan(ctx, FinalizeScanParams{
+		Scan:         limitedScan,
+		Collection:   limitedReport,
+		CoverageKeys: limitedReport.CoverageKeys,
+		GraphAfter:   graphAfter,
+		Publish:      true,
+	})
+	if err != nil {
+		t.Fatalf("finalize limited publication: %v", err)
+	}
+	if len(limitedResult.ActiveCoverageLimitations) != 1 {
+		t.Fatalf("limited publication = %+v", limitedResult)
+	}
+	limitedFindingScope, err := findings.PublishedFindingScope(ctx)
+	if err != nil {
+		t.Fatalf("read limited finding scope: %v", err)
+	}
+	if !limitedFindingScope.CoverageLimited ||
+		len(limitedFindingScope.ActiveCoverageLimitations) != 1 ||
+		limitedFindingScope.ActiveCoverageLimitations[0].CoverageKey != limitedScope {
+		t.Fatalf("limited finding scope = %+v", limitedFindingScope)
+	}
+	var deleteConflict *ScanDeleteConflictError
+	if err := scans.DeleteScan(ctx, limitationID); !errors.As(err, &deleteConflict) ||
+		!strings.Contains(deleteConflict.Reason, "coverage limitation") {
+		t.Fatalf("delete active limitation owner error = %v", err)
+	}
+
 	mustCreateScan(headID, model.ScanStatusCompleted)
 	if _, err := pool.Exec(ctx, `INSERT INTO coverage_heads (coverage_key, scan_id)
 		VALUES ('config', $1) ON CONFLICT (coverage_key) DO UPDATE SET scan_id = EXCLUDED.scan_id`,
@@ -333,6 +394,7 @@ func TestIntegrationAuthoritativeRootRetiresRemovedChildHeadAndDirtyKey(t *testi
 			`DELETE FROM coverage_heads WHERE coverage_key = ANY($1::text[])`,
 			[]string{root, childA, childB, childC, childD},
 		)
+		_, _ = pool.Exec(ctx, `DELETE FROM coverage_limitations WHERE scan_id LIKE $1`, prefix+"%")
 		_, _ = pool.Exec(ctx, `DELETE FROM scans WHERE id LIKE $1`, prefix+"%")
 	}
 	cleanup()
@@ -730,7 +792,15 @@ func TestIntegrationIncompleteInstructionRootPreservesChildrenUntilComplete(t *t
 	firstID := "instruction-root-first"
 	finalize(firstID, sdkingest.OutcomeComplete, true, currentChild, priorSibling)
 	partialID := "instruction-root-partial"
-	finalize(partialID, sdkingest.OutcomePartial, false, currentChild)
+	partialResult := finalize(partialID, sdkingest.OutcomePartial, false, currentChild)
+	if partialResult.Revision == nil ||
+		len(partialResult.ActiveCoverageLimitations) != 1 ||
+		partialResult.ActiveCoverageLimitations[0].CoverageKey != root ||
+		partialResult.ActiveCoverageLimitations[0].State != sdkingest.OutcomePartial ||
+		partialResult.Export == nil ||
+		len(partialResult.Export.Scope.ActiveCoverageLimitations) != 1 {
+		t.Fatalf("partial coverage publication = %+v", partialResult)
+	}
 
 	var (
 		rootState     sdkingest.OutcomeState
@@ -782,6 +852,46 @@ func TestIntegrationIncompleteInstructionRootPreservesChildrenUntilComplete(t *t
 		)
 	}
 
+	unrelatedID := "instruction-root-unrelated"
+	unrelatedScope := sdkingest.CanonicalCoverageKey(
+		"mcp",
+		"target",
+		"https://unrelated.example",
+	)
+	createRunning(unrelatedID)
+	unrelatedReport := &sdkingest.CollectionReport{
+		State:        sdkingest.OutcomeComplete,
+		CoverageKeys: []string{unrelatedScope},
+		Outcomes: []sdkingest.CollectionOutcome{{
+			Collector:   "mcp",
+			CoverageKey: unrelatedScope,
+			Method:      "enumerate",
+			State:       sdkingest.OutcomeComplete,
+		}},
+	}
+	unrelatedScan := finalScan(unrelatedID)
+	unrelatedScan.Collector = "mcp"
+	unrelatedResult, err := findings.FinalizeScan(ctx, FinalizeScanParams{
+		Scan:            unrelatedScan,
+		Collection:      unrelatedReport,
+		CoverageKeys:    unrelatedReport.CoverageKeys,
+		CompleteDomains: unrelatedReport.CoverageKeys,
+		GraphAfter:      graphAfter,
+		Publish:         true,
+	})
+	if err != nil {
+		t.Fatalf("finalize unrelated scan: %v", err)
+	}
+	if len(unrelatedResult.ActiveCoverageLimitations) != 1 ||
+		unrelatedResult.ActiveCoverageLimitations[0].CoverageKey != root ||
+		unrelatedResult.Export == nil ||
+		unrelatedResult.Export.Scope.ComparisonKey != "" {
+		t.Fatalf(
+			"unrelated publication lost or compared limited coverage: %+v",
+			unrelatedResult,
+		)
+	}
+
 	failedID := "instruction-root-failed"
 	finalize(failedID, sdkingest.OutcomeFailed, false, currentChild)
 	if err := pool.QueryRow(
@@ -797,6 +907,35 @@ func TestIntegrationIncompleteInstructionRootPreservesChildrenUntilComplete(t *t
 
 	completeID := "instruction-root-complete"
 	finalize(completeID, sdkingest.OutcomeComplete, true, currentChild)
+	projectionState, err := findings.GetProjectionState(ctx)
+	if err != nil {
+		t.Fatalf("read projection after complete coverage: %v", err)
+	}
+	if len(projectionState.ActiveCoverageLimitations) != 0 {
+		t.Fatalf(
+			"complete coverage retained limitations: %+v",
+			projectionState.ActiveCoverageLimitations,
+		)
+	}
+	var partialExportJSON []byte
+	if err := pool.QueryRow(
+		ctx,
+		`SELECT export FROM posture_publications WHERE revision = $1`,
+		*partialResult.Revision,
+	).Scan(&partialExportJSON); err != nil {
+		t.Fatalf("read historical partial export: %v", err)
+	}
+	var partialExport model.PostureExport
+	if err := json.Unmarshal(partialExportJSON, &partialExport); err != nil {
+		t.Fatalf("decode historical partial export: %v", err)
+	}
+	if len(partialExport.Scope.ActiveCoverageLimitations) != 1 ||
+		partialExport.Scope.ActiveCoverageLimitations[0].CoverageKey != root {
+		t.Fatalf(
+			"historical revision lost coverage limitation: %+v",
+			partialExport.Scope.ActiveCoverageLimitations,
+		)
+	}
 	var siblingCount int
 	if err := pool.QueryRow(
 		ctx,
@@ -893,6 +1032,7 @@ func TestBuildPostureExportDeclaresHealthAndCompleteState(t *testing.T) {
 			"config:path:sha256:current",
 			"mcp:target:sha256:prior",
 		},
+		nil,
 		nil,
 	)
 

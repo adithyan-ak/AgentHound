@@ -162,7 +162,7 @@ func writeRemoteIngestResult(
 	heading := "Ingest complete"
 	if !complete {
 		heading = "Ingest incomplete"
-	} else if ingest.InstructionCoverageLimited(&result.Collection) {
+	} else if remoteResultCoverageLimited(result) {
 		heading = "Ingest complete with coverage limitations"
 	}
 	findings := "unknown"
@@ -183,6 +183,21 @@ func writeRemoteIngestResult(
 		return fmt.Errorf("write ingest result: %w", err)
 	}
 	return nil
+}
+
+func remoteResultCoverageLimited(result *ingest.IngestResult) bool {
+	if result == nil {
+		return false
+	}
+	if ingest.CoverageLimited(&result.Collection) {
+		return true
+	}
+	for _, warning := range result.Warnings {
+		if warning == ingest.CoverageLimitationWarning {
+			return true
+		}
+	}
+	return false
 }
 
 func validateRemoteIngestScanID(result *ingest.IngestResult, expectedScanID string) error {

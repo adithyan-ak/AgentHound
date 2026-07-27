@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/server/model"
 )
 
@@ -15,8 +16,10 @@ type StateReader interface {
 
 // Identity identifies one immutable published graph projection.
 type Identity struct {
-	ScanID   string `json:"scan_id"`
-	Revision int64  `json:"revision"`
+	ScanID                  string `json:"scan_id"`
+	Revision                int64  `json:"revision"`
+	CoverageLimited         bool   `json:"coverage_limited"`
+	CoverageLimitationCount int    `json:"coverage_limitation_count"`
 }
 
 // ConflictError reports why a stable complete published projection could not
@@ -107,8 +110,19 @@ func readable(state *model.ProjectionState) (Identity, error) {
 	if len(state.DirtyCoverage) != 0 {
 		return Identity{}, &ConflictError{Reason: "incomplete", State: state}
 	}
+	limitedScopes := make(map[string]bool, len(state.ActiveCoverageLimitations))
+	for _, limitation := range state.ActiveCoverageLimitations {
+		limitedScopes[limitation.CoverageKey] = true
+	}
+	for _, root := range state.ActiveCoverageRoots {
+		if root.State != sdkingest.OutcomeComplete || !root.ContractCurrent {
+			limitedScopes[root.CoverageKey] = true
+		}
+	}
 	return Identity{
-		ScanID:   state.PublishedScanID,
-		Revision: *state.PublishedRevision,
+		ScanID:                  state.PublishedScanID,
+		Revision:                *state.PublishedRevision,
+		CoverageLimited:         len(limitedScopes) > 0,
+		CoverageLimitationCount: len(limitedScopes),
 	}, nil
 }

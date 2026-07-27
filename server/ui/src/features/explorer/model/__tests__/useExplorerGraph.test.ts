@@ -19,9 +19,13 @@ vi.mock("@entities/finding/api", () => ({
   fetchAllFindings: mocks.fetchFindings,
 }));
 
-vi.mock("@entities/posture/api", () => ({
-  fetchProjectionState: mocks.fetchProjectionState,
-}));
+vi.mock("@entities/posture/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@entities/posture/api")>();
+  return {
+    ...actual,
+    fetchProjectionState: mocks.fetchProjectionState,
+  };
+});
 
 import {
   ExplorerPublicationError,
@@ -38,6 +42,8 @@ function findingScope(scanId = "scan-1", revision = 1) {
     snapshotStatus: "complete",
     available: true,
     stale: false,
+    coverageLimited: false,
+    activeCoverageLimitations: [],
   };
 }
 
@@ -46,6 +52,8 @@ function projectionState(scanId = "scan-1", revision = 1) {
     status: "complete" as const,
     scan_id: scanId,
     dirty_coverage: [],
+    active_coverage_roots: [],
+    active_coverage_limitations: [],
     updated_at: "2026-07-11T00:00:00Z",
     published_scan_id: scanId,
     published_revision: revision,
@@ -60,14 +68,24 @@ describe("fetchExplorerGraph publication coherence", () => {
       total: 0,
       complete: true,
       revision: "graph-revision",
-      projection: { scanId: "scan-1", revision: 1 },
+      projection: {
+        scanId: "scan-1",
+        revision: 1,
+        coverageLimited: false,
+        coverageLimitationCount: 0,
+      },
     });
     mocks.fetchEdges.mockReset().mockResolvedValue({
       items: [],
       total: 0,
       complete: true,
       revision: "graph-revision",
-      projection: { scanId: "scan-1", revision: 1 },
+      projection: {
+        scanId: "scan-1",
+        revision: 1,
+        coverageLimited: false,
+        coverageLimitationCount: 0,
+      },
     });
     mocks.fetchFindings.mockReset().mockResolvedValue({
       findings: [],
@@ -80,13 +98,82 @@ describe("fetchExplorerGraph publication coherence", () => {
 
   it("returns graph data only when all four sources share one publication", async () => {
     await expect(fetchExplorerGraph()).resolves.toMatchObject({
-      publication: { scanId: "scan-1", revision: 1 },
+      publication: {
+        scanId: "scan-1",
+        revision: 1,
+        coverageLimited: false,
+        coverageLimitationCount: 0,
+      },
       findingScope: { scanId: "scan-1", revision: 1 },
       projectionState: {
         published_scan_id: "scan-1",
         published_revision: 1,
       },
-      collection: { complete: true, revision: "graph-revision" },
+      collection: {
+        complete: true,
+        coverageLimited: false,
+        revision: "graph-revision",
+      },
+    });
+  });
+
+  it("keeps a limited graph usable while withholding absence verdicts", async () => {
+    const limitation = {
+      coverageKey: "mcp:target:sha256:limited",
+      state: "partial" as const,
+      scanId: "scan-1",
+      observedAt: "2026-07-11T00:00:00Z",
+    };
+    const limitedProjection = {
+      scanId: "scan-1",
+      revision: 1,
+      coverageLimited: true,
+      coverageLimitationCount: 1,
+    };
+    mocks.fetchNodes.mockResolvedValue({
+      items: [],
+      total: 0,
+      complete: true,
+      revision: "graph-revision",
+      projection: limitedProjection,
+    });
+    mocks.fetchEdges.mockResolvedValue({
+      items: [],
+      total: 0,
+      complete: true,
+      revision: "graph-revision",
+      projection: limitedProjection,
+    });
+    mocks.fetchFindings.mockResolvedValue({
+      findings: [],
+      scope: {
+        ...findingScope(),
+        coverageLimited: true,
+        activeCoverageLimitations: [limitation],
+      },
+    });
+    mocks.fetchProjectionState.mockResolvedValue({
+      ...projectionState(),
+      active_coverage_limitations: [
+        {
+          coverage_key: limitation.coverageKey,
+          state: limitation.state,
+          scan_id: limitation.scanId,
+          observed_at: limitation.observedAt,
+        },
+      ],
+    });
+
+    await expect(fetchExplorerGraph()).resolves.toMatchObject({
+      nodes: [],
+      edges: [],
+      collection: {
+        complete: false,
+        coverageLimited: true,
+        incompleteReason: expect.stringContaining(
+          "absence-based conclusions are withheld",
+        ),
+      },
     });
   });
 
@@ -99,7 +186,12 @@ describe("fetchExplorerGraph publication coherence", () => {
           total: 0,
           complete: true,
           revision: "graph-revision",
-          projection: { scanId: "scan-2", revision: 2 },
+          projection: {
+            scanId: "scan-2",
+            revision: 2,
+            coverageLimited: false,
+            coverageLimitationCount: 0,
+          },
         }),
     },
     {

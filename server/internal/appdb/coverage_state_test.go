@@ -6,6 +6,7 @@ import (
 	"time"
 
 	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
+	"github.com/adithyan-ak/agenthound/server/model"
 )
 
 func finalizeCoverageAttempt(
@@ -368,5 +369,20 @@ func TestActivePostureCoverageRootsExposeCurrentRootState(t *testing.T) {
 		!roots[0].RegistryContract.Equal(contract) ||
 		!roots[0].ContractCurrent {
 		t.Fatalf("active root status = %+v", roots[0])
+	}
+}
+
+func TestPostureCoverageRootsLimitedIncludesOutdatedContract(t *testing.T) {
+	if !postureCoverageRootsLimited([]model.PostureCoverageRoot{{
+		State:           sdkingest.OutcomeComplete,
+		ContractCurrent: false,
+	}}) {
+		t.Fatal("outdated registered-source contract was treated as complete coverage")
+	}
+	if postureCoverageRootsLimited([]model.PostureCoverageRoot{{
+		State:           sdkingest.OutcomeComplete,
+		ContractCurrent: true,
+	}}) {
+		t.Fatal("current complete registered-source contract was treated as limited")
 	}
 }

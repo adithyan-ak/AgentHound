@@ -9,6 +9,7 @@ import {
   useScans,
 } from "@entities/scan";
 import {
+  activePublishedCoverageLimitations,
   limitedPublishedInstructionRoots,
   useProjectionState,
 } from "@entities/posture";
@@ -165,17 +166,20 @@ export function Dashboard() {
     latestPublished.snapshot_status === "complete" &&
     latestPublished.projection_status === "complete";
   const limitedCoverageRoots = limitedPublishedInstructionRoots(posture);
+  const activeCoverageLimitations =
+    activePublishedCoverageLimitations(posture);
   const exactCoverageNeedsRefresh = limitedCoverageRoots.some(
     (root) => root.mode !== "deep",
   );
   const latestCollectionLimited =
     latestPublished != null &&
     latestPublished.collection_status !== "complete";
-  const coverageLimitationDetail = exactCoverageNeedsRefresh
-    ? "Registered user or project instruction coverage uses an incomplete or outdated source contract. Run a new config scan before treating missing registered sources as absent."
-    : limitedCoverageRoots.length > 0
-      ? "The current exact registered-source posture is usable, but retained nested coverage is truncated or uses an older source contract. Run a new config scan with --deep before treating missing nested evidence as absent."
-      : "The current exact registered-source posture is usable, but the latest nested discovery attempt did not complete. Retained evidence remains visible; missing nested evidence is not a clean absence.";
+  const coverageLimitationDetail =
+    activeCoverageLimitations.length > 0
+      ? "Confirmed evidence is retained, but one or more collection scopes were incomplete. Missing evidence is not proof of absence; rerun the affected collection before treating gaps as clean."
+      : exactCoverageNeedsRefresh
+        ? "Registered user or project instruction coverage uses an incomplete or outdated source contract. Run a new config scan before treating missing registered sources as absent."
+        : "The current exact registered-source posture is usable, but retained nested coverage is truncated or uses an older source contract. Run a new config scan with --deep before treating missing nested evidence as absent.";
   const projectionIncomplete =
     posture?.status === "updating" || posture?.status === "incomplete";
   const unknownProjectionWithInventory =
@@ -257,7 +261,9 @@ export function Dashboard() {
         )}
 
         {publishedStagesComplete &&
-          (latestCollectionLimited || limitedCoverageRoots.length > 0) && (
+          (latestCollectionLimited ||
+            activeCoverageLimitations.length > 0 ||
+            limitedCoverageRoots.length > 0) && (
             <DataStateNotice
               tone="warning"
               title="Published posture has coverage limitations"

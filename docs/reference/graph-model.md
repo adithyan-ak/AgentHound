@@ -335,8 +335,10 @@ The writer derives internal `observation_tokens` from the validated
 `observation_domains` field and current scan ID. Complete-scope reconciliation
 retires only old tokens for that exact target/config key. A shared node or raw
 relationship remains while any owner token survives. Unknown, partial, failed,
-and truncated coverage is non-destructive. Coverage root and child keys use the
-same applicable identity scope. Each child outcome serializes its
+and truncated coverage is non-destructive: supplied facts are retained, while
+omitted properties, labels, owners, edges, and child scopes are not removed.
+Coverage root and child keys use the same applicable identity scope. Each child
+outcome serializes its
 `parent_coverage_key`; PostgreSQL records that membership explicitly.
 Lifecycle code never reconstructs parentage by parsing an opaque key, so one
 vantage cannot retire another vantage's evidence.
@@ -357,13 +359,12 @@ the static config collector does not infer them.
 
 Registered instruction files use stable per-file owners derived from the
 stable exact/deep root key and canonical path; the registry contract is not
-part of the owner key. A recognized incomplete instruction root may publish
-complete child facts additively, but only a complete root has absence authority
-over its current child set. Limited roots perform no unseen-child retirement,
-produce no comparison key, and cannot support an all-clear. A later complete
-root refreshes the same owners and can retire children it authoritatively
-proves absent. This is registered-source coverage only; it does not claim which
-effective client loads a file.
+part of the owner key. This is one instance of the general rule: incomplete
+collection may publish confirmed child facts additively, but only a complete
+root has absence authority over its current child set. Limited roots perform no
+unseen-child retirement, produce no comparison key, and cannot support an
+all-clear. A later complete root refreshes the same owners and can retire
+children it authoritatively proves absent.
 
 A complete exact re-observation replaces stale managed properties. Observation
 completeness considers only public collector-produced nodes and managed raw
@@ -387,6 +388,16 @@ incoming owner's prior fingerprint so an older retry also remains incomplete.
 Completeness and replacement resume only after all active owners are observed
 together, or after retirement leaves an exact remaining-owner refresh able to
 replace the fact.
+When an established owner reports partial evidence while another owner remains,
+a semantic no-op subset—identical fingerprint-participating values and no new
+public labels—preserves the prior fingerprint and property completeness.
+Volatile lifecycle fields may still advance. If that partial owner instead adds
+a compatible property or public label, the writer retains the addition in the
+working graph but removes that owner's prior fingerprint and marks the shared
+fact property-incomplete. It never installs the partial fingerprint. The dirty
+working graph therefore cannot become the published projection until a joint
+complete refresh covers the full union; a later complete retry of only the
+smaller partial shape cannot certify retained values it omitted.
 Relationships marked `all_dependencies` instead carry one indivisible owner
 group for each logical `(source, edge kind, target)` fact. A complete incoming
 group atomically supersedes the prior dependency tokens, fingerprints, and
@@ -415,17 +426,16 @@ another active owner is not present, the writer remains additive and marks the
 fact property-incomplete; publication stays withheld until all active owners
 are re-observed together.
 
-Composite edges are epoch-recomputed separately. When at least one complete raw
-domain is promoted, the server retires the entire derived epoch and rebuilds
-all processors from retained current raw facts in dependency order. Global
-replacement prevents a narrow-domain change from preserving cross-domain
-evidence merely because its `source_collector` names another detector.
-Blocking unknown, partial, and failed collection cannot publish. When no
-domain is promotably complete, derived processing is skipped and the epoch is
-untouched. The narrow exception is a recognized incomplete instruction root
-with complete per-file children: those children are promotable and may drive a
-limited publication, while the root remains non-authoritative for absence and
-retirement.
+Composite edges are epoch-recomputed separately. When at least one raw fact is
+accepted or a complete domain is promoted, the server retires the entire
+derived epoch and rebuilds all processors from retained current raw facts in
+dependency order. Global replacement prevents a narrow-domain change from
+preserving cross-domain evidence merely because its `source_collector` names
+another detector. Safe unknown, partial, failed, or truncated collection may
+publish confirmed facts and a rebuilt composite epoch. Its incomplete scopes
+remain non-authoritative for absence and are persisted as coverage
+limitations. When there are neither accepted raw mutations nor promotable
+complete domains, derived processing is skipped and the epoch is untouched.
 
 ---
 
@@ -592,10 +602,9 @@ epoch. All `is_composite=true` relationships are retired before every
 registered processor recomputes from the retained raw projection. This covers
 transitive, cross-protocol, credential-chain, and other multi-domain evidence
 without relying on the single-valued `source_collector` provenance field.
-Attempts with no promotably complete domain perform no epoch retirement;
-partial and failed blocking collection never publishes. A recognized limited
-instruction root can publish only because its complete per-file domains are
-promotable; its incomplete root is never used for absence retirement or
+Attempts with neither an accepted raw mutation nor a promotably complete domain
+perform no epoch retirement. Safe partial attempts can publish confirmed
+facts, but their incomplete scopes are never used for absence retirement or
 comparison.
 
 ### Neo4j Version Compatibility

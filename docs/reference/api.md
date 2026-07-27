@@ -95,12 +95,18 @@ excluded from stats, node lists, and search results.
   "edge_counts": { "TRUSTS_SERVER": 15, "PROVIDES_TOOL": 47, "CAN_REACH": 8 },
   "total_nodes": 85,
   "total_edges": 70,
-  "projection": { "scan_id": "scan-abc123", "revision": 12 }
+  "projection": {
+    "scan_id": "scan-abc123",
+    "revision": 12,
+    "coverage_limited": false,
+    "coverage_limitation_count": 0
+  }
 }
 ```
 
 `projection` is required and identifies the immutable publication represented
-by the counts.
+by the counts. `coverage_limited` qualifies absence-based conclusions, while
+`coverage_limitation_count` reports the number of active limited scopes.
 
 ### `GET /api/v1/graph/search`
 
@@ -132,7 +138,12 @@ Node, edge, and scan lists use typed JSON envelopes. For example:
     "has_more": false,
     "complete": true,
     "revision": "...",
-    "projection": { "scan_id": "scan-abc123", "revision": 12 }
+    "projection": {
+      "scan_id": "scan-abc123",
+      "revision": 12,
+      "coverage_limited": false,
+      "coverage_limitation_count": 0
+    }
   }
 }
 ```
@@ -368,6 +379,12 @@ credential material.
 `meta.collection` is required on every ingest request, and `collection` is
 required on every successful ingest result. A missing collection report is a
 validation error, not an implicit complete scan.
+The response contains the finalized server-scoped coverage keys, outcomes, and
+authoritative roots after identity scoping—not the producer-local key space.
+The receipt owns an independent copy of that report. Coverage warnings qualify
+both a limited current artifact and any unrelated coverage limitation that
+remains active after publication; a clean artifact clears the warning only
+when no active limitation remains.
 Nodes may set `property_semantics: "reference_only"` only with an empty
 `properties` object. This records ID/kind ownership without authoring or
 replacing managed properties; omitted `property_semantics` is authoritative.
@@ -397,15 +414,14 @@ authoritative facts. `display` contains optional bounded, non-authoritative
 hostname/OS/architecture labels.
 
 Only explicitly complete, attributable target/config coverage keys can retire
-prior raw observations. Incomplete blocking coverage never retires data or
-replaces the latest published posture. Recognized registry-backed exact and
-deep instruction roots are the narrow non-blocking exception: complete
-per-file children publish additively under stable owners while an incomplete
-root has no absence authority. It cannot retire unseen sources or produce a
-comparison/all-clear claim. Partial, failed, and truncated roots may therefore
-publish observed positives while preserving unseen prior instruction evidence.
-A later complete root reuses those owners and restores normal absence
-reconciliation.
+prior raw observations. Incomplete coverage never retires omitted data. A safe
+partial, failed, truncated, or unknown collection may still publish the facts
+it did confirm; those writes are additive and preserve omitted properties,
+labels, owners, edges, and child scopes. The server persists each incomplete
+scope as an active coverage limitation, disables comparison, and does not
+permit an empty-findings all-clear. A later published `complete` or
+`not_applicable` outcome clears the corresponding limitation and restores
+normal absence reconciliation.
 Lossless normalization coercions are persisted as `warning` and may publish;
 only warnings explicitly marked `publication_unsafe` produce `degraded` and
 withhold publication.
@@ -447,7 +463,12 @@ Use the separate `/analysis/topology/...` operations for undirected topology.
     "algorithm": "bounded-min-weight",
     "complete": true
   },
-  "projection": { "scan_id": "scan-abc123", "revision": 12 }
+  "projection": {
+    "scan_id": "scan-abc123",
+    "revision": 12,
+    "coverage_limited": false,
+    "coverage_limitation_count": 0
+  }
 }
 ```
 
@@ -501,10 +522,13 @@ inline `triage` state.
 | `include_suppressed` | bool | Default `false`. When `true`, include findings triaged `accepted-risk` / `false-positive` (hidden otherwise). |
 The response is `{ "findings": [...], "scope": {...} }`. `scope` carries the
 published scan ID, revision, publication time, projection/snapshot status,
-availability, and staleness. A partial live Neo4j projection does not move the
-published pointer. Clients require explicit available/complete/non-stale
-metadata before interpreting an empty findings array as a current all-clear.
-A failed refresh may show cached rows only when labelled as cached.
+availability, staleness, and `active_coverage_limitations`. A partial live
+Neo4j projection does not move the published pointer. Clients require explicit
+available/complete/non-stale metadata and `coverage_limited: false` before
+interpreting an empty findings array as a current all-clear. The boolean also
+covers an outdated registered instruction-source contract; the limitations
+array carries generic incomplete-scope details. A failed refresh may show
+cached rows only when labelled as cached.
 
 Each finding carries `owasp_map` and `atlas_map` arrays. Detections without a
 confident ATLAS mapping return `atlas_map: []`. `variant`, typed `evidence`,
@@ -587,7 +611,12 @@ non-verified findings.
     "evidence_node_ids": ["sha256:agent", "sha256:entry-server", "sha256:entry-tool", "sha256:server", "sha256:credential", "sha256:identity", "sha256:resource-tool", "sha256:resource"],
     "evidence_node_kinds": ["AgentInstance", "MCPServer", "MCPTool", "MCPServer", "Credential", "Identity", "MCPTool", "MCPResource"]
   },
-  "projection": { "scan_id": "scan-...", "revision": 7 }
+  "projection": {
+    "scan_id": "scan-...",
+    "revision": 7,
+    "coverage_limited": false,
+    "coverage_limitation_count": 0
+  }
 }
 ```
 
@@ -637,7 +666,12 @@ Execute a pre-built query and return results.
     "atlas_map": ["AML.T0051", "AML.T0110"]
   },
   "rows": [...],
-  "projection": { "scan_id": "scan-abc123", "revision": 12 }
+  "projection": {
+    "scan_id": "scan-abc123",
+    "revision": 12,
+    "coverage_limited": false,
+    "coverage_limitation_count": 0
+  }
 }
 ```
 
@@ -679,30 +713,33 @@ The Origin gate protects against browser drive-by Cypher injection from a hostil
 Returns the mutable projection state separately from the latest published
 revision. When an ingest is updating or incomplete, `scan_id` identifies that
 attempt while `published_scan_id` / `published_revision` continue to identify
-the last complete snapshot. `active_coverage_roots` reports each current exact
-or deep instruction root by hashed coverage key, mode, state, owning scan,
-observation time, and registry contract. An old, truncated, or otherwise
-incomplete exact or deep contract is a coverage limitation rather than a clean
-absence. Positive findings and graph facts remain usable; consumers must not
-interpret an empty finding set as an all-clear while any active published root
-is incomplete or uses an older registry contract.
+the last safe snapshot. `active_coverage_roots` reports each current exact or
+deep instruction root by hashed coverage key, mode, state, owning scan,
+observation time, and registry contract.
+`active_coverage_limitations` reports every latest published `unknown`,
+`partial`, `failed`, or `truncated` collection scope with its optional parent,
+owning scan, and observation time. Positive findings and graph facts remain
+usable; consumers must not interpret an empty finding set as an all-clear while
+that list is non-empty or an active instruction root uses an older registry
+contract.
 
 ### `GET /api/v1/posture/export`
 
 Returns one persisted publication revision. The export is assembled inside the
 same PostgreSQL transaction that replaces the scan's finding snapshot and
-advances publication. Export schema version 3 adds typed
-`scope.active_coverage_roots`, so external clients can distinguish usable
-limited publications from complete registered-source coverage. The endpoint
-serves only schema version 3; unsupported persisted schemas fail closed rather
-than returning a response outside the OpenAPI contract. It includes
+advances publication. Export schema version 4 adds typed
+`scope.active_coverage_limitations`, while schema version 3 introduced
+`scope.active_coverage_roots`. The endpoint serves persisted schema versions 3
+and 4; unsupported schemas fail closed rather than returning a response outside
+the OpenAPI contract. It includes
 exact scope, stage/coverage completeness,
 normalization warnings, managed-observation completeness, observation and
 publication timestamps, suppression policy, frozen public graph totals,
-comparison metadata, rules provenance, active coverage-root state, and all findings with the triage state
-observed at publication. `scope.dirty_coverage` is always an explicit empty
-array for a published revision; `scope.active_coverage_keys` lists all active
-coverage heads. `completeness.observation_details` reports property-incomplete
+comparison metadata, rules provenance, active coverage-root/limitation state,
+and all findings with the triage state observed at publication.
+`scope.dirty_coverage` is always an explicit empty array for a published
+revision; `scope.active_coverage_keys` lists all active coverage heads.
+`completeness.observation_details` reports property-incomplete
 public managed node/raw-relationship counts plus public tokenless-node and raw
 relationship-incident-to-tokenless-node counts. Any non-zero count withholds
 publication.
@@ -725,8 +762,8 @@ Scan records serialize `model.Scan` verbatim. The `status` field is one of:
 |--------|---------|
 | `pending` | Registered but not yet started. |
 | `running` | Ingest in progress. |
-| `completed` | Required collection, graph, analysis, stats, snapshot, and publication stages succeeded. |
-| `completed_with_errors` | Graph writes completed, but blocking coverage or a required later stage was incomplete/failed; the prior published posture remains available. Recognized limited instruction-root publication remains `completed`. |
+| `completed` | Complete collection plus required graph, analysis, stats, snapshot, and publication stages succeeded. |
+| `completed_with_errors` | Either a safe limited-coverage revision published, or a required later stage failed and the prior published posture remains available. Check `publication_status` / `published_revision`. |
 | `failed` | A graph write failed. `write_rows` preserves rows committed before failure. |
 
 Additive lifecycle fields expose `collection_status`, `graph_status`,
@@ -742,8 +779,9 @@ totals, not write counts. Deltas are
 comparable only when a non-empty `comparison_key` matches. The key includes
 canonical target/config coverage, rules and identity semantics, plus each
 active root's registry contract/state and the revisions of every other active
-coverage head. Outdated or incomplete roots make comparison unavailable. The server records
-`comparable_to_scan_id` only in that case.
+coverage head. Any active coverage limitation or outdated/incomplete
+instruction root makes comparison unavailable. The server records
+`comparable_to_scan_id` only for matching non-empty comparison keys.
 
 Collector artifacts and the server use ingest v5 in lockstep. Version mismatch
 returns `UNSUPPORTED_INGEST_VERSION`; instruction-registry mismatch returns
@@ -773,9 +811,9 @@ page.
 
 Delete PostgreSQL history only; this endpoint never mutates Neo4j or infers
 ownership from scalar `scan_id`. It returns `409 SCAN_DELETE_CONFLICT` for
-pending/running scans, active coverage heads, and the currently published
-scan. Historical finding rows cascade with the scan; cross-scan triage state
-remains.
+pending/running scans, active coverage heads, active coverage limitations, and
+the currently published scan. Historical finding rows cascade with the scan;
+cross-scan triage state remains.
 
 ---
 

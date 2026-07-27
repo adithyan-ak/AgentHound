@@ -15,6 +15,8 @@ function pageResponse({
   revision = "rev-1",
   projectionScanId = "scan-1",
   projectionRevision = 1,
+  coverageLimited = false,
+  coverageLimitationCount = 0,
 }: {
   offset: number;
   total: number;
@@ -22,6 +24,8 @@ function pageResponse({
   revision?: string;
   projectionScanId?: string;
   projectionRevision?: number;
+  coverageLimited?: boolean;
+  coverageLimitationCount?: number;
 }): Response {
   return new Response(
     JSON.stringify({
@@ -43,6 +47,8 @@ function pageResponse({
         projection: {
           scan_id: projectionScanId,
           revision: projectionRevision,
+          coverage_limited: coverageLimited,
+          coverage_limitation_count: coverageLimitationCount,
         },
       },
     }),
@@ -92,7 +98,12 @@ describe("fetchEdgeCollection", () => {
     await expect(fetchEdgeCollection(undefined, 1)).resolves.toMatchObject({
       complete: true,
       revision: "rev-1",
-      projection: { scanId: "scan-1", revision: 1 },
+      projection: {
+        scanId: "scan-1",
+        revision: 1,
+        coverageLimited: false,
+        coverageLimitationCount: 0,
+      },
     });
     expect(getMock.mock.calls[1]?.[1]?.searchParams).toMatchObject({
       offset: "1",
@@ -118,7 +129,12 @@ describe("fetchEdgeCollection", () => {
     await expect(fetchEdgeCollection(undefined, 1)).resolves.toMatchObject({
       complete: false,
       incompleteReason: "projection-changed",
-      projection: { scanId: "scan-1", revision: 1 },
+      projection: {
+        scanId: "scan-1",
+        revision: 1,
+        coverageLimited: false,
+        coverageLimitationCount: 0,
+      },
     });
   });
 

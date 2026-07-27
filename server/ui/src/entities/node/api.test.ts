@@ -17,6 +17,8 @@ function pageResponse(
     revision = "rev-1",
     projectionScanId = "scan-1",
     projectionRevision = 1,
+    coverageLimited = false,
+    coverageLimitationCount = 0,
   }: {
     offset: number;
     total: number;
@@ -24,6 +26,8 @@ function pageResponse(
     revision?: string;
     projectionScanId?: string;
     projectionRevision?: number;
+    coverageLimited?: boolean;
+    coverageLimitationCount?: number;
   },
 ): Response {
   return new Response(JSON.stringify({
@@ -38,6 +42,8 @@ function pageResponse(
       projection: {
         scan_id: projectionScanId,
         revision: projectionRevision,
+        coverage_limited: coverageLimited,
+        coverage_limitation_count: coverageLimitationCount,
       },
     },
   }), {
@@ -78,7 +84,12 @@ describe("fetchNodeCollection", () => {
 
     expect(result.complete).toBe(true);
     expect(result.items.map((item) => item.id)).toEqual(["a", "b", "c"]);
-    expect(result.projection).toEqual({ scanId: "scan-1", revision: 1 });
+    expect(result.projection).toEqual({
+      scanId: "scan-1",
+      revision: 1,
+      coverageLimited: false,
+      coverageLimitationCount: 0,
+    });
     expect(getMock).toHaveBeenCalledTimes(2);
     expect(getMock.mock.calls[1]?.[1]?.searchParams).toMatchObject({
       offset: "2",
@@ -118,7 +129,12 @@ describe("fetchNodeCollection", () => {
     await expect(fetchNodeCollection(undefined, 2)).resolves.toMatchObject({
       complete: false,
       incompleteReason: "projection-changed",
-      projection: { scanId: "scan-1", revision: 1 },
+      projection: {
+        scanId: "scan-1",
+        revision: 1,
+        coverageLimited: false,
+        coverageLimitationCount: 0,
+      },
     });
   });
 

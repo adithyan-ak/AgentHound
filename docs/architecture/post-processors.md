@@ -464,14 +464,15 @@ cross-service credential chains. Keeping the prior epoch available while
 recomputing would also let downstream processors consume stale `HAS_ACCESS_TO`
 or `CAN_REACH` inputs and incorrectly refresh them into the new epoch.
 
-When no domain is promotably complete (unknown, partial, failed, or
-publication-unsafe coverage), derived processing is skipped and the current
-composite epoch is left untouched. If epoch retirement or any processor fails
-after a complete promotion, analysis is incomplete and publication is
-withheld. The mutable projection may contain an incomplete new epoch, but the
-previously published PostgreSQL revision and its frozen evidence remain
-unchanged. A later complete attempt starts from another empty derived epoch and
-rebuilds it.
+When a partial scan adds or updates a confirmed raw fact, that mutation also
+starts a new derived epoch so analysis reflects the retained graph plus the new
+positive evidence. Omitted partial-scan facts are retained rather than treated
+as absent. When there are neither accepted raw mutations nor promoted complete
+domains, derived processing is skipped and the current composite epoch is left
+untouched. If epoch retirement or any processor fails, analysis is incomplete
+and publication is withheld. The mutable projection may contain an incomplete
+new epoch, but the previously published PostgreSQL revision and its frozen
+evidence remain unchanged.
 
 This invariant requires every composite edge to be produced by the registered
 processor set and every processor to rebuild solely from retained raw facts or
@@ -501,12 +502,15 @@ finalization stores the resulting node/edge snapshots as JSONB with the finding
 row. Finding detail serves that frozen witness graph; it does not re-run
 detector-like `LIMIT 1` queries against the mutable projection.
 
-When all required stages and complete coverage succeed, the same transaction
-inserts an immutable `posture_publications` revision, persists its export, and
-advances `posture_state`. Otherwise the snapshot can remain historical but the
-published pointer does not move. A degraded retry using the currently
-published scan ID preserves the prior published rows and export until a new
-complete revision commits.
+When all required graph, analysis, and snapshot stages succeed, the same
+transaction inserts an immutable `posture_publications` revision, persists its
+export, advances `posture_state`, and records any published collection
+limitations. Collection coverage may remain limited: confirmed findings are
+then current, while missing findings are not an all-clear and comparison is
+disabled. Otherwise the snapshot can remain historical but the published
+pointer does not move. A degraded retry using the currently published scan ID
+preserves the prior published rows and export until a new safe revision
+commits.
 
 ## Integration-test isolation
 

@@ -6,6 +6,7 @@ import type {
   Finding,
   FindingDetail,
   FindingEvidence,
+  PublishedCoverageLimitation,
   PublishedFindingScope,
   PublishedFindings,
   RemediationStep,
@@ -94,6 +95,34 @@ export function decodePublishedFindingScope(
           scope.published_at,
           "findings response.scope.published_at",
         );
+  const activeCoverageLimitations = collection(
+    scope.active_coverage_limitations ?? [],
+    "findings response.scope.active_coverage_limitations",
+  ).map((value, index): PublishedCoverageLimitation => {
+    const path = `findings response.scope.active_coverage_limitations[${index}]`;
+    const limitation = record(value, path);
+    if (
+      limitation.state !== "unknown" &&
+      limitation.state !== "partial" &&
+      limitation.state !== "failed" &&
+      limitation.state !== "truncated"
+    ) {
+      throw new TypeError(`${path}.state is invalid`);
+    }
+    return {
+      coverageKey: requiredString(limitation.coverage_key, `${path}.coverage_key`),
+      parentCoverageKey:
+        limitation.parent_coverage_key == null
+          ? undefined
+          : requiredString(
+              limitation.parent_coverage_key,
+              `${path}.parent_coverage_key`,
+            ),
+      state: limitation.state as PublishedCoverageLimitation["state"],
+      scanId: requiredString(limitation.scan_id, `${path}.scan_id`),
+      observedAt: requiredString(limitation.observed_at, `${path}.observed_at`),
+    };
+  });
   return {
     mode: scope.mode,
     scanId,
@@ -112,6 +141,14 @@ export function decodePublishedFindingScope(
       "findings response.scope.available",
     ),
     stale: requiredBoolean(scope.stale, "findings response.scope.stale"),
+    coverageLimited:
+      scope.coverage_limited == null
+        ? activeCoverageLimitations.length > 0
+        : requiredBoolean(
+            scope.coverage_limited,
+            "findings response.scope.coverage_limited",
+          ),
+    activeCoverageLimitations,
   };
 }
 

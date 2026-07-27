@@ -632,6 +632,16 @@ func (s *ScanStore) DeleteScan(ctx context.Context, id string) error {
 		return &ScanDeleteConflictError{Reason: "scan owns an active coverage head"}
 	}
 
+	var activeLimitation bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM coverage_limitations WHERE scan_id = $1)`, id,
+	).Scan(&activeLimitation); err != nil {
+		return fmt.Errorf("check scan coverage limitations: %w", err)
+	}
+	if activeLimitation {
+		return &ScanDeleteConflictError{Reason: "scan owns an active coverage limitation"}
+	}
+
 	var currentlyPublished bool
 	if err := tx.QueryRow(ctx,
 		`SELECT EXISTS (

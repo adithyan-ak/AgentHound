@@ -40,14 +40,16 @@ type FindingsDiff struct {
 }
 
 type FindingScope struct {
-	Mode             string     `json:"mode"`
-	ScanID           string     `json:"scan_id"`
-	Revision         *int64     `json:"revision"`
-	PublishedAt      *time.Time `json:"published_at"`
-	ProjectionStatus string     `json:"projection_status"`
-	SnapshotStatus   string     `json:"snapshot_status"`
-	Available        bool       `json:"available"`
-	Stale            bool       `json:"stale"`
+	Mode                      string                            `json:"mode"`
+	ScanID                    string                            `json:"scan_id"`
+	Revision                  *int64                            `json:"revision"`
+	PublishedAt               *time.Time                        `json:"published_at"`
+	ProjectionStatus          string                            `json:"projection_status"`
+	SnapshotStatus            string                            `json:"snapshot_status"`
+	Available                 bool                              `json:"available"`
+	Stale                     bool                              `json:"stale"`
+	CoverageLimited           bool                              `json:"coverage_limited"`
+	ActiveCoverageLimitations []model.PostureCoverageLimitation `json:"active_coverage_limitations"`
 }
 
 func replaceFindingsTx(ctx context.Context, tx pgx.Tx, scanID string, findings []model.Finding) error {
@@ -121,17 +123,26 @@ const findingSelectColumns = `f.scan_id, f.captured_at, f.fingerprint, f.severit
 // callers can keep the prior rows while clearly marking them stale.
 func (s *FindingStore) PublishedFindingScope(ctx context.Context) (FindingScope, error) {
 	scope := FindingScope{
-		Mode:             "published",
-		ProjectionStatus: model.ProjectionUnknown,
-		SnapshotStatus:   model.LifecycleUnknown,
+		Mode:                      "published",
+		ProjectionStatus:          model.ProjectionUnknown,
+		SnapshotStatus:            model.LifecycleUnknown,
+		ActiveCoverageLimitations: []model.PostureCoverageLimitation{},
 	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return FindingScope{}, fmt.Errorf("begin published finding scope read: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 	var (
 		scanID           *string
 		revision         *int64
 		publishedAt      *time.Time
 		projectionScanID *string
 	)
-	err := s.pool.QueryRow(ctx, `SELECT
+	err = tx.QueryRow(ctx, `SELECT
 	    ps.published_scan_id,
 	    ps.published_revision,
 	    ps.published_at,
@@ -152,6 +163,9 @@ func (s *FindingStore) PublishedFindingScope(ctx context.Context) (FindingScope,
 		return FindingScope{}, fmt.Errorf("published finding scope: %w", err)
 	}
 	if scanID == nil || revision == nil {
+		if err := tx.Commit(ctx); err != nil {
+			return FindingScope{}, fmt.Errorf("commit published finding scope read: %w", err)
+		}
 		return scope, nil
 	}
 	scope.ScanID = *scanID
@@ -161,6 +175,19 @@ func (s *FindingStore) PublishedFindingScope(ctx context.Context) (FindingScope,
 	scope.Stale = scope.ProjectionStatus != model.ProjectionComplete ||
 		projectionScanID == nil ||
 		*projectionScanID != scope.ScanID
+	scope.ActiveCoverageLimitations, err = listActiveCoverageLimitations(ctx, tx)
+	if err != nil {
+		return FindingScope{}, err
+	}
+	heads, err := activeCoverageHeads(ctx, tx)
+	if err != nil {
+		return FindingScope{}, err
+	}
+	scope.CoverageLimited = len(scope.ActiveCoverageLimitations) > 0 ||
+		postureCoverageRootsLimited(activePostureCoverageRoots(heads))
+	if err := tx.Commit(ctx); err != nil {
+		return FindingScope{}, fmt.Errorf("commit published finding scope read: %w", err)
+	}
 	return scope, nil
 }
 
@@ -252,6 +279,35 @@ func (s *FindingStore) findingsForScan(ctx context.Context, scanID string) ([]mo
 // both. When includeSuppressed is false, suppressed findings are dropped
 // from the added set so CI-style diffs don't re-alert on accepted risks.
 func (s *FindingStore) Diff(ctx context.Context, scanA, scanB string, includeSuppressed bool) (*FindingsDiff, error) {
+	var comparisonKeyA, comparisonKeyB *string
+	if err := s.pool.QueryRow(ctx,
+		`SELECT comparison_key FROM scans WHERE id = $1`,
+		scanA,
+	).Scan(&comparisonKeyA); err != nil {
+		return nil, fmt.Errorf("read comparison scope for scan %s: %w", scanA, err)
+	}
+	if err := s.pool.QueryRow(ctx,
+		`SELECT comparison_key FROM scans WHERE id = $1`,
+		scanB,
+	).Scan(&comparisonKeyB); err != nil {
+		return nil, fmt.Errorf("read comparison scope for scan %s: %w", scanB, err)
+	}
+	if comparisonKeyA == nil || comparisonKeyB == nil ||
+		*comparisonKeyA == "" || *comparisonKeyB == "" {
+		return nil, fmt.Errorf(
+			"scans %s and %s are not comparable because at least one has no authoritative comparison key",
+			scanA,
+			scanB,
+		)
+	}
+	if *comparisonKeyA != *comparisonKeyB {
+		return nil, fmt.Errorf(
+			"scans %s and %s are not comparable because their comparison scopes differ",
+			scanA,
+			scanB,
+		)
+	}
+
 	a, err := s.findingsForScan(ctx, scanA)
 	if err != nil {
 		return nil, err

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchProjectionState,
+  hasLimitedPublishedCoverage,
   hasLimitedPublishedInstructionCoverage,
   type ProjectionState,
 } from "./api";
@@ -35,6 +36,15 @@ describe("fetchProjectionState", () => {
             contract_current: true,
           },
         ],
+        active_coverage_limitations: [
+          {
+            coverage_key: `mcp:target:sha256:${"c".repeat(64)}`,
+            state: "partial",
+            scan_id: "scan-mcp",
+            observed_at: "2026-07-24T18:00:00Z",
+          },
+        ],
+        published_scan_id: "scan-mcp",
         updated_at: "2026-07-24T18:00:01Z",
       }),
     });
@@ -49,6 +59,13 @@ describe("fetchProjectionState", () => {
         contract_current: true,
       }),
     ]);
+    expect(posture.active_coverage_limitations).toEqual([
+      expect.objectContaining({
+        state: "partial",
+        scan_id: "scan-mcp",
+      }),
+    ]);
+    expect(hasLimitedPublishedCoverage(posture, "scan-mcp")).toBe(true);
   });
 
   it("rejects malformed root contracts", async () => {

@@ -39,20 +39,26 @@ func collectionState(report *sdkingest.CollectionReport) sdkingest.OutcomeState 
 	return report.State
 }
 
-func incompleteCoverageDomains(report *sdkingest.CollectionReport) []string {
-	nonBlocking := make(map[string]bool)
-	for _, key := range sdkingest.NonBlockingInstructionCoverageDomains(report) {
-		nonBlocking[key] = true
+func cloneCollectionReport(report *sdkingest.CollectionReport) sdkingest.CollectionReport {
+	if report == nil {
+		return sdkingest.CollectionReport{}
 	}
-	states := sdkingest.CoverageStates(report)
-	domains := make([]string, 0, len(states))
-	for domain, state := range states {
-		if state != sdkingest.OutcomeComplete && !nonBlocking[domain] {
-			domains = append(domains, domain)
+	cloned := *report
+	cloned.CoverageKeys = append([]string(nil), report.CoverageKeys...)
+	cloned.Outcomes = append([]sdkingest.CollectionOutcome(nil), report.Outcomes...)
+	cloned.AuthoritativeRoots = make([]sdkingest.CoverageRoot, len(report.AuthoritativeRoots))
+	for i, root := range report.AuthoritativeRoots {
+		cloned.AuthoritativeRoots[i] = root
+		cloned.AuthoritativeRoots[i].ChildCoverageKeys = append(
+			[]string(nil),
+			root.ChildCoverageKeys...,
+		)
+		if root.RegistryContract != nil {
+			contract := *root.RegistryContract
+			cloned.AuthoritativeRoots[i].RegistryContract = &contract
 		}
 	}
-	sort.Strings(domains)
-	return domains
+	return cloned
 }
 
 func mergeCoverage(groups ...[]string) []string {
@@ -88,6 +94,26 @@ func subtractCoverage(keys []string, replaced ...[]string) []string {
 		}
 	}
 	return remaining
+}
+
+func graphObservationDomains(graph sdkingest.GraphData) []string {
+	var groups [][]string
+	for _, node := range graph.Nodes {
+		groups = append(groups, node.ObservationDomains)
+	}
+	for _, edge := range graph.Edges {
+		groups = append(groups, edge.ObservationDomains)
+	}
+	return mergeCoverage(groups...)
+}
+
+func appendWarningOnce(warnings []string, warning string) []string {
+	for _, existing := range warnings {
+		if existing == warning {
+			return warnings
+		}
+	}
+	return append(warnings, warning)
 }
 
 // prepareObservationDomains verifies the strict-v5 ownership contract after

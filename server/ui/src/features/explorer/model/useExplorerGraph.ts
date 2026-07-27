@@ -16,6 +16,7 @@ import {
 } from "@entities/finding/model";
 import {
   fetchProjectionState,
+  hasLimitedPublishedCoverage,
   type ProjectionState,
 } from "@entities/posture/api";
 
@@ -28,6 +29,7 @@ export interface ExplorerRawData {
   projectionState: ProjectionState;
   collection: {
     complete: boolean;
+    coverageLimited: boolean;
     revision: string | null;
     nodeTotal: number;
     edgeTotal: number;
@@ -81,11 +83,10 @@ export async function fetchExplorerGraph(): Promise<ExplorerRawData> {
       "finding snapshot is unavailable, stale, or incomplete",
     );
   }
-  const findingIdentity: ProjectionIdentity = {
-    scanId: findingResult.scope.scanId,
-    revision: findingResult.scope.revision!,
-  };
-  if (!sameProjectionIdentity(nodeResult.projection, findingIdentity)) {
+  if (
+    nodeResult.projection.scanId !== findingResult.scope.scanId ||
+    nodeResult.projection.revision !== findingResult.scope.revision
+  ) {
     throw new ExplorerPublicationError(
       "graph and finding publication identities differ",
     );
@@ -103,17 +104,22 @@ export async function fetchExplorerGraph(): Promise<ExplorerRawData> {
       "published projection state is unavailable or incomplete",
     );
   }
-  const projectionStateIdentity: ProjectionIdentity = {
-    scanId: projectionState.published_scan_id,
-    revision: projectionState.published_revision,
-  };
   if (
-    !sameProjectionIdentity(nodeResult.projection, projectionStateIdentity)
+    nodeResult.projection.scanId !== projectionState.published_scan_id ||
+    nodeResult.projection.revision !== projectionState.published_revision
   ) {
     throw new ExplorerPublicationError(
       "graph and projection-state publication identities differ",
     );
   }
+  const coverageLimited =
+    nodeResult.projection.coverageLimited ||
+    findingResult.scope.coverageLimited === true ||
+    (findingResult.scope.activeCoverageLimitations?.length ?? 0) > 0 ||
+    hasLimitedPublishedCoverage(
+      projectionState,
+      projectionState.published_scan_id,
+    );
 
   return {
     nodes: nodeResult.items,
@@ -123,10 +129,14 @@ export async function fetchExplorerGraph(): Promise<ExplorerRawData> {
     findingScope: findingResult.scope,
     projectionState,
     collection: {
-      complete: true,
+      complete: !coverageLimited,
+      coverageLimited,
       revision: nodeResult.revision,
       nodeTotal: nodeResult.total,
       edgeTotal: edgeResult.total,
+      incompleteReason: coverageLimited
+        ? "Published coverage is limited; graph facts remain usable, but absence-based conclusions are withheld."
+        : undefined,
     },
   };
 }

@@ -123,6 +123,15 @@ describe("published finding scope", () => {
         snapshot_status: "complete",
         available: true,
         stale: false,
+        coverage_limited: true,
+        active_coverage_limitations: [
+          {
+            coverage_key: "mcp:target:sha256:limited",
+            state: "failed",
+            scan_id: "scan-1",
+            observed_at: "2026-07-11T00:00:00Z",
+          },
+        ],
       },
     });
   });
@@ -142,6 +151,13 @@ describe("published finding scope", () => {
       revision: 7,
       available: true,
       stale: false,
+      coverageLimited: true,
+      activeCoverageLimitations: [
+        expect.objectContaining({
+          coverageKey: "mcp:target:sha256:limited",
+          state: "failed",
+        }),
+      ],
     });
   });
 

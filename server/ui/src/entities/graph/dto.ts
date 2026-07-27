@@ -88,6 +88,8 @@ export interface APIEdge {
 export interface ProjectionIdentity {
   scanId: string;
   revision: number;
+  coverageLimited: boolean;
+  coverageLimitationCount: number;
 }
 
 export function sameProjectionIdentity(
@@ -98,7 +100,9 @@ export function sameProjectionIdentity(
     left != null &&
     right != null &&
     left.scanId === right.scanId &&
-    left.revision === right.revision
+    left.revision === right.revision &&
+    left.coverageLimited === right.coverageLimited &&
+    left.coverageLimitationCount === right.coverageLimitationCount
   );
 }
 
@@ -123,6 +127,20 @@ function requiredString(value: unknown, field: string): string {
   return value;
 }
 
+function requiredBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${field} must be a boolean`);
+  }
+  return value;
+}
+
+function nonNegativeInteger(value: unknown, field: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new TypeError(`${field} must be a non-negative integer`);
+  }
+  return value as number;
+}
+
 export function parseProjectionIdentity(
   value: unknown,
   field: string,
@@ -137,6 +155,14 @@ export function parseProjectionIdentity(
   return {
     scanId: requiredString(projection.scan_id, `${field}.scan_id`),
     revision: projection.revision as number,
+    coverageLimited: requiredBoolean(
+      projection.coverage_limited,
+      `${field}.coverage_limited`,
+    ),
+    coverageLimitationCount: nonNegativeInteger(
+      projection.coverage_limitation_count,
+      `${field}.coverage_limitation_count`,
+    ),
   };
 }
 

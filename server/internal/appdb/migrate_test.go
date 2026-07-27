@@ -22,6 +22,7 @@ func TestMigrationsContainCurrentSchemaAndBindingUpgrade(t *testing.T) {
 		"002_storage_binding.sql",
 		"003_zero_config_storage_binding.sql",
 		"004_coverage_root_state.sql",
+		"005_coverage_limitations.sql",
 	}; !reflect.DeepEqual(names, want) {
 		t.Fatalf("migration files = %v, want %v", names, want)
 	}
@@ -110,6 +111,24 @@ func TestMigrationsContainCurrentSchemaAndBindingUpgrade(t *testing.T) {
 	} {
 		if !strings.Contains(rootStateSQL, expected) {
 			t.Errorf("coverage-root migration missing %q", expected)
+		}
+	}
+
+	data, err = migrationFS.ReadFile("migrations/005_coverage_limitations.sql")
+	if err != nil {
+		t.Fatalf("read coverage-limitations migration: %v", err)
+	}
+	limitationsSQL := string(data)
+	for _, expected := range []string{
+		"CREATE TABLE IF NOT EXISTS coverage_limitations",
+		"parent_coverage_key",
+		"'unknown', 'partial', 'failed', 'truncated'",
+		"REFERENCES scans(id) ON DELETE RESTRICT",
+		"INSERT INTO coverage_limitations",
+		"FROM coverage_heads",
+	} {
+		if !strings.Contains(limitationsSQL, expected) {
+			t.Errorf("coverage-limitations migration missing %q", expected)
 		}
 	}
 }

@@ -3,7 +3,7 @@ import { useNodes, isUnauth } from "@entities/node";
 import { useFindings, severityCounts } from "@entities/finding";
 import { comparablePublishedNodeDelta, useScans } from "@entities/scan";
 import {
-  hasLimitedPublishedInstructionCoverage,
+  hasLimitedPublishedCoverage,
   useProjectionState,
 } from "@entities/posture";
 import {
@@ -69,9 +69,8 @@ export function ExposureGauge() {
   const score = exposureScore({ critical, high, unauthServers });
   const pointer = exposureColor(score);
   const color = pointer;
-  const limitedInstructionCoverage =
-    hasLimitedPublishedInstructionCoverage(posture);
-  const label = limitedInstructionCoverage
+  const limitedCoverage = hasLimitedPublishedCoverage(posture);
+  const label = limitedCoverage
     ? `${GAUGE_LABELS[exposureBand(score)]} · Limited Coverage`
     : GAUGE_LABELS[exposureBand(score)];
 
@@ -104,7 +103,7 @@ export function ExposureGauge() {
           value={score}
           valueColor={pointer}
           caption={
-            limitedInstructionCoverage ? "observed score of 100" : "of 100"
+            limitedCoverage ? "observed score of 100" : "of 100"
           }
         />
         <div

@@ -47,6 +47,7 @@ func TestRunScan_RemoteIngestSavesExactArtifactAndPrintsSummary(t *testing.T) {
 				Edges: len(artifact.Graph.Edges),
 			},
 			Findings:          2,
+			Collection:        *artifact.Meta.Collection,
 			PublishedRevision: &revision,
 			Duration:          1500 * time.Millisecond,
 		})

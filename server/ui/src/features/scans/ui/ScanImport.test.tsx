@@ -267,7 +267,7 @@ describe("ScanImport", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveClass("border-amber-400/30");
     expect(
-      screen.getByText(/missing instruction evidence is not a clean absence/i),
+      screen.getByText(/missing evidence is not proof of absence/i),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /view findings/i }),
@@ -331,7 +331,7 @@ describe("ScanImport", () => {
     expect(screen.getByRole("alert")).toHaveClass("border-amber-400/30");
     expect(
       screen.getByText(
-        /observed instruction positives were published.*missing instruction evidence is not a clean absence/i,
+        /confirmed positives were published.*missing evidence is not proof of absence/i,
       ),
     ).toBeInTheDocument();
     expect(

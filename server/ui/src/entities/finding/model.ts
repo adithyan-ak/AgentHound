@@ -81,6 +81,16 @@ export interface PublishedFindingScope {
   snapshotStatus: string;
   available: boolean;
   stale: boolean;
+  coverageLimited?: boolean;
+  activeCoverageLimitations?: PublishedCoverageLimitation[];
+}
+
+export interface PublishedCoverageLimitation {
+  coverageKey: string;
+  parentCoverageKey?: string;
+  state: "unknown" | "partial" | "failed" | "truncated";
+  scanId: string;
+  observedAt: string;
 }
 
 export interface PublishedFindings {

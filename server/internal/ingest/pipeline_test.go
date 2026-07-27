@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -462,10 +463,11 @@ func (s *fakeScanStore) lastUpdate(id string) (scanUpdate, bool) {
 }
 
 type fakePublisher struct {
-	finalizations []appdb.FinalizeScanParams
-	err           error
-	lifecycle     *fakeLifecycleScanStore
-	scanStore     *fakeScanStore
+	finalizations             []appdb.FinalizeScanParams
+	activeCoverageLimitations []model.PostureCoverageLimitation
+	err                       error
+	lifecycle                 *fakeLifecycleScanStore
+	scanStore                 *fakeScanStore
 }
 
 func (p *fakePublisher) FinalizeScan(
@@ -513,6 +515,10 @@ func (p *fakePublisher) FinalizeScan(
 		Revision:    &revision,
 		PublishedAt: &publishedAt,
 		Published:   true,
+		ActiveCoverageLimitations: append(
+			[]model.PostureCoverageLimitation(nil),
+			p.activeCoverageLimitations...,
+		),
 	}, nil
 }
 
@@ -986,6 +992,74 @@ func TestPipelineReportsRecognizedCollectionPoint(t *testing.T) {
 	}
 }
 
+func TestPipelineReceiptUsesFinalizedDeepClonedCollection(t *testing.T) {
+	data := validIngestDataFor("finalized-collection-receipt")
+	rawCoverageKey := data.Meta.Collection.CoverageKeys[0]
+	pipeline := newTestPipeline(
+		&fakeWriter{},
+		&graph.MockGraphDB{},
+		&fakeScanStore{},
+		noOpRunPP,
+	)
+	result, err := pipeline.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Collection.CoverageKeys) != 1 ||
+		result.Collection.CoverageKeys[0] == rawCoverageKey ||
+		result.Collection.CoverageKeys[0] != data.Meta.Collection.CoverageKeys[0] {
+		t.Fatalf(
+			"receipt coverage = %v, finalized coverage = %v, raw = %q",
+			result.Collection.CoverageKeys,
+			data.Meta.Collection.CoverageKeys,
+			rawCoverageKey,
+		)
+	}
+	wantCoverageKey := result.Collection.CoverageKeys[0]
+	wantOutcome := result.Collection.Outcomes[0]
+	data.Meta.Collection.CoverageKeys[0] = "mutated-after-ingest"
+	data.Meta.Collection.Outcomes[0].CoverageKey = "mutated-after-ingest"
+	data.Meta.Collection.Outcomes[0].Error = "mutated-after-ingest"
+	if result.Collection.CoverageKeys[0] != wantCoverageKey ||
+		result.Collection.Outcomes[0] != wantOutcome {
+		t.Fatalf("submitted report mutated receipt clone: %+v", result.Collection)
+	}
+}
+
+func TestCloneCollectionReportClonesNestedRoots(t *testing.T) {
+	contract := sdkingest.RegistryContract{Generation: 7, Digest: "sha256:contract"}
+	report := &sdkingest.CollectionReport{
+		State:        sdkingest.OutcomeComplete,
+		CoverageKeys: []string{"root", "child"},
+		AuthoritativeRoots: []sdkingest.CoverageRoot{{
+			CoverageKey:       "root",
+			ChildCoverageKeys: []string{"child"},
+			RegistryContract:  &contract,
+		}},
+		Outcomes: []sdkingest.CollectionOutcome{{
+			CoverageKey: "child",
+			State:       sdkingest.OutcomeComplete,
+		}},
+	}
+	cloned := cloneCollectionReport(report)
+	report.CoverageKeys[0] = "changed-root"
+	report.AuthoritativeRoots[0].CoverageKey = "changed-root"
+	report.AuthoritativeRoots[0].ChildCoverageKeys[0] = "changed-child"
+	report.AuthoritativeRoots[0].RegistryContract.Digest = "changed-digest"
+	report.Outcomes[0].CoverageKey = "changed-child"
+
+	if !slices.Equal(cloned.CoverageKeys, []string{"root", "child"}) ||
+		cloned.AuthoritativeRoots[0].CoverageKey != "root" ||
+		!slices.Equal(
+			cloned.AuthoritativeRoots[0].ChildCoverageKeys,
+			[]string{"child"},
+		) ||
+		cloned.AuthoritativeRoots[0].RegistryContract.Digest != "sha256:contract" ||
+		cloned.Outcomes[0].CoverageKey != "child" {
+		t.Fatalf("nested collection clone was mutated: %+v", cloned)
+	}
+}
+
 func TestPipelineRecognitionFailurePrecedesLifecycleMutation(t *testing.T) {
 	sentinel := errors.New("recognition unavailable")
 	store := &fakeScanStore{recognizeErr: sentinel}
@@ -1161,12 +1235,12 @@ func TestPipeline_ExhaustiveRootReconcilesRemovedChildAsCompleteEmpty(t *testing
 		strings.Join(mergeCoverage([]string{scopedCurrentChild, scopedNetworkRoot, scopedPointRoot}), "\x00") {
 		t.Fatalf("promoted heads = %v, want current child and root", got)
 	}
-	if len(finalized.ResolvedDirtyCoverage) != 1 ||
-		finalized.ResolvedDirtyCoverage[0] != scopedRemovedChild {
+	if got := finalized.ResolvedDirtyCoverage; strings.Join(got, "\x00") !=
+		strings.Join(wantReconciled, "\x00") {
 		t.Fatalf(
-			"resolved removed coverage = %v, want [%s]",
-			finalized.ResolvedDirtyCoverage,
-			scopedRemovedChild,
+			"resolved mutation coverage = %v, want %v",
+			got,
+			wantReconciled,
 		)
 	}
 	if len(finalized.AuthoritativeRoots) != 2 {
@@ -1239,8 +1313,10 @@ func TestPipeline_CompleteEmptyRootClearsFailedUnheadedChild(t *testing.T) {
 	}
 	if len(publisher.finalizations) != 1 ||
 		!publisher.finalizations[0].Publish ||
-		len(publisher.finalizations[0].ResolvedDirtyCoverage) != 1 ||
-		publisher.finalizations[0].ResolvedDirtyCoverage[0] != scopedFailedChild {
+		strings.Join(
+			publisher.finalizations[0].ResolvedDirtyCoverage,
+			"\x00",
+		) != strings.Join(wantReconciled, "\x00") {
 		t.Fatalf("complete-empty finalization = %+v", publisher.finalizations)
 	}
 	if len(lifecycle.dirtyCoverage) != 0 {
@@ -1411,10 +1487,10 @@ func TestPipeline_LimitedExactRootPublishesChildWithoutRootAuthority(t *testing.
 		containsCoverage(finalized.CompleteDomains, scopedRoot) {
 		t.Fatalf("complete domains = %v, want child only for limited root", finalized.CompleteDomains)
 	}
-	if !containsCoverage(finalized.ResolvedDirtyCoverage, scopedRoot) ||
+	if containsCoverage(finalized.ResolvedDirtyCoverage, scopedRoot) ||
 		!containsCoverage(finalized.ResolvedDirtyCoverage, scopedChild) {
 		t.Fatalf(
-			"resolved dirty coverage = %v, want processed limited root and child",
+			"resolved dirty coverage = %v, want mutated child but not limitation-only root",
 			finalized.ResolvedDirtyCoverage,
 		)
 	}
@@ -1477,14 +1553,18 @@ func TestPipeline_LimitedExactDirtyResolutionIsSuccessfulAndSeenOnly(t *testing.
 		t.Fatalf("unseen dirty sibling unexpectedly published: %+v", result)
 	}
 	finalized := publisher.finalizations[0]
-	if !containsCoverage(finalized.ResolvedDirtyCoverage, scopedRoot) ||
+	if containsCoverage(finalized.ResolvedDirtyCoverage, scopedRoot) ||
 		!containsCoverage(finalized.ResolvedDirtyCoverage, scopedChild) ||
 		containsCoverage(finalized.ResolvedDirtyCoverage, unseenSibling) {
 		t.Fatalf("resolved dirty coverage = %v", finalized.ResolvedDirtyCoverage)
 	}
-	if len(finalized.DirtyCoverage) != 1 ||
-		finalized.DirtyCoverage[0] != unseenSibling {
-		t.Fatalf("final dirty coverage = %v, want unseen sibling", finalized.DirtyCoverage)
+	if !containsCoverage(finalized.DirtyCoverage, scopedRoot) ||
+		!containsCoverage(finalized.DirtyCoverage, unseenSibling) ||
+		containsCoverage(finalized.DirtyCoverage, scopedChild) {
+		t.Fatalf(
+			"final dirty coverage = %v, want unresolved root and unseen sibling",
+			finalized.DirtyCoverage,
+		)
 	}
 }
 
@@ -1610,7 +1690,7 @@ func TestPipeline_PartialOrFailedDeepDoesNotSeedDeepDirtiness(t *testing.T) {
 	}
 }
 
-func TestPipeline_PartialCurrentChildPreventsRootRetirement(t *testing.T) {
+func TestPipeline_PartialCurrentChildPublishesWithoutRootRetirement(t *testing.T) {
 	currentChild := sdkingest.CanonicalCoverageKey(
 		"mcp",
 		"target",
@@ -1663,8 +1743,13 @@ func TestPipeline_PartialCurrentChildPreventsRootRetirement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
-	if result.Outcome != sdkingest.OutcomePartial {
-		t.Fatalf("partial result = %+v", result)
+	if result.Outcome != sdkingest.OutcomeComplete ||
+		result.ProjectionStatus != model.ProjectionComplete ||
+		result.PublishedRevision == nil {
+		t.Fatalf("limited result = %+v, want published projection", result)
+	}
+	if !slices.Contains(result.Warnings, sdkingest.CoverageLimitationWarning) {
+		t.Fatalf("limited result warnings = %v", result.Warnings)
 	}
 	if len(store.resolvedRoots) != 0 {
 		t.Fatalf("partial child resolved authoritative roots: %+v", store.resolvedRoots)
@@ -1783,39 +1868,57 @@ func TestPipeline_SnapshotFailureFinalizesExplicitEmptySnapshot(t *testing.T) {
 	}
 }
 
-func TestPipeline_PartialCoverageNeverPublishesOrReconciles(t *testing.T) {
+func TestPipeline_PartialCoveragePublishesWithoutAbsenceReconciliation(t *testing.T) {
 	w := &fakeWriter{}
-	ss := &fakeScanStore{}
+	lifecycle := &fakeLifecycleScanStore{fakeScanStore: &fakeScanStore{}}
 	db := &graph.MockGraphDB{}
-	publisher := &fakePublisher{scanStore: ss}
+	publisher := &fakePublisher{lifecycle: lifecycle}
 	var ppDomains []string
 	runPP := func(_ context.Context, _ graph.GraphDB, _ string, completeDomains []string) ([]graph.ProcessingStats, error) {
 		ppDomains = append([]string(nil), completeDomains...)
 		return nil, nil
 	}
-	p := newTestPipeline(w, db, ss, runPP)
+	p := newTestPipeline(w, db, lifecycle, runPP)
 	p.findingStore = publisher
 
 	data := validIngestDataFor("scan-partial")
 	data.Meta.Collection.State = sdkingest.OutcomePartial
 	data.Meta.Collection.Outcomes[0].State = sdkingest.OutcomePartial
-	data.Graph = sdkingest.GraphData{Nodes: []sdkingest.Node{}, Edges: []sdkingest.Edge{}}
 	result, err := p.Ingest(context.Background(), data)
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
-	if result.Outcome != sdkingest.OutcomePartial ||
-		result.ProjectionStatus != model.ProjectionIncomplete {
-		t.Fatalf("result = %+v, want partial incomplete projection", result)
+	scope := data.Meta.Collection.CoverageKeys[0]
+	if result.Outcome != sdkingest.OutcomeComplete ||
+		result.ProjectionStatus != model.ProjectionComplete ||
+		result.PublishedRevision == nil {
+		t.Fatalf("result = %+v, want published limited projection", result)
 	}
-	if len(publisher.finalizations) != 1 || publisher.finalizations[0].Publish {
-		t.Fatalf("partial scan publication = %+v, want withheld", publisher.finalizations)
+	if len(publisher.finalizations) != 1 || !publisher.finalizations[0].Publish {
+		t.Fatalf("partial scan publication = %+v, want published", publisher.finalizations)
 	}
 	if len(publisher.finalizations[0].CompleteDomains) != 0 {
 		t.Fatalf("partial domains promoted: %v", publisher.finalizations[0].CompleteDomains)
 	}
-	if len(ppDomains) != 0 {
-		t.Fatalf("partial coverage enabled composite replacement: %v", ppDomains)
+	if !slices.Equal(ppDomains, []string{scope}) {
+		t.Fatalf("partial positive analysis domains = %v, want [%s]", ppDomains, scope)
+	}
+	if len(lifecycle.beginDirtyCoverage) != 1 ||
+		!slices.Equal(lifecycle.beginDirtyCoverage[0], []string{scope}) {
+		t.Fatalf(
+			"partial positive dirty coverage = %v, want mutation scope",
+			lifecycle.beginDirtyCoverage,
+		)
+	}
+	if !slices.Equal(
+		publisher.finalizations[0].ResolvedDirtyCoverage,
+		[]string{scope},
+	) {
+		t.Fatalf(
+			"partial positive resolved coverage = %v, want [%s]",
+			publisher.finalizations[0].ResolvedDirtyCoverage,
+			scope,
+		)
 	}
 	if got := len(db.CallsTo("ExecuteWrite")); got != 0 {
 		t.Fatalf("partial coverage executed %d retirement writes", got)
@@ -1902,7 +2005,7 @@ func TestPipeline_IncompleteRulesetWithholdsPublication(t *testing.T) {
 	}
 }
 
-func TestPipeline_FailedMCPThenSuccessfulConfigKeepsMCPDirty(t *testing.T) {
+func TestPipeline_FailedCollectionDoesNotQuarantineUnchangedGraph(t *testing.T) {
 	lifecycle := &fakeLifecycleScanStore{fakeScanStore: &fakeScanStore{}}
 	publisher := &fakePublisher{lifecycle: lifecycle}
 	p := newTestPipeline(
@@ -1921,8 +2024,13 @@ func TestPipeline_FailedMCPThenSuccessfulConfigKeepsMCPDirty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed MCP ingest: %v", err)
 	}
-	if first.Outcome != sdkingest.OutcomePartial {
+	if first.Outcome != sdkingest.OutcomeComplete ||
+		first.ProjectionStatus != model.ProjectionComplete ||
+		first.PublishedRevision == nil {
 		t.Fatalf("failed MCP result = %+v", first)
+	}
+	if !slices.Contains(first.Warnings, sdkingest.CoverageLimitationWarning) {
+		t.Fatalf("failed MCP warnings = %v", first.Warnings)
 	}
 
 	successfulConfig := validIngestDataFor("scan-successful-config")
@@ -1955,18 +2063,68 @@ func TestPipeline_FailedMCPThenSuccessfulConfigKeepsMCPDirty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("successful config ingest: %v", err)
 	}
-	if second.Outcome != sdkingest.OutcomePartial ||
-		second.ProjectionStatus != model.ProjectionIncomplete {
-		t.Fatalf("config result laundered MCP dirtiness: %+v", second)
+	if second.Outcome != sdkingest.OutcomeComplete ||
+		second.ProjectionStatus != model.ProjectionComplete ||
+		second.PublishedRevision == nil {
+		t.Fatalf("config result = %+v, want published projection", second)
 	}
 	if len(publisher.finalizations) != 2 {
 		t.Fatalf("finalizations = %d, want two", len(publisher.finalizations))
 	}
 	finalized := publisher.finalizations[1]
-	if finalized.Publish ||
-		len(finalized.DirtyCoverage) != 1 ||
-		finalized.DirtyCoverage[0] != failedMCP.Meta.Collection.CoverageKeys[0] {
-		t.Fatalf("config finalization = %+v, want dirty MCP only", finalized)
+	if !finalized.Publish || len(finalized.DirtyCoverage) != 0 {
+		t.Fatalf("config finalization = %+v, want no graph dirtiness", finalized)
+	}
+}
+
+func TestPipelineReceiptWarnsForPersistentActiveCoverageLimitations(t *testing.T) {
+	tests := []struct {
+		name        string
+		limitations []model.PostureCoverageLimitation
+		wantWarning bool
+	}{
+		{name: "none", wantWarning: false},
+		{
+			name: "unrelated persistent limitation",
+			limitations: []model.PostureCoverageLimitation{{
+				CoverageKey: "mcp:network:sha256:persistent",
+				State:       sdkingest.OutcomePartial,
+				ScanID:      "earlier-limited-scan",
+			}},
+			wantWarning: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			publisher := &fakePublisher{
+				activeCoverageLimitations: test.limitations,
+			}
+			pipeline := newTestPipeline(
+				&fakeWriter{},
+				&graph.MockGraphDB{},
+				&fakeScanStore{},
+				noOpRunPP,
+			)
+			pipeline.findingStore = publisher
+			result, err := pipeline.Ingest(
+				context.Background(),
+				validIngestDataFor("clean-receipt-"+strings.ReplaceAll(test.name, " ", "-")),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hasWarning := slices.Contains(
+				result.Warnings,
+				sdkingest.CoverageLimitationWarning,
+			)
+			if hasWarning != test.wantWarning {
+				t.Fatalf(
+					"warnings = %v, want coverage warning %t",
+					result.Warnings,
+					test.wantWarning,
+				)
+			}
+		})
 	}
 }
 
@@ -1977,7 +2135,11 @@ func TestPipeline_PublicationFailureMarksProjectionIncomplete(t *testing.T) {
 	p := newTestPipeline(w, &graph.MockGraphDB{}, ss, noOpRunPP)
 	p.findingStore = publisher
 
-	result, err := p.Ingest(context.Background(), validIngestDataFor("scan-publication-fail"))
+	data := validIngestDataFor("scan-publication-fail")
+	data.Meta.Collection.State = sdkingest.OutcomePartial
+	data.Meta.Collection.Outcomes[0].State = sdkingest.OutcomePartial
+	result, err := p.Ingest(context.Background(), data)
+	scope := data.Meta.Collection.CoverageKeys[0]
 
 	if err != nil {
 		t.Fatalf("post-write publication failure should be represented in stages: %v", err)
@@ -1993,6 +2155,13 @@ func TestPipeline_PublicationFailureMarksProjectionIncomplete(t *testing.T) {
 	update, ok := ss.lastUpdate("scan-publication-fail")
 	if !ok || update.Status != model.ScanStatusCompletedWithErrors {
 		t.Fatalf("failure lifecycle update = %+v, found=%t", update, ok)
+	}
+	if len(ss.failures) != 1 ||
+		!containsCoverage(ss.failures[0].DirtyCoverage, scope) {
+		t.Fatalf(
+			"partial graph mutation escaped dirty quarantine: %+v",
+			ss.failures,
+		)
 	}
 }
 

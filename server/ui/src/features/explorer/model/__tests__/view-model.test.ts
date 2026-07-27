@@ -64,7 +64,12 @@ const DATA: ExplorerRawData = {
   nodes: NODES,
   edges: EDGES,
   findings: FINDINGS,
-  publication: { scanId: "scan-1", revision: 1 },
+  publication: {
+    scanId: "scan-1",
+    revision: 1,
+    coverageLimited: false,
+    coverageLimitationCount: 0,
+  },
   findingScope: {
     mode: "published",
     scanId: "scan-1",
@@ -87,6 +92,7 @@ const DATA: ExplorerRawData = {
   },
   collection: {
     complete: true,
+    coverageLimited: false,
     revision: "rev-1",
     nodeTotal: NODES.length,
     edgeTotal: EDGES.length,
@@ -135,6 +141,7 @@ describe("explorer view-model — three distinct shapes", () => {
           edges: EDGES.slice(0, 1),
           collection: {
             complete: false,
+            coverageLimited: false,
             revision: null,
             nodeTotal: NODES.length,
             edgeTotal: EDGES.length,

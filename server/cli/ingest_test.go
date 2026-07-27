@@ -67,6 +67,16 @@ func TestWriteIngestResultComplete(t *testing.T) {
 		PublishedRevision: &revision,
 		WriteRows:         ingest.FactCounts{Nodes: 3, Edges: 2},
 		Duration:          1500 * time.Millisecond,
+		Collection: ingest.CollectionReport{
+			State:        ingest.OutcomeComplete,
+			CoverageKeys: []string{"config:path:sha256:" + strings.Repeat("c", 64)},
+			Outcomes: []ingest.CollectionOutcome{{
+				Collector:   "config",
+				CoverageKey: "config:path:sha256:" + strings.Repeat("c", 64),
+				Method:      "config_discovery",
+				State:       ingest.OutcomeComplete,
+			}},
+		},
 		Identity: ingest.IngestIdentityResult{
 			CollectionPointID: "sha256:" + strings.Repeat("a", 64),
 			NetworkContextID:  "sha256:" + strings.Repeat("b", 64),
@@ -180,11 +190,11 @@ func TestWriteIngestResultPublishedIncompleteExactCoverageRemainsSuccessful(t *t
 			t.Fatalf("output missing %q:\n%s", want, output.String())
 		}
 	}
-	if strings.Contains(ingest.InstructionCoverageLimitationWarning, "deep") ||
-		!strings.Contains(ingest.InstructionCoverageLimitationWarning, "not a clean absence") {
+	if strings.Contains(ingest.CoverageLimitationWarning, "instruction") ||
+		!strings.Contains(ingest.CoverageLimitationWarning, "not proof of absence") {
 		t.Fatalf(
-			"warning is not generalized to incomplete instruction coverage: %q",
-			ingest.InstructionCoverageLimitationWarning,
+			"warning is not generalized to incomplete collection coverage: %q",
+			ingest.CoverageLimitationWarning,
 		)
 	}
 }

@@ -905,7 +905,7 @@ func TestWriterReplacesCompleteAllDependencyOwnerSetAtomically(t *testing.T) {
 			}
 			for _, fragment := range []string{
 				"AS replace_dependency_set",
-				"AND incoming_complete",
+				"AND incoming_authoritative",
 				"AND (replace_dependency_set",
 				"WHEN replace_dependency_set THEN edge.observation_dependency_tokens",
 				"WHEN replace_dependency_set THEN edge.observation_fact_fingerprints",
@@ -959,6 +959,132 @@ func TestCompleteObservationReplacesManagedProperties(t *testing.T) {
 	}
 }
 
+func TestPartialObservationUsesAdditivePropertyUpdates(t *testing.T) {
+	scope := "mcp:target:sha256:server-partial"
+	recorder := &recordedExec{}
+	writer := newTestWriter(recorder.exec, false)
+	node := ingest.Node{
+		ID:                 "server-partial",
+		Kinds:              []string{"MCPServer"},
+		ObservationDomains: []string{scope},
+		Properties:         map[string]any{"name": "observed"},
+	}
+
+	if _, err := writer.WriteObservationNodes(
+		context.Background(),
+		[]ingest.Node{node},
+		"scan-partial",
+		nil,
+	); err != nil {
+		t.Fatalf("WriteObservationNodes: %v", err)
+	}
+	call := recorder.snapshot()[0]
+	row := rowsAt(t, call.Params, "nodes")[0]
+	if prefixes, _ := row["complete_domain_prefixes"].([]string); len(prefixes) != 0 {
+		t.Fatalf("partial observation has authoritative prefixes: %v", prefixes)
+	}
+	for _, fragment := range []string{
+		"AS partial_existing_owner",
+		"AS partial_new_owner",
+		"AS partial_coowner_noop",
+		"AS partial_coowner_addition",
+		"WHERE none(prefix IN node.observation_fingerprint_domain_prefixes",
+		"SET n += node.properties",
+		"WHEN observation_created THEN true",
+		"WHEN partial_existing_owner THEN true",
+		"WHEN partial_coowner_noop THEN true",
+		"WHEN partial_coowner_addition THEN false",
+	} {
+		if !strings.Contains(call.Cypher, fragment) {
+			t.Fatalf("partial merge query missing %q:\n%s", fragment, call.Cypher)
+		}
+	}
+	if strings.Contains(
+		call.Cypher,
+		"CASE WHEN partial_existing_owner THEN [1] ELSE [] END | REMOVE",
+	) {
+		t.Fatalf("partial observation can remove labels:\n%s", call.Cypher)
+	}
+
+	edge := ingest.Edge{
+		Source:             "server-partial",
+		Target:             "host-partial",
+		Kind:               "RUNS_ON",
+		SourceKind:         "MCPServer",
+		TargetKind:         "Host",
+		ObservationDomains: []string{scope},
+		Properties:         map[string]any{"confidence": 0.8},
+	}
+	if _, err := writer.WriteObservationEdges(
+		context.Background(),
+		[]ingest.Edge{edge},
+		"scan-partial",
+		nil,
+	); err != nil {
+		t.Fatalf("WriteObservationEdges: %v", err)
+	}
+	edgeCall := recorder.snapshot()[1]
+	for _, fragment := range []string{
+		"AS partial_existing_owner",
+		"AS partial_new_owner",
+		"AS partial_coowner_noop",
+		"AS partial_coowner_addition",
+		"SET r += edge.properties",
+		"WHEN observation_created THEN true",
+		"WHEN partial_coowner_addition THEN false",
+	} {
+		if !strings.Contains(edgeCall.Cypher, fragment) {
+			t.Fatalf("partial edge query missing %q:\n%s", fragment, edgeCall.Cypher)
+		}
+	}
+}
+
+func TestRelationshipWritersRejectCompatibleOwnerRecoveryShortcut(
+	t *testing.T,
+) {
+	edge := ingest.Edge{
+		Source:             "server-recovery",
+		Target:             "host-recovery",
+		Kind:               "RUNS_ON",
+		SourceKind:         "MCPServer",
+		TargetKind:         "Host",
+		ObservationDomains: []string{"mcp:target:sha256:recovery"},
+		Properties:         map[string]any{"confidence": 1.0},
+	}
+	for _, hasAPOC := range []bool{false, true} {
+		name := "fallback"
+		if hasAPOC {
+			name = "apoc"
+		}
+		t.Run(name, func(t *testing.T) {
+			recorder := &recordedExec{}
+			writer := newTestWriter(recorder.exec, hasAPOC)
+			if _, err := writer.WriteObservationEdges(
+				context.Background(),
+				[]ingest.Edge{edge},
+				"complete-recovery",
+				edge.ObservationDomains,
+			); err != nil {
+				t.Fatalf("WriteObservationEdges: %v", err)
+			}
+			query := recorder.snapshot()[0].Cypher
+			for _, fragment := range []string{
+				"WHERE none(prefix IN edge.observation_fingerprint_domain_prefixes",
+				"AS partial_coowner_noop",
+				"AS partial_coowner_addition",
+				"WHEN partial_coowner_addition THEN false",
+			} {
+				if !strings.Contains(query, fragment) {
+					t.Fatalf("owner quarantine query missing %q:\n%s", fragment, query)
+				}
+			}
+			if strings.Contains(query, "compatible_owner_recovery") {
+				t.Fatalf("unsafe compatible owner recovery remains:\n%s", query)
+			}
+		})
+	}
+}
+
 func TestReferenceOnlyObservationPreservesAuthoritativeProperties(t *testing.T) {
 	scope := "scan:loot:sha256:reference"
 	recorder := &recordedExec{}
@@ -992,6 +1118,7 @@ func TestReferenceOnlyObservationPreservesAuthoritativeProperties(t *testing.T) 
 		"old_authoritative_tokens",
 		"AND NOT node.reference_only",
 		"old_properties_complete OR",
+		"WHEN observation_created THEN true",
 		"n.observation_reference_tokens",
 		"NOT replace_properties AND NOT node.reference_only",
 	} {

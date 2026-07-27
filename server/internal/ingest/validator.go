@@ -293,7 +293,6 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 	}
 	errs = append(errs, validateRuleset(data.Meta.Ruleset)...)
 	errs = append(errs, validateIdentitySchemes(data.Meta.IdentitySchemes)...)
-	coverageStates := ingest.CoverageStates(data.Meta.Collection)
 	if data.Graph.Nodes == nil {
 		errs = append(errs, FieldError{Path: "graph.nodes", Message: "must be a non-null array"})
 	}
@@ -331,11 +330,6 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 		errs = append(errs, validateObservationDomains(
 			node.ObservationDomains,
 			declaredCoverage,
-			fmt.Sprintf("graph.nodes[%d].observation_domains", i),
-		)...)
-		errs = append(errs, validateCompleteObservationDomains(
-			node.ObservationDomains,
-			coverageStates,
 			fmt.Sprintf("graph.nodes[%d].observation_domains", i),
 		)...)
 		errs = append(errs, validateNodePropertySemantics(node, i)...)
@@ -395,11 +389,6 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 		errs = append(errs, validateObservationDomains(
 			edge.ObservationDomains,
 			declaredCoverage,
-			fmt.Sprintf("graph.edges[%d].observation_domains", i),
-		)...)
-		errs = append(errs, validateCompleteObservationDomains(
-			edge.ObservationDomains,
-			coverageStates,
 			fmt.Sprintf("graph.edges[%d].observation_domains", i),
 		)...)
 		errs = append(errs, validateObservationSemantics(edge, i)...)
@@ -549,7 +538,6 @@ func preflightRegistryContracts(report *ingest.CollectionReport) error {
 	}
 
 	current := ingest.CurrentInstructionRegistryContract()
-	coverageStates := ingest.CoverageStates(report)
 	for i, root := range report.AuthoritativeRoots {
 		path := fmt.Sprintf("meta.collection.authoritative_roots[%d]", i)
 		expectedInstructionMethod := ""
@@ -594,18 +582,6 @@ func preflightRegistryContracts(report *ingest.CollectionReport) error {
 				Path:    path + ".child_coverage_keys",
 				Message: "instruction root with active children must have a recognized coverage state",
 			})
-		}
-		for childIndex, child := range root.ChildCoverageKeys {
-			if coverageStates[child] != ingest.OutcomeComplete {
-				errs = append(errs, FieldError{
-					Path: fmt.Sprintf(
-						"%s.child_coverage_keys[%d]",
-						path,
-						childIndex,
-					),
-					Message: "active instruction child must have complete coverage",
-				})
-			}
 		}
 	}
 	if len(errs) > 0 {
@@ -677,12 +653,6 @@ func validateInstructionChildren(
 			errs = append(errs, FieldError{
 				Path:    path + ".method",
 				Message: fmt.Sprintf("instruction source method must be %q", ingest.InstructionMethodSource),
-			})
-		}
-		if outcome.State != ingest.OutcomeComplete {
-			errs = append(errs, FieldError{
-				Path:    path + ".state",
-				Message: "an active instruction source must be complete",
 			})
 		}
 	}
@@ -1049,25 +1019,6 @@ func validateObservationDomains(
 				Message: fmt.Sprintf("domain %q is not declared in meta.collection.coverage_keys", domain),
 			})
 		}
-	}
-	return errs
-}
-
-func validateCompleteObservationDomains(
-	domains []string,
-	states map[string]ingest.OutcomeState,
-	path string,
-) []FieldError {
-	var errs []FieldError
-	for i, domain := range domains {
-		state, declared := states[domain]
-		if !declared || state == ingest.OutcomeComplete {
-			continue
-		}
-		errs = append(errs, FieldError{
-			Path:    fmt.Sprintf("%s[%d]", path, i),
-			Message: fmt.Sprintf("domain %q must be complete to own graph facts, got %q", domain, state),
-		})
 	}
 	return errs
 }

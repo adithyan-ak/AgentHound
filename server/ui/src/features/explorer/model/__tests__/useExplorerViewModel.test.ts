@@ -26,7 +26,12 @@ const cachedData: ExplorerRawData = {
   nodes: [],
   edges: [],
   findings: [],
-  publication: { scanId: "scan-1", revision: 1 },
+  publication: {
+    scanId: "scan-1",
+    revision: 1,
+    coverageLimited: false,
+    coverageLimitationCount: 0,
+  },
   findingScope: {
     mode: "published",
     scanId: "scan-1",
@@ -48,6 +53,7 @@ const cachedData: ExplorerRawData = {
   },
   collection: {
     complete: true,
+    coverageLimited: false,
     revision: "graph-revision",
     nodeTotal: 0,
     edgeTotal: 0,

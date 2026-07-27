@@ -3,6 +3,7 @@ package appdb
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,6 +74,7 @@ func TestIntegrationFindingStore(t *testing.T) {
 	// fingerprints up front. finding_triage has no FK, so it survives scan
 	// deletion and must be cleared explicitly.
 	cleanup := func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM coverage_limitations WHERE scan_id LIKE 'fs-test-%'")
 		_, _ = pool.Exec(ctx, "DELETE FROM scans WHERE id LIKE 'fs-test-%'")
 		_, _ = pool.Exec(ctx, "DELETE FROM finding_triage WHERE fingerprint = ANY($1)", []string{fpA, fpB, fpD})
 	}
@@ -93,6 +95,13 @@ func TestIntegrationFindingStore(t *testing.T) {
 	}
 	mustScan(scanID)
 	mustScan(scanID2)
+	if _, err := pool.Exec(ctx,
+		`UPDATE scans SET comparison_key = $1 WHERE id = ANY($2::text[])`,
+		"sha256:fs-test-scope",
+		[]string{scanID, scanID2},
+	); err != nil {
+		t.Fatalf("set comparable finding scopes: %v", err)
+	}
 	replaceFindings := func(id string, snapshot []model.Finding) {
 		t.Helper()
 		tx, err := pool.Begin(ctx)
@@ -256,6 +265,23 @@ func TestIntegrationFindingStore(t *testing.T) {
 			SourceKind: "MCPTool", TargetKind: "MCPTool", Confidence: 0.7},
 	}
 	replaceFindings(scanID2, findings2)
+	if _, err := pool.Exec(ctx,
+		`UPDATE scans SET comparison_key = NULL WHERE id = $1`,
+		scanID2,
+	); err != nil {
+		t.Fatalf("clear comparison scope: %v", err)
+	}
+	if _, err := fs.Diff(ctx, scanID, scanID2, false); err == nil ||
+		!strings.Contains(err.Error(), "no authoritative comparison key") {
+		t.Fatalf("limited-scope diff error = %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE scans SET comparison_key = $1 WHERE id = $2`,
+		"sha256:fs-test-scope",
+		scanID2,
+	); err != nil {
+		t.Fatalf("restore comparison scope: %v", err)
+	}
 	diff, err := fs.Diff(ctx, scanID, scanID2, false)
 	if err != nil {
 		t.Fatalf("Diff: %v", err)

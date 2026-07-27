@@ -197,29 +197,13 @@ function completedStage(result: IngestResult, name: string): boolean {
   ) ?? false;
 }
 
-function hasLimitedInstructionCoverage(result: IngestResult): boolean {
-  const rootKinds: Record<string, string> = {
-    instruction_exact_user: "instruction-exact-user",
-    instruction_exact_project: "instruction-exact-project",
-    instruction_deep: "instruction-deep",
-  };
-  return (result.collection.authoritative_roots ?? []).some((root) => {
-    if (!root.registry_contract) {
-      return false;
-    }
-    return result.collection.outcomes.some(
-      (outcome) => {
-        const rootKind = rootKinds[outcome.method];
-        return (
-          rootKind !== undefined &&
-          root.coverage_key.startsWith(`config:${rootKind}:sha256:`) &&
-          outcome.coverage_key === root.coverage_key &&
-          outcome.collector === "config" &&
-          ["truncated", "partial", "failed"].includes(outcome.state)
-        );
-      },
-    );
-  });
+function hasLimitedCoverage(result: IngestResult): boolean {
+  return (
+    result.collection.state !== "complete" ||
+    (result.warnings ?? []).includes(
+      "coverage is limited; missing evidence is not proof of absence",
+    )
+  );
 }
 
 const ghostBtn =
@@ -390,7 +374,7 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
     result.projection_status === "complete" &&
     incompleteStages.length === 0;
   const limitedCoverage =
-    publishedOutcome && result != null && hasLimitedInstructionCoverage(result);
+    publishedOutcome && result != null && hasLimitedCoverage(result);
   const completeOutcome =
     publishedOutcome && warnings.length === 0 && !limitedCoverage;
   const canOpenGraph =
@@ -582,8 +566,8 @@ export function ScanImport({ open, onClose, onSuccess }: ScanImportProps) {
                 </p>
                 {limitedCoverage && (
                   <p className="text-xs text-muted-foreground">
-                    Observed instruction positives were published and remain
-                    usable; missing instruction evidence is not a clean absence.
+                    Confirmed positives were published and remain usable;
+                    missing evidence is not proof of absence.
                   </p>
                 )}
                 {!completeOutcome && !limitedCoverage && (

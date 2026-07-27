@@ -97,8 +97,8 @@ explicitly.
 
 Scan deletion is deliberately history-only. It never issues a Neo4j delete or
 interprets last-writer `scan_id` as ownership. The API rejects pending/running
-scans, scans referenced by active coverage heads, and the currently published
-posture revision with `409`.
+scans, scans referenced by active coverage heads or coverage limitations, and
+the currently published posture revision with `409`.
 
 ## Collection provenance and storage pairing
 
@@ -131,29 +131,22 @@ services and edges involving them reconcile under an independent network (or
 artifact-local) variant. Moving between VPNs cannot retire the previous VPN's
 configured-service observations.
 
-## Limited instruction publication
+## Limited-evidence publication
 
-Instruction coverage is measured over AgentHound's registered static sources,
-not every instruction an effective client may load. Each observed registered
-file has a stable owner derived from its exact/deep root and canonical path.
-Registry-contract changes refresh those same owners rather than minting new
-ones.
+AgentHound separates collected facts from coverage. A safe incomplete scan can
+publish confirmed positive facts and findings. Its incomplete scopes have no
+absence authority: they cannot delete unseen prior evidence, create a
+comparison key, or justify an empty-findings all-clear. CLI, API, and UI
+surfaces therefore keep graph/findings access available while warning that
+missing evidence is unknown, not clean. CI `--fail-on` gates fail closed when
+the published scope has an active coverage limitation.
 
-An incomplete recognized exact or deep root is a successful but
-coverage-limited publication when the rest of the pipeline is safe. Complete
-per-file positives remain current and are published additively, including
-poisoning findings. The incomplete root has no absence authority: it cannot
-retire unseen files, create a comparison key, or justify an empty-findings
-all-clear. CLI and UI surfaces therefore keep graph/findings access available
-while warning that missing instruction evidence is unknown, not clean.
-
-Dirty-state safety still fails closed. A limited successful attempt resolves
-only the root and complete children it actually processed; an unseen dirty
-child continues to block publication. Graph, analysis, snapshot, or
-finalization failure resolves no attempted dirty instruction coverage. A later
-complete scan of the same root reuses stable per-file owners, regains
-root-level absence authority, retires sources proven absent, and restores
-normal comparison behavior.
+Dirty-state safety remains separate and fails closed. Every domain that mutates
+Neo4j is marked dirty before the mutation and is cleared only after graph,
+analysis, snapshot, and PostgreSQL publication all succeed. A PostgreSQL
+failure cannot leave Neo4j changes available for an unrelated scan to publish.
+A later complete scan clears the corresponding limitation, regains absence
+authority, and restores comparison behavior.
 
 PostgreSQL and Neo4j carry the same server-generated internal storage-pair UUID,
 so crossed volumes fail closed. Verification remains the first ingest
