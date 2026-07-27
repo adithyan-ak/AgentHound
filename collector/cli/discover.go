@@ -161,35 +161,81 @@ func runDiscover(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	envelope := buildDiscoverEnvelope(spec, targets, authzFile, authzHash, allowPublic)
+	report := scanner.LastReport()
+	contract := buildProtocolProbeContract(report)
+	contractIdentity, contractErr := identifyProbeContract("discover", contract)
+	if contractErr != nil {
+		return fmt.Errorf("identify protocol probe contract: %w", contractErr)
+	}
+	envelope := buildDiscoverEnvelope(
+		spec,
+		targets,
+		authzFile,
+		authzHash,
+		allowPublic,
+		report,
+		contractIdentity,
+		contract,
+	)
 	if output == "" {
 		output = fmt.Sprintf("discover-%s.json", envelope.Meta.ScanID)
 	}
+	var writeErr error
 	if output == "-" {
-		return writeCollectorOutputStdout(envelope)
+		writeErr = writeCollectorOutputStdout(envelope)
+	} else {
+		writeErr = writeCollectorOutputFile(envelope, output)
 	}
-	return writeCollectorOutput(envelope, output)
+	if writeErr != nil {
+		return writeErr
+	}
+	assessment := assessScanCoverage(envelope.Meta.Collection)
+	writeScanCoverageWarnings(cmd.ErrOrStderr(), envelope.Meta.Collection, assessment)
+	writeScanNextStep(cmd.ErrOrStderr(), output, assessment, false)
+	return nil
 }
 
-func buildDiscoverEnvelope(spec string, targets []action.Target, authzFile, authzHash string, allowPublic bool) *ingest.IngestData {
+func buildDiscoverEnvelope(
+	spec string,
+	targets []action.Target,
+	authzFile,
+	authzHash string,
+	allowPublic bool,
+	report protoscan.ProbeReport,
+	contractIdentity probeContractIdentity,
+	contract protocolProbeContract,
+) *ingest.IngestData {
 	scanID := uuid.New().String()
 	env := common.NewIngestData("scan", scanID)
 	env.Meta.Extra = map[string]any{
-		"discover_spec":        spec,
-		"discover_targets":     len(targets),
-		"allow_public_targets": allowPublic,
+		"discover_spec":         spec,
+		"discover_targets":      len(targets),
+		"allow_public_targets":  allowPublic,
+		"probe_contract":        contract,
+		"probe_contract_digest": contractIdentity.Digest,
 	}
-	coverageKey := ingest.CanonicalCoverageKey("scan", "discover", spec)
+	state := report.State()
+	errorText := ""
+	if report.Total == 0 {
+		errorText = "zero protocol probes scheduled"
+	} else if unknown := report.Unknown(); unknown > 0 {
+		errorText = fmt.Sprintf(
+			"%d of %d protocol probe(s) inconclusive",
+			unknown,
+			report.Total,
+		)
+	}
 	env.Meta.Collection = &ingest.CollectionReport{
-		State:        ingest.OutcomeComplete,
-		CoverageKeys: []string{coverageKey},
+		State:        state,
+		CoverageKeys: []string{contractIdentity.CoverageKey},
 		Outcomes: []ingest.CollectionOutcome{{
 			Collector:   "scan",
-			CoverageKey: coverageKey,
+			CoverageKey: contractIdentity.CoverageKey,
 			Target:      spec,
 			Method:      "protocol_discovery",
-			State:       ingest.OutcomeComplete,
+			State:       state,
 			Items:       len(targets),
+			Error:       errorText,
 		}},
 	}
 	if authzFile != "" {
@@ -197,6 +243,6 @@ func buildDiscoverEnvelope(spec string, targets []action.Target, authzFile, auth
 		env.Meta.Extra["authorization_file_sha256"] = authzHash
 	}
 	env.Graph = protoscan.EmitDiscoveryNodes(targets)
-	ingest.TagObservationDomain(&env.Graph, coverageKey)
+	ingest.TagObservationDomain(&env.Graph, contractIdentity.CoverageKey)
 	return env
 }

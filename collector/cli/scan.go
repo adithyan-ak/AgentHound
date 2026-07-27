@@ -1071,23 +1071,26 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 		return fmt.Errorf("registered network module %q is not a Scanner", mod.ID())
 	}
 
-	// Configure runtime overrides directly on the *networkscan.Scanner if
-	// possible — avoids constructing a parallel options struct. We don't
-	// type-assert here because module.Get returns the concrete value the
-	// init() registered.
+	// Configure the registered concrete scanner and retain it so its bounded
+	// coverage counts and exact scheduled surface can be attached to the
+	// artifact. A different implementation cannot provide that lifecycle
+	// identity safely.
 	reporter := newProgressReporter(cmd.OutOrStderr(), "[scan] probing "+spec, quiet)
-	if ns, ok := mod.(*networkscan.Scanner); ok {
-		if len(ports) > 0 {
-			ns.Ports = ports
-		}
-		ns.Concurrency = concurrency
-		ns.ExpandOpts = networkscan.ExpandOptions{
-			AllowLargeCIDR:     allowLarge,
-			AllowPublicTargets: allowPublic,
-		}
-		ns.Timeout = tcpTimeout
-		ns.Progress = reporter.update
+	networkScanner, ok := mod.(*networkscan.Scanner)
+	if !ok {
+		return fmt.Errorf(
+			"registered network module %q cannot report its scheduled probe surface",
+			mod.ID(),
+		)
 	}
+	networkScanner.Ports = append([]int(nil), ports...)
+	networkScanner.Concurrency = concurrency
+	networkScanner.ExpandOpts = networkscan.ExpandOptions{
+		AllowLargeCIDR:     allowLarge,
+		AllowPublicTargets: allowPublic,
+	}
+	networkScanner.Timeout = tcpTimeout
+	networkScanner.Progress = reporter.update
 
 	ctx, stop := signalContext()
 	defer stop()
@@ -1123,23 +1126,44 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 	// PortToKind is an ordering hint only, so a real service on a custom port is
 	// still discoverable. Operationally indeterminate probes make this domain
 	// partial and therefore cannot retire a previously observed service.
-	envelope := buildNetworkScanEnvelope(spec, targets, authzFile, authzHash, allowPublic)
+	report := networkScanner.LastReport()
+	candidates := registeredFingerprinters()
 	_, ruleset := loadEffectiveRules()
+	contract := buildNetworkProbeContract(report, candidates, ruleset)
+	contractIdentity, contractErr := identifyProbeContract("network", contract)
+	if contractErr != nil {
+		return fmt.Errorf("identify network probe contract: %w", contractErr)
+	}
+	envelope := buildNetworkScanEnvelope(
+		spec,
+		targets,
+		authzFile,
+		authzHash,
+		allowPublic,
+		contractIdentity,
+		contract,
+	)
 	envelope.Meta.Ruleset = ruleset
-	networkState := ingest.OutcomeComplete
-	if ctx.Err() != nil {
-		networkState = ingest.OutcomePartial
+	networkState := report.State()
+	networkError := ""
+	if unknown := report.Unknown(); unknown > 0 {
+		networkError = fmt.Sprintf(
+			"%d of %d TCP probe(s) inconclusive",
+			unknown,
+			report.Total,
+		)
 	}
 	envelope.Meta.Collection = &ingest.CollectionReport{
 		State:        networkState,
-		CoverageKeys: []string{ingest.CanonicalCoverageKey("scan", "network", spec)},
+		CoverageKeys: []string{contractIdentity.CoverageKey},
 		Outcomes: []ingest.CollectionOutcome{{
 			Collector:   "scan",
-			CoverageKey: ingest.CanonicalCoverageKey("scan", "network", spec),
+			CoverageKey: contractIdentity.CoverageKey,
 			Target:      spec,
 			Method:      "port_scan",
 			State:       networkState,
 			Items:       len(targets),
+			Error:       networkError,
 		}},
 	}
 	// On cancellation (Ctrl-C), every fingerprint probe would immediately fail
@@ -1152,13 +1176,14 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 		}
 		envelope.Meta.Collection.Outcomes = append(envelope.Meta.Collection.Outcomes, ingest.CollectionOutcome{
 			Collector: "scan", CoverageKey: envelope.Meta.Collection.CoverageKeys[0],
-			Target: spec, Method: "fingerprint", State: ingest.OutcomePartial,
+			Target: spec, Method: "fingerprint", State: ingest.OutcomeFailed,
 			Error: "fingerprint phase canceled before dispatch",
 		})
 	} else {
-		dispatchFingerprints(
+		dispatchFingerprintCandidates(
 			ctx, cmd.OutOrStderr(), targets, envelope, quiet,
 			normalizeFingerprintWorkers(concurrency), fingerprintTimeout, spec,
+			candidates,
 		)
 	}
 	envelope.Meta.Collection.State = ingest.AggregateOutcomeState(envelope.Meta.Collection.Outcomes)
@@ -1186,16 +1211,23 @@ func runNetworkScan(cmd *cobra.Command, spec string) error {
 // network scanner and subsequent fingerprint dispatch. The authorization
 // watermark lets downstream analysis tools refuse to operate on public-target
 // scans that lack an authorization record.
-func buildNetworkScanEnvelope(spec string, targets []action.Target, authzFile, authzHash string, allowPublic bool) *ingest.IngestData {
+func buildNetworkScanEnvelope(
+	spec string,
+	targets []action.Target,
+	authzFile,
+	authzHash string,
+	allowPublic bool,
+	contractIdentity probeContractIdentity,
+	contract networkProbeContract,
+) *ingest.IngestData {
 	scanID := uuid.New().String()
 	env := common.NewIngestData("scan", scanID)
-	coverageKey := ingest.CanonicalCoverageKey("scan", "network", spec)
 	env.Meta.Collection = &ingest.CollectionReport{
 		State:        ingest.OutcomeComplete,
-		CoverageKeys: []string{coverageKey},
+		CoverageKeys: []string{contractIdentity.CoverageKey},
 		Outcomes: []ingest.CollectionOutcome{{
 			Collector:   "scan",
-			CoverageKey: coverageKey,
+			CoverageKey: contractIdentity.CoverageKey,
 			Target:      spec,
 			Method:      "port_scan",
 			State:       ingest.OutcomeComplete,
@@ -1206,9 +1238,11 @@ func buildNetworkScanEnvelope(spec string, targets []action.Target, authzFile, a
 	// a property on the envelope. Fingerprinters append nodes/edges
 	// to env.Graph; the watermark is independent of the graph payload.
 	env.Meta.Extra = map[string]any{
-		"network_scan_spec":    spec,
-		"network_scan_targets": len(targets),
-		"allow_public_targets": allowPublic,
+		"network_scan_spec":     spec,
+		"network_scan_targets":  len(targets),
+		"allow_public_targets":  allowPublic,
+		"probe_contract":        contract,
+		"probe_contract_digest": contractIdentity.Digest,
 	}
 	if authzFile != "" {
 		env.Meta.Extra["authorization_file_path"] = authzFile
@@ -1258,9 +1292,10 @@ func sha256OfFile(path string) (string, error) {
 // endpoint. Port mappings only prioritize likely matches. Failures are
 // retained as partial fingerprint coverage rather than authoritative absence.
 type fingerprintCandidate struct {
-	id     string
-	target string
-	fp     action.Fingerprinter
+	id      string
+	target  string
+	version string
+	fp      action.Fingerprinter
 }
 
 type fingerprintTask struct {
@@ -1293,7 +1328,9 @@ func registeredFingerprinters() []fingerprintCandidate {
 		if !ok {
 			continue
 		}
-		candidates = append(candidates, fingerprintCandidate{id: mod.ID(), target: mod.Target(), fp: fp})
+		candidates = append(candidates, fingerprintCandidate{
+			id: mod.ID(), target: mod.Target(), version: mod.Version(), fp: fp,
+		})
 	}
 	return candidates
 }
@@ -1345,19 +1382,6 @@ func fingerprintEndpoints(targets []action.Target) []fingerprintEndpoint {
 	return endpoints
 }
 
-func dispatchFingerprints(
-	ctx context.Context,
-	stderr io.Writer,
-	targets []action.Target,
-	envelope *ingest.IngestData,
-	quiet bool,
-	workers int,
-	timeout time.Duration,
-	scopeTarget string,
-) {
-	dispatchFingerprintCandidates(ctx, stderr, targets, envelope, quiet, workers, timeout, scopeTarget, registeredFingerprinters())
-}
-
 func dispatchFingerprintCandidates(
 	ctx context.Context,
 	stderr io.Writer,
@@ -1377,10 +1401,18 @@ func dispatchFingerprintCandidates(
 	total := len(endpoints) * len(candidates)
 	reporter := newProgressReporter(stderr, "[scan] fingerprinting", quiet)
 	coverageKey := envelope.Meta.Collection.CoverageKeys[0]
-	if total == 0 {
+	if len(endpoints) == 0 {
 		envelope.Meta.Collection.Outcomes = append(envelope.Meta.Collection.Outcomes, ingest.CollectionOutcome{
 			Collector: "scan", CoverageKey: coverageKey, Target: scopeTarget,
-			Method: "fingerprint", State: ingest.OutcomeComplete,
+			Method: "fingerprint", State: ingest.OutcomeNotApplicable,
+		})
+		return
+	}
+	if len(candidates) == 0 {
+		envelope.Meta.Collection.Outcomes = append(envelope.Meta.Collection.Outcomes, ingest.CollectionOutcome{
+			Collector: "scan", CoverageKey: coverageKey, Target: scopeTarget,
+			Method: "fingerprint", State: ingest.OutcomeFailed,
+			Error: "no registered fingerprinters; zero probes scheduled",
 		})
 		return
 	}
@@ -1496,15 +1528,21 @@ func dispatchFingerprintCandidates(
 	}
 	scheduled := <-producerDone
 	unstarted := total - scheduled
-	state := ingest.OutcomeComplete
+	conclusive := completed - failures
+	state := ingest.ProbeOutcomeState(total, conclusive)
 	errorText := ""
-	if failures > 0 || unstarted > 0 || ctx.Err() != nil {
-		state = ingest.OutcomePartial
-		errorText = fmt.Sprintf("%d probe(s) failed, %d not started", failures, max(0, unstarted))
+	if state != ingest.OutcomeComplete {
+		errorText = fmt.Sprintf(
+			"%d of %d probe(s) inconclusive (%d failed, %d not started)",
+			total-conclusive,
+			total,
+			failures,
+			max(0, unstarted),
+		)
 	}
 	envelope.Meta.Collection.Outcomes = append(envelope.Meta.Collection.Outcomes, ingest.CollectionOutcome{
 		Collector: "scan", CoverageKey: coverageKey, Target: scopeTarget,
-		Method: "fingerprint", State: state, Items: completed - failures, Error: errorText,
+		Method: "fingerprint", State: state, Items: conclusive, Error: errorText,
 	})
 	reporter.clear()
 	if !quiet {

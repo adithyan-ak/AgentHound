@@ -5,15 +5,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/adithyan-ak/agenthound/modules/networkscan"
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
@@ -21,6 +27,12 @@ import (
 
 const initializeOK = `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","serverInfo":{"name":"demo-mcp","version":"0.0.1"},"capabilities":{}}}`
 const a2aCard = `{"name":"demo-agent","url":"http://demo-agent.example/api","description":"demo"}`
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) {
+	return 0, io.ErrUnexpectedEOF
+}
 
 func mcpStub(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -76,6 +88,47 @@ func TestScan_DiscoversMCP(t *testing.T) {
 	}
 	if got := targets[0].Meta["protocol"]; got != "mcp" {
 		t.Errorf("protocol = %q, want mcp", got)
+	}
+	report := s.LastReport()
+	if report.State() != ingest.OutcomeComplete ||
+		report.Total != 1 || report.Conclusive != 1 {
+		t.Fatalf("positive report = %+v, want complete 1/1", report)
+	}
+	if report.Targets != networkscan.LogicalTargetSetIdentity([]string{"127.0.0.1"}) {
+		t.Fatalf("scheduled targets = %+v", report.Targets)
+	}
+	if len(report.Protocols) != 1 ||
+		report.Protocols[0].Protocol != "mcp" ||
+		!slices.Equal(report.Protocols[0].Ports, s.MCPPorts) {
+		t.Fatalf("scheduled protocols = %+v, want only MCP %v",
+			report.Protocols, s.MCPPorts)
+	}
+}
+
+func TestScanReportExcludesInactiveProtocolPorts(t *testing.T) {
+	srv := mcpStub(t)
+	defer srv.Close()
+
+	activePort := portOf(t, srv)
+	first := &Scanner{
+		Mode:     ModeMCP,
+		MCPPorts: []int{activePort},
+		A2APorts: []int{10001},
+	}
+	if _, err := first.Scan(context.Background(), "127.0.0.1"); err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	second := &Scanner{
+		Mode:     ModeMCP,
+		MCPPorts: []int{activePort},
+		A2APorts: []int{20002},
+	}
+	if _, err := second.Scan(context.Background(), "127.0.0.1"); err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+	if !reflect.DeepEqual(first.LastReport(), second.LastReport()) {
+		t.Fatalf("inactive A2A ports changed report: first=%+v second=%+v",
+			first.LastReport(), second.LastReport())
 	}
 }
 
@@ -491,5 +544,140 @@ func TestProbe_RejectsNonMCP(t *testing.T) {
 	}
 	if len(targets) != 0 {
 		t.Errorf("expected 0 targets (vLLM-shaped body), got %d", len(targets))
+	}
+}
+
+func TestScan_ProtocolProbeOutcomeAccounting(t *testing.T) {
+	negative := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer negative.Close()
+	unknown := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer unknown.Close()
+	concealed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer concealed.Close()
+
+	t.Run("all definitive negatives are complete", func(t *testing.T) {
+		s := &Scanner{Mode: ModeMCP, MCPPorts: []int{portOf(t, negative)}}
+		if _, err := s.Scan(context.Background(), "127.0.0.1"); err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+		report := s.LastReport()
+		if report.State() != ingest.OutcomeComplete ||
+			report.Total != 1 || report.Conclusive != 1 || report.Unknown() != 0 {
+			t.Fatalf("negative report = %+v, want complete 1/1", report)
+		}
+	})
+
+	t.Run("mixed definitive and unknown is partial", func(t *testing.T) {
+		s := &Scanner{
+			Mode:     ModeMCP,
+			MCPPorts: []int{portOf(t, negative), portOf(t, unknown)},
+		}
+		if _, err := s.Scan(context.Background(), "127.0.0.1"); err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+		report := s.LastReport()
+		if report.State() != ingest.OutcomePartial ||
+			report.Total != 2 || report.Conclusive != 1 || report.Unknown() != 1 {
+			t.Fatalf("mixed report = %+v, want partial 2/1", report)
+		}
+	})
+
+	t.Run("nothing conclusive is failed", func(t *testing.T) {
+		s := &Scanner{Mode: ModeMCP, MCPPorts: []int{portOf(t, unknown)}}
+		if _, err := s.Scan(context.Background(), "127.0.0.1"); err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+		report := s.LastReport()
+		if report.State() != ingest.OutcomeFailed ||
+			report.Total != 1 || report.Conclusive != 0 || report.Unknown() != 1 {
+			t.Fatalf("unknown-only report = %+v, want failed 1/0", report)
+		}
+	})
+
+	t.Run("bare 404 is unknown", func(t *testing.T) {
+		s := &Scanner{Mode: ModeMCP, MCPPorts: []int{portOf(t, concealed)}}
+		if _, err := s.Scan(context.Background(), "127.0.0.1"); err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+		report := s.LastReport()
+		if report.State() != ingest.OutcomeFailed ||
+			report.Total != 1 || report.Conclusive != 0 || report.Unknown() != 1 {
+			t.Fatalf("concealed report = %+v, want failed 1/0", report)
+		}
+	})
+
+	t.Run("connection refused is a definitive negative", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		tcpAddress, ok := listener.Addr().(*net.TCPAddr)
+		if !ok {
+			t.Fatalf("listener address %T is not TCP", listener.Addr())
+		}
+		port := tcpAddress.Port
+		if err := listener.Close(); err != nil {
+			t.Fatalf("close listener: %v", err)
+		}
+		s := &Scanner{Mode: ModeMCP, MCPPorts: []int{port}}
+		if _, err := s.Scan(context.Background(), "127.0.0.1"); err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+		report := s.LastReport()
+		if report.State() != ingest.OutcomeComplete ||
+			report.Total != 1 || report.Conclusive != 1 {
+			t.Fatalf("refused report = %+v, want complete 1/1", report)
+		}
+	})
+
+	t.Run("zero probes is failed", func(t *testing.T) {
+		s := &Scanner{Mode: Mode(99)}
+		if _, err := s.Scan(context.Background(), "127.0.0.1"); err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+		if report := s.LastReport(); report.State() != ingest.OutcomeFailed ||
+			report.Total != 0 {
+			t.Fatalf("zero-probe report = %+v, want failed", report)
+		}
+	})
+}
+
+func TestProtocolProbeClassifiers(t *testing.T) {
+	for _, tt := range []struct {
+		status int
+		want   probeDisposition
+	}{
+		{status: http.StatusOK, want: probePositive},
+		{status: http.StatusNotFound, want: probeUnknown},
+		{status: http.StatusMethodNotAllowed, want: probeUnknown},
+		{status: http.StatusFound, want: probeUnknown},
+		{status: http.StatusBadRequest, want: probeUnknown},
+		{status: http.StatusUnauthorized, want: probeUnknown},
+		{status: http.StatusForbidden, want: probeUnknown},
+		{status: http.StatusProxyAuthRequired, want: probeUnknown},
+		{status: http.StatusServiceUnavailable, want: probeUnknown},
+	} {
+		if got := classifyHTTPProbeStatus(tt.status); got != tt.want {
+			t.Errorf("status %d disposition = %v, want %v", tt.status, got, tt.want)
+		}
+	}
+	if got := classifyProbeError(syscall.ECONNREFUSED); got != probeNegative {
+		t.Errorf("connection-refused disposition = %v, want negative", got)
+	}
+	if got := classifyProbeError(context.DeadlineExceeded); got != probeUnknown {
+		t.Errorf("timeout disposition = %v, want unknown", got)
+	}
+	if _, err := readProbeBody(strings.NewReader(strings.Repeat("x", (1<<20)+1))); err == nil {
+		t.Fatal("oversized body was accepted")
+	}
+	if _, err := readProbeBody(failingReader{}); err == nil {
+		t.Fatal("incomplete body was accepted")
 	}
 }

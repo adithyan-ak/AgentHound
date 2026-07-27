@@ -260,11 +260,38 @@ By default network-mode `scan` prints a one-line summary (`N host(s) with at lea
 
 Every registered fingerprinter runs once against every open endpoint. Port
 mappings prioritize likely candidates but are not eligibility gates, so a real
-service on a custom port remains discoverable. A complete response that fails
-its matcher is a definitive no-match. Transport/TLS/timeouts, redirects,
-authentication challenges, transient statuses, incomplete or oversized bodies,
-and matcher runtime failures are indeterminate and make fingerprint coverage
-partial, preventing lifecycle reconciliation from deleting prior service facts.
+service on a custom port remains discoverable. TCP connect success and explicit
+connection refusal are conclusive; timeout, DNS, reset, panic, cancellation,
+and unstarted TCP probes are unknown. For HTTP fingerprinting, a complete
+2xx response that fails its matcher or explicit connection refusal is a
+definitive no-match. Bare 404/405 responses are unknown because an access
+gateway can conceal a protected route and a method rejection does not prove
+the service is absent. TLS/timeouts and other transport failures, redirects,
+authentication challenges, other non-2xx statuses, incomplete or oversized
+bodies, and matcher runtime failures are also unknown.
+
+Each port-scan, fingerprint, and protocol-discovery outcome is `complete` only
+when every scheduled probe is conclusive, `partial` when conclusive and unknown
+results are mixed, and `failed` when nothing is conclusive. Fingerprinting is
+`not_applicable` when the conclusive TCP sweep found no open endpoint. An open
+endpoint with no registered fingerprinter is a failed zero-probe condition.
+Confirmed service nodes remain in the artifact in partial runs, while the
+coverage warning prevents unchecked services from being presented as absent.
+
+Network `scan` and `discover` bind lifecycle ownership to a versioned probe
+contract recorded as `meta.extra.probe_contract` plus
+`meta.extra.probe_contract_digest`. The contract hashes the exact sorted,
+deduplicated logical target set expanded for scheduling; a changed `@file`
+therefore creates a different owner even when its path is unchanged, while
+reordered or repeated entries do not. Hostnames remain logical hostnames and
+are not replaced by unstable DNS results. Network fingerprint contracts also
+include the scheduled ports, the exact dispatched module ID/target/version set,
+and only the fingerprint/native-detector semantic hashes those candidates
+execute. Protocol discovery contracts include only active protocols and their
+scheduled ports, so an A2A port flag cannot change an MCP-only contract. A
+complete result may retire earlier observations only for this exact contract; a
+different target, port, protocol, candidate, or executed detection surface
+cannot prove them absent.
 
 #### Shared Flags
 
@@ -336,6 +363,15 @@ agenthound scan --output - | agenthound-server ingest -
 ### `agenthound discover`
 
 Protocol-shape probes against a network to discover MCP servers (JSON-RPC initialize) and A2A agents (well-known agent-card). Unlike `scan` which fingerprints fixed AI-service ports, `discover` issues protocol-specific HTTP probes against likely web ports.
+
+Discovery preserves every positive MCP/A2A match while recording truthful
+coverage. A complete non-matching 2xx protocol response and explicit connection
+refusal are conclusive negatives. Bare 404/405 responses, authentication
+blocks, redirects, other non-2xx statuses, TLS/timeouts and other transport
+failures, and incomplete or oversized responses are unknown. Mixed scans are
+marked `partial`; an all-unknown or zero-probe run is `failed`. The artifact is
+still written and the CLI prints a coverage warning so retained positives can
+be ingested without treating unchecked endpoints as absent.
 
 ```
 agenthound discover <cidr|host|@file> [flags]

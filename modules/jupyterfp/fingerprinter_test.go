@@ -116,6 +116,46 @@ func TestFingerprintRequiresPublicAPICandidate(t *testing.T) {
 	}
 }
 
+func TestFingerprintConnectionRefusedIsDefinitiveNoMatch(t *testing.T) {
+	fingerprinter, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	result, err := fingerprinter.Fingerprint(context.Background(), action.Target{
+		Kind: "host", Address: "127.0.0.1:1",
+	})
+	if err != nil {
+		t.Fatalf("connection refusal should be a definitive no-match: %v", err)
+	}
+	if result.Matched {
+		t.Fatal("connection refusal matched Jupyter")
+	}
+}
+
+func TestIndeterminateHTTPStatus(t *testing.T) {
+	for _, tt := range []struct {
+		status             int
+		allowAuthChallenge bool
+		wantErr            bool
+	}{
+		{status: http.StatusOK},
+		{status: http.StatusNotFound, wantErr: true},
+		{status: http.StatusMethodNotAllowed, wantErr: true},
+		{status: http.StatusUnauthorized, wantErr: true},
+		{status: http.StatusUnauthorized, allowAuthChallenge: true},
+		{status: http.StatusForbidden, allowAuthChallenge: true},
+		{status: http.StatusBadRequest, wantErr: true},
+		{status: http.StatusFound, wantErr: true},
+		{status: http.StatusServiceUnavailable, wantErr: true},
+	} {
+		err := indeterminateHTTPStatus(tt.status, tt.allowAuthChallenge)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("status %d allow-auth=%v err=%v, wantErr=%v",
+				tt.status, tt.allowAuthChallenge, err, tt.wantErr)
+		}
+	}
+}
+
 func TestFingerprintStatusDecision(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -125,6 +165,7 @@ func TestFingerprintStatusDecision(t *testing.T) {
 		wantMatch        bool
 		wantStatusAccess string
 		wantAnonymous    bool
+		wantErr          bool
 	}{
 		{
 			name:             "canonical anonymous success",
@@ -156,6 +197,7 @@ func TestFingerprintStatusDecision(t *testing.T) {
 			status:      http.StatusNotFound,
 			contentType: "text/plain",
 			body:        "not found",
+			wantErr:     true,
 		},
 		{
 			name:        "malformed status",
@@ -181,7 +223,23 @@ func TestFingerprintStatusDecision(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			res := fingerprintTarget(t, srv)
+			fingerprinter, err := New()
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			res, err := fingerprinter.Fingerprint(context.Background(), action.Target{
+				Kind:    "host",
+				Address: strings.TrimPrefix(srv.URL, "http://"),
+			})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("concealed status route must remain indeterminate")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Fingerprint: %v", err)
+			}
 			if res.Matched != tt.wantMatch {
 				t.Fatalf("Matched = %v, want %v", res.Matched, tt.wantMatch)
 			}
@@ -372,7 +430,7 @@ func TestValidateBundleOverrideRequiresExactNodeKindTuple(t *testing.T) {
 	}
 }
 
-func TestFingerprintExcludesKernelGatewayCollision(t *testing.T) {
+func TestFingerprintKernelGatewayCollisionWithMissingStatusIsIndeterminate(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api":
@@ -386,8 +444,16 @@ func TestFingerprintExcludesKernelGatewayCollision(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if res := fingerprintTarget(t, srv); res.Matched {
-		t.Fatal("Kernel Gateway public /api collision was identified as JupyterServer")
+	fingerprinter, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = fingerprinter.Fingerprint(context.Background(), action.Target{
+		Kind:    "host",
+		Address: strings.TrimPrefix(srv.URL, "http://"),
+	})
+	if err == nil {
+		t.Fatal("missing status route must not become authoritative absence")
 	}
 }
 

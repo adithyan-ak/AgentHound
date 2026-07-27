@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
 // DefaultPorts is the default AI-service port set. Order does not matter;
@@ -88,6 +90,43 @@ type Scanner struct {
 	// once at the end, so implementations may render directly without
 	// locking. nil disables progress reporting (the default).
 	Progress func(done, total int)
+
+	reportMu sync.RWMutex
+	report   ProbeReport
+}
+
+// ProbeReport records bounded TCP coverage from the most recent Scan.
+// Conclusive includes successful connects and explicit connection refusals.
+// All other failures, panics, and unstarted probes remain indeterminate.
+type ProbeReport struct {
+	Total      int
+	Conclusive int
+	Targets    TargetSetIdentity
+	Ports      []int
+}
+
+func (r ProbeReport) State() ingest.OutcomeState {
+	return ingest.ProbeOutcomeState(r.Total, r.Conclusive)
+}
+
+func (r ProbeReport) Unknown() int {
+	return max(0, r.Total-r.Conclusive)
+}
+
+// LastReport returns the immutable coverage counts from the most recent Scan.
+func (s *Scanner) LastReport() ProbeReport {
+	s.reportMu.RLock()
+	defer s.reportMu.RUnlock()
+	report := s.report
+	report.Ports = append([]int(nil), s.report.Ports...)
+	return report
+}
+
+func (s *Scanner) setReport(report ProbeReport) {
+	s.reportMu.Lock()
+	report.Ports = append([]int(nil), report.Ports...)
+	s.report = report
+	s.reportMu.Unlock()
 }
 
 // hostResult aggregates open ports for a single host with mutex-protected
@@ -108,11 +147,14 @@ func (h *hostResult) appendPort(p int) {
 // parallel via a fixed-size worker pool. Hosts with no open ports are
 // dropped; hosts with at least one open port produce one Target.
 //
-// Returns the targets and a non-nil error only if the expansion itself
-// failed. Probe failures (connection refused, timeout) are normal and
-// silent. Context cancellation returns a partial result plus
-// context.Canceled so the operator's --output can still be written.
+// Returns the targets and a non-nil error only if expansion failed or the
+// context was canceled. Individual probe failures remain silent, while
+// LastReport distinguishes explicit refusal (conclusive closed) from timeout,
+// DNS, reset, panic, and unstarted probes (unknown). Context cancellation
+// returns the retained partial result plus context.Canceled so the operator's
+// output can still be written.
 func (s *Scanner) Scan(ctx context.Context, cidr string) ([]action.Target, error) {
+	s.setReport(ProbeReport{})
 	hosts, err := Expand(cidr, s.ExpandOpts)
 	if err != nil {
 		return nil, fmt.Errorf("expand %q: %w", cidr, err)
@@ -122,6 +164,8 @@ func (s *Scanner) Scan(ctx context.Context, cidr string) ([]action.Target, error
 	if len(ports) == 0 {
 		ports = DefaultPorts
 	}
+	ports = append([]int(nil), ports...)
+	targetSet := LogicalTargetSetIdentity(hosts)
 
 	concurrency := s.Concurrency
 	if concurrency <= 0 {
@@ -157,6 +201,7 @@ func (s *Scanner) Scan(ctx context.Context, cidr string) ([]action.Target, error
 	// contends with the worker pool. Guarded so a nil Progress costs nothing.
 	total := len(hosts) * len(ports)
 	var completed atomic.Int64
+	var conclusive atomic.Int64
 	var stopReporter, reporterDone chan struct{}
 	if s.Progress != nil && total > 0 {
 		stopReporter = make(chan struct{})
@@ -182,7 +227,9 @@ func (s *Scanner) Scan(ctx context.Context, cidr string) ([]action.Target, error
 		go func() {
 			defer wg.Done()
 			for t := range tasks {
-				probe(ctx, d, t.host, t.port, timeout, results[t.host])
+				if probe(ctx, d, t.host, t.port, timeout, results[t.host]) {
+					conclusive.Add(1)
+				}
 				completed.Add(1)
 			}
 		}()
@@ -221,6 +268,12 @@ producer:
 		}
 		out = append(out, hostResultToTarget(host, r.openPorts, ports))
 	}
+	s.setReport(ProbeReport{
+		Total:      total,
+		Conclusive: int(conclusive.Load()),
+		Targets:    targetSet,
+		Ports:      ports,
+	})
 
 	if cancelled {
 		return out, ctx.Err()
@@ -236,10 +289,18 @@ producer:
 // Wrapped in defer recover() so a misbehaving dialer can't crash the
 // worker pool — the surrounding Scan call should still return useful
 // partial results.
-func probe(ctx context.Context, d dialer, host string, port int, timeout time.Duration, r *hostResult) {
+func probe(
+	ctx context.Context,
+	d dialer,
+	host string,
+	port int,
+	timeout time.Duration,
+	r *hostResult,
+) (conclusive bool) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			slog.Error("scanner probe panicked", "host", host, "port", port, "panic", rec)
+			conclusive = false
 		}
 	}()
 
@@ -248,10 +309,11 @@ func probe(ctx context.Context, d dialer, host string, port int, timeout time.Du
 	address := net.JoinHostPort(host, strconv.Itoa(port))
 	conn, err := d.DialContext(dialCtx, "tcp", address)
 	if err != nil {
-		return
+		return common.IsConnectionRefused(err)
 	}
 	_ = conn.Close()
 	r.appendPort(port)
+	return true
 }
 
 // hostResultToTarget assembles the final Target per host. The

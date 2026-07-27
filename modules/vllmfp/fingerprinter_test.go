@@ -83,15 +83,12 @@ func TestFingerprint_NotVLLM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	res, err := f.Fingerprint(context.Background(), action.Target{
+	_, err = f.Fingerprint(context.Background(), action.Target{
 		Kind:    "host",
 		Address: strings.TrimPrefix(srv.URL, "http://"),
 	})
-	if err != nil {
-		t.Fatalf("Fingerprint err = %v", err)
-	}
-	if res.Matched {
-		t.Error("expected no match for a generic OpenAI-compatible service")
+	if err == nil {
+		t.Fatal("concealed version route must remain indeterminate")
 	}
 }
 
@@ -113,26 +110,26 @@ func TestFingerprint_LiteLLMNearMiss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	res, err := f.Fingerprint(context.Background(), action.Target{Kind: "host", Address: strings.TrimPrefix(srv.URL, "http://")})
-	if err != nil {
-		t.Fatalf("Fingerprint: %v", err)
-	}
-	if res.Matched {
-		t.Fatal("LiteLLM-compatible OpenAI routes were misclassified as vLLM")
+	_, err = f.Fingerprint(context.Background(), action.Target{Kind: "host", Address: strings.TrimPrefix(srv.URL, "http://")})
+	if err == nil {
+		t.Fatal("concealed version route must remain indeterminate")
 	}
 }
 
-func TestFingerprint_NetworkError(t *testing.T) {
+func TestFingerprint_ConnectionRefused(t *testing.T) {
 	f, err := New()
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	_, err = f.Fingerprint(context.Background(), action.Target{
+	result, err := f.Fingerprint(context.Background(), action.Target{
 		Kind:    "host",
 		Address: "127.0.0.1:1",
 	})
-	if err == nil {
-		t.Fatal("closed-port transport failure must be operationally indeterminate")
+	if err != nil {
+		t.Fatalf("connection refusal should be a definitive no-match: %v", err)
+	}
+	if result.Matched {
+		t.Fatal("connection refusal matched vLLM")
 	}
 }
 
