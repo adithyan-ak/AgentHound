@@ -22,22 +22,42 @@ func completeRemoteIngestResult(scanID string) ingest.IngestResult {
 		NodeCounts: map[string]int64{},
 		EdgeCounts: map[string]int64{},
 	}
+	coverageKey := ingest.CanonicalCoverageKey(
+		"config",
+		"remote-ingest-test",
+		"/workspace/project",
+	)
+	revision := int64(1)
 	return ingest.IngestResult{
 		ScanID:              scanID,
 		Outcome:             ingest.OutcomeComplete,
 		ProjectionStatus:    "complete",
+		Submitted:           ingest.FactCounts{},
+		WriteRows:           ingest.FactCounts{},
+		Findings:            0,
 		GraphTotals:         ingest.FrozenGraphTotals{Before: emptyTotals, After: emptyTotals},
 		NormalizationStatus: ingest.NormalizationStatusComplete,
-		Collection:          ingest.CollectionReport{State: ingest.OutcomeComplete},
+		Collection: ingest.CollectionReport{
+			State:        ingest.OutcomeComplete,
+			CoverageKeys: []string{coverageKey},
+			Outcomes: []ingest.CollectionOutcome{{
+				Collector:   "config",
+				CoverageKey: coverageKey,
+				Target:      "/workspace/project",
+				Method:      "remote_ingest_test",
+				State:       ingest.OutcomeComplete,
+			}},
+		},
 		Identity: ingest.IngestIdentityResult{
-			CollectionPointID: "sha256:test-collection-point",
-			NetworkContextID:  "sha256:test-network-context",
+			CollectionPointID: "sha256:" + strings.Repeat("a", 64),
+			NetworkContextID:  "sha256:" + strings.Repeat("b", 64),
 			Quality:           ingest.IdentityQualityStrong,
 			NetworkQuality:    ingest.IdentityQualityStrong,
 			NetworkClass:      ingest.NetworkClassPrivate,
 			Recognition:       "new",
 		},
-		Duration: time.Millisecond,
+		PublishedRevision: &revision,
+		Duration:          time.Millisecond,
 	}
 }
 
@@ -205,9 +225,14 @@ func TestRunScan_RemoteIngestRejectsUncorrelatedReceiptBeforeSuccessOutput(t *te
 	tests := []struct {
 		name           string
 		responseScanID string
+		want           string
 	}{
-		{name: "different scan", responseScanID: "different-scan"},
-		{name: "missing scan"},
+		{
+			name:           "different scan",
+			responseScanID: "different-scan",
+			want:           "does not match submitted scan_id",
+		},
+		{name: "missing scan", want: "scan_id must not be empty"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -229,8 +254,8 @@ func TestRunScan_RemoteIngestRejectsUncorrelatedReceiptBeforeSuccessOutput(t *te
 			mustSetFlag(t, cmd, "ingest", server.URL)
 
 			err := runScan(cmd, nil)
-			if err == nil || !strings.Contains(err.Error(), "does not match submitted scan_id") {
-				t.Fatalf("error = %v, want scan correlation failure", err)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want error containing %q", err, test.want)
 			}
 			if strings.Contains(stdout.String(), "Ingest complete") {
 				t.Fatalf("uncorrelated receipt reported success:\n%s", stdout.String())
@@ -292,26 +317,25 @@ func TestWriteRemoteIngestResult_LimitedCoverageRemainsSuccessful(t *testing.T) 
 		"/workspace/project",
 	)
 	contract := ingest.CurrentInstructionRegistryContract()
-	result := &ingest.IngestResult{
-		ScanID:            "scan-limited",
-		Outcome:           ingest.OutcomeComplete,
-		ProjectionStatus:  "complete",
-		PublishedRevision: &revision,
-		Collection: ingest.CollectionReport{
-			State:        ingest.OutcomeTruncated,
-			CoverageKeys: []string{root},
-			AuthoritativeRoots: []ingest.CoverageRoot{{
-				CoverageKey:      root,
-				RegistryContract: &contract,
-			}},
-			Outcomes: []ingest.CollectionOutcome{{
-				Collector:   "config",
-				CoverageKey: root,
-				Method:      ingest.InstructionMethodExactProject,
-				State:       ingest.OutcomeTruncated,
-			}},
-		},
+	limited := completeRemoteIngestResult("scan-limited")
+	limited.PublishedRevision = &revision
+	limited.Collection = ingest.CollectionReport{
+		State:        ingest.OutcomeTruncated,
+		CoverageKeys: []string{root},
+		AuthoritativeRoots: []ingest.CoverageRoot{{
+			CoverageKey:       root,
+			ChildCoverageKeys: []string{},
+			RegistryContract:  &contract,
+		}},
+		Outcomes: []ingest.CollectionOutcome{{
+			Collector:   "config",
+			CoverageKey: root,
+			Target:      "/workspace/project",
+			Method:      ingest.InstructionMethodExactProject,
+			State:       ingest.OutcomeTruncated,
+		}},
 	}
+	result := &limited
 	receipt := &remoteIngestReceipt{result: result}
 
 	var output bytes.Buffer
@@ -350,12 +374,12 @@ func TestPostRemoteIngest_RejectsRedirect(t *testing.T) {
 }
 
 func TestWriteRemoteIngestResult_JSONAndIncompleteValidation(t *testing.T) {
-	result := &ingest.IngestResult{
-		ScanID:           "scan-partial",
-		Outcome:          ingest.OutcomePartial,
-		ProjectionStatus: "incomplete",
-		Findings:         3,
-	}
+	incomplete := completeRemoteIngestResult("scan-partial")
+	incomplete.Outcome = ingest.OutcomePartial
+	incomplete.ProjectionStatus = "incomplete"
+	incomplete.Findings = 3
+	incomplete.PublishedRevision = nil
+	result := &incomplete
 	raw, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
@@ -378,6 +402,307 @@ func TestWriteRemoteIngestResult_JSONAndIncompleteValidation(t *testing.T) {
 	if err := validateRemoteIngestResult(result); err == nil {
 		t.Fatal("incomplete projection returned success")
 	}
+}
+
+func TestDecodeRemoteIngestResult_RejectsMalformedV1Receipts(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+		want   string
+	}{
+		{
+			name: "missing coverage keys",
+			mutate: func(document map[string]any) {
+				delete(remoteDocumentObject(document, "collection"), "coverage_keys")
+			},
+			want: "collection.coverage_keys",
+		},
+		{
+			name: "null coverage keys",
+			mutate: func(document map[string]any) {
+				remoteDocumentObject(document, "collection")["coverage_keys"] = nil
+			},
+			want: "collection.coverage_keys",
+		},
+		{
+			name: "empty coverage keys",
+			mutate: func(document map[string]any) {
+				remoteDocumentObject(document, "collection")["coverage_keys"] = []any{}
+			},
+			want: "coverage_keys must be a nonempty array",
+		},
+		{
+			name: "missing outcomes",
+			mutate: func(document map[string]any) {
+				delete(remoteDocumentObject(document, "collection"), "outcomes")
+			},
+			want: "collection.outcomes",
+		},
+		{
+			name: "null outcomes",
+			mutate: func(document map[string]any) {
+				remoteDocumentObject(document, "collection")["outcomes"] = nil
+			},
+			want: "collection.outcomes",
+		},
+		{
+			name: "empty outcomes",
+			mutate: func(document map[string]any) {
+				remoteDocumentObject(document, "collection")["outcomes"] = []any{}
+			},
+			want: "outcomes must be a nonempty array",
+		},
+		{
+			name: "noncanonical coverage key",
+			mutate: func(document map[string]any) {
+				remoteDocumentObject(document, "collection")["coverage_keys"] =
+					[]any{"config:target:sha256:not-a-digest"}
+			},
+			want: "coverage_keys[0] is not canonical",
+		},
+		{
+			name: "duplicate coverage key",
+			mutate: func(document map[string]any) {
+				collection := remoteDocumentObject(document, "collection")
+				key := remoteDocumentArray(collection, "coverage_keys")[0]
+				collection["coverage_keys"] = []any{key, key}
+			},
+			want: "coverage_keys[1] duplicates",
+		},
+		{
+			name: "outcome key not declared",
+			mutate: func(document map[string]any) {
+				collection := remoteDocumentObject(document, "collection")
+				outcome := remoteDocumentArray(collection, "outcomes")[0]
+				remoteDocumentValueObject(outcome)["coverage_key"] =
+					ingest.CanonicalCoverageKey("config", "other", "/other")
+			},
+			want: "coverage_key is not declared",
+		},
+		{
+			name: "invalid collection enum",
+			mutate: func(document map[string]any) {
+				remoteDocumentObject(document, "collection")["state"] = "clean"
+			},
+			want: "collection.state",
+		},
+		{
+			name: "invalid outcome enum",
+			mutate: func(document map[string]any) {
+				collection := remoteDocumentObject(document, "collection")
+				outcome := remoteDocumentArray(collection, "outcomes")[0]
+				remoteDocumentValueObject(outcome)["state"] = "clean"
+			},
+			want: "collection.outcomes[0].state",
+		},
+		{
+			name: "invalid projection enum",
+			mutate: func(document map[string]any) {
+				document["projection_status"] = "published"
+			},
+			want: "projection_status",
+		},
+		{
+			name: "invalid normalization enum",
+			mutate: func(document map[string]any) {
+				document["normalization_status"] = "ok"
+			},
+			want: "normalization_status",
+		},
+		{
+			name: "invalid identity hash",
+			mutate: func(document map[string]any) {
+				remoteDocumentObject(document, "identity")["collection_point_id"] =
+					"sha256:not-a-digest"
+			},
+			want: "identity.collection_point_id",
+		},
+		{
+			name: "invalid identity enum",
+			mutate: func(document map[string]any) {
+				remoteDocumentObject(document, "identity")["recognition"] = "trusted"
+			},
+			want: "identity.recognition",
+		},
+		{
+			name: "incomplete graph totals",
+			mutate: func(document map[string]any) {
+				graphTotals := remoteDocumentObject(document, "graph_totals")
+				before := remoteDocumentValueObject(graphTotals["before"])
+				delete(before, "total_nodes")
+			},
+			want: "graph_totals.before.total_nodes",
+		},
+		{
+			name: "negative submitted count",
+			mutate: func(document map[string]any) {
+				remoteDocumentObject(document, "submitted")["nodes"] = -1
+			},
+			want: "submitted counts must be non-negative",
+		},
+		{
+			name: "negative written count",
+			mutate: func(document map[string]any) {
+				remoteDocumentObject(document, "write_rows")["edges"] = -1
+			},
+			want: "write_rows counts must be non-negative",
+		},
+		{
+			name: "negative finding count",
+			mutate: func(document map[string]any) {
+				document["findings"] = -1
+			},
+			want: "findings must be non-negative",
+		},
+		{
+			name: "negative graph count",
+			mutate: func(document map[string]any) {
+				graphTotals := remoteDocumentObject(document, "graph_totals")
+				remoteDocumentValueObject(graphTotals["after"])["total_edges"] = -1
+			},
+			want: "graph_totals.after totals must be non-negative",
+		},
+		{
+			name: "null successful snapshot",
+			mutate: func(document map[string]any) {
+				remoteDocumentObject(document, "graph_totals")["after"] = nil
+			},
+			want: "complete projection requires before and after graph totals",
+		},
+		{
+			name: "missing published revision",
+			mutate: func(document map[string]any) {
+				delete(document, "published_revision")
+			},
+			want: "complete projection requires published_revision",
+		},
+		{
+			name: "zero published revision",
+			mutate: func(document map[string]any) {
+				document["published_revision"] = 0
+			},
+			want: "published_revision must be at least 1",
+		},
+		{
+			name: "unknown field",
+			mutate: func(document map[string]any) {
+				document["legacy_success"] = true
+			},
+			want: "unknown field",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			document := remoteIngestResultDocument(
+				t,
+				completeRemoteIngestResult("scan-strict-v1"),
+			)
+			test.mutate(document)
+			body, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = decodeRemoteIngestResult(body)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("decode error = %v, want error containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestDecodeRemoteIngestResult_AcceptsPublishedLimitedCollections(t *testing.T) {
+	for _, state := range []ingest.OutcomeState{
+		ingest.OutcomePartial,
+		ingest.OutcomeFailed,
+		ingest.OutcomeTruncated,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			result := completeRemoteIngestResult("scan-limited-" + string(state))
+			result.Collection.State = state
+			result.Collection.Outcomes[0].State = state
+			body, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := decodeRemoteIngestResult(body)
+			if err != nil {
+				t.Fatalf("decode published %s collection: %v", state, err)
+			}
+			if !remoteIngestComplete(decoded) {
+				t.Fatalf("published %s collection was not successful", state)
+			}
+			if !remoteResultCoverageLimited(decoded) {
+				t.Fatalf("published %s collection lost its coverage warning", state)
+			}
+		})
+	}
+}
+
+func TestRunScan_RemoteIngestRejectsMalformedReceiptBeforeSuccessOutput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var artifact ingest.IngestData
+		if err := json.NewDecoder(r.Body).Decode(&artifact); err != nil {
+			t.Errorf("decode artifact: %v", err)
+		}
+		result := completeRemoteIngestResult(artifact.Meta.ScanID)
+		result.Identity.CollectionPointID = "sha256:not-a-digest"
+		_ = json.NewEncoder(w).Encode(result)
+	}))
+	defer server.Close()
+
+	cmd := newScanCmdForTest()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(io.Discard)
+	mustSetFlag(t, cmd, "config", "true")
+	mustSetFlag(t, cmd, "path", writeEmptyConfig(t))
+	mustSetFlag(t, cmd, "scan-output", filepath.Join(t.TempDir(), "backup.json"))
+	mustSetFlag(t, cmd, "ingest", server.URL)
+
+	err := runScan(cmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "identity.collection_point_id") {
+		t.Fatalf("runScan error = %v, want malformed receipt rejection", err)
+	}
+	if strings.Contains(stdout.String(), "Ingest complete") {
+		t.Fatalf("malformed receipt reported success:\n%s", stdout.String())
+	}
+}
+
+func remoteIngestResultDocument(
+	t *testing.T,
+	result ingest.IngestResult,
+) map[string]any {
+	t.Helper()
+	body, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(body, &document); err != nil {
+		t.Fatal(err)
+	}
+	return document
+}
+
+func remoteDocumentObject(document map[string]any, field string) map[string]any {
+	return remoteDocumentValueObject(document[field])
+}
+
+func remoteDocumentValueObject(value any) map[string]any {
+	object, ok := value.(map[string]any)
+	if !ok {
+		panic(fmt.Sprintf("test document value has type %T, want object", value))
+	}
+	return object
+}
+
+func remoteDocumentArray(document map[string]any, field string) []any {
+	array, ok := document[field].([]any)
+	if !ok {
+		panic(fmt.Sprintf("test document field %q has type %T, want array", field, document[field]))
+	}
+	return array
 }
 
 func TestRunScan_RemoteIngestFlagValidation(t *testing.T) {

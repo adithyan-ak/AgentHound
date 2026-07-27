@@ -1235,6 +1235,7 @@ components:
 
     NormalizationWarning:
       type: object
+      additionalProperties: false
       required: [code, status, message, publication_unsafe]
       properties:
         code:
@@ -1266,10 +1267,10 @@ components:
       properties:
         node_counts:
           type: object
-          additionalProperties: { type: integer, format: int64 }
+          additionalProperties: { type: integer, format: int64, minimum: 0 }
         edge_counts:
           type: object
-          additionalProperties: { type: integer, format: int64 }
+          additionalProperties: { type: integer, format: int64, minimum: 0 }
         total_nodes: { type: integer, format: int64, minimum: 0 }
         total_edges: { type: integer, format: int64, minimum: 0 }
 
@@ -1299,6 +1300,7 @@ components:
           enum: [unknown, complete, partial, failed]
         projection_status:
           type: string
+          enum: [complete, incomplete]
         submitted:
           $ref: "#/components/schemas/FactCounts"
         write_rows:
@@ -1327,13 +1329,28 @@ components:
           type: array
           items:
             type: object
+            additionalProperties: false
+            required: [processor_name, edges_created, nodes_updated, duration]
             properties:
               processor_name:
+                type: string
+              edges_created:
+                type: integer
+                minimum: 0
+              nodes_updated:
+                type: integer
+                minimum: 0
+              duration:
+                type: integer
+                minimum: 0
+              error:
                 type: string
         stages:
           type: array
           items:
             type: object
+            additionalProperties: false
+            required: [name, state, required, duration]
             properties:
               name:
                 type: string
@@ -1348,8 +1365,10 @@ components:
         published_revision:
           type: integer
           format: int64
+          minimum: 1
         duration:
           type: integer
+          minimum: 0
           description: Duration in nanoseconds
 
     IngestIdentityResult:

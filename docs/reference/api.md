@@ -337,7 +337,7 @@ credential material.
     "after": { "node_counts": {}, "edge_counts": {}, "total_nodes": 47, "total_edges": 82 }
   },
   "stages": [
-    { "name": "write_nodes", "state": "complete", "required": true }
+    { "name": "write_nodes", "state": "complete", "required": true, "duration": 1200000 }
   ],
   "published_revision": 12,
   "warnings": [],

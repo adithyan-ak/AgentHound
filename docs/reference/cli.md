@@ -309,7 +309,10 @@ Concurrency precedence for local-mode `scan`: an explicit `--scan-concurrency` a
 `--ingest` preserves the normal JSON artifact before making the request. The
 default path is `./scan-<scan_id>.json`; use `--output <path>` to choose another
 backup path. `--output -` is incompatible because direct ingest requires a
-recoverable artifact. Redirects are not followed.
+recoverable artifact. Redirects are not followed. The collector validates the
+remote receipt against the exact V1 response contract before printing success;
+missing coverage, malformed identity or totals, invalid states, unknown fields,
+and non-positive publication revisions fail closed.
 
 Direct-ingest HTTP is supported only for the default loopback server or an
 endpoint already protected by an operator-controlled VPN/SSH tunnel. Use HTTPS
