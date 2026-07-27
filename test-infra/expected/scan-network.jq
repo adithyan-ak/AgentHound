@@ -1,4 +1,24 @@
-.meta.collection.state == "complete"
+.meta.collection.state == "partial"
+and .meta.collection.outcomes == [
+  {
+    collector:"scan",
+    coverage_key:.meta.collection.outcomes[0].coverage_key,
+    target:"10.20.30.0/24",
+    method:"port_scan",
+    state:"partial",
+    items:9,
+    error:"1659 of 1792 TCP probe(s) inconclusive"
+  },
+  {
+    collector:"scan",
+    coverage_key:.meta.collection.outcomes[1].coverage_key,
+    target:"10.20.30.0/24",
+    method:"fingerprint",
+    state:"partial",
+    items:18,
+    error:"54 of 72 probe(s) inconclusive (54 failed, 0 not started)"
+  }
+]
 and ([.graph.nodes[] | select(.kinds | index("AIService"))] | length) == 9
 and ([.graph.nodes[] | select(.kinds | index("OllamaInstance")) | .properties.endpoint])
   == ["http://10.20.30.10:11434"]

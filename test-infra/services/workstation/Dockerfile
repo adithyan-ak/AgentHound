@@ -14,6 +14,12 @@ RUN sed -i \
         jq \
     && rm -rf /var/lib/apt/lists/*
 
+# The production identity policy intentionally makes every authoritative fact
+# artifact-local when a collection point is weak. This disposable workstation
+# exercises cross-artifact Config -> MCP -> Looter joins, so give the fixture
+# its own deterministic OS identity instead of borrowing identity from the host.
+RUN printf '%s\n' '9f4c0ee2a24d4e11aee29e53b8118a37' >/etc/machine-id
+
 # Use the same exact official MCP reference package as the HTTP and SSE
 # targets. Config fixtures therefore launch a real stdio server, not printf or
 # another collector-shaped stand-in.
