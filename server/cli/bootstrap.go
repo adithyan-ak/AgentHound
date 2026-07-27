@@ -182,7 +182,7 @@ func resolveStorageBinding(
 	if postgres.Marker == nil || neo4j.Marker == nil {
 		if !postgres.ProductEmpty || !neo4j.ProductEmpty {
 			return binding.Marker{}, fmt.Errorf(
-				"nonempty legacy or crossed storage is not an ingest v5 database pair; refusing all mutation: back up the existing deployment, recreate both PostgreSQL and Neo4j volumes together, restart the server, and recollect with ingest v5",
+				"nonempty unbound or crossed storage is not an ingest v1 database pair; refusing all mutation: recreate both PostgreSQL and Neo4j volumes together, restart the server, and recollect with ingest v1",
 			)
 		}
 	}

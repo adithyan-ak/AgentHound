@@ -220,15 +220,14 @@ func (p *Poisoner) Revert(ctx context.Context, receipt action.Receipt) error {
 		return errors.New("instruction poison revert: receipt missing sentinel markers")
 	}
 	prePoisonHash, _ := r.Extra["pre_sha256"].(string)
-	// file_existed defaults to true for receipts written before this
-	// field existed — the safe choice, since the old behavior always
-	// left a file behind. We only remove on revert when we KNOW poison
-	// created the file.
-	fileExisted := true
-	if v, ok := r.Extra["file_existed"].(bool); ok {
-		fileExisted = v
+	fileExisted, ok := r.Extra["file_existed"].(bool)
+	if !ok {
+		return errors.New("instruction poison revert: receipt missing valid 'file_existed'")
 	}
-	origMode := parseMode(r.Extra["orig_mode"], 0o600)
+	origMode, ok := parseMode(r.Extra["orig_mode"])
+	if !ok {
+		return errors.New("instruction poison revert: receipt missing valid 'orig_mode'")
+	}
 
 	current, _, _, _, err := readFileBounded(path)
 	if err != nil {
@@ -338,22 +337,26 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 }
 
 // modeStr/parseMode persist a file mode through the receipt's JSON Extra
-// map as an octal string, sidestepping the float64 coercion JSON applies
-// to numeric values when a receipt is read back from disk for revert.
+// map as a canonical octal string. V1 receipts reject numeric or
+// non-canonical encodings instead of guessing at rollback metadata.
 func modeStr(m os.FileMode) string {
 	return fmt.Sprintf("%o", m.Perm())
 }
 
-func parseMode(v any, fallback os.FileMode) os.FileMode {
-	switch s := v.(type) {
-	case string:
-		if n, err := strconv.ParseUint(s, 8, 32); err == nil {
-			return os.FileMode(n).Perm()
-		}
-	case float64:
-		return os.FileMode(uint32(s)).Perm()
+func parseMode(v any) (os.FileMode, bool) {
+	s, ok := v.(string)
+	if !ok || s == "" {
+		return 0, false
 	}
-	return fallback
+	n, err := strconv.ParseUint(s, 8, 32)
+	if err != nil {
+		return 0, false
+	}
+	mode := os.FileMode(n).Perm()
+	if modeStr(mode) != s {
+		return 0, false
+	}
+	return mode, true
 }
 
 // stripBracket removes the sentinel-bracketed block. Symmetric with

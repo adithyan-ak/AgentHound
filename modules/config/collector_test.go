@@ -1101,8 +1101,8 @@ func TestConfigCollector_PreservesOrderedStdioIdentity(t *testing.T) {
 		t.Fatalf("ordered stdio definitions collapsed: %v", serverIDs)
 	}
 	for _, node := range findNodesByKind(result, "MCPServer") {
-		if node.Properties["id_scheme"] != ingest.MCPStdioIdentitySchemeV3 {
-			t.Fatalf("stdio identity scheme = %v, want v3", node.Properties["id_scheme"])
+		if node.Properties["id_scheme"] != ingest.MCPStdioIdentitySchemeV1 {
+			t.Fatalf("stdio identity scheme = %v, want V1", node.Properties["id_scheme"])
 		}
 		if _, exists := node.Properties["legacy_objectid"]; exists {
 			t.Fatalf("stdio server exposed removed legacy identity: %+v", node.Properties)

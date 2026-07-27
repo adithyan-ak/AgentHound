@@ -1,4 +1,4 @@
-# Open WebUI fingerprint rule (v3 response shape).
+# Open WebUI fingerprint rule.
 #
 # Open WebUI is the most-deployed self-hosted ChatGPT-style frontend. It speaks
 # to a backend Ollama (or any OpenAI-compatible API) and stores chat history,
@@ -8,12 +8,10 @@
 #
 # /api/version returns: {"version":"0.3.x"}.
 #
-# v3 change: the historic $.ollama.base_url capture on /api/config was
-# verified absent from Open WebUI's get_app_config response on every
-# tag from v0.1.111 through v0.9.6 (and main). The old capture was dead
-# and never emitted an EXPOSES edge in practice. It has been removed;
-# the backend URL is now captured by the openwebuiloot Looter via the
-# admin-gated /ollama/config endpoint (which does return OLLAMA_BASE_URLS).
+# $.ollama.base_url is absent from Open WebUI's get_app_config response on
+# every verified tag from v0.1.111 through v0.9.6 (and main). Backend URLs are
+# captured by the openwebuiloot Looter via the admin-gated /ollama/config
+# endpoint, which does return OLLAMA_BASE_URLS.
 #
 # The second probe is a public shape guard: /api/config is expected to return
 # {"name": "Open WebUI", ...} on every version. These public endpoints prove
@@ -21,7 +19,7 @@
 id: openwebui
 name: Open WebUI chat frontend
 description: 'Identifies Open WebUI from its version and application-config response shapes'
-version: 4
+version: 1
 service_kind: openwebui
 probes:
   - method: GET

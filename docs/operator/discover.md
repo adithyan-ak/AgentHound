@@ -54,7 +54,7 @@ ingest that output.
 ```json
 {
   "meta": {
-    "version": 5,
+    "version": 1,
     "type": "agenthound-ingest",
     "collector": "scan",
     "collector_version": "1.0.1",
@@ -96,8 +96,8 @@ ingest that output.
     "identity_schemes": [{
       "entity_kind": "MCPServer",
       "transport": "stdio",
-      "scheme": "mcp_stdio_v3_hashed_argv",
-      "version": 3
+      "scheme": "mcp_stdio_v1_hashed_argv",
+      "version": 1
     }],
     "extra": {
       "discover_spec": "10.0.0.0/24",

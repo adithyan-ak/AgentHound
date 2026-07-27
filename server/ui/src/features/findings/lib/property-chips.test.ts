@@ -30,6 +30,10 @@ describe("authentication property chips", () => {
       transport: "stdio",
       auth_method: "none",
       auth_evidence: "local_process",
+      effective_auth_method: "none",
+      effective_auth_assurance: "unknown",
+      effective_auth_evidence: "local_process",
+      effective_auth_source: "configured",
     });
 
     expect(chips).toContain("local-process");
@@ -45,6 +49,10 @@ describe("authentication property chips", () => {
       observed_auth_method: "none",
       observed_auth_assurance: "unauthenticated",
       observed_auth_evidence: "anonymous_probe_succeeded",
+      effective_auth_method: "none",
+      effective_auth_assurance: "unauthenticated",
+      effective_auth_evidence: "anonymous_probe_succeeded",
+      effective_auth_source: "observed",
     });
 
     expect(chips).toContain("no-auth");

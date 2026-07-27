@@ -21,9 +21,8 @@ const (
 )
 
 type remoteIngestReceipt struct {
-	result          *ingest.IngestResult
-	raw             []byte
-	findingsPresent bool
+	result *ingest.IngestResult
+	raw    []byte
 }
 
 func postRemoteIngest(
@@ -69,20 +68,91 @@ func postRemoteIngest(
 		return nil, remoteIngestHTTPError(resp.StatusCode, body)
 	}
 
+	result, err := decodeRemoteIngestResult(body)
+	if err != nil {
+		return nil, err
+	}
+	return &remoteIngestReceipt{
+		result: result,
+		raw:    body,
+	}, nil
+}
+
+func decodeRemoteIngestResult(body []byte) (*ingest.IngestResult, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, fmt.Errorf("decode ingest response: %w", err)
+	}
+	for _, field := range []string{
+		"scan_id",
+		"outcome",
+		"projection_status",
+		"submitted",
+		"write_rows",
+		"findings",
+		"graph_totals",
+		"normalization_status",
+		"collection",
+		"identity",
+		"duration",
+	} {
+		raw, exists := fields[field]
+		if !exists || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return nil, fmt.Errorf("decode ingest response: required field %q is missing or null", field)
+		}
+	}
+	nestedRequirements := []struct {
+		field    string
+		required []string
+	}{
+		{field: "submitted", required: []string{"nodes", "edges"}},
+		{field: "write_rows", required: []string{"nodes", "edges"}},
+		{field: "graph_totals", required: []string{"before", "after"}},
+		{field: "collection", required: []string{"state"}},
+		{field: "identity", required: []string{
+			"collection_point_id",
+			"network_context_id",
+			"quality",
+			"network_quality",
+			"network_class",
+			"recognition",
+		}},
+	}
+	for _, requirement := range nestedRequirements {
+		if err := requireRemoteIngestObjectFields(
+			fields[requirement.field],
+			requirement.field,
+			requirement.required,
+		); err != nil {
+			return nil, err
+		}
+	}
 	var result ingest.IngestResult
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("decode ingest response: %w", err)
 	}
+	return &result, nil
+}
+
+func requireRemoteIngestObjectFields(
+	raw json.RawMessage,
+	path string,
+	required []string,
+) error {
 	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(body, &fields); err != nil {
-		return nil, fmt.Errorf("decode ingest response fields: %w", err)
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return fmt.Errorf("decode ingest response: %s must be an object: %w", path, err)
 	}
-	_, findingsPresent := fields["findings"]
-	return &remoteIngestReceipt{
-		result:          &result,
-		raw:             body,
-		findingsPresent: findingsPresent,
-	}, nil
+	for _, field := range required {
+		value, exists := fields[field]
+		if !exists || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return fmt.Errorf(
+				"decode ingest response: required field %q is missing or null",
+				path+"."+field,
+			)
+		}
+	}
+	return nil
 }
 
 func resolveRemoteIngestEndpoint(serverURL string) (string, error) {
@@ -165,10 +235,7 @@ func writeRemoteIngestResult(
 	} else if remoteResultCoverageLimited(result) {
 		heading = "Ingest complete with coverage limitations"
 	}
-	findings := "unknown"
-	if receipt.findingsPresent {
-		findings = strconv.Itoa(result.Findings)
-	}
+	findings := strconv.Itoa(result.Findings)
 	if _, err := fmt.Fprintf(
 		w,
 		"%s:\n\n  Scan ID:   %s\n  Artifact:  %s\n  Nodes:     %d\n  Edges:     %d\n  Findings:  %s\n  Duration:  %s\n",

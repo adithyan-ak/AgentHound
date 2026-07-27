@@ -95,7 +95,7 @@ Located in `sdk/rules/builtin/fingerprints/*.yaml`. These define HTTP probes for
 id: ollama
 name: Ollama LLM inference server
 description: 'Identifies Ollama by GET /api/version'
-version: 2
+version: 1
 service_kind: ollama
 probes:
   - method: GET                        # GET or HEAD only (read-only contract)

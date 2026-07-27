@@ -448,15 +448,15 @@ func TestNodeLabelMutationIsCompatibilityGated(t *testing.T) {
 func TestPublicFactPropertiesStripsInternalFingerprintWithoutMutation(t *testing.T) {
 	properties := map[string]any{
 		"endpoint":                     "http://mcp.example/mcp",
-		"auth_observation_compat":      "pre_v1_raw_mcp",
+		"collector_note":               "observed",
 		observationFactFingerprintsKey: []string{"internal"},
 	}
 	public := PublicFactProperties(properties)
 	if public["endpoint"] != properties["endpoint"] {
 		t.Fatalf("public properties lost collector data: %#v", public)
 	}
-	if public["auth_observation_compat"] != "pre_v1_raw_mcp" {
-		t.Fatalf("public properties lost auth compatibility provenance: %#v", public)
+	if public["collector_note"] != "observed" {
+		t.Fatalf("public properties lost collector data: %#v", public)
 	}
 	if _, exists := public[observationFactFingerprintsKey]; exists {
 		t.Fatalf("internal fingerprint leaked through public properties: %#v", public)

@@ -13,7 +13,7 @@ import (
 // on export and both the collector (Validate) and the server re-correlation
 // reject any other value, so a witness produced by an incompatible build is
 // rejected rather than silently misinterpreted (stale-schema rejection).
-const WitnessSchemaVersion = 3
+const WitnessSchemaVersion = 1
 
 // WitnessTopologyNormalizationVersion identifies the deterministic concrete-kind
 // normalization used for the ordered current CAN_REACH evidence topology.

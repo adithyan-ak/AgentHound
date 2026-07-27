@@ -3,7 +3,7 @@ name: Code Execution Capability
 description: >
   Classifies tools with arbitrary code execution capability only from
   direct execution-specific phrases in tool metadata.
-version: 3
+version: 1
 enabled: true
 scope:
   collector: mcp

@@ -102,7 +102,7 @@ the currently published posture revision with `409`.
 
 ## Collection provenance and storage pairing
 
-Every ingest-v5 artifact carries an automatically derived collection point and
+Every ingest-v1 artifact carries an automatically derived collection point and
 network context. Private-route evidence binds the destination prefix to its
 observable next hop and stable native profile/link discriminator; if neither
 path signal is available, only network quality becomes unknown. Raw
@@ -265,7 +265,7 @@ or log it. Its handling is deliberately stricter than `--include-credential-valu
   but the untouched trimmed spelling—including any query bytes—is hashed through
   `ResolveMCPServerIdentity("http", input)` and must equal the witness server ID.
   Only absolute HTTP(S) URLs with valid authority/hostname and no userinfo or
-  fragment are accepted. The clear endpoint is never stored in witness v3.
+  fragment are accepted. The clear endpoint is never stored in witness V1.
 - **Query handling is defense-in-depth, not universal detection.** Fixed
   known-sensitive decoded keys and decoded values exactly equal to the supplied
   campaign credential are rejected. Other arbitrary query bytes remain accepted
@@ -289,7 +289,7 @@ or log it. Its handling is deliberately stricter than `--include-credential-valu
   (a raw fact). Findings derive only from composite edges, so this never
   auto-creates a finding; treat it as a policy concern only where authentication
   was expected.
-- **Exact per-agent witness contract.** Witness v3 names one source
+- **Exact per-agent witness contract.** Witness V1 names one source
   `AgentInstance`, is exported only for HTTP-backed resources, and carries the
   actual ordered current `CAN_REACH` evidence node IDs with normalized concrete
   kinds. Promotion recomputes the unkeyed fingerprint and validates every
@@ -412,8 +412,7 @@ destructive-primitive posture:
   `mcp.config.implant` stores the target path plus only the servers key/name,
   canonical named-entry hash, and original file existence/mode required for
   safe reversion; it stores no injected JSON plaintext or whole-file hash.
-  Protected legacy plaintext receipts still decode and use conflict-aware
-  reversion.
+  Missing, malformed, plaintext, or unknown receipt fields fail closed.
 - **Not an attack finding.** It emits no graph edge and makes no claim about a
   predicted credential path — the round-trip evidence stays in the campaign
   transport. It validates only that the mutation/rollback machinery works.

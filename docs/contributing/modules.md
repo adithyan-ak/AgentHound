@@ -3,9 +3,9 @@
 Action modules are self-registering units that perform a specific action against
 a target service. They live in `modules/<name>/` and register at `init()` time
 via `sdk/module.Register()`. Two campaign scenarios instead use `sdk/campaign`,
-and `protoscan` is a discovery engine. Config, MCP, and A2A enumeration remain
-legacy collector paths; their compatibility registry entries do not implement
-or dispatch `Enumerator`.
+and `protoscan` is a discovery engine. Config, MCP, and A2A enumeration use
+collector-specific paths; their module registry entries are metadata-only and
+do not implement or dispatch `Enumerator`.
 
 ## Action Interfaces
 

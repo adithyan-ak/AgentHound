@@ -116,7 +116,7 @@ func appendWarningOnce(warnings []string, warning string) []string {
 	return append(warnings, warning)
 }
 
-// prepareObservationDomains verifies the strict-v5 ownership contract after
+// prepareObservationDomains verifies the strict V1 ownership contract after
 // validation. It never infers ownership from report-level coverage.
 func prepareObservationDomains(data *sdkingest.IngestData) bool {
 	keys := coverageKeys(data.Meta.Collection)

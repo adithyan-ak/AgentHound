@@ -7,8 +7,8 @@ import (
 )
 
 // DecodeVersion reads only the open wire-version envelope. Callers use it
-// before strict current-schema decoding so older artifacts receive actionable
-// upgrade guidance even when their schema contains now-unknown fields.
+// before strict current-schema decoding so non-V1 artifacts are rejected
+// before any stateful work.
 func DecodeVersion(document []byte) (int, error) {
 	var envelope struct {
 		Meta *struct {

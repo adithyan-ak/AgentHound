@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	sdkingest "github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/server/model"
 )
 
@@ -24,17 +25,34 @@ func (f *fakePostureReader) GetProjectionState(context.Context) (*model.Projecti
 	return f.state, nil
 }
 
-func TestPostureExportServesPersistedRevision(t *testing.T) {
-	handler := &PostureHandler{store: &fakePostureReader{
-		export: &model.PostureExport{
-			SchemaVersion: model.PostureExportSchemaVersion,
-			Scope: model.PostureScope{
-				ScanID:              "scan-published",
-				Revision:            42,
-				ActiveCoverageRoots: []model.PostureCoverageRoot{},
-			},
-			Findings: []model.Finding{},
+func validPostureExport() *model.PostureExport {
+	return &model.PostureExport{
+		SchemaVersion: model.PostureExportSchemaVersion,
+		Scope: model.PostureScope{
+			CoverageKeys:              []string{},
+			ActiveCoverageKeys:        []string{},
+			ActiveCoverageRoots:       []model.PostureCoverageRoot{},
+			ActiveCoverageLimitations: []model.PostureCoverageLimitation{},
+			DirtyCoverage:             []string{},
 		},
+		Completeness: model.PostureCompleteness{
+			Warnings: []sdkingest.NormalizationWarning{},
+			Stages:   []sdkingest.StageResult{},
+		},
+		GraphAfter: model.GraphSnapshot{
+			NodeCounts: map[string]int64{},
+			EdgeCounts: map[string]int64{},
+		},
+		Findings: []model.Finding{},
+	}
+}
+
+func TestPostureExportServesPersistedRevision(t *testing.T) {
+	export := validPostureExport()
+	export.Scope.ScanID = "scan-published"
+	export.Scope.Revision = 42
+	handler := &PostureHandler{store: &fakePostureReader{
+		export: export,
 	}}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/posture/export", nil)
@@ -44,17 +62,17 @@ func TestPostureExportServesPersistedRevision(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
 	}
-	var export model.PostureExport
-	if err := json.NewDecoder(w.Body).Decode(&export); err != nil {
+	var decoded model.PostureExport
+	if err := json.NewDecoder(w.Body).Decode(&decoded); err != nil {
 		t.Fatal(err)
 	}
-	if export.Scope.Revision != 42 || export.Scope.ScanID != "scan-published" {
-		t.Fatalf("export scope = %+v", export.Scope)
+	if decoded.Scope.Revision != 42 || decoded.Scope.ScanID != "scan-published" {
+		t.Fatalf("export scope = %+v", decoded.Scope)
 	}
-	if export.Scope.ActiveCoverageRoots == nil {
+	if decoded.Scope.ActiveCoverageRoots == nil {
 		t.Fatal("current export emitted null active_coverage_roots")
 	}
-	if export.Scope.ActiveCoverageLimitations == nil {
+	if decoded.Scope.ActiveCoverageLimitations == nil {
 		t.Fatal("current export emitted null active_coverage_limitations")
 	}
 	if got := w.Header().Get("Content-Disposition"); got == "" {
@@ -62,37 +80,30 @@ func TestPostureExportServesPersistedRevision(t *testing.T) {
 	}
 }
 
-func TestPostureExportServesPreviousPersistedSchema(t *testing.T) {
+func TestPostureExportRejectsNullRequiredCoverage(t *testing.T) {
+	export := validPostureExport()
+	export.Scope.ActiveCoverageLimitations = nil
 	handler := &PostureHandler{store: &fakePostureReader{
-		export: &model.PostureExport{
-			SchemaVersion: model.PostureExportPreviousSchemaVersion,
-			Scope: model.PostureScope{
-				ScanID:   "scan-v3",
-				Revision: 3,
-			},
-		},
+		export: export,
 	}}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/posture/export", nil)
 
 	handler.HandleExport(w, r)
 
-	if w.Code != http.StatusOK {
+	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
 	}
-	var export model.PostureExport
-	if err := json.NewDecoder(w.Body).Decode(&export); err != nil {
-		t.Fatal(err)
-	}
-	if export.SchemaVersion != model.PostureExportPreviousSchemaVersion ||
-		export.Scope.ActiveCoverageLimitations == nil {
-		t.Fatalf("normalized previous export = %+v", export)
+	if got := w.Header().Get("Content-Disposition"); got != "" {
+		t.Fatalf("invalid export received download header %q", got)
 	}
 }
 
 func TestPostureExportRejectsUnsupportedPersistedSchema(t *testing.T) {
+	export := validPostureExport()
+	export.SchemaVersion = model.PostureExportSchemaVersion + 1
 	handler := &PostureHandler{store: &fakePostureReader{
-		export: &model.PostureExport{SchemaVersion: 1},
+		export: export,
 	}}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/posture/export", nil)
@@ -112,12 +123,14 @@ func TestPostureStateReportsPublishedFallbackDuringIncompleteProjection(t *testi
 	publishedAt := time.Now().UTC()
 	handler := &PostureHandler{store: &fakePostureReader{
 		state: &model.ProjectionState{
-			Status:            model.ProjectionIncomplete,
-			ScanID:            "scan-partial",
-			DirtyCoverage:     []string{"mcp"},
-			PublishedScanID:   "scan-published",
-			PublishedRevision: &revision,
-			PublishedAt:       &publishedAt,
+			Status:                    model.ProjectionIncomplete,
+			ScanID:                    "scan-partial",
+			DirtyCoverage:             []string{"mcp"},
+			ActiveCoverageRoots:       []model.PostureCoverageRoot{},
+			ActiveCoverageLimitations: []model.PostureCoverageLimitation{},
+			PublishedScanID:           "scan-published",
+			PublishedRevision:         &revision,
+			PublishedAt:               &publishedAt,
 		},
 	}}
 	w := httptest.NewRecorder()

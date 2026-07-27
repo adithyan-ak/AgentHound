@@ -33,7 +33,7 @@ Four gates are on by default:
 - One file per `(module-id, engagement-id)` tuple. Multiple receipts for the same engagement append to the same file as a JSON array.
 - New receipts carry a random opaque `receipt_id` that is independent of target paths and receipt contents. Campaign reports link only this ID; they never expose receipt paths or receipt/content hashes.
 - Receipts include `module_id`, `target`, `target_id`, the rollback state required by that module, `mode`, `applied_at`, and `dry_run`. Campaign mutations also carry `campaign_run_id` and a positive invocation-order `step_sequence`; `applied_at` is diagnostic only. ContextForge tool-description receipts additionally carry a typed, versioned provider contract with separate MCP and management identities, fixed paths/method/status, original and updated descriptions, the original ContextForge version, and precomputed forward/restore operation User-Agents.
-- File-mutating modules record original file existence/mode so revert can restore the exact prior state. New `mcp.config.implant` receipts additionally store only the servers key, server name, and canonical implanted-entry SHA-256 for conflict detection—never the injected JSON plaintext or a whole-file hash. Legacy protected receipts containing plaintext `InjectionContent`, `file`, and `orig_mode` remain decodable and revertible.
+- File-mutating modules record original file existence/mode so revert can restore the exact prior state. `mcp.config.implant` receipts additionally store only the servers key, server name, and canonical implanted-entry SHA-256 for conflict detection—never the injected JSON plaintext or a whole-file hash. Missing, malformed, plaintext, or unknown receipt fields fail closed.
 - Override the state root with `AGENTHOUND_STATE_DIR` (used by tests; production should leave it alone).
 - Receipts are the only permitted store for rollback-required original/injected mutation values. Raw credentials and auth tokens are forbidden even in receipts. ContextForge recovery resolves its MCP and management credentials again from environment/config sources; an untyped, unknown-version, or wrong-profile MCP receipt is rejected before networking.
 
@@ -42,8 +42,10 @@ Four gates are on by default:
 For modules that mutate on-disk files, `revert` restores the file's prior state precisely:
 
 - **File that did not exist before** is **removed** on revert (not left behind as an empty shell), restoring the original absent state. If the operator or client added other content to that file after the mutation, revert keeps the file and only drops the agenthound-owned entry/block.
-- **Pre-existing file** keeps its **original permission mode** — revert no longer narrows it to `0o600`. The mode captured at mutation time (`orig_mode`, or `original_mode` in minimized config receipts) is reapplied.
-- Receipts written before these fields existed default to the prior conservative behavior (leave the file, mode `0o600`), so older receipts still revert safely.
+- **Pre-existing file** keeps its **original permission mode**. The mode captured at mutation time (`orig_mode` for instruction receipts or `original_mode` for MCP-config receipts) is reapplied.
+- V1 receipts require the captured file-existence and permission-mode fields.
+  Missing or malformed restore metadata is rejected before mutation; recovery
+  never invents a default file state.
 
 ## Shipped destructive modules
 
@@ -51,7 +53,7 @@ For modules that mutate on-disk files, `revert` restores the file's prior state 
 |---|---|---|---|
 | `mcp.tool.description` | `poison` | ContextForge server-scoped `MCPServer` → `MCPTool.description` | Restore only an exact tool-UUID/version/User-Agent attribution; verify MCP when the association still exists, otherwise report verification unavailable. |
 | `instruction.file` | `poison`, `implant` | operator machine → `CLAUDE.md` / `AGENTS.md` / `.cursorrules` | Rewrite the file to remove the sentinel-bracketed block; if the file did not exist before mutation (`file_existed=false` on the receipt), remove it entirely. Pre-existing files keep their original permission mode (`orig_mode`). |
-| `mcp.config.malicious-server` | `implant` | operator machine → MCP client config (`.cursor/mcp.json` etc.) | Hash-compare the current named entry against the canonical entry hash, then remove only that entry; preserve unrelated edits and drop the file only when AgentHound created it and no unrelated content remains. Legacy plaintext receipts use the same conflict-aware fallback. |
+| `mcp.config.malicious-server` | `implant` | operator machine → MCP client config (`.cursor/mcp.json` etc.) | Hash-compare the current named entry against the canonical entry hash, then remove only that entry; preserve unrelated edits and drop the file only when AgentHound created it and no unrelated content remains. |
 
 `agenthound implant --type instruction.file` accepts the Poisoner-backed module too — the implant dispatcher falls back to the shared poison runner when no Implanter matches the requested target kind, so operators get consistent CLI ergonomics regardless of which contract the module implements.
 
@@ -200,7 +202,7 @@ agenthound extract <ai-model-node-id> \
 
 ### `cred-reach` — read-only differential verification
 
-Given an HTTP-only witness v3 for one explicit source agent's predicted credential-gated `CAN_REACH` finding, `cred-reach` binds the untouched trimmed endpoint spelling to the witness's endpoint-derived server identity and its scoped graph ID before networking, then reads the exact resource without and with the hash-matched credential. Credentials are scoped to exact scheme+hostname+effective-port across redirects. A control initialization denial plus an authenticated exact resource read verifies; only dual exact resource-read denials can retire that agent's prior evidence. Other failures are indeterminate, while a successful anonymous control read remains an independent fact. It proves credential-gated resource reach associated with the source agent—not observed agent invocation or impact.
+Given an HTTP-only witness V1 for one explicit source agent's predicted credential-gated `CAN_REACH` finding, `cred-reach` binds the untouched trimmed endpoint spelling to the witness's endpoint-derived server identity and its scoped graph ID before networking, then reads the exact resource without and with the hash-matched credential. Credentials are scoped to exact scheme+hostname+effective-port across redirects. A control initialization denial plus an authenticated exact resource read verifies; only dual exact resource-read denials can retire that agent's prior evidence. Other failures are indeterminate, while a successful anonymous control read remains an independent fact. It proves credential-gated resource reach associated with the source agent—not observed agent invocation or impact.
 
 ### `mcp-poison-roundtrip` — standalone target-mutation validation
 

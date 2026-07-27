@@ -45,7 +45,7 @@ func TestStrictV4ImportedA2ANoneAuthRequiresProbeEvidence(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			data := strictV5A2AImport(test.authEvidence, test.observed)
 			if err := serveringest.NewValidator().Validate(data); err != nil {
-				t.Fatalf("strict ingest-v5 A2A import rejected: %v", err)
+				t.Fatalf("strict ingest-v1 A2A import rejected: %v", err)
 			}
 
 			properties := data.Graph.Nodes[0].Properties
@@ -121,7 +121,7 @@ func strictV5A2AImport(authEvidence string, observed bool) *sdkingest.IngestData
 			Collector:        "a2a",
 			CollectorVersion: "import-test",
 			Timestamp:        "2026-07-12T00:00:00Z",
-			ScanID:           "strict-v4-a2a-import",
+			ScanID:           "strict-v1-a2a-import",
 			Collection: &sdkingest.CollectionReport{
 				State:        sdkingest.OutcomeComplete,
 				CoverageKeys: []string{scope},

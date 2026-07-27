@@ -184,67 +184,6 @@ func TestRevertConflictsOnModifiedLiveServerEntry(t *testing.T) {
 	}
 }
 
-func TestLegacyPlaintextReceiptDecodesAndReverts(t *testing.T) {
-	implanter := newImplanter(t)
-	path := filepath.Join(t.TempDir(), "mcp.json")
-	writeSeed(t, path)
-	if _, err := implanter.Implant(
-		context.Background(),
-		action.Target{},
-		action.ImplantPayload{
-			InjectionContent: evilEntry,
-			EngagementID:     "ENG-LEGACY",
-			Extras:           map[string]any{"file": path},
-		},
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	legacyReceipt := &action.ImplantReceipt{
-		ModuleID:         "mcp.config.implant",
-		EngagementID:     "ENG-LEGACY",
-		TargetID:         path,
-		InjectionContent: evilEntry,
-		Extra: map[string]any{
-			"file":         path,
-			"servers_key":  "mcpServers",
-			"server_name":  "agenthound-implant-ENG-LEGACY",
-			"file_existed": true,
-			"orig_mode":    "600",
-		},
-	}
-	legacyEnvelope := []map[string]any{{
-		"module_id": "mcp.config.implant",
-		"type":      "implant",
-		"receipt":   legacyReceipt,
-	}}
-	encoded, err := json.MarshalIndent(legacyEnvelope, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	receiptPath := filepath.Join(implanter.stateful.StateDir(), "ENG-LEGACY.json")
-	if err := os.WriteFile(receiptPath, encoded, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	decoded, err := implanter.stateful.ReadReceipts("ENG-LEGACY")
-	if err != nil {
-		t.Fatalf("decode legacy receipt: %v", err)
-	}
-	if len(decoded) != 1 {
-		t.Fatalf("decoded legacy receipts = %d, want 1", len(decoded))
-	}
-	if err := implanter.Revert(context.Background(), decoded[0]); err != nil {
-		t.Fatalf("revert decoded legacy receipt: %v", err)
-	}
-	current, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(current), "agenthound-implant-ENG-LEGACY") {
-		t.Fatalf("legacy plaintext receipt did not remove named entry: %s", current)
-	}
-}
-
 func TestImplant_ServersKeyOverride(t *testing.T) {
 	i := newImplanter(t)
 	dir := t.TempDir()
@@ -277,6 +216,45 @@ func TestImplant_ServersKeyOverride(t *testing.T) {
 	got2, _ := os.ReadFile(path)
 	if strings.Contains(string(got2), `"rat"`) {
 		t.Errorf("revert left implant entry; got %s", string(got2))
+	}
+}
+
+func TestReceiptEntryMatchesRequiresCurrentHash(t *testing.T) {
+	receipt := &action.ImplantReceipt{Extra: map[string]any{}}
+	if _, err := receiptEntryMatches(receipt, map[string]any{"command": "node"}); err == nil ||
+		!strings.Contains(err.Error(), "entry_sha256 is required") {
+		t.Fatalf("receiptEntryMatches error = %v, want current receipt rejection", err)
+	}
+}
+
+func TestRevertRejectsIncompleteV1ReceiptBeforeReadingTarget(t *testing.T) {
+	i := newImplanter(t)
+	base := action.ImplantReceipt{
+		TargetID: filepath.Join(t.TempDir(), "missing.json"),
+		Extra: map[string]any{
+			"servers_key":   "mcpServers",
+			"server_name":   "agenthound",
+			"entry_sha256":  strings.Repeat("a", 64),
+			"file_existed":  true,
+			"original_mode": "600",
+		},
+	}
+	for _, field := range []string{
+		"entry_sha256",
+		"file_existed",
+		"original_mode",
+	} {
+		t.Run(field, func(t *testing.T) {
+			receipt := base
+			receipt.Extra = map[string]any{}
+			for key, value := range base.Extra {
+				receipt.Extra[key] = value
+			}
+			delete(receipt.Extra, field)
+			if err := i.Revert(context.Background(), &receipt); err == nil {
+				t.Fatalf("Revert accepted V1 receipt missing %s", field)
+			}
+		})
 	}
 }
 

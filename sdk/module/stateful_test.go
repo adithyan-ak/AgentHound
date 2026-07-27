@@ -1,9 +1,11 @@
 package module_test
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -178,32 +180,34 @@ func TestWriteReceipt_RefusesToOverwriteCorruptFile(t *testing.T) {
 	}
 }
 
-func TestReadReceipts_UnknownReceiptType(t *testing.T) {
+func TestReadReceiptsRejectsUnknownReceiptType(t *testing.T) {
 	tmp := t.TempDir()
 	setStateRoot(t, tmp)
 
 	s := module.NewFileStatefulModule("future.module")
 	dir := filepath.Join(tmp, "future.module")
 	_ = os.MkdirAll(dir, 0o700)
-	// Write a receipt with a type we don't recognize yet.
-	data := `[{"module_id":"future.module","type":"future-thing","receipt":{"custom_field":"value123"}}]`
-	path := filepath.Join(dir, "FWD-COMPAT.json")
+	data := `[{"module_id":"future.module","type":"unsupported","receipt":{"custom_field":"value123"}}]`
+	path := filepath.Join(dir, "STRICT-V1.json")
 	_ = os.WriteFile(path, []byte(data), 0o600)
 
-	got, err := s.ReadReceipts("FWD-COMPAT")
-	if err != nil {
-		t.Fatalf("ReadReceipts with unknown type should not error: %v", err)
+	if _, err := s.ReadReceipts("STRICT-V1"); err == nil ||
+		!strings.Contains(err.Error(), `unsupported receipt type "unsupported"`) {
+		t.Fatalf("ReadReceipts error = %v, want unsupported-type rejection", err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("expected 1 receipt, got %d", len(got))
+}
+
+func TestWriteReceiptRejectsUnknownReceiptType(t *testing.T) {
+	tmp := t.TempDir()
+	setStateRoot(t, tmp)
+
+	s := module.NewFileStatefulModule("strict.module")
+	if _, err := s.WriteReceipt("STRICT-V1", map[string]any{"unsupported": true}); err == nil ||
+		!strings.Contains(err.Error(), "unsupported receipt type") {
+		t.Fatalf("WriteReceipt error = %v, want unsupported-type rejection", err)
 	}
-	// The unknown receipt should be preserved as a map.
-	m, ok := got[0].(map[string]any)
-	if !ok {
-		t.Fatalf("expected map[string]any for unknown receipt type, got %T", got[0])
-	}
-	if m["custom_field"] != "value123" {
-		t.Errorf("custom_field = %v, want value123", m["custom_field"])
+	if _, err := os.Stat(filepath.Join(tmp, "strict.module")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unsupported receipt created state directory: %v", err)
 	}
 }
 

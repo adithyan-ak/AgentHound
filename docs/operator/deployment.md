@@ -27,17 +27,17 @@ effective principal, and filesystem/container execution scope. It derives a
 network context from that point plus the network visibility it can observe.
 Raw identity evidence never leaves the collection host; bounded hostname, OS,
 and architecture labels are emitted only for display. The server accepts every
-structurally valid ingest-v5 artifact and uses the derived IDs to scope local,
+structurally valid ingest-v1 artifact and uses the derived IDs to scope local,
 private, and endpoint-derived graph evidence; they are not authentication or
 attestation. If route/interface inspection fails, the point can remain strong
 while only network-scoped evidence is made artifact-local.
 
 The server also generates the storage UUID internally. Startup reads the
 versioned marker from both databases before migrations or schema writes.
-Crossed pairs, legacy or future marker versions, and unsafe unbound non-empty
-databases fail closed. Binding v3 is a clean lifecycle-ownership boundary:
-back up the deployment, recreate both database volumes together, restart, and
-recollect ingest-v5 artifacts. A repairable one-sided missing marker is
+Crossed pairs, non-V1 marker versions, and unsafe unbound non-empty databases
+fail closed. Binding V1 requires freshly initialized paired stores. Recreate
+both database volumes together, restart, and recollect ingest-v1 artifacts.
+A repairable one-sided missing marker is
 restored automatically only for product-empty stores.
 A runtime verification failure returns a sanitized
 `503 STORAGE_BINDING_UNAVAILABLE` and writes nothing.
@@ -142,32 +142,22 @@ backup from one deployment incompatible with a Neo4j backup from another.
 
 ## Upgrades
 
-Ingest v5 with storage-binding v3 is a clean paired-database boundary. Existing
-pre-v5 evidence cannot be safely rewritten into the independent exact/deep
-instruction ownership and current-only projection, so it must not be mixed
-into the v5 projection. Preserve the old deployment or a coordinated backup as
-read-only evidence, then start v5 with fresh PostgreSQL and Neo4j volumes and
-recollect.
+This development V1 baseline has no in-place upgrade or artifact-conversion
+path. PostgreSQL and Neo4j must be initialized together from empty storage.
+Before resetting collector state, resolve every applied offensive-action
+receipt: discard dry-run-only receipts, then revert and verify each real
+mutation. Stop if any reversion cannot be verified.
 
-The unreleased binding-v3 line also changes network scanner ownership from a
-raw target expression to the exact expanded probe contract. Development
-databases created from an earlier binding-v3 build must likewise be reset and
-recollected; legacy target-only scanner owners are not migrated. This remains
-safe only while binding v3 is unreleased. After a binding version is deployed,
-any incompatible ownership-contract change requires an explicit migration or a
-new documented reset boundary.
-
-Back up the deployment, preserve any source artifacts needed for recollection,
-then recreate both development databases before starting this release:
+Then recreate both development databases:
 
 ```bash
 docker compose -f docker/docker-compose.yml down --volumes
 docker compose -f docker/docker-compose.yml up -d
 ```
 
-This permanently deletes the selected Neo4j and PostgreSQL volumes; take the
-coordinated backup first. The fresh graph schema is idempotent after creation,
-and the server still detects Neo4j 4.4 versus 5.x constraint syntax.
+This permanently deletes the selected Neo4j and PostgreSQL volumes. The fresh
+graph schema is idempotent after creation, and the server still detects Neo4j
+4.4 versus 5.x constraint syntax.
 
 For the public no-clone installation, the equivalent full operation reset is:
 
@@ -179,11 +169,9 @@ curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/docker/
 This command is intentionally destructive and cannot be undone without a
 coordinated backup. Run the public Quickstart `up` command again afterward.
 
-Re-run the current collector after the reset. Retained pre-v5 JSON remains
-evidence to archive, not input for rebuilding the v5 projection. The strict
-server reports an actionable unsupported-version error before current-schema
-decoding and rejects incompatible identity or instruction-registry metadata
-rather than merging incompatible ownership.
+Re-run the current collector after the reset. The strict server accepts only V1
+artifacts and rejects incompatible identity or instruction-registry metadata
+before graph mutation.
 
 Per-collection-point purge is intentionally unavailable. The graph stores a
 merged current projection, not every point's immutable normalized contribution,
@@ -198,7 +186,7 @@ perform a documented full operation reset by replacing both database volumes.
 - [ ] All ports bound to `127.0.0.1` (or behind VPN/mesh)
 - [ ] `AGENTHOUND_CORS_ORIGINS` matches the operator-facing URL(s); foreign-origin browser POSTs are rejected
 - [ ] PostgreSQL and Neo4j are backed up and restored as one coordinated pair
-- [ ] Pre-v5 database pairs are preserved separately, never mixed into the v5 projection
+- [ ] PostgreSQL and Neo4j were freshly initialized together for V1
 - [ ] Neo4j credentials changed from default `agenthound`
 - [ ] Postgres credentials changed from default
 - [ ] If exposed via reverse proxy: mTLS or equivalent client auth enabled

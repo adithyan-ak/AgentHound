@@ -47,20 +47,13 @@ stdin form is the standard pipe target for 'agenthound scan --output -':
 		}
 
 		version, err := ingest.DecodeVersion(data)
-		if err != nil {
-			return fmt.Errorf("parse JSON: %w", err)
-		}
-		if version != ingest.CurrentVersion {
-			probe := ingest.IngestData{}
-			probe.Meta.Version = version
-			if err := serveringest.Preflight(&probe); err != nil {
-				return fmt.Errorf("ingest preflight: %w", err)
-			}
+		if err != nil || version != ingest.CurrentVersion {
+			return fmt.Errorf("unsupported V1 ingest contract")
 		}
 
 		var ingestData ingest.IngestData
 		if err := ingest.DecodeStrict(bytes.NewReader(data), &ingestData); err != nil {
-			return fmt.Errorf("parse JSON: %w", err)
+			return fmt.Errorf("unsupported V1 ingest contract")
 		}
 		if err := serveringest.Preflight(&ingestData); err != nil {
 			return fmt.Errorf("ingest preflight: %w", err)

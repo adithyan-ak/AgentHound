@@ -17,6 +17,30 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
+func completeRemoteIngestResult(scanID string) ingest.IngestResult {
+	emptyTotals := &ingest.GraphTotals{
+		NodeCounts: map[string]int64{},
+		EdgeCounts: map[string]int64{},
+	}
+	return ingest.IngestResult{
+		ScanID:              scanID,
+		Outcome:             ingest.OutcomeComplete,
+		ProjectionStatus:    "complete",
+		GraphTotals:         ingest.FrozenGraphTotals{Before: emptyTotals, After: emptyTotals},
+		NormalizationStatus: ingest.NormalizationStatusComplete,
+		Collection:          ingest.CollectionReport{State: ingest.OutcomeComplete},
+		Identity: ingest.IngestIdentityResult{
+			CollectionPointID: "sha256:test-collection-point",
+			NetworkContextID:  "sha256:test-network-context",
+			Quality:           ingest.IdentityQualityStrong,
+			NetworkQuality:    ingest.IdentityQualityStrong,
+			NetworkClass:      ingest.NetworkClassPrivate,
+			Recognition:       "new",
+		},
+		Duration: time.Millisecond,
+	}
+}
+
 func TestRunScan_RemoteIngestSavesExactArtifactAndPrintsSummary(t *testing.T) {
 	var uploaded []byte
 	var submittedNodes int
@@ -38,19 +62,16 @@ func TestRunScan_RemoteIngestSavesExactArtifactAndPrintsSummary(t *testing.T) {
 			t.Errorf("decode artifact: %v", err)
 		}
 		submittedNodes = len(artifact.Graph.Nodes)
-		_ = json.NewEncoder(w).Encode(ingest.IngestResult{
-			ScanID:           artifact.Meta.ScanID,
-			Outcome:          ingest.OutcomeComplete,
-			ProjectionStatus: "complete",
-			Submitted: ingest.FactCounts{
-				Nodes: len(artifact.Graph.Nodes),
-				Edges: len(artifact.Graph.Edges),
-			},
-			Findings:          2,
-			Collection:        *artifact.Meta.Collection,
-			PublishedRevision: &revision,
-			Duration:          1500 * time.Millisecond,
-		})
+		result := completeRemoteIngestResult(artifact.Meta.ScanID)
+		result.Submitted = ingest.FactCounts{
+			Nodes: len(artifact.Graph.Nodes),
+			Edges: len(artifact.Graph.Edges),
+		}
+		result.Findings = 2
+		result.Collection = *artifact.Meta.Collection
+		result.PublishedRevision = &revision
+		result.Duration = 1500 * time.Millisecond
+		_ = json.NewEncoder(w).Encode(result)
 	}))
 	defer server.Close()
 
@@ -192,12 +213,9 @@ func TestRunScan_RemoteIngestRejectsUncorrelatedReceiptBeforeSuccessOutput(t *te
 		t.Run(test.name, func(t *testing.T) {
 			revision := int64(9)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				_ = json.NewEncoder(w).Encode(ingest.IngestResult{
-					ScanID:            test.responseScanID,
-					Outcome:           ingest.OutcomeComplete,
-					ProjectionStatus:  "complete",
-					PublishedRevision: &revision,
-				})
+				result := completeRemoteIngestResult(test.responseScanID)
+				result.PublishedRevision = &revision
+				_ = json.NewEncoder(w).Encode(result)
 			}))
 			defer server.Close()
 
@@ -235,39 +253,34 @@ func TestPostRemoteIngest_ReturnsSanitizedAPIError(t *testing.T) {
 	}
 }
 
-func TestPostRemoteIngest_OlderReceiptReportsUnknownFindings(t *testing.T) {
-	revision := int64(9)
+func TestPostRemoteIngest_RejectsMissingRequiredField(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprintf(
-			w,
-			`{"scan_id":"old-scan","outcome":"complete","projection_status":"complete","submitted":{"nodes":1,"edges":0},"published_revision":%d,"duration":1000000}`,
-			revision,
-		)
+		_, _ = io.WriteString(w, `{
+			"scan_id":"scan-1",
+			"outcome":"complete",
+			"projection_status":"complete",
+			"submitted":{"nodes":1,"edges":0},
+			"write_rows":{"nodes":1,"edges":0},
+			"graph_totals":{"before":null,"after":null},
+			"normalization_status":"complete",
+			"collection":{"state":"complete"},
+			"identity":{
+				"collection_point_id":"cp",
+				"network_context_id":"network",
+				"quality":"strong",
+				"network_quality":"strong",
+				"network_class":"private",
+				"recognition":"new"
+			},
+			"published_revision":9,
+			"duration":1000000
+		}`)
 	}))
 	defer server.Close()
 
-	receipt, err := postRemoteIngest(context.Background(), server.URL, []byte(`{}`))
-	if err != nil {
-		t.Fatalf("postRemoteIngest: %v", err)
-	}
-	var compact bytes.Buffer
-	if err := writeRemoteIngestResult(&compact, receipt, "backup.json", false); err != nil {
-		t.Fatalf("compact result: %v", err)
-	}
-	if !strings.Contains(compact.String(), "Findings:  unknown") {
-		t.Fatalf("older receipt summary = %q, want unknown findings", compact.String())
-	}
-
-	var full bytes.Buffer
-	if err := writeRemoteIngestResult(&full, receipt, "backup.json", true); err != nil {
-		t.Fatalf("full result: %v", err)
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(full.Bytes(), &fields); err != nil {
-		t.Fatalf("decode full result: %v", err)
-	}
-	if _, ok := fields["findings"]; ok {
-		t.Fatalf("full older receipt invented findings: %s", full.String())
+	_, err := postRemoteIngest(context.Background(), server.URL, []byte(`{}`))
+	if err == nil || !strings.Contains(err.Error(), `required field "findings"`) {
+		t.Fatalf("postRemoteIngest error = %v, want missing findings rejection", err)
 	}
 }
 
@@ -299,7 +312,7 @@ func TestWriteRemoteIngestResult_LimitedCoverageRemainsSuccessful(t *testing.T) 
 			}},
 		},
 	}
-	receipt := &remoteIngestReceipt{result: result, findingsPresent: true}
+	receipt := &remoteIngestReceipt{result: result}
 
 	var output bytes.Buffer
 	if err := writeRemoteIngestResult(&output, receipt, "backup.json", false); err != nil {
@@ -348,9 +361,8 @@ func TestWriteRemoteIngestResult_JSONAndIncompleteValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	receipt := &remoteIngestReceipt{
-		result:          result,
-		raw:             raw,
-		findingsPresent: true,
+		result: result,
+		raw:    raw,
 	}
 	var output bytes.Buffer
 	if err := writeRemoteIngestResult(&output, receipt, "backup.json", true); err != nil {

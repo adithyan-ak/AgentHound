@@ -34,8 +34,7 @@ func (p *AuthStrength) Process(ctx context.Context, db graph.GraphDB, _ string) 
 	start := time.Now()
 
 	// This predicate intentionally duplicates the strict ingest contract at the
-	// analysis boundary. It makes upgrades safe for an existing database that
-	// predates tuple validation: malformed legacy observed fields cannot become
+	// analysis boundary. Malformed or incomplete observed tuples cannot become
 	// effective merely because observed_auth_method is non-empty.
 	validKnownObserved := `(
   (n:MCPServer AND n.transport = 'http' AND n.status = 'reachable' AND (

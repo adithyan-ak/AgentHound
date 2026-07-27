@@ -5,16 +5,16 @@ import (
 	"testing"
 )
 
-func TestDecodeVersionIgnoresFieldsFromOlderSchemas(t *testing.T) {
+func TestDecodeVersionReadsOpenEnvelope(t *testing.T) {
 	version, err := DecodeVersion([]byte(`{
-		"meta": {"version": 4, "removed_meta_field": true},
-		"removed_top_level_field": {"nested": true}
+		"meta": {"version": 1, "unrelated_meta_field": true},
+		"unrelated_top_level_field": {"nested": true}
 	}`))
 	if err != nil {
 		t.Fatalf("DecodeVersion() error = %v", err)
 	}
-	if version != 4 {
-		t.Fatalf("version = %d, want 4", version)
+	if version != 1 {
+		t.Fatalf("version = %d, want 1", version)
 	}
 }
 
@@ -31,7 +31,7 @@ func TestDecodeStrictRejectsUnknownStructuralField(t *testing.T) {
 	var data IngestData
 	err := DecodeStrict(strings.NewReader(`{
 		"meta": {
-			"version": 5,
+			"version": 1,
 			"type": "agenthound-ingest",
 			"identity": {},
 			"collector": "mcp",
@@ -51,7 +51,7 @@ func TestDecodeStrictAllowsCollectorProperties(t *testing.T) {
 	var data IngestData
 	err := DecodeStrict(strings.NewReader(`{
 		"meta": {
-			"version": 5,
+			"version": 1,
 			"type": "agenthound-ingest",
 			"identity": {},
 			"collector": "mcp",
@@ -88,7 +88,7 @@ func TestDecodeStrictRejectsRemovedAdvisoryField(t *testing.T) {
 	var data IngestData
 	err := DecodeStrict(strings.NewReader(`{
 		"meta": {
-			"version": 5,
+			"version": 1,
 			"type": "agenthound-ingest",
 			"identity": {},
 			"collector": "config",

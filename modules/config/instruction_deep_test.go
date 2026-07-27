@@ -73,11 +73,11 @@ func TestInstructionRegistryContractMatchesSDK(t *testing.T) {
 }
 
 func TestInstructionRegistryContractDeclaresPerFileOwnership(t *testing.T) {
-	if instructionRegistryGeneration != 3 {
-		t.Fatalf("instruction registry generation = %d, want selected-project partition generation 3", instructionRegistryGeneration)
+	if instructionRegistryGeneration != 1 {
+		t.Fatalf("instruction registry generation = %d, want V1", instructionRegistryGeneration)
 	}
 	for _, declaration := range []string{
-		"agenthound-instruction-registry/v3\n",
+		"agenthound-instruction-registry/v1\n",
 		"ownership:file=stable-root-key+canonical-file-path\n",
 		"ownership:registry-contract=excluded\n",
 		"deep:canonical-home+selected-project:nested-only:overlap-partitioned\n",

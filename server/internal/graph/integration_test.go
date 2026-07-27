@@ -106,14 +106,14 @@ DETACH DELETE n`, nil)
 		t.Fatalf("create product fixture: %v", err)
 	}
 	if _, err := integrationWrite(ctx, driver, "MATCH (b:AgentHoundStorageBinding) DELETE b", nil); err != nil {
-		t.Fatalf("remove marker for legacy-state proof: %v", err)
+		t.Fatalf("remove marker for unbound-state proof: %v", err)
 	}
 	inspection, err = store.Inspect(ctx)
 	if err != nil {
-		t.Fatalf("inspect legacy graph: %v", err)
+		t.Fatalf("inspect unbound graph: %v", err)
 	}
 	if inspection.Marker != nil || inspection.ProductEmpty {
-		t.Fatalf("legacy inspection = %+v, want unbound and nonempty", inspection)
+		t.Fatalf("unbound inspection = %+v, want unbound and nonempty", inspection)
 	}
 }
 
@@ -141,7 +141,7 @@ func TestIntegrationSchemaInit(t *testing.T) {
 	}
 }
 
-func TestIntegrationSchemaInitRejectsLegacySchema(t *testing.T) {
+func TestIntegrationSchemaInitRejectsUnsupportedSchema(t *testing.T) {
 	ctx := testDriver(t)
 	driver, err := NewDriver(
 		os.Getenv("AGENTHOUND_NEO4J_URI"),
@@ -153,17 +153,11 @@ func TestIntegrationSchemaInitRejectsLegacySchema(t *testing.T) {
 	}
 	defer driver.Close(ctx)
 
-	const (
-		sourceID = "legacy-fingerprint-schema-source"
-		targetID = "legacy-fingerprint-schema-target"
-		domainA  = "config:path:sha256:legacy-schema-a"
-		domainB  = "mcp:target:sha256:legacy-schema-b"
-	)
 	cleanup := func() {
-		_, _ = integrationWrite(ctx, driver, `
-			MATCH (n)
-			WHERE n.objectid IN $ids OR n:SchemaVersion
-			DETACH DELETE n`, map[string]any{"ids": []string{sourceID, targetID}})
+		_, _ = integrationWrite(ctx, driver,
+			"MATCH (schema:SchemaVersion) DELETE schema RETURN count(schema)",
+			nil,
+		)
 		_ = runDDL(ctx, driver, fmt.Sprintf(
 			"CREATE (:SchemaVersion {version: %d})",
 			graphSchemaVersion,
@@ -171,102 +165,51 @@ func TestIntegrationSchemaInitRejectsLegacySchema(t *testing.T) {
 	}
 	cleanup()
 	defer cleanup()
-	if err := InitSchema(ctx, driver); err != nil {
-		t.Fatalf("initialize current schema: %v", err)
-	}
-	if _, err := integrationWrite(ctx, driver, `
-		MATCH (schema:SchemaVersion) DELETE schema
-		CREATE (:SchemaVersion {version: 1})
-		CREATE (source:MCPServer {
-		  objectid: $source,
-		  observation_tokens: $source_tokens,
-		  observation_reference_tokens: [],
-		  observation_fact_fingerprints: $source_fingerprints,
-		  observation_properties_complete: true
-		})
-		CREATE (target:Host {
-		  objectid: $target,
-		  observation_tokens: $target_tokens,
-		  observation_reference_tokens: [],
-		  observation_fact_fingerprints: $target_fingerprints,
-		  observation_properties_complete: true
-		})
-		CREATE (source)-[:RUNS_ON {
-		  observation_tokens: $source_tokens,
-		  observation_semantics: $semantics,
-		  observation_fact_fingerprints: $source_fingerprints,
-		  observation_properties_complete: true
-		}]->(target)
-		RETURN 1`, map[string]any{
-		"source":              sourceID,
-		"target":              targetID,
-		"source_tokens":       []string{observationToken(domainA, "legacy"), observationToken(domainB, "legacy")},
-		"target_tokens":       []string{observationToken(domainA, "legacy")},
-		"source_fingerprints": []string{observationFingerprintDomainPrefix(domainA) + "legacy-digest"},
-		"target_fingerprints": []string{observationFingerprintDomainPrefix(domainA) + "legacy-digest"},
-		"semantics":           string(ingest.ObservationSemanticsAnyOwner),
-	}); err != nil {
-		t.Fatalf("seed legacy graph: %v", err)
-	}
 
-	err = InitSchema(ctx, driver)
-	if err == nil {
-		t.Fatal("InitSchema accepted schema-1 facts with unfingerprinted owners")
-	}
-	for _, want := range []string{
-		"Neo4j graph schema 1",
-		"predates ingest v4 scoped identity",
-		"automatic upgrade to schema 3 is refused",
-		"recreate both database volumes",
-	} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("InitSchema error %q missing %q", err, want)
-		}
-	}
-
-	state, err := readObservationFingerprintSchemaState(ctx, driver)
-	if err != nil {
-		t.Fatalf("read rejected schema state: %v", err)
-	}
-	if state.Version != 1 {
-		t.Fatalf("rejected schema state = %+v", state)
-	}
-
-	// Once a database was created under schema 3, a deliberately invalidated
-	// owner may have no current fingerprint. Startup must still succeed so a
-	// later joint refresh or retirement can repair that fail-closed fact.
+	unsupportedVersion := int64(graphSchemaVersion + 1)
 	if _, err := integrationWrite(ctx, driver,
 		"MATCH (schema:SchemaVersion) SET schema.version = $version RETURN count(schema)",
-		map[string]any{"version": graphSchemaVersion},
+		map[string]any{"version": unsupportedVersion},
 	); err != nil {
-		t.Fatalf("mark current schema: %v", err)
-	}
-	if err := InitSchema(ctx, driver); err != nil {
-		t.Fatalf("schema 3 rejected an intentionally invalidated owner: %v", err)
-	}
-
-	// A binary must never rewrite an unknown future schema marker down to the
-	// version it happens to understand.
-	futureVersion := int64(graphSchemaVersion + 1)
-	if _, err := integrationWrite(ctx, driver,
-		"MATCH (schema:SchemaVersion) SET schema.version = $version RETURN count(schema)",
-		map[string]any{"version": futureVersion},
-	); err != nil {
-		t.Fatalf("mark future schema: %v", err)
+		t.Fatalf("mark unsupported schema: %v", err)
 	}
 	err = InitSchema(ctx, driver)
 	if err == nil || !strings.Contains(
 		err.Error(),
-		"graph schema 4 is newer than the maximum schema 3",
+		"graph schema 2 is unsupported; this server requires schema 1",
 	) {
-		t.Fatalf("future schema rejection = %v", err)
+		t.Fatalf("unsupported schema rejection = %v", err)
 	}
-	state, err = readObservationFingerprintSchemaState(ctx, driver)
+	state, err := readGraphSchemaState(ctx, driver)
 	if err != nil {
-		t.Fatalf("read future schema state: %v", err)
+		t.Fatalf("read unsupported schema version: %v", err)
 	}
-	if state.Version != futureVersion {
-		t.Fatalf("future schema was mutated to version %d", state.Version)
+	if state.MarkerCount != 1 || state.MinVersion != unsupportedVersion ||
+		state.MaxVersion != unsupportedVersion {
+		t.Fatalf("unsupported schema was mutated: %+v", state)
+	}
+
+	if _, err := integrationWrite(ctx, driver, `
+		MATCH (schema:SchemaVersion) DELETE schema
+		CREATE (:SchemaVersion {version: $version}),
+		       (:SchemaVersion {version: $version})
+		RETURN 1`, map[string]any{"version": int64(graphSchemaVersion)}); err != nil {
+		t.Fatalf("seed duplicate schema markers: %v", err)
+	}
+	err = InitSchema(ctx, driver)
+	if err == nil || !strings.Contains(err.Error(), "schema marker is malformed") {
+		t.Fatalf("duplicate schema marker rejection = %v", err)
+	}
+
+	if _, err := integrationWrite(ctx, driver, `
+		MATCH (schema:SchemaVersion) DELETE schema
+		CREATE (:SchemaVersion)
+		RETURN 1`, nil); err != nil {
+		t.Fatalf("seed versionless schema marker: %v", err)
+	}
+	err = InitSchema(ctx, driver)
+	if err == nil || !strings.Contains(err.Error(), "schema marker is malformed") {
+		t.Fatalf("versionless schema marker rejection = %v", err)
 	}
 }
 
@@ -1525,7 +1468,7 @@ func TestIntegrationExactOwnerTransferPreservesOnlyRedundantFacts(t *testing.T) 
 					"server": serverID,
 					"host":   hostID,
 				}); err != nil {
-					t.Fatalf("strip legacy fingerprints: %v", err)
+					t.Fatalf("strip current fingerprints: %v", err)
 				}
 			}
 

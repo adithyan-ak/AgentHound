@@ -44,6 +44,7 @@ const completePosture = {
     status: "complete",
     scan_id: "scan-1",
     dirty_coverage: [],
+    active_coverage_limitations: [],
     active_coverage_roots: [
       {
         coverage_key: "config:instruction-exact-user:sha256:root",

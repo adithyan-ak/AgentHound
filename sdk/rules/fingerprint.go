@@ -199,7 +199,7 @@ func loadEmbeddedFingerprints() ([]FingerprintRule, error) {
 		}
 		r.Source = "builtin"
 		if r.Version == 0 {
-			r.Version = 2
+			r.Version = 1
 		}
 		out = append(out, r)
 	}

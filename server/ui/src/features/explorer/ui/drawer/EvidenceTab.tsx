@@ -1,4 +1,5 @@
 import type { APINode } from "@entities/graph/dto";
+import { hasConfirmedAnonymousAccess } from "@entities/node";
 
 const EVIDENCE_KEYS = [
   "description",
@@ -61,17 +62,12 @@ export function EvidenceTab({ node }: { node: APINode }) {
     props.auth_probe_status === "anonymous_protocol_access" &&
     (props.auth_probe_detail === "task_not_found_v1" ||
       props.auth_probe_detail === "task_not_found_v0_3") &&
-    props.observed_auth_method === "none" &&
-    props.observed_auth_assurance === "unauthenticated" &&
-    props.observed_auth_evidence === "anonymous_probe_succeeded";
+    hasConfirmedAnonymousAccess(props);
   const exactProtectedA2AProbe =
     props.auth_probe_method === "get_task_nonexistent" &&
     props.auth_probe_status === "authentication_required" &&
     (props.auth_probe_detail === "http_unauthorized" ||
-      props.auth_probe_detail === "http_forbidden") &&
-    props.observed_auth_method == null &&
-    props.observed_auth_assurance == null &&
-    props.observed_auth_evidence == null;
+      props.auth_probe_detail === "http_forbidden");
   const observation =
     exactAnonymousA2AProbe
       ? {

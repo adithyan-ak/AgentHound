@@ -244,10 +244,6 @@ func NonBlockingInstructionCoverageDomains(report *CollectionReport) []string {
 
 const CoverageLimitationWarning = "coverage is limited; missing evidence is not proof of absence"
 
-// InstructionCoverageLimitationWarning remains as a compatibility alias for
-// callers that used the original instruction-only limited-publication path.
-const InstructionCoverageLimitationWarning = CoverageLimitationWarning
-
 // CoverageLimited reports whether any declared scope lacks absence authority.
 // An all-not-applicable optional surface aggregates to complete because the
 // collector conclusively established that none of those operations applied.

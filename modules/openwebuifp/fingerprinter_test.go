@@ -19,10 +19,9 @@ const owuiVersionBody = `{"version":"0.6.5"}`
 // the fingerprint no longer captures it.
 const owuiConfigBody = `{"name":"Open WebUI","status":true,"features":{"auth":false,"enable_signup":true}}`
 
-// TestFingerprint_OpenWebUI_HappyPath — the v3 rule matches on
+// TestFingerprint_OpenWebUI_HappyPath — the V1 rule matches on
 // /api/version + /api/config's {"name": "Open WebUI"} shape. Emits
-// exactly 1 OpenWebUIInstance node, 0 edges (the old EXPOSES edge on
-// $.ollama.base_url is gone — Ollama backend URLs are surfaced by the
+// exactly 1 OpenWebUIInstance node and 0 edges. Ollama backend URLs are surfaced by the
 // authenticated Looter via /ollama/config).
 func TestFingerprint_OpenWebUI_HappyPath(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +61,7 @@ func TestFingerprint_OpenWebUI_HappyPath(t *testing.T) {
 		t.Fatalf("expected 1 node (OpenWebUIInstance only), got %d", len(res.IngestData.Graph.Nodes))
 	}
 	if len(res.IngestData.Graph.Edges) != 0 {
-		t.Fatalf("expected 0 EXPOSES edges (dead capture removed in v3), got %d", len(res.IngestData.Graph.Edges))
+		t.Fatalf("expected 0 EXPOSES edges from the V1 fingerprint, got %d", len(res.IngestData.Graph.Edges))
 	}
 	props := res.IngestData.Graph.Nodes[0].Properties
 	if got := props["version"]; got != "0.6.5" {

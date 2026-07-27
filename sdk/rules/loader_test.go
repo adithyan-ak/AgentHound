@@ -19,6 +19,9 @@ func TestLoadBuiltinRules(t *testing.T) {
 		if r.Source != "builtin" {
 			t.Errorf("rule %q source = %q, want %q", r.ID, r.Source, "builtin")
 		}
+		if r.Version != 1 {
+			t.Errorf("builtin rule %q version = %d, want V1", r.ID, r.Version)
+		}
 	}
 }
 

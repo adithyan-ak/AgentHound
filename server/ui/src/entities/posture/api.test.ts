@@ -84,12 +84,28 @@ describe("fetchProjectionState", () => {
             contract_current: false,
           },
         ],
+        active_coverage_limitations: [],
         updated_at: "2026-07-24T18:00:01Z",
       }),
     });
 
     await expect(fetchProjectionState()).rejects.toThrow(
       "active_coverage_roots[0] is invalid",
+    );
+  });
+
+  it("rejects missing required coverage arrays", async () => {
+    getMock.mockReturnValue({
+      json: vi.fn().mockResolvedValue({
+        status: "complete",
+        dirty_coverage: [],
+        active_coverage_roots: [],
+        updated_at: "2026-07-24T18:00:01Z",
+      }),
+    });
+
+    await expect(fetchProjectionState()).rejects.toThrow(
+      "active_coverage_limitations must be an array",
     );
   });
 });
@@ -110,6 +126,7 @@ describe("hasLimitedPublishedInstructionCoverage", () => {
         contract_current: false,
       },
     ],
+    active_coverage_limitations: [],
     updated_at: "2026-07-24T18:00:01Z",
     published_scan_id: "scan-1",
     published_revision: 1,

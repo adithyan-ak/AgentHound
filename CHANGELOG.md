@@ -9,7 +9,7 @@
 - **Fast fully observed empty ingests.** A complete empty collection against an
   empty projection skips no-op reconciliation, analysis, duplicate graph
   statistics, and finding queries. Limited or incomplete collections retain
-  the full v5 lifecycle path and cannot enter this optimization.
+  the full V1 lifecycle path and cannot enter this optimization.
 - **Bounded instruction discovery by default.** Config scans now check the
   registered Claude, Cursor, GitHub Copilot, `AGENTS.md`, and `CLAUDE.md`
   sources at the canonical user and project roots. `--deep` adds a bounded
@@ -24,16 +24,15 @@
   publish usable exact posture, retain unseen prior deep evidence, and surface
   an explicit limitation. Failed deep attempts leave prior deep ownership
   untouched.
-- **Strict ingest-v5 boundary.** Wire version and registered-source contract
-  mismatches are rejected before storage access with actionable upgrade
-  guidance. Storage binding v3 requires a clean paired PostgreSQL/Neo4j reset
-  instead of mixing pre-root-state evidence into the new projection.
+- **Strict ingest-v1 boundary.** Wire version and registered-source contract
+  mismatches are rejected before storage access. Storage binding v1 requires a
+  clean paired PostgreSQL/Neo4j initialization.
 - **No false clean instruction score.** Agent poisoning risk uses observed
   `LOADS_INSTRUCTIONS` relationships only; missing load relationships remain
   an assessment limitation. Published truncated posture remains visible in the
   dashboard with persistent deep-coverage and registry-refresh warnings, while
   ambiguous comparisons are unavailable.
-- **Typed posture export v3.** Projection state and persisted exports expose
+- **Typed posture export v1.** Projection state and persisted exports expose
   typed active instruction-root coverage. Unsupported persisted export schemas
   fail closed instead of violating the documented response contract.
 
@@ -79,7 +78,7 @@ real systems with evidence-backed, reversible workflows.
   the same infrastructure across collectors, while stable credential hashes
   correlate a secret observed in configuration with the service that accepts
   or exposes it—without persisting the raw value by default.
-- **Vantage-aware temporal ingestion.** Ingest v4 derives collection-point and
+- **Vantage-aware temporal ingestion.** Ingest V1 derives collection-point and
   network-context provenance automatically. Ambiguous identities, lifecycle
   ownership, and cross-observation processing remain scoped per vantage, while
   weak identity stays analyzable under artifact-local additive-only scope.
@@ -91,8 +90,8 @@ real systems with evidence-backed, reversible workflows.
   shadowing, poisoned content, reachability, credential chains, exfiltration,
   impersonation, cross-protocol paths, and risk scores from the retained raw
   evidence.
-- **Canonical risk semantics.** The legacy `EdgeRiskWeight` helper and the v1
-  risk table now agree for Basic, OIDC, and unknown or custom authentication.
+- **Canonical risk semantics.** `EdgeRiskWeight` and the V1 risk table agree
+  for Basic, OIDC, and unknown or custom authentication.
 - **Evidence-first findings.** Prebuilt attack paths, finding detail,
   remediation guidance, graph evidence, and stable witness export keep each
   security conclusion tied to the nodes, edges, provenance, and publication
@@ -132,9 +131,8 @@ real systems with evidence-backed, reversible workflows.
 - **Automatic storage pairing.** The server generates and validates the
   PostgreSQL/Neo4j storage pairing internally, accepts artifacts from multiple
   recognized vantages, and reports identity recognition in ingest results.
-- **Clean ingest-v4 boundary.** Version 4 artifacts require a fresh database,
-  avoiding unsafe per-point purge while the retained projection moves from the
-  former single-realm model to automatic vantage-aware ownership.
+- **Strict ingest-v1 boundary.** V1 artifacts use automatic vantage-aware
+  ownership and require freshly initialized paired storage.
 - **Strict transport defaults.** MCP and A2A TLS verification is on by default;
   insecure transport requires an explicit operator choice. Active operations
   require an `AUTHORIZED` acknowledgement and record engagement provenance.

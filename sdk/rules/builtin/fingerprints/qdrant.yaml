@@ -10,7 +10,7 @@
 id: qdrant
 name: Qdrant vector database
 description: 'Identifies Qdrant by GET /telemetry returning its canonical app identity'
-version: 3
+version: 1
 service_kind: qdrant
 probes:
   - method: GET

@@ -47,7 +47,7 @@ import (
 
 const (
 	scenarioID      = "mcp-poison-roundtrip"
-	scenarioVersion = 2
+	scenarioVersion = 1
 )
 
 // Scenario is the reversible mcppoison round-trip validation.

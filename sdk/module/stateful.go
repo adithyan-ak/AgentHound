@@ -135,14 +135,16 @@ func (s *FileStatefulModule) StateDir() string {
 // read-modify-write cycle so concurrent processes targeting the same
 // engagement-id cannot drop each other's receipts.
 //
-// The encoding step is `*action.PoisonReceipt`-aware via type
-// assertion, but we accept any action.Receipt so future receipt types
-// (ImplantReceipt) work without code changes here. If the receipt is
-// not JSON-encodable, the call returns an error rather than silently
-// dropping the receipt.
+// Only the current poison and implant receipt types are accepted. If a
+// receipt is unsupported or not JSON-encodable, the call returns an error
+// rather than silently dropping it.
 func (s *FileStatefulModule) WriteReceipt(engagementID string, r action.Receipt) (string, error) {
 	if !validEngagementID(engagementID) {
 		return "", fmt.Errorf("invalid engagement-id %q (alnum, dot, dash, underscore only)", engagementID)
+	}
+	receiptType, err := receiptTypeFor(r)
+	if err != nil {
+		return "", err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -171,7 +173,7 @@ func (s *FileStatefulModule) WriteReceipt(engagementID string, r action.Receipt)
 	}
 	wrapped := receiptEnvelope{
 		ModuleID: s.moduleID,
-		Type:     receiptTypeFor(r),
+		Type:     receiptType,
 		Receipt:  r,
 	}
 	existing = append(existing, wrapped)
@@ -293,14 +295,14 @@ type receiptEnvelope struct {
 	Receipt  action.Receipt `json:"receipt"`
 }
 
-func receiptTypeFor(r action.Receipt) string {
+func receiptTypeFor(r action.Receipt) (string, error) {
 	switch r.(type) {
 	case *action.PoisonReceipt, action.PoisonReceipt:
-		return "poison"
+		return "poison", nil
 	case *action.ImplantReceipt, action.ImplantReceipt:
-		return "implant"
+		return "implant", nil
 	default:
-		return "unknown"
+		return "", fmt.Errorf("unsupported receipt type %T", r)
 	}
 }
 
@@ -351,14 +353,7 @@ func readReceiptsFile(path string) ([]receiptEnvelope, error) {
 			}
 			receipt = &i
 		default:
-			// Unknown receipt type — preserve as raw map rather than
-			// dropping, so a future agenthound version with a new
-			// receipt type can decode old state files.
-			var m map[string]any
-			if err := json.Unmarshal(e.Receipt, &m); err != nil {
-				return nil, fmt.Errorf("decode unknown receipt: %w", err)
-			}
-			receipt = m
+			return nil, fmt.Errorf("decode envelope: unsupported receipt type %q", e.Type)
 		}
 		out = append(out, receiptEnvelope{ModuleID: e.ModuleID, Type: e.Type, Receipt: receipt})
 	}

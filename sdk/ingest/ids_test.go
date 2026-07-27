@@ -55,10 +55,10 @@ func TestComputeMCPServerIDMatchesAcrossCollectors(t *testing.T) {
 	}
 }
 
-func TestResolveMCPServerIdentityUsesHashedArgvV3(t *testing.T) {
+func TestResolveMCPServerIdentityUsesHashedArgvV1(t *testing.T) {
 	secret := "sk-RAW-ARG-SECRET-123456789"
 	identity := ResolveMCPServerIdentity("stdio", "npx", "--api-key", secret)
-	if identity.Scheme != MCPStdioIdentitySchemeV3 || identity.Version != 3 {
+	if identity.Scheme != MCPStdioIdentitySchemeV1 || identity.Version != 1 {
 		t.Fatalf("unexpected stdio identity contract: %+v", identity)
 	}
 	if len(identity.ArgumentHashes) != 2 {

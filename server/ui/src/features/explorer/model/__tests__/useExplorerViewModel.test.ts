@@ -47,6 +47,7 @@ const cachedData: ExplorerRawData = {
     scan_id: "scan-1",
     dirty_coverage: [],
     active_coverage_roots: [],
+    active_coverage_limitations: [],
     updated_at: "2026-07-11T00:00:00Z",
     published_scan_id: "scan-1",
     published_revision: 1,

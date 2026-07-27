@@ -247,7 +247,7 @@ func validCampaignEvidenceRow(t *testing.T, agentID string, relationshipID int64
 	}
 }
 
-func TestValidatedCampaignEvidenceAcceptsOldPositivePublicationRevision(t *testing.T) {
+func TestValidatedCampaignEvidenceAcceptsEarlierPositivePublicationRevision(t *testing.T) {
 	row := validCampaignEvidenceRow(t, "sha256:agent-a", 41)
 	db := &graph.MockGraphDB{QueryResult: []map[string]any{row}}
 	ids, err := validatedCampaignEvidenceRelationshipIDs(context.Background(), db)
@@ -266,9 +266,11 @@ func TestValidatedCampaignEvidenceRejectsPerFieldTamper(t *testing.T) {
 		t.Fatalf("properties have unexpected type %T", base["properties"])
 	}
 	tampers := map[string]func(map[string]any, map[string]any){
-		"source agent":                   func(row, _ map[string]any) { row["source_agent_id"] = "sha256:agent-b" },
-		"target resource":                func(row, _ map[string]any) { row["target_resource_id"] = "sha256:other" },
-		campaign.PropWitnessSchema:       func(_, props map[string]any) { props[campaign.PropWitnessSchema] = 1 },
+		"source agent":    func(row, _ map[string]any) { row["source_agent_id"] = "sha256:agent-b" },
+		"target resource": func(row, _ map[string]any) { row["target_resource_id"] = "sha256:other" },
+		campaign.PropWitnessSchema: func(_, props map[string]any) {
+			props[campaign.PropWitnessSchema] = campaign.WitnessSchemaVersion + 1
+		},
 		campaign.PropTopologyVersion:     func(_, props map[string]any) { props[campaign.PropTopologyVersion] = 2 },
 		campaign.PropPublicationRevision: func(_, props map[string]any) { props[campaign.PropPublicationRevision] = 0 },
 		campaign.PropPredictedEdgeKind:   func(_, props map[string]any) { props[campaign.PropPredictedEdgeKind] = "HAS_ACCESS_TO" },

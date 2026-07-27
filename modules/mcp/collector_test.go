@@ -557,17 +557,17 @@ func TestComputeServerID(t *testing.T) {
 		}
 	})
 
-	t.Run("arg_order_sensitive_v2", func(t *testing.T) {
+	t.Run("arg_order_sensitive_v1", func(t *testing.T) {
 		spec1 := ServerSpec{Transport: "stdio", Command: "npx", Args: []string{"b", "a"}}
 		spec2 := ServerSpec{Transport: "stdio", Command: "npx", Args: []string{"a", "b"}}
 		if computeServerID(spec1) == computeServerID(spec2) {
-			t.Error("v2 server IDs must preserve arg order")
+			t.Error("V1 stdio server IDs must preserve arg order")
 		}
 		first := serverIdentityForSpec(spec1)
 		second := serverIdentityForSpec(spec2)
-		if first.Scheme != ingest.MCPStdioIdentitySchemeV3 ||
-			second.Scheme != ingest.MCPStdioIdentitySchemeV3 {
-			t.Fatalf("reordered definitions must use hashed-argv v3 identity: %+v %+v", first, second)
+		if first.Scheme != ingest.MCPStdioIdentitySchemeV1 ||
+			second.Scheme != ingest.MCPStdioIdentitySchemeV1 {
+			t.Fatalf("reordered definitions must use hashed-argv V1 identity: %+v %+v", first, second)
 		}
 	})
 }

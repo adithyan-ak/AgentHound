@@ -118,7 +118,7 @@ func TestIntegrationMigrations(t *testing.T) {
 	if err := versionRows.Err(); err != nil {
 		t.Fatalf("list migration versions: %v", err)
 	}
-	if want := []int{1, 2, 3, 4, 5}; !reflect.DeepEqual(versions, want) {
+	if want := []int{1}; !reflect.DeepEqual(versions, want) {
 		t.Fatalf("migration versions = %v, want %v", versions, want)
 	}
 
@@ -132,125 +132,6 @@ func TestIntegrationMigrations(t *testing.T) {
 		t.Fatalf("posture singleton rows = %d, want 1", postureRows)
 	}
 
-	if _, err := pool.Exec(ctx, `
-		DROP TABLE coverage_limitations;
-		DELETE FROM schema_migrations WHERE version = 5;
-		INSERT INTO scans (id, collector) VALUES ('limited-v4-publication', 'config');
-		INSERT INTO coverage_heads
-		    (
-		        coverage_key, scan_id, state, discovery_mode,
-		        contract_generation, contract_digest
-		    )
-		VALUES
-		    (
-		        'config:instruction-root:sha256:legacy',
-		        'limited-v4-publication',
-		        'partial',
-		        'deep',
-		        1,
-		        'sha256:legacy'
-		    )`); err != nil {
-		t.Fatalf("prepare coverage-limitation upgrade: %v", err)
-	}
-	if err := RunMigrations(ctx, pool); err != nil {
-		t.Fatalf("reapply coverage-limitation migration: %v", err)
-	}
-	var (
-		backfilledState  string
-		backfilledScanID string
-	)
-	if err := pool.QueryRow(ctx, `SELECT state, scan_id
-		FROM coverage_limitations
-		WHERE coverage_key = 'config:instruction-root:sha256:legacy'`).
-		Scan(&backfilledState, &backfilledScanID); err != nil {
-		t.Fatalf("read backfilled coverage limitation: %v", err)
-	}
-	if backfilledState != "partial" || backfilledScanID != "limited-v4-publication" {
-		t.Fatalf(
-			"backfilled limitation = state %q scan %q",
-			backfilledState,
-			backfilledScanID,
-		)
-	}
-}
-
-func TestIntegrationMigrationsUpgradeProductEmptyV1Schema(t *testing.T) {
-	skipIfNoPG(t)
-	ctx := context.Background()
-
-	admin, err := NewPool(os.Getenv("AGENTHOUND_PG_URI"))
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	defer admin.Close()
-
-	schema := fmt.Sprintf("agenthound_migration_upgrade_test_%d", time.Now().UnixNano())
-	quotedSchema := pgx.Identifier{schema}.Sanitize()
-	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
-		t.Fatalf("create isolated schema: %v", err)
-	}
-	defer func() {
-		if _, err := admin.Exec(ctx, "DROP SCHEMA "+quotedSchema+" CASCADE"); err != nil {
-			t.Errorf("drop isolated schema: %v", err)
-		}
-	}()
-
-	config, err := pgxpool.ParseConfig(os.Getenv("AGENTHOUND_PG_URI"))
-	if err != nil {
-		t.Fatalf("parse connection config: %v", err)
-	}
-	config.ConnConfig.RuntimeParams["search_path"] = schema
-	pool, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		t.Fatalf("connect isolated schema: %v", err)
-	}
-	defer pool.Close()
-	if err := pool.Ping(ctx); err != nil {
-		t.Fatalf("ping isolated schema: %v", err)
-	}
-
-	initialSQL, err := migrationFS.ReadFile("migrations/001_initial.sql")
-	if err != nil {
-		t.Fatalf("read initial migration: %v", err)
-	}
-	if _, err := pool.Exec(ctx, string(initialSQL)); err != nil {
-		t.Fatalf("install pre-binding v1 schema: %v", err)
-	}
-	if _, err := pool.Exec(ctx, "INSERT INTO schema_migrations (version) VALUES (1)"); err != nil {
-		t.Fatalf("record pre-binding migration version: %v", err)
-	}
-
-	store := NewStorageBindingStore(pool)
-	inspection, err := store.Inspect(ctx)
-	if err != nil {
-		t.Fatalf("inspect pre-binding v1 schema: %v", err)
-	}
-	if inspection.Marker != nil || !inspection.ProductEmpty {
-		t.Fatalf("pre-binding v1 inspection = %+v, want unbound and product-empty", inspection)
-	}
-
-	if err := RunMigrations(ctx, pool); err != nil {
-		t.Fatalf("upgrade pre-binding v1 schema: %v", err)
-	}
-	markerTable, err := relationExists(ctx, pool, "storage_binding")
-	if err != nil {
-		t.Fatalf("inspect upgraded storage-binding table: %v", err)
-	}
-	if !markerTable {
-		t.Fatal("upgrade left the product-empty v1 schema without storage_binding")
-	}
-
-	marker, err := binding.NewMarker(integrationStoragePairID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Install(ctx, marker); err != nil {
-		t.Fatalf("install marker after v1 upgrade: %v", err)
-	}
-	actual, err := store.ReadStorageBinding(ctx)
-	if err != nil || !actual.Equal(marker) {
-		t.Fatalf("read upgraded marker = %+v, %v", actual, err)
-	}
 }
 
 func TestIntegrationStorageBindingLifecycle(t *testing.T) {
@@ -323,14 +204,14 @@ func TestIntegrationStorageBindingLifecycle(t *testing.T) {
 		t.Fatalf("insert product row: %v", err)
 	}
 	if _, err := pool.Exec(ctx, "DELETE FROM storage_binding"); err != nil {
-		t.Fatalf("remove marker for legacy-state proof: %v", err)
+		t.Fatalf("remove marker for unbound-state proof: %v", err)
 	}
 	inspection, err = store.Inspect(ctx)
 	if err != nil {
-		t.Fatalf("inspect legacy state: %v", err)
+		t.Fatalf("inspect unbound state: %v", err)
 	}
 	if inspection.Marker != nil || inspection.ProductEmpty {
-		t.Fatalf("legacy inspection = %+v, want unbound and nonempty", inspection)
+		t.Fatalf("unbound inspection = %+v, want unbound and nonempty", inspection)
 	}
 }
 

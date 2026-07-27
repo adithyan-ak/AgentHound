@@ -24,9 +24,7 @@ func TestComparisonKeyRequiresCompleteKnownInputs(t *testing.T) {
 				Digest:    "sha256:rules",
 				LoadState: sdkingest.OutcomeComplete,
 			},
-			IdentitySchemes: []sdkingest.IdentityScheme{
-				{EntityKind: "MCPServer", Scheme: "v2", Version: 2},
-			},
+			IdentitySchemes: sdkingest.CurrentIdentitySchemes(),
 		},
 	}
 
