@@ -184,7 +184,7 @@ func runDiscover(cmd *cobra.Command, args []string) error {
 	if output == "-" {
 		writeErr = writeCollectorOutputStdout(envelope)
 	} else {
-		writeErr = writeCollectorOutput(envelope, output)
+		writeErr = writeCollectorOutputFile(envelope, output)
 	}
 	if writeErr != nil {
 		return writeErr
