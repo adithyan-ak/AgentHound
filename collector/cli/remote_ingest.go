@@ -127,6 +127,52 @@ func decodeRemoteIngestResult(body []byte) (*ingest.IngestResult, error) {
 			return nil, err
 		}
 	}
+	optionalArrayRequirements := []struct {
+		field    string
+		required []string
+	}{
+		{
+			field:    "stages",
+			required: []string{"name", "state", "required", "duration"},
+		},
+		{
+			field: "normalization_warnings",
+			required: []string{
+				"code",
+				"status",
+				"message",
+				"publication_unsafe",
+			},
+		},
+		{
+			field: "post_processing_stats",
+			required: []string{
+				"processor_name",
+				"edges_created",
+				"nodes_updated",
+				"duration",
+			},
+		},
+	}
+	for _, requirement := range optionalArrayRequirements {
+		raw, exists := fields[requirement.field]
+		if !exists {
+			continue
+		}
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return nil, fmt.Errorf(
+				"decode ingest response: field %q must be an array when present",
+				requirement.field,
+			)
+		}
+		if err := requireRemoteIngestArrayObjectFields(
+			raw,
+			requirement.field,
+			requirement.required,
+		); err != nil {
+			return nil, err
+		}
+	}
 	if err := requireRemoteGraphSnapshotFields(fields["graph_totals"]); err != nil {
 		return nil, err
 	}
@@ -162,6 +208,31 @@ func requireRemoteGraphSnapshotFields(raw json.RawMessage) error {
 			value,
 			"graph_totals."+snapshot,
 			[]string{"node_counts", "edge_counts", "total_nodes", "total_edges"},
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func requireRemoteIngestArrayObjectFields(
+	raw json.RawMessage,
+	path string,
+	required []string,
+) error {
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return fmt.Errorf(
+			"decode ingest response: %s must be an array: %w",
+			path,
+			err,
+		)
+	}
+	for index, item := range items {
+		if err := requireRemoteIngestObjectFields(
+			item,
+			fmt.Sprintf("%s[%d]", path, index),
+			required,
 		); err != nil {
 			return err
 		}
@@ -245,6 +316,15 @@ func validateRemoteIngestReceiptV1(result *ingest.IngestResult) error {
 	if err := validateRemoteIdentityResult(result.Identity); err != nil {
 		return err
 	}
+	if err := validateRemoteNormalizationWarnings(result); err != nil {
+		return err
+	}
+	if err := validateRemoteStages(result); err != nil {
+		return err
+	}
+	if err := validateRemotePostProcessingStats(result); err != nil {
+		return err
+	}
 	if result.PublishedRevision != nil && *result.PublishedRevision < 1 {
 		return fmt.Errorf("published_revision must be at least 1")
 	}
@@ -263,6 +343,108 @@ func validateRemoteIngestReceiptV1(result *ingest.IngestResult) error {
 		}
 		if result.GraphTotals.Before == nil || result.GraphTotals.After == nil {
 			return fmt.Errorf("complete projection requires before and after graph totals")
+		}
+	}
+	return nil
+}
+
+func validateRemoteNormalizationWarnings(result *ingest.IngestResult) error {
+	expectedStatus := ingest.NormalizationStatusComplete
+	for index, warning := range result.NormalizationWarnings {
+		path := fmt.Sprintf("normalization_warnings[%d]", index)
+		if strings.TrimSpace(warning.Code) == "" {
+			return fmt.Errorf("%s.code must not be empty", path)
+		}
+		if strings.TrimSpace(warning.Message) == "" {
+			return fmt.Errorf("%s.message must not be empty", path)
+		}
+		switch warning.Status {
+		case ingest.NormalizationStatusWarning:
+			if warning.PublicationUnsafe {
+				return fmt.Errorf(
+					"%s warning status cannot be publication-unsafe",
+					path,
+				)
+			}
+			if expectedStatus == ingest.NormalizationStatusComplete {
+				expectedStatus = ingest.NormalizationStatusWarning
+			}
+		case ingest.NormalizationStatusDegraded:
+			if !warning.PublicationUnsafe {
+				return fmt.Errorf(
+					"%s degraded status must be publication-unsafe",
+					path,
+				)
+			}
+			expectedStatus = ingest.NormalizationStatusDegraded
+		default:
+			return fmt.Errorf("%s.status %q is invalid", path, warning.Status)
+		}
+	}
+	if result.NormalizationStatus != expectedStatus {
+		return fmt.Errorf(
+			"normalization_status %q is inconsistent with warnings status %q",
+			result.NormalizationStatus,
+			expectedStatus,
+		)
+	}
+	return nil
+}
+
+func validateRemoteStages(result *ingest.IngestResult) error {
+	for index, stage := range result.Stages {
+		path := fmt.Sprintf("stages[%d]", index)
+		if strings.TrimSpace(stage.Name) == "" {
+			return fmt.Errorf("%s.name must not be empty", path)
+		}
+		if !validRemoteCollectionState(stage.State) {
+			return fmt.Errorf("%s.state %q is invalid", path, stage.State)
+		}
+		if stage.Duration < 0 {
+			return fmt.Errorf("%s.duration must be non-negative", path)
+		}
+		if stage.State == ingest.OutcomeComplete &&
+			strings.TrimSpace(stage.Error) != "" {
+			return fmt.Errorf("%s complete state cannot include an error", path)
+		}
+		if result.ProjectionStatus != "complete" {
+			continue
+		}
+		if stage.Required && stage.State != ingest.OutcomeComplete {
+			return fmt.Errorf(
+				"complete projection has required stage %q in state %q",
+				stage.Name,
+				stage.State,
+			)
+		}
+		if stage.Name == "publication" && stage.State != ingest.OutcomeComplete {
+			return fmt.Errorf(
+				"complete projection has publication stage in state %q",
+				stage.State,
+			)
+		}
+	}
+	return nil
+}
+
+func validateRemotePostProcessingStats(result *ingest.IngestResult) error {
+	for index, stat := range result.PostProcessingStats {
+		path := fmt.Sprintf("post_processing_stats[%d]", index)
+		if strings.TrimSpace(stat.ProcessorName) == "" {
+			return fmt.Errorf("%s.processor_name must not be empty", path)
+		}
+		if stat.EdgesCreated < 0 || stat.NodesUpdated < 0 {
+			return fmt.Errorf("%s counts must be non-negative", path)
+		}
+		if stat.Duration < 0 {
+			return fmt.Errorf("%s.duration must be non-negative", path)
+		}
+		if result.ProjectionStatus == "complete" &&
+			strings.TrimSpace(stat.Error) != "" {
+			return fmt.Errorf(
+				"complete projection cannot include %s.error",
+				path,
+			)
 		}
 	}
 	return nil
@@ -377,10 +559,33 @@ func validateRemoteCollectionReport(report *ingest.CollectionReport) error {
 			}
 			children[child] = true
 		}
-		if root.RegistryContract != nil &&
-			(root.RegistryContract.Generation < 1 ||
-				!isCanonicalSHA256(root.RegistryContract.Digest)) {
-			return fmt.Errorf("%s.registry_contract is invalid", path)
+		instructionRoot := false
+		for _, method := range []string{
+			ingest.InstructionMethodExactUser,
+			ingest.InstructionMethodExactProject,
+			ingest.InstructionMethodDeep,
+		} {
+			if ingest.InstructionRootMatchesMethod(root.CoverageKey, method) {
+				instructionRoot = true
+				break
+			}
+		}
+		if !instructionRoot {
+			if root.RegistryContract != nil {
+				return fmt.Errorf(
+					"%s.registry_contract must be omitted for non-instruction roots",
+					path,
+				)
+			}
+			continue
+		}
+		current := ingest.CurrentInstructionRegistryContract()
+		if root.RegistryContract == nil ||
+			!root.RegistryContract.Equal(current) {
+			return fmt.Errorf(
+				"%s.registry_contract must match the current instruction registry",
+				path,
+			)
 		}
 	}
 	return nil

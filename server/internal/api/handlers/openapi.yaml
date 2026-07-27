@@ -1240,11 +1240,13 @@ components:
       properties:
         code:
           type: string
+          minLength: 1
         status:
           type: string
           enum: [warning, degraded]
         message:
           type: string
+          minLength: 1
         context:
           type: string
         property:
@@ -1334,6 +1336,7 @@ components:
             properties:
               processor_name:
                 type: string
+                minLength: 1
               edges_created:
                 type: integer
                 minimum: 0
@@ -1354,12 +1357,15 @@ components:
             properties:
               name:
                 type: string
+                minLength: 1
               state:
                 type: string
+                enum: [unknown, not_applicable, complete, partial, failed, truncated]
               required:
                 type: boolean
               duration:
                 type: integer
+                minimum: 0
               error:
                 type: string
         published_revision:

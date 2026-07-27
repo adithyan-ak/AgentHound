@@ -312,7 +312,12 @@ backup path. `--output -` is incompatible because direct ingest requires a
 recoverable artifact. Redirects are not followed. The collector validates the
 remote receipt against the exact V1 response contract before printing success;
 missing coverage, malformed identity or totals, invalid states, unknown fields,
-and non-positive publication revisions fail closed.
+non-positive publication revisions, and contradictory required-stage or
+publication outcomes fail closed. Supplied stages, normalization warnings, and
+post-processing statistics are validated field-by-field. A coherent incomplete
+receipt remains valid diagnostic evidence: the collector prints
+`Ingest incomplete`, preserves the receipt, and exits non-zero. Safe partial
+collection evidence may still publish successfully with a coverage warning.
 
 Direct-ingest HTTP is supported only for the default loopback server or an
 endpoint already protected by an operator-controlled VPN/SSH tunnel. Use HTTPS

@@ -584,6 +584,180 @@ func TestDecodeRemoteIngestResult_RejectsMalformedV1Receipts(t *testing.T) {
 			want: "published_revision must be at least 1",
 		},
 		{
+			name: "null stages",
+			mutate: func(document map[string]any) {
+				document["stages"] = nil
+			},
+			want: `field "stages" must be an array when present`,
+		},
+		{
+			name: "stage missing required field",
+			mutate: func(document map[string]any) {
+				document["stages"] = []any{map[string]any{
+					"state":    "complete",
+					"required": true,
+					"duration": 0,
+				}}
+			},
+			want: "stages[0].name",
+		},
+		{
+			name: "invalid stage state",
+			mutate: func(document map[string]any) {
+				document["stages"] = []any{map[string]any{
+					"name":     "publication",
+					"state":    "published",
+					"required": true,
+					"duration": 0,
+				}}
+			},
+			want: "stages[0].state",
+		},
+		{
+			name: "negative stage duration",
+			mutate: func(document map[string]any) {
+				document["stages"] = []any{map[string]any{
+					"name":     "publication",
+					"state":    "complete",
+					"required": true,
+					"duration": -1,
+				}}
+			},
+			want: "stages[0].duration must be non-negative",
+		},
+		{
+			name: "complete projection with failed publication stage",
+			mutate: func(document map[string]any) {
+				document["stages"] = []any{map[string]any{
+					"name":     "publication",
+					"state":    "failed",
+					"required": true,
+					"duration": 1,
+					"error":    "publication failed",
+				}}
+			},
+			want: `required stage "publication" in state "failed"`,
+		},
+		{
+			name: "normalization warning missing required fields",
+			mutate: func(document map[string]any) {
+				document["normalization_warnings"] = []any{map[string]any{}}
+			},
+			want: "normalization_warnings[0].code",
+		},
+		{
+			name: "publication unsafe warning marked nondegraded",
+			mutate: func(document map[string]any) {
+				document["normalization_status"] = "warning"
+				document["normalization_warnings"] = []any{map[string]any{
+					"code":               "unsafe",
+					"status":             "warning",
+					"message":            "unsafe normalization",
+					"publication_unsafe": true,
+				}}
+			},
+			want: "warning status cannot be publication-unsafe",
+		},
+		{
+			name: "post processing stat missing required fields",
+			mutate: func(document map[string]any) {
+				document["post_processing_stats"] = []any{map[string]any{}}
+			},
+			want: "post_processing_stats[0].processor_name",
+		},
+		{
+			name: "negative post processing count",
+			mutate: func(document map[string]any) {
+				document["post_processing_stats"] = []any{map[string]any{
+					"processor_name": "can_reach",
+					"edges_created":  -1,
+					"nodes_updated":  0,
+					"duration":       1,
+				}}
+			},
+			want: "post_processing_stats[0] counts must be non-negative",
+		},
+		{
+			name: "complete projection with processor error",
+			mutate: func(document map[string]any) {
+				document["post_processing_stats"] = []any{map[string]any{
+					"processor_name": "can_reach",
+					"edges_created":  0,
+					"nodes_updated":  0,
+					"duration":       1,
+					"error":          "processor failed",
+				}}
+			},
+			want: "complete projection cannot include post_processing_stats[0].error",
+		},
+		{
+			name: "instruction root with wrong registry contract",
+			mutate: func(document map[string]any) {
+				collection := remoteDocumentObject(document, "collection")
+				root := ingest.CanonicalCoverageKey(
+					"config",
+					"instruction-exact-user",
+					"/workspace/user",
+				)
+				collection["coverage_keys"] = append(
+					remoteDocumentArray(collection, "coverage_keys"),
+					root,
+				)
+				collection["outcomes"] = append(
+					remoteDocumentArray(collection, "outcomes"),
+					map[string]any{
+						"collector":    "config",
+						"coverage_key": root,
+						"target":       "/workspace/user",
+						"method":       ingest.InstructionMethodExactUser,
+						"state":        "complete",
+						"items":        0,
+					},
+				)
+				collection["authoritative_roots"] = []any{map[string]any{
+					"coverage_key":        root,
+					"child_coverage_keys": []any{},
+					"registry_contract": map[string]any{
+						"generation": ingest.InstructionRegistryGeneration,
+						"digest":     "sha256:" + strings.Repeat("f", 64),
+					},
+				}}
+			},
+			want: "must match the current instruction registry",
+		},
+		{
+			name: "registry contract on noninstruction root",
+			mutate: func(document map[string]any) {
+				collection := remoteDocumentObject(document, "collection")
+				root := ingest.CanonicalCoverageKey(
+					"config",
+					"root",
+					"/workspace/project",
+				)
+				collection["coverage_keys"] = append(
+					remoteDocumentArray(collection, "coverage_keys"),
+					root,
+				)
+				collection["outcomes"] = append(
+					remoteDocumentArray(collection, "outcomes"),
+					map[string]any{
+						"collector":    "config",
+						"coverage_key": root,
+						"target":       "/workspace/project",
+						"method":       "config",
+						"state":        "complete",
+						"items":        0,
+					},
+				)
+				collection["authoritative_roots"] = []any{map[string]any{
+					"coverage_key":        root,
+					"child_coverage_keys": []any{},
+					"registry_contract":   ingest.CurrentInstructionRegistryContract(),
+				}}
+			},
+			want: "must be omitted for non-instruction roots",
+		},
+		{
 			name: "unknown field",
 			mutate: func(document map[string]any) {
 				document["legacy_success"] = true
@@ -608,6 +782,50 @@ func TestDecodeRemoteIngestResult_RejectsMalformedV1Receipts(t *testing.T) {
 				t.Fatalf("decode error = %v, want error containing %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestDecodeRemoteIngestResult_AcceptsCoherentIncompleteReceipt(t *testing.T) {
+	result := completeRemoteIngestResult("scan-incomplete-publication")
+	result.Outcome = ingest.OutcomePartial
+	result.ProjectionStatus = "incomplete"
+	result.PublishedRevision = nil
+	result.Stages = []ingest.StageResult{{
+		Name:     "publication",
+		State:    ingest.OutcomeFailed,
+		Required: true,
+		Duration: time.Millisecond,
+		Error:    "publication failed",
+	}}
+	result.PostProcessingStats = []ingest.PostProcessingStat{{
+		ProcessorName: "can_reach",
+		Duration:      time.Millisecond,
+		Error:         "processor failed",
+	}}
+
+	body, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeRemoteIngestResult(body)
+	if err != nil {
+		t.Fatalf("decode coherent incomplete receipt: %v", err)
+	}
+
+	var output bytes.Buffer
+	if err := writeRemoteIngestResult(
+		&output,
+		&remoteIngestReceipt{result: decoded, raw: body},
+		"backup.json",
+		false,
+	); err != nil {
+		t.Fatalf("write coherent incomplete receipt: %v", err)
+	}
+	if !strings.Contains(output.String(), "Ingest incomplete") {
+		t.Fatalf("incomplete receipt output:\n%s", output.String())
+	}
+	if err := validateRemoteIngestResult(decoded); err == nil {
+		t.Fatal("coherent incomplete receipt returned success")
 	}
 }
 
@@ -639,6 +857,48 @@ func TestDecodeRemoteIngestResult_AcceptsPublishedLimitedCollections(t *testing.
 	}
 }
 
+func TestDecodeRemoteIngestResult_AcceptsCompleteSafeDiagnostics(t *testing.T) {
+	result := completeRemoteIngestResult("scan-safe-diagnostics")
+	result.NormalizationStatus = ingest.NormalizationStatusWarning
+	result.NormalizationWarnings = []ingest.NormalizationWarning{{
+		Code:              "complex_property_serialized",
+		Status:            ingest.NormalizationStatusWarning,
+		Message:           "serialized a supported complex property",
+		PublicationUnsafe: false,
+	}}
+	result.Stages = []ingest.StageResult{
+		{
+			Name:     "analysis",
+			State:    ingest.OutcomeComplete,
+			Required: true,
+			Duration: time.Millisecond,
+		},
+		{
+			Name:     "publication",
+			State:    ingest.OutcomeComplete,
+			Required: true,
+			Duration: time.Millisecond,
+		},
+	}
+	result.PostProcessingStats = []ingest.PostProcessingStat{{
+		ProcessorName: "can_reach",
+		EdgesCreated:  1,
+		Duration:      time.Millisecond,
+	}}
+
+	body, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeRemoteIngestResult(body)
+	if err != nil {
+		t.Fatalf("decode complete safe diagnostics: %v", err)
+	}
+	if !remoteIngestComplete(decoded) {
+		t.Fatal("complete safe diagnostics did not remain successful")
+	}
+}
+
 func TestRunScan_RemoteIngestRejectsMalformedReceiptBeforeSuccessOutput(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var artifact ingest.IngestData
@@ -666,6 +926,44 @@ func TestRunScan_RemoteIngestRejectsMalformedReceiptBeforeSuccessOutput(t *testi
 	}
 	if strings.Contains(stdout.String(), "Ingest complete") {
 		t.Fatalf("malformed receipt reported success:\n%s", stdout.String())
+	}
+}
+
+func TestRunScan_RemoteIngestRejectsContradictoryPublicationBeforeSuccessOutput(
+	t *testing.T,
+) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var artifact ingest.IngestData
+		if err := json.NewDecoder(r.Body).Decode(&artifact); err != nil {
+			t.Errorf("decode artifact: %v", err)
+		}
+		result := completeRemoteIngestResult(artifact.Meta.ScanID)
+		result.Stages = []ingest.StageResult{{
+			Name:     "publication",
+			State:    ingest.OutcomeFailed,
+			Required: true,
+			Duration: time.Millisecond,
+			Error:    "publication failed",
+		}}
+		_ = json.NewEncoder(w).Encode(result)
+	}))
+	defer server.Close()
+
+	cmd := newScanCmdForTest()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(io.Discard)
+	mustSetFlag(t, cmd, "config", "true")
+	mustSetFlag(t, cmd, "path", writeEmptyConfig(t))
+	mustSetFlag(t, cmd, "scan-output", filepath.Join(t.TempDir(), "backup.json"))
+	mustSetFlag(t, cmd, "ingest", server.URL)
+
+	err := runScan(cmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "publication") {
+		t.Fatalf("runScan error = %v, want contradictory publication rejection", err)
+	}
+	if strings.Contains(stdout.String(), "Ingest complete") {
+		t.Fatalf("contradictory receipt reported success:\n%s", stdout.String())
 	}
 }
 
