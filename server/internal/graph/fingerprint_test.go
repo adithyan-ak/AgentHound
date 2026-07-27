@@ -436,7 +436,7 @@ func TestWriterCarriesStableFingerprintsForExactSharedOwnerRefresh(t *testing.T)
 
 func TestNodeLabelMutationIsCompatibilityGated(t *testing.T) {
 	query := nodeCypherForKindTuple("OllamaInstance", []string{"AIService"})
-	want := "FOREACH (_ IN CASE WHEN observation_created OR replace_properties OR compatible_new_owner OR compatible_existing_owner OR compatible_mixed_owners OR compatible_owner_recovery OR partial_existing_owner OR partial_compatible_owner OR partial_reference_upgrade THEN [1] ELSE [] END | SET n:AIService)"
+	want := "FOREACH (_ IN CASE WHEN observation_created OR replace_properties OR compatible_new_owner OR compatible_existing_owner OR compatible_mixed_owners OR partial_existing_owner OR partial_new_owner OR partial_coowner_noop OR partial_coowner_addition OR partial_reference_upgrade THEN [1] ELSE [] END | SET n:AIService)"
 	if !strings.Contains(query, want) {
 		t.Fatalf("extra label mutation is not compatibility-gated:\n%s", query)
 	}

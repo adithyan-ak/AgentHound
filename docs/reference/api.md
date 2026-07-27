@@ -379,6 +379,12 @@ credential material.
 `meta.collection` is required on every ingest request, and `collection` is
 required on every successful ingest result. A missing collection report is a
 validation error, not an implicit complete scan.
+The response contains the finalized server-scoped coverage keys, outcomes, and
+authoritative roots after identity scoping—not the producer-local key space.
+The receipt owns an independent copy of that report. Coverage warnings qualify
+both a limited current artifact and any unrelated coverage limitation that
+remains active after publication; a clean artifact clears the warning only
+when no active limitation remains.
 Nodes may set `property_semantics: "reference_only"` only with an empty
 `properties` object. This records ID/kind ownership without authoring or
 replacing managed properties; omitted `property_semantics` is authoritative.

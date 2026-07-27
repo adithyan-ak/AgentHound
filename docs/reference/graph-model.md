@@ -388,6 +388,16 @@ incoming owner's prior fingerprint so an older retry also remains incomplete.
 Completeness and replacement resume only after all active owners are observed
 together, or after retirement leaves an exact remaining-owner refresh able to
 replace the fact.
+When an established owner reports partial evidence while another owner remains,
+a semantic no-op subset—identical fingerprint-participating values and no new
+public labels—preserves the prior fingerprint and property completeness.
+Volatile lifecycle fields may still advance. If that partial owner instead adds
+a compatible property or public label, the writer retains the addition in the
+working graph but removes that owner's prior fingerprint and marks the shared
+fact property-incomplete. It never installs the partial fingerprint. The dirty
+working graph therefore cannot become the published projection until a joint
+complete refresh covers the full union; a later complete retry of only the
+smaller partial shape cannot certify retained values it omitted.
 Relationships marked `all_dependencies` instead carry one indivisible owner
 group for each logical `(source, edge kind, target)` fact. A complete incoming
 group atomically supersedes the prior dependency tokens, fingerprints, and

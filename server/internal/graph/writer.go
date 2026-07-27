@@ -136,6 +136,7 @@ func (w *Writer) writeNodesBatched(
 				params[j] = map[string]any{
 					"id":                            n.ID,
 					"properties":                    properties,
+					"public_labels":                 n.Kinds,
 					"observation_tokens":            observationTokens(n.ObservationDomains, scanID),
 					"observation_domain_prefixes":   observationDomainPrefixes(n.ObservationDomains),
 					"observation_fact_fingerprints": fingerprints,
@@ -234,22 +235,6 @@ WITH n, node, observation_created,
       AND incoming_authoritative
       AND old_properties_complete
       AND size(old_authoritative_tokens) > 0
-      AND size(node.observation_fact_fingerprints) > 0
-      AND all(prefix IN node.observation_domain_prefixes WHERE
-          any(token IN old_authoritative_tokens WHERE token STARTS WITH prefix))
-      AND all(prefix IN node.observation_fingerprint_domain_prefixes WHERE
-          any(fingerprint IN old_fact_fingerprints WHERE
-              fingerprint STARTS WITH prefix))
-      AND any(fingerprint IN node.observation_fact_fingerprints WHERE
-          NOT fingerprint IN old_fact_fingerprints)
-      AND all(key IN keys(node.properties) WHERE
-          key IN $semantic_volatile_properties
-          OR n[key] IS NULL OR n[key] = node.properties[key])) AS compatible_owner_recovery,
-     (NOT observation_created
-      AND NOT node.reference_only
-      AND incoming_authoritative
-      AND old_properties_complete
-      AND size(old_authoritative_tokens) > 0
       AND size(node.observation_owner_fingerprints) =
           size(node.observation_domain_prefixes)
       AND any(owner IN node.observation_owner_fingerprints WHERE
@@ -279,9 +264,39 @@ WITH n, node, observation_created,
       AND NOT incoming_authoritative
       AND old_properties_complete
       AND size(old_authoritative_tokens) > 0
+      AND none(prefix IN node.observation_domain_prefixes WHERE
+          any(token IN old_authoritative_tokens WHERE token STARTS WITH prefix))
       AND all(key IN keys(node.properties) WHERE
           key IN $semantic_volatile_properties
-          OR n[key] IS NULL OR n[key] = node.properties[key])) AS partial_compatible_owner,
+          OR n[key] IS NULL OR n[key] = node.properties[key])) AS partial_new_owner,
+     (NOT observation_created
+      AND NOT node.reference_only
+      AND NOT incoming_authoritative
+      AND old_properties_complete
+      AND size(old_authoritative_tokens) > 0
+      AND all(prefix IN node.observation_domain_prefixes WHERE
+          any(token IN old_authoritative_tokens WHERE token STARTS WITH prefix))
+      AND any(token IN old_authoritative_tokens WHERE
+          none(prefix IN node.observation_domain_prefixes WHERE token STARTS WITH prefix))
+      AND all(key IN keys(node.properties) WHERE
+          key IN $semantic_volatile_properties
+          OR n[key] = node.properties[key])
+      AND all(label IN node.public_labels WHERE label IN labels(n))) AS partial_coowner_noop,
+     (NOT observation_created
+      AND NOT node.reference_only
+      AND NOT incoming_authoritative
+      AND old_properties_complete
+      AND size(old_authoritative_tokens) > 0
+      AND all(prefix IN node.observation_domain_prefixes WHERE
+          any(token IN old_authoritative_tokens WHERE token STARTS WITH prefix))
+      AND any(token IN old_authoritative_tokens WHERE
+          none(prefix IN node.observation_domain_prefixes WHERE token STARTS WITH prefix))
+      AND all(key IN keys(node.properties) WHERE
+          key IN $semantic_volatile_properties
+          OR n[key] IS NULL OR n[key] = node.properties[key])
+      AND (any(key IN keys(node.properties) WHERE
+          NOT key IN $semantic_volatile_properties AND n[key] IS NULL)
+        OR any(label IN node.public_labels WHERE NOT label IN labels(n)))) AS partial_coowner_addition,
      (NOT observation_created
       AND NOT node.reference_only
       AND NOT incoming_authoritative
@@ -295,8 +310,8 @@ FOREACH (_ IN CASE WHEN observation_created AND node.reference_only THEN [1] ELS
 FOREACH (_ IN CASE
   WHEN NOT observation_created AND NOT replace_properties AND NOT node.reference_only
        AND (compatible_new_owner OR compatible_existing_owner OR compatible_mixed_owners
-            OR compatible_owner_recovery
-            OR partial_existing_owner OR partial_compatible_owner
+            OR partial_existing_owner OR partial_new_owner
+            OR partial_coowner_noop OR partial_coowner_addition
             OR partial_reference_upgrade)
   THEN [1] ELSE [] END |
   SET n += node.properties)
@@ -320,9 +335,9 @@ SET n.objectid = node.id,
     END,
     n.observation_fact_fingerprints = CASE
       WHEN node.reference_only THEN old_fact_fingerprints
-      WHEN observation_created OR replace_properties OR compatible_owner_recovery
+      WHEN observation_created OR replace_properties
            OR partial_existing_owner
-           OR partial_compatible_owner OR partial_reference_upgrade THEN
+           OR partial_new_owner OR partial_reference_upgrade THEN
         reduce(fingerprints = [
           fingerprint IN old_fact_fingerprints
           WHERE none(prefix IN node.observation_fingerprint_domain_prefixes WHERE
@@ -341,6 +356,11 @@ SET n.objectid = node.id,
           CASE WHEN fingerprint IN fingerprints
             THEN fingerprints ELSE fingerprints + fingerprint END)
       WHEN compatible_existing_owner THEN old_fact_fingerprints
+      WHEN partial_coowner_noop THEN old_fact_fingerprints
+      WHEN partial_coowner_addition THEN
+        [fingerprint IN old_fact_fingerprints
+         WHERE none(prefix IN node.observation_fingerprint_domain_prefixes WHERE
+           fingerprint STARTS WITH prefix)]
       WHEN incoming_authoritative THEN
         [fingerprint IN old_fact_fingerprints
          WHERE none(prefix IN node.observation_fingerprint_domain_prefixes WHERE
@@ -356,9 +376,10 @@ SET n.objectid = node.id,
       WHEN compatible_new_owner THEN true
       WHEN compatible_existing_owner THEN true
       WHEN compatible_mixed_owners THEN true
-      WHEN compatible_owner_recovery THEN true
       WHEN partial_existing_owner THEN true
-      WHEN partial_compatible_owner THEN true
+      WHEN partial_new_owner THEN true
+      WHEN partial_coowner_noop THEN true
+      WHEN partial_coowner_addition THEN false
       WHEN partial_reference_upgrade THEN true
       ELSE false
     END`)
@@ -381,7 +402,7 @@ SET n.objectid = node.id,
 	for _, lbl := range extraLabels {
 		fmt.Fprintf(
 			&sb,
-			"\nFOREACH (_ IN CASE WHEN observation_created OR replace_properties OR compatible_new_owner OR compatible_existing_owner OR compatible_mixed_owners OR compatible_owner_recovery OR partial_existing_owner OR partial_compatible_owner OR partial_reference_upgrade THEN [1] ELSE [] END | SET n:%s)",
+			"\nFOREACH (_ IN CASE WHEN observation_created OR replace_properties OR compatible_new_owner OR compatible_existing_owner OR compatible_mixed_owners OR partial_existing_owner OR partial_new_owner OR partial_coowner_noop OR partial_coowner_addition OR partial_reference_upgrade THEN [1] ELSE [] END | SET n:%s)",
 			lbl,
 		)
 	}
@@ -523,21 +544,6 @@ WITH rel, edge, observation_created, old_tokens, old_dependency_tokens,
       AND incoming_authoritative
       AND old_properties_complete
       AND size(old_ownership_tokens) > 0
-      AND size(edge.observation_fact_fingerprints) > 0
-      AND all(prefix IN edge.observation_domain_prefixes WHERE
-          any(token IN old_ownership_tokens WHERE token STARTS WITH prefix))
-      AND all(prefix IN edge.observation_fingerprint_domain_prefixes WHERE
-          any(fingerprint IN old_fact_fingerprints WHERE
-              fingerprint STARTS WITH prefix))
-      AND any(fingerprint IN edge.observation_fact_fingerprints WHERE
-          NOT fingerprint IN old_fact_fingerprints)
-      AND all(key IN keys(edge.properties) WHERE
-          key IN $semantic_volatile_properties
-          OR rel[key] IS NULL OR rel[key] = edge.properties[key])) AS compatible_owner_recovery,
-     (NOT observation_created
-      AND incoming_authoritative
-      AND old_properties_complete
-      AND size(old_ownership_tokens) > 0
       AND size(edge.observation_owner_fingerprints) =
           size(edge.observation_domain_prefixes)
       AND any(owner IN edge.observation_owner_fingerprints WHERE
@@ -565,16 +571,42 @@ WITH rel, edge, observation_created, old_tokens, old_dependency_tokens,
       AND NOT incoming_authoritative
       AND old_properties_complete
       AND size(old_ownership_tokens) > 0
+      AND none(prefix IN edge.observation_domain_prefixes WHERE
+          any(token IN old_ownership_tokens WHERE token STARTS WITH prefix))
       AND all(key IN keys(edge.properties) WHERE
           key IN $semantic_volatile_properties
-          OR rel[key] IS NULL OR rel[key] = edge.properties[key])) AS partial_compatible_owner
+          OR rel[key] IS NULL OR rel[key] = edge.properties[key])) AS partial_new_owner,
+     (NOT observation_created
+      AND NOT incoming_authoritative
+      AND old_properties_complete
+      AND size(old_ownership_tokens) > 0
+      AND all(prefix IN edge.observation_domain_prefixes WHERE
+          any(token IN old_ownership_tokens WHERE token STARTS WITH prefix))
+      AND any(token IN old_ownership_tokens WHERE
+          none(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix))
+      AND all(key IN keys(edge.properties) WHERE
+          key IN $semantic_volatile_properties
+          OR rel[key] = edge.properties[key])) AS partial_coowner_noop,
+     (NOT observation_created
+      AND NOT incoming_authoritative
+      AND old_properties_complete
+      AND size(old_ownership_tokens) > 0
+      AND all(prefix IN edge.observation_domain_prefixes WHERE
+          any(token IN old_ownership_tokens WHERE token STARTS WITH prefix))
+      AND any(token IN old_ownership_tokens WHERE
+          none(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix))
+      AND all(key IN keys(edge.properties) WHERE
+          key IN $semantic_volatile_properties
+          OR rel[key] IS NULL OR rel[key] = edge.properties[key])
+      AND any(key IN keys(edge.properties) WHERE
+          NOT key IN $semantic_volatile_properties AND rel[key] IS NULL)) AS partial_coowner_addition
 FOREACH (_ IN CASE WHEN NOT observation_created AND replace_properties THEN [1] ELSE [] END |
   SET rel = edge.properties)
 FOREACH (_ IN CASE
   WHEN NOT observation_created AND NOT replace_properties
        AND (compatible_new_owner OR compatible_existing_owner OR compatible_mixed_owners
-            OR compatible_owner_recovery
-            OR partial_existing_owner OR partial_compatible_owner)
+            OR partial_existing_owner OR partial_new_owner
+            OR partial_coowner_noop OR partial_coowner_addition)
   THEN [1] ELSE [] END |
   SET rel += edge.properties)
 SET rel.observation_properties_complete = CASE
@@ -583,9 +615,10 @@ SET rel.observation_properties_complete = CASE
       WHEN compatible_new_owner THEN true
       WHEN compatible_existing_owner THEN true
       WHEN compatible_mixed_owners THEN true
-      WHEN compatible_owner_recovery THEN true
       WHEN partial_existing_owner THEN true
-      WHEN partial_compatible_owner THEN true
+      WHEN partial_new_owner THEN true
+      WHEN partial_coowner_noop THEN true
+      WHEN partial_coowner_addition THEN false
       ELSE false
     END,
     rel.observation_tokens = reduce(tokens = old_tokens, token IN edge.observation_tokens |
@@ -598,8 +631,8 @@ SET rel.observation_properties_complete = CASE
     rel.observation_semantics = edge.observation_semantics,
     rel.observation_fact_fingerprints = CASE
       WHEN replace_dependency_set THEN edge.observation_fact_fingerprints
-      WHEN observation_created OR replace_properties OR compatible_owner_recovery
-           OR partial_existing_owner OR partial_compatible_owner THEN
+      WHEN observation_created OR replace_properties
+           OR partial_existing_owner OR partial_new_owner THEN
         reduce(fingerprints = [
           fingerprint IN old_fact_fingerprints
           WHERE none(prefix IN edge.observation_fingerprint_domain_prefixes WHERE
@@ -618,6 +651,11 @@ SET rel.observation_properties_complete = CASE
           CASE WHEN fingerprint IN fingerprints
             THEN fingerprints ELSE fingerprints + fingerprint END)
       WHEN compatible_existing_owner THEN old_fact_fingerprints
+      WHEN partial_coowner_noop THEN old_fact_fingerprints
+      WHEN partial_coowner_addition THEN
+        [fingerprint IN old_fact_fingerprints
+         WHERE none(prefix IN edge.observation_fingerprint_domain_prefixes WHERE
+           fingerprint STARTS WITH prefix)]
       WHEN incoming_authoritative THEN
         [fingerprint IN old_fact_fingerprints
          WHERE none(prefix IN edge.observation_fingerprint_domain_prefixes WHERE
@@ -770,21 +808,6 @@ WITH r, edge, observation_created, old_tokens, old_dependency_tokens,
       AND incoming_authoritative
       AND old_properties_complete
       AND size(old_ownership_tokens) > 0
-      AND size(edge.observation_fact_fingerprints) > 0
-      AND all(prefix IN edge.observation_domain_prefixes WHERE
-          any(token IN old_ownership_tokens WHERE token STARTS WITH prefix))
-      AND all(prefix IN edge.observation_fingerprint_domain_prefixes WHERE
-          any(fingerprint IN old_fact_fingerprints WHERE
-              fingerprint STARTS WITH prefix))
-      AND any(fingerprint IN edge.observation_fact_fingerprints WHERE
-          NOT fingerprint IN old_fact_fingerprints)
-      AND all(key IN keys(edge.properties) WHERE
-          key IN $semantic_volatile_properties
-          OR r[key] IS NULL OR r[key] = edge.properties[key])) AS compatible_owner_recovery,
-     (NOT observation_created
-      AND incoming_authoritative
-      AND old_properties_complete
-      AND size(old_ownership_tokens) > 0
       AND size(edge.observation_owner_fingerprints) =
           size(edge.observation_domain_prefixes)
       AND any(owner IN edge.observation_owner_fingerprints WHERE
@@ -812,16 +835,42 @@ WITH r, edge, observation_created, old_tokens, old_dependency_tokens,
       AND NOT incoming_authoritative
       AND old_properties_complete
       AND size(old_ownership_tokens) > 0
+      AND none(prefix IN edge.observation_domain_prefixes WHERE
+          any(token IN old_ownership_tokens WHERE token STARTS WITH prefix))
       AND all(key IN keys(edge.properties) WHERE
           key IN $semantic_volatile_properties
-          OR r[key] IS NULL OR r[key] = edge.properties[key])) AS partial_compatible_owner
+          OR r[key] IS NULL OR r[key] = edge.properties[key])) AS partial_new_owner,
+     (NOT observation_created
+      AND NOT incoming_authoritative
+      AND old_properties_complete
+      AND size(old_ownership_tokens) > 0
+      AND all(prefix IN edge.observation_domain_prefixes WHERE
+          any(token IN old_ownership_tokens WHERE token STARTS WITH prefix))
+      AND any(token IN old_ownership_tokens WHERE
+          none(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix))
+      AND all(key IN keys(edge.properties) WHERE
+          key IN $semantic_volatile_properties
+          OR r[key] = edge.properties[key])) AS partial_coowner_noop,
+     (NOT observation_created
+      AND NOT incoming_authoritative
+      AND old_properties_complete
+      AND size(old_ownership_tokens) > 0
+      AND all(prefix IN edge.observation_domain_prefixes WHERE
+          any(token IN old_ownership_tokens WHERE token STARTS WITH prefix))
+      AND any(token IN old_ownership_tokens WHERE
+          none(prefix IN edge.observation_domain_prefixes WHERE token STARTS WITH prefix))
+      AND all(key IN keys(edge.properties) WHERE
+          key IN $semantic_volatile_properties
+          OR r[key] IS NULL OR r[key] = edge.properties[key])
+      AND any(key IN keys(edge.properties) WHERE
+          NOT key IN $semantic_volatile_properties AND r[key] IS NULL)) AS partial_coowner_addition
 FOREACH (_ IN CASE WHEN observation_created OR replace_properties THEN [1] ELSE [] END |
   SET r = edge.properties)
 FOREACH (_ IN CASE
   WHEN NOT observation_created AND NOT replace_properties
        AND (compatible_new_owner OR compatible_existing_owner OR compatible_mixed_owners
-            OR compatible_owner_recovery
-            OR partial_existing_owner OR partial_compatible_owner)
+            OR partial_existing_owner OR partial_new_owner
+            OR partial_coowner_noop OR partial_coowner_addition)
   THEN [1] ELSE [] END |
   SET r += edge.properties)
 SET r.scan_id = $scan_id,
@@ -836,8 +885,8 @@ SET r.scan_id = $scan_id,
     r.observation_semantics = edge.observation_semantics,
     r.observation_fact_fingerprints = CASE
       WHEN replace_dependency_set THEN edge.observation_fact_fingerprints
-      WHEN observation_created OR replace_properties OR compatible_owner_recovery
-           OR partial_existing_owner OR partial_compatible_owner THEN
+      WHEN observation_created OR replace_properties
+           OR partial_existing_owner OR partial_new_owner THEN
         reduce(fingerprints = [
           fingerprint IN old_fact_fingerprints
           WHERE none(prefix IN edge.observation_fingerprint_domain_prefixes WHERE
@@ -856,6 +905,11 @@ SET r.scan_id = $scan_id,
           CASE WHEN fingerprint IN fingerprints
             THEN fingerprints ELSE fingerprints + fingerprint END)
       WHEN compatible_existing_owner THEN old_fact_fingerprints
+      WHEN partial_coowner_noop THEN old_fact_fingerprints
+      WHEN partial_coowner_addition THEN
+        [fingerprint IN old_fact_fingerprints
+         WHERE none(prefix IN edge.observation_fingerprint_domain_prefixes WHERE
+           fingerprint STARTS WITH prefix)]
       WHEN incoming_authoritative THEN
         [fingerprint IN old_fact_fingerprints
          WHERE none(prefix IN edge.observation_fingerprint_domain_prefixes WHERE
@@ -868,9 +922,10 @@ SET r.scan_id = $scan_id,
       WHEN compatible_new_owner THEN true
       WHEN compatible_existing_owner THEN true
       WHEN compatible_mixed_owners THEN true
-      WHEN compatible_owner_recovery THEN true
       WHEN partial_existing_owner THEN true
-      WHEN partial_compatible_owner THEN true
+      WHEN partial_new_owner THEN true
+      WHEN partial_coowner_noop THEN true
+      WHEN partial_coowner_addition THEN false
       ELSE false
     END
 REMOVE r.__agenthound_observation_created

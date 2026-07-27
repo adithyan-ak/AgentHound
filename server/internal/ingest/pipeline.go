@@ -179,13 +179,6 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 		return nil, err
 	}
 
-	result.Collection = *data.Meta.Collection
-	if sdkingest.CoverageLimited(data.Meta.Collection) {
-		result.Warnings = append(
-			result.Warnings,
-			sdkingest.CoverageLimitationWarning,
-		)
-	}
 	stageStart = time.Now()
 	rulesetState, rulesetErr := rulesetPublicationState(data.Meta.Ruleset)
 	appendStage(result, "ruleset", rulesetState, true, stageStart, rulesetErr)
@@ -226,6 +219,14 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 			"normalization warnings",
 			"count", len(normalizationWarnings),
 			"status", result.NormalizationStatus,
+		)
+	}
+
+	result.Collection = cloneCollectionReport(data.Meta.Collection)
+	if sdkingest.CoverageLimited(data.Meta.Collection) {
+		result.Warnings = appendWarningOnce(
+			result.Warnings,
+			sdkingest.CoverageLimitationWarning,
 		)
 	}
 

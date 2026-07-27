@@ -985,14 +985,15 @@ func TestPartialObservationUsesAdditivePropertyUpdates(t *testing.T) {
 	}
 	for _, fragment := range []string{
 		"AS partial_existing_owner",
-		"AS partial_compatible_owner",
-		"AS compatible_owner_recovery",
-		"NOT fingerprint IN old_fact_fingerprints",
+		"AS partial_new_owner",
+		"AS partial_coowner_noop",
+		"AS partial_coowner_addition",
+		"WHERE none(prefix IN node.observation_fingerprint_domain_prefixes",
 		"SET n += node.properties",
 		"WHEN observation_created THEN true",
-		"WHEN compatible_owner_recovery THEN true",
 		"WHEN partial_existing_owner THEN true",
-		"WHEN partial_compatible_owner THEN true",
+		"WHEN partial_coowner_noop THEN true",
+		"WHEN partial_coowner_addition THEN false",
 	} {
 		if !strings.Contains(call.Cypher, fragment) {
 			t.Fatalf("partial merge query missing %q:\n%s", fragment, call.Cypher)
@@ -1025,11 +1026,12 @@ func TestPartialObservationUsesAdditivePropertyUpdates(t *testing.T) {
 	edgeCall := recorder.snapshot()[1]
 	for _, fragment := range []string{
 		"AS partial_existing_owner",
-		"AS partial_compatible_owner",
-		"AS compatible_owner_recovery",
+		"AS partial_new_owner",
+		"AS partial_coowner_noop",
+		"AS partial_coowner_addition",
 		"SET r += edge.properties",
 		"WHEN observation_created THEN true",
-		"WHEN compatible_owner_recovery THEN true",
+		"WHEN partial_coowner_addition THEN false",
 	} {
 		if !strings.Contains(edgeCall.Cypher, fragment) {
 			t.Fatalf("partial edge query missing %q:\n%s", fragment, edgeCall.Cypher)
@@ -1037,7 +1039,7 @@ func TestPartialObservationUsesAdditivePropertyUpdates(t *testing.T) {
 	}
 }
 
-func TestRelationshipWritersRestoreCertifiedOwnerFingerprintAfterPartialSubset(
+func TestRelationshipWritersRejectCompatibleOwnerRecoveryShortcut(
 	t *testing.T,
 ) {
 	edge := ingest.Edge{
@@ -1067,14 +1069,17 @@ func TestRelationshipWritersRestoreCertifiedOwnerFingerprintAfterPartialSubset(
 			}
 			query := recorder.snapshot()[0].Cypher
 			for _, fragment := range []string{
-				"AS compatible_owner_recovery",
-				"NOT fingerprint IN old_fact_fingerprints",
-				"OR compatible_owner_recovery",
-				"WHEN compatible_owner_recovery THEN true",
+				"WHERE none(prefix IN edge.observation_fingerprint_domain_prefixes",
+				"AS partial_coowner_noop",
+				"AS partial_coowner_addition",
+				"WHEN partial_coowner_addition THEN false",
 			} {
 				if !strings.Contains(query, fragment) {
-					t.Fatalf("owner recovery query missing %q:\n%s", fragment, query)
+					t.Fatalf("owner quarantine query missing %q:\n%s", fragment, query)
 				}
+			}
+			if strings.Contains(query, "compatible_owner_recovery") {
+				t.Fatalf("unsafe compatible owner recovery remains:\n%s", query)
 			}
 		})
 	}

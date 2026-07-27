@@ -463,10 +463,11 @@ func (s *fakeScanStore) lastUpdate(id string) (scanUpdate, bool) {
 }
 
 type fakePublisher struct {
-	finalizations []appdb.FinalizeScanParams
-	err           error
-	lifecycle     *fakeLifecycleScanStore
-	scanStore     *fakeScanStore
+	finalizations             []appdb.FinalizeScanParams
+	activeCoverageLimitations []model.PostureCoverageLimitation
+	err                       error
+	lifecycle                 *fakeLifecycleScanStore
+	scanStore                 *fakeScanStore
 }
 
 func (p *fakePublisher) FinalizeScan(
@@ -514,6 +515,10 @@ func (p *fakePublisher) FinalizeScan(
 		Revision:    &revision,
 		PublishedAt: &publishedAt,
 		Published:   true,
+		ActiveCoverageLimitations: append(
+			[]model.PostureCoverageLimitation(nil),
+			p.activeCoverageLimitations...,
+		),
 	}, nil
 }
 
@@ -984,6 +989,74 @@ func TestPipelineReportsRecognizedCollectionPoint(t *testing.T) {
 	}
 	if result.Identity.Recognition != "recognized" {
 		t.Fatalf("recognition = %q, want recognized", result.Identity.Recognition)
+	}
+}
+
+func TestPipelineReceiptUsesFinalizedDeepClonedCollection(t *testing.T) {
+	data := validIngestDataFor("finalized-collection-receipt")
+	rawCoverageKey := data.Meta.Collection.CoverageKeys[0]
+	pipeline := newTestPipeline(
+		&fakeWriter{},
+		&graph.MockGraphDB{},
+		&fakeScanStore{},
+		noOpRunPP,
+	)
+	result, err := pipeline.Ingest(context.Background(), data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Collection.CoverageKeys) != 1 ||
+		result.Collection.CoverageKeys[0] == rawCoverageKey ||
+		result.Collection.CoverageKeys[0] != data.Meta.Collection.CoverageKeys[0] {
+		t.Fatalf(
+			"receipt coverage = %v, finalized coverage = %v, raw = %q",
+			result.Collection.CoverageKeys,
+			data.Meta.Collection.CoverageKeys,
+			rawCoverageKey,
+		)
+	}
+	wantCoverageKey := result.Collection.CoverageKeys[0]
+	wantOutcome := result.Collection.Outcomes[0]
+	data.Meta.Collection.CoverageKeys[0] = "mutated-after-ingest"
+	data.Meta.Collection.Outcomes[0].CoverageKey = "mutated-after-ingest"
+	data.Meta.Collection.Outcomes[0].Error = "mutated-after-ingest"
+	if result.Collection.CoverageKeys[0] != wantCoverageKey ||
+		result.Collection.Outcomes[0] != wantOutcome {
+		t.Fatalf("submitted report mutated receipt clone: %+v", result.Collection)
+	}
+}
+
+func TestCloneCollectionReportClonesNestedRoots(t *testing.T) {
+	contract := sdkingest.RegistryContract{Generation: 7, Digest: "sha256:contract"}
+	report := &sdkingest.CollectionReport{
+		State:        sdkingest.OutcomeComplete,
+		CoverageKeys: []string{"root", "child"},
+		AuthoritativeRoots: []sdkingest.CoverageRoot{{
+			CoverageKey:       "root",
+			ChildCoverageKeys: []string{"child"},
+			RegistryContract:  &contract,
+		}},
+		Outcomes: []sdkingest.CollectionOutcome{{
+			CoverageKey: "child",
+			State:       sdkingest.OutcomeComplete,
+		}},
+	}
+	cloned := cloneCollectionReport(report)
+	report.CoverageKeys[0] = "changed-root"
+	report.AuthoritativeRoots[0].CoverageKey = "changed-root"
+	report.AuthoritativeRoots[0].ChildCoverageKeys[0] = "changed-child"
+	report.AuthoritativeRoots[0].RegistryContract.Digest = "changed-digest"
+	report.Outcomes[0].CoverageKey = "changed-child"
+
+	if !slices.Equal(cloned.CoverageKeys, []string{"root", "child"}) ||
+		cloned.AuthoritativeRoots[0].CoverageKey != "root" ||
+		!slices.Equal(
+			cloned.AuthoritativeRoots[0].ChildCoverageKeys,
+			[]string{"child"},
+		) ||
+		cloned.AuthoritativeRoots[0].RegistryContract.Digest != "sha256:contract" ||
+		cloned.Outcomes[0].CoverageKey != "child" {
+		t.Fatalf("nested collection clone was mutated: %+v", cloned)
 	}
 }
 
@@ -2001,6 +2074,57 @@ func TestPipeline_FailedCollectionDoesNotQuarantineUnchangedGraph(t *testing.T) 
 	finalized := publisher.finalizations[1]
 	if !finalized.Publish || len(finalized.DirtyCoverage) != 0 {
 		t.Fatalf("config finalization = %+v, want no graph dirtiness", finalized)
+	}
+}
+
+func TestPipelineReceiptWarnsForPersistentActiveCoverageLimitations(t *testing.T) {
+	tests := []struct {
+		name        string
+		limitations []model.PostureCoverageLimitation
+		wantWarning bool
+	}{
+		{name: "none", wantWarning: false},
+		{
+			name: "unrelated persistent limitation",
+			limitations: []model.PostureCoverageLimitation{{
+				CoverageKey: "mcp:network:sha256:persistent",
+				State:       sdkingest.OutcomePartial,
+				ScanID:      "earlier-limited-scan",
+			}},
+			wantWarning: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			publisher := &fakePublisher{
+				activeCoverageLimitations: test.limitations,
+			}
+			pipeline := newTestPipeline(
+				&fakeWriter{},
+				&graph.MockGraphDB{},
+				&fakeScanStore{},
+				noOpRunPP,
+			)
+			pipeline.findingStore = publisher
+			result, err := pipeline.Ingest(
+				context.Background(),
+				validIngestDataFor("clean-receipt-"+strings.ReplaceAll(test.name, " ", "-")),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hasWarning := slices.Contains(
+				result.Warnings,
+				sdkingest.CoverageLimitationWarning,
+			)
+			if hasWarning != test.wantWarning {
+				t.Fatalf(
+					"warnings = %v, want coverage warning %t",
+					result.Warnings,
+					test.wantWarning,
+				)
+			}
+		})
 	}
 }
 

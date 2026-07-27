@@ -256,6 +256,14 @@ Implementation details:
   re-certified by retrying an older targeted artifact. A complete joint write,
   or an exact remaining-owner write after the other owners retire, replaces the
   fact and restores completeness.
+- A partial refresh from an established owner is a semantic no-op only when all
+  fingerprint-participating values already match and every incoming public
+  label already exists. That path preserves the owner's prior fingerprint and
+  may update only volatile lifecycle fields. A compatible partial addition is
+  retained in the working graph, but the writer removes the owner's prior
+  fingerprint, installs no partial fingerprint, and marks the shared fact
+  incomplete. Publication remains quarantined until a complete joint write
+  covers the full property and label union.
 - Reference-only node observations add ownership without merging managed
   properties or downgrading an existing complete authoritative observation.
   Their owner tokens are tracked as an explicit subset of node owners.
@@ -392,7 +400,8 @@ Dependency validation runs before the first processor executes. If a processor a
 - `NormalizationStatus`, `NormalizationWarnings` -- deterministic
   `complete`/`warning`/`degraded` classification, codes, context, and the
   explicit publication-safety bit
-- `Collection` -- required collection report echoed from the artifact
+- `Collection` -- required finalized, server-scoped collection report copied
+  independently from the mutable submitted artifact
 - `Stages` -- typed required/optional outcomes (`complete`, `partial`,
   `failed`, `truncated`, `unknown`, `not_applicable`)
 - `PostProcessingStats` -- per-processor name, edges created, nodes updated, duration, error

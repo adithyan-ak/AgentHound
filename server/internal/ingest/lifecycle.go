@@ -39,6 +39,28 @@ func collectionState(report *sdkingest.CollectionReport) sdkingest.OutcomeState 
 	return report.State
 }
 
+func cloneCollectionReport(report *sdkingest.CollectionReport) sdkingest.CollectionReport {
+	if report == nil {
+		return sdkingest.CollectionReport{}
+	}
+	cloned := *report
+	cloned.CoverageKeys = append([]string(nil), report.CoverageKeys...)
+	cloned.Outcomes = append([]sdkingest.CollectionOutcome(nil), report.Outcomes...)
+	cloned.AuthoritativeRoots = make([]sdkingest.CoverageRoot, len(report.AuthoritativeRoots))
+	for i, root := range report.AuthoritativeRoots {
+		cloned.AuthoritativeRoots[i] = root
+		cloned.AuthoritativeRoots[i].ChildCoverageKeys = append(
+			[]string(nil),
+			root.ChildCoverageKeys...,
+		)
+		if root.RegistryContract != nil {
+			contract := *root.RegistryContract
+			cloned.AuthoritativeRoots[i].RegistryContract = &contract
+		}
+	}
+	return cloned
+}
+
 func mergeCoverage(groups ...[]string) []string {
 	seen := make(map[string]bool)
 	var merged []string
