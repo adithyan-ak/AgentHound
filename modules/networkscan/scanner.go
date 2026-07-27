@@ -101,6 +101,8 @@ type Scanner struct {
 type ProbeReport struct {
 	Total      int
 	Conclusive int
+	Targets    TargetSetIdentity
+	Ports      []int
 }
 
 func (r ProbeReport) State() ingest.OutcomeState {
@@ -115,11 +117,14 @@ func (r ProbeReport) Unknown() int {
 func (s *Scanner) LastReport() ProbeReport {
 	s.reportMu.RLock()
 	defer s.reportMu.RUnlock()
-	return s.report
+	report := s.report
+	report.Ports = append([]int(nil), s.report.Ports...)
+	return report
 }
 
 func (s *Scanner) setReport(report ProbeReport) {
 	s.reportMu.Lock()
+	report.Ports = append([]int(nil), report.Ports...)
 	s.report = report
 	s.reportMu.Unlock()
 }
@@ -159,6 +164,8 @@ func (s *Scanner) Scan(ctx context.Context, cidr string) ([]action.Target, error
 	if len(ports) == 0 {
 		ports = DefaultPorts
 	}
+	ports = append([]int(nil), ports...)
+	targetSet := LogicalTargetSetIdentity(hosts)
 
 	concurrency := s.Concurrency
 	if concurrency <= 0 {
@@ -264,6 +271,8 @@ producer:
 	s.setReport(ProbeReport{
 		Total:      total,
 		Conclusive: int(conclusive.Load()),
+		Targets:    targetSet,
+		Ports:      ports,
 	})
 
 	if cancelled {

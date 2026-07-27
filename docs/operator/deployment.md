@@ -149,6 +149,14 @@ into the v5 projection. Preserve the old deployment or a coordinated backup as
 read-only evidence, then start v5 with fresh PostgreSQL and Neo4j volumes and
 recollect.
 
+The unreleased binding-v3 line also changes network scanner ownership from a
+raw target expression to the exact expanded probe contract. Development
+databases created from an earlier binding-v3 build must likewise be reset and
+recollected; legacy target-only scanner owners are not migrated. This remains
+safe only while binding v3 is unreleased. After a binding version is deployed,
+any incompatible ownership-contract change requires an explicit migration or a
+new documented reset boundary.
+
 Back up the deployment, preserve any source artifacts needed for recollection,
 then recreate both development databases before starting this release:
 

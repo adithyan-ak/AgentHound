@@ -96,6 +96,15 @@ type Scanner struct {
 type ProbeReport struct {
 	Total      int
 	Conclusive int
+	Targets    networkscan.TargetSetIdentity
+	Protocols  []ProtocolSurface
+}
+
+// ProtocolSurface is one protocol and the exact port list used to schedule
+// its probes. Inactive protocol port flags never appear.
+type ProtocolSurface struct {
+	Protocol string `json:"protocol"`
+	Ports    []int  `json:"ports"`
 }
 
 func (r ProbeReport) State() ingest.OutcomeState {
@@ -109,13 +118,23 @@ func (r ProbeReport) Unknown() int {
 func (s *Scanner) LastReport() ProbeReport {
 	s.reportMu.RLock()
 	defer s.reportMu.RUnlock()
-	return s.report
+	return cloneProbeReport(s.report)
 }
 
 func (s *Scanner) setReport(report ProbeReport) {
 	s.reportMu.Lock()
-	s.report = report
+	s.report = cloneProbeReport(report)
 	s.reportMu.Unlock()
+}
+
+func cloneProbeReport(report ProbeReport) ProbeReport {
+	cloned := report
+	cloned.Protocols = make([]ProtocolSurface, len(report.Protocols))
+	for i, protocol := range report.Protocols {
+		cloned.Protocols[i] = protocol
+		cloned.Protocols[i].Ports = append([]int(nil), protocol.Ports...)
+	}
+	return cloned
 }
 
 type probeDisposition uint8
@@ -181,6 +200,20 @@ func (s *Scanner) Scan(ctx context.Context, spec string) ([]action.Target, error
 	a2aPorts := s.A2APorts
 	if len(a2aPorts) == 0 {
 		a2aPorts = DefaultA2APorts
+	}
+	targetSet := networkscan.LogicalTargetSetIdentity(hosts)
+	var protocolSurfaces []ProtocolSurface
+	if wantMCP {
+		protocolSurfaces = append(protocolSurfaces, ProtocolSurface{
+			Protocol: "mcp",
+			Ports:    append([]int(nil), mcpPorts...),
+		})
+	}
+	if wantA2A {
+		protocolSurfaces = append(protocolSurfaces, ProtocolSurface{
+			Protocol: "a2a",
+			Ports:    append([]int(nil), a2aPorts...),
+		})
 	}
 
 	type job struct {
@@ -277,6 +310,8 @@ dispatch:
 	s.setReport(ProbeReport{
 		Total:      total,
 		Conclusive: int(conclusive.Load()),
+		Targets:    targetSet,
+		Protocols:  protocolSurfaces,
 	})
 
 	if cancelled {

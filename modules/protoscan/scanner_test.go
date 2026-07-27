@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/adithyan-ak/agenthound/modules/networkscan"
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
@@ -86,9 +89,46 @@ func TestScan_DiscoversMCP(t *testing.T) {
 	if got := targets[0].Meta["protocol"]; got != "mcp" {
 		t.Errorf("protocol = %q, want mcp", got)
 	}
-	if report := s.LastReport(); report.State() != ingest.OutcomeComplete ||
+	report := s.LastReport()
+	if report.State() != ingest.OutcomeComplete ||
 		report.Total != 1 || report.Conclusive != 1 {
 		t.Fatalf("positive report = %+v, want complete 1/1", report)
+	}
+	if report.Targets != networkscan.LogicalTargetSetIdentity([]string{"127.0.0.1"}) {
+		t.Fatalf("scheduled targets = %+v", report.Targets)
+	}
+	if len(report.Protocols) != 1 ||
+		report.Protocols[0].Protocol != "mcp" ||
+		!slices.Equal(report.Protocols[0].Ports, s.MCPPorts) {
+		t.Fatalf("scheduled protocols = %+v, want only MCP %v",
+			report.Protocols, s.MCPPorts)
+	}
+}
+
+func TestScanReportExcludesInactiveProtocolPorts(t *testing.T) {
+	srv := mcpStub(t)
+	defer srv.Close()
+
+	activePort := portOf(t, srv)
+	first := &Scanner{
+		Mode:     ModeMCP,
+		MCPPorts: []int{activePort},
+		A2APorts: []int{10001},
+	}
+	if _, err := first.Scan(context.Background(), "127.0.0.1"); err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	second := &Scanner{
+		Mode:     ModeMCP,
+		MCPPorts: []int{activePort},
+		A2APorts: []int{20002},
+	}
+	if _, err := second.Scan(context.Background(), "127.0.0.1"); err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+	if !reflect.DeepEqual(first.LastReport(), second.LastReport()) {
+		t.Fatalf("inactive A2A ports changed report: first=%+v second=%+v",
+			first.LastReport(), second.LastReport())
 	}
 }
 

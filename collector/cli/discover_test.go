@@ -65,6 +65,11 @@ func TestBuildDiscoverEnvelopeUsesProbeCoverage(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			contract := buildProtocolProbeContract(tt.report)
+			identity, err := identifyProbeContract("discover", contract)
+			if err != nil {
+				t.Fatalf("identify probe contract: %v", err)
+			}
 			envelope := buildDiscoverEnvelope(
 				"127.0.0.1",
 				nil,
@@ -72,6 +77,8 @@ func TestBuildDiscoverEnvelopeUsesProbeCoverage(t *testing.T) {
 				"",
 				false,
 				tt.report,
+				identity,
+				contract,
 			)
 			if envelope.Meta.Collection.State != tt.want {
 				t.Fatalf("collection state = %q, want %q",

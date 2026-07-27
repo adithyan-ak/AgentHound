@@ -278,6 +278,21 @@ endpoint with no registered fingerprinter is a failed zero-probe condition.
 Confirmed service nodes remain in the artifact in partial runs, while the
 coverage warning prevents unchecked services from being presented as absent.
 
+Network `scan` and `discover` bind lifecycle ownership to a versioned probe
+contract recorded as `meta.extra.probe_contract` plus
+`meta.extra.probe_contract_digest`. The contract hashes the exact sorted,
+deduplicated logical target set expanded for scheduling; a changed `@file`
+therefore creates a different owner even when its path is unchanged, while
+reordered or repeated entries do not. Hostnames remain logical hostnames and
+are not replaced by unstable DNS results. Network fingerprint contracts also
+include the scheduled ports, the exact dispatched module ID/target/version set,
+and only the fingerprint/native-detector semantic hashes those candidates
+execute. Protocol discovery contracts include only active protocols and their
+scheduled ports, so an A2A port flag cannot change an MCP-only contract. A
+complete result may retire earlier observations only for this exact contract; a
+different target, port, protocol, candidate, or executed detection surface
+cannot prove them absent.
+
 #### Shared Flags
 
 | Flag | Default | Description |

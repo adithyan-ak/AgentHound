@@ -161,13 +161,21 @@ func runDiscover(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	report := scanner.LastReport()
+	contract := buildProtocolProbeContract(report)
+	contractIdentity, contractErr := identifyProbeContract("discover", contract)
+	if contractErr != nil {
+		return fmt.Errorf("identify protocol probe contract: %w", contractErr)
+	}
 	envelope := buildDiscoverEnvelope(
 		spec,
 		targets,
 		authzFile,
 		authzHash,
 		allowPublic,
-		scanner.LastReport(),
+		report,
+		contractIdentity,
+		contract,
 	)
 	if output == "" {
 		output = fmt.Sprintf("discover-%s.json", envelope.Meta.ScanID)
@@ -194,15 +202,18 @@ func buildDiscoverEnvelope(
 	authzHash string,
 	allowPublic bool,
 	report protoscan.ProbeReport,
+	contractIdentity probeContractIdentity,
+	contract protocolProbeContract,
 ) *ingest.IngestData {
 	scanID := uuid.New().String()
 	env := common.NewIngestData("scan", scanID)
 	env.Meta.Extra = map[string]any{
-		"discover_spec":        spec,
-		"discover_targets":     len(targets),
-		"allow_public_targets": allowPublic,
+		"discover_spec":         spec,
+		"discover_targets":      len(targets),
+		"allow_public_targets":  allowPublic,
+		"probe_contract":        contract,
+		"probe_contract_digest": contractIdentity.Digest,
 	}
-	coverageKey := ingest.CanonicalCoverageKey("scan", "discover", spec)
 	state := report.State()
 	errorText := ""
 	if report.Total == 0 {
@@ -216,10 +227,10 @@ func buildDiscoverEnvelope(
 	}
 	env.Meta.Collection = &ingest.CollectionReport{
 		State:        state,
-		CoverageKeys: []string{coverageKey},
+		CoverageKeys: []string{contractIdentity.CoverageKey},
 		Outcomes: []ingest.CollectionOutcome{{
 			Collector:   "scan",
-			CoverageKey: coverageKey,
+			CoverageKey: contractIdentity.CoverageKey,
 			Target:      spec,
 			Method:      "protocol_discovery",
 			State:       state,
@@ -232,6 +243,6 @@ func buildDiscoverEnvelope(
 		env.Meta.Extra["authorization_file_sha256"] = authzHash
 	}
 	env.Graph = protoscan.EmitDiscoveryNodes(targets)
-	ingest.TagObservationDomain(&env.Graph, coverageKey)
+	ingest.TagObservationDomain(&env.Graph, contractIdentity.CoverageKey)
 	return env
 }

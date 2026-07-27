@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -122,6 +123,18 @@ func TestScanner_NoOpenPorts(t *testing.T) {
 		report.Conclusive != report.Total {
 		t.Fatalf("refused-port report = %+v, want complete", report)
 	}
+	wantTargets := LogicalTargetSetIdentity([]string{
+		"10.0.0.0",
+		"10.0.0.1",
+		"10.0.0.2",
+		"10.0.0.3",
+	})
+	if report.Targets != wantTargets {
+		t.Fatalf("scheduled targets = %+v, want %+v", report.Targets, wantTargets)
+	}
+	if len(report.Ports) != len(DefaultPorts) {
+		t.Fatalf("scheduled ports = %v, want defaults %v", report.Ports, DefaultPorts)
+	}
 }
 
 func TestScanner_ProbeOutcomeAccounting(t *testing.T) {
@@ -178,6 +191,13 @@ func TestScanner_CustomPorts(t *testing.T) {
 	targets, err := s.Scan(context.Background(), "10.0.0.1")
 	if err != nil {
 		t.Fatalf("err = %v", err)
+	}
+	report := s.LastReport()
+	if !slices.Equal(report.Ports, []int{9999, 7777}) {
+		t.Fatalf("scheduled ports = %v, want [9999 7777]", report.Ports)
+	}
+	if report.Targets != LogicalTargetSetIdentity([]string{"10.0.0.1"}) {
+		t.Fatalf("scheduled targets = %+v", report.Targets)
 	}
 	if len(targets) != 1 {
 		t.Fatalf("got %d targets, want 1", len(targets))

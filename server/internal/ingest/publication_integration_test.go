@@ -508,6 +508,92 @@ func TestIntegrationFreshSchemaEmptyIngestPublishesUnderThreeSeconds(t *testing.
 	}
 }
 
+func TestIntegrationProbeContractRetiresOnlyExactCoverageKey(t *testing.T) {
+	ctx, pipeline, db, _, _ := freshPublicationIntegrationHarness(t)
+	scopeA := sdkingest.CanonicalCoverageKey(
+		"scan",
+		"network",
+		"sha256:"+strings.Repeat("1", 64),
+	)
+	scopeB := sdkingest.CanonicalCoverageKey(
+		"scan",
+		"network",
+		"sha256:"+strings.Repeat("2", 64),
+	)
+	const endpoint = "http://127.0.0.1:18085/mcp"
+	nodeID := sdkingest.ComputeMCPServerID("http", endpoint)
+
+	artifact := func(scanID, scope string, nodes []sdkingest.Node) *sdkingest.IngestData {
+		data := newPublicationIntegrationData("scan", scanID)
+		data.Meta.Collection = &sdkingest.CollectionReport{
+			State:        sdkingest.OutcomeComplete,
+			CoverageKeys: []string{scope},
+			Outcomes: []sdkingest.CollectionOutcome{{
+				Collector:   "scan",
+				CoverageKey: scope,
+				Target:      "expanded-target-set",
+				Method:      "port_scan",
+				State:       sdkingest.OutcomeComplete,
+				Items:       len(nodes),
+			}},
+		}
+		data.Graph.Nodes = append([]sdkingest.Node{}, nodes...)
+		return data
+	}
+	nodePresent := func() bool {
+		t.Helper()
+		node, _, err := db.GetNode(ctx, nodeID)
+		if err != nil {
+			t.Fatalf("query service: %v", err)
+		}
+		return node != nil
+	}
+
+	first := artifact("probe-contract-a-positive", scopeA, []sdkingest.Node{{
+		ID:                 nodeID,
+		Kinds:              []string{"MCPServer"},
+		ObservationDomains: []string{scopeA},
+		Properties: map[string]any{
+			"name":      "probe-contract-service",
+			"transport": "http",
+			"endpoint":  endpoint,
+		},
+	}})
+	if result, err := pipeline.Ingest(ctx, first); err != nil {
+		t.Fatalf("initial contract ingest: %v", err)
+	} else if result.PublishedRevision == nil {
+		t.Fatalf("initial contract did not publish: %+v", result)
+	}
+	nodeID = first.Graph.Nodes[0].ID
+	if !nodePresent() {
+		t.Fatal("initial contract service was not retained")
+	}
+
+	if result, err := pipeline.Ingest(
+		ctx,
+		artifact("probe-contract-b-empty", scopeB, nil),
+	); err != nil {
+		t.Fatalf("different contract empty ingest: %v", err)
+	} else if result.PublishedRevision == nil {
+		t.Fatalf("different contract did not publish: %+v", result)
+	}
+	if !nodePresent() {
+		t.Fatal("different contract incorrectly retired retained service")
+	}
+
+	if result, err := pipeline.Ingest(
+		ctx,
+		artifact("probe-contract-a-empty", scopeA, nil),
+	); err != nil {
+		t.Fatalf("exact contract empty ingest: %v", err)
+	} else if result.PublishedRevision == nil {
+		t.Fatalf("exact contract did not publish: %+v", result)
+	}
+	if nodePresent() {
+		t.Fatal("exact contract did not retire absent service")
+	}
+}
+
 func TestIntegrationExhaustiveRootRemovesMissingChildAcrossGraphAndPublication(t *testing.T) {
 	ctx, pipeline, db, _, pool := freshPublicationIntegrationHarness(t)
 	root := sdkingest.CanonicalCoverageKey("mcp", "root", "collect")
