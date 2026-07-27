@@ -23,7 +23,7 @@ type coverageHead struct {
 
 func normalizeCoverageKeys(groups ...[]string) []string {
 	seen := make(map[string]bool)
-	var keys []string
+	keys := make([]string, 0)
 	for _, group := range groups {
 		for _, key := range group {
 			key = strings.TrimSpace(key)

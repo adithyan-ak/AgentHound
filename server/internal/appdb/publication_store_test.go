@@ -1058,6 +1058,46 @@ func TestBuildPostureExportDeclaresHealthAndCompleteState(t *testing.T) {
 	}
 }
 
+func TestBuildPostureExportUsesNonNullEmptyCoverageArrays(t *testing.T) {
+	now := time.Now().UTC()
+	export := buildPostureExport(
+		FinalizeScanParams{
+			Scan: model.Scan{
+				ID:          "scan-empty-coverage",
+				StartedAt:   now,
+				CompletedAt: &now,
+			},
+		},
+		1,
+		now,
+		nil,
+		model.PostureComparison{},
+		nil,
+		nil,
+		nil,
+	)
+
+	encoded, err := json.Marshal(export)
+	if err != nil {
+		t.Fatalf("marshal posture export: %v", err)
+	}
+	var payload struct {
+		Scope struct {
+			CoverageKeys       json.RawMessage `json:"coverage_keys"`
+			ActiveCoverageKeys json.RawMessage `json:"active_coverage_keys"`
+		} `json:"scope"`
+	}
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("unmarshal posture export: %v", err)
+	}
+	if got := string(payload.Scope.CoverageKeys); got != "[]" {
+		t.Fatalf("coverage_keys = %s, want []", got)
+	}
+	if got := string(payload.Scope.ActiveCoverageKeys); got != "[]" {
+		t.Fatalf("active_coverage_keys = %s, want []", got)
+	}
+}
+
 func TestCoverageRootHeadsAcceptsRegisteredInstructionRootStates(t *testing.T) {
 	contract := sdkingest.CurrentInstructionRegistryContract()
 	for _, mode := range []struct {
