@@ -1233,6 +1233,19 @@ components:
         source:
           type: string
 
+    RuleListResponse:
+      type: object
+      additionalProperties: false
+      required: [rules, total]
+      properties:
+        rules:
+          type: array
+          items:
+            $ref: "#/components/schemas/Rule"
+        total:
+          type: integer
+          minimum: 0
+
     NormalizationWarning:
       type: object
       additionalProperties: false
@@ -2605,9 +2618,7 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Rule"
+                $ref: "#/components/schemas/RuleListResponse"
 
   /rules/{id}:
     get:

@@ -140,8 +140,23 @@ func TestOpenAPIRuntimeParityContracts(t *testing.T) {
 	if got := scanListPage["$ref"]; got != "#/components/schemas/ScanPageMetadata" {
 		t.Fatalf("ScanListResponse.page ref = %v, want ScanPageMetadata", got)
 	}
+	requireSchemaFields(t, schemas, "RuleListResponse", "rules", "total")
 
 	paths := nestedMap(t, spec, "paths")
+	ruleListSchema := nestedMap(
+		t,
+		paths,
+		"/rules",
+		"get",
+		"responses",
+		"200",
+		"content",
+		"application/json",
+		"schema",
+	)
+	if got := ruleListSchema["$ref"]; got != "#/components/schemas/RuleListResponse" {
+		t.Fatalf("GET /rules 200 schema ref = %v, want RuleListResponse", got)
+	}
 	searchLimit := operationParameter(t, paths, "/graph/search", "get", "limit")
 	requireIntegerContract(
 		t,
