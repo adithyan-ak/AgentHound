@@ -1,11 +1,12 @@
-.meta.collection.state == "complete"
+.meta.collection.state == "partial"
 and .meta.collection.outcomes == [{
   collector:"scan",
   coverage_key:.meta.collection.outcomes[0].coverage_key,
   target:"10.20.30.0/24",
   method:"protocol_discovery",
-  state:"complete",
-  items:3
+  state:"partial",
+  items:3,
+  error:"712 of 768 protocol probe(s) inconclusive"
 }]
 and ([.graph.nodes[] | select(.kinds | index("MCPServer")) | .properties.endpoint])
   == ["http://10.20.30.20:3001/mcp"]

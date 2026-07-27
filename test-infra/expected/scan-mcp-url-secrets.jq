@@ -9,9 +9,11 @@ and ([.graph.nodes[] | select(.kinds | index("MCPServer"))][0].properties | (
   .endpoint_userinfo_redacted == true and
   .endpoint_query_redacted == true and
   .endpoint_fragment_redacted == true and
-  .auth_method == "basic" and
-  .auth_evidence == "configured_credential" and
+  (has("auth_method") | not) and
+  (has("auth_assurance") | not) and
+  (has("auth_evidence") | not) and
   .observed_auth_method == "basic" and
+  .observed_auth_assurance == "weak" and
   .observed_auth_evidence == "configured_credential" and
   .has_tasks_capability == true and
   (.capabilities | index("tasks")) != null

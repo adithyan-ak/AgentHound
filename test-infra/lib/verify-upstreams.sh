@@ -16,6 +16,11 @@ ws() {
   compose exec -T workstation "$@"
 }
 
+workstation_machine_id="$(ws sh -c 'cat /etc/machine-id 2>/dev/null')"
+[[ "${workstation_machine_id}" =~ ^[0-9a-f]{32}$ ]] ||
+  fail 'upstream truth: disposable workstation has no canonical machine identity'
+pass upstream:workstation-identity
+
 expect_jq() {
   local name="$1"
   local filter="$2"

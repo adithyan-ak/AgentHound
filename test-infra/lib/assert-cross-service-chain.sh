@@ -26,10 +26,32 @@ require_exact_cross_service_pairs() {
   '
 }
 
+require_exact_cross_service_semantics() {
+  local source_name="$1"
+  local target_descriptors="$2"
+  local label="$3"
+
+  jq -cer \
+    --arg source_name "${source_name}" \
+    --argjson targets "${target_descriptors}" \
+    --arg label "${label}" '
+    (sort_by(.source_name, .target_name)) as $rows |
+    ($targets | map({source_name:$source_name,target_name:.name}) |
+      sort_by(.source_name, .target_name)) as $expected |
+    if
+      ($rows | map({source_name,target_name})) == $expected and
+      ([$rows[].source_id] | unique | length) == 1 and
+      ([$rows[].target_id] | unique | length) == ($targets | length)
+    then $rows
+    else error($label + " rows do not exactly match the expected semantic source/target set") end
+  '
+}
+
 cross_service_pair_oracle_self_test() {
   local source_id=expected-agent
   local target_ids='["target-1","target-2","target-3"]'
-  local exact_rows extra_source_rows
+  local exact_rows extra_source_rows semantic_targets semantic_rows
+  local extra_semantic_rows
 
   exact_rows="$(jq -nc \
     --arg source "${source_id}" \
@@ -51,11 +73,36 @@ cross_service_pair_oracle_self_test() {
     fail 'cross-service exact-set oracle accepted an unexpected source'
     return 1
   fi
+
+  semantic_targets='[{"name":"one"},{"name":"two"},{"name":"three"}]'
+  semantic_rows='[
+    {"source_id":"scoped-agent","source_name":"agent","target_id":"id-1","target_name":"one"},
+    {"source_id":"scoped-agent","source_name":"agent","target_id":"id-2","target_name":"two"},
+    {"source_id":"scoped-agent","source_name":"agent","target_id":"id-3","target_name":"three"}
+  ]'
+  printf '%s' "${semantic_rows}" |
+    require_exact_cross_service_semantics \
+      agent "${semantic_targets}" self-test >/dev/null ||
+    fail 'cross-service semantic oracle rejected the expected source/target set'
+  extra_semantic_rows="$(jq -nc --argjson rows "${semantic_rows}" '
+    $rows + [{
+      source_id:"unexpected-agent-id",
+      source_name:"unexpected-agent",
+      target_id:"id-1",
+      target_name:"one"
+    }]
+  ')"
+  if printf '%s' "${extra_semantic_rows}" |
+    require_exact_cross_service_semantics \
+      agent "${semantic_targets}" self-test >/dev/null 2>&1; then
+    fail 'cross-service semantic oracle accepted an unexpected source'
+    return 1
+  fi
 }
 
 if [[ "${1:-}" == --self-test ]]; then
   cross_service_pair_oracle_self_test
-  pass 'cross-service exact-set oracle rejects unexpected sources'
+  pass 'cross-service scoped-ID and semantic oracles reject unexpected sources'
   exit 0
 fi
 
@@ -106,7 +153,7 @@ master_hash="$(jq -er '
 [[ "${master_hash}" =~ ^[0-9a-f]{64}$ ]] ||
   fail 'LiteLLM master credential has no canonical nonempty value_hash'
 
-config_server_id="$(jq -er --arg endpoint "${GATE_URL}" '
+raw_config_server_id="$(jq -er --arg endpoint "${GATE_URL}" '
   [.graph.nodes[] | select(
     (.kinds | index("MCPServer")) and
     .properties.transport == "http" and
@@ -114,7 +161,7 @@ config_server_id="$(jq -er --arg endpoint "${GATE_URL}" '
   )] | if length == 1 then .[0].id
       else error("exact cross-service MCP server absent from config output") end
 ' "${CONFIG_OUTPUT}")"
-config_credential_id="$(jq -er --arg hash "${master_hash}" '
+raw_config_credential_id="$(jq -er --arg hash "${master_hash}" '
   [.graph.nodes[] | select(
     (.kinds | index("Credential")) and
     .properties.name == "Authorization" and
@@ -131,7 +178,7 @@ config_credential_id="$(jq -er --arg hash "${master_hash}" '
 
 # The second required gate header gives the real corpus one positive
 # high-entropy, non-env Credential without changing the value_hash join.
-proof_credential_id="$(jq -er '
+raw_proof_credential_id="$(jq -er '
   [.graph.nodes[] | select(
     (.kinds | index("Credential")) and
     .properties.name == "X-AgentHound-Secret" and
@@ -145,13 +192,13 @@ proof_credential_id="$(jq -er '
   )] | if length == 1 then .[0].id
       else error("enforced high-entropy proof header is not unique") end
 ' "${CONFIG_OUTPUT}")"
-proof_identity_id="$(jq -er --arg proof "${proof_credential_id}" '
+raw_proof_identity_id="$(jq -er --arg proof "${raw_proof_credential_id}" '
   [.graph.edges[] | select(
     .kind == "USES_CREDENTIAL" and .target == $proof
   )] | if length == 1 then .[0].source
       else error("high-entropy proof credential identity is not unique") end
 ' "${CONFIG_OUTPUT}")"
-jq -e --arg server "${config_server_id}" --arg identity "${proof_identity_id}" '
+jq -e --arg server "${raw_config_server_id}" --arg identity "${raw_proof_identity_id}" '
   [.graph.edges[] | select(
     .kind == "AUTHENTICATES_WITH" and
     .source == $server and .target == $identity
@@ -159,27 +206,33 @@ jq -e --arg server "${config_server_id}" --arg identity "${proof_identity_id}" '
 ' "${CONFIG_OUTPUT}" >/dev/null ||
   fail 'enforced high-entropy proof header lacks canonical server attribution'
 
-identity_id="$(jq -er --arg credential "${config_credential_id}" '
+raw_identity_id="$(jq -er --arg credential "${raw_config_credential_id}" '
   [.graph.edges[] | select(
     .kind == "USES_CREDENTIAL" and .target == $credential
   )] | if length == 1 then .[0].source
       else error("master credential does not have exactly one canonical identity") end
 ' "${CONFIG_OUTPUT}")"
-jq -e --arg server "${config_server_id}" --arg identity "${identity_id}" '
+jq -e --arg server "${raw_config_server_id}" --arg identity "${raw_identity_id}" '
   [.graph.edges[] | select(
     .kind == "AUTHENTICATES_WITH" and
     .source == $server and .target == $identity
   )] | length == 1
 ' "${CONFIG_OUTPUT}" >/dev/null ||
   fail 'configured master credential is not on MCPServer -> Identity -> Credential topology'
-agent_id="$(jq -er --arg server "${config_server_id}" '
+raw_agent_id="$(jq -er --arg server "${raw_config_server_id}" '
   [.graph.edges[] | select(
     .kind == "TRUSTS_SERVER" and .target == $server
   )] | if length == 1 then .[0].source
       else error("cross-service MCP server does not have exactly one trusting agent") end
 ' "${CONFIG_OUTPUT}")"
+agent_name="$(jq -er --arg agent "${raw_agent_id}" '
+  [.graph.nodes[] | select(
+    (.kinds | index("AgentInstance")) and .id == $agent
+  )] | if length == 1 then .[0].properties.name
+      else error("cross-service trusting agent identity is not unique") end
+' "${CONFIG_OUTPUT}")"
 
-master_credential_id="$(jq -er --arg hash "${master_hash}" '
+raw_master_credential_id="$(jq -er --arg hash "${master_hash}" '
   [.graph.nodes[] | select(
     (.kinds | index("Credential")) and
     .properties.type == "master_key" and
@@ -187,15 +240,15 @@ master_credential_id="$(jq -er --arg hash "${master_hash}" '
   )] | if length == 1 then .[0].id
       else error("LiteLLM master ID cannot be resolved") end
 ' "${LITELLM_OUTPUT}")"
-gateway_id="$(jq -er --arg master "${master_credential_id}" '
+raw_gateway_id="$(jq -er --arg master "${raw_master_credential_id}" '
   [.graph.edges[] | select(
     .kind == "EXPOSES_CREDENTIAL" and .target == $master
   )] | if length == 1 then .[0].source
       else error("LiteLLM gateway -> master evidence is not unique") end
 ' "${LITELLM_OUTPUT}")"
-target_descriptors="$(jq -cer \
-  --arg gateway "${gateway_id}" \
-  --arg master "${master_credential_id}" '
+raw_target_descriptors="$(jq -cer \
+  --arg gateway "${raw_gateway_id}" \
+  --arg master "${raw_master_credential_id}" '
   . as $document |
   ([$document.graph.edges[] | select(
     .kind == "EXPOSES_CREDENTIAL" and
@@ -240,7 +293,6 @@ target_descriptors="$(jq -cer \
   then $targets
   else error("real LiteLLM processor target set is not the pinned two apiKey plus one virtual_key corpus") end
 ' "${LITELLM_OUTPUT}")"
-target_ids="$(printf '%s' "${target_descriptors}" | jq -c 'map(.id) | sort')"
 
 # Re-ingestion is deliberate: same-ID production retries are supported, and
 # this makes the lane independent of the earlier credential-reach campaign's
@@ -272,9 +324,24 @@ public_detector_rows="$(jq -cer '
 ' "${ARTIFACTS_DIR}/cross-service-credential-chain-findings.json")" ||
   fail 'published cross-service detector rows are malformed'
 public_matches="$(printf '%s' "${public_detector_rows}" |
-  require_exact_cross_service_pairs \
-    "${agent_id}" "${target_ids}" published)" ||
+  require_exact_cross_service_semantics \
+    "${agent_name}" "${raw_target_descriptors}" published)" ||
   fail 'published cross-service findings do not exactly cover the closed fixture'
+scoped_agent_id="$(printf '%s' "${public_matches}" | jq -er '
+  [.[].source_id] | unique |
+  if length == 1 then .[0]
+  else error("published cross-service source identity is not unique") end
+')"
+target_descriptors="$(jq -nc \
+  --argjson raw_targets "${raw_target_descriptors}" \
+  --argjson published "${public_matches}" '
+  $raw_targets | map(
+    . as $target |
+    ($published[] | select(.target_name == $target.name)) as $finding |
+    $target + {id:$finding.target_id}
+  )
+')"
+target_ids="$(printf '%s' "${target_descriptors}" | jq -c 'map(.id) | sort')"
 jq -e '
   .scope.available == true and
   .scope.stale == false and
@@ -282,10 +349,10 @@ jq -e '
 ' "${ARTIFACTS_DIR}/cross-service-credential-chain-findings.json" >/dev/null ||
   fail 'published cross-service finding scope is unavailable or stale'
 printf '%s' "${public_matches}" | jq -e \
-  --argjson targets "${target_descriptors}" '
+  --argjson targets "${raw_target_descriptors}" '
   all(
     . as $finding |
-    ($targets[] | select(.id == $finding.target_id)) as $target |
+    ($targets[] | select(.name == $finding.target_name)) as $target |
     $finding.edge_kind == "CAN_REACH" and
     $finding.source_kind == "AgentInstance" and
     $finding.target_kind == "Credential" and
@@ -298,21 +365,28 @@ printf '%s' "${public_matches}" | jq -e \
   )
 ' >/dev/null ||
   fail 'published cross-service findings do not preserve expected evidence'
-jq -e \
-  --arg credential "${proof_credential_id}" \
-  --arg server "${config_server_id}" \
+high_entropy_match="$(jq -cer \
   --argjson revision "$(jq -er '.scope.revision' "${ARTIFACTS_DIR}/cross-service-credential-chain-findings.json")" '
-  .projection.revision == $revision and
-  ([.rows[] | select(
-    .credential_id == $credential and
+  . as $document |
+  [.rows[] | select(
     .credential_name == "X-AgentHound-Secret" and
     .credential_type == "hardcoded" and
-    .server_id == $server and
     .server_name == "http://mcp-cross-service-gate:3003/mcp" and
     .source == "litellm-master-gated-everything"
-  )] | length) == 1
-' "${ARTIFACTS_DIR}/cross-service-credential-chain-high-entropy.json" >/dev/null ||
+  )] as $matches |
+  if
+    $document.projection.revision == $revision and
+    ($matches | length) == 1 and
+    ($matches[0].credential_id | test("^sha256:[0-9a-f]{64}$")) and
+    ($matches[0].server_id | test("^sha256:[0-9a-f]{64}$"))
+  then $matches[0]
+  else error("published high-entropy query did not attribute the enforced header to its MCP server") end
+' "${ARTIFACTS_DIR}/cross-service-credential-chain-high-entropy.json")" ||
   fail 'published high-entropy query did not attribute the enforced header to its MCP server'
+scoped_proof_credential_id="$(printf '%s' "${high_entropy_match}" |
+  jq -er '.credential_id')"
+high_entropy_server_id="$(printf '%s' "${high_entropy_match}" |
+  jq -er '.server_id')"
 
 graph_query='MATCH (a:AgentInstance)-[e:CAN_REACH]->(target:Credential)
 WHERE e.source_collector = "cross_service_credential_chain"
@@ -333,23 +407,36 @@ ws agenthound-server --log-level error query "${graph_query}" --format json \
   >"${ARTIFACTS_DIR}/cross-service-credential-chain-graph.json" \
   2>"${ARTIFACTS_DIR}/cross-service-credential-chain-graph.stderr"
 
-expected_synthetic="$(jq -nc \
-  --arg configured "${config_credential_id}" \
-  --arg master "${master_credential_id}" '
-  [$configured,$master,"VALUE_HASH_MATCH","identity_correlation","value_hash","cross_service_credential_chain"]
-')"
 graph_matches="$(require_exact_cross_service_pairs \
-  "${agent_id}" "${target_ids}" graph \
+  "${scoped_agent_id}" "${target_ids}" graph \
   <"${ARTIFACTS_DIR}/cross-service-credential-chain-graph.json")" ||
   fail 'current graph has missing or unexpected cross-service detector rows'
+scoped_prefix="$(printf '%s' "${graph_matches}" | jq -cer '
+  [.[].evidence_node_ids[0:6]] | unique |
+  if length == 1 and (.[0] | length) == 6 then .[0]
+  else error("cross-service graph rows do not share one canonical topology prefix") end
+')"
+scoped_server_id="$(printf '%s' "${scoped_prefix}" | jq -er '.[1]')"
+scoped_identity_id="$(printf '%s' "${scoped_prefix}" | jq -er '.[2]')"
+scoped_config_credential_id="$(printf '%s' "${scoped_prefix}" | jq -er '.[3]')"
+scoped_master_credential_id="$(printf '%s' "${scoped_prefix}" | jq -er '.[4]')"
+scoped_gateway_id="$(printf '%s' "${scoped_prefix}" | jq -er '.[5]')"
+[[ "$(printf '%s' "${scoped_prefix}" | jq -er '.[0]')" == "${scoped_agent_id}" &&
+  "${scoped_server_id}" == "${high_entropy_server_id}" ]] ||
+  fail 'cross-service graph topology disagrees with published source or server attribution'
+expected_synthetic="$(jq -nc \
+  --arg configured "${scoped_config_credential_id}" \
+  --arg master "${scoped_master_credential_id}" '
+  [$configured,$master,"VALUE_HASH_MATCH","identity_correlation","value_hash","cross_service_credential_chain"]
+')"
 printf '%s' "${graph_matches}" | jq -e \
   --arg hash "${master_hash}" \
-  --arg agent "${agent_id}" \
-  --arg server "${config_server_id}" \
-  --arg identity "${identity_id}" \
-  --arg configured "${config_credential_id}" \
-  --arg master "${master_credential_id}" \
-  --arg gateway "${gateway_id}" \
+  --arg agent "${scoped_agent_id}" \
+  --arg server "${scoped_server_id}" \
+  --arg identity "${scoped_identity_id}" \
+  --arg configured "${scoped_config_credential_id}" \
+  --arg master "${scoped_master_credential_id}" \
+  --arg gateway "${scoped_gateway_id}" \
   --argjson target_ids "${target_ids}" \
   --argjson synthetic "${expected_synthetic}" '
   ($hash | test("^[0-9a-f]{64}$")) and
@@ -393,17 +480,17 @@ jq -s '.' "${ARTIFACTS_DIR}/cross-service-credential-chain-persisted-evidence.nd
   >"${ARTIFACTS_DIR}/cross-service-credential-chain-persisted-evidence.json"
 
 persisted_matches="$(require_exact_cross_service_pairs \
-  "${agent_id}" "${target_ids}" persisted \
+  "${scoped_agent_id}" "${target_ids}" persisted \
   <"${ARTIFACTS_DIR}/cross-service-credential-chain-persisted-evidence.json")" ||
   fail 'persisted findings have missing or unexpected cross-service detector rows'
 printf '%s' "${persisted_matches}" | jq -e \
   --arg hash "${master_hash}" \
-  --arg agent "${agent_id}" \
-  --arg server "${config_server_id}" \
-  --arg identity "${identity_id}" \
-  --arg configured "${config_credential_id}" \
-  --arg master "${master_credential_id}" \
-  --arg gateway "${gateway_id}" \
+  --arg agent "${scoped_agent_id}" \
+  --arg server "${scoped_server_id}" \
+  --arg identity "${scoped_identity_id}" \
+  --arg configured "${scoped_config_credential_id}" \
+  --arg master "${scoped_master_credential_id}" \
+  --arg gateway "${scoped_gateway_id}" \
   --argjson targets "${target_descriptors}" \
   --argjson public_matches "${public_matches}" '
   (map(.target_id) | sort) == ($targets | map(.id) | sort) and
@@ -472,12 +559,12 @@ status_targets="$(jq -nc \
   )
 ')"
 topology_witnesses="$(jq -nc \
-  --arg agent "${agent_id}" \
-  --arg server "${config_server_id}" \
-  --arg identity "${identity_id}" \
-  --arg configured "${config_credential_id}" \
-  --arg master "${master_credential_id}" \
-  --arg gateway "${gateway_id}" \
+  --arg agent "${scoped_agent_id}" \
+  --arg server "${scoped_server_id}" \
+  --arg identity "${scoped_identity_id}" \
+  --arg configured "${scoped_config_credential_id}" \
+  --arg master "${scoped_master_credential_id}" \
+  --arg gateway "${scoped_gateway_id}" \
   --argjson targets "${target_descriptors}" '
   $targets | map(
     .id as $target |
@@ -497,9 +584,9 @@ topology_witnesses="$(jq -nc \
 
 write_status_json "${RESULT_PATH}" \
   --arg hash "${master_hash}" \
-  --arg configured_credential_id "${config_credential_id}" \
-  --arg master_credential_id "${master_credential_id}" \
-  --arg proof_credential_id "${proof_credential_id}" \
+  --arg configured_credential_id "${scoped_config_credential_id}" \
+  --arg master_credential_id "${scoped_master_credential_id}" \
+  --arg proof_credential_id "${scoped_proof_credential_id}" \
   --arg via_gateway "${via_gateway}" \
   --argjson publication_revision "${publication_revision}" \
   --argjson targets "${status_targets}" \

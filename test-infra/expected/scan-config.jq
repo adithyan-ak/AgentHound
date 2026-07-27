@@ -1,4 +1,5 @@
 .meta.collection.state == "complete"
+and .meta.identity.quality == "strong"
 and ([.graph.nodes[] | select(.kinds | index("ConfigFile")) | .properties.path] | sort)
   == ([
     "/root/.augment/settings.json",

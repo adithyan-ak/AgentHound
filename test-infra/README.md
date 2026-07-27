@@ -50,8 +50,10 @@ The harness asserts the automatic ingest-v5 identity schema and canonical
 derived IDs on every artifact before any scenario-specific oracle runs. The
 server generates its PostgreSQL/Neo4j storage-pair UUID internally. The
 host-native macOS discovery lane remains collection-only and proves that no
-manual identity configuration is needed on either the host or the disposable
-container workstation.
+manual identity configuration is needed on the host. The disposable container
+workstation has a deterministic harness-owned `/etc/machine-id` so its
+cross-artifact Config → MCP → Looter joins exercise strong collection identity
+without reading or reusing the host machine ID.
 
 ## Run
 
