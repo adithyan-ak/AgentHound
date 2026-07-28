@@ -190,11 +190,12 @@ brew install adithyan-ak/agenthound/agenthound \
 ```
 
 <!-- Release automation updates this hidden compatibility pin:
-https://raw.githubusercontent.com/adithyan-ak/agenthound/v1.0.1/install.sh
+https://raw.githubusercontent.com/adithyan-ak/agenthound/1.0.0/install.sh
 -->
 
-Also available via `go install` and release archives with a Cosign-signed checksum
-manifest and per-archive SPDX SBOMs - see the
+Also available from release archives, or from Go at the explicit
+`@1.0.0` revision. Release archives include a Cosign-signed checksum manifest
+and per-archive SPDX SBOMs - see the
 [installation guide](https://docs.agenthound.io/getting-started/install/).
 
 ## 🔪 The offensive lifecycle

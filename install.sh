@@ -2,7 +2,7 @@
 # AgentHound collector installer.
 #
 # Pin to a release tag for integrity:
-#   curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/v1.0.1/install.sh | sh
+#   curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/1.0.0/install.sh | sh
 #
 # Verifies the downloaded archive against checksums.txt before extracting,
 # and against cosign signatures if cosign is available on $PATH.
@@ -41,7 +41,7 @@ if [ -z "$AGENTHOUND_VERSION" ]; then
   VERSION=${resolved##*/tag/}
   if [ -z "$VERSION" ] || [ "$VERSION" = "$resolved" ]; then
     echo "Error: could not determine latest release"
-    echo "       Set AGENTHOUND_VERSION=vX.Y.Z to pin a specific version."
+    echo "       Set AGENTHOUND_VERSION=X.Y.Z to pin a specific version."
     exit 1
   fi
 else
@@ -52,7 +52,7 @@ echo "Version:  ${VERSION}"
 echo "Platform: ${OS}/${ARCH}"
 echo ""
 
-ARCHIVE="agenthound_${VERSION#v}_${OS}_${ARCH}.tar.gz"
+ARCHIVE="agenthound_${VERSION}_${OS}_${ARCH}.tar.gz"
 BASE_URL="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}"
 TMPDIR=$(mktemp -d)
 STAGE=$(mktemp -d)

@@ -18,6 +18,7 @@ on:
       - "Makefile"
       - "scripts/release-notes.sh"
       - "scripts/release-process-test.sh"
+      - "scripts/release-tag-check.sh"
       - "scripts/sync-version.sh"
       - "scripts/verify-homebrew-formula.sh"
       - "scripts/version-check.sh"
