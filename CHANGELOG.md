@@ -32,7 +32,8 @@
   before the destination receives a request.
 - **Native Windows embedded rules.** Built-in detection and fingerprint rules
   use slash-based embedded filesystem paths and are exercised on a native
-  Windows CI runner.
+  Windows CI runner. Native fingerprint probes also recognize Winsock
+  connection refusals.
 - **Truthful interrupted-ingest recovery.** Server startup and an idle recovery
   loop terminalize orphaned running scans, retain the previous publication and
   dirty coverage, and leave the mutable projection safely incomplete until a
