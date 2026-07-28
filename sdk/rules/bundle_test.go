@@ -120,6 +120,43 @@ func TestLoadFingerprintBundle_Tarball(t *testing.T) {
 	}
 }
 
+func TestLoadFingerprintBundle_TarballEntrySizeBoundary(t *testing.T) {
+	exact := make([]byte, int(maxFingerprintBundleEntryBytes))
+	copy(exact, newRuleYAML)
+	for i := len(newRuleYAML); i < len(exact); i++ {
+		exact[i] = ' '
+	}
+
+	exactPath := writeBundleTarball(t, []bundleTarEntry{
+		{name: "exact.yaml", content: exact},
+	})
+	loaded, err := LoadFingerprintBundle(exactPath)
+	if err != nil {
+		t.Fatalf("load exact-boundary bundle: %v", err)
+	}
+	if len(loaded) != 1 || loaded[0].ID != "bundle-only-rule" {
+		t.Fatalf("exact-boundary rules = %+v, want bundle-only-rule", loaded)
+	}
+
+	oversized := append(append([]byte(nil), exact...), 'x')
+	oversizedPath := writeBundleTarball(t, []bundleTarEntry{
+		{name: "oversized.yaml", content: oversized},
+		{name: "valid.yaml", content: []byte(sampleRuleYAML)},
+	})
+	loaded, failures, err := loadFingerprintBundleWithFailures(oversizedPath)
+	if err != nil {
+		t.Fatalf("load oversized bundle: %v", err)
+	}
+	if len(loaded) != 1 || loaded[0].ID != "ollama" {
+		t.Fatalf("oversized bundle rules = %+v, want valid ollama sibling only", loaded)
+	}
+	if len(failures) != 1 ||
+		!strings.Contains(failures[0], "oversized.yaml") ||
+		!strings.Contains(failures[0], "exceeds 1 MiB limit") {
+		t.Fatalf("oversized bundle failures = %v", failures)
+	}
+}
+
 func TestLoadFingerprintBundle_MissingPath(t *testing.T) {
 	_, err := LoadFingerprintBundle("/nonexistent/path/to/bundle.tar.gz")
 	if err == nil {
@@ -216,4 +253,42 @@ func TestMergeFingerprintRules_EmptyOverride(t *testing.T) {
 	if len(merged) != 1 {
 		t.Errorf("got %d rules, want 1", len(merged))
 	}
+}
+
+type bundleTarEntry struct {
+	name    string
+	content []byte
+}
+
+func writeBundleTarball(t *testing.T, entries []bundleTarEntry) string {
+	t.Helper()
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for _, entry := range entries {
+		if err := tw.WriteHeader(&tar.Header{
+			Name:     entry.name,
+			Mode:     0o644,
+			Size:     int64(len(entry.content)),
+			Typeflag: tar.TypeReg,
+		}); err != nil {
+			t.Fatalf("tar header: %v", err)
+		}
+		if _, err := tw.Write(entry.content); err != nil {
+			t.Fatalf("tar write: %v", err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar close: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "rules.tar.gz")
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatalf("write tarball: %v", err)
+	}
+	return path
 }

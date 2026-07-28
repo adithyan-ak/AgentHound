@@ -66,7 +66,8 @@ func getBundleOverridePath() string {
 // path replaces it with the absolute path of the bundle the rule came
 // from so operators have a clear provenance trail.
 const (
-	BundleSourceBuiltin = "builtin"
+	BundleSourceBuiltin            = "builtin"
+	maxFingerprintBundleEntryBytes = int64(1 << 20)
 )
 
 // LoadFingerprintBundle reads fingerprint rules from a directory or
@@ -183,11 +184,34 @@ func loadBundleFromTarballWithFailures(
 		}
 		// Cap per-file size at 1 MiB. Fingerprint YAMLs are tiny;
 		// anything larger is suspicious.
-		data, err := io.ReadAll(io.LimitReader(tr, 1<<20))
+		if hdr.Size > maxFingerprintBundleEntryBytes {
+			failures = append(
+				failures,
+				fmt.Sprintf(
+					"reject fingerprint rule %s: entry size %d exceeds 1 MiB limit",
+					hdr.Name,
+					hdr.Size,
+				),
+			)
+			continue
+		}
+		data, err := io.ReadAll(
+			io.LimitReader(tr, maxFingerprintBundleEntryBytes+1),
+		)
 		if err != nil {
 			failures = append(
 				failures,
 				fmt.Sprintf("read fingerprint rule %s: %v", hdr.Name, err),
+			)
+			continue
+		}
+		if int64(len(data)) > maxFingerprintBundleEntryBytes {
+			failures = append(
+				failures,
+				fmt.Sprintf(
+					"reject fingerprint rule %s: entry exceeds 1 MiB limit",
+					hdr.Name,
+				),
 			)
 			continue
 		}

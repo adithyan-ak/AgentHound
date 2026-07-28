@@ -156,13 +156,17 @@ func runRulesList(cmd *cobra.Command, _ []string) error {
 func runRulesValidate(cmd *cobra.Command, args []string) error {
 	strict, _ := cmd.Flags().GetBool("strict")
 
-	loaded, err := loadRulesForCommand(args)
+	loaded, loadFailures, err := loadRulesForCommand(args)
 	if err != nil {
 		return err
 	}
 
 	passed := 0
-	failed := 0
+	failed := len(loadFailures)
+
+	for _, loadErr := range loadFailures {
+		fmt.Printf("[FAIL] %v\n", loadErr)
+	}
 
 	for _, r := range loaded {
 		valErrs := rules.ValidateRule(r)
@@ -210,9 +214,12 @@ func runRulesTest(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid format %q: must be table or json", format)
 	}
 
-	loaded, err := loadRulesForCommand(args)
+	loaded, loadFailures, err := loadRulesForCommand(args)
 	if err != nil {
 		return err
+	}
+	for _, loadErr := range loadFailures {
+		_, _ = fmt.Fprintf(os.Stderr, "[FAIL] %v\n", loadErr)
 	}
 
 	totalCases := 0
@@ -303,25 +310,25 @@ func runRulesTest(cmd *cobra.Command, args []string) error {
 
 	_, _ = fmt.Fprintf(os.Stderr, "%d test cases: %d passed, %d failed\n", totalPassed+totalFailed, totalPassed, totalFailed)
 
-	if totalFailed > 0 {
+	if totalFailed > 0 || len(loadFailures) > 0 {
 		os.Exit(1)
 	}
 	return nil
 }
 
-func loadRulesForCommand(args []string) ([]rules.Rule, error) {
+func loadRulesForCommand(args []string) ([]rules.Rule, []error, error) {
 	if len(args) == 0 {
 		engine, err := buildRulesEngine()
 		if err != nil {
-			return nil, fmt.Errorf("loading rules: %w", err)
+			return nil, nil, fmt.Errorf("loading rules: %w", err)
 		}
-		return engine.Rules(), nil
+		return engine.Rules(), nil, nil
 	}
 
 	path := args[0]
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, fmt.Errorf("stat %s: %w", path, err)
+		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
 	}
 
 	if info.IsDir() {
@@ -329,9 +336,9 @@ func loadRulesForCommand(args []string) ([]rules.Rule, error) {
 	}
 	r, err := loadRuleFromFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return []rules.Rule{*r}, nil
+	return []rules.Rule{*r}, nil, nil
 }
 
 func loadRuleFromFile(path string) (*rules.Rule, error) {
@@ -353,12 +360,13 @@ func loadRuleFromFile(path string) (*rules.Rule, error) {
 	return &r, nil
 }
 
-func loadRulesFromDir(dir string) ([]rules.Rule, error) {
+func loadRulesFromDir(dir string) ([]rules.Rule, []error, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("reading directory %s: %w", dir, err)
+		return nil, nil, fmt.Errorf("reading directory %s: %w", dir, err)
 	}
 	var loaded []rules.Rule
+	var failures []error
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -369,12 +377,12 @@ func loadRulesFromDir(dir string) ([]rules.Rule, error) {
 		}
 		r, err := loadRuleFromFile(filepath.Join(dir, name))
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+			failures = append(failures, err)
 			continue
 		}
 		loaded = append(loaded, *r)
 	}
-	return loaded, nil
+	return loaded, failures, nil
 }
 
 func yamlHasField(data []byte, field string) bool {
