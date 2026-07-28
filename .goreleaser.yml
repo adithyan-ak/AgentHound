@@ -61,6 +61,7 @@ brews:
       owner: adithyan-ak
       name: homebrew-agenthound
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    skip_upload: true
     ids: [agenthound]
     name: agenthound
     directory: Formula
@@ -75,6 +76,7 @@ brews:
       owner: adithyan-ak
       name: homebrew-agenthound
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    skip_upload: true
     ids: [agenthound-server]
     name: agenthound-server
     directory: Formula
@@ -88,8 +90,7 @@ brews:
 dockers:
   - id: agenthound
     image_templates:
-      - "ghcr.io/adithyan-ak/agenthound:{{ .Version }}-amd64"
-      - "ghcr.io/adithyan-ak/agenthound:latest-amd64"
+      - "{{ .Env.AGENTHOUND_IMAGE_REPOSITORY }}:{{ .Version }}-amd64"
     dockerfile: docker/Dockerfile.agenthound
     use: buildx
     build_flag_templates:
@@ -104,8 +105,7 @@ dockers:
     goarch: amd64
   - id: agenthound-arm64
     image_templates:
-      - "ghcr.io/adithyan-ak/agenthound:{{ .Version }}-arm64"
-      - "ghcr.io/adithyan-ak/agenthound:latest-arm64"
+      - "{{ .Env.AGENTHOUND_IMAGE_REPOSITORY }}:{{ .Version }}-arm64"
     dockerfile: docker/Dockerfile.agenthound
     use: buildx
     build_flag_templates:
@@ -116,8 +116,7 @@ dockers:
     goarch: arm64
   - id: agenthound-server
     image_templates:
-      - "ghcr.io/adithyan-ak/agenthound-server:{{ .Version }}-amd64"
-      - "ghcr.io/adithyan-ak/agenthound-server:latest-amd64"
+      - "{{ .Env.AGENTHOUND_SERVER_IMAGE_REPOSITORY }}:{{ .Version }}-amd64"
     dockerfile: docker/Dockerfile.agenthound-server
     use: buildx
     build_flag_templates:
@@ -128,8 +127,7 @@ dockers:
     goarch: amd64
   - id: agenthound-server-arm64
     image_templates:
-      - "ghcr.io/adithyan-ak/agenthound-server:{{ .Version }}-arm64"
-      - "ghcr.io/adithyan-ak/agenthound-server:latest-arm64"
+      - "{{ .Env.AGENTHOUND_SERVER_IMAGE_REPOSITORY }}:{{ .Version }}-arm64"
     dockerfile: docker/Dockerfile.agenthound-server
     use: buildx
     build_flag_templates:
@@ -140,27 +138,17 @@ dockers:
     goarch: arm64
 
 docker_manifests:
-  - name_template: ghcr.io/adithyan-ak/agenthound:{{ .Version }}
+  - name_template: "{{ .Env.AGENTHOUND_IMAGE_REPOSITORY }}:{{ .Version }}"
     image_templates:
-      - ghcr.io/adithyan-ak/agenthound:{{ .Version }}-amd64
-      - ghcr.io/adithyan-ak/agenthound:{{ .Version }}-arm64
-  - name_template: ghcr.io/adithyan-ak/agenthound:latest
+      - "{{ .Env.AGENTHOUND_IMAGE_REPOSITORY }}:{{ .Version }}-amd64"
+      - "{{ .Env.AGENTHOUND_IMAGE_REPOSITORY }}:{{ .Version }}-arm64"
+  - name_template: "{{ .Env.AGENTHOUND_SERVER_IMAGE_REPOSITORY }}:{{ .Version }}"
     image_templates:
-      - ghcr.io/adithyan-ak/agenthound:latest-amd64
-      - ghcr.io/adithyan-ak/agenthound:latest-arm64
-  - name_template: ghcr.io/adithyan-ak/agenthound-server:{{ .Version }}
-    image_templates:
-      - ghcr.io/adithyan-ak/agenthound-server:{{ .Version }}-amd64
-      - ghcr.io/adithyan-ak/agenthound-server:{{ .Version }}-arm64
-  - name_template: ghcr.io/adithyan-ak/agenthound-server:latest
-    image_templates:
-      - ghcr.io/adithyan-ak/agenthound-server:latest-amd64
-      - ghcr.io/adithyan-ak/agenthound-server:latest-arm64
+      - "{{ .Env.AGENTHOUND_SERVER_IMAGE_REPOSITORY }}:{{ .Version }}-amd64"
+      - "{{ .Env.AGENTHOUND_SERVER_IMAGE_REPOSITORY }}:{{ .Version }}-arm64"
 
-docker_signs:
-  - cmd: cosign
-    artifacts: manifests
-    args: ["sign", "--yes", "${artifact}@${digest}"]
+release:
+  draft: true
 
 changelog:
   sort: asc

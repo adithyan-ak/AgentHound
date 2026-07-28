@@ -5,13 +5,12 @@ set -eu
 
 changelog=${1:-CHANGELOG.md}
 expected=${2:-}
-expected=${expected#v}
 
 if [ ! -f "$changelog" ]; then
   echo "release-notes: changelog not found: $changelog" >&2
   exit 1
 fi
-if [ -n "$expected" ] && ! printf '%s\n' "$expected" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+if [ -n "$expected" ] && ! printf '%s\n' "$expected" | grep -qE '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
   echo "release-notes: invalid expected version: $expected" >&2
   exit 1
 fi
@@ -22,17 +21,17 @@ awk -v expected="$expected" '
     next
   }
 
-  /^## v[0-9]+\.[0-9]+\.[0-9]+([[:space:]]|$)/ {
+  /^## (0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)([[:space:]]|$)/ {
     sections++
     if (sections > 1) {
       exit
     }
 
     version = $0
-    sub(/^## v/, "", version)
+    sub(/^## /, "", version)
     sub(/[[:space:]].*$/, "", version)
     if (expected != "" && version != expected) {
-      print "release-notes: newest version v" version " does not match expected v" expected > "/dev/stderr"
+      print "release-notes: newest version " version " does not match expected " expected > "/dev/stderr"
       exit 2
     }
     if (title != "") {

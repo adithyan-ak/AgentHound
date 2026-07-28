@@ -2,99 +2,87 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
-  # A manual run executes only the publishing preflight: release metadata,
-  # GoReleaser snapshot, and non-mutating Homebrew tap access checks.
+    tags: ['[0-9]*.[0-9]*.[0-9]*']
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Manual release-control operation
+        required: true
+        default: gate-test
+        type: choice
+        options:
+          - gate-test
+          - bootstrap-staging
 
 concurrency:
   group: agenthound-release
-  queue: max
+  cancel-in-progress: false
 
 permissions:
   contents: write
   packages: write
-  id-token: write  # required for cosign keyless OIDC signing
+  id-token: write
+
+env:
+  STAGING_COLLECTOR: ghcr.io/adithyan-ak/agenthound-release-staging
+  STAGING_SERVER: ghcr.io/adithyan-ak/agenthound-server-release-staging
+  PRODUCTION_COLLECTOR: ghcr.io/adithyan-ak/agenthound
+  PRODUCTION_SERVER: ghcr.io/adithyan-ak/agenthound-server
 
 jobs:
-  publishing-preflight:
+  gate-test:
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'gate-test'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    environment: release-production
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
-        with:
-          fetch-depth: 0
-          # The probe below supplies the separate tap token. Persisting the
-          # repository token here would send two Authorization headers.
-          persist-credentials: false
+      - name: Confirm the production approval gate resumed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" != "branch" ]]; then
+            echo "Gate test must be dispatched from a branch" >&2
+            exit 1
+          fi
+          echo "release-production approval resumed a read-only, secret-free gate test for ${GITHUB_REF_NAME}"
 
+  bootstrap-staging:
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'bootstrap-staging'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
         with:
           go-version: "1.25.12"
 
-      - name: Verify release tag and Homebrew tap access
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create repository-linked staging packages
         shell: bash
         run: |
           set -euo pipefail
+          go install github.com/google/go-containerregistry/cmd/crane@v0.20.6
+          crane copy ghcr.io/adithyan-ak/agenthound:1.0.1 \
+            "${STAGING_COLLECTOR}:bootstrap"
+          crane copy ghcr.io/adithyan-ak/agenthound-server:1.0.1 \
+            "${STAGING_SERVER}:bootstrap"
 
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            ./scripts/version-check.sh
-            git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
-            tag_commit="$(git rev-parse --verify "${GITHUB_REF_NAME}^{commit}")"
-            if ! git merge-base --is-ancestor "${tag_commit}" refs/remotes/origin/main; then
-              echo "Release tag ${GITHUB_REF_NAME} does not point to an ancestor of origin/main" >&2
-              exit 1
-            fi
-
-            latest_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
-            highest_tag="$(printf '%s\n' "${latest_tag}" "${GITHUB_REF_NAME}" | sort -V | tail -n 1)"
-            if [[ "${latest_tag}" == "${GITHUB_REF_NAME}" || "${highest_tag}" != "${GITHUB_REF_NAME}" ]]; then
-              echo "Release tag ${GITHUB_REF_NAME} must be newer than current latest ${latest_tag}" >&2
-              exit 1
-            fi
-          fi
-
-          if [[ -z "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]]; then
-            echo "HOMEBREW_TAP_GITHUB_TOKEN is not configured" >&2
-            exit 1
-          fi
-
-          tap_url="https://github.com/adithyan-ak/homebrew-agenthound.git"
-          auth_header="$(printf 'x-access-token:%s' "${HOMEBREW_TAP_GITHUB_TOKEN}" | base64 | tr -d '\n')"
-          tap_sha="$(git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-            ls-remote "${tap_url}" refs/heads/main | awk '{print $1}')"
-
-          if [[ ! "${tap_sha}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Could not resolve the Homebrew tap's main branch with the configured token" >&2
-            exit 1
-          fi
-
-          git fetch --quiet "${tap_url}" "${tap_sha}"
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-            push --dry-run "${tap_url}" "${tap_sha}:refs/heads/main"
-
-      - name: Check GoReleaser configuration
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94  # v7.2.3
-        with:
-          version: 'v2.15.4'
-          args: check
-
-      - name: Run GoReleaser snapshot preflight
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94  # v7.2.3
-        with:
-          version: 'v2.15.4'
-          args: release --clean --snapshot --skip=docker,sign,sbom
-
-  release:
-    needs: publishing-preflight
-    if: startsWith(github.ref, 'refs/tags/v')
+  candidate:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
         with:
@@ -106,17 +94,76 @@ jobs:
           cache: npm
           cache-dependency-path: server/ui/package-lock.json
 
-      - name: Build frontend
-        run: cd server/ui && npm ci --ignore-scripts && npm run build
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: "3.x"
+
+      - name: Verify one-time migration invariants
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Release ref is not strict numeric SemVer: ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+          ./scripts/version-check.sh
+          git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          latest_release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
+          mode="$(./scripts/release-tag-check.sh candidate \
+            "${GITHUB_REF_NAME}" "${latest_release}" refs/remotes/origin/main)"
+          printf '%s\n' "${mode}" > "${RUNNER_TEMP}/release-mode"
+          printf 'Validated %s release transition.\n' "${mode}"
+
+      - name: Verify Homebrew tap write access
+        env:
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]]; then
+            echo "HOMEBREW_TAP_GITHUB_TOKEN is not configured" >&2
+            exit 1
+          fi
+          tap_url="https://github.com/adithyan-ak/homebrew-agenthound.git"
+          git config --local --unset-all http.https://github.com/.extraheader || true
+          auth_header="$(printf 'x-access-token:%s' "${HOMEBREW_TAP_GITHUB_TOKEN}" | base64 | tr -d '\n')"
+          tap_sha="$(git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+            ls-remote "${tap_url}" refs/heads/main | awk '{print $1}')"
+          [[ "${tap_sha}" =~ ^[0-9a-f]{40}$ ]]
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+            push --dry-run "${tap_url}" "${tap_sha}:refs/heads/main"
+
+      - name: Install release gate dependencies
+        run: |
+          pip install -r docs/requirements.txt
+          cd server/ui
+          npm ci --ignore-scripts
 
       - name: Install release gate tools
-        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.0
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.0
+          go install github.com/google/go-containerregistry/cmd/crane@v0.20.6
 
-      - name: Run prerelease gate
-        run: make prerelease
+      - name: Run mandatory release gates
+        run: |
+          make prerelease
+          make docs-check
 
-      - name: Copy frontend dist for embedding
-        run: mkdir -p server/internal/api/ui/dist && cp -r server/ui/dist/* server/internal/api/ui/dist/
+      - name: Copy frontend for release embedding
+        run: |
+          mkdir -p server/internal/api/ui/dist
+          cp -r server/ui/dist/. server/internal/api/ui/dist/
+
+      - name: Check GoReleaser configuration
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94  # v7.2.3
+        with:
+          version: 'v2.15.4'
+          args: check
+        env:
+          AGENTHOUND_IMAGE_REPOSITORY: ${{ env.STAGING_COLLECTOR }}
+          AGENTHOUND_SERVER_IMAGE_REPOSITORY: ${{ env.STAGING_SERVER }}
 
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
 
@@ -132,11 +179,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Prepare curated release notes
+      - name: Reconfirm private staging packages
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_GITHUB_TOKEN }}
         shell: bash
+        run: |
+          set -euo pipefail
+          for package in agenthound-release-staging agenthound-server-release-staging; do
+            visibility="$(gh api "users/adithyan-ak/packages/container/${package}" --jq '.visibility')"
+            if [[ "${visibility}" != "private" ]]; then
+              echo "Staging package ${package} is ${visibility}, expected private" >&2
+              exit 1
+            fi
+          done
+
+      - name: Prepare curated release notes
         run: ./scripts/release-notes.sh CHANGELOG.md "${GITHUB_REF_NAME}" > "${RUNNER_TEMP}/agenthound-release-notes.md"
 
-      - name: Run GoReleaser
+      - name: Build the private candidate once
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94  # v7.2.3
         with:
           version: 'v2.15.4'
@@ -144,155 +204,507 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          AGENTHOUND_IMAGE_REPOSITORY: ${{ env.STAGING_COLLECTOR }}
+          AGENTHOUND_SERVER_IMAGE_REPOSITORY: ${{ env.STAGING_SERVER }}
 
-      - name: Verify published release surfaces
+      - name: Verify candidate assets, formulas, images, and Go origin
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ADMIN_GITHUB_TOKEN: ${{ secrets.RELEASE_ADMIN_GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag}"
+          tag_commit="$(git rev-parse "${tag}^{commit}")"
+          candidate_dir="${RUNNER_TEMP}/release-candidate"
+          mkdir -p "${candidate_dir}/formulas"
+
+          expected_assets="${candidate_dir}/expected-assets.txt"
+          : > "${expected_assets}"
+          for product in agenthound agenthound-server; do
+            for os in darwin linux windows; do
+              for arch in amd64 arm64; do
+                extension=tar.gz
+                [[ "${os}" == windows ]] && extension=zip
+                asset="${product}_${version}_${os}_${arch}.${extension}"
+                printf '%s\n%s.sbom.json\n' "${asset}" "${asset}" >> "${expected_assets}"
+              done
+            done
+          done
+          printf '%s\n' checksums.txt checksums.txt.sigstore.json >> "${expected_assets}"
+          sort -o "${expected_assets}" "${expected_assets}"
+          [[ "$(wc -l < "${expected_assets}" | tr -d ' ')" == 26 ]]
+
+          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"${tag}\" and .draft == true) | .id" | head -n1)"
+          [[ -n "${release_id}" ]]
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" > "${candidate_dir}/draft.json"
+          jq -e --arg tag "${tag}" '.draft == true and .tag_name == $tag' "${candidate_dir}/draft.json" >/dev/null
+          jq -r '.assets[].name' "${candidate_dir}/draft.json" | sort > "${candidate_dir}/draft-assets.txt"
+          diff -u "${expected_assets}" "${candidate_dir}/draft-assets.txt"
+
+          expected_notes="$(cat "${RUNNER_TEMP}/agenthound-release-notes.md")"
+          published_notes="$(jq -r '.body' "${candidate_dir}/draft.json")"
+          [[ "${published_notes}" == "${expected_notes}" ]]
+
+          : > "${candidate_dir}/assets.tsv"
+          while IFS= read -r asset; do
+            local_file="$(find dist -type f -name "${asset}" -print -quit)"
+            [[ -n "${local_file}" ]]
+            digest="$(sha256sum "${local_file}" | awk '{print $1}')"
+            api_digest="$(jq -r --arg name "${asset}" '.assets[] | select(.name == $name) | .digest' \
+              "${candidate_dir}/draft.json")"
+            [[ "${api_digest}" == "sha256:${digest}" ]]
+            printf '%s\t%s\n' "${asset}" "${digest}" >> "${candidate_dir}/assets.tsv"
+          done < "${expected_assets}"
+
+          checksums_file="$(find dist -type f -name checksums.txt -print -quit)"
+          bundle_file="$(find dist -type f -name checksums.txt.sigstore.json -print -quit)"
+          cosign verify-blob \
+            --bundle "${bundle_file}" \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${tag}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${checksums_file}"
+
+          while read -r expected_sum asset; do
+            local_file="$(find dist -type f -name "${asset}" -print -quit)"
+            [[ -n "${local_file}" ]]
+            actual_sum="$(sha256sum "${local_file}" | awk '{print $1}')"
+            [[ "${actual_sum}" == "${expected_sum}" ]]
+          done < "${checksums_file}"
+
+          for product in agenthound agenthound-server; do
+            formula_file="$(find dist -type f -name "${product}.rb" -print -quit)"
+            [[ -n "${formula_file}" ]]
+            cp "${formula_file}" "${candidate_dir}/formulas/${product}.rb"
+            ./scripts/verify-homebrew-formula.sh \
+              "${product}" "${version}" "${tag}" "${formula_file}" "${checksums_file}"
+
+            for arch in amd64 arm64; do
+              image_var=STAGING_COLLECTOR
+              [[ "${product}" == agenthound-server ]] && image_var=STAGING_SERVER
+              image_repo="${!image_var}"
+              image="${image_repo}:${version}-${arch}"
+              output="$(docker run --rm --platform "linux/${arch}" "${image}" --version)"
+              [[ "${output}" == "${product} version ${version} (commit: ${tag_commit})" ]]
+            done
+          done
+
+          : > "${candidate_dir}/images.tsv"
+          for image_repo in "${STAGING_COLLECTOR}" "${STAGING_SERVER}"; do
+            for suffix in "${version}-amd64" "${version}-arm64" "${version}"; do
+              digest="$(crane digest "${image_repo}:${suffix}")"
+              printf '%s\t%s\n' "${image_repo}:${suffix}" "${digest}" >> "${candidate_dir}/images.tsv"
+            done
+            manifest="$(docker buildx imagetools inspect "${image_repo}:${version}")"
+            grep -Fq 'linux/amd64' <<<"${manifest}"
+            grep -Fq 'linux/arm64' <<<"${manifest}"
+          done
+
+          direct_json="$(GOWORK=off GOPROXY=direct GOSUMDB=off \
+            go list -m -json "github.com/adithyan-ak/agenthound@${tag}")"
+          [[ "$(jq -r '.Origin.Ref' <<<"${direct_json}")" == "refs/tags/${tag}" ]]
+          [[ "$(jq -r '.Origin.Hash' <<<"${direct_json}")" == "${tag_commit}" ]]
+
+          git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          [[ -n "${RELEASE_ADMIN_GITHUB_TOKEN:-}" ]]
+          admin_auth_header="$(printf 'x-access-token:%s' "${RELEASE_ADMIN_GITHUB_TOKEN}" | base64 | tr -d '\n')"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${admin_auth_header}" \
+            push --dry-run origin "${tag_commit}:refs/heads/main"
+
+          printf '%s\n' "${tag_commit}" > "${candidate_dir}/release-commit"
+          printf '%s\n' "$(git rev-parse "${tag_commit}^")" > "${candidate_dir}/release-parent"
+          cp "${RUNNER_TEMP}/release-mode" "${candidate_dir}/release-mode"
+          (
+            cd "${candidate_dir}/formulas"
+            sha256sum *.rb | sort > "${candidate_dir}/formula-digests.txt"
+          )
+          cp "${RUNNER_TEMP}/agenthound-release-notes.md" "${candidate_dir}/release-notes.md"
+
+      - name: Preserve verified candidate records
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: release-candidate-${{ github.run_id }}
+          path: ${{ runner.temp }}/release-candidate
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    needs: candidate
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: release-production
+    permissions:
+      actions: write
+      contents: write
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version: "1.25.12"
+
+      - uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3  # v4.1.0
+
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
+
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+
+      - name: Install registry promotion tool
+        run: go install github.com/google/go-containerregistry/cmd/crane@v0.20.6
+
+      - name: Restore verified candidate records
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: release-candidate-${{ github.run_id }}
+          path: ${{ runner.temp }}/release-candidate
+
+      - name: Revalidate the irreversible publication checkpoint
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          records="${RUNNER_TEMP}/release-candidate"
+          tag_commit="$(git rev-parse "${tag}^{commit}")"
+          recorded_commit="$(cat "${records}/release-commit")"
+          recorded_parent="$(cat "${records}/release-parent")"
+          release_mode="$(cat "${records}/release-mode")"
+          [[ "${tag_commit}" == "${recorded_commit}" ]]
+          git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          live_main="$(git rev-parse refs/remotes/origin/main)"
+          if [[ "${release_mode}" == migration ]]; then
+            [[ "$(git rev-list --parents -n1 "${tag_commit}" | awk '{print NF}')" == 2 ]]
+            [[ "$(git rev-parse "${tag_commit}^")" == "${recorded_parent}" ]]
+            [[ "${live_main}" == "${recorded_parent}" ]]
+          else
+            [[ "${release_mode}" == normal ]]
+            [[ "${live_main}" == "${recorded_commit}" ]]
+          fi
+
+          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"${tag}\")" | head -n1)"
+          [[ -n "${release_json}" ]]
+          [[ "$(jq -r '.draft' <<<"${release_json}")" == true ]]
+          [[ "$(jq -r '.immutable' <<<"${release_json}")" == false ]]
+          [[ "$(jq -r '.body' <<<"${release_json}")" == "$(cat "${records}/release-notes.md")" ]]
+          [[ "$(gh api "repos/${GITHUB_REPOSITORY}/immutable-releases" --jq '.enabled')" == true ]]
+
+          ruleset_id="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets" --paginate \
+            --jq '.[] | select(.name == "Protect numeric release tags") | .id')"
+          [[ -n "${ruleset_id}" ]]
+          bypass_count="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}" \
+            --jq '[.bypass_actors[] | select(.actor_type == "User" and .actor_id == 34126904 and .bypass_mode == "always")] | length')"
+          [[ "${bypass_count}" == 1 ]]
+
+          for package in agenthound-release-staging agenthound-server-release-staging; do
+            [[ "$(gh api "users/adithyan-ak/packages/container/${package}" --jq '.visibility')" == private ]]
+          done
+
+          release_id="$(jq -r '.id' <<<"${release_json}")"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" > "${RUNNER_TEMP}/live-draft.json"
+          jq -r '.assets[] | [.name, (.digest | sub("^sha256:"; ""))] | @tsv' \
+            "${RUNNER_TEMP}/live-draft.json" | sort > "${RUNNER_TEMP}/live-assets.tsv"
+          diff -u "${records}/assets.tsv" "${RUNNER_TEMP}/live-assets.tsv"
+          (
+            cd "${records}/formulas"
+            sha256sum --check "${records}/formula-digests.txt"
+          )
+          while IFS=$'\t' read -r image digest; do
+            [[ "$(crane digest "${image}")" == "${digest}" ]]
+          done < "${records}/images.tsv"
+
+      - name: Publish and prove the immutable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          records="${RUNNER_TEMP}/release-candidate"
+          tag_commit="$(cat "${records}/release-commit")"
+          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"${tag}\")" | head -n1)"
+          release_id="$(jq -r '.id' <<<"${release_json}")"
+          if [[ "$(jq -r '.draft' <<<"${release_json}")" == true ]]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+              -F draft=false -F make_latest=true >/dev/null
+          fi
+
+          published="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}")"
+          jq -e --arg tag "${tag}" \
+            '.draft == false and .immutable == true and .tag_name == $tag and (.assets | length) == 26' \
+            <<<"${published}" >/dev/null
+          [[ "$(git rev-parse "${tag}^{commit}")" == "${tag_commit}" ]]
+          jq -r '.assets[] | [.name, (.digest | sub("^sha256:"; ""))] | @tsv' \
+            <<<"${published}" | sort > "${RUNNER_TEMP}/published-assets.tsv"
+          diff -u "${records}/assets.tsv" "${RUNNER_TEMP}/published-assets.tsv"
+          [[ "$(jq -r '.body' <<<"${published}")" == "$(cat "${records}/release-notes.md")" ]]
+          [[ "$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')" == "${tag}" ]]
+
+      - name: Fast-forward main to the immutable release commit
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          records="${RUNNER_TEMP}/release-candidate"
+          tag_commit="$(cat "${records}/release-commit")"
+          release_parent="$(cat "${records}/release-parent")"
+          git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          live_main="$(git rev-parse refs/remotes/origin/main)"
+          if [[ "${live_main}" == "${release_parent}" ]]; then
+            auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              push origin "${tag_commit}:refs/heads/main"
+          elif [[ "${live_main}" != "${tag_commit}" ]]; then
+            echo "main moved unexpectedly to ${live_main}" >&2
+            exit 1
+          fi
+          git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          ./scripts/release-tag-check.sh published "${GITHUB_REF_NAME}" refs/remotes/origin/main >/dev/null
+
+      - name: Promote verified image digests and sign production identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          records="${RUNNER_TEMP}/release-candidate"
+          for pair in \
+            "${STAGING_COLLECTOR} ${PRODUCTION_COLLECTOR}" \
+            "${STAGING_SERVER} ${PRODUCTION_SERVER}"; do
+            read -r staging production <<<"${pair}"
+            for arch in amd64 arm64; do
+              crane copy "${staging}:${tag}-${arch}" "${production}:${tag}-${arch}"
+              crane copy "${staging}:${tag}-${arch}" "${production}:latest-${arch}"
+              expected="$(crane digest "${staging}:${tag}-${arch}")"
+              [[ "$(crane digest "${production}:${tag}-${arch}")" == "${expected}" ]]
+              [[ "$(crane digest "${production}:latest-${arch}")" == "${expected}" ]]
+            done
+            crane copy "${staging}:${tag}" "${production}:${tag}"
+            crane copy "${staging}:${tag}" "${production}:latest"
+            expected="$(crane digest "${staging}:${tag}")"
+            [[ "$(crane digest "${production}:${tag}")" == "${expected}" ]]
+            [[ "$(crane digest "${production}:latest")" == "${expected}" ]]
+            cosign sign --yes "${production}@${expected}"
+            cosign verify \
+              --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${tag}" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "${production}@${expected}" >/dev/null
+          done
+
+          while IFS=$'\t' read -r staging_ref expected; do
+            staging_repo="${staging_ref%%:*}"
+            suffix="${staging_ref##*:}"
+            production="${PRODUCTION_COLLECTOR}"
+            [[ "${staging_repo}" == "${STAGING_SERVER}" ]] && production="${PRODUCTION_SERVER}"
+            [[ "$(crane digest "${production}:${suffix}")" == "${expected}" ]]
+          done < "${records}/images.tsv"
+
+      - name: Publish the exact verified Homebrew formulas
+        env:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
+          records="${RUNNER_TEMP}/release-candidate"
+          tap="${RUNNER_TEMP}/homebrew-agenthound"
+          auth_header="$(printf 'x-access-token:%s' "${HOMEBREW_TAP_GITHUB_TOKEN}" | base64 | tr -d '\n')"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+            clone --quiet https://github.com/adithyan-ak/homebrew-agenthound.git "${tap}"
+          cp "${records}/formulas/agenthound.rb" "${tap}/Formula/agenthound.rb"
+          cp "${records}/formulas/agenthound-server.rb" "${tap}/Formula/agenthound-server.rb"
+          (
+            cd "${tap}"
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            if ! git diff --quiet -- Formula/agenthound.rb Formula/agenthound-server.rb; then
+              git add Formula/agenthound.rb Formula/agenthound-server.rb
+              git commit -m "brew: AgentHound ${GITHUB_REF_NAME}"
+              git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+                push origin HEAD:main
+            fi
+          )
+          (
+            cd "${records}/formulas"
+            sha256sum --check "${records}/formula-digests.txt"
+          )
 
+      - name: Remove the temporary numeric-tag rollback bypass
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruleset_id="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets" --paginate \
+            --jq '.[] | select(.name == "Protect numeric release tags") | .id')"
+          live="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}")"
+          jq '{name, target, enforcement, bypass_actors: [], conditions, rules}' <<<"${live}" \
+            > "${RUNNER_TEMP}/numeric-ruleset.json"
+          gh api --method PUT "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}" \
+            --input "${RUNNER_TEMP}/numeric-ruleset.json" >/dev/null
+          [[ "$(gh api "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}" --jq '.bypass_actors | length')" == 0 ]]
+
+      - name: Verify public GitHub, installer, GHCR, Homebrew, and Go surfaces
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
           tag="${GITHUB_REF_NAME}"
-          version="${tag#v}"
-          repo="${GITHUB_REPOSITORY}"
-          tag_commit="$(git rev-parse --verify "${tag}^{commit}")"
-          module="github.com/adithyan-ak/agenthound"
+          commit="$(cat "${RUNNER_TEMP}/release-candidate/release-commit")"
+          module=github.com/adithyan-ak/agenthound
+          [[ "$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')" == "${tag}" ]]
+          [[ "$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" --jq '.immutable')" == true ]]
+          git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          ./scripts/release-tag-check.sh published "${tag}" refs/remotes/origin/main >/dev/null
 
-          latest_tag="$(gh api "repos/${repo}/releases/latest" --jq '.tag_name')"
-          if [[ "${latest_tag}" != "${tag}" ]]; then
-            echo "Latest GitHub release is ${latest_tag}, expected ${tag}" >&2
-            exit 1
-          fi
-
-          asset_count="$(gh release view --repo "${repo}" "${tag}" --json assets --jq '.assets | length')"
-          if [[ "${asset_count}" != "26" ]]; then
-            echo "Expected 26 release assets, found ${asset_count}" >&2
-            exit 1
-          fi
-
-          expected_notes="$(cat "${RUNNER_TEMP}/agenthound-release-notes.md")"
-          published_notes="$(gh release view --repo "${repo}" "${tag}" --json body --jq '.body')"
-          if [[ "${published_notes}" != "${expected_notes}" ]]; then
-            echo "Published release notes do not match the curated changelog section" >&2
-            exit 1
-          fi
-
-          verify_dir="$(mktemp -d)"
-          gh release download --repo "${repo}" "${tag}" --pattern checksums.txt --dir "${verify_dir}"
-
-          for formula in agenthound agenthound-server; do
-            formula_file="${verify_dir}/${formula}.rb"
-            GH_TOKEN="${HOMEBREW_TAP_GITHUB_TOKEN}" gh api \
-              -H 'Accept: application/vnd.github.raw+json' \
-              "repos/adithyan-ak/homebrew-agenthound/contents/Formula/${formula}.rb" > "${formula_file}"
-            ./scripts/verify-homebrew-formula.sh \
-              "${formula}" "${version}" "${tag}" "${formula_file}" "${verify_dir}/checksums.txt"
-          done
-
-          for image in agenthound agenthound-server; do
-            version_image="ghcr.io/adithyan-ak/${image}:${version}"
-            latest_image="ghcr.io/adithyan-ak/${image}:latest"
-            manifest="$(docker buildx imagetools inspect "${version_image}")"
-            grep -Fq 'linux/amd64' <<<"${manifest}"
-            grep -Fq 'linux/arm64' <<<"${manifest}"
-
-            version_digest="$(docker buildx imagetools inspect --raw "${version_image}" | sha256sum | awk '{print $1}')"
-            latest_digest="$(docker buildx imagetools inspect --raw "${latest_image}" | sha256sum | awk '{print $1}')"
-            if [[ "${version_digest}" != "${latest_digest}" ]]; then
-              echo "GHCR ${image}:latest and :${version} resolve to different manifests" >&2
-              exit 1
-            fi
-
-            version_output="$(docker run --rm "${version_image}" --version)"
-            expected_output="${image} version ${version} (commit: ${tag_commit})"
-            if [[ "${version_output}" != "${expected_output}" ]]; then
-              echo "Unexpected ${image} container version: ${version_output}" >&2
-              exit 1
-            fi
-          done
-          if ! grep -Eq '^[[:space:]]*image:[[:space:]]*ghcr\.io/adithyan-ak/agenthound-server:latest[[:space:]]*$' \
-            docker/docker-compose.public.yml; then
-            echo "Public Docker Compose no longer defaults to agenthound-server:latest" >&2
-            exit 1
-          fi
-
-          installer_dir="$(mktemp -d)"
-          curl -sSfL "https://raw.githubusercontent.com/${repo}/main/install.sh" |
-            env -u AGENTHOUND_VERSION AGENTHOUND_INSTALL_DIR="${installer_dir}" sh
-          installer_output="$("${installer_dir}/agenthound" --version)"
-          expected_installer_output="agenthound version ${version} (commit: ${tag_commit})"
-          if [[ "${installer_output}" != "${expected_installer_output}" ]]; then
-            echo "Default installer resolved unexpected build: ${installer_output}" >&2
-            exit 1
-          fi
-
-          go_verify_dir="$(mktemp -d)"
-          latest_json=""
-          for attempt in $(seq 1 12); do
-            attempt_modcache="${go_verify_dir}/mod-${attempt}"
-            candidate="$(GOWORK=off GOMODCACHE="${attempt_modcache}" GOPROXY=https://proxy.golang.org \
-              GOSUMDB=sum.golang.org timeout 60s go list -m -json "${module}@latest" 2>&1 || true)"
-            candidate_version="$(jq -r '.Version // empty' <<<"${candidate}" 2>/dev/null || true)"
-            if [[ "${candidate_version}" == "${tag}" ]]; then
-              latest_json="${candidate}"
+          first_digest="$(head -n1 "${RUNNER_TEMP}/release-candidate/assets.tsv" | cut -f2)"
+          attestation=
+          for attempt in $(seq 1 30); do
+            candidate="$(gh api "users/adithyan-ak/attestations/sha256:${first_digest}?per_page=100" 2>/dev/null || true)"
+            if jq -e '.attestations | length > 0' <<<"${candidate}" >/dev/null 2>&1; then
+              attestation="${candidate}"
               break
             fi
-            echo "Go proxy latest is ${candidate_version:-unavailable}; waiting for ${tag} (${attempt}/12)"
+            echo "Release attestation is not available yet; retry ${attempt}/30"
             sleep 10
           done
-          if [[ -z "${latest_json}" ]]; then
-            echo "Go proxy did not resolve ${module}@latest to ${tag}" >&2
-            exit 1
-          fi
+          [[ -n "${attestation}" ]]
+          jq -r '.attestations[0].bundle.dsseEnvelope.payload' <<<"${attestation}" |
+            base64 --decode > "${RUNNER_TEMP}/release-attestation.json"
+          jq -e --arg tag "${tag}" --arg repo "${GITHUB_REPOSITORY}" \
+            '.predicateType == "https://in-toto.io/attestation/release/v0.2"
+             and .predicate.tag == $tag
+             and (.predicate.repository | ascii_downcase) == ($repo | ascii_downcase)
+             and (.subject | length) == 27' \
+            "${RUNNER_TEMP}/release-attestation.json" >/dev/null
+          tag_object="$(git rev-parse "${tag}")"
+          jq -e --arg uri "pkg:github/adithyan-ak/AgentHound@${tag}" --arg sha1 "${tag_object}" \
+            '.subject[] | select(.uri == $uri and .digest.sha1 == $sha1)' \
+            "${RUNNER_TEMP}/release-attestation.json" >/dev/null
+          jq -r '.subject[] | select(.name != null) | [.name, .digest.sha256] | @tsv' \
+            "${RUNNER_TEMP}/release-attestation.json" | sort > "${RUNNER_TEMP}/attested-assets.tsv"
+          diff -u "${RUNNER_TEMP}/release-candidate/assets.tsv" "${RUNNER_TEMP}/attested-assets.tsv"
 
-          origin_hash="$(jq -r '.Origin.Hash // "not reported"' <<<"${latest_json}")"
-          echo "Go latest Origin.Hash (diagnostic only): ${origin_hash}"
-
-          versions_modcache="${go_verify_dir}/versions-modcache"
-          normal_versions="$(GOWORK=off GOMODCACHE="${versions_modcache}" GOPROXY=https://proxy.golang.org \
-            GOSUMDB=sum.golang.org timeout 60s go list -m -versions -json "${module}@latest")"
-          all_versions="$(GOWORK=off GOMODCACHE="${versions_modcache}" GOPROXY=https://proxy.golang.org \
-            GOSUMDB=sum.golang.org timeout 60s go list -m -versions -retracted -json "${module}@latest")"
-          if ! jq -e --arg latest "${tag}" \
-            '.Version == $latest and (.Versions | index($latest) != null)' <<<"${normal_versions}" >/dev/null; then
-            echo "Normal Go version listing does not select and include ${tag}" >&2
-            exit 1
-          fi
-
-          retracted_versions=(v0.5.0 v0.6.0 v0.6.1 v0.7.0 v0.8.0 v0.9.0 v1.0.0)
-          for retracted in "${retracted_versions[@]}"; do
-            if jq -e --arg version "${retracted}" '.Versions | index($version) != null' \
-              <<<"${normal_versions}" >/dev/null; then
-              echo "Normal Go version listing still includes retracted ${retracted}" >&2
-              exit 1
-            fi
-            if ! jq -e --arg version "${retracted}" '.Versions | index($version) != null' \
-              <<<"${all_versions}" >/dev/null; then
-              echo "Go -retracted version listing omits published ${retracted}" >&2
-              exit 1
-            fi
+          for image in "${PRODUCTION_COLLECTOR}" "${PRODUCTION_SERVER}"; do
+            [[ "$(crane digest "${image}:${tag}")" == "$(crane digest "${image}:latest")" ]]
+            manifest="$(docker buildx imagetools inspect "${image}:${tag}")"
+            grep -Fq 'linux/amd64' <<<"${manifest}"
+            grep -Fq 'linux/arm64' <<<"${manifest}"
+          done
+          for product in agenthound agenthound-server; do
+            image="${PRODUCTION_COLLECTOR}"
+            [[ "${product}" == agenthound-server ]] && image="${PRODUCTION_SERVER}"
+            for arch in amd64 arm64; do
+              output="$(docker run --rm --platform "linux/${arch}" "${image}:${tag}-${arch}" --version)"
+              [[ "${output}" == "${product} version ${tag} (commit: ${commit})" ]]
+            done
           done
 
-          download_json="$(GOWORK=off GOMODCACHE="${go_verify_dir}/download-modcache" \
-            GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org \
-            timeout 60s go mod download -json "${module}@${tag}")"
-          if ! jq -e --arg version "${tag}" '.Version == $version' <<<"${download_json}" >/dev/null; then
-            echo "go mod download did not resolve ${module}@${tag}" >&2
-            exit 1
+          install_default="$(mktemp -d)"
+          curl -sSfL "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh" |
+            env -u AGENTHOUND_VERSION AGENTHOUND_INSTALL_DIR="${install_default}" sh
+          [[ "$("${install_default}/agenthound" --version)" == "agenthound version ${tag} (commit: ${commit})" ]]
+          install_pinned="$(mktemp -d)"
+          curl -sSfL "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh" |
+            env AGENTHOUND_VERSION="${tag}" AGENTHOUND_INSTALL_DIR="${install_pinned}" sh
+          [[ "$("${install_pinned}/agenthound" --version)" == "agenthound version ${tag} (commit: ${commit})" ]]
+
+          verify_dir="$(mktemp -d)"
+          gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" \
+            --pattern checksums.txt --dir "${verify_dir}"
+          for formula in agenthound agenthound-server; do
+            GH_TOKEN="${HOMEBREW_TAP_GITHUB_TOKEN}" gh api \
+              -H 'Accept: application/vnd.github.raw+json' \
+              "repos/adithyan-ak/homebrew-agenthound/contents/Formula/${formula}.rb" \
+              > "${verify_dir}/${formula}.rb"
+            ./scripts/verify-homebrew-formula.sh \
+              "${formula}" "${tag}" "${tag}" "${verify_dir}/${formula}.rb" "${verify_dir}/checksums.txt"
+          done
+
+          proxy_json=
+          for attempt in $(seq 1 30); do
+            modcache="$(mktemp -d)"
+            candidate="$(GOWORK=off GOMODCACHE="${modcache}" GOPROXY=https://proxy.golang.org \
+              GOSUMDB=sum.golang.org timeout 60s go list -m -json "${module}@${tag}" 2>/dev/null || true)"
+            if jq -e '.Version != null' <<<"${candidate}" >/dev/null 2>&1; then
+              proxy_json="${candidate}"
+              break
+            fi
+            echo "Go proxy has not resolved @${tag}; retry ${attempt}/30"
+            sleep 60
+          done
+          [[ -n "${proxy_json}" ]]
+          proxy_version="$(jq -r '.Version' <<<"${proxy_json}")"
+
+          direct_json="$(GOWORK=off GOPROXY=direct GOSUMDB=off go list -m -json "${module}@${tag}")"
+          [[ "$(jq -r '.Origin.Ref' <<<"${direct_json}")" == "refs/tags/${tag}" ]]
+          [[ "$(jq -r '.Origin.Hash' <<<"${direct_json}")" == "${commit}" ]]
+          proxy_download="$(GOWORK=off GOMODCACHE="$(mktemp -d)" GOPROXY=https://proxy.golang.org \
+            GOSUMDB=sum.golang.org go mod download -json "${module}@${tag}")"
+          direct_download="$(GOWORK=off GOMODCACHE="$(mktemp -d)" GOPROXY=direct \
+            GOSUMDB=off go mod download -json "${module}@${tag}")"
+          if [[ "$(jq -r '.Version' <<<"${proxy_download}")" == "$(jq -r '.Version' <<<"${direct_download}")" ]]; then
+            [[ "$(jq -r '.Sum' <<<"${proxy_download}")" == "$(jq -r '.Sum' <<<"${direct_download}")" ]]
+            [[ "$(jq -r '.GoModSum' <<<"${proxy_download}")" == "$(jq -r '.GoModSum' <<<"${direct_download}")" ]]
           fi
 
-          mkdir -p "${go_verify_dir}/bin" "${go_verify_dir}/install-modcache" "${go_verify_dir}/build-cache"
+          go_root="$(mktemp -d)"
+          mkdir -p "${go_root}/bin"
           for command_path in collector/cmd/agenthound server/cmd/agenthound-server; do
-            GOWORK=off GOBIN="${go_verify_dir}/bin" GOMODCACHE="${go_verify_dir}/install-modcache" \
-              GOCACHE="${go_verify_dir}/build-cache" GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org \
-              timeout 10m go install "${module}/${command_path}@latest"
+            GOWORK=off GOBIN="${go_root}/bin" GOMODCACHE="${go_root}/mod" GOCACHE="${go_root}/cache" \
+              GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org \
+              timeout 10m go install "${module}/${command_path}@${tag}"
           done
-          for binary in agenthound agenthound-server; do
-            source_output="$("${go_verify_dir}/bin/${binary}" --version)"
-            expected_source_output="${binary} version ${version} (commit: none)"
-            if [[ "${source_output}" != "${expected_source_output}" ]]; then
-              echo "Unexpected go install provenance for ${binary}: ${source_output}" >&2
-              exit 1
-            fi
-          done
+          [[ "$("${go_root}/bin/agenthound" --version)" == "agenthound version ${proxy_version} (commit: none)" ]]
+          [[ "$("${go_root}/bin/agenthound-server" --version)" == "agenthound-server version ${proxy_version} (commit: none)" ]]
+
+      - name: Remove the temporary candidate artifact
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          artifact_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
+            --jq '.artifacts[] | select(.name == "release-candidate-'"${GITHUB_RUN_ID}"'") | .id')"
+          [[ -z "${artifact_id}" ]] || gh api --method DELETE \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
+
+  homebrew-acceptance:
+    needs: publish
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0
+      - name: Clean install and test both formulas
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew uninstall --force agenthound agenthound-server 2>/dev/null || true
+          brew untap adithyan-ak/agenthound 2>/dev/null || true
+          brew tap adithyan-ak/agenthound
+          brew install adithyan-ak/agenthound/agenthound \
+            adithyan-ak/agenthound/agenthound-server
+          brew test adithyan-ak/agenthound/agenthound
+          brew test adithyan-ak/agenthound/agenthound-server
+          commit="$(git rev-parse "${GITHUB_REF_NAME}^{commit}")"
+          [[ "$(agenthound --version)" == "agenthound version ${GITHUB_REF_NAME} (commit: ${commit})" ]]
+          [[ "$(agenthound-server --version)" == "agenthound-server version ${GITHUB_REF_NAME} (commit: ${commit})" ]]

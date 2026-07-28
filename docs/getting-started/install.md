@@ -20,7 +20,7 @@ brew install adithyan-ak/agenthound/agenthound            # collector only
 brew install adithyan-ak/agenthound/agenthound-server     # analysis server
 ```
 
-Both formulas are published by GoReleaser on every tagged release. The
+Both formulas are published from the verified release candidate. The
 fully-qualified names are required because Homebrew does not automatically
 trust third-party taps. Multi-arch (amd64 + arm64).
 
@@ -72,9 +72,14 @@ go build -o bin/agenthound ./collector/cmd/agenthound
 ## Via `go install`
 
 ```bash
-go install github.com/adithyan-ak/agenthound/collector/cmd/agenthound@latest
-go install github.com/adithyan-ak/agenthound/server/cmd/agenthound-server@latest
+go install github.com/adithyan-ak/agenthound/collector/cmd/agenthound@1.0.0
+go install github.com/adithyan-ak/agenthound/server/cmd/agenthound-server@1.0.0
 ```
+
+The numeric Git tag is an explicit revision for Go rather than a canonical
+`v1.0.0` module version, so Go reports a pseudo-version for this installation.
+Always use the explicit `@1.0.0` revision; `@latest` can resolve the unsupported
+historical `v1.0.1` module from public proxy caches.
 
 ## Verify
 
@@ -83,9 +88,10 @@ agenthound version
 agenthound-server version
 ```
 
-Both print `version (commit: commit)`. On a release build GoReleaser injects the
-git-tag version and commit hash. A local build without linker overrides prints
-the compiled development defaults.
+GoReleaser archives and containers print the release version and source commit.
+A `go install` build reports Go's pseudo-version and may not include a linker
+commit. A local build without linker overrides prints the compiled development
+defaults.
 
 ## Release signatures
 

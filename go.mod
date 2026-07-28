@@ -2,8 +2,9 @@ module github.com/adithyan-ak/agenthound
 
 go 1.25.12
 
-// v0.5.0 through v1.0.0 are superseded unsupported publications; v1.0.0 is
-// inconsistent across GitHub and the Go module proxy. Use v1.0.1 or later.
+// v0.5.0 through v1.0.0 are superseded unsupported publications. The historical
+// v1.0.1 is also unsupported, but a numeric Git tag cannot make that canonical
+// module version technically retracted. Use the explicit revision @1.0.0.
 retract [v0.5.0, v1.0.0]
 
 require (
