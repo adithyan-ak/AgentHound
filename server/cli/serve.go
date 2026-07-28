@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -12,7 +13,13 @@ import (
 
 	"github.com/adithyan-ak/agenthound/sdk/rules"
 	"github.com/adithyan-ak/agenthound/server/internal/api"
+	"github.com/adithyan-ak/agenthound/server/internal/ingest"
 	"github.com/spf13/cobra"
+)
+
+const (
+	interruptedIngestRecoveryInterval = 5 * time.Second
+	interruptedIngestRecoveryTimeout  = 3 * time.Second
 )
 
 var serveCmd = &cobra.Command{
@@ -27,6 +34,13 @@ var serveCmd = &cobra.Command{
 			return err
 		}
 		defer cleanup()
+
+		if err := recoverInterruptedIngestsOnce(ctx, infra.Pipeline); err != nil {
+			return err
+		}
+		recoveryCtx, cancelRecovery := context.WithCancel(ctx)
+		defer cancelRecovery()
+		go runInterruptedIngestRecovery(recoveryCtx, infra.Pipeline)
 
 		rulesEngine, err := rules.NewEngine(rules.LoadOptions{})
 		if err != nil {
@@ -69,6 +83,44 @@ var serveCmd = &cobra.Command{
 			return server.Shutdown(shutdownCtx)
 		}
 	},
+}
+
+func recoverInterruptedIngestsOnce(
+	ctx context.Context,
+	pipeline *ingest.Pipeline,
+) error {
+	recoveryCtx, cancel := context.WithTimeout(ctx, interruptedIngestRecoveryTimeout)
+	defer cancel()
+	recovered, err := pipeline.RecoverInterruptedIngests(recoveryCtx)
+	if err != nil {
+		return fmt.Errorf("recover interrupted ingests: %w", err)
+	}
+	if len(recovered) > 0 {
+		slog.Warn(
+			"recovered interrupted ingests",
+			"count", len(recovered),
+			"scan_ids", recovered,
+		)
+	}
+	return nil
+}
+
+func runInterruptedIngestRecovery(
+	ctx context.Context,
+	pipeline *ingest.Pipeline,
+) {
+	ticker := time.NewTicker(interruptedIngestRecoveryInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := recoverInterruptedIngestsOnce(ctx, pipeline); err != nil {
+				slog.Warn("interrupted ingest recovery failed", "error", err)
+			}
+		}
+	}
 }
 
 func init() {

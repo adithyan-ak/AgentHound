@@ -423,6 +423,11 @@ A2A v1.0.1 signature verification separates cryptographic validity from identity
 
 Remote `jku` requires HTTPS on the initial request and every redirect, validates the certificate identity even when `--insecure` is used for card retrieval, blocks link-local/metadata destinations, rejects fragments, and bounds redirects, bytes, key count, signatures, unique remote sources, and aggregate verification time. Invalid, expired, or explicitly revoked key evidence is rejected. Operators needing private/self-signed key infrastructure must pin the key locally with `--a2a-trusted-keys`; `--insecure` is not a bypass.
 
+Bearer-authenticated Agent Card retrieval permits redirects only within the
+original HTTP origin: scheme, hostname, and effective port must all match.
+HTTPS-to-HTTP redirects are rejected even without a bearer credential.
+Redirect failures never include the credential in errors or logs.
+
 Card conformance and signature state qualify functional A2A edges. Invalid
 cards are retained for visibility, but declarations alone do not create active
 authentication identities or edges. A v1.0.1 empty security requirement is a

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/common"
@@ -44,7 +46,7 @@ func FetchAgentCard(ctx context.Context, targetURL string, authToken string, ins
 			if len(via) >= 5 {
 				return fmt.Errorf("too many redirects (max 5)")
 			}
-			return nil
+			return validateAgentCardRedirect(req, via, authToken != "")
 		},
 	}
 
@@ -61,6 +63,45 @@ func FetchAgentCard(ctx context.Context, targetURL string, authToken string, ins
 	}
 
 	return card, nil
+}
+
+func validateAgentCardRedirect(
+	req *http.Request,
+	via []*http.Request,
+	credentialed bool,
+) error {
+	if len(via) == 0 {
+		return nil
+	}
+	original := via[0].URL
+	if strings.EqualFold(original.Scheme, "https") &&
+		!strings.EqualFold(req.URL.Scheme, "https") {
+		return fmt.Errorf("agent card redirect cannot downgrade from HTTPS")
+	}
+	if credentialed && !sameHTTPOrigin(original, req.URL) {
+		return fmt.Errorf("agent card redirect cannot change bearer credential origin")
+	}
+	return nil
+}
+
+func sameHTTPOrigin(left, right *url.URL) bool {
+	return strings.EqualFold(left.Scheme, right.Scheme) &&
+		strings.EqualFold(left.Hostname(), right.Hostname()) &&
+		effectiveHTTPPort(left) == effectiveHTTPPort(right)
+}
+
+func effectiveHTTPPort(parsed *url.URL) string {
+	if port := parsed.Port(); port != "" {
+		return port
+	}
+	switch {
+	case strings.EqualFold(parsed.Scheme, "http"):
+		return "80"
+	case strings.EqualFold(parsed.Scheme, "https"):
+		return "443"
+	default:
+		return ""
+	}
 }
 
 type FetchError struct {

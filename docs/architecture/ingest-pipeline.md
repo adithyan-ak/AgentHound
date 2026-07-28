@@ -420,8 +420,9 @@ Terminal statuses:
   coverage remains limited; or a required later stage failed and the previous
   published posture remains selected. Check `publication_status` and
   `published_revision` to distinguish those cases.
-- `failed` — a raw graph write failed; actual committed write rows and the
-  failed stage are persisted.
+- `failed` — a raw graph write failed, or the process stopped before it could
+  durably finalize the attempt. Actual committed write rows are persisted when
+  known; restart recovery conservatively treats unfinished stages as failed.
 
 The scan row stores summary lifecycle/publication state and frozen totals;
 metadata JSONB stores detailed coverage, rules, identity, normalization
@@ -432,6 +433,14 @@ each scope. A later published `complete` or `not_applicable` outcome clears that
 scope; an authoritative root also retires stale child limitations.
 `posture_state` separates the current mutable attempt from the selected
 published revision.
+
+The serving process checks for interrupted `running` attempts before accepting
+requests and periodically while the ingest pipeline is idle. Recovery marks
+those attempts `failed` and changes a stranded `updating` projection to
+`incomplete`. It preserves the prior publication, coverage state, and dirty
+coverage. Public graph reads remain conflict-blocked until a later
+authoritative ingest repairs the mutable Neo4j projection; restart recovery
+never assumes that partially committed graph writes are safe to publish.
 
 `DELETE /api/v1/scans/{id}` is history-only. It never mutates Neo4j and rejects
 pending/running, active coverage-head, active coverage-limitation, and currently

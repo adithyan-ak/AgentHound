@@ -296,3 +296,172 @@ func TestIntegrationScansCRUD(t *testing.T) {
 	// Cleanup
 	_, _ = pool.Exec(ctx, "DELETE FROM scans WHERE id = $1", scanID)
 }
+
+func TestIntegrationRecoverInterruptedIngests(t *testing.T) {
+	skipIfNoPG(t)
+	ctx := context.Background()
+
+	admin, err := NewPool(os.Getenv("AGENTHOUND_PG_URI"))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer admin.Close()
+
+	schema := fmt.Sprintf("agenthound_recovery_test_%d", time.Now().UnixNano())
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create isolated schema: %v", err)
+	}
+	defer func() {
+		if _, err := admin.Exec(ctx, "DROP SCHEMA "+quotedSchema+" CASCADE"); err != nil {
+			t.Errorf("drop isolated schema: %v", err)
+		}
+	}()
+
+	config, err := pgxpool.ParseConfig(os.Getenv("AGENTHOUND_PG_URI"))
+	if err != nil {
+		t.Fatalf("parse connection config: %v", err)
+	}
+	config.ConnConfig.RuntimeParams["search_path"] = schema
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatalf("connect isolated schema: %v", err)
+	}
+	defer pool.Close()
+	if err := RunMigrations(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	scans := NewScanStore(pool)
+	findings := NewFindingStore(pool)
+	started := time.Now().UTC()
+	publishedID := "published-before-interruption"
+	interruptedID := "interrupted-ingest"
+	pendingID := "intentionally-pending"
+	if err := scans.CreateScan(ctx, &model.Scan{
+		ID:                publishedID,
+		Collector:         "mcp",
+		Status:            model.ScanStatusCompleted,
+		StartedAt:         started.Add(-time.Minute),
+		CollectionStatus:  model.LifecycleComplete,
+		GraphStatus:       model.LifecycleComplete,
+		AnalysisStatus:    model.LifecycleComplete,
+		SnapshotStatus:    model.LifecycleComplete,
+		ProjectionStatus:  model.ProjectionComplete,
+		PublicationStatus: model.PublicationPublished,
+	}); err != nil {
+		t.Fatalf("create prior published scan: %v", err)
+	}
+	var revision int64
+	var publishedAt time.Time
+	if err := pool.QueryRow(ctx, `INSERT INTO posture_publications (scan_id)
+		VALUES ($1) RETURNING revision, published_at`,
+		publishedID,
+	).Scan(&revision, &publishedAt); err != nil {
+		t.Fatalf("create prior publication: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE scans SET
+	    published_revision = $1,
+	    published_at = $2
+	WHERE id = $3`,
+		revision,
+		publishedAt,
+		publishedID,
+	); err != nil {
+		t.Fatalf("attach prior publication to scan: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE posture_state SET
+	    projection_status = $1,
+	    projection_scan_id = $2,
+	    published_revision = $3,
+	    published_scan_id = $2,
+	    published_at = $4
+	WHERE singleton = TRUE`,
+		model.ProjectionComplete,
+		publishedID,
+		revision,
+		publishedAt,
+	); err != nil {
+		t.Fatalf("select prior publication: %v", err)
+	}
+
+	dirtyCoverage := []string{"mcp:target:sha256:interrupted"}
+	if _, err := scans.BeginScan(ctx, &model.Scan{
+		ID:                interruptedID,
+		Collector:         "mcp",
+		Status:            model.ScanStatusRunning,
+		StartedAt:         started,
+		CollectionStatus:  model.LifecycleComplete,
+		GraphStatus:       model.LifecyclePending,
+		AnalysisStatus:    model.LifecyclePending,
+		SnapshotStatus:    model.LifecyclePending,
+		ProjectionStatus:  model.ProjectionUpdating,
+		PublicationStatus: model.PublicationUnpublished,
+	}, dirtyCoverage, nil); err != nil {
+		t.Fatalf("begin interrupted scan: %v", err)
+	}
+	if err := scans.CreateScan(ctx, &model.Scan{
+		ID:                pendingID,
+		Collector:         "a2a",
+		Status:            model.ScanStatusPending,
+		StartedAt:         started,
+		CollectionStatus:  model.LifecyclePending,
+		GraphStatus:       model.LifecyclePending,
+		AnalysisStatus:    model.LifecyclePending,
+		SnapshotStatus:    model.LifecyclePending,
+		ProjectionStatus:  model.ProjectionUnknown,
+		PublicationStatus: model.PublicationUnpublished,
+	}); err != nil {
+		t.Fatalf("create pending scan: %v", err)
+	}
+
+	recovered, err := scans.RecoverInterruptedIngests(ctx)
+	if err != nil {
+		t.Fatalf("recover interrupted ingests: %v", err)
+	}
+	if !reflect.DeepEqual(recovered, []string{interruptedID}) {
+		t.Fatalf("recovered scans = %v", recovered)
+	}
+	interrupted, err := scans.GetScan(ctx, interruptedID)
+	if err != nil {
+		t.Fatalf("get interrupted scan: %v", err)
+	}
+	if interrupted.Status != model.ScanStatusFailed ||
+		interrupted.CompletedAt == nil ||
+		interrupted.CollectionStatus != model.LifecycleComplete ||
+		interrupted.GraphStatus != model.LifecycleFailed ||
+		interrupted.AnalysisStatus != model.LifecycleFailed ||
+		interrupted.SnapshotStatus != model.LifecycleFailed ||
+		interrupted.ProjectionStatus != model.ProjectionIncomplete ||
+		interrupted.Error != interruptedIngestError {
+		t.Fatalf("recovered interrupted scan = %+v", interrupted)
+	}
+	pending, err := scans.GetScan(ctx, pendingID)
+	if err != nil {
+		t.Fatalf("get pending scan: %v", err)
+	}
+	if pending.Status != model.ScanStatusPending || pending.CompletedAt != nil {
+		t.Fatalf("pending scan changed during recovery: %+v", pending)
+	}
+	state, err := findings.GetProjectionState(ctx)
+	if err != nil {
+		t.Fatalf("get recovered projection state: %v", err)
+	}
+	if state.Status != model.ProjectionIncomplete ||
+		state.ScanID != interruptedID ||
+		state.Error != interruptedIngestError ||
+		state.PublishedScanID != publishedID ||
+		state.PublishedRevision == nil ||
+		*state.PublishedRevision != revision ||
+		!reflect.DeepEqual(state.DirtyCoverage, dirtyCoverage) {
+		t.Fatalf("recovered projection state = %+v", state)
+	}
+
+	recovered, err = scans.RecoverInterruptedIngests(ctx)
+	if err != nil {
+		t.Fatalf("repeat recovery: %v", err)
+	}
+	if len(recovered) != 0 {
+		t.Fatalf("repeat recovery changed scans: %v", recovered)
+	}
+}

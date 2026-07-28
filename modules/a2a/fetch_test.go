@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -126,6 +127,140 @@ func TestFetchAgentCard_AuthHeader(t *testing.T) {
 	}
 	if gotAuth != "Bearer test-token-123" {
 		t.Errorf("expected Authorization header 'Bearer test-token-123', got %q", gotAuth)
+	}
+}
+
+func TestFetchAgentCard_CredentialedSameOriginRedirect(t *testing.T) {
+	body := loadFixture(t, "agent_card_v10.json")
+	var redirectedAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case v10Path:
+			http.Redirect(w, r, "/redirected-card", http.StatusTemporaryRedirect)
+		case "/redirected-card":
+			redirectedAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(body)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	if _, err := FetchAgentCard(
+		context.Background(),
+		srv.URL,
+		"same-origin-token",
+		false,
+		time.Second,
+	); err != nil {
+		t.Fatalf("same-origin redirect: %v", err)
+	}
+	if redirectedAuth != "Bearer same-origin-token" {
+		t.Fatalf("redirected Authorization = %q", redirectedAuth)
+	}
+}
+
+func TestFetchAgentCard_RejectsCredentialedCrossPortRedirect(t *testing.T) {
+	var destinationRequests atomic.Int32
+	destination := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		destinationRequests.Add(1)
+	}))
+	t.Cleanup(destination.Close)
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(source.Close)
+
+	_, err := FetchAgentCard(
+		context.Background(),
+		source.URL,
+		"cross-port-token",
+		false,
+		time.Second,
+	)
+	if err == nil || !strings.Contains(err.Error(), "credential origin") {
+		t.Fatalf("expected credential-origin redirect error, got %v", err)
+	}
+	if destinationRequests.Load() != 0 {
+		t.Fatalf("cross-port destination received %d requests", destinationRequests.Load())
+	}
+}
+
+func TestFetchAgentCard_RejectsCredentialedCrossHostRedirect(t *testing.T) {
+	var redirectedRequests atomic.Int32
+	var source *httptest.Server
+	source = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == v10Path {
+			redirectURL := strings.Replace(source.URL, "127.0.0.1", "localhost", 1) + "/redirected-card"
+			http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
+			return
+		}
+		redirectedRequests.Add(1)
+	}))
+	t.Cleanup(source.Close)
+
+	_, err := FetchAgentCard(
+		context.Background(),
+		source.URL,
+		"cross-host-token",
+		false,
+		time.Second,
+	)
+	if err == nil || !strings.Contains(err.Error(), "credential origin") {
+		t.Fatalf("expected credential-origin redirect error, got %v", err)
+	}
+	if redirectedRequests.Load() != 0 {
+		t.Fatalf("cross-host destination received %d requests", redirectedRequests.Load())
+	}
+}
+
+func TestFetchAgentCard_RejectsHTTPSDowngradeRedirect(t *testing.T) {
+	var destinationRequests atomic.Int32
+	destination := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		destinationRequests.Add(1)
+	}))
+	t.Cleanup(destination.Close)
+	source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(source.Close)
+
+	_, err := FetchAgentCard(
+		context.Background(),
+		source.URL,
+		"downgrade-token",
+		true,
+		time.Second,
+	)
+	if err == nil || !strings.Contains(err.Error(), "downgrade") {
+		t.Fatalf("expected HTTPS downgrade error, got %v", err)
+	}
+	if destinationRequests.Load() != 0 {
+		t.Fatalf("downgraded destination received %d requests", destinationRequests.Load())
+	}
+}
+
+func TestFetchAgentCard_CredentialFreeCrossPortRedirect(t *testing.T) {
+	body := loadFixture(t, "agent_card_v10.json")
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(destination.Close)
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(source.Close)
+
+	if _, err := FetchAgentCard(
+		context.Background(),
+		source.URL,
+		"",
+		false,
+		time.Second,
+	); err != nil {
+		t.Fatalf("credential-free cross-port redirect: %v", err)
 	}
 }
 

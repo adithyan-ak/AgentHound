@@ -8,7 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
-	"path/filepath"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -189,7 +189,7 @@ func loadEmbeddedFingerprints() ([]FingerprintRule, error) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
 			continue
 		}
-		data, err := fs.ReadFile(builtinFS, filepath.Join(dir, e.Name()))
+		data, err := fs.ReadFile(builtinFS, path.Join(dir, e.Name()))
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", e.Name(), err)
 		}
