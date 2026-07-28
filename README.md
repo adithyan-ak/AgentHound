@@ -16,10 +16,8 @@
 [Safety](#-safety--authorization)
 
 [![CI](https://github.com/adithyan-ak/agenthound/actions/workflows/ci.yml/badge.svg)](https://github.com/adithyan-ak/agenthound/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/adithyan-ak/agenthound?logo=github)](https://github.com/adithyan-ak/agenthound/releases)
-[![Go Report Card](https://goreportcard.com/badge/github.com/adithyan-ak/agenthound)](https://goreportcard.com/report/github.com/adithyan-ak/agenthound)
+[![Release](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fadithyan-ak%2FAgentHound%2Freleases%2Flatest&query=%24.tag_name&label=release&logo=github)](https://github.com/adithyan-ak/agenthound/releases/latest)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![cosign](https://img.shields.io/badge/checksums-cosign%20signed-0b7285)](https://docs.agenthound.io/getting-started/install/)
 
 </div>
 
@@ -135,7 +133,8 @@ A new attack against a new AI service is one module away - implement an action i
 
 ## 🚀 Quick start
 
-Prerequisites: Docker + Compose v2. No Go, no Node, no `git clone`.
+Default path prerequisites: Docker + Compose v2. No Go, no Node, no
+`git clone`.
 
 **1. Start the analysis server** - Neo4j + Postgres + UI, binds
 `127.0.0.1:8080`:
@@ -150,6 +149,19 @@ curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/docker/
 curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
+
+Or choose one of these package-manager alternatives:
+
+```bash
+# Homebrew (macOS or Linux; adds the tap automatically)
+brew install adithyan-ak/agenthound/agenthound
+
+# Go 1.25.12+
+go install github.com/adithyan-ak/agenthound/collector/cmd/agenthound@1.0.0
+```
+
+Go installs into `GOBIN` or, by default, `$(go env GOPATH)/bin`; ensure that
+directory is on `PATH`.
 
 **3. Scan local configs** - offline, read-only, raw credential values omitted.
 Choose one coverage level and ingest the saved artifact.
@@ -181,19 +193,13 @@ ingest receipt. Use `--json` for the full receipt.
   <img src="docs/readme-assets/agenthound-dashboard.png" alt="AgentHound dashboard" width="900">
 </p>
 
-Prefer Homebrew for both binaries?
-
-```bash
-brew tap adithyan-ak/agenthound
-brew install adithyan-ak/agenthound/agenthound \
-  adithyan-ak/agenthound/agenthound-server
-```
-
 <!-- Release automation updates this hidden compatibility pin:
 https://raw.githubusercontent.com/adithyan-ak/agenthound/1.0.0/install.sh
 -->
 
-Also available from release archives, or from Go at the explicit
+The standalone server binary is also available as
+`adithyan-ak/agenthound/agenthound-server` through Homebrew. Both binaries are
+available from release archives, or from Go at the explicit
 `@1.0.0` revision. Release archives include a Cosign-signed checksum manifest
 and per-archive SPDX SBOMs - see the
 [installation guide](https://docs.agenthound.io/getting-started/install/).

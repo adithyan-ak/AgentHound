@@ -69,9 +69,9 @@ jobs:
         run: |
           set -euo pipefail
           go install github.com/google/go-containerregistry/cmd/crane@v0.20.6
-          crane copy ghcr.io/adithyan-ak/agenthound:1.0.1 \
+          crane copy ghcr.io/adithyan-ak/agenthound:latest \
             "${STAGING_COLLECTOR}:bootstrap"
-          crane copy ghcr.io/adithyan-ak/agenthound-server:1.0.1 \
+          crane copy ghcr.io/adithyan-ak/agenthound-server:latest \
             "${STAGING_SERVER}:bootstrap"
 
   candidate:

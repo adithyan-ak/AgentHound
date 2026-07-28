@@ -287,7 +287,7 @@ credential material.
     "version": 1,
     "type": "agenthound-ingest",
     "collector": "mcp",
-    "collector_version": "1.0.1",
+    "collector_version": "1.0.0",
     "timestamp": "2026-07-11T00:00:00Z",
     "scan_id": "scan-abc123",
     "identity": {

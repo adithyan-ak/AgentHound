@@ -57,7 +57,7 @@ ingest that output.
     "version": 1,
     "type": "agenthound-ingest",
     "collector": "scan",
-    "collector_version": "1.0.1",
+    "collector_version": "1.0.0",
     "timestamp": "2026-07-11T20:00:00Z",
     "scan_id": "...",
     "identity": {
