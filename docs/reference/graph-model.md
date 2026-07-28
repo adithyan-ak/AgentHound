@@ -622,7 +622,7 @@ New modules emit nodes and edges via the `sdk/ingest` wire format:
     "version": 1,
     "type": "agenthound-ingest",
     "collector": "mcp|a2a|config|scan",
-    "collector_version": "1.0.1",
+    "collector_version": "1.0.0",
     "timestamp": "2025-01-15T10:30:00Z",
     "scan_id": "scan-abc123",
     "identity": {

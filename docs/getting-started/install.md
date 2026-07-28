@@ -4,7 +4,7 @@
 
 | Tool | Version | Notes |
 |------|---------|-------|
-| Go | 1.25+ | Build from source only |
+| Go | 1.25.12+ | Build from source or install with `go install` |
 | Docker + Compose | v2+ | Required for the analysis server (Neo4j + Postgres) |
 | Node.js | 20+ | UI build only (skippable if using Docker or collector-only) |
 
@@ -15,14 +15,13 @@ The **collector** (`agenthound`) has zero runtime dependencies -- single static 
 ## Homebrew (macOS / Linux)
 
 ```bash
-brew tap adithyan-ak/agenthound
 brew install adithyan-ak/agenthound/agenthound            # collector only
 brew install adithyan-ak/agenthound/agenthound-server     # analysis server
 ```
 
 Both formulas are published from the verified release candidate. The
-fully-qualified names are required because Homebrew does not automatically
-trust third-party taps. Multi-arch (amd64 + arm64).
+fully-qualified command automatically adds the tap and trusts only the selected
+formula. Multi-arch (amd64 + arm64).
 
 ## Docker
 
@@ -78,14 +77,15 @@ go install github.com/adithyan-ak/agenthound/server/cmd/agenthound-server@1.0.0
 
 The numeric Git tag is an explicit revision for Go rather than a canonical
 `v1.0.0` module version, so Go reports a pseudo-version for this installation.
-Always use the explicit `@1.0.0` revision; `@latest` can resolve the unsupported
-historical `v1.0.1` module from public proxy caches.
+Always use the explicit `@1.0.0` revision. Do not use `@latest`: historical
+canonical `v*` versions remain in module proxies, so resolver and cache state can
+produce a different version label or source revision.
 
 ## Verify
 
 ```bash
-agenthound version
-agenthound-server version
+agenthound --version
+agenthound-server --version
 ```
 
 GoReleaser archives and containers print the release version and source commit.
