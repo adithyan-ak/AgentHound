@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -322,7 +323,12 @@ func loadRulesForCommand(args []string) ([]rules.Rule, []error, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("loading rules: %w", err)
 		}
-		return engine.Rules(), nil, nil
+		failureMessages := engine.LoadFailures()
+		loadFailures := make([]error, len(failureMessages))
+		for i, failure := range failureMessages {
+			loadFailures[i] = errors.New(failure)
+		}
+		return engine.Rules(), loadFailures, nil
 	}
 
 	path := args[0]
