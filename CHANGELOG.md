@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Fail-closed custom rule inputs.** Directory rule validation now reports
+  malformed or unreadable YAML as a failure while continuing to validate valid
+  siblings. Fingerprint tar bundles reject entries larger than 1 MiB instead
+  of parsing and executing a truncated prefix.
 - **First-class scan upload.** `agenthound scan --ingest <server-url>` saves the
   normal local JSON artifact before uploading those exact bytes,
   rejects redirects, and prints a correlated ingest receipt with finding
