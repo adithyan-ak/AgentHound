@@ -42,6 +42,8 @@ type ScanFailure struct {
 	Metadata         map[string]any
 }
 
+const interruptedIngestError = "ingest interrupted before lifecycle finalization"
+
 // CampaignRejectionAudit is the complete sanitized payload persisted for a
 // campaign artifact rejected before BeginScan. It intentionally has no raw
 // artifact, artifact digest, endpoint, witness, credential material, or
@@ -506,6 +508,92 @@ func (s *ScanStore) RecordFailure(ctx context.Context, failure ScanFailure) erro
 		return fmt.Errorf("commit failure lifecycle: %w", err)
 	}
 	return nil
+}
+
+// RecoverInterruptedIngests marks orphaned running scans terminal after the
+// process that owned them has stopped. It deliberately leaves the prior
+// publication and dirty coverage untouched: Neo4j may contain partial mutable
+// writes, so only a later authoritative ingest can make the projection readable.
+func (s *ScanStore) RecoverInterruptedIngests(ctx context.Context) ([]string, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin interrupted ingest recovery: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var projectionStatus string
+	if err := tx.QueryRow(ctx, `SELECT projection_status
+		FROM posture_state WHERE singleton = TRUE
+		FOR UPDATE`).Scan(&projectionStatus); err != nil {
+		return nil, fmt.Errorf("lock projection state for interrupted ingest recovery: %w", err)
+	}
+
+	rows, err := tx.Query(ctx, `UPDATE scans SET
+	    status = $1,
+	    completed_at = NOW(),
+	    error = CASE
+	        WHEN coalesce(error, '') = '' THEN $2
+	        ELSE error || '; ' || $2
+	    END,
+	    graph_status = CASE
+	        WHEN graph_status IN ('complete', 'partial', 'failed', 'not_applicable')
+	            THEN graph_status
+	        ELSE $3
+	    END,
+	    analysis_status = CASE
+	        WHEN analysis_status IN ('complete', 'partial', 'failed', 'not_applicable')
+	            THEN analysis_status
+	        ELSE $3
+	    END,
+	    snapshot_status = CASE
+	        WHEN snapshot_status IN ('complete', 'partial', 'failed', 'not_applicable')
+	            THEN snapshot_status
+	        ELSE $3
+	    END,
+	    projection_status = $4,
+	    lifecycle_updated_at = NOW()
+	WHERE status = $5
+	RETURNING id`,
+		model.ScanStatusFailed,
+		interruptedIngestError,
+		model.LifecycleFailed,
+		model.ProjectionIncomplete,
+		model.ScanStatusRunning,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("recover interrupted scan rows: %w", err)
+	}
+	var recovered []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan recovered interrupted scan id: %w", err)
+		}
+		recovered = append(recovered, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("recover interrupted scan rows: %w", err)
+	}
+	sort.Strings(recovered)
+
+	if projectionStatus == model.ProjectionUpdating {
+		if _, err := tx.Exec(ctx, `UPDATE posture_state SET
+		    projection_status = $1,
+		    projection_error = $2,
+		    projection_updated_at = NOW()
+		WHERE singleton = TRUE`,
+			model.ProjectionIncomplete,
+			interruptedIngestError,
+		); err != nil {
+			return nil, fmt.Errorf("recover interrupted projection state: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit interrupted ingest recovery: %w", err)
+	}
+	return recovered, nil
 }
 
 func (s *ScanStore) GetScan(ctx context.Context, id string) (*model.Scan, error) {

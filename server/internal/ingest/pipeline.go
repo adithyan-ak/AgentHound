@@ -53,6 +53,7 @@ type scanLifecycleRecorder interface {
 		roots []sdkingest.CoverageRoot,
 	) ([]string, error)
 	RecordFailure(ctx context.Context, failure appdb.ScanFailure) error
+	RecoverInterruptedIngests(ctx context.Context) ([]string, error)
 }
 
 // postProcessFunc runs the analysis post-processors. Defaulted to
@@ -116,6 +117,20 @@ func NewPipeline(
 		p.findingStore = findingStore
 	}
 	return p
+}
+
+// RecoverInterruptedIngests reconciles orphaned lifecycle rows only while this
+// pipeline is idle. Ingest already holds the same mutex for every graph
+// mutation, so a live request cannot be mistaken for an interrupted attempt.
+func (p *Pipeline) RecoverInterruptedIngests(ctx context.Context) ([]string, error) {
+	if !p.mu.TryLock() {
+		return nil, nil
+	}
+	defer p.mu.Unlock()
+	if p.scanStore == nil {
+		return nil, fmt.Errorf("recover interrupted ingests: lifecycle store unavailable")
+	}
+	return p.scanStore.RecoverInterruptedIngests(ctx)
 }
 
 func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdkingest.IngestResult, error) {

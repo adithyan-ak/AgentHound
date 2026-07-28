@@ -11,6 +11,21 @@ import (
 	"time"
 )
 
+func TestLoadEmbeddedFingerprints(t *testing.T) {
+	fingerprints, err := loadEmbeddedFingerprints()
+	if err != nil {
+		t.Fatalf("loadEmbeddedFingerprints: %v", err)
+	}
+	if len(fingerprints) == 0 {
+		t.Fatal("expected embedded fingerprint rules")
+	}
+	for _, fingerprint := range fingerprints {
+		if fingerprint.Source != "builtin" {
+			t.Fatalf("fingerprint %q source = %q, want builtin", fingerprint.ID, fingerprint.Source)
+		}
+	}
+}
+
 func TestRunFingerprintUsesPostInitBundleOverride(t *testing.T) {
 	SetBundleOverridePath("")
 	builtin, err := LoadFingerprints()

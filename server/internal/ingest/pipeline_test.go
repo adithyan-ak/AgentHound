@@ -283,9 +283,12 @@ type fakeScanStore struct {
 	dirtyCoverage []string
 	retired       []string
 	resolvedRoots []sdkingest.CoverageRoot
+	recovered     []string
+	recoveryCalls int
 
 	createErr    error
 	resolveErr   error
+	recoveryErr  error
 	updateErr    error
 	recognized   bool
 	recognizeErr error
@@ -438,6 +441,15 @@ func (s *fakeScanStore) RecordFailure(
 		Error:     failure.Error,
 	})
 	return s.updateErr
+}
+
+func (s *fakeScanStore) RecoverInterruptedIngests(
+	_ context.Context,
+) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recoveryCalls++
+	return append([]string(nil), s.recovered...), s.recoveryErr
 }
 
 type scanUpdate struct {
@@ -3286,6 +3298,35 @@ func TestNewPipeline_PassesConcreteThrough(t *testing.T) {
 	p := NewPipeline(w, nil, nil, nil, allowStorageVerifier{})
 	if p.writer == nil {
 		t.Error("non-nil *graph.Writer should be stored as interface")
+	}
+}
+
+func TestPipeline_RecoverInterruptedIngestsOnlyWhileIdle(t *testing.T) {
+	ss := &fakeScanStore{recovered: []string{"scan-interrupted"}}
+	p := newTestPipeline(nil, nil, ss, noOpRunPP)
+
+	recovered, err := p.RecoverInterruptedIngests(context.Background())
+	if err != nil {
+		t.Fatalf("idle recovery: %v", err)
+	}
+	if !slices.Equal(recovered, []string{"scan-interrupted"}) {
+		t.Fatalf("idle recovery = %v", recovered)
+	}
+	if ss.recoveryCalls != 1 {
+		t.Fatalf("idle recovery calls = %d, want 1", ss.recoveryCalls)
+	}
+
+	p.mu.Lock()
+	recovered, err = p.RecoverInterruptedIngests(context.Background())
+	p.mu.Unlock()
+	if err != nil {
+		t.Fatalf("active-ingest recovery: %v", err)
+	}
+	if recovered != nil {
+		t.Fatalf("active-ingest recovery = %v, want nil", recovered)
+	}
+	if ss.recoveryCalls != 1 {
+		t.Fatalf("active-ingest recovery called store %d times", ss.recoveryCalls)
 	}
 }
 

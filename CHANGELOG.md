@@ -27,6 +27,16 @@
 - **Strict ingest-v1 boundary.** Wire version and registered-source contract
   mismatches are rejected before storage access. Storage binding v1 requires a
   clean paired PostgreSQL/Neo4j initialization.
+- **Origin-bound A2A bearer redirects.** Authenticated Agent Card requests now
+  reject host, port, or scheme changes, and all HTTPS-to-HTTP redirects fail
+  before the destination receives a request.
+- **Native Windows embedded rules.** Built-in detection and fingerprint rules
+  use slash-based embedded filesystem paths and are exercised on a native
+  Windows CI runner.
+- **Truthful interrupted-ingest recovery.** Server startup and an idle recovery
+  loop terminalize orphaned running scans, retain the previous publication and
+  dirty coverage, and leave the mutable projection safely incomplete until a
+  later authoritative ingest repairs it.
 - **No false clean instruction score.** Agent poisoning risk uses observed
   `LOADS_INSTRUCTIONS` relationships only; missing load relationships remain
   an assessment limitation. Published truncated posture remains visible in the

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -42,7 +43,7 @@ func loadRulesFromFSWithFailures(
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
 			continue
 		}
-		data, err := fs.ReadFile(fsys, filepath.Join(root, entry.Name()))
+		data, err := fs.ReadFile(fsys, path.Join(root, entry.Name()))
 		if err != nil {
 			failures = append(
 				failures,
