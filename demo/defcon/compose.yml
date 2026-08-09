@@ -1,0 +1,136 @@
+name: agenthound-defcon34
+
+services:
+  graph-db:
+    image: neo4j:4.4-community@sha256:b0efe93722d27bc050908810650939380d989b1936fc5dd02ad1d7bf1c87a13b
+    environment:
+      NEO4J_AUTH: neo4j/password
+      NEO4J_dbms_memory_heap_initial__size: 256m
+      NEO4J_dbms_memory_heap_max__size: 512m
+    volumes:
+      - neo4j-data:/data
+    networks:
+      - demo
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p password 'RETURN 1' >/dev/null"]
+      interval: 5s
+      timeout: 10s
+      retries: 36
+      start_period: 25s
+
+  app-db:
+    image: postgres:16.14-alpine3.24@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    environment:
+      POSTGRES_DB: agenthound
+      POSTGRES_USER: agenthound
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - demo
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d agenthound -U agenthound"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  agenthound-server:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile.agenthound-server
+      args:
+        VERSION: ${AGENTHOUND_DEMO_VERSION:-defcon34}
+        COMMIT: ${AGENTHOUND_DEMO_COMMIT:-none}
+    image: agenthound:defcon34-server
+    environment:
+      AGENTHOUND_NEO4J_URI: bolt://graph-db:7687
+      AGENTHOUND_NEO4J_USER: neo4j
+      AGENTHOUND_NEO4J_PASSWORD: password
+      AGENTHOUND_PG_URI: postgres://agenthound:password@app-db:5432/agenthound?sslmode=disable
+      AGENTHOUND_BIND: 0.0.0.0:8080
+      AGENTHOUND_CORS_ORIGINS: http://localhost:18080,http://127.0.0.1:18080
+      AGENTHOUND_LOG_LEVEL: info
+    ports:
+      - "127.0.0.1:18080:8080"
+    depends_on:
+      graph-db:
+        condition: service_healthy
+      app-db:
+        condition: service_healthy
+    networks:
+      - demo
+      - presenter
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 18
+      start_period: 30s
+
+  devtools-mcp:
+    build:
+      context: ../..
+      dockerfile: demo/defcon/Dockerfile.mcp
+    image: agenthound:defcon34-mcp
+    environment:
+      MCP_DEMO_MODE: devtools
+      PORT: "3001"
+    networks:
+      - demo
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:3001/healthz"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  crm-mcp:
+    image: agenthound:defcon34-mcp
+    environment:
+      MCP_DEMO_MODE: crm
+      PORT: "8931"
+      MCP_BEARER_TOKEN: ${DEFCON_CRM_TOKEN:-example}
+    networks:
+      - demo
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8931/healthz"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  workstation:
+    build:
+      context: ../..
+      dockerfile: demo/defcon/Dockerfile.workstation
+      args:
+        VERSION: ${AGENTHOUND_DEMO_VERSION:-defcon34}
+        COMMIT: ${AGENTHOUND_DEMO_COMMIT:-none}
+    image: agenthound:defcon34-workstation
+    # Match the attendee's host UID/GID so atomic 0600 collector artifacts are
+    # immediately selectable by the host browser on native Linux and Docker Desktop.
+    user: "${AGENTHOUND_DEMO_UID:?set AGENTHOUND_DEMO_UID}:${AGENTHOUND_DEMO_GID:?set AGENTHOUND_DEMO_GID}"
+    environment:
+      AGENTHOUND_CAMPAIGN_CREDENTIAL: ${DEFCON_CRM_TOKEN:-example}
+      MCP_URL: http://crm-mcp:8931/mcp
+    volumes:
+      - ./artifacts:/demo/artifacts
+    depends_on:
+      devtools-mcp:
+        condition: service_healthy
+      crm-mcp:
+        condition: service_healthy
+    networks:
+      - demo
+    healthcheck:
+      test: ["CMD", "agenthound", "version"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+networks:
+  demo:
+    internal: true
+  presenter:
+
+volumes:
+  neo4j-data:
+  postgres-data:

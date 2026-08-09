@@ -1,0 +1,14 @@
+.git
+.codex-build-*
+tmp
+output
+presentation
+launch-assets
+AgentHound-DEFCON34-Red-Team-Village*
+*.pptx
+*.inspect.ndjson
+server/ui/node_modules
+demo/defcon/screenshots
+demo/defcon/artifacts/*
+!demo/defcon/artifacts/.gitignore
+**/__pycache__
