@@ -19,6 +19,10 @@ export AGENTHOUND_DEMO_UID="$(id -u)"
 export AGENTHOUND_DEMO_GID="$(id -g)"
 ```
 
+This walkthrough was validated against runtime commit `bc06a9416d5a`. If a
+later `main` changes any checkpoint, run `git checkout bc06a9416d5a` to use
+the exact tested infrastructure.
+
 Keep that terminal open. The UID/GID values make the container-generated,
 private JSON files selectable by the host browser on macOS and Linux.
 
