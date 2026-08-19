@@ -1,234 +1,104 @@
-# Writing a Module
+# Writing modules
 
-Action modules are self-registering units that perform a specific action against
-a target service. They live in `modules/<name>/` and register at `init()` time
-via `sdk/module.Register()`. Two campaign scenarios instead use `sdk/campaign`,
-and `protoscan` is a discovery engine. Config, MCP, and A2A enumeration use
-collector-specific paths; their module registry entries are metadata-only and
-do not implement or dispatch `Enumerator`.
+The public workflow is fixed: every module contributes to `agenthound scan`. Do not add a module-specific CLI verb or flags.
 
-## Action Interfaces
+## Module categories
 
-Choose the interface that matches your module's purpose:
+- `Scanner`: expands bounded target scope.
+- `Fingerprinter`: identifies a concrete endpoint and returns graph evidence.
+- Config/MCP/A2A collectors: parse local configuration or enumerate protocol state.
+- `ServiceCollector`: performs deeper service-specific collection after fingerprinting.
+- `PlannerAction`: generates and executes autonomous candidates using the accumulated local view.
 
-| Interface | Action | Contract | Mutating? |
-|-----------|--------|----------|-----------|
-| `Fingerprinter` | `fingerprint` | Probe a target, identify the service kind/version/auth | No |
-| `Scanner` | `scan` | Expand a CIDR / range / discovery seed into concrete `Target`s (feeds Fingerprinters) | No |
-| `Enumerator` | `enumerate` | Reserved contract for inspecting a single `Target`; the current CLI does not dispatch it | No |
-| `Looter` | `loot` | Extract secrets/state read-only (GET/HEAD; idempotent search/lookup POSTs allowed with a `get_only` guard) | No |
-| `Extractor` | `extract` | Analyze a specific operator-supplied resource by reference | No |
-| `Poisoner` | `poison` | Inject content into upstream artifacts | **Yes** — requires `Reverter` |
-| `Implanter` | `implant` | Plant persistent backdoors in target config | **Yes** — requires `Reverter` |
+The CLI keeps orchestration concrete. Do not introduce a generic workflow engine, DAG schema, policy language, LLM planner, or database dependency.
 
-`Reverter` (`sdk/action/reverter.go`) is not an action of its own — it is a compile-time-mandatory super-interface every `Poisoner` and `Implanter` embeds, so every destructive module ships an explicit `agenthound revert` recovery path. Runtime restoration must be verified and may still be blocked by provider policy, conflicts, deletion, or loss of access.
+## Service collectors
 
-All interfaces are defined in `sdk/action/`. Every module also implements `sdk/module.Module`:
+Implement `sdk/action.ServiceCollector` and `sdk/module.Module`, then register the collector from its package:
 
 ```go
-type Module interface {
-    ID() string            // dotted lowercase: "ollama.fingerprint"
-    Action() action.Action // action.Fingerprint, action.Loot, etc.
-    Target() string        // service kind: "ollama", "litellm", "mcp"
-    Description() string   // one-line summary
-    Version() string       // semver
-    IsDestructive() bool   // true for Poisoner/Implanter
+type Collector struct{}
+
+func (*Collector) ID() string            { return "example.collect" }
+func (*Collector) Action() action.Action { return action.Collect }
+func (*Collector) Target() string        { return "example" }
+func (*Collector) IsDestructive() bool   { return false }
+
+func (*Collector) Collect(
+    ctx context.Context,
+    target action.Target,
+    opts action.CollectOptions,
+) (*action.CollectResult, error) {
+    // bounded, target-specific collection
 }
 ```
 
-## Step-by-Step: Creating a Fingerprinter
+Normal and deep behavior comes from fixed planner presets. A collector must not read removed module-specific CLI flags.
 
-We'll use `modules/ollamafp/` as the worked example.
+## Planner actions
 
-### 1. Create the directory
-
-```
-modules/yourservice/
-    register.go
-    fingerprinter.go
-    fingerprinter_test.go
-```
-
-### 2. Implement the action interface
-
-`fingerprinter.go`:
+Planner actions live in the collector orchestration layer when they compose existing modules. They implement:
 
 ```go
-package yourservicefp
-
-import (
-    "context"
-    "errors"
-    "github.com/adithyan-ak/agenthound/sdk/action"
-    "github.com/adithyan-ak/agenthound/sdk/rules"
-)
-
-type Fingerprinter struct {
-    rule *rules.FingerprintRule
-}
-
-func New() (*Fingerprinter, error) {
-    all, err := rules.LoadFingerprints()
-    if err != nil {
-        return nil, err
-    }
-    for _, r := range all {
-        if r.ServiceKind == "yourservice" {
-            rule := r
-            return &Fingerprinter{rule: &rule}, nil
-        }
-    }
-    return nil, errors.New("yourservice fingerprint rule not found")
-}
-
-func (f *Fingerprinter) Fingerprint(ctx context.Context, t action.Target) (*action.FingerprintResult, error) {
-    // Replace this no-match skeleton with the service-specific probe and
-    // IngestData construction used by modules/ollamafp.
-    return &action.FingerprintResult{Matched: false}, nil
-}
-
-var _ action.Fingerprinter = (*Fingerprinter)(nil)
-```
-
-Key points from the `ollamafp` implementation:
-- Load the fingerprint rule from `sdk/rules/builtin/fingerprints/` by `service_kind`
-- Use `rules.RunFingerprint()` to dispatch the HTTP probe and matchers
-- Compute deterministic node ID via `ingest.ComputeNodeID("YourKind", endpoint)`
-- Return `IngestData` with multi-label node (e.g., `["YourKind", "AIService"]`)
-
-### 3. Write register.go
-
-```go
-package yourservicefp
-
-import (
-    "log/slog"
-    "github.com/adithyan-ak/agenthound/sdk/action"
-    "github.com/adithyan-ak/agenthound/sdk/module"
-)
-
-func init() {
-    f, err := New()
-    if err != nil {
-        slog.Warn("yourservice fingerprinter init failed", "error", err)
-        module.Register(&disabledFingerprinter{})
-        return
-    }
-    module.Register(f)
-}
-
-func (*Fingerprinter) ID() string            { return "yourservice.fingerprint" }
-func (*Fingerprinter) Action() action.Action { return action.Fingerprint }
-func (*Fingerprinter) Target() string        { return "yourservice" }
-func (*Fingerprinter) Description() string   { return "Identify YourService by ..." }
-func (*Fingerprinter) Version() string       { return "0.1.0" }
-func (*Fingerprinter) IsDestructive() bool   { return false }
-
-// disabledFingerprinter -- fallback when rule fails to load.
-type disabledFingerprinter struct{}
-// ... implement Module interface, return Matched=false from Fingerprint
-```
-
-Pattern: always register something (even a disabled stub) so registry lookups succeed and the scanner can skip gracefully.
-
-### 4. Blank-import in main.go
-
-Add to `collector/cmd/agenthound/main.go`:
-
-```go
-_ "github.com/adithyan-ak/agenthound/modules/yourservicefp"
-```
-
-### 5. Add to the collector allowlist
-
-Add the module package and any new dependency packages to
-`scripts/collector-allowlist.txt`. CI rejects packages that cross the collector
-dependency boundary without an allowlist entry.
-
-### 6. Write tests
-
-Use `httptest.Server` to mock the target service. Test both the matching and non-matching cases:
-
-```go
-func TestFingerprint_Match(t *testing.T) {
-    srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        json.NewEncoder(w).Encode(map[string]string{"version": "1.0.0"})
-    }))
-    defer srv.Close()
-
-    fp, err := New()
-    require.NoError(t, err)
-
-    target := action.Target{Address: srv.Listener.Addr().String(), Meta: map[string]string{"scheme": "http"}}
-    result, err := fp.Fingerprint(context.Background(), target)
-    require.NoError(t, err)
-    assert.True(t, result.Matched)
+type PlannerAction interface {
+    ID() string
+    Candidates(View) []Candidate
+    Execute(context.Context, Candidate, Journal) (Result, error)
 }
 ```
 
-## Optional Sidecar Interfaces
+Candidate generation must be deterministic and side-effect free. A key binds module ID, canonical target, credential value hash or anonymous identity, resource/tool ID, and deep mode. Raw execution inputs remain memory-only.
 
-### FlagsModule -- Per-Module CLI Flags
+Only add an autonomous action when it has:
 
-For modules that need CLI flags beyond the standard set:
+- self-contained prerequisites;
+- a specific target and compatible credential contract;
+- a meaningful observable oracle;
+- bounded time and output;
+- no operator-generated payload requirement;
+- immediate, independently confirmed cleanup for mutation.
 
-```go
-import "github.com/spf13/pflag"
+Instruction poisoning and config implantation were removed because the collector cannot autonomously choose a meaningful attacker payload or endpoint.
 
-func (f *YourLooter) RegisterFlags(fs *pflag.FlagSet) {
-    fs.Bool("include-embeddings", false,
-        "Issue benchmark embedding request (consumes operator-billed compute)")
-    fs.String("api-key", "",
-        "Optional service API key; enables authenticated enumeration")
-}
+## Contact policy
+
+Every AgentHound-owned connection must carry the scan context and use `sdk/contact` at both request and final-dial boundaries. Never create `http.DefaultClient`, an unguarded `http.Transport`, or a bare `net.Dialer` in module code.
+
+Derived URLs, redirects, cleanup clients, and JWKS retrieval are in scope. Tests must prove an excluded configured endpoint and an excluded redirect destination receive zero requests.
+
+## Graph and credentials
+
+Return ingest V1 graph facts with explicit observation domains. Credential nodes store concrete raw material in `properties.value` and its stable identity in `properties.value_hash`. Never place a mask, hash, or unresolved reference in `value`.
+
+Service result ownership is attached to the scan observation that triggered it; planner execution does not publish a second artifact envelope.
+
+Every emitted coverage outcome must have a matching declaration owned by the same collector prefix, and every declaration must have an outcome. Preserve a useful graph returned alongside structured partial errors, but return the partial error to the planner so the action is not recorded as successful.
+
+Executable credential nodes must preserve the parsed `auth_method`. Candidate adapters must explicitly accept that scheme; never infer Bearer compatibility from a field name or from another credential with the same value hash.
+
+## Mutation journal
+
+Mutation recovery must go through the passed `Journal`:
+
+1. `Prepare` exact original state and credential references;
+2. checkpoint success is required before the first write;
+3. `MarkApplied` immediately after the write;
+4. run the oracle;
+5. restore immediately under a detached bounded context;
+6. confirm original state independently;
+7. `MarkRestored`.
+
+Do not create receipt files, state directories, engagement identifiers, confirmation sentinels, or separate recovery artifacts.
+
+## Verification
+
+Run focused package tests, then:
+
+```bash
+go test ./... -race
+go vet ./...
+make deps-check
+make size-check
 ```
 
-The CLI dispatcher calls `module.RegisterFlagsFor(cmd, mod)` which type-asserts for `FlagsModule`. Flag values are available at dispatch time via `LootOptions.Extras` or `PoisonPayload.Extras`.
-
-### StatefulModule -- Receipt Persistence
-
-For destructive modules (Poisoner, Implanter) that need revert capability:
-
-```go
-type YourPoisoner struct {
-    state *module.FileStatefulModule
-}
-
-func New() *YourPoisoner {
-    return &YourPoisoner{
-        state: module.NewFileStatefulModule("yourservice.poison"),
-    }
-}
-
-func (p *YourPoisoner) StateDir() string { return p.state.StateDir() }
-func (p *YourPoisoner) WriteReceipt(engagementID string, r action.Receipt) (string, error) {
-    return p.state.WriteReceipt(engagementID, r)
-}
-func (p *YourPoisoner) ReadReceipts(engagementID string) ([]action.Receipt, error) {
-    return p.state.ReadReceipts(engagementID)
-}
-```
-
-Receipts are stored at `~/.agenthound/state/<module-id>/<engagement-id>.json` with mode 0o600. A committing module persists the receipt BEFORE it issues the mutating write -- and the receipt is written exactly once, with no post-mutation re-write -- so a crash after the mutation still leaves a revert path. Dry-run receipts (which mutate nothing) are persisted by the CLI after the module returns.
-
-## Registry Lookup
-
-Modules are resolved by the CLI and scanner via:
-
-```go
-module.Get("ollama.fingerprint")                    // by ID
-module.ListByAction(action.Fingerprint)             // all fingerprinters
-module.GetByTarget("ollama", action.Fingerprint)    // by (target, action) pair
-```
-
-## Checklist
-
-- [ ] Implements one action interface from `sdk/action/`
-- [ ] Implements `sdk/module.Module`
-- [ ] Has `register.go` with `init()` calling `module.Register()`
-- [ ] Blank-imported in `collector/cmd/agenthound/main.go`
-- [ ] Module package and any new dependencies added to `scripts/collector-allowlist.txt`
-- [ ] Tests cover match, no-match, and error cases
-- [ ] `make build-collector && make deps-check` passes
-- [ ] `IsDestructive()` returns true for Poisoner/Implanter modules
-- [ ] Fingerprint rule YAML added to `sdk/rules/builtin/fingerprints/` (for fingerprinters)
+The final collector must also cross-compile without CGO for Linux amd64, Darwin arm64, and Windows amd64.

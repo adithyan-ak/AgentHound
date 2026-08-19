@@ -1089,12 +1089,12 @@ The Looter test suite must include a regression test that asserts only GET metho
 The earlier draft of this sketch had several CI-failing or interface-violating issues — missing imports for `bytes` and `strings`, ignored `error` returns from `http.NewRequestWithContext` (errcheck-fail), references to a non-existent `LootOptions.IncludeValues` field, a `Name()` method that does not exist on `sdk/module.Module`, missing `Description()` and `Version()` methods that DO exist on the interface, and a comment that promised partial-error recording but didn't actually populate `LootResult.PartialErrors`. The corrected sketch:
 
 ```go
-// modules/litellmloot/looter.go
+// modules/litellmcollect/looter.go
 //
 // Conforms to sdk/action.Looter and sdk/module.Module.
-// Self-registers via modules/litellmloot/register.go.
+// Self-registers via modules/litellmcollect/register.go.
 
-package litellmloot
+package litellmcollect
 
 import (
     "bytes"
@@ -1293,7 +1293,7 @@ The skeleton is ~150 LOC including comments. The full implementation lands at ~2
 **Mandatory unit test — credential redaction in logs.** The Looter test suite must assert that NO `slog` output contains the full master key. The pattern:
 
 ```go
-// modules/litellmloot/looter_redaction_test.go
+// modules/litellmcollect/looter_redaction_test.go
 func TestMasterKeyNeverLoggedRaw(t *testing.T) {
     var buf bytes.Buffer
     handler := slog.NewJSONHandler(&buf, nil)
@@ -1665,7 +1665,7 @@ Numbered phases preserved so v0.3 can reference "Phase 3 of Sprint 3" cleanly.
 
 - **Deliverables:**
   - LiteLLM Fingerprinter (`rules/builtin/fingerprints/litellm.yaml` + `modules/litellmfp/`).
-  - LiteLLM Looter (`modules/litellmloot/`).
+  - LiteLLM Looter (`modules/litellmcollect/`).
   - `EXPOSES_CREDENTIAL` edge kind landed in BOTH `AllowedEdgeKinds` AND `RawEdgeKinds` (per the §6 SHIP-BLOCKER), plus `EdgeKindEndpoints`.
   - `agenthound loot <host> --type litellm --master-key sk-... [--include-credential-values]` CLI verb wired (replaces today's stub in `collector/cli/stubs.go`).
   - First concrete `LootResult` shape (per §4.4) — replaces the v0 `struct{}` stub in `sdk/action/looter.go`.
@@ -2021,7 +2021,7 @@ For implementer scoping. Every file that changes in this milestone, with phase m
 | `modules/networkscan/` | 1 | NEW (dir) | Scanner module per §3.9 sketch (worker-pool, ctx-cancel guards, panic-recover). Includes `register.go` for self-registration. Conforms to `sdk/action.Scanner`. |
 | `modules/ollamafp/` | 2 | NEW (dir) | Ollama Fingerprinter module + rule file `rules/builtin/fingerprints/ollama.yaml`. |
 | `modules/litellmfp/` | 4 | NEW (dir) | LiteLLM Fingerprinter module + rule file `rules/builtin/fingerprints/litellm.yaml`. |
-| `modules/litellmloot/` | 4 | NEW (dir) | LiteLLM Looter module per §4.8 sketch. Tests: GET-only assertion, master-key-redaction assertion. |
+| `modules/litellmcollect/` | 4 | NEW (dir) | LiteLLM Looter module per §4.8 sketch. Tests: GET-only assertion, master-key-redaction assertion. |
 | `server/ui/src/theme/tokens.ts` | 6 | Edit | Add 8 entries to `NODE_KIND_COLORS` keyed by per-kind label. The 2 v0.2 service kinds (Ollama, LiteLLM) get final colors; the remaining 6 get placeholder colors so v0.3/v0.4 don't require theme-token edits — they only swap the placeholders for chosen colors. |
 | `server/ui/src/lib/explorer/hex-config.ts:37-150` | 6 | Edit | Add 8 entries to `HEX_CONFIG`, keyed by per-kind label. Include `strokeColor`, `fillColor`, `icon`, `kindTag`, `column`, `groupLabel`. As with `tokens.ts`: 2 v0.2 entries final, 6 stubbed. |
 | `server/ui/src/lib/explorer/layout.ts` | 6 | Edit | Update partition-column logic if columns shift; likely a no-op. |

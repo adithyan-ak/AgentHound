@@ -270,15 +270,13 @@ A2A signature posture is likewise optional and atomic:
 and mutually consistent. Full A2A card collection emits all four; sparse
 protocol discovery emits none.
 
-Campaign submissions add a scenario-specific prevalidation stage immediately
-after generic validation and before normalization, `BeginScan`, graph writes, or
-coverage reconciliation. Both positive and negative artifacts must match their
-bounded witness/staged-observation envelope and current topology. A rejection
-cannot overwrite canonical campaign evidence or retire coverage. It creates only
-a failed Postgres scan-audit row whose `metadata.campaign_rejection` contains a
-random rejection ID, sanitized run/scenario/version/outcome fields, and fixed
-reason codes—never the raw artifact, witness, fingerprint, digest, endpoint, or
-credential material.
+Unified scan artifacts may include a strictly validated
+`meta.extra.scan_execution` journal. The complete journal is retained under
+scan metadata; only mode, deep, status, timestamps, and summary counters are
+promoted for normal scan-history responses. Legacy campaign artifacts are
+rejected. The full journal also retains the scan's normalized `exclusions` for
+collector-side recovery; exclusions are not part of the bounded promoted
+summary.
 
 ```json
 // Request body (abridged; see graph-model.md for the complete schema)
@@ -523,21 +521,20 @@ cached rows only when labelled as cached.
 
 Each finding carries `owasp_map` and `atlas_map` arrays. Detections without a
 confident ATLAS mapping return `atlas_map: []`. `variant`, typed `evidence`,
-and exact witness evidence are persisted with the same scan row, so a
+and exact path evidence are persisted with the same scan row, so a
 published credential reference cannot be silently reclassified from a later
 live graph. See the [ATLAS crosswalk](detection-rules.md#mitre-atlas-crosswalk).
 
-When `evidence.state` is `verified`, `evidence.verification` contains the
-persisted campaign contract: scenario ID/version, campaign run ID, verified
-time, oracle type/outcome, control and authenticated stages/statuses/resource-
-addressed flags, and `cleanup_status` (`not_applicable` for read-only
-`cred-reach`). The API never returns a witness endpoint, credential, payload,
-resource content, or receipt state.
+When `evidence.state` is `verified`, `evidence.proof` contains the persisted
+same-scan contract: action and action ID, verified time, proof type/outcome,
+control and credential stages/statuses/resource-addressed flags, and cleanup
+status. Scenario, campaign, engagement, witness, oracle, and publication-
+revision fields are not part of the proof response.
 
 ### `GET /api/v1/analysis/findings/{id}`
 
 Return evidence detail for a specific finding in the same published snapshot.
-`attack_path` is the literal typed detector witness. It reports `shape`
+`attack_path` is the literal typed detector evidence. It reports `shape`
 (`linear`, `branched`, `disconnected`, `cyclic`, or `nodes_only`), continuity,
 recorded relationship direction, completeness reasons, and synthetic-join
 provenance. `linearization` is present only when every supplied node and edge
@@ -553,69 +550,6 @@ stores the detector witness graph with each finding snapshot. Detail serves it d
 `snapshot.evidence_state: "persisted_exact_evidence"` even when the
 mutable projection has advanced or is incomplete; detail does not run a second
 query or reconstruct evidence from mutable Neo4j.
-
-### `GET /api/v1/analysis/findings/{id}/witness`
-
-Export a stable, sanitized **campaign witness** for a predicted credential-gated
-`CAN_REACH` finding (16-char fingerprint), so the collector-side campaign runner
-(`agenthound campaign --scenario cred-reach`) can verify it.
-
-Witness V1 is built under a guarded read and is runnable only when the providing
-`MCPServer` transport is HTTP. It carries the explicit source agent, explicit
-agent/server/credential/resource kinds and IDs, credential `value_hash` +
-`merge_key`, the endpoint-derived server identity hash, opaque service scope,
-resource identity input, predicted edge kind, topology normalization version,
-and the actual ordered current `CAN_REACH` evidence node IDs/kinds. The endpoint
-remains out-of-band. It carries no Neo4j relationship IDs, arbitrary properties,
-or raw credential. Its unkeyed fingerprint is a consistency checksum, not
-authenticity or authorization.
-
-Returns `400` for a malformed finding ID, `404` when no runnable
-credential-gated `CAN_REACH` prediction matches the finding (e.g. the credential
-is a synthetic identity with no observable material), and `409` when no stable
-published projection is available or the projection changes during the guarded
-read. The served OpenAPI contract defines the complete witness response and
-`FindingVerification` schemas; `evidence.verification` remains optional for
-non-verified findings.
-
-```json
-{
-  "witness": {
-    "schema_version": 1,
-    "topology_normalization_version": 1,
-    "publication_revision": 7,
-    "predicted_edge_kind": "CAN_REACH",
-    "agent_id": "sha256:...",
-    "agent_kind": "AgentInstance",
-    "credential_id": "sha256:...",
-    "credential_kind": "Credential",
-    "credential_value_hash": "sha256-hex",
-    "credential_merge_key": "value_hash",
-    "server_id": "sha256:...",
-    "server_kind": "MCPServer",
-    "server_identity_id": "sha256:...",
-    "service_scope": "network_context",
-    "service_scope_id": "sha256:...",
-    "resource_id": "sha256:...",
-    "resource_kind": "MCPResource",
-    "resource_identity_input": "postgres://prod/customers",
-    "evidence_node_ids": ["sha256:agent", "sha256:entry-server", "sha256:entry-tool", "sha256:server", "sha256:credential", "sha256:identity", "sha256:resource-tool", "sha256:resource"],
-    "evidence_node_kinds": ["AgentInstance", "MCPServer", "MCPTool", "MCPServer", "Credential", "Identity", "MCPTool", "MCPResource"]
-  },
-  "projection": {
-    "scan_id": "scan-...",
-    "revision": 7,
-    "coverage_limited": false,
-    "coverage_limitation_count": 0
-  }
-}
-```
-
-The same witness is produced by the `agenthound-server witness --finding <id>`
-CLI. When the verification is later ingested, the server re-correlates the
-witness fingerprint and every echoed field against current identities and the
-exact ordered source-agent `CAN_REACH` topology. A positive publication revision
-is provenance; equality to the current revision is not required.
 
 ### `GET /api/v1/findings/triage/{fingerprint}`
 

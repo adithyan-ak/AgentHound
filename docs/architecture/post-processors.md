@@ -237,41 +237,22 @@ relationship recreation order. Evidence nodes follow that tuple, and evidence
 relationships follow `(TRUSTS_SERVER, PROVIDES_TOOL, AUTHENTICATES_WITH,
 USES_CREDENTIAL, PROVIDES_TOOL, HAS_ACCESS_TO)`.
 
-**Verified-reach upgrade (3rd pass):** after building the CAN_REACH edges,
-`can_reach` re-correlates any persisted per-agent raw
-`CREDENTIAL_REACH_VERIFIED` edge
-(emitted by the campaign runner's `cred-reach` scenario) against the freshly
-rebuilt edges. On a full match it **upgrades the CAN_REACH edge in place** —
-`reach_evidence_state='verified'`, `confidence=1.0`, plus the verified
-scenario/run/oracle/staged-observation/cleanup metadata. It creates **no** new edge and no second finding,
-so risk is never double-counted; `findings.go` reads `reach_evidence_state` and
-raises the finding's evidence state to `verified`.
-
-The ingest pipeline admits that raw campaign edge only after generic validation
-and campaign-specific envelope/current-topology prevalidation, all before
-normalization, `BeginScan`, canonical writes, and reconciliation. Rejected
-positive or negative submissions leave canonical edges and coverage untouched;
-diagnostics are limited to a sanitized Postgres rejection audit.
-
-Before the Cypher upgrade, Go reconstructs witness V1 from each raw edge and
-recomputes its unkeyed fingerprint; invalid evidence remains stored for
-diagnosis but is excluded from the validated relationship-ID allowlist.
-Re-correlation then requires `a.objectid = witness.agent_id`, exact live
-credential hash/merge key, the exact providing server/resource identity, the
-fixed scenario/oracle/stage/outcome contract, and equality between the complete
-ordered witness topology and the current `CAN_REACH.evidence_node_ids`; every
-normalized kind must still label its corresponding node. Only a positive
-publication revision is required—revision equality is deliberately not a gate.
-Because evidence identity is `AgentInstance -> MCPResource` and coverage also
-includes the agent, two agents sharing one credential/resource cannot overwrite
-or over-upgrade each other.
+**Verified-reach upgrade (3rd pass):** every base rebuild first resets
+`reach_evidence_state='inferred'` and removes proof and legacy verification
+properties. `can_reach` then correlates current raw
+`CREDENTIAL_ACCESS_OBSERVED` edges against freshly rebuilt paths. The proof must
+name the same MCPResource and its exact Credential ID must appear in
+`CAN_REACH.evidence_node_ids`. On a valid differential denied/allowed pair it
+upgrades the relationship in place to confidence `1.0`, copies bounded generic
+proof fields, and creates no second edge or finding. Removing proof therefore
+clears stale verified state on the next rebuild.
 
 ## 7. cross_service_credential_chain
 
 **Computes:** `AgentInstance -[CAN_REACH]-> Credential` (upstream provider
 credential material or references)
 
-Joins Config Collector and LiteLLM Looter emissions on `Credential.value_hash`:
+Joins Config Collector and LiteLLM service-collector emissions on `Credential.value_hash`:
 
 ```
 AgentInstance -> MCPServer -[AUTHENTICATES_WITH]-> Identity

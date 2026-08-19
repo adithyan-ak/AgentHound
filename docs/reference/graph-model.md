@@ -14,7 +14,7 @@ An attacker (or a compromised agent) moves along edge direction to escalate acce
 
 ## 1. Node Types
 
-### Collector-Produced (23 kinds)
+### Collector-Produced (22 kinds)
 
 These are the node kinds accepted in ingest input (`sdk/ingest.AllowedNodeKinds`).
 
@@ -28,21 +28,20 @@ These are the node kinds accepted in ingest input (`sdk/ingest.AllowedNodeKinds`
 | `A2ASkill` | A2A | `id`, `name`, `description`, `input_modes`, `output_modes`, `security_requirements`, `conformant`, `conformance_errors`, `description_hash`, `has_injection_patterns` |
 | `AgentInstance` | Config | `name`, `framework`, `config_path` |
 | `Identity` | Config + A2A | `type` (none/apiKey/oauth/bearer/mtls), server-identity `scope`, `is_static` |
-| `Credential` | Config + LiteLLM/Open WebUI Looters | `type`, `name`, `source`, Config `location` (`env`, `header`, `arg:<index>`, or redacted URL component), required `merge_key` (`value_hash`/`identity`), `identity_basis` (`value_hash`/`provider_name`/`metadata`/`unknown`), `material_status` (`observed`/`masked`/`hashed`/`unobserved`/`unknown`), `exposure_status` (`exposed`/`not_observed`/`unknown`), `high_entropy`, `format`, `value_hash`, `blast_radius` |
+| `Credential` | Config + service collectors | Concrete raw `value` when observed; parsed `auth_method` when known; `type`, `name`, `source`, Config `location` (`env`, `header`, `arg:<index>`, or redacted URL component), required `merge_key` (`value_hash`/`identity`), `identity_basis` (`value_hash`/`provider_name`/`metadata`/`unknown`), `material_status` (`observed`/`masked`/`hashed`/`unobserved`/`unknown`), `exposure_status` (`exposed`/`not_observed`/`unknown`), `high_entropy`, `format`, `value_hash`, `blast_radius`. Masks, hashes, and unresolved references omit `value`. |
 | `Host` | Config + A2A + MCP | `hostname`, `ip`, `scope` (`local`/`private`/`public`/`unknown`) |
 | `ConfigFile` | Config | `path`, sorted `clients`, singular `client` only for one applicable client, unique enabled `server_count` |
 | `InstructionFile` | Config | `path`, `type` (`agents.md`, `claude.md`, `claude-rule`, `cursorrules`, `cursor-rule`, `copilot-instructions`, or `copilot-instruction`), `hash`, `is_suspicious` |
-| `OllamaInstance` | Network scan + Ollama fingerprinter + Ollama Looter + Open WebUI config | `endpoint`, `version`, observed `auth_method`/`auth_assurance`/`auth_evidence`, active-probe `probe_status` (`verified`/`failed`/`unknown`), `last_verified_at`, `loot_observed`, `configuration_observed`, `configured_via`, `configured_auth_method`, `is_anonymous_loot`, active-discovery `discovered_via`. Direct loot sets `loot_observed` and does not overwrite discovery provenance; it adds verified anonymous evidence only after a credential-free `/api/tags` response contains the canonical `models` array. Open WebUI configuration references intentionally omit probe status and active-discovery provenance so a later direct Ollama observation can merge without being overwritten. |
+| `OllamaInstance` | Network scan + Ollama collector + Open WebUI config | `endpoint`, `version`, observed auth evidence, `probe_status`, `last_verified_at`, `collection_observed`, configuration provenance, and active-discovery provenance. Deep active mode may add bounded embedding verification. |
 | `VLLMInstance` | Network scan + vLLM fingerprinter | `endpoint`, upstream `version`, `auth_method` (`unknown` from fingerprinting) |
-| `QdrantInstance` | Network scan + Qdrant fingerprinter + Qdrant Looter | `endpoint`, `version`, `loot_observed`, successful-inventory `auth_method`/`auth_assurance`/`auth_evidence`, `probe_status`, `last_verified_at`, `is_anonymous_loot`, `collection_count`, `collections` (sorted names), `total_points`, `anonymous_listing`. The Looter adds the anonymous and inventory properties only after a credential-free `status=ok` response with a `result.collections` array. |
-| `MLflowServer` | Network scan + MLflow fingerprinter + MLflow Looter | `endpoint`, `version`, `loot_observed`, successful-inventory `auth_method`/`auth_assurance`/`auth_evidence`, `probe_status`, `last_verified_at`, `is_anonymous_loot`, `experiment_count`. The Looter adds the anonymous and inventory properties only after a credential-free experiments-search response with an `experiments` array. |
-| `LiteLLMGateway` | Network scan + LiteLLM fingerprinter | `endpoint`, `auth_method`, `is_anonymous_loot`, `docs_enabled` |
-| `JupyterServer` | Network scan + Jupyter fingerprinter + Jupyter Looter | `endpoint`, fingerprint-owned `version`, `status_access`, `status_anonymous_access`, `fingerprint_detector_id`, `fingerprint_detector_version`, `fingerprint_detector_source`; Looter-owned `sessions_access`, `contents_access`, `auth_required` (only when known), observed `auth_method`, `auth_assurance`, `auth_evidence`, `anonymous_access_observed`, `is_anonymous_loot` |
+| `QdrantInstance` | Network scan + Qdrant collector | `endpoint`, `version`, `collection_observed`, successful inventory/auth evidence, `probe_status`, `last_verified_at`, collection totals, and optional bounded deep payload samples. |
+| `MLflowServer` | Network scan + MLflow collector | `endpoint`, `version`, `collection_observed`, successful inventory/auth evidence, `probe_status`, `last_verified_at`, and experiment/run inventory. |
+| `LiteLLMGateway` | Network scan + LiteLLM fingerprinter | `endpoint`, observed authentication posture, `docs_enabled` |
+| `JupyterServer` | Network scan + Jupyter collector | `endpoint`, version and fingerprint detector metadata; `collection_observed`, sessions/contents access, bounded file inventory, observed auth evidence, and `anonymous_access_observed`. |
 | `LangServeApp` | Network scan + LangServe fingerprinter | `endpoint`, `chains` |
-| `OpenWebUIInstance` | Network scan + Open WebUI fingerprinter + Open WebUI Looter | `endpoint`, `version`, `loot_observed`, `signup_enabled`, `auth_required`, `ollama_backend_urls` (canonicalized list, Looter-enriched from admin `/ollama/config`). Public identity fingerprinting omits graph auth fields; only the looter's `/api/config` observation authors auth evidence. |
+| `OpenWebUIInstance` | Network scan + Open WebUI collector | `endpoint`, `version`, `collection_observed`, signup/auth posture, upstream service URLs, and authenticated credential evidence when available. |
 | `AIService` | Multi-label umbrella (see below) | _(no unique properties — carried as companion label)_ |
-| `AIModel` | Ollama Looter + extractor reference endpoint | Looter observations: `name`, `size_bytes`, `digest`, `family`, `parameter_size`, `is_finetune`, `modified_at`, `value_hash` (when modelfile present), `has_system_prompt`, `modelfile_size_bytes`. Extractors may emit the canonical source `AIModel` ID as an empty `reference_only` endpoint so extraction edges remain closed without fabricating model properties. |
-| `ExtractedTrainingSignal` | Embedding inversion extractor | `token_index`, `token_string`, `magnitude`, `z_score`, `confidence`, `source_model_id`, `engagement_id`, `method`, `extracted_at` |
+| `AIModel` | Ollama collector | `name`, `size_bytes`, `digest`, `family`, `parameter_size`, `is_finetune`, `modified_at`, `value_hash` when modelfile content is present, `has_system_prompt`, and `modelfile_size_bytes`. |
 
 Config collection normalizes stdio executable basenames (including
 path-qualified and Windows `.exe`/`.cmd`/`.bat` launchers) before assessing
@@ -213,13 +212,13 @@ This enables queries like `MATCH (n:AIService)` to find all AI infrastructure re
 
 ## 3. Edge Types
 
-### Raw Edges (20 collector-produced)
+### Raw Edges (19 collector-produced)
 
 | Edge | Source | Target | Collector | Meaning |
 |------|--------|--------|-----------|---------|
 | `TRUSTS_SERVER` | AgentInstance | MCPServer | Config | Agent trusts this server to provide tools; configured `risk_weight` / `auth_assessment_complete` remain raw provenance, while the auth-strength pre-pass adds derived `effective_risk_weight` / `effective_auth_assessment_complete` / `effective_auth_source`; `configured_names` preserves sorted same-identity aliases without making an alias a server identity property |
 | `PROVIDES_TOOL` | MCPServer | MCPTool | MCP | Server exposes this tool |
-| `PROVIDES_RESOURCE` | MCPServer / JupyterServer / MLflowServer / QdrantInstance | MCPResource | MCP / Jupyter Looter / MLflow Looter (Model Registry storage URIs) / Qdrant Looter (scrolled point payloads under `--include-points`) | Server exposes this resource. MLflow URIs are plain `storage_location or source` (s3://, gs://, dbfs:/, file:///), NOT presigned credentials. Qdrant point resources are per-collection payload samples. |
+| `PROVIDES_RESOURCE` | MCPServer / JupyterServer / MLflowServer / QdrantInstance | MCPResource | MCP and service collectors | Server exposes this resource. MLflow URIs are plain storage locations, not presigned credentials. Qdrant point resources are bounded deep-mode payload samples. |
 | `PROVIDES_PROMPT` | MCPServer | MCPPrompt | MCP | Server exposes this prompt template |
 | `ADVERTISES_SKILL` | A2AAgent | A2ASkill | A2A | A conformant skill declaration advertises this skill; invalid skill observations do not emit the edge |
 | `DELEGATES_TO` | A2AAgent | A2AAgent | A2A | Lexical possible-delegation hypothesis. `match_type`, `match_field`, and `matched_reference` preserve the boundary/context witness; not proof of runtime delegation. |
@@ -230,20 +229,14 @@ This enables queries like `MATCH (n:AIService)` to find all AI infrastructure re
 | `HAS_ENV_VAR` | MCPServer | Credential | Config | Server has access to this env var |
 | `LOADS_INSTRUCTIONS` | AgentInstance | InstructionFile | Future evidence-backed collectors | Agent loads this instruction file. Static path discovery does not emit this edge because path presence alone cannot prove client/scope applicability. |
 | `SAME_AUTH_DOMAIN` | A2AAgent | A2AAgent | A2A | Agents share an authentication domain |
-| `EXPOSES` | AIService | AIService | Fingerprinters / Looters | Service relationship. Open WebUI backend references carry `assertion_type=configured_reference` and `confidence_scope=configuration_presence`; they do not prove backend availability or authentication until a direct probe sets `probe_status=verified`. |
-| `EXPOSES_CREDENTIAL` | AIService | Credential | LiteLLM Looter, Open WebUI Looter | Credential evidence relationship. Inspect `exposure_status`/`assertion_type`: masked provider references and returned hashes remain reference edges but are not usable secret exposure. |
-| `PROVIDES_MODEL` | OllamaInstance | AIModel | Ollama Looter | Instance serves this model |
-| `EXTRACTED_FROM` | AIModel | ExtractedTrainingSignal | Extractors | Extracted signal was derived from this model |
+| `EXPOSES` | AIService | AIService | Fingerprinters / service collectors | Service relationship. Configured references do not prove backend availability or authentication until a direct observation succeeds. |
+| `EXPOSES_CREDENTIAL` | AIService | Credential | Service collectors | Credential evidence relationship. Masked references and returned hashes remain reference edges and are not usable secret material. |
+| `PROVIDES_MODEL` | OllamaInstance | AIModel | Ollama collector | Instance serves this model |
 | `INGESTS_UNTRUSTED` | MCPTool | MCPResource | MCP | Tool with rule-derived `source_trust` (web/email/fileshare) ingests untrusted input that taints same-server resources. **Raw edge** — not swept by composite cleanup (see post-processors doc) |
-| `CREDENTIAL_REACH_VERIFIED` | AgentInstance | MCPResource | scan (campaign runner) | Per-agent campaign evidence that a supplied credential enabled a read of the exact predicted resource. It means “campaign verification associated with this source agent,” **not** observed agent invocation. Carries witness-V1 identity/topology, staged status, and credential hash metadata; NEVER the endpoint or raw credential. On ingest the server validates the complete contract and upgrades only the matching source-agent `CAN_REACH` finding. **Raw edge.** |
-| `PUBLIC_ACCESS_OBSERVED` | MCPServer | MCPResource | scan (campaign runner) | A campaign probe read this resource with no credential. A recorded fact, not an auto-finding (findings derive only from composite edges) — only a policy concern where authentication was expected. **Raw edge.** |
+| `CREDENTIAL_ACCESS_OBSERVED` | Credential | MCPResource | scan planner | Differential same-resource proof: anonymous control denied and selected credential allowed. Carries bounded generic proof fields and no campaign/witness identity. **Raw edge.** |
+| `PUBLIC_ACCESS_OBSERVED` | MCPServer | MCPResource | scan planner | A read-only probe read this resource with no credential. A recorded fact, not an automatic finding. **Raw edge.** |
 
-> The campaign runner's second scenario, `mcp-poison-roundtrip` (a STANDALONE reversible-mutation validation), deliberately emits **no** graph edge. Its oracle/cleanup evidence stays in the bounded CLI `campaign.RunReport` rather than a scored edge, so a finding-free validation never pollutes the graph. See [offensive-actions.md](../operator/offensive-actions.md#mcp-poison-roundtrip-standalone-target-mutation-validation).
-
-Campaign artifacts are prevalidated against their bounded public envelope and
-the current graph before normalization, scan lifecycle creation, canonical
-`MERGE`, or coverage retirement. Invalid positives therefore cannot overwrite a
-valid per-agent campaign edge, and invalid negatives cannot retire it.
+The ContextForge reversible round trip emits no graph edge. Oracle and cleanup outcomes stay in `meta.extra.scan_execution`.
 
 ### Composite Edges (12 post-processor computed)
 
@@ -255,7 +248,7 @@ valid per-agent campaign edge, and invalid negatives cannot retire it.
 | `POISONED_DESCRIPTION` | MCPTool | MCPTool (self-edge) | Raw edges | Tool description contains injection patterns |
 | `POISONED_INSTRUCTIONS` | InstructionFile | InstructionFile (self-edge) | Raw edges | Suspicious patterns: imperative overrides, exfiltration commands, hidden Unicode |
 | `TAINTS` | MCPTool | MCPTool | INGESTS_UNTRUSTED + `schema_keys` | Untrusted-input tool shares ≥2 schema keys with a tool on another server, so attacker data can flow between them |
-| `CAN_REACH` | AgentInstance / A2AAgent | MCPResource / Credential | HAS_ACCESS_TO and correlation joins | Inferred transitive access. Credential variants distinguish observed material from references; cross-protocol shared-host variants are 50%-confidence hypotheses, not proven invocation paths. Credential-path candidates for one `(agent, resource)` are reduced deterministically by the complete object-ID tuple `(agent, entry server, entry tool, resource server, identity, credential, resource tool, resource)`; relationship IDs never choose the witness path. When per-agent `CREDENTIAL_REACH_VERIFIED` evidence exactly re-correlates on ingest, only that source agent's credential-chain edge is upgraded in place (`reach_evidence_state=verified`, confidence 1.0), with structured verification metadata persisted on the finding. |
+| `CAN_REACH` | AgentInstance / A2AAgent | MCPResource / Credential | HAS_ACCESS_TO and correlation joins | Inferred transitive access. Credential variants distinguish observed material from references; cross-protocol shared-host variants remain hypotheses. A current `CREDENTIAL_ACCESS_OBSERVED` edge upgrades only a path containing its exact Credential and resource, in place, to verified confidence 1.0. |
 | `CAN_EXFILTRATE_VIA` | AgentInstance | MCPTool | CAN_REACH | Inferred sensitive-data access plus a matched output-channel capability (incl. `auto_fetch_render` / `allowlisted_proxy`); not observed exfiltration |
 | `IFC_VIOLATION` | MCPTool | MCPTool | INGESTS_UNTRUSTED + HAS_ACCESS_TO (≤3 hops) | Untrusted source shares a resource with a high-impact sink (credential_access/file_write/email_send) |
 | `CAN_IMPERSONATE` | A2AAgent | A2AAgent | Raw edges | TF-IDF cosine similarity > 0.8 on skill descriptions |
@@ -314,7 +307,7 @@ contract defines it.
 | `is_composite` | bool | True for post-processed edges |
 
 Raw edges that carry an `evidence` map define its keys per edge, for example
-`endpoint`, `source`, or `engagement_id`. Do not assume the map exists on an
+`endpoint`, `source`, or `proof_type`. Do not assume the map exists on an
 arbitrary relationship.
 
 Composite edges additionally carry `source_collector` (`mcp`, `a2a`, `config`,
@@ -324,7 +317,7 @@ detector provenance. It is neither raw-fact nor composite lifecycle ownership.
 Finding-producing composite edges also carry transient
 `evidence_version`, `evidence_node_ids`, and `evidence_relationship_ids`
 references selected by the detector. The findings snapshot stage dereferences
-and persists those exact witnesses; detail does not reconstruct them later
+and persists that exact evidence; detail does not reconstruct it later
 from a similar graph pattern.
 
 ### Active observation ownership
@@ -496,7 +489,7 @@ The `value_hash` property on `Credential` nodes is the cross-collector merge pri
    `AUTHENTICATES_WITH` and `USES_CREDENTIAL` (server → identity → credential),
    independent of whether the material came from an env var, header, argument,
    or URL component
-2. LiteLLM Looter emits a Credential node via `EXPOSES_CREDENTIAL` (gateway → master/upstream/virtual keys)
+2. The LiteLLM service collector emits Credential nodes via `EXPOSES_CREDENTIAL` (gateway → master/upstream/virtual keys)
 3. Both compute `value_hash = SHA-256(credential_material)` via
    `sdk/common.HashCredentialValue`. For a recognized HTTP `Authorization`
    scheme, the material is the value after `Bearer`, `Basic`, or the other
@@ -510,7 +503,7 @@ The `value_hash` property on `Credential` nodes is the cross-collector merge pri
 
 This enables evidence graphs like `AgentInstance → MCPServer → Identity → Credential ← LiteLLMGateway → upstream provider`. An observed `value_hash` match correlates the local and gateway credential records; the upstream target is classified separately as observed material or a reference.
 
-**Requirement:** Every collector or looter MUST populate `value_hash` on every emitted Credential node.
+**Requirement:** Every collector MUST populate `value_hash` on every emitted Credential node and preserve `auth_method` when its scheme is known. A hash match correlates values; it does not authorize changing or guessing the authentication scheme.
 
 **Exception:** when a producer cannot observe raw material, it may retain a stable identity while setting explicit evidence states. LiteLLM `/model/info` references use `merge_key=identity`, `identity_basis=provider_name`, `material_status=masked`, and `exposure_status=not_observed`. Returned one-way virtual-key digests use `material_status=hashed`. These nodes are excluded from exposure, entropy, rotation, and observed-material joins.
 

@@ -153,10 +153,9 @@ alphanumeric runs from benign text that would false-positive such a rule.
 Natural-language phrase rules should leave it unset (the default, `false`) so
 they still catch obfuscated instructions.
 
-### `RunTests` parity
+### Test parity
 
-`agenthound rules test` evaluates cases embedded in custom text-detection rules;
-the Go builtin-fixture guard temporarily attaches the external cases from
+The Go builtin-fixture guard attaches the external cases from
 `sdk/rules/builtin_tests/`. Both paths send each supplied input through the exact
 same matcher code used at scan time: the raw view is matched first, and only
 when the rule is canonicalization-eligible and the canonical text differs is
@@ -217,7 +216,7 @@ emit:
   properties:
     version: "{capture:version}"
     auth_method: "none"
-    is_anonymous_loot: "true"
+    anonymous_access_observed: "true"
 ```
 
 ### Probe Execution
@@ -305,6 +304,6 @@ emit:
 
 Unresolved placeholders are preserved as-is in the output (makes misnamed captures visible). Captures not referenced in the template still appear as properties automatically.
 
-### Bundle Override
+### Runtime loading
 
-Operators can ship custom fingerprint rules via `--rules-bundle <path>`. Same-id rules from the bundle override the embedded set. The bundle must be a directory of YAML files or a `.tar.gz` archive. Verify cosign signature before use.
+Collector releases use their compiled text and fingerprint rules. Runtime directories, tarball overlays, and `--rules-bundle` were removed so a scan has one reproducible ruleset. Develop and test changes in-tree, then ship them with the matching collector/server release.

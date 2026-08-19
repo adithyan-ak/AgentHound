@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Breaking: lean autonomous collector
+
+- Replaced the fragmented collector workflow with one active-by-default
+  `agenthound scan [host|CIDR|@targets-file]` loop. `--stealth` disables active
+  proofs, cross-target credential reuse, compute, and mutation; `--deep` adds
+  bounded high-cost collection.
+- The collector now checkpoints one plain V1 JSON artifact, stores exact
+  observed credential values on Credential nodes, plans same-scan service
+  collection and access proofs locally, and restores temporary ContextForge
+  mutations before another candidate runs.
+- Added exact host/IP/CIDR exclusions enforced before admission and again at
+  every AgentHound-owned socket dial, including redirects and derived URLs.
+- Removed collector-side ingestion and the public `discover`, `loot`,
+  `extract`, `poison`, `implant`, `campaign`, and `rules` workflows. Manual
+  `agenthound-server ingest <scan.json>` remains the analysis handoff.
+- Replaced campaign witness evidence with same-scan
+  `CREDENTIAL_ACCESS_OBSERVED` proof, embedded recovery state in
+  `meta.extra.scan_execution`, and added `agenthound revert <scan.json>`.
+- The dashboard keeps its existing analysis workflow, adds bounded scan
+  execution summaries, labels same-scan proof as “Verified During Scan,” and
+  masks Credential `value` with one-click reveal/copy.
+- Hardened the unified scan contract after review: configured MCP references
+  seed discovery, MCP/A2A protocol observations remain distinct graph facts,
+  coverage is validated before checkpointing, parsed credential schemes and
+  deterministic attribution survive planning, partial results cannot produce
+  false success, partially verified cleanup stays unresolved, and standalone
+  recovery replays the scan's recorded exclusions.
+
 ## 1.0.0 — 🚀 First Supported Release (2026-07-27)
 
 AgentHound 1.0.0 is the first supported release of the offensive security

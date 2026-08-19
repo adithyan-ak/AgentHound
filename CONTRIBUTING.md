@@ -40,23 +40,21 @@ CI additionally runs `golangci-lint`, `govulncheck`, `go-licenses`, `scripts/dep
 - **Property keys** in collector JSON and Neo4j are canonical `snake_case`.
   Non-canonical keys are rejected before normalization.
 
-## How to add a new module (collector / fingerprinter / looter)
+## How to add a new module (scanner / fingerprinter / service collector)
 
-Action modules live under `modules/` and self-register at init time. Config,
-MCP, and A2A enumeration are current compatibility exceptions: their registry
-entries describe the capability, while the CLI invokes their legacy collectors
-directly. Do not use `Enumerator` as an extension point until the CLI dispatches
-it.
+Action modules live under `modules/` and self-register at init time. The public
+workflow is always `agenthound scan`; modules do not add commands or flags.
+Config, MCP, and A2A collection remain concrete orchestration stages.
 
 1. Create a new directory: `modules/<name>/`.
 2. Implement a currently dispatched action interface from `sdk/action/` — for
-   example `Fingerprinter`, `Looter`, `Extractor`, `Poisoner`, or `Implanter`.
+   example `Fingerprinter` or `ServiceCollector`.
 3. Add `register.go` calling `module.Register(...)` in `init()`.
 4. Blank-import your module in `collector/cmd/agenthound/main.go`:
    ```go
    _ "github.com/adithyan-ak/agenthound/modules/<name>"
    ```
-5. Produce JSON output matching `sdk/ingest.IngestData` (see
+5. Return graph data matching `sdk/ingest.IngestData` (see
    `docs/reference/graph-model.md` for the schema). Node IDs must be
    deterministic SHA-256 hashes per `sdk/common`.
 6. Add the module package and any new dependency packages to

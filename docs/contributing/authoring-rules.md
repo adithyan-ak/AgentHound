@@ -167,18 +167,7 @@ All probe matchers are conjunctive (ALL must pass). Multiple probes are also con
 
 ## Validation and Testing
 
-### Validate custom text-detection rules
-
-```bash
-agenthound rules validate /path/to/custom-rule.yaml --strict
-```
-
-The CLI validator accepts the text-detection schema only. It checks ID format,
-required fields, regex compilation, matcher validity, and inline tests. Strict
-mode also requires at least one inline test. It does not validate fingerprint
-YAML.
-
-### Validate fingerprint rules
+### Validate rules
 
 Fingerprint rules are validated at load time by `rules.ValidateFingerprint`.
 For the embedded rules, run:
@@ -187,13 +176,7 @@ For the embedded rules, run:
 go test ./sdk/rules -run 'TestValidateFingerprint|TestLoadFingerprints_EmbeddedRulesValid'
 ```
 
-### Test custom text-detection rules
-
-```bash
-agenthound rules test /path/to/custom-rule.yaml
-```
-
-This runs the `tests:` block embedded in a custom text-detection rule:
+Text-rule cases use the `tests:` shape during development:
 
 ```yaml
 tests:
@@ -239,13 +222,6 @@ For every rule:
 
 - [ ] Rule ID is kebab-case, 3-64 characters
 - [ ] Regex patterns compile without error
-
-For a custom text-detection rule:
-
-- [ ] OWASP mappings reference valid MCP01-MCP10 or ASI01-ASI10 codes
-- [ ] Inline tests cover true-positive and true-negative cases
-- [ ] `agenthound rules validate /path/to/rule.yaml --strict` passes
-- [ ] `agenthound rules test /path/to/rule.yaml` runs the expected cases and passes
 
 For a built-in text-detection rule:
 

@@ -43,11 +43,11 @@ Modules self-register via `init()`. To add one:
 ## Critical Architectural Facts
 
 - **Node IDs:** Deterministic SHA-256 content-based. MCPServer ID MUST match between Config Collector and MCP Collector (the merge point).
-- **value_hash:** SHA-256 of credential value. Cross-collector merge primitive. Every Looter MUST populate it on every emitted Credential. **Exception:** when a Looter cannot observe the raw credential value (e.g. LiteLLM masks upstream provider `api_key` via `/model/info`), it may synthesize a stable identity via `SHA-256("provider:name")` and mark the node `merge_key: "identity"`. The cross-service credential-chain processor explicitly filters these out of value_hash joins (`server/internal/analysis/processors/cross_service_credential_chain.go`), so synthetic identities cannot false-positive against real credentials.
+- **Credential material:** Every observed credential stores its raw material in `properties.value` and its SHA-256 identity in `properties.value_hash`. Masks, hashes, and unresolved references are never written to `value` and never become planner inputs. Provider-only identities may retain `merge_key: "identity"`; cross-service joins exclude them.
 - **Batch writes:** 1000 operations per Neo4j transaction. UNWIND + MERGE pattern.
 - **Composite epochs:** Promoting any complete raw domain retires every composite edge, then all registered processors rebuild from the retained current raw projection. `source_collector` is provenance, not lifecycle ownership.
 - **Post-processor order:** auth_strength → HAS_ACCESS_TO → CAN_EXECUTE → SHADOWS → POISONED_DESCRIPTION → POISONED_INSTRUCTIONS → TAINTS → CAN_REACH → cross_service_credential_chain → IFC_VIOLATION → CAN_EXFILTRATE_VIA → CAN_IMPERSONATE → CONFUSED_DEPUTY → Cross-protocol CAN_REACH → RiskScore.
-- **Poisoner safety:** Receipt persisted BEFORE mutation. Reverter is compile-time mandatory (embedded interface).
+- **Mutation safety:** Recovery state is checkpointed into the scan artifact before mutation. Every autonomous round-trip restores immediately under a detached cleanup context and confirms the original before the planner continues.
 
 ## Documentation Updates
 
@@ -74,7 +74,7 @@ IMPORTANT: When making changes that affect any of these, update the correspondin
 | Module authoring guide | `docs/contributing/modules.md` |
 | Architecture deep-dive | `docs/architecture/` |
 | Ingest wire format | `sdk/ingest/` (Node, Edge, IngestData, GraphData) |
-| Action interfaces | `sdk/action/` (Fingerprinter, Looter, Poisoner, Extractor, etc.) |
+| Action interfaces | `sdk/action/` (Fingerprinter, ServiceCollector, Poisoner) |
 | Module registry | `sdk/module/` (Register, Get, ListByAction) |
 | Post-processors | `server/internal/analysis/processors/` |
 | Neo4j writer | `server/internal/graph/writer.go` |

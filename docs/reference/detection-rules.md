@@ -8,7 +8,7 @@ AgentHound surfaces findings through two complementary layers:
 
 | Layer | Where it runs | Count | Storage |
 |---|---|---|---|
-| **YAML rules engine** | Inside collectors at scan time. Drives capability classification, credential extraction, prompt-injection pattern matching, instruction-file poisoning, source-trust tagging, and resource-sensitivity classification. | **35 builtin rules** | `sdk/rules/builtin/*.yaml`. Inspect with `agenthound rules list`; run custom inline tests with `agenthound rules test <path>`; run the shipped external fixtures with `go test ./sdk/rules -run TestBuiltinRules_AllPassInlineTests`; query the running server via `GET /api/v1/rules`. |
+| **Compiled YAML rules engine** | Inside collectors at scan time. Drives capability classification, credential extraction, prompt-injection pattern matching, source-trust tagging, and resource-sensitivity classification. | **35 builtin rules** | `sdk/rules/builtin/*.yaml`. Run the shipped fixtures with `go test ./sdk/rules -run TestBuiltinRules_AllPassInlineTests`; inspect the matching server release through `GET /api/v1/rules`. Runtime custom-rule CLI loading was removed. |
 | **Pre-built graph queries** | Inside `agenthound-server` against the post-processed Neo4j graph. Each query expresses a high-level finding as a Cypher path or pattern. | **19 queries** | `server/internal/analysis/prebuilt/`. Surface as findings via `GET /api/v1/analysis/findings`, runnable via `GET /api/v1/analysis/prebuilt/{id}` or `agenthound-server query --prebuilt <id>`. |
 
 The two layers feed each other: the rules engine emits structured signals (`capability_surface`, `exposure_status`, `material_status`, `high_entropy`, `has_injection_patterns`, `source_trust`, sensitivity classifications) on collected nodes; the post-processors and pre-built queries consume those signals to compute composite edges (`HAS_ACCESS_TO`, `CAN_REACH`, `POISONED_DESCRIPTION`, `TAINTS`, `IFC_VIOLATION`, `CONFUSED_DEPUTY`, `POISONS_CONTEXT`, etc.) and enumerate attack paths.
@@ -401,9 +401,8 @@ resources.
 
 **Risk:** Chokepoints are high-value targets. Compromising one chokepoint server may grant access to every agent that trusts it.
 
-## Campaign verification (evidence, not a new detection)
+## Same-scan proof (evidence, not a new detection)
 
-The [campaign runner](../operator/offensive-actions.md#campaign-runner-verify-and-validate) does not add a detection layer. It **upgrades** or **records evidence** against existing detections:
+The collector's local planner can strengthen an existing detection without adding a detection layer. A successful differential MCP read emits `CREDENTIAL_ACCESS_OBSERVED`; exact Credential, resource, and current-path re-correlation upgrades only the matching `CAN_REACH` finding. It does not claim agent invocation, create a second finding, or double-count risk. `PUBLIC_ACCESS_OBSERVED` remains an independent raw fact.
 
-- **`cred-reach`** verifies a *predicted* credential-gated `CAN_REACH` finding for one explicit source agent. `CREDENTIAL_REACH_VERIFIED` is per-agent raw supporting evidence; exact current identity/topology re-correlation upgrades only that existing finding and persists the complete structured verification basis. It does not claim the agent invoked the resource, create a second finding, or double-count risk. `PUBLIC_ACCESS_OBSERVED` remains an independent raw fact.
-- **`mcp-poison-roundtrip`** is a STANDALONE reversible-mutation validation. It produces **no** graph edge, finding, or detection; its bounded CLI `RunReport` keeps oracle and cleanup separate.
+The reversible ContextForge round trip produces no graph edge or finding. Oracle and cleanup outcomes remain separate in `meta.extra.scan_execution`.

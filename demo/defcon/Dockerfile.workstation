@@ -19,7 +19,6 @@ RUN apk add --no-cache bash ca-certificates curl \
 COPY --from=builder /bin/agenthound /usr/local/bin/agenthound
 COPY demo/defcon/workstation/home/ /home/demo/
 RUN mkdir -p /home/demo/.agenthound /demo/artifacts \
-    && touch /home/demo/.agenthound/campaign-acknowledged \
     && chown -R demo:demo /home/demo /demo
 USER demo
 WORKDIR /home/demo/project

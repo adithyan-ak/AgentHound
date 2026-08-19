@@ -148,8 +148,7 @@ marker version and shared storage-pair UUID. The UUID is generated and stamped
 automatically during server initialization; it is not public configuration.
 
 This ordering is a data-integrity boundary. Unverifiable storage cannot create
-a failed scan row, persist a campaign-rejection audit, retire lifecycle
-coverage, or touch the graph. Valid artifacts from every collection point are
+a failed scan row, retire lifecycle coverage, or touch the graph. Valid artifacts from every collection point are
 accepted; identity controls scope rather than admission.
 PostgreSQL stores the internal singleton binding row; Neo4j stores an internal
 `AgentHoundStorageBinding` node. Neither is part of the public graph API,
@@ -171,8 +170,8 @@ Checks performed:
 - collection, ruleset, and current identity-scheme metadata must be complete
 - coverage keys must use `<collector>:<scope>:sha256:<digest>`
 - every raw fact must carry explicit declared observation domains
-- Every node must have a non-empty `id` and at least one `kind` from `AllowedNodeKinds` (23 kinds)
-- Every edge must have non-empty `source`/`target` and a `kind` from `RawEdgeKinds` (20 kinds)
+- Every node must have a non-empty `id` and at least one `kind` from `AllowedNodeKinds` (22 kinds)
+- Every edge must have non-empty `source`/`target` and a `kind` from `RawEdgeKinds` (19 kinds)
 - removed property aliases are rejected; canonical status/evidence fields are
   required for credentials and hosts
 - configured MCP/A2A method, assurance, and evidence are optional as a channel,
