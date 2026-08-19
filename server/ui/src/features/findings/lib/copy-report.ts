@@ -6,7 +6,7 @@ import type {
 } from "@entities/finding/model";
 
 /**
- * Campaign export: a markdown summary table of multiple findings (the register
+ * Markdown export: a summary table of multiple findings (the register
  * selection). Path-level detail requires per-finding fetches, so this stays a
  * summary — id, severity, relationship, endpoints, OWASP, ATLAS, confidence.
  */
@@ -65,24 +65,24 @@ export function buildMarkdownReport(
   lines.push(markdownText(finding.description));
   lines.push("");
 
-  const verification = finding.evidence.verification;
-  if (finding.evidence.state === "verified" && verification) {
-    lines.push("### Campaign Verification");
+  const proof = finding.evidence.proof;
+  if (finding.evidence.state === "verified" && proof) {
+    lines.push("### Access Proof");
     lines.push(
-      `Scenario: ${markdownText(verification.scenario_id)} v${verification.scenario_version} | Run: ${markdownText(verification.campaign_run_id)} | Verified: ${markdownText(verification.verified_at)}`,
+      `Action: ${markdownText(proof.action)} | Action ID: ${markdownText(proof.action_id)} | Observed: ${markdownText(proof.verified_at)}`,
     );
     lines.push(
-      `Oracle: ${markdownText(verification.oracle_type)} | Outcome: ${markdownText(verification.outcome)}`,
+      `Proof: ${markdownText(proof.proof_type)} | Outcome: ${markdownText(proof.outcome)}`,
     );
     lines.push(
-      `Control: ${markdownText(verification.control_stage)} / ${markdownText(verification.control_status)} / resource_addressed=${verification.control_resource_addressed}`,
+      `Control: ${markdownText(proof.control_stage)} / ${markdownText(proof.control_status)} / resource_addressed=${proof.control_resource_addressed}`,
     );
     lines.push(
-      `Authenticated: ${markdownText(verification.authed_stage)} / ${markdownText(verification.authed_status)} / resource_addressed=${verification.authed_resource_addressed}`,
+      `Credential: ${markdownText(proof.credential_stage)} / ${markdownText(proof.credential_status)} / resource_addressed=${proof.credential_resource_addressed}`,
     );
-    lines.push(`Cleanup: ${markdownText(verification.cleanup_status)}`);
+    lines.push(`Cleanup: ${markdownText(proof.cleanup_status)}`);
     lines.push(
-      "Proof boundary: exact credential-gated resource reach for the source agent; not observed agent invocation or impact.",
+      "Proof boundary: exact credential-gated resource access; not observed agent invocation or downstream impact.",
     );
     lines.push("");
   }

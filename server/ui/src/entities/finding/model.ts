@@ -53,23 +53,22 @@ export interface FindingEvidence {
   material_status?: string;
   exposure_status?: string;
   correlation?: string;
-  verification?: FindingVerification;
+  proof?: FindingProof;
 }
 
-export interface FindingVerification {
-  scenario_id: string;
-  scenario_version: number;
-  campaign_run_id: string;
+export interface FindingProof {
+  action: string;
+  action_id: string;
   verified_at: string;
-  oracle_type: string;
+  proof_type: string;
   outcome: string;
-  control_stage: "initialize" | "resource_read";
+  control_stage: string;
   control_status: string;
   control_resource_addressed: boolean;
-  authed_stage: "initialize" | "resource_read";
-  authed_status: string;
-  authed_resource_addressed: boolean;
-  cleanup_status: "not_applicable" | "restored" | "conflict" | "indeterminate" | "failed";
+  credential_stage: string;
+  credential_status: string;
+  credential_resource_addressed: boolean;
+  cleanup_status: string;
 }
 
 export interface PublishedFindingScope {

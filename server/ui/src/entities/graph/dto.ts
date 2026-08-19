@@ -24,8 +24,7 @@ export type NodeKind =
   | "LangServeApp"
   | "OpenWebUIInstance"
   | "AIService"
-  | "AIModel"
-  | "ExtractedTrainingSignal";
+  | "AIModel";
 
 export const EDGE_KINDS = [
   "TRUSTS_SERVER",
@@ -44,9 +43,8 @@ export const EDGE_KINDS = [
   "EXPOSES",
   "EXPOSES_CREDENTIAL",
   "PROVIDES_MODEL",
-  "EXTRACTED_FROM",
   "INGESTS_UNTRUSTED",
-  "CREDENTIAL_REACH_VERIFIED",
+  "CREDENTIAL_ACCESS_OBSERVED",
   "PUBLIC_ACCESS_OBSERVED",
   "HAS_ACCESS_TO",
   "CAN_EXECUTE",

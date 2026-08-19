@@ -3,50 +3,47 @@ import { WidgetCard } from "@shared/ui/widgets";
 import type { FindingEvidence } from "@entities/finding/model";
 import { FEEDBACK } from "@shared/theme/tokens";
 
-export function FindingVerification({
-  evidence,
-}: {
-  evidence: FindingEvidence;
-}) {
-  const verification = evidence.verification;
-  if (evidence.state !== "verified" || verification == null) {
+export function FindingProof({ evidence }: { evidence: FindingEvidence }) {
+  const proof = evidence.proof;
+  if (evidence.state !== "verified" || proof == null) {
     return null;
   }
 
   const rows = [
-    ["Scenario", `${verification.scenario_id} v${verification.scenario_version}`],
-    ["Run", verification.campaign_run_id],
-    ["Verified", verification.verified_at],
-    ["Oracle", verification.oracle_type],
-    ["Outcome", verification.outcome],
+    ["Action", proof.action],
+    ["Action ID", proof.action_id],
+    ["Observed", proof.verified_at],
+    ["Proof", proof.proof_type],
+    ["Outcome", proof.outcome],
     [
       "Control",
-      `${verification.control_stage} · ${verification.control_status} · ${
-        verification.control_resource_addressed
+      `${proof.control_stage} · ${proof.control_status} · ${
+        proof.control_resource_addressed
           ? "resource addressed"
           : "resource not addressed"
       }`,
     ],
     [
-      "Authenticated",
-      `${verification.authed_stage} · ${verification.authed_status} · ${
-        verification.authed_resource_addressed
+      "Credential",
+      `${proof.credential_stage} · ${proof.credential_status} · ${
+        proof.credential_resource_addressed
           ? "resource addressed"
           : "resource not addressed"
       }`,
     ],
-    ["Cleanup", verification.cleanup_status],
+    ["Cleanup", proof.cleanup_status],
   ] as const;
 
   return (
     <WidgetCard
-      title="Campaign Verification"
+      title="Access Proof"
       icon={BadgeCheck}
       accent={FEEDBACK.success.solid}
     >
       <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
-        The supplied credential read the exact predicted resource for this source
-        agent. This verifies reachability, not agent invocation or impact.
+        The credential read the exact resource while the anonymous control was
+        denied. This proves credential-gated access, not agent invocation or
+        downstream impact.
       </p>
       <dl className="space-y-2">
         {rows.map(([label, value]) => (

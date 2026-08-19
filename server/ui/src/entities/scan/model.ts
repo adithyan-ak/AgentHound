@@ -35,7 +35,30 @@ export interface Scan {
   published_revision?: number;
   published_at?: string;
   lifecycle_updated_at?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: ScanMetadata;
+}
+
+export interface ScanMetadata extends Record<string, unknown> {
+  scan_execution?: ScanExecution;
+}
+
+export interface ScanExecution {
+  version: 1;
+  mode: "active" | "stealth";
+  deep: boolean;
+  status: "running" | "completed" | "interrupted" | "failed";
+  started_at: string;
+  updated_at: string;
+  completed_at?: string;
+  summary: ScanExecutionSummary;
+}
+
+export interface ScanExecutionSummary {
+  actions_attempted: number;
+  actions_succeeded: number;
+  actions_failed: number;
+  actions_skipped: number;
+  cleanup_failures: number;
 }
 
 export interface ScanCounts {

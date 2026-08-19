@@ -41,19 +41,18 @@ function verifiedFinding() {
     evidence: {
       state: "verified",
       channels: [],
-      verification: {
-        scenario_id: "cred-reach",
-        scenario_version: 1,
-        campaign_run_id: "run-ui",
+      proof: {
+        action: "credential_reach",
+        action_id: "action-ui",
         verified_at: "2026-07-13T12:00:00Z",
-        oracle_type: "differential_credential_reach",
-        outcome: "credential_gated_reach_verified",
+        proof_type: "differential_resource_read",
+        outcome: "credential_required",
         control_stage: "initialize",
         control_status: "denied",
         control_resource_addressed: false,
-        authed_stage: "resource_read",
-        authed_status: "allowed",
-        authed_resource_addressed: true,
+        credential_stage: "resource_read",
+        credential_status: "allowed",
+        credential_resource_addressed: true,
         cleanup_status: "not_applicable",
       },
     },
@@ -194,18 +193,18 @@ describe("published finding scope", () => {
     const result = await fetchFindings();
     expect(result.findings[0]?.evidence).toMatchObject({
       state: "verified",
-      verification: {
-        campaign_run_id: "run-ui",
+      proof: {
+        action_id: "action-ui",
         control_stage: "initialize",
         control_resource_addressed: false,
-        authed_stage: "resource_read",
-        authed_resource_addressed: true,
+        credential_stage: "resource_read",
+        credential_resource_addressed: true,
         cleanup_status: "not_applicable",
       },
     });
   });
 
-  it("rejects verified evidence without its verification contract", async () => {
+  it("rejects verified evidence without its proof contract", async () => {
     mocks.json.mockResolvedValue({
       findings: [{ ...finding(), evidence: { state: "verified", channels: [] } }],
       scope: {
@@ -222,7 +221,7 @@ describe("published finding scope", () => {
       },
     });
     await expect(fetchFindings()).rejects.toThrow(
-      "findings[0].evidence.verification is required",
+      "findings[0].evidence.proof is required",
     );
   });
 
