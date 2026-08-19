@@ -156,7 +156,11 @@ func artifactNodeScopes(data *IngestData, coverageScopes map[string]scopeRef) ma
 	}
 	scopes := make(map[string]scopeRef)
 	for _, node := range data.Graph.Nodes {
-		if !authoritative[node.ID] {
+		// A reference-only contribution must reuse the scope selected by the
+		// authoritative row with the same raw ID. Its intentionally empty
+		// properties cannot determine whether an endpoint is local or remote.
+		if node.PropertySemantics == NodePropertySemanticsReferenceOnly ||
+			!authoritative[node.ID] {
 			continue
 		}
 		kind := ConcreteNodeKind(node.Kinds)

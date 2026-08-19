@@ -56,10 +56,21 @@ func (a serviceCollectAction) Candidates(view View) []Candidate {
 					"observation_domains": strings.Join(node.ObservationDomains, "\x1f"),
 				},
 			}
-			if service != "litellm" {
+			// Deep Qdrant collection already includes base inventory, so schedule
+			// one combined call. Deep active Ollama likewise runs base inventory
+			// through the embedding action; stealth keeps the ordinary read-only
+			// call because compute is intentionally disabled.
+			combineWithDeep := view.Deep && service == "qdrant"
+			deferBaseToEmbedding := view.Deep && !view.Stealth && service == "ollama"
+			if service != "litellm" && !deferBaseToEmbedding {
 				candidate := base
 				candidate.Priority = 2
 				candidate.Key = candidateKey(mod.ID(), endpoint, "", "", view.Deep)
+				if combineWithDeep {
+					candidate.Inputs = cloneStringMap(base.Inputs)
+					candidate.Inputs["deep"] = "true"
+					candidate.Key = candidateKey(mod.ID()+".deep", endpoint, "", "", true)
+				}
 				if !seen[candidate.Key] {
 					seen[candidate.Key] = true
 					candidates = append(candidates, candidate)
@@ -92,17 +103,6 @@ func (a serviceCollectAction) Candidates(view View) []Candidate {
 				}
 			}
 
-			if view.Deep && service == "qdrant" {
-				candidate := base
-				candidate.Priority = 6
-				candidate.Inputs = cloneStringMap(base.Inputs)
-				candidate.Inputs["deep"] = "true"
-				candidate.Key = candidateKey(mod.ID()+".deep", endpoint, "", "", true)
-				if !seen[candidate.Key] {
-					seen[candidate.Key] = true
-					candidates = append(candidates, candidate)
-				}
-			}
 		}
 	}
 	return candidates
@@ -388,6 +388,10 @@ func (a credentialReachAction) Candidates(view View) []Candidate {
 		if len(resources) == 0 {
 			continue
 		}
+		publicResources := make(map[string]bool)
+		for _, resourceID := range targetsForEdge(view.Outgoing[server.ID], "PUBLIC_ACCESS_OBSERVED") {
+			publicResources[resourceID] = true
+		}
 		direct := directCredentialIDs(view, server.ID)
 		for _, credentialID := range orderedCredentialIDs(view, direct) {
 			value := view.Credentials[credentialID]
@@ -403,6 +407,11 @@ func (a credentialReachAction) Candidates(view View) []Candidate {
 				continue
 			}
 			for _, resourceID := range resources {
+				// Once the anonymous control has proved this resource public,
+				// trying more credentials cannot establish credential-gated reach.
+				if publicResources[resourceID] {
+					continue
+				}
 				resource, ok := view.Nodes[resourceID]
 				if !ok {
 					continue

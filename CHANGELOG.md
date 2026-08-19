@@ -29,6 +29,13 @@
   deterministic attribution survive planning, partial results cannot produce
   false success, partially verified cleanup stays unresolved, and standalone
   recovery replays the scan's recorded exclusions.
+- Closed full-harness release-readiness gaps: repeated content observations
+  ingest with their latest timestamp, rejected positional targets fail the run,
+  target files enforce one aggregate host cap, reference-only contributions
+  cannot change authoritative scope, exclusions are recorded as not applicable,
+  deep collection does not repeat base service inventory, resources already
+  proven public are not re-tested with redundant credentials, and scan-verified
+  evidence uses the promised “Verified During Scan” label in the UI and reports.
 
 ## 1.0.0 — 🚀 First Supported Release (2026-07-27)
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Finding } from "@entities/finding/model";
-import { buildMarkdownReport } from "./copy-report";
+import { buildFindingsTableMarkdown, buildMarkdownReport } from "./copy-report";
+import { formatFindingEvidenceState } from "./evidence-label";
 
 describe("buildMarkdownReport proof", () => {
   it("includes structured access proof metadata", () => {
@@ -41,6 +42,9 @@ describe("buildMarkdownReport proof", () => {
       atlas_map: [],
     };
     const report = buildMarkdownReport(finding, null, []);
+    expect(formatFindingEvidenceState(finding.evidence.state)).toBe("Verified During Scan");
+    expect(report).toContain("Evidence: Verified During Scan");
+    expect(buildFindingsTableMarkdown([finding])).toContain("| Verified During Scan |");
     expect(report).toContain("### Access Proof");
     expect(report).toContain("Action ID: action-report");
     expect(report).toContain("Control: initialize / denied / resource_addressed=false");

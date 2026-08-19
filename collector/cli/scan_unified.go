@@ -224,8 +224,10 @@ func (r *scanRuntime) collectConfiguredMCP(timeout time.Duration) error {
 func (r *scanRuntime) discoverAndFingerprint(args []string) error {
 	specs := localScanSeeds()
 	specs = append(specs, r.configuredSeeds...)
+	explicitSpec := ""
 	if len(args) == 1 {
-		specs = append(specs, args[0])
+		explicitSpec = strings.TrimSpace(args[0])
+		specs = append(specs, explicitSpec)
 	}
 	specs = uniqueSortedStrings(specs)
 	candidates := registeredFingerprinters()
@@ -233,6 +235,16 @@ func (r *scanRuntime) discoverAndFingerprint(args []string) error {
 		if err := r.ctx.Err(); err != nil {
 			return err
 		}
+		if isDirectDiscoverySpec(spec) {
+			if err := r.policy.AdmitAddress(spec); errors.Is(err, contact.ErrExcluded) {
+				r.recordExcludedDiscovery(spec)
+				if checkpointErr := r.checkpoint(); checkpointErr != nil {
+					return checkpointErr
+				}
+				continue
+			}
+		}
+		explicit := explicitSpec != "" && spec == explicitSpec
 		scanner := &networkscan.Scanner{
 			Concurrency: networkscan.DefaultConcurrency,
 			Timeout:     networkscan.DefaultProbeTimeout,
@@ -246,6 +258,9 @@ func (r *scanRuntime) discoverAndFingerprint(args []string) error {
 			r.addFailure("scan", "port_scan", spec, err)
 			if checkpointErr := r.checkpoint(); checkpointErr != nil {
 				return checkpointErr
+			}
+			if explicit {
+				return fmt.Errorf("explicit target %q was rejected: %w", spec, err)
 			}
 			continue
 		}
@@ -283,6 +298,12 @@ func (r *scanRuntime) discoverAndFingerprint(args []string) error {
 		protocolTargets, protocolErr := protocolScanner.Scan(r.ctx, spec)
 		if protocolErr != nil && !errors.Is(protocolErr, context.Canceled) && !errors.Is(protocolErr, context.DeadlineExceeded) {
 			r.addFailure("scan", "protocol_discovery", spec, protocolErr)
+			if explicit {
+				if checkpointErr := r.checkpoint(); checkpointErr != nil {
+					return checkpointErr
+				}
+				return fmt.Errorf("explicit target %q was rejected: %w", spec, protocolErr)
+			}
 		} else {
 			report := protocolScanner.LastReport()
 			r.artifact.Meta.Collection.Outcomes = append(r.artifact.Meta.Collection.Outcomes, ingest.CollectionOutcome{
@@ -296,6 +317,24 @@ func (r *scanRuntime) discoverAndFingerprint(args []string) error {
 		}
 	}
 	return nil
+}
+
+func (r *scanRuntime) recordExcludedDiscovery(spec string) {
+	for _, method := range []string{"port_scan", "protocol_discovery"} {
+		r.addOutcome(ingest.CollectionOutcome{
+			Collector: "scan", CoverageKey: r.rootKey, Target: spec, Method: method,
+			State: ingest.OutcomeNotApplicable, Error: "skipped by --exclude",
+		})
+	}
+}
+
+func isDirectDiscoverySpec(spec string) bool {
+	spec = strings.TrimSpace(spec)
+	if strings.HasPrefix(spec, "@") || strings.HasPrefix(spec, "file://") {
+		return false
+	}
+	_, err := netip.ParsePrefix(spec)
+	return err != nil
 }
 
 func (r *scanRuntime) collectDiscoveredProtocols(timeout time.Duration) error {

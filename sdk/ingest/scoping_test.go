@@ -714,6 +714,36 @@ func TestScopeArtifactPreservesReferenceOnlySemantics(t *testing.T) {
 	}
 }
 
+func TestScopeArtifactReferenceCannotOverwriteAuthoritativeLoopbackScope(t *testing.T) {
+	identity := strongTestIdentity("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	data := &IngestData{
+		Meta: IngestMeta{ScanID: "loopback-reference", Identity: identity, Collection: &CollectionReport{}},
+		Graph: GraphData{Nodes: []Node{
+			{
+				ID: "gateway", Kinds: []string{"LiteLLMGateway", "AIService"},
+				Properties: map[string]any{"endpoint": "http://127.0.0.1:4000"},
+			},
+			{
+				ID: "gateway", Kinds: []string{"LiteLLMGateway"}, Properties: map[string]any{},
+				PropertySemantics: NodePropertySemanticsReferenceOnly,
+			},
+		}},
+	}
+	if err := ScopeArtifact(data); err != nil {
+		t.Fatal(err)
+	}
+	wantID := ScopedNodeID(ScopeCollectionPoint, identity.CollectionPointID, "gateway")
+	for _, node := range data.Graph.Nodes {
+		if node.ID != wantID {
+			t.Fatalf("node ID = %q, want authoritative loopback scope %q", node.ID, wantID)
+		}
+	}
+	if data.Graph.Nodes[1].PropertySemantics != NodePropertySemanticsReferenceOnly ||
+		len(data.Graph.Nodes[1].Properties) != 0 {
+		t.Fatalf("reference semantics changed: %+v", data.Graph.Nodes[1])
+	}
+}
+
 func TestScopeArtifactScopesStandaloneServiceReferenceByCoverage(t *testing.T) {
 	identity := strongTestIdentity("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 	coverageKey := CanonicalCoverageKey("scan", "loot", "http://127.0.0.1:4000")

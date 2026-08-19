@@ -4,6 +4,7 @@ import type {
   FindingDetail,
   RemediationStep,
 } from "@entities/finding/model";
+import { formatFindingEvidenceState } from "./evidence-label";
 
 /**
  * Markdown export: a summary table of multiple findings (the register
@@ -24,7 +25,7 @@ export function buildFindingsTableMarkdown(findings: Finding[]): string {
     const owasp = (f.owasp_map ?? []).join(", ") || "—";
     const atlas = (f.atlas_map ?? []).join(", ") || "—";
     lines.push(
-      `| ${markdownCell(f.severity.toUpperCase())} | ${markdownCell(f.title)} | ${markdownCell(f.variant)} | ${markdownCell(f.evidence.state)} | ${markdownCell(f.edge_kind)} | ${src} → ${tgt} | ${markdownCell(owasp)} | ${markdownCell(atlas)} | ${Math.round(
+      `| ${markdownCell(f.severity.toUpperCase())} | ${markdownCell(f.title)} | ${markdownCell(f.variant)} | ${markdownCell(formatFindingEvidenceState(f.evidence.state))} | ${markdownCell(f.edge_kind)} | ${src} → ${tgt} | ${markdownCell(owasp)} | ${markdownCell(atlas)} | ${Math.round(
         f.confidence * 100,
       )}% |`,
     );
@@ -49,7 +50,7 @@ export function buildMarkdownReport(
   lines.push(`**Finding:** ${finding.id} | Confidence: ${Math.round(finding.confidence * 100)}%`);
   lines.push(`**References:** OWASP: ${(finding.owasp_map ?? []).join(", ") || "—"} | MITRE ATLAS: ${(finding.atlas_map ?? []).join(", ") || "—"}`);
   lines.push(
-    `**Classification:** ${finding.category} | Variant: ${finding.variant} | Evidence: ${finding.evidence.state}`,
+    `**Classification:** ${finding.category} | Variant: ${finding.variant} | Evidence: ${formatFindingEvidenceState(finding.evidence.state)}`,
   );
   lines.push(`**Source:** ${markdownText(finding.source_name || finding.source_id)} (${markdownText(finding.source_kind)})`);
   lines.push(`**Target:** ${markdownText(finding.target_name || finding.target_id)} (${markdownText(finding.target_kind)})`);

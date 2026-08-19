@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	_ "github.com/adithyan-ak/agenthound/modules/ollamacollect"
+	_ "github.com/adithyan-ak/agenthound/modules/qdrantcollect"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/checkpoint"
@@ -133,6 +134,37 @@ func TestCredentialReachDeduplicatesByValueHashAndPrefersDirectAttribution(t *te
 	}
 }
 
+func TestCredentialReachSkipsResourceAlreadyProvenPublic(t *testing.T) {
+	const (
+		serverID     = "server"
+		resourceID   = "resource"
+		credentialID = "credential"
+	)
+	graph := ingest.GraphData{
+		Nodes: []ingest.Node{
+			{ID: serverID, Kinds: []string{"MCPServer"}, Properties: map[string]any{
+				"endpoint": "https://mcp.example/mcp", "transport": "http",
+			}},
+			{ID: resourceID, Kinds: []string{"MCPResource"}, Properties: map[string]any{"uri": "secret://one"}},
+			{ID: credentialID, Kinds: []string{"Credential"}, Properties: map[string]any{
+				"value":           "bearer-value",
+				"value_hash":      common.HashCredentialValue("bearer-value"),
+				"material_status": string(common.CredentialMaterialObserved),
+				"auth_method":     string(common.AuthBearer),
+			}},
+		},
+		Edges: []ingest.Edge{
+			{Source: serverID, Target: resourceID, Kind: "PROVIDES_RESOURCE"},
+			{Source: serverID, Target: resourceID, Kind: "PUBLIC_ACCESS_OBSERVED"},
+		},
+	}
+
+	view := buildPlannerView(graph, nil, map[string]bool{}, false, false)
+	if candidates := (credentialReachAction{}).Candidates(view); len(candidates) != 0 {
+		t.Fatalf("candidates = %+v, want none after public access was proven", candidates)
+	}
+}
+
 func TestPlannerStopsOnWrappedCheckpointOrCleanupFailure(t *testing.T) {
 	checkpointFailure := &checkpoint.CheckpointError{
 		Phase: string(checkpoint.Durability), Committed: true, Err: errors.New("directory sync"),
@@ -173,6 +205,55 @@ func TestOllamaEmbeddingCandidateRequiresDeepActiveMode(t *testing.T) {
 			}
 			if len(candidates) == 1 && candidates[0].ModuleID != "ollama.collect" {
 				t.Fatalf("module = %q, want ollama.collect", candidates[0].ModuleID)
+			}
+		})
+	}
+}
+
+func TestDeepServiceCollectionDoesNotRepeatBaseInventory(t *testing.T) {
+	graph := ingest.GraphData{Nodes: []ingest.Node{
+		{
+			ID: "ollama-1", Kinds: []string{"OllamaInstance"},
+			Properties: map[string]any{"endpoint": "http://127.0.0.1:11434"},
+		},
+		{
+			ID: "qdrant-1", Kinds: []string{"QdrantInstance"},
+			Properties: map[string]any{"endpoint": "http://127.0.0.1:6333"},
+		},
+	}}
+
+	for _, test := range []struct {
+		name                 string
+		deep, stealth        bool
+		wantOllamaBase       int
+		wantQdrantCandidates int
+		wantQdrantDeep       bool
+	}{
+		{name: "normal active", wantOllamaBase: 1, wantQdrantCandidates: 1},
+		{name: "deep active", deep: true, wantQdrantCandidates: 1, wantQdrantDeep: true},
+		{name: "deep stealth", deep: true, stealth: true, wantOllamaBase: 1, wantQdrantCandidates: 1, wantQdrantDeep: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			view := buildPlannerView(graph, nil, map[string]bool{}, test.deep, test.stealth)
+			candidates := (serviceCollectAction{}).Candidates(view)
+			var ollamaBase, qdrantCandidates int
+			var qdrantDeep bool
+			for _, candidate := range candidates {
+				switch candidate.Inputs["service"] {
+				case "ollama":
+					ollamaBase++
+				case "qdrant":
+					qdrantCandidates++
+					qdrantDeep = candidate.Inputs["deep"] == "true"
+				}
+			}
+			if ollamaBase != test.wantOllamaBase ||
+				qdrantCandidates != test.wantQdrantCandidates ||
+				qdrantDeep != test.wantQdrantDeep {
+				t.Fatalf(
+					"candidates = %+v, want Ollama base=%d Qdrant=%d deep=%t",
+					candidates, test.wantOllamaBase, test.wantQdrantCandidates, test.wantQdrantDeep,
+				)
 			}
 		})
 	}

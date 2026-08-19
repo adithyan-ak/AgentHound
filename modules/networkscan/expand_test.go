@@ -255,6 +255,21 @@ func TestExpand_TargetsFileDedupes(t *testing.T) {
 	}
 }
 
+func TestExpand_TargetsFileAppliesAggregateUniqueHostCap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "aggregate-cap.txt")
+	// Each line is valid below this test's small aggregate cap. Together they
+	// cross it, and the repeated host must not consume capacity.
+	content := "10.0.0.0/30\n10.0.0.1\n10.0.0.4/30\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := expandFileWithLimit(path, ExpandOptions{}, 6)
+	if !errors.Is(err, ErrTooManyHosts) {
+		t.Fatalf("aggregate expansion error = %v, want ErrTooManyHosts", err)
+	}
+}
+
 func TestExpand_TargetsFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "targets.txt")
