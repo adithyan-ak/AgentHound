@@ -12,7 +12,8 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/adithyan-ak/agenthound/sdk/campaign"
+	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/contact"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
@@ -112,17 +113,15 @@ func buildHTTPTransport(spec ServerSpec, insecure bool) (mcpsdk.Transport, error
 		DisableStandaloneSSE: true,
 	}
 
-	if insecure || len(canonicalHeaders) > 0 {
-		httpTransport := &http.Transport{}
-		if insecure {
-			httpTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
-		}
-		transport.HTTPClient = &http.Client{Transport: headerRoundTripper{
-			base:    httpTransport,
-			headers: canonicalHeaders,
-			origin:  origin,
-		}}
+	httpTransport := contact.HTTPTransport(nil)
+	if insecure {
+		httpTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
 	}
+	transport.HTTPClient = &http.Client{Transport: contact.RoundTripper{Base: headerRoundTripper{
+		base:    httpTransport,
+		headers: canonicalHeaders,
+		origin:  origin,
+	}}}
 
 	return transport, nil
 }
@@ -133,17 +132,15 @@ func buildSSETransport(spec ServerSpec, insecure bool) mcpsdk.Transport {
 	}
 	origin, _ := parseMCPHTTPOrigin(spec.URL)
 
-	if insecure || len(spec.Headers) > 0 {
-		httpTransport := &http.Transport{}
-		if insecure {
-			httpTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
-		}
-		transport.HTTPClient = &http.Client{Transport: headerRoundTripper{
-			base:    httpTransport,
-			headers: spec.Headers,
-			origin:  origin,
-		}}
+	httpTransport := contact.HTTPTransport(nil)
+	if insecure {
+		httpTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
 	}
+	transport.HTTPClient = &http.Client{Transport: contact.RoundTripper{Base: headerRoundTripper{
+		base:    httpTransport,
+		headers: spec.Headers,
+		origin:  origin,
+	}}}
 
 	return transport
 }
@@ -157,12 +154,12 @@ func buildSSETransport(spec ServerSpec, insecure bool) mcpsdk.Transport {
 func withHTTPTransportDeadline(transport mcpsdk.Transport, deadline time.Time) mcpsdk.Transport {
 	wrapClient := func(client *http.Client) *http.Client {
 		if client == nil {
-			client = http.DefaultClient
+			client = &http.Client{Transport: contact.GuardTransport(nil)}
 		}
 		clone := *client
 		base := clone.Transport
 		if base == nil {
-			base = http.DefaultTransport
+			base = contact.GuardTransport(nil)
 		}
 		clone.Transport = deadlineRoundTripper{base: base, deadline: deadline}
 		return &clone
@@ -188,18 +185,18 @@ func withHTTPTransportDeadline(transport mcpsdk.Transport, deadline time.Time) m
 // must not enter the public origin parser, which intentionally rejects them for
 // campaign endpoints. The sanitizer preserves the exact origin while removing
 // only components that cannot affect it.
-func parseMCPHTTPOrigin(rawURL string) (campaign.HTTPOrigin, error) {
+func parseMCPHTTPOrigin(rawURL string) (common.HTTPOrigin, error) {
 	safeEndpoint := ingest.SanitizeHTTPEndpoint(rawURL)
 	if !safeEndpoint.Valid {
-		return campaign.HTTPOrigin{}, errors.New("invalid MCP HTTP endpoint")
+		return common.HTTPOrigin{}, errors.New("invalid MCP HTTP endpoint")
 	}
-	return campaign.ParseHTTPOrigin(safeEndpoint.Display)
+	return common.ParseHTTPOrigin(safeEndpoint.Display)
 }
 
 type headerRoundTripper struct {
 	base    http.RoundTripper
 	headers map[string]string
-	origin  campaign.HTTPOrigin
+	origin  common.HTTPOrigin
 }
 
 // RoundTrip injects caller-supplied headers only when the request targets the
@@ -225,7 +222,7 @@ func (h headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	}
 	base := h.base
 	if base == nil {
-		base = http.DefaultTransport
+		base = contact.GuardTransport(nil)
 	}
 	return base.RoundTrip(cloned)
 }

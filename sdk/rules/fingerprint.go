@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/adithyan-ak/agenthound/sdk/contact"
+
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	"gopkg.in/yaml.v3"
 )
@@ -617,7 +619,8 @@ func DefaultFingerprintHTTPClient(timeout time.Duration) *http.Client {
 		timeout = 5 * time.Second
 	}
 	return &http.Client{
-		Timeout: timeout,
+		Timeout:   timeout,
+		Transport: contact.GuardTransport(nil),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

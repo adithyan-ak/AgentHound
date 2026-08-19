@@ -155,20 +155,20 @@ func TestHandleFindings_PublishedScopeIsExactAndAttributed(t *testing.T) {
 	}
 }
 
-func TestHandleFindingsSerializesVerificationMetadata(t *testing.T) {
+func TestHandleFindingsSerializesProofMetadata(t *testing.T) {
 	store := &fakePublishedFindingStore{
 		recordingFindingLister: recordingFindingLister{findings: []model.Finding{{
 			ID: "aaaaaaaaaaaaaaaa",
 			Evidence: model.FindingEvidence{
 				State: model.FindingEvidenceVerified,
-				Verification: &model.FindingVerification{
-					ScenarioID: "cred-reach", ScenarioVersion: 1,
-					CampaignRunID: "run-api", VerifiedAt: "2026-07-13T12:00:00Z",
-					OracleType:   "differential_credential_reach",
-					Outcome:      "credential_gated_reach_verified",
+				Proof: &model.FindingProof{
+					Action: "credential_reach", ActionID: "action-api",
+					VerifiedAt:   "2026-07-13T12:00:00Z",
+					ProofType:    "differential_resource_read",
+					Outcome:      "credential_required",
 					ControlStage: "initialize", ControlStatus: "denied",
-					AuthedStage: "resource_read", AuthedStatus: "allowed",
-					AuthedResourceAddressed: true, CleanupStatus: "not_applicable",
+					CredentialStage: "resource_read", CredentialStatus: "allowed",
+					CredentialResourceAddressed: true, CleanupStatus: "not_applicable",
 				},
 			},
 		}}},
@@ -186,10 +186,10 @@ func TestHandleFindingsSerializesVerificationMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(response.Findings) != 1 ||
-		response.Findings[0].Evidence.Verification == nil ||
-		response.Findings[0].Evidence.Verification.CampaignRunID != "run-api" ||
-		response.Findings[0].Evidence.Verification.CleanupStatus != "not_applicable" {
-		t.Fatalf("verification API round-trip = %+v", response.Findings)
+		response.Findings[0].Evidence.Proof == nil ||
+		response.Findings[0].Evidence.Proof.ActionID != "action-api" ||
+		response.Findings[0].Evidence.Proof.CleanupStatus != "not_applicable" {
+		t.Fatalf("proof API round-trip = %+v", response.Findings)
 	}
 }
 

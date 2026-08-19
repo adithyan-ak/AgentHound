@@ -3,12 +3,12 @@ package ingest
 import "testing"
 
 // TestExposesCredentialEdge locks the EXPOSES_CREDENTIAL contract shared by
-// every Looter that emits exposed upstream secrets (litellmloot,
-// openwebuiloot, ...). A typo in Kind or a swap of confidence/risk_weight
+// every service collector that emits exposed upstream secrets (litellmcollect,
+// openwebuicollect, ...). A typo in Kind or a swap of confidence/risk_weight
 // here would silently propagate to all of them, so the constants are
 // asserted explicitly rather than via an integration test.
 func TestExposesCredentialEdge(t *testing.T) {
-	e := ExposesCredentialEdge("svc-1", "cred-1", "ENG-1", "litellm_keys", "/key/info")
+	e := ExposesCredentialEdge("svc-1", "cred-1", "litellm_keys", "/key/info")
 
 	if e.Source != "svc-1" {
 		t.Errorf("Source: got %q, want %q", e.Source, "svc-1")
@@ -43,7 +43,7 @@ func TestExposesCredentialEdge(t *testing.T) {
 	if ev["source"] != "litellm_keys" {
 		t.Errorf("evidence.source: got %v, want %q", ev["source"], "litellm_keys")
 	}
-	if ev["engagement_id"] != "ENG-1" {
-		t.Errorf("evidence.engagement_id: got %v, want %q", ev["engagement_id"], "ENG-1")
+	if _, present := ev["engagement_id"]; present {
+		t.Errorf("removed engagement_id is still present: %v", ev)
 	}
 }

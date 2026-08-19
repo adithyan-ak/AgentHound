@@ -3,30 +3,35 @@ package credreach
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/contact"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
-
-	"github.com/adithyan-ak/agenthound/sdk/campaign"
-	"github.com/adithyan-ak/agenthound/sdk/common"
 )
 
 const defaultProbeTimeout = 30 * time.Second
 
 // defaultProber is the live MCP prober used when RunInput.Prober is nil.
-func defaultProber() campaign.Prober { return &mcpProber{} }
+func defaultProber() Prober { return &mcpProber{} }
 
 // mcpProber performs a single read-only resources/read against a streamable
 // HTTP MCP server, optionally presenting a bearer credential. It never logs the
-// credential and never returns resource content.
+// credential; the unified scan may retain content from a successful exact read.
 type mcpProber struct{}
 
-func (p *mcpProber) Probe(ctx context.Context, req campaign.ProbeRequest) campaign.ProbeResult {
+func (p *mcpProber) Probe(ctx context.Context, req ProbeRequest) ProbeResult {
+	result, _ := p.probeWithContent(ctx, req)
+	return result
+}
+
+func (p *mcpProber) probeWithContent(ctx context.Context, req ProbeRequest) (ProbeResult, json.RawMessage) {
 	timeout := req.Timeout
 	if timeout <= 0 {
 		timeout = defaultProbeTimeout
@@ -44,45 +49,47 @@ func (p *mcpProber) Probe(ctx context.Context, req campaign.ProbeRequest) campai
 	session, err := client.Connect(pctx, transport, nil)
 	if err != nil {
 		status := classifyProbeError(pctx, err)
-		return campaign.ProbeResult{
-			Stage:  campaign.ProbeStageInitialize,
+		return ProbeResult{
+			Stage:  ProbeStageInitialize,
 			Status: status,
-			Detail: probeDetailCode(campaign.ProbeStageInitialize, status),
-		}
+			Detail: probeDetailCode(ProbeStageInitialize, status),
+		}, nil
 	}
 	defer func() { _ = session.Close() }()
 
-	if _, err := session.ReadResource(pctx, &mcpsdk.ReadResourceParams{URI: req.ResourceURI}); err != nil {
+	resource, err := session.ReadResource(pctx, &mcpsdk.ReadResourceParams{URI: req.ResourceURI})
+	if err != nil {
 		status := classifyProbeError(pctx, err)
-		return campaign.ProbeResult{
-			Stage:             campaign.ProbeStageResourceRead,
+		return ProbeResult{
+			Stage:             ProbeStageResourceRead,
 			ResourceAddressed: true,
 			Status:            status,
-			Detail:            probeDetailCode(campaign.ProbeStageResourceRead, status),
-		}
+			Detail:            probeDetailCode(ProbeStageResourceRead, status),
+		}, nil
 	}
-	return campaign.ProbeResult{
-		Stage:             campaign.ProbeStageResourceRead,
+	content, _ := json.Marshal(resource)
+	return ProbeResult{
+		Stage:             ProbeStageResourceRead,
 		ResourceAddressed: true,
-		Status:            campaign.ProbeAllowed,
+		Status:            ProbeAllowed,
 		Detail:            "resource_read_allowed",
-	}
+	}, content
 }
 
 // buildProbeTransport builds a streamable HTTP transport. The authed probe adds
 // an Authorization: Bearer header scoped to the endpoint's exact origin so
 // redirects cannot leak the credential across scheme, hostname, or effective
 // port. TLS verification stays on unless the operator opted into --insecure.
-func buildProbeTransport(req campaign.ProbeRequest, deadline time.Time) mcpsdk.Transport {
+func buildProbeTransport(req ProbeRequest, deadline time.Time) mcpsdk.Transport {
 	transport := &mcpsdk.StreamableClientTransport{Endpoint: req.Host}
-	origin, _ := campaign.ParseHTTPOrigin(req.Host)
+	origin, _ := common.ParseHTTPOrigin(req.Host)
 	endpoint, _ := url.Parse(req.Host)
 
 	headers := map[string]string{}
 	if strings.TrimSpace(req.Credential) != "" {
 		headers["Authorization"] = "Bearer " + req.Credential
 	}
-	httpTransport := &http.Transport{}
+	httpTransport := contact.HTTPTransport(nil)
 	if req.Insecure {
 		httpTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
 	}
@@ -95,7 +102,6 @@ func buildProbeTransport(req campaign.ProbeRequest, deadline time.Time) mcpsdk.T
 		}
 	}
 	base = observedHTTPStatusRoundTripper{base: base}
-	base = campaign.CountingTransport{Base: base}
 	transport.HTTPClient = &http.Client{Transport: endpointDeleteDeadlineRoundTripper{
 		base:     base,
 		endpoint: endpoint,
@@ -180,7 +186,7 @@ func sameEndpoint(left, right *url.URL) bool {
 type probeHeaderRoundTripper struct {
 	base    http.RoundTripper
 	headers map[string]string
-	origin  campaign.HTTPOrigin
+	origin  common.HTTPOrigin
 }
 
 func (h probeHeaderRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -206,19 +212,19 @@ func (h probeHeaderRoundTripper) RoundTrip(req *http.Request) (*http.Response, e
 // Only a typed HTTP response observed by observedHTTPStatusRoundTripper can
 // establish a 401/403 denial. Structured non-auth MCP codes and conservative
 // non-denial diagnostics remain classified; unknowns are ambiguous.
-func classifyProbeError(ctx context.Context, err error) campaign.ProbeStatus {
+func classifyProbeError(ctx context.Context, err error) ProbeStatus {
 	if err == nil {
-		return campaign.ProbeAllowed
+		return ProbeAllowed
 	}
 	var observed *observedHTTPStatusError
 	if errors.As(err, &observed) &&
 		(observed.statusCode == http.StatusUnauthorized ||
 			observed.statusCode == http.StatusForbidden) {
-		return campaign.ProbeDenied
+		return ProbeDenied
 	}
 	if errors.Is(err, context.DeadlineExceeded) ||
 		(ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded)) {
-		return campaign.ProbeTimeout
+		return ProbeTimeout
 	}
 	if status, ok := classifyStructuredError(err); ok {
 		return status
@@ -227,36 +233,36 @@ func classifyProbeError(ctx context.Context, err error) campaign.ProbeStatus {
 }
 
 // classifyStructuredError inspects any MCP/JSON-RPC WireError in the chain.
-func classifyStructuredError(err error) (campaign.ProbeStatus, bool) {
+func classifyStructuredError(err error) (ProbeStatus, bool) {
 	var wire *jsonrpc.Error
 	if !errors.As(err, &wire) {
 		return "", false
 	}
 	switch wire.Code {
 	case mcpsdk.CodeResourceNotFound:
-		return campaign.ProbeNotFound, true
+		return ProbeNotFound, true
 	case mcpsdk.CodeHeaderMismatch:
-		return campaign.ProbeMalformedAuth, true
+		return ProbeMalformedAuth, true
 	default:
 		return "", false
 	}
 }
 
-func classifyErrorMessage(raw string) campaign.ProbeStatus {
+func classifyErrorMessage(raw string) ProbeStatus {
 	msg := strings.ToLower(raw)
 	switch {
 	case containsAny(msg, "404", "not found", "resource not found", "no such resource"):
-		return campaign.ProbeNotFound
+		return ProbeNotFound
 	case containsAny(msg, "400", "bad request", "malformed"):
-		return campaign.ProbeMalformedAuth
+		return ProbeMalformedAuth
 	case containsAny(msg, "timeout", "timed out", "deadline exceeded"):
-		return campaign.ProbeTimeout
+		return ProbeTimeout
 	case containsAny(msg, "connection refused", "no such host", "connection reset", "eof", "tls", "certificate"):
-		return campaign.ProbeError
+		return ProbeError
 	case containsAny(msg, "parse error", "protocol", "json-rpc", "jsonrpc", "invalid message"):
-		return campaign.ProbeProtocolError
+		return ProbeProtocolError
 	default:
-		return campaign.ProbeAmbiguous
+		return ProbeAmbiguous
 	}
 }
 
@@ -269,6 +275,6 @@ func containsAny(haystack string, needles ...string) bool {
 	return false
 }
 
-func probeDetailCode(stage campaign.ProbeStage, status campaign.ProbeStatus) string {
+func probeDetailCode(stage ProbeStage, status ProbeStatus) string {
 	return string(stage) + "_" + string(status)
 }

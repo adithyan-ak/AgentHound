@@ -279,7 +279,6 @@ type fakeScanStore struct {
 	mu            sync.Mutex
 	creates       []*model.Scan
 	updates       []scanUpdate
-	rejections    []appdb.CampaignRejectionAudit
 	dirtyCoverage []string
 	retired       []string
 	resolvedRoots []sdkingest.CoverageRoot
@@ -402,17 +401,6 @@ func (s *fakeScanStore) BeginScan(
 	s.dirtyCoverage = append([]string(nil), merged...)
 	s.mu.Unlock()
 	return merged, s.CreateScan(ctx, scan)
-}
-
-func (s *fakeScanStore) RecordCampaignRejection(
-	_ context.Context,
-	audit appdb.CampaignRejectionAudit,
-) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	audit.ReasonCodes = append([]string(nil), audit.ReasonCodes...)
-	s.rejections = append(s.rejections, audit)
-	return nil
 }
 
 func (s *fakeScanStore) ResolveRetiredCoverage(
@@ -816,7 +804,7 @@ func containsCoverage(keys []string, want string) bool {
 	return false
 }
 
-func TestPipelineStorageVerificationPrecedesEveryMutationAndValidationAudit(t *testing.T) {
+func TestPipelineStorageVerificationPrecedesEveryMutationAndValidation(t *testing.T) {
 	sentinel := errors.New("storage rejected")
 	guard := &rejectStorageVerifier{err: sentinel}
 	writer := &fakeWriter{}
@@ -825,9 +813,9 @@ func TestPipelineStorageVerificationPrecedesEveryMutationAndValidationAudit(t *t
 	pipeline := newTestPipeline(writer, db, scans, noOpRunPP)
 	pipeline.storageGuard = guard
 
-	// Deliberately make this a generic-invalid campaign submission. If the
-	// validator ran first, it would persist a campaign-rejection audit.
-	data := campaignEvidenceIngest()
+	// Deliberately make this a generic-invalid submission. Storage admission
+	// must still fail before validation or any external mutation.
+	data := validIngestDataFor("storage-preflight")
 	data.Graph.Edges[0].ObservationDomains = nil
 
 	result, err := pipeline.Ingest(context.Background(), data)
@@ -840,18 +828,18 @@ func TestPipelineStorageVerificationPrecedesEveryMutationAndValidationAudit(t *t
 	if guard.calls != 1 {
 		t.Fatalf("storage verification calls = %d, want 1", guard.calls)
 	}
-	if len(scans.rejections) != 0 || len(scans.creates) != 0 || len(scans.updates) != 0 ||
+	if len(scans.creates) != 0 || len(scans.updates) != 0 ||
 		len(writer.nodeCalls) != 0 || len(writer.edgeCalls) != 0 ||
 		len(db.CallsTo("Query")) != 0 || len(db.CallsTo("ExecuteWrite")) != 0 {
 		t.Fatalf(
-			"rejected storage pair mutated or queried state: rejections=%d creates=%d updates=%d nodes=%d edges=%d",
-			len(scans.rejections), len(scans.creates), len(scans.updates),
+			"rejected storage pair mutated or queried state: creates=%d updates=%d nodes=%d edges=%d",
+			len(scans.creates), len(scans.updates),
 			len(writer.nodeCalls), len(writer.edgeCalls),
 		)
 	}
 }
 
-func TestPipelineVersionPreflightPrecedesStorageAndAudit(t *testing.T) {
+func TestPipelineVersionPreflightPrecedesStorage(t *testing.T) {
 	guard := &rejectStorageVerifier{err: errors.New("storage must not be read")}
 	writer := &fakeWriter{}
 	scans := &fakeScanStore{}
@@ -859,7 +847,7 @@ func TestPipelineVersionPreflightPrecedesStorageAndAudit(t *testing.T) {
 	pipeline := newTestPipeline(writer, db, scans, noOpRunPP)
 	pipeline.storageGuard = guard
 
-	data := campaignEvidenceIngest()
+	data := validIngestDataFor("version-preflight")
 	data.Meta.Version = sdkingest.CurrentVersion - 1
 	result, err := pipeline.Ingest(context.Background(), data)
 	var versionErr *UnsupportedVersionError
@@ -872,8 +860,7 @@ func TestPipelineVersionPreflightPrecedesStorageAndAudit(t *testing.T) {
 	if guard.calls != 0 {
 		t.Fatalf("storage verification calls = %d, want zero", guard.calls)
 	}
-	if len(scans.rejections) != 0 ||
-		len(scans.creates) != 0 ||
+	if len(scans.creates) != 0 ||
 		len(scans.updates) != 0 ||
 		len(writer.nodeCalls) != 0 ||
 		len(writer.edgeCalls) != 0 ||

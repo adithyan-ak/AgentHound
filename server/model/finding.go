@@ -21,10 +21,8 @@ const (
 	FindingEvidenceInferred      FindingEvidenceState = "inferred"
 	FindingEvidenceHypothesis    FindingEvidenceState = "hypothesis"
 	FindingEvidenceReferenceOnly FindingEvidenceState = "reference_only"
-	// FindingEvidenceVerified marks a finding whose predicted relationship was
-	// actively confirmed by a campaign scenario (e.g. a differentially-verified
-	// credential-gated resource read). It is the strongest state: the composite
-	// edge was re-correlated against a persisted raw verification edge on ingest.
+	// FindingEvidenceVerified marks a predicted relationship actively confirmed
+	// by a proof action in the same unified scan.
 	FindingEvidenceVerified FindingEvidenceState = "verified"
 )
 
@@ -37,26 +35,25 @@ type FindingEvidence struct {
 	MaterialStatus string               `json:"material_status,omitempty"`
 	ExposureStatus string               `json:"exposure_status,omitempty"`
 	Correlation    string               `json:"correlation,omitempty"`
-	Verification   *FindingVerification `json:"verification,omitempty"`
+	Proof          *FindingProof        `json:"proof,omitempty"`
 }
 
-// FindingVerification is the structured, persisted basis for a campaign-
-// verified prediction. It contains only bounded status/identity metadata; no
-// endpoint, credential, payload, resource content, or receipt state.
-type FindingVerification struct {
-	ScenarioID               string `json:"scenario_id"`
-	ScenarioVersion          int    `json:"scenario_version"`
-	CampaignRunID            string `json:"campaign_run_id"`
-	VerifiedAt               string `json:"verified_at"`
-	OracleType               string `json:"oracle_type"`
-	Outcome                  string `json:"outcome"`
-	ControlStage             string `json:"control_stage"`
-	ControlStatus            string `json:"control_status"`
-	ControlResourceAddressed bool   `json:"control_resource_addressed"`
-	AuthedStage              string `json:"authed_stage"`
-	AuthedStatus             string `json:"authed_status"`
-	AuthedResourceAddressed  bool   `json:"authed_resource_addressed"`
-	CleanupStatus            string `json:"cleanup_status"`
+// FindingProof is the bounded, structured basis for a scan-verified
+// prediction. Resource contents and credential material remain on their graph
+// nodes and are not duplicated into finding metadata.
+type FindingProof struct {
+	Action                      string `json:"action"`
+	ActionID                    string `json:"action_id"`
+	VerifiedAt                  string `json:"verified_at"`
+	ProofType                   string `json:"proof_type"`
+	Outcome                     string `json:"outcome"`
+	ControlStage                string `json:"control_stage"`
+	ControlStatus               string `json:"control_status"`
+	ControlResourceAddressed    bool   `json:"control_resource_addressed"`
+	CredentialStage             string `json:"credential_stage"`
+	CredentialStatus            string `json:"credential_status"`
+	CredentialResourceAddressed bool   `json:"credential_resource_addressed"`
+	CleanupStatus               string `json:"cleanup_status"`
 }
 
 // ExactFindingEvidence is the detector-selected witness snapshot captured

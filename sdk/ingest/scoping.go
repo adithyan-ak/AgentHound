@@ -241,24 +241,21 @@ func artifactNodeScopes(data *IngestData, coverageScopes map[string]scopeRef) ma
 			}
 		}
 	}
-	_, campaignSubmission := data.Meta.Extra["campaign_artifact"]
-	if !campaignSubmission {
-		for _, node := range data.Graph.Nodes {
-			if node.PropertySemantics != NodePropertySemanticsReferenceOnly ||
-				authoritative[node.ID] ||
-				!referenceFollowsCoverageScope(ConcreteNodeKind(node.Kinds)) {
-				continue
-			}
-			domainScope, present := commonCoverageScope(node.ObservationDomains, coverageScopes)
-			if !present {
-				continue
-			}
-			if existing, alreadyScoped := scopes[node.ID]; alreadyScoped && existing != domainScope {
-				scopes[node.ID] = artifactScope
-				continue
-			}
-			scopes[node.ID] = domainScope
+	for _, node := range data.Graph.Nodes {
+		if node.PropertySemantics != NodePropertySemanticsReferenceOnly ||
+			authoritative[node.ID] ||
+			!referenceFollowsCoverageScope(ConcreteNodeKind(node.Kinds)) {
+			continue
 		}
+		domainScope, present := commonCoverageScope(node.ObservationDomains, coverageScopes)
+		if !present {
+			continue
+		}
+		if existing, alreadyScoped := scopes[node.ID]; alreadyScoped && existing != domainScope {
+			scopes[node.ID] = artifactScope
+			continue
+		}
+		scopes[node.ID] = domainScope
 	}
 	return scopes
 }
@@ -295,7 +292,7 @@ func commonCoverageScope(domains []string, coverageScopes map[string]scopeRef) (
 func inheritsSourceScope(kind string) bool {
 	switch kind {
 	case "PROVIDES_TOOL", "PROVIDES_RESOURCE", "PROVIDES_PROMPT", "ADVERTISES_SKILL",
-		"PROVIDES_MODEL", "EXTRACTED_FROM", "AUTHENTICATES_WITH", "USES_CREDENTIAL",
+		"PROVIDES_MODEL", "AUTHENTICATES_WITH", "USES_CREDENTIAL",
 		"HAS_ENV_VAR", "EXPOSES_CREDENTIAL":
 		return true
 	default:
@@ -303,7 +300,7 @@ func inheritsSourceScope(kind string) bool {
 	}
 }
 
-func inheritsReferenceScope(kind string) bool { return kind == "EXTRACTED_FROM" }
+func inheritsReferenceScope(string) bool { return false }
 
 func artifactCoverageScopes(data *IngestData) map[string]scopeRef {
 	result := make(map[string]scopeRef)
@@ -330,8 +327,6 @@ func artifactCoverageScopes(data *IngestData) map[string]scopeRef {
 			result[key] = endpointCoverageScope(data, key, point, network)
 		case "scan":
 			if _, extract := data.Meta.Extra["extract_type"]; extract {
-				result[key] = point
-			} else if _, campaign := data.Meta.Extra["campaign_artifact"]; campaign {
 				result[key] = point
 			} else if _, loot := data.Meta.Extra["loot_type"]; loot {
 				result[key] = endpointCoverageScope(data, key, point, network)

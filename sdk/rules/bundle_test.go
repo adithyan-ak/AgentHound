@@ -28,7 +28,7 @@ emit:
     - AIService
   properties:
     auth_method: none
-    is_anonymous_loot: "true"
+    anonymous_access_observed: "true"
 `
 
 const newRuleYAML = `

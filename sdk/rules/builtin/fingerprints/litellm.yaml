@@ -9,7 +9,6 @@
 # Authentication posture is "master_key" because the looter that lands
 # requires a master key to enumerate observed master-key material plus masked
 # provider and server-hashed virtual-key references.
-# is_anonymous_loot=false: the looter cannot exfiltrate credentials
 # without operator-supplied master key (vs. Ollama, which exposes its
 # model list anonymously).
 id: litellm
@@ -32,4 +31,3 @@ emit:
   properties:
     service_kind: litellm
     auth_method: master_key
-    is_anonymous_loot: "false"

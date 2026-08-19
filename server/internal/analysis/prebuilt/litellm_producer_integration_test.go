@@ -34,8 +34,8 @@ func (allowStorageVerifier) Verify(context.Context) error {
 	return nil
 }
 
-func TestLiteLLMProductionLootArtifactIsStrictV4(t *testing.T) {
-	fixture := newLiteLLMFixture(t)
+func TestLiteLLMProductionUnifiedScanArtifactIsStrictV4(t *testing.T) {
+	fixture := newLiteLLMScanFixture(t)
 	defer fixture.Close()
 
 	data := runAgentHoundLiteLLMLoot(t, fixture.URL)
@@ -257,36 +257,34 @@ func assertStrictLiteLLMArtifact(
 ) {
 	t.Helper()
 	if err := serveringest.NewValidator().Validate(data); err != nil {
-		t.Fatalf("strict ingest-v1 validation rejected agenthound loot output: %v", err)
+		if validation, ok := err.(*serveringest.ValidationError); ok {
+			t.Logf("unified scan validation errors: %+v", validation.Errors)
+		}
+		t.Fatalf("strict ingest-v1 validation rejected agenthound unified scan output: %v", err)
 	}
 
 	gatewayID := sdkingest.ComputeNodeID("LiteLLMGateway", fixtureURL)
-	var gateway *sdkingest.Node
+	var gateway, gatewayReference *sdkingest.Node
+	var gatewayCount, gatewayReferenceCount int
 	for i := range data.Graph.Nodes {
 		if data.Graph.Nodes[i].ID == gatewayID {
-			gateway = &data.Graph.Nodes[i]
-			break
+			if data.Graph.Nodes[i].PropertySemantics == sdkingest.NodePropertySemanticsReferenceOnly {
+				gatewayReferenceCount++
+				gatewayReference = &data.Graph.Nodes[i]
+			} else {
+				gatewayCount++
+				gateway = &data.Graph.Nodes[i]
+			}
 		}
 	}
-	if gateway == nil {
-		t.Fatalf("production loot envelope omitted gateway %q", gatewayID)
+	if gateway == nil || gatewayCount != 1 {
+		t.Fatalf("production unified scan gateway count = %d for %q, want one", gatewayCount, gatewayID)
 	}
-	if len(gateway.Kinds) != 2 ||
-		gateway.Kinds[0] != "LiteLLMGateway" ||
-		gateway.Kinds[1] != "AIService" ||
-		len(gateway.Properties) != 0 ||
-		gateway.PropertySemantics != sdkingest.NodePropertySemanticsReferenceOnly {
-		t.Fatalf("production loot gateway is not a property-neutral reference: %+v", gateway)
+	if gatewayReference == nil || gatewayReferenceCount != 1 || len(gatewayReference.Properties) != 0 {
+		t.Fatalf("unified service collection omitted its property-neutral gateway reference: %+v", gatewayReference)
 	}
-	for _, property := range []string{
-		"auth_method",
-		"auth_assurance",
-		"auth_evidence",
-		"discovered_via",
-	} {
-		if _, exists := gateway.Properties[property]; exists {
-			t.Fatalf("loot gateway fabricated fingerprint-owned %q: %+v", property, gateway)
-		}
+	if gateway.Properties["endpoint"] != fixtureURL || gateway.Properties["discovered_via"] != "network_scan" {
+		t.Fatalf("unified scan gateway lost fingerprint evidence: %+v", gateway)
 	}
 }
 
@@ -320,7 +318,6 @@ type liteLLMFixture struct {
 	mu                sync.Mutex
 	modelInfoRequests int
 	keyListRequests   int
-	healthRequests    int
 }
 
 func newLiteLLMFixture(t *testing.T) *liteLLMFixture {
@@ -350,8 +347,6 @@ func newLiteLLMFixtureWithListener(
 			fixture.modelInfoRequests++
 		case "/key/list":
 			fixture.keyListRequests++
-		case "/health/liveliness":
-			fixture.healthRequests++
 		}
 		fixture.mu.Unlock()
 
@@ -412,21 +407,16 @@ func (f *liteLLMFixture) AssertLootRequests(t *testing.T) {
 			f.keyListRequests,
 		)
 	}
-	if f.healthRequests != 0 {
-		t.Fatalf("loot required a separate fingerprint probe: health requests=%d", f.healthRequests)
-	}
 }
 
 func (f *liteLLMFixture) AssertFingerprintThenLootRequests(t *testing.T) {
 	t.Helper()
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.healthRequests != 1 ||
-		f.modelInfoRequests != 1 ||
+	if f.modelInfoRequests != 1 ||
 		f.keyListRequests != 1 {
 		t.Fatalf(
-			"LiteLLM fixture requests: health=%d model/info=%d key/list=%d, want one each",
-			f.healthRequests,
+			"LiteLLM fixture requests: model/info=%d key/list=%d, want one collection each",
 			f.modelInfoRequests,
 			f.keyListRequests,
 		)
@@ -436,38 +426,41 @@ func (f *liteLLMFixture) AssertFingerprintThenLootRequests(t *testing.T) {
 func runAgentHoundLiteLLMScan(t *testing.T) sdkingest.IngestData {
 	t.Helper()
 	binaryPath, repositoryRoot := buildAgentHound(t)
+	artifact := filepath.Join(t.TempDir(), "scan.json")
 	command := exec.Command(
 		binaryPath,
 		"scan",
 		"127.0.0.1",
-		"--ports",
-		"4000",
-		"--scan-output",
-		"-",
+		"--stealth",
+		"--timeout", "30s",
+		"--output", artifact,
 		"--quiet",
 	)
-	return runAgentHoundArtifactCommand(t, command, repositoryRoot, "scan")
+	return runAgentHoundArtifactCommand(t, command, repositoryRoot, artifact, "scan")
 }
 
 func runAgentHoundLiteLLMLoot(t *testing.T, fixtureURL string) sdkingest.IngestData {
 	t.Helper()
-	binaryPath, repositoryRoot := buildAgentHound(t)
+	binaryPath, _ := buildAgentHound(t)
+	workDir := t.TempDir()
+	configPath := filepath.Join(workDir, ".vscode", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("create test configuration directory: %v", err)
+	}
+	config := []byte(`{"servers":{"credential-source":{"type":"stdio","command":"true","env":{"LITELLM_MASTER_KEY":"sk-integration-master-key"}}}}`)
+	if err := os.WriteFile(configPath, config, 0o600); err != nil {
+		t.Fatalf("write test configuration: %v", err)
+	}
+	artifact := filepath.Join(t.TempDir(), "scan.json")
 	command := exec.Command(
 		binaryPath,
-		"loot",
-		strings.TrimPrefix(fixtureURL, "http://"),
-		"--type",
-		"litellm",
-		"--master-key",
-		"sk-integration-master-key",
-		"--engagement-id",
-		"prebuilt-satisfiability",
-		"--output",
-		"-",
+		"scan",
+		strings.Split(strings.TrimPrefix(fixtureURL, "http://"), ":")[0],
+		"--timeout", "30s",
+		"--output", artifact,
 		"--quiet",
 	)
-	command.Stdin = strings.NewReader("AUTHORIZED\n")
-	return runAgentHoundArtifactCommand(t, command, repositoryRoot, "loot")
+	return runAgentHoundArtifactCommand(t, command, workDir, artifact, "scan")
 }
 
 func buildAgentHound(t *testing.T) (string, string) {
@@ -489,26 +482,31 @@ func buildAgentHound(t *testing.T) (string, string) {
 func runAgentHoundArtifactCommand(
 	t *testing.T,
 	command *exec.Cmd,
-	repositoryRoot string,
+	workingDirectory string,
+	artifactPath string,
 	verb string,
 ) sdkingest.IngestData {
 	t.Helper()
-	command.Dir = repositoryRoot
+	command.Dir = workingDirectory
 	command.Env = integrationCommandEnv(t.TempDir())
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
+	var stderr bytes.Buffer
+	command.Stdout = &bytes.Buffer{}
 	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
 		t.Fatalf("agenthound %s failed: %v\nstderr:\n%s", verb, err, stderr.String())
 	}
 
+	raw, err := os.ReadFile(artifactPath)
+	if err != nil {
+		t.Fatalf("read agenthound %s artifact: %v", verb, err)
+	}
 	var data sdkingest.IngestData
-	if err := sdkingest.DecodeStrict(bytes.NewReader(stdout.Bytes()), &data); err != nil {
+	if err := sdkingest.DecodeStrict(bytes.NewReader(raw), &data); err != nil {
 		t.Fatalf(
-			"strict JSON decode rejected agenthound %s output: %v\nstdout:\n%s\nstderr:\n%s",
+			"strict JSON decode rejected agenthound %s output: %v\nartifact:\n%s\nstderr:\n%s",
 			verb,
 			err,
-			stdout.String(),
+			string(raw),
 			stderr.String(),
 		)
 	}

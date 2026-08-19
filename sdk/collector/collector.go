@@ -14,21 +14,18 @@ type Collector interface {
 }
 
 type CollectOptions struct {
-	ConfigPath              string
-	ConfigPaths             []string
-	TargetURL               string
-	TargetURLs              []string
-	TargetURLsFile          string
-	Discover                bool
-	ProjectDir              string
-	OutputPath              string
-	Concurrency             int
-	Timeout                 time.Duration
-	IncludeCredentialValues bool
-	Insecure                bool
-	AuthToken               string
-	ScanID                  string
-	RulesEngine             *rules.Engine // nil = default engine constructed automatically
+	ConfigPath     string
+	ConfigPaths    []string
+	TargetURL      string
+	TargetURLs     []string
+	TargetURLsFile string
+	Discover       bool
+	ProjectDir     string
+	Timeout        time.Duration
+	Insecure       bool
+	AuthToken      string
+	ScanID         string
+	RulesEngine    *rules.Engine // nil = default engine constructed automatically
 	// InstructionRecursiveRoot names the canonical home boundary used by optional
 	// nested registered-source discovery. The selected project receives a
 	// separately partitioned scope in the same bounded attempt. Empty disables

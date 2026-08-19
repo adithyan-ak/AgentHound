@@ -677,7 +677,7 @@ func TestScopeArtifactWeakIdentityLocalizesReferencesAndTheirEdges(t *testing.T)
 				{ID: "known-agent", Kinds: []string{"AgentInstance"}, Properties: map[string]any{}, PropertySemantics: NodePropertySemanticsReferenceOnly},
 				{ID: "known-resource", Kinds: []string{"MCPResource"}, Properties: map[string]any{}, PropertySemantics: NodePropertySemanticsReferenceOnly},
 			},
-			Edges: []Edge{{Source: "known-agent", Target: "known-resource", Kind: "CREDENTIAL_REACH_VERIFIED"}},
+			Edges: []Edge{{Source: "known-agent", Target: "known-resource", Kind: "CREDENTIAL_ACCESS_OBSERVED"}},
 		},
 	}
 	if err := ScopeArtifact(data); err != nil {
@@ -702,10 +702,7 @@ func TestScopeArtifactPreservesReferenceOnlySemantics(t *testing.T) {
 			Nodes: []Node{
 				{ID: "server", Kinds: []string{"MCPServer"}, Properties: map[string]any{"transport": "http", "endpoint": "https://service.internal"}},
 				{ID: "server", Kinds: []string{"MCPServer"}, Properties: map[string]any{}, PropertySemantics: NodePropertySemanticsReferenceOnly},
-				{ID: "external-model", Kinds: []string{"Model"}, Properties: map[string]any{}, PropertySemantics: NodePropertySemanticsReferenceOnly},
-				{ID: "signal", Kinds: []string{"ExtractedTrainingSignal"}, Properties: map[string]any{"source_model_id": "external-model"}},
 			},
-			Edges: []Edge{{Source: "external-model", Target: "signal", Kind: "EXTRACTED_FROM"}},
 		},
 	}
 	if err := ScopeArtifact(data); err != nil {
@@ -714,13 +711,6 @@ func TestScopeArtifactPreservesReferenceOnlySemantics(t *testing.T) {
 	scopedServer := ScopedNodeID(ScopeNetworkContext, identity.NetworkContextID, "server")
 	if data.Graph.Nodes[1].ID != scopedServer || len(data.Graph.Nodes[1].Properties) != 0 {
 		t.Fatalf("reference contribution gained properties or wrong ID: %+v", data.Graph.Nodes[1])
-	}
-	if data.Graph.Nodes[2].ID != "external-model" {
-		t.Fatalf("unresolved reference identity changed: %+v", data.Graph.Nodes[2])
-	}
-	wantSignal := ScopedNodeID(ScopeReference, "external-model", "signal")
-	if data.Graph.Nodes[3].ID != wantSignal || data.Graph.Edges[0].Target != wantSignal {
-		t.Fatalf("reference-derived child scope = node %q edge target %q, want %q", data.Graph.Nodes[3].ID, data.Graph.Edges[0].Target, wantSignal)
 	}
 }
 
@@ -752,36 +742,6 @@ func TestScopeArtifactScopesStandaloneServiceReferenceByCoverage(t *testing.T) {
 	wantID := ScopedNodeID(ScopeCollectionPoint, identity.CollectionPointID, "gateway")
 	if data.Graph.Nodes[0].ID != wantID || len(data.Graph.Nodes[0].Properties) != 0 {
 		t.Fatalf("standalone reference = %+v, want point-scoped empty reference %q", data.Graph.Nodes[0], wantID)
-	}
-}
-
-func TestScopeArtifactPreservesPreScopedCampaignReferences(t *testing.T) {
-	identity := strongTestIdentity("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
-	coverageKey := CanonicalCoverageKey("scan", "campaign", "campaign-proof")
-	data := &IngestData{
-		Meta: IngestMeta{
-			ScanID:   "campaign-reference",
-			Identity: identity,
-			Extra:    map[string]any{"campaign_artifact": map[string]any{}},
-			Collection: &CollectionReport{
-				State:        OutcomeComplete,
-				CoverageKeys: []string{coverageKey},
-				Outcomes: []CollectionOutcome{{
-					Collector: "scan", CoverageKey: coverageKey,
-					Target: "sha256:scoped-resource", Method: "campaign:cred-reach", State: OutcomeComplete,
-				}},
-			},
-		},
-		Graph: GraphData{Nodes: []Node{{
-			ID: "sha256:already-scoped", Kinds: []string{"MCPResource"}, Properties: map[string]any{},
-			ObservationDomains: []string{coverageKey}, PropertySemantics: NodePropertySemanticsReferenceOnly,
-		}}},
-	}
-	if err := ScopeArtifact(data); err != nil {
-		t.Fatal(err)
-	}
-	if data.Graph.Nodes[0].ID != "sha256:already-scoped" {
-		t.Fatalf("campaign reference was scoped twice: %+v", data.Graph.Nodes[0])
 	}
 }
 

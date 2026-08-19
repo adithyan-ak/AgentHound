@@ -38,4 +38,3 @@ emit:
     service_kind: mlflow
     auth_method: none
     auth_evidence: anonymous_probe_succeeded
-    is_anonymous_loot: "true"

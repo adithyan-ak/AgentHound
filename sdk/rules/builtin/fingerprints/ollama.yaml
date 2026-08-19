@@ -39,5 +39,4 @@ emit:
   properties:
     service_kind: ollama
     auth_method: none
-    is_anonymous_loot: "true"
     version: "{capture:version}"

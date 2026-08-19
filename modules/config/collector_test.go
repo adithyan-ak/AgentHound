@@ -3,7 +3,6 @@ package config
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -325,8 +324,8 @@ func TestConfigCollector_CredentialExtraction(t *testing.T) {
 	if credNode == nil {
 		t.Fatal("Credential node for API_KEY not found")
 	}
-	if credNode.Properties["value"] == "sk-ant-secret123456789" {
-		t.Error("credential value should be hashed by default, got raw value")
+	if credNode.Properties["value"] != "sk-ant-secret123456789" {
+		t.Errorf("credential value = %v, want raw discovered value", credNode.Properties["value"])
 	}
 	if credNode.Properties["exposure_status"] != "exposed" {
 		t.Error("hardcoded credential should have exposure_status=exposed")
@@ -427,9 +426,8 @@ func TestConfigCollector_CredentialValuesIncluded(t *testing.T) {
 
 	c := NewConfigCollector()
 	result, err := c.Collect(context.Background(), collector.CollectOptions{
-		ConfigPath:              configPath,
-		ScanID:                  "raw-cred-test",
-		IncludeCredentialValues: true,
+		ConfigPath: configPath,
+		ScanID:     "raw-cred-test",
 	})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -440,10 +438,9 @@ func TestConfigCollector_CredentialValuesIncluded(t *testing.T) {
 		t.Fatal("Credential node not found")
 	}
 	if credNode.Properties["value"] != "test-raw-value" {
-		t.Errorf("expected raw value with IncludeCredentialValues, got %q", credNode.Properties["value"])
+		t.Errorf("expected raw observed value, got %q", credNode.Properties["value"])
 	}
-	// value_hash is ALWAYS populated (with or without --include-credential-values)
-	// because it's the cross-collector merge primitive.
+	// value_hash is always populated because it is the cross-collector merge primitive.
 	if credNode.Properties["value_hash"] != common.HashCredentialValue("test-raw-value") {
 		t.Errorf("value_hash = %v, want SHA-256 of raw value", credNode.Properties["value_hash"])
 	}
@@ -451,7 +448,7 @@ func TestConfigCollector_CredentialValuesIncluded(t *testing.T) {
 
 // TestConfigCollector_ValueHashAlwaysPopulated guards the
 // cross-collector merge primitive: every emitted Credential node
-// MUST carry value_hash, regardless of --include-credential-values.
+// MUST carry value_hash alongside raw observed material.
 // Without it the cross_service_credential_chain post-processor has nothing to
 // join on, and the corresponding credential-chain findings return zero rows.
 func TestConfigCollector_ValueHashAlwaysPopulated(t *testing.T) {
@@ -470,34 +467,54 @@ func TestConfigCollector_ValueHashAlwaysPopulated(t *testing.T) {
 	}`)
 
 	c := NewConfigCollector()
-	for _, includeValues := range []bool{false, true} {
-		t.Run(fmt.Sprintf("include=%v", includeValues), func(t *testing.T) {
-			result, err := c.Collect(context.Background(), collector.CollectOptions{
-				ConfigPath:              configPath,
-				ScanID:                  "valuehash-test",
-				IncludeCredentialValues: includeValues,
-			})
-			if err != nil {
-				t.Fatalf("Collect: %v", err)
+	result, err := c.Collect(context.Background(), collector.CollectOptions{
+		ConfigPath: configPath,
+		ScanID:     "valuehash-test",
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	credNode := findNodeByKindAndProp(result, "Credential", "name", "LITELLM_MASTER_KEY")
+	if credNode == nil {
+		t.Fatal("Credential node not found")
+	}
+	gotHash, _ := credNode.Properties["value_hash"].(string)
+	wantHash := common.HashCredentialValue("sk-merge-key-target")
+	if gotHash != wantHash {
+		t.Errorf("value_hash = %q, want %q", gotHash, wantHash)
+	}
+	if got := credNode.Properties["value"]; got != "sk-merge-key-target" {
+		t.Errorf("raw value = %v, want discovered credential", got)
+	}
+}
+
+func TestConfigCollector_UnresolvedReferenceIsNotExecutableValue(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	writeJSON(t, configPath, `{
+		"mcpServers": {
+			"referenced": {
+				"command": "node",
+				"args": ["server.js"],
+				"env": {"API_TOKEN": "$REAL_TOKEN"}
 			}
-			credNode := findNodeByKindAndProp(result, "Credential", "name", "LITELLM_MASTER_KEY")
-			if credNode == nil {
-				t.Fatal("Credential node not found")
-			}
-			gotHash, _ := credNode.Properties["value_hash"].(string)
-			wantHash := common.HashCredentialValue("sk-merge-key-target")
-			if gotHash != wantHash {
-				t.Errorf("value_hash = %q, want %q", gotHash, wantHash)
-			}
-			// Raw value is gated on the flag.
-			_, hasValue := credNode.Properties["value"]
-			if includeValues && !hasValue {
-				t.Error("expected raw value with --include-credential-values")
-			}
-			if !includeValues && hasValue {
-				t.Errorf("raw value should be omitted by default; got %v", credNode.Properties["value"])
-			}
-		})
+		}
+	}`)
+
+	result, err := NewConfigCollector().Collect(context.Background(), collector.CollectOptions{
+		ConfigPath: configPath, ScanID: "unresolved-reference-test",
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	credential := findNodeByKindAndProp(result, "Credential", "name", "API_TOKEN")
+	if credential == nil {
+		t.Fatal("Credential node not found")
+	}
+	if _, executable := credential.Properties["value"]; executable {
+		t.Fatalf("unresolved reference became Credential.value: %+v", credential.Properties)
+	}
+	if credential.Properties["material_status"] != "unobserved" {
+		t.Fatalf("material_status = %v, want unobserved", credential.Properties["material_status"])
 	}
 }
 
@@ -1142,7 +1159,16 @@ func TestConfigCollector_RedactsMCPArgvAndURLSecretsFromEntireEnvelope(t *testin
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	serialized, err := json.Marshal(result)
+	// Raw material is intentionally retained on Credential nodes, but it must
+	// not leak into endpoint identities, argv, edges, or envelope metadata.
+	safeResult := *result
+	safeResult.Graph.Nodes = nil
+	for _, node := range result.Graph.Nodes {
+		if !containsString(node.Kinds, "Credential") {
+			safeResult.Graph.Nodes = append(safeResult.Graph.Nodes, node)
+		}
+	}
+	serialized, err := json.Marshal(&safeResult)
 	if err != nil {
 		t.Fatalf("marshal result: %v", err)
 	}
@@ -1151,7 +1177,7 @@ func TestConfigCollector_RedactsMCPArgvAndURLSecretsFromEntireEnvelope(t *testin
 		fragmentSecret, "RAW-DSN-SECRET-123456789",
 	} {
 		if strings.Contains(string(serialized), forbidden) {
-			t.Fatalf("serialized envelope leaked %q: %s", forbidden, serialized)
+			t.Fatalf("non-credential envelope leaked %q: %s", forbidden, serialized)
 		}
 	}
 
@@ -1166,18 +1192,15 @@ func TestConfigCollector_RedactsMCPArgvAndURLSecretsFromEntireEnvelope(t *testin
 	var stdioNode, httpNode *ingest.Node
 	for i := range result.Graph.Nodes {
 		node := &result.Graph.Nodes[i]
-		if node.ID == stdioIdentity.ObjectID {
+		if containsString(node.Kinds, "MCPServer") && node.Properties["transport"] == "stdio" {
 			stdioNode = node
 		}
-		if node.ID == ingest.ComputeMCPServerID(
-			"http",
-			"https://alice:"+userinfoSecret+"@mcp.example/mcp?api_key="+querySecret+"#"+fragmentSecret,
-		) {
+		if containsString(node.Kinds, "MCPServer") && node.Properties["transport"] == "http" {
 			httpNode = node
 		}
 	}
 	if stdioNode == nil || httpNode == nil {
-		t.Fatalf("redacted servers missing: stdio=%v http=%v", stdioNode != nil, httpNode != nil)
+		t.Fatalf("redacted servers missing: stdio=%v http=%v servers=%+v", stdioNode != nil, httpNode != nil, findNodesByKind(result, "MCPServer"))
 	}
 	if _, exists := stdioNode.Properties["args"]; exists {
 		t.Fatalf("stdio node retained raw args property: %+v", stdioNode.Properties)
@@ -1204,13 +1227,20 @@ func TestConfigCollector_RedactsMCPArgvAndURLSecretsFromEntireEnvelope(t *testin
 		if hash, ok := node.Properties["value_hash"].(string); ok {
 			credentialHashes[hash] = true
 		}
-		if _, exposesRaw := node.Properties["value"]; exposesRaw {
-			t.Fatalf("credential exposed raw value without opt-in: %+v", node.Properties)
-		}
 	}
 	for _, secret := range []string{argvSecret, inlineSecret, userinfoSecret, querySecret} {
 		if !credentialHashes[common.HashCredentialValue(secret)] {
 			t.Fatalf("credential hash for redacted material %q was not retained", secret)
+		}
+		foundRaw := false
+		for _, node := range findNodesByKind(result, "Credential") {
+			if node.Properties["value"] == secret {
+				foundRaw = true
+				break
+			}
+		}
+		if !foundRaw {
+			t.Fatalf("credential raw material %q was not retained", secret)
 		}
 	}
 	if edge := findEdgeByKind(result, "HAS_ENV_VAR"); edge != nil {
@@ -1455,6 +1485,10 @@ func TestConfigCollector_BearerAuthRiskWeight(t *testing.T) {
 	}
 	if server.Properties["auth_method"] != "bearer" {
 		t.Errorf("auth_method = %q, want bearer", server.Properties["auth_method"])
+	}
+	credential := findNodeByKind(result, "Credential")
+	if credential == nil || credential.Properties["auth_method"] != "bearer" {
+		t.Fatalf("credential auth_method = %v, want bearer", credential)
 	}
 
 	trustEdge := findEdgeByKind(result, "TRUSTS_SERVER")

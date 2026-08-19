@@ -9,14 +9,8 @@ import (
 // binary. When the user invokes one of these against agenthound-server, we
 // print a one-line redirect and exit non-zero.
 var collectorVerbs = map[string]bool{
-	"scan":    true,
-	"collect": true,
-	"setup":   true,
-	"rules":   true,
-	"loot":    true,
-	"extract": true,
-	"poison":  true,
-	"implant": true,
+	"scan":   true,
+	"revert": true,
 }
 
 // HandleUnknownCommand inspects os.Args for a top-level subcommand that lives

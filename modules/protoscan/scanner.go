@@ -31,7 +31,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -41,6 +40,7 @@ import (
 	"github.com/adithyan-ak/agenthound/modules/networkscan"
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/contact"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
@@ -79,6 +79,9 @@ type Scanner struct {
 	Timeout     time.Duration
 	Insecure    bool
 	ExpandOpts  networkscan.ExpandOptions
+	// ContactPolicy filters expanded hosts before scheduling and remains
+	// enforced by the guarded HTTP transport.
+	ContactPolicy *contact.Policy
 
 	// Progress, if non-nil, is called periodically with the number of
 	// completed probes and the total probe count (hosts × protocol ports).
@@ -168,6 +171,15 @@ func (s *Scanner) Scan(ctx context.Context, spec string) ([]action.Target, error
 	if err != nil {
 		return nil, err
 	}
+	if s.ContactPolicy != nil {
+		admitted := hosts[:0]
+		for _, host := range hosts {
+			if s.ContactPolicy.AdmitAddress(host) == nil {
+				admitted = append(admitted, host)
+			}
+		}
+		hosts = admitted
+	}
 	if s.Concurrency <= 0 {
 		s.Concurrency = DefaultConcurrency
 	}
@@ -179,12 +191,9 @@ func (s *Scanner) Scan(ctx context.Context, spec string) ([]action.Target, error
 	}
 	s.httpClient = &http.Client{
 		Timeout: s.Timeout,
-		Transport: &http.Transport{
+		Transport: contact.GuardTransport(&http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: s.Insecure}, //nolint:gosec
-			DialContext: (&net.Dialer{
-				Timeout: s.Timeout,
-			}).DialContext,
-		},
+		}),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
