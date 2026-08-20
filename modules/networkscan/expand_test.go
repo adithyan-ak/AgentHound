@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -89,6 +90,36 @@ func TestExpand_SingleHost(t *testing.T) {
 			t.Errorf("got %v, want [fc00::1]", got)
 		}
 	})
+}
+
+func TestExpand_InvalidHostSyntaxRejectedBeforePublicTargetGate(t *testing.T) {
+	for _, spec := range []string{
+		"not a valid target !",
+		"bad host name %%%",
+		"https://example.test",
+		"example.test:443",
+		"-leading.example",
+		"trailing-.example",
+		"two..dots.example",
+		"999.999.999.999",
+		strings.Repeat("a", 64) + ".example",
+	} {
+		t.Run(spec, func(t *testing.T) {
+			_, err := Expand(spec, ExpandOptions{AllowPublicTargets: true})
+			if !errors.Is(err, ErrInvalidCIDR) {
+				t.Fatalf("Expand(%q) error = %v, want ErrInvalidCIDR", spec, err)
+			}
+		})
+	}
+
+	for _, spec := range []string{"localhost", "mcp-container", "mcp.example.test", "MCP.Example.Test."} {
+		t.Run("valid_"+spec, func(t *testing.T) {
+			got, err := Expand(spec, ExpandOptions{AllowPublicTargets: true})
+			if err != nil || len(got) != 1 || got[0] != spec {
+				t.Fatalf("Expand(%q) = %v, %v; want unchanged host", spec, got, err)
+			}
+		})
+	}
 }
 
 func TestExpand_CIDR(t *testing.T) {

@@ -259,6 +259,13 @@ func (a a2aCredentialAction) Candidates(view View) []Candidate {
 	var candidates []Candidate
 	seen := make(map[string]bool)
 	for _, agent := range view.ByKind["A2AAgent"] {
+		// A successful anonymous protocol probe is stronger evidence than the
+		// card's declared security metadata. Credentials cannot unlock anything
+		// further here and must not be disclosed to the already-public origin.
+		if stringProperty(agent.Properties, "auth_probe_status") ==
+			a2acollector.A2AAuthProbeStatusAnonymousProtocolAccess {
+			continue
+		}
 		endpoint := stringProperty(agent.Properties, "url")
 		if endpoint == "" {
 			continue

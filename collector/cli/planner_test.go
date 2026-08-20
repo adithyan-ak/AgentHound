@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	a2acollector "github.com/adithyan-ak/agenthound/modules/a2a"
 	_ "github.com/adithyan-ak/agenthound/modules/ollamacollect"
 	_ "github.com/adithyan-ak/agenthound/modules/qdrantcollect"
 
@@ -162,6 +163,41 @@ func TestCredentialReachSkipsResourceAlreadyProvenPublic(t *testing.T) {
 	view := buildPlannerView(graph, nil, map[string]bool{}, false, false)
 	if candidates := (credentialReachAction{}).Candidates(view); len(candidates) != 0 {
 		t.Fatalf("candidates = %+v, want none after public access was proven", candidates)
+	}
+}
+
+func TestA2ACredentialActionSkipsAgentWithProvenAnonymousAccess(t *testing.T) {
+	const (
+		agentID      = "agent"
+		credentialID = "credential"
+	)
+	credential := ingest.Node{ID: credentialID, Kinds: []string{"Credential"}, Properties: map[string]any{
+		"value":           "unrelated-bearer",
+		"value_hash":      common.HashCredentialValue("unrelated-bearer"),
+		"material_status": string(common.CredentialMaterialObserved),
+		"auth_method":     string(common.AuthBearer),
+	}}
+	for _, test := range []struct {
+		name       string
+		probeState string
+		want       int
+	}{
+		{name: "anonymous access proven", probeState: a2acollector.A2AAuthProbeStatusAnonymousProtocolAccess, want: 0},
+		{name: "authentication required", probeState: a2acollector.A2AAuthProbeStatusAuthenticationRequired, want: 1},
+		{name: "probe unknown", probeState: a2acollector.A2AAuthProbeStatusUnknown, want: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			graph := ingest.GraphData{Nodes: []ingest.Node{
+				{ID: agentID, Kinds: []string{"A2AAgent"}, Properties: map[string]any{
+					"url": "https://a2a.example", "auth_probe_status": test.probeState,
+				}},
+				credential,
+			}}
+			view := buildPlannerView(graph, nil, map[string]bool{}, false, false)
+			if candidates := (a2aCredentialAction{}).Candidates(view); len(candidates) != test.want {
+				t.Fatalf("candidates = %+v, want %d", candidates, test.want)
+			}
+		})
 	}
 }
 

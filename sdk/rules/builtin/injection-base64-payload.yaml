@@ -1,8 +1,8 @@
 id: injection-base64-payload
 name: Base64 Encoded Payload
 description: >
-  Detects long base64-encoded strings (20+ chars) embedded in descriptions,
-  which may contain hidden instructions or payloads.
+  Detects structurally valid base64 tokens (20+ chars) embedded in
+  descriptions, while excluding path-like substrings inside ordinary URLs.
 version: 1
 enabled: true
 scope:
@@ -21,7 +21,7 @@ tags: [injection, prompt-injection]
 shadow_exclude: true
 matcher:
   type: regex
-  pattern: '[A-Za-z0-9+/]{20,}={0,2}'
+  pattern: '(^|[\s([{:])([A-Za-z0-9+/]{4}){5,}([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?($|[\s,.;:)\]}])'
 emit:
   finding_type: has_injection_patterns
   labels: [base64_instruction]

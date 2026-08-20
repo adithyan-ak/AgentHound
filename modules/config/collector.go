@@ -268,6 +268,13 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 					cred.Location,
 					cred.Name,
 				)
+				// Concrete material has a global value identity. Keep each
+				// provenance contribution and edge, but point them at the same
+				// Credential ID so the artifact agrees with identity_basis and
+				// downstream ingestion does not split one secret into many nodes.
+				if cred.MaterialStatus == common.CredentialMaterialObserved && cred.ValueHash != "" {
+					credID = ingest.ComputeNodeID("Credential", cred.ValueHash)
+				}
 				// value_hash is the cross-collector merge primitive — see
 				// sdk/common/hasher.go HashCredentialValue. Always populated
 				// from the original observed value or reference. The credential-chain Cypher

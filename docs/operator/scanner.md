@@ -57,7 +57,7 @@ Anonymous collection covers applicable LiteLLM, Open WebUI, Jupyter, Qdrant, MLf
 
 The active planner performs three bounded actions when their prerequisites are present:
 
-- MCP credential access compares an anonymous control read with an authenticated read of the same resource and saves returned content.
+- MCP credential access first reads the exact resource anonymously. A successful control records public access without presenting a credential; otherwise AgentHound compares an authenticated read of the same resource and saves returned content.
 - The ContextForge description round trip writes a scan-specific marker, observes it through MCP, restores the original immediately, and confirms restoration.
 - Deep Ollama verification invokes a bounded embedding request to prove compute access.
 
