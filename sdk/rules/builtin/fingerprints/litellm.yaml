@@ -6,11 +6,9 @@
 # the lowest-friction probe that disambiguates LiteLLM from anything
 # else listening on 4000 — no auth required.
 #
-# Authentication posture is "master_key" because the looter that lands
-# requires a master key to enumerate observed master-key material plus masked
-# provider and server-hashed virtual-key references.
-# without operator-supplied master key (vs. Ollama, which exposes its
-# model list anonymously).
+# Authentication posture is "master_key" because service collection requires
+# a master key to enumerate observed master-key material plus masked provider
+# and server-hashed virtual-key references. Fingerprinting remains anonymous.
 id: litellm
 name: LiteLLM proxy / gateway
 description: Identifies LiteLLM by GET /health/liveliness returning "I'm alive!"

@@ -1,32 +1,24 @@
-# AgentHound Documentation
+# AgentHound documentation
 
-AgentHound is an autonomous offensive collector for AI agent infrastructure. One `scan` performs local collection, network discovery, service enumeration, compatible credential reuse, bounded access proof, immediate mutation cleanup, and continuous checkpointing to one plain JSON artifact.
-
-The collector is fully operational without the server. Manually ingest the artifact later when full-graph analysis and dashboard inspection are useful.
+AgentHound performs autonomous offensive collection and access verification against AI agent infrastructure. The collector writes one local JSON artifact; the optional server turns that artifact into full-graph paths, findings, risk, and an inspection dashboard.
 
 ## Start here
 
-- [Install](getting-started/install.md)
-- [Quickstart](getting-started/quickstart.md)
-- [Scanner guide](operator/scanner.md)
-- [CLI reference](reference/cli.md)
-- [Security and operational behavior](operator/security.md)
+1. [Install AgentHound](getting-started/install.md).
+2. Follow the [Quickstart](getting-started/quickstart.md) for your first scan and ingest.
+3. Use the [Scanner guide](operator/scanner.md) for targets, modes, credentials, actions, and recovery.
 
-## Analysis
+## Operate and analyze
 
-- [Attack paths](operator/attack-paths.md)
-- [Graph model](reference/graph-model.md)
-- [Risk scoring](reference/risk-scoring.md)
-- [Detection rules](reference/detection-rules.md)
-- [API](reference/api.md)
+- [Attack paths](operator/attack-paths.md) explains inferred and scan-verified reachability.
+- [Deployment](operator/deployment.md) covers the optional analysis stack.
+- [Security and OPSEC](operator/security.md) describes active behavior and artifact handling.
+- [CLI reference](reference/cli.md) lists every command and flag.
 
-## Architecture and contribution
+## Extend AgentHound
 
 - [System design](architecture/system-design.md)
-- [Ingest pipeline](architecture/ingest-pipeline.md)
-- [Post-processors](architecture/post-processors.md)
-- [Writing modules](contributing/modules.md)
+- [Server analysis](architecture/server-analysis.md)
 - [Development setup](contributing/dev-setup.md)
-- [Two-binary decision](adr/0001-two-binary-split.md)
-
-AgentHound has no separate discovery, loot, campaign, witness, extract, poison, implant, or collector-side ingest workflow. Those old operator decisions have been folded into `scan` or removed.
+- [Writing modules](contributing/modules.md)
+- [Authoring rules](contributing/authoring-rules.md)

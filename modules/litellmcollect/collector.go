@@ -6,7 +6,7 @@
 //   - GET /model/info     (lists upstream provider models + their api_base)
 //   - GET /key/list       (master-key only; lists virtual keys + spend)
 //
-// Emits (per docs/plans/sprint3-offensive-primitives.md 4.5):
+// Emits:
 //   - 1 :LiteLLMGateway:AIService source node
 //   - 1 :Credential master node (the master key the operator supplied,
 //     value_hash populated so the cross-collector chain can join)

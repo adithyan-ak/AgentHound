@@ -1,6 +1,6 @@
-# AgentHound isolated demo lab
+# AgentHound isolated demo
 
-This lab demonstrates the unified collector against synthetic MCP services. AgentHound runs only inside the isolated workstation container; the host supplies Docker and a browser.
+This lab runs AgentHound against synthetic MCP services on a disposable Docker network. The workstation fixture contains the collector and sample client configuration; the host provides Docker and a browser.
 
 ## Start
 
@@ -13,22 +13,16 @@ docker compose -f demo/defcon/compose.yml up -d --wait --build
 curl -fsS http://127.0.0.1:18080/api/v1/health
 ```
 
-## Run one scan
+## Scan
 
-The workstation contains an unauthenticated devtools MCP configuration and an authenticated CRM MCP configuration. The latter's concrete bearer is deliberately present in the fixture config, so the same scan can collect it and perform differential resource-access proof.
+The workstation has an anonymous devtools MCP endpoint and an authenticated CRM endpoint. Its synthetic bearer credential lets the same scan perform a differential resource-access proof.
 
 ```bash
 docker compose -f demo/defcon/compose.yml exec workstation \
   agenthound scan --timeout 5m --output /demo/artifacts/scan.json
 ```
 
-Expected behavior:
-
-- local configs and raw Credential values are captured;
-- both configured MCP servers are enumerated;
-- the local planner attempts compatible collection and exact MCP access proof;
-- `meta.extra.scan_execution` contains every action and recovery transition;
-- the single artifact is ready for manual ingest.
+The artifact contains local configuration, raw Credential material, MCP enumeration, planner action results, and the collected graph.
 
 ## Ingest and inspect
 
@@ -37,15 +31,18 @@ docker compose -f demo/defcon/compose.yml exec agenthound-server \
   agenthound-server ingest /demo/artifacts/scan.json
 ```
 
-Open <http://127.0.0.1:18080>. Inspect the `augment -> customers-database` path and its same-scan proof. A successful differential read is labeled **Verified During Scan** at confidence 100%. The credential value is masked in normal properties and available through Reveal or Copy.
+Open <http://127.0.0.1:18080>. Inspect the `augment` path to the customer resource. A successful differential read appears as **Verified During Scan** at confidence 100%. Credential values are masked in normal properties and available through Reveal or Copy.
 
-There is no witness export, campaign, second collector run, engagement ID, or separate recovery file.
-
-## Stop or reset
+## Stop
 
 ```bash
 docker compose -f demo/defcon/compose.yml down
+```
+
+Delete all lab data and volumes:
+
+```bash
 docker compose -f demo/defcon/compose.yml down --volumes --remove-orphans
 ```
 
-All target data and credentials are synthetic.
+All target data and credentials in this lab are synthetic.

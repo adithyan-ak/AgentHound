@@ -1,58 +1,37 @@
-# Architecture overview
+# System design
 
-AgentHound ships two intentionally separate binaries.
+AgentHound separates foothold-time collection from full-graph analysis.
 
 ```text
-compromised host                         analysis host
+collection host                         analysis host
 
-agenthound scan [scope]                 agenthound-server ingest scan.json
-  local collection                         validate and publish
-  contact policy                           Neo4j post-processing
-  discovery/fingerprinting                 PostgreSQL history/findings
-  service collection                       API + embedded dashboard
-  local planner
-  immediate cleanup
-  atomic scan.json
+agenthound scan [scope]                agenthound-server ingest scan.json
+  local evidence                         validate and normalize
+  guarded discovery                      publish raw graph
+  service collection                     rebuild composite analysis
+  local planner                          persist findings and history
+  immediate restoration                  serve API and dashboard
+  one scan.json
 ```
-
-The collector contains no database client, UI, server callback, or remote-ingest client. The server never participates in foothold-time planning. Operators move the plain ingest V1 artifact through their existing channel and ingest it manually.
 
 ## Collector
 
-The public surface is `scan`, `revert`, and `version`. One scan owns the complete flow:
+The collector is a static Go binary with no database or server dependency. A scan owns local configuration and instruction collection, contact-policy enforcement, network and protocol discovery, service collection, credential handling, deterministic candidate planning, access proof, recovery, and artifact checkpointing.
 
-1. build the immutable contact policy;
-2. initialize and checkpoint the artifact;
-3. collect local configs, instructions, and raw credentials;
-4. admit configured, local, and positional targets;
-5. enumerate MCP/A2A and discover/fingerprint network services;
-6. run deep service collectors;
-7. rebuild lightweight planner indexes and execute deterministic candidates;
-8. restore every temporary mutation immediately;
-9. finalize the artifact.
+The planner uses in-memory indexes over nodes, edges, targets, credentials, capabilities, and completed candidate keys. New evidence can unlock work during the same scan. Read-only work may run concurrently; a reversible mutation holds an exclusive lease through confirmed restoration.
 
-The planner uses standard-library maps over graph nodes, edges, credentials, targets, and completed candidate keys. It adds no Neo4j, PostgreSQL, LLM, DAG, workflow language, or policy engine to the binary.
+Every AgentHound-owned HTTP request and TCP connection passes through the scan's contact policy. The guard is applied during target admission and again after DNS resolution at the final dial boundary.
 
-## Connection boundary
+## Artifact
 
-The scan context carries one `sdk/contact.Policy`. Target admission filters exact excluded hostnames, IPs, and CIDRs. Guarded HTTP transports and TCP dials resolve hostnames, filter concrete addresses, disable proxy bypass, and recheck redirects and derived URLs. Modules cannot opt out of the final-dial boundary.
+The collector writes ingest V1 as `{meta, graph}`. `meta.extra.scan_execution` stores mode, exclusions, status, action outcomes, and recovery records. The destination is replaced with a complete JSON document after each meaningful transition.
 
-## Artifact and recovery
+Raw credential material lives on Credential nodes in `properties.value`. `value_hash` provides stable identity and deduplication without becoming executable material itself.
 
-The artifact remains `{meta, graph}` ingest V1. Complete action and recovery state lives under `meta.extra.scan_execution`. The same file is strictly encoded and atomically replaced after each meaningful transition. There are no engagement directories, witness files, campaign artifacts, encrypted outputs, or receipt sidecars.
+## Analysis server
 
-`scan_execution.exclusions` records the immutable network boundary for standalone recovery. Recovery rebuilds its guarded clients from that field instead of creating an unrestricted policy.
+The server validates and scopes collector input, writes raw observations to Neo4j, rebuilds composite relationships, stores scan and finding state in PostgreSQL, and publishes one coherent analysis revision. PostgreSQL and Neo4j are bound as one storage pair.
 
-A reversible ContextForge candidate uses an exclusive mutation lease. Recovery state is checkpointed before the write, applied state immediately after it, and restored state only after independent confirmation. Cleanup gets a detached 90-second context. Unresolved cleanup stops forward planning.
+The REST API and embedded React application read the published projection for operator analysis. Raw administrative Cypher remains available through the server CLI and query API.
 
-Collector coverage declarations and outcomes are validated before each checkpoint. Partial graphs remain useful evidence, but partial structured failures never become successful action outcomes. Protocol discovery persists its positive MCP/A2A observations and keeps protocol identity in target deduplication.
-
-## Graph proof
-
-The collector emits `CREDENTIAL_ACCESS_OBSERVED` for a successful unauthenticated-denied/authenticated-allowed read of the exact MCPResource. Server post-processing correlates the exact Credential and resource against a current `CAN_REACH` path, upgrades that relationship in place, and exposes generic proof as `evidence.proof`.
-
-## Server and dashboard
-
-The server retains ingest validation, normalization, graph writes, reconciliation, post-processors, risk scores, findings, scan history, triage, rules, queries, and file import. Complete execution data is stored in `metadata.artifact_extra.scan_execution`; a bounded summary is promoted to `metadata.scan_execution` for scan history.
-
-The dashboard changes only where the collector contract changes: same-scan proof wording, execution summary, the new proof edge, and masking/reveal/copy for exact Credential `value`. Navigation and analysis workflows remain intact.
+See [Server Analysis](server-analysis.md) for the publication lifecycle and [Graph Model](../reference/graph-model.md) for the data contract.

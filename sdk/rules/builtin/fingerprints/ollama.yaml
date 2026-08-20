@@ -1,8 +1,7 @@
 # Ollama fingerprint rule.
 #
 # Identifies an Ollama LLM inference server. Default port 11434, no
-# authentication by default — see docs/plans/sprint3-offensive-primitives.md
-# 2.1 for the protocol context. /api/version returns deterministic version
+# authentication by default. /api/version returns deterministic version
 # JSON, while /api/tags supplies the Ollama-specific model inventory shape.
 # Both are required because Open WebUI also exposes /api/version.
 #

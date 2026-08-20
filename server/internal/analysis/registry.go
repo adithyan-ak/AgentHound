@@ -21,8 +21,7 @@ func allProcessors() []PostProcessor {
 		// CAN_REACH edges that span config + LiteLLM service collection
 		// emissions joined on Credential.value_hash. See
 		// cross_service_credential_chain.go for the full path
-		// description; design rationale in
-		// docs/plans/sprint3-offensive-primitives.md 3.7 + 4.5.
+		// description and docs/architecture/server-analysis.md.
 		&processors.CrossServiceCredentialChain{},
 		// ifc_violation reads HAS_ACCESS_TO paths populated earlier and the
 		// raw INGESTS_UNTRUSTED edges; runs after the credential chain,

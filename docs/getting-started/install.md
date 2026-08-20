@@ -1,111 +1,66 @@
-# Installation
+# Install AgentHound
 
-## Prerequisites
+Install the collector on the system where the scan will run. Deploy the analysis server only where you want to ingest and inspect artifacts.
 
-| Tool | Version | Notes |
-|------|---------|-------|
-| Go | 1.25.12+ | Build from source or install with `go install` |
-| Docker + Compose | v2+ | Required for the analysis server (Neo4j + Postgres) |
-| Node.js | 20+ | UI build only (skippable if using Docker or collector-only) |
+## Collector
 
-The **collector** (`agenthound`) has zero runtime dependencies -- single static binary, no DB clients, no outbound network calls except to scan targets. The **server** (`agenthound-server`) requires Neo4j 4.4+ and PostgreSQL 16+, both provided via Docker Compose.
-
-> **Preflight built in.** The newcomer-facing `make` targets — `build`, `build-collector`, `build-server`, `up`, `down`, `docker*`, `standard*`, `seed` — verify their prerequisites before running. (`test`, `lint`, `release`, `clean` and the `prerelease` gate are developer targets and skip the preflight.) `agenthound-server serve` itself probes Neo4j and Postgres on startup. If you see `Neo4j unreachable at bolt://localhost:7687`, the database stack isn't running — bring it up with `docker compose -f docker/docker-compose.yml up -d graph-db app-db` (or `make up` for the full stack). `AGENTHOUND_SKIP_PREFLIGHT=1` bypasses **only** the shell/Make checks; the runtime DB probe inside `agenthound-server` ignores it.
-
-## Homebrew (macOS / Linux)
+The release installer selects the platform archive and installs `agenthound` under `$HOME/.local/bin` by default:
 
 ```bash
-brew install adithyan-ak/agenthound/agenthound            # collector only
-brew install adithyan-ak/agenthound/agenthound-server     # analysis server
+curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.0/install.sh \
+  | AGENTHOUND_VERSION=1.1.0 sh
+export PATH="$HOME/.local/bin:$PATH"
+agenthound version
 ```
 
-Both formulas are published from the verified release candidate. The
-fully-qualified command automatically adds the tap and trusts only the selected
-formula. Multi-arch (amd64 + arm64).
-
-## Docker
-
-Pull pre-built images from GHCR:
+Homebrew is also supported:
 
 ```bash
-docker pull ghcr.io/adithyan-ak/agenthound:latest
-docker pull ghcr.io/adithyan-ak/agenthound-server:latest
+brew install adithyan-ak/agenthound/agenthound
 ```
 
-Or bring up the full stack (server + Neo4j + Postgres) in one command:
+The collector is a static binary and does not require Neo4j, PostgreSQL, Node.js, or a running AgentHound server.
+
+## Analysis server
+
+Docker Compose provides `agenthound-server`, Neo4j, and PostgreSQL:
 
 ```bash
-git clone https://github.com/adithyan-ak/agenthound.git
-cd agenthound
-docker compose -f docker/docker-compose.yml up -d
+curl -sSfL \
+  https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.0/docker/docker-compose.public.yml \
+  -o agenthound-compose.yml
+docker compose -f agenthound-compose.yml -p agenthound up -d --wait
 ```
 
-The server binds `127.0.0.1:8080`. Neo4j is at `bolt://localhost:7687` and
-Postgres at `localhost:5432`. The server creates and verifies its internal
-database-pair UUID automatically; collectors also derive their identity without
-configuration.
+Open `http://127.0.0.1:8080`. The server binds to loopback by default.
+
+Homebrew packages the server separately:
+
+```bash
+brew install adithyan-ak/agenthound/agenthound-server
+```
 
 ## Build from source
 
 ```bash
 git clone https://github.com/adithyan-ak/agenthound.git
 cd agenthound
-make build
-```
-
-This produces two binaries:
-
-- `bin/agenthound` -- collector (~9 MiB stripped, no DB deps)
-- `bin/agenthound-server` -- server (includes embedded UI)
-
-The `build` target runs `build-collector` (pure Go) then `build-server` (which first runs `ui-build` to compile the React SPA into `server/internal/api/ui/dist/`).
-
-To build just the collector (no Node.js required):
-
-```bash
 make build-collector
-# or directly:
-go build -o bin/agenthound ./collector/cmd/agenthound
+make build-server
 ```
 
-## Via `go install`
+The binaries are written to `bin/`. Building the server also builds and embeds the React UI. See [Development setup](../contributing/dev-setup.md) for toolchain requirements and validation commands.
 
-```bash
-go install github.com/adithyan-ak/agenthound/collector/cmd/agenthound@1.0.0
-go install github.com/adithyan-ak/agenthound/server/cmd/agenthound-server@1.0.0
-```
+## Verify a release
 
-The numeric Git tag is an explicit revision for Go rather than a canonical
-`v1.0.0` module version, so Go reports a pseudo-version for this installation.
-Always use the explicit `@1.0.0` revision. Do not use `@latest`: historical
-canonical `v*` versions remain in module proxies, so resolver and cache state can
-produce a different version label or source revision.
-
-## Verify
-
-```bash
-agenthound --version
-agenthound-server --version
-```
-
-GoReleaser archives and containers print the release version and source commit.
-A `go install` build reports Go's pseudo-version and may not include a linker
-commit. A local build without linker overrides prints the compiled development
-defaults.
-
-## Release signatures
-
-Every release artifact is signed with cosign (keyless, GitHub Actions OIDC). Verify:
+Release archives include checksums, a Sigstore bundle, and SPDX SBOMs. Verify the checksum bundle with cosign:
 
 ```bash
 cosign verify-blob \
-    --bundle checksums.txt.sigstore.json \
-    --certificate-identity-regexp 'https://github.com/adithyan-ak/AgentHound/.*' \
-    --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-    checksums.txt
+  --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp 'https://github.com/adithyan-ak/AgentHound/.*' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  checksums.txt
 ```
 
-The signature and Fulcio certificate are bundled into a single
-`checksums.txt.sigstore.json` (cosign v3 format).
-
-SBOMs (SPDX JSON, generated by syft) ship alongside every archive.
+Continue with the [Quickstart](quickstart.md).

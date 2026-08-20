@@ -1,18 +1,19 @@
 # AgentHound modules
 
-Modules supply scanners, fingerprinters, protocol/config collectors, service collectors, and the internal ContextForge reversible adapter used by the autonomous planner.
+Modules provide target scanning, fingerprinting, protocol and configuration collection, service collection, and action adapters for the autonomous planner.
 
-The operator does not select modules. `agenthound scan` fingerprints targets, dispatches applicable collection, reuses compatible credentials, and executes eligible proof actions using fixed normal/deep presets.
+`agenthound scan` selects modules from the current targets, credentials, service kinds, mode, and completed candidate keys. Normal and deep presets keep operator behavior consistent across modules.
 
-Public extension interfaces live under `sdk/action`; registration metadata lives under `sdk/module`. The collector's lightweight `PlannerAction` composes those capabilities without a workflow engine or database.
+Every module must:
 
-Requirements:
-
-- use the shared contact policy for every connection;
+- use the shared contact policy for AgentHound-owned connections;
 - keep collection bounded and deterministic;
-- return ingest V1 graph facts with observation domains;
+- return ingest V1 graph facts with observation domains and honest outcomes;
 - store concrete credential material in `Credential.properties.value`;
-- never add module-specific CLI flags;
-- use the scan artifact journal before any mutation and clean up immediately.
+- preserve parsed authentication schemes for planner compatibility;
+- checkpoint recovery state before mutation and restore immediately;
+- keep the collector dependency and size boundaries intact.
+
+Public action interfaces live in `sdk/action`; registration lives in `sdk/module`. Planner composition lives in the collector orchestration layer.
 
 See [Writing modules](../docs/contributing/modules.md).

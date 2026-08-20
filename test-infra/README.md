@@ -1,13 +1,15 @@
-# Unified collector integration harness
+# Upstream compatibility harness
 
-This manual Docker harness verifies the released product shape against real upstream implementations:
+The Docker harness validates the collector and analysis server against pinned upstream implementations.
 
-1. build the collector and server;
-2. start and independently seed the pinned MCP, A2A, Ollama, vLLM, LangServe, Qdrant, MLflow, LiteLLM, Jupyter, Open WebUI, and ContextForge fixtures;
-3. run one deep active `agenthound scan 10.20.30.0/24`;
-4. run one targetless `agenthound scan --stealth`;
-5. validate plain raw Credential material, execution journals, supported service nodes, removed extraction/campaign graph types, mode behavior, and zero unresolved cleanup;
-6. manually ingest the active artifact into the production PostgreSQL/Neo4j server pair.
+It performs:
+
+1. collector and server builds;
+2. independent startup and seeding of MCP, A2A, Ollama, vLLM, LangServe, Qdrant, MLflow, LiteLLM, Jupyter, Open WebUI, and ContextForge;
+3. one deep active scan of the isolated service network;
+4. one targetless stealth scan;
+5. assertions over raw credentials, scan execution state, supported service nodes, mode boundaries, access proof, and cleanup;
+6. manual ingestion of the active artifact into the production PostgreSQL/Neo4j stack.
 
 Run from the repository root:
 
@@ -15,12 +17,12 @@ Run from the repository root:
 bash test-infra/run-tests.sh
 ```
 
-Retain the stack and generated `test-infra/artifacts/<run-id>/` directory:
+Keep the stack and generated `test-infra/artifacts/<run-id>/` directory for investigation:
 
 ```bash
 bash test-infra/run-tests.sh --keep
 ```
 
-The topology is isolated on the disposable `10.20.30.0/24` Compose bridge. Never repoint its seed scripts at production. The cold run is large because it uses pinned real service images, including CPU vLLM.
+The services run on the disposable `10.20.30.0/24` Compose bridge. Do not point the seed or verification scripts at production systems. The cold run downloads several pinned service images and a CPU vLLM model.
 
-The harness intentionally does not test deleted collector commands, witness export, campaigns, engagement state, output-to-stdout, runtime rule bundles, or GGUF extraction.
+See [UPSTREAMS.md](UPSTREAMS.md) for immutable versions, sources, and the refresh procedure.

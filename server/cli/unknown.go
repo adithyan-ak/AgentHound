@@ -30,7 +30,8 @@ func HandleUnknownCommand() bool {
 		return false
 	}
 	fmt.Fprintf(os.Stderr,
-		"%q lives in the 'agenthound' collector binary — see https://docs.agenthound.io/adr/0001-two-binary-split/\n",
+		"%q is an agenthound collector command; run 'agenthound %s'.\n",
+		verb,
 		verb)
 	os.Exit(1)
 	return true

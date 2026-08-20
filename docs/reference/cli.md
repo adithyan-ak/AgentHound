@@ -1,84 +1,104 @@
 # CLI reference
 
-The collector exposes one normal workflow and one recovery command.
+AgentHound ships a collector and an optional analysis server. Bare invocation shows help.
+
+## Collector
 
 ```text
-agenthound scan [host|CIDR|@targets-file]
+agenthound scan [CIDR|host|@targets-file]
 agenthound revert <scan.json>
 agenthound version
 ```
 
-Bare `agenthound` shows help.
+### `agenthound scan`
 
-## `agenthound scan`
-
-Local configuration, instruction, and credential collection always runs. A positional host, CIDR, or `@targets-file` adds network targets; it never changes the scan into a network-only mode.
-
-With no positional target, AgentHound seeds loopback, active local unicast interfaces, configured endpoints, and standard AI-service ports.
-
-### Flags
+Local configuration, instruction, and credential collection always runs. One positional hostname, IP, CIDR, or `@targets-file` adds network scope.
 
 | Flag | Default | Meaning |
 |---|---:|---|
-| `--deep` | `false` | Add bounded recursive instruction collection, Qdrant payload samples, expensive probes, and active Ollama embedding verification. |
-| `--stealth` | `false` | Disable cross-target credential reuse, compute invocation, tool invocation, mutation, and every other active planner action. |
-| `--timeout <duration>` | `15m` | Overall scan deadline. |
-| `--exclude <value>` | none | Repeatable exact hostname, IP, or CIDR that AgentHound must not contact. Globs and URLs are rejected. |
-| `--insecure` | `false` | Skip TLS certificate verification. It does not bypass exclusions. |
-| `--output <path>` | `scan-<scan_id>.json` | Artifact file. Directories and `-` are rejected. |
-| `--quiet` | `false` | Suppress progress, summary, ingest hint, and discovered-secret output. Errors remain visible. |
+| `--deep` | `false` | Add bounded recursive and high-cost evidence collection. |
+| `--exclude <value>` | none | Exclude an exact hostname, IP, or CIDR; repeatable. |
+| `--insecure` | `false` | Skip TLS certificate verification. |
+| `--output <path>` | `scan-<scan_id>.json` | Write the artifact to a file. Directories and `-` are rejected. |
+| `--quiet` | `false` | Suppress non-error progress and discovered-secret output. |
+| `--stealth` | `false` | Keep the scan read-only and disable credential reuse and active probes. |
+| `--timeout <duration>` | `15m` | Set the overall scan deadline. |
 
-`AGENTHOUND_QUIET=1` has the same effect as `--quiet`. Existing client configuration may still set log level and the default output path; it does not restore removed commands or flags.
+Success exits `0`. Invalid input, checkpoint failure, fatal scan failure, or unresolved cleanup exits nonzero. Independent collection failures remain recorded in the artifact and do not necessarily make the whole scan fail.
 
-### Modes
-
-`scan` is active by default. It collects anonymous data, uses configured authentication on exact configured endpoints, reuses compatible concrete credentials, performs differential MCP resource-access proof, and runs eligible reversible ContextForge description round trips.
-
-`scan --deep` additionally enables expensive read collection and the bounded Ollama embedding invocation.
-
-`scan --stealth` keeps network operations read-only. Protocol-required read-only POSTs remain allowed. Configured credentials may enumerate only their exact configured endpoint. Cross-target credential presentation, model and tool invocation, and mutation are disabled.
-
-`scan --stealth --deep` adds only deep read-only collection.
-
-### Targets files
-
-A targets file is selected by prefixing its path with `@`:
+### `agenthound revert`
 
 ```text
-# comments and blank lines are ignored
-10.20.0.10
-10.20.1.0/24
-ai-gateway.internal
+agenthound revert <scan.json>
 ```
 
-The expanded scan is capped at one million hosts. Multicast targets are rejected.
+Retries unresolved recovery records newest-first using endpoint, TLS, exclusion, and credential data in the artifact. Restored records are skipped. The command exits nonzero while any record remains unresolved.
 
-### Exit and artifact behavior
+### `agenthound version`
 
-AgentHound writes an ingest-valid `running` artifact before local collection. It atomically replaces that same file after each phase, collector result, action transition, and cleanup transition.
+Prints the collector version and build commit. `agenthound --version` provides the same version string.
 
-Independent target and collector failures are recorded and do not stop unrelated work. A checkpoint failure, unresolved mutation cleanup, deadline, or signal stops forward planning. Deadline and signal termination finalize the execution as `interrupted`; other fatal errors use `failed`.
-
-At successful completion the CLI prints:
+## Analysis server
 
 ```text
-Next: agenthound-server ingest <scan.json>
+agenthound-server serve
+agenthound-server ingest <file.json | ->
+agenthound-server query [cypher] [flags]
+agenthound-server version
 ```
 
-There is no collector-side remote ingest and no JSON-to-stdout artifact mode.
+All server commands accept these global flags:
 
-## `agenthound revert <scan.json>`
+| Flag | Default | Meaning |
+|---|---:|---|
+| `--bind <host:port>` | `127.0.0.1:8080` | API and dashboard bind address. |
+| `--cors-origins <list>` | loopback browser origins | Comma-separated allowed browser origins. |
+| `--log-level <level>` | `info` | `debug`, `info`, `warn`, or `error`. |
+| `--neo4j-uri <uri>` | `bolt://localhost:7687` | Neo4j connection URI. |
+| `--neo4j-user <user>` | `neo4j` | Neo4j username. |
+| `--neo4j-password <value>` | `agenthound` | Neo4j password. |
+| `--pg-uri <uri>` | local AgentHound database | PostgreSQL connection URI. |
 
-Strictly decodes a unified scan artifact and retries unresolved recovery records newest-first. It resolves credential values from Credential nodes in the artifact, uses the recorded endpoint and TLS settings, and checkpoints after every attempt.
+### `agenthound-server serve`
 
-The command reconstructs the immutable contact policy from the scan's recorded `exclusions`; recovery cannot contact a destination the original scan was forbidden to contact.
+Starts the REST API and embedded dashboard after validating the PostgreSQL and Neo4j pair.
 
-`prepared` is treated as possibly applied, so live state is observed before any restore. A third-party change produces `conflict` and is never overwritten. Restored records are skipped. The command exits nonzero while any recovery remains unresolved.
+### `agenthound-server ingest`
 
-## `agenthound version`
+Ingests a complete JSON envelope from a file. `-` reads a complete envelope from standard input for automation.
 
-Prints collector version and build commit.
+```bash
+agenthound-server ingest scan-6c6306d5.json
+```
 
-## Removed workflows
+### `agenthound-server query`
 
-The collector does not expose `discover`, `loot`, `extract`, `poison`, `implant`, `campaign`, `rules`, `--commit`, engagement IDs, witness files, authorization prompts, watermarks, or remote-ingest flags. Discovery, service collection, and eligible proof actions are internal scan phases. Runtime rule bundles and specialized GGUF extraction were removed.
+Select exactly one query mode:
+
+```bash
+agenthound-server query 'MATCH (n:MCPServer) RETURN n.name'
+agenthound-server query --prebuilt agents-shell-access
+agenthound-server query --findings --severity high
+agenthound-server query --diff scan-a,scan-b
+agenthound-server query --shortest-path \
+  --from AgentInstance:operator-agent \
+  --to MCPResource:customer-records
+```
+
+| Flag | Meaning |
+|---|---|
+| `--prebuilt <id>` | Run a registered prebuilt query. |
+| `--findings` | List findings. |
+| `--severity <level>` | Filter findings by `critical`, `high`, `medium`, or `low`. |
+| `--diff <scanA,scanB>` | Compare the findings from two scans. |
+| `--shortest-path` | Find a path between `--from` and `--to`. |
+| `--from <Kind:name>` | Select the path source. |
+| `--to <Kind:name>` | Select the path destination. |
+| `--path-mode <mode>` | Use directed `security` traversal or undirected `topology`; default `security`. |
+| `--format <format>` | Emit `table` or `json`; default `table`. |
+| `--fail-on <level>` | Exit `1` when a non-suppressed finding meets the severity threshold. |
+| `--all-findings` | Include accepted-risk and false-positive findings in output. |
+
+### `agenthound-server version`
+
+Prints the server version and build commit. `agenthound-server --version` provides the same version string.

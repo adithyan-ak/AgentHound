@@ -1,84 +1,72 @@
-# AgentHound
+# AgentHound maintainer contract
 
-Offensive security framework for AI agent infrastructure (BloodHound for the agentic stack). Two binaries: `agenthound` (lean collector, ~9.9 MiB) and `agenthound-server` (Neo4j + Postgres + React UI, binds 127.0.0.1:8080).
+AgentHound provides autonomous offensive collection and access verification for AI agent infrastructure.
 
-## Pre-Commit Checks (MANDATORY)
+- `agenthound` is the static foothold-time collector. It scans, plans, verifies, restores, and checkpoints one local JSON artifact.
+- `agenthound-server` manually ingests artifacts, publishes the Neo4j graph and PostgreSQL finding state, and serves the API and dashboard.
+
+## Required checks
+
+Before committing:
 
 ```bash
-gofmt -l .                  # Must produce no output
-go build ./...              # Must pass with zero errors
-go vet ./...                # Must pass with zero warnings
-go test ./... -race         # All tests pass with race detector
+gofmt -l .
+go build ./...
+go vet ./...
+go test ./... -race
+make deps-check
+make size-check
+cd server/ui && npm test && npm run build
 ```
 
-CI also runs: `golangci-lint` (errcheck + gofmt), `govulncheck`, `go-licenses check`, `scripts/deps-check.sh`, `scripts/size-check.sh`.
+`gofmt -l .` must produce no output. Documentation changes also run `make docs-check`.
 
-IMPORTANT: Before any release tag, run `make prerelease` — it gates on all release checks (version-check, gofmt, golangci-lint, vet, govulncheck, go-licenses, build, test -race, deps-check, size-check, slop-check, UI build, cross-compile). Never tag without a passing `make prerelease`.
+Before a release tag, run `make prerelease` and `make docs-check`. Release tags are numeric SemVer without a `v` prefix. The first numeric heading in `CHANGELOG.md` is the version source of truth; `make sync-version` updates the installer pins in `README.md` and `install.sh`.
 
-### Release versioning (single source of truth)
+## Hard boundaries
 
-The first `## X.Y.Z` header in `CHANGELOG.md` is the SSOT for the human-maintained version. Release tags use strict numeric SemVer without a `v` prefix. The binary / Docker / Homebrew versions are injected by GoReleaser from the git tag, so the only strings to bump are the install pins in `install.sh` and `README.md`.
+- The collector must not link `chi`, `pgx`, `neo4j-go-driver`, or `server/internal` packages. `scripts/deps-check.sh` enforces the boundary.
+- The stripped Linux amd64 collector must remain within the budget enforced by `scripts/size-check.sh`.
+- Add every collector package and dependency to `scripts/collector-allowlist.txt`.
+- Allowed dependency licenses are Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0, Unlicense, and Zlib.
+- TLS verification is enabled by default. Every AgentHound-owned connection uses the shared contact policy through the final dial.
+- The server is single-user and binds to loopback by default. OriginGuard protects browser mutations; callers without an `Origin` header are inside the local-process trust boundary.
+- PostgreSQL and Neo4j form one storage pair and must be backed up and restored together.
+- Build the UI before the server so `server/internal/api/ui/dist` contains the files required by `go:embed`.
 
-Release prep: write the new `CHANGELOG.md` section, run `make sync-version` (rewrites both pins from the CHANGELOG), then `make prerelease`. `scripts/version-check.sh` runs as a `prerelease` step (and as a path-filtered CI job on `install.sh` / `README.md` / `CHANGELOG.md` changes); it fails if the pins or the pushed tag disagree with the CHANGELOG, so a mismatched version can never ship.
+## Core invariants
 
-## Key Constraints
+- Node IDs are deterministic SHA-256 identities. Config and MCP collection must emit the same MCPServer identity for the same endpoint.
+- Concrete credentials store raw material in `properties.value` and SHA-256 identity in `properties.value_hash`. Masks, hashes, and unresolved references never become planner input.
+- Collectors return explicit observation domains and honest coverage outcomes. Partial evidence remains useful but cannot be recorded as action success.
+- The planner uses deterministic candidates and completed-key deduplication. It contains no database, workflow language, policy engine, or model dependency.
+- Recovery state is checkpointed into the scan artifact before mutation. Reversible actions restore immediately under a detached cleanup context and confirm the original before planning resumes.
+- A complete raw-domain promotion retires the composite epoch. All registered processors rebuild against the current retained projection before publication.
+- Neo4j writes use UNWIND and MERGE in bounded batches.
 
-- **Deps boundary:** Collector binary MUST NOT link `chi`, `pgx`, `neo4j-go-driver`, or any `server/internal/` code. Enforced by `scripts/deps-check.sh`. Every new module needs its package added to `scripts/collector-allowlist.txt`.
-- **Binary size:** Collector linux/amd64 stripped must stay within baseline + 10% (`scripts/size-check.sh`).
-- **License allowlist:** `Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0, Unlicense, Zlib`.
-- **Neo4j compat:** Schema init detects version via `CALL dbms.components()` — use 4.4 (`ON...ASSERT`) or 5.x (`FOR...REQUIRE`) syntax.
-- **TLS strict default:** Both MCP and A2A modules verify certs by default. `--insecure` opts in.
-- **No application-layer auth:** Server is single-user, localhost-only. `OriginGuard` gates mutating endpoints — browser `Origin` must be in `AGENTHOUND_CORS_ORIGINS`; callers with no `Origin` (curl, the agenthound CLI, cron) pass through.
-- **go:embed constraint:** Go forbids `..` in embed paths. Makefile copies `server/ui/dist` → `server/internal/api/ui/dist` before build.
+## Module registration
 
-## Module Registration
+1. Implement the applicable interface under `sdk/action`.
+2. Register the module with `sdk/module.Register` from its package `init()`.
+3. Blank-import the package in `collector/cmd/agenthound/main.go`.
+4. Add it to `scripts/collector-allowlist.txt`.
+5. Add focused module, contact-policy, graph, and coverage tests.
 
-Modules self-register via `init()`. To add one:
-1. Create `modules/<name>/`
-2. Implement an action interface from `sdk/action/`
-3. Add `register.go` calling `sdk/module.Register(...)`
-4. Blank-import in `collector/cmd/agenthound/main.go`
-5. Add package to `scripts/collector-allowlist.txt`
+The reversible ContextForge implementation backs the `mcp.description.roundtrip` planner action and must use the artifact Journal for recovery transitions.
 
-## Critical Architectural Facts
+## Documentation ownership
 
-- **Node IDs:** Deterministic SHA-256 content-based. MCPServer ID MUST match between Config Collector and MCP Collector (the merge point).
-- **Credential material:** Every observed credential stores its raw material in `properties.value` and its SHA-256 identity in `properties.value_hash`. Masks, hashes, and unresolved references are never written to `value` and never become planner inputs. Provider-only identities may retain `merge_key: "identity"`; cross-service joins exclude them.
-- **Batch writes:** 1000 operations per Neo4j transaction. UNWIND + MERGE pattern.
-- **Composite epochs:** Promoting any complete raw domain retires every composite edge, then all registered processors rebuild from the retained current raw projection. `source_collector` is provenance, not lifecycle ownership.
-- **Post-processor order:** auth_strength → HAS_ACCESS_TO → CAN_EXECUTE → SHADOWS → POISONED_DESCRIPTION → POISONED_INSTRUCTIONS → TAINTS → CAN_REACH → cross_service_credential_chain → IFC_VIOLATION → CAN_EXFILTRATE_VIA → CAN_IMPERSONATE → CONFUSED_DEPUTY → Cross-protocol CAN_REACH → RiskScore.
-- **Mutation safety:** Recovery state is checkpointed into the scan artifact before mutation. Every autonomous round-trip restores immediately under a detached cleanup context and confirms the original before the planner continues.
+| Change | Canonical document |
+|---|---|
+| Commands and flags | `docs/reference/cli.md` |
+| Environment and defaults | `docs/reference/configuration.md` |
+| Scan behavior | `docs/operator/scanner.md` |
+| Node or edge kinds | `docs/reference/graph-model.md` |
+| API behavior | `docs/reference/api.md` and served OpenAPI |
+| Analysis lifecycle | `docs/architecture/server-analysis.md` |
+| Risk formulas | `docs/reference/risk-scoring.md` |
+| Detection coverage | `docs/reference/detection-rules.md` |
+| Module contract | `docs/contributing/modules.md` |
+| Deployment or trust boundary | `docs/operator/deployment.md` and `docs/operator/security.md` |
 
-## Documentation Updates
-
-IMPORTANT: When making changes that affect any of these, update the corresponding doc:
-- New node/edge kinds → `docs/reference/graph-model.md`
-- New CLI flags or verbs → `docs/reference/cli.md`
-- New env vars or config → `docs/reference/configuration.md`
-- New modules → `docs/contributing/modules.md` (if pattern changes)
-- New post-processors → `docs/architecture/post-processors.md`
-- API endpoint changes → `docs/reference/api.md`
-- Risk scoring changes → `docs/reference/risk-scoring.md`
-- New detection rules → `docs/reference/detection-rules.md`
-- Deployment changes → `docs/operator/deployment.md`
-- Security posture changes → `docs/operator/security.md`
-- New docs page → add it to the `nav` in `mkdocs.yml` (Docs CI runs `mkdocs build --strict` on every docs PR, so an orphan page, broken link, or bad anchor fails the build; run `make docs-check` locally first).
-
-## Quick Reference
-
-| What | Where |
-|------|-------|
-| All docs | `docs/README.md` (navigation hub) |
-| Graph schema (nodes, edges, IDs) | `docs/reference/graph-model.md` |
-| CLI flags | `docs/reference/cli.md` |
-| Module authoring guide | `docs/contributing/modules.md` |
-| Architecture deep-dive | `docs/architecture/` |
-| Ingest wire format | `sdk/ingest/` (Node, Edge, IngestData, GraphData) |
-| Action interfaces | `sdk/action/` (Fingerprinter, ServiceCollector, Poisoner) |
-| Module registry | `sdk/module/` (Register, Get, ListByAction) |
-| Post-processors | `server/internal/analysis/processors/` |
-| Neo4j writer | `server/internal/graph/writer.go` |
-
-## Tech Stack
-
-Go 1.25.12 | cobra | chi/v5 | Neo4j 4.4+ | PostgreSQL 16 | pgx/v5 | MCP Go SDK v1.6.1 | React 18 + Vite 8 + React Flow + ELK | shadcn/ui + Zustand 5 + TanStack Query 5 | Docker Compose | GoReleaser v2 + cosign | Apache 2.0
+Every page under `docs/` belongs in `mkdocs.yml`; strict Docs CI rejects broken links, bad anchors, and orphan pages.

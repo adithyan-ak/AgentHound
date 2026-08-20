@@ -2277,7 +2277,7 @@ paths:
     get:
       summary: Finding detail
       description: >-
-        Returns a typed detector witness and context for a finding in the
+        Returns the typed evidence subgraph and context for a finding in the
         immutable currently published snapshot. Mutable Neo4j is never used as
         a detail fallback.
       operationId: getFindingDetail

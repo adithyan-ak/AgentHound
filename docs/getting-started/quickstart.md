@@ -1,66 +1,58 @@
 # Quickstart
 
-## 1. Install the collector
+## 1. Run a scan
 
-```bash
-curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
-agenthound version
-```
-
-## 2. Run one scan
-
-The default is active and needs no server:
+An active targetless scan is the fastest useful starting point:
 
 ```bash
 agenthound scan
 ```
 
-This collects local configuration and instruction sources, saves concrete raw credentials, seeds local and configured targets, discovers reachable services, and executes eligible same-run proofs. It continuously updates `scan-<scan_id>.json`.
+It collects local MCP configuration, instruction sources, and credentials; seeds loopback, active local interfaces, and configured endpoints; discovers supported AI services; and runs eligible same-scan access proofs.
 
-To add network scope:
+Add network scope when needed:
 
 ```bash
 agenthound scan 10.20.0.0/24
+agenthound scan @targets.txt --deep --exclude 10.20.0.15
 ```
 
-For read-only collection:
+Use stealth mode when the operation must remain read-only:
 
 ```bash
 agenthound scan --stealth
 ```
 
-For recursive and expensive collection:
+## 2. Preserve the result
 
-```bash
-agenthound scan 10.20.0.0/24 --deep --exclude 10.20.0.15
-```
+The collector continuously updates `scan-<scan_id>.json`. The artifact contains the collected graph, raw credential values, action outcomes, and any recovery records.
 
-## 3. Inspect the operational result
-
-The CLI prints newly discovered raw credential values unless `--quiet`, followed by node, edge, action, and unresolved-cleanup counts. The plain JSON artifact contains the graph and `meta.extra.scan_execution` action/recovery journal.
-
-If cleanup remains unresolved, retain the artifact and retry:
+The final summary reports nodes, edges, actions, and unresolved cleanup. If cleanup needs another attempt, keep the artifact and run:
 
 ```bash
 agenthound revert scan-<scan_id>.json
 ```
 
-## 4. Optionally ingest later
+## 3. Ingest for full analysis
 
-Start the server/UI:
-
-```bash
-curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/main/docker/docker-compose.public.yml \
-  | docker compose -f - -p agenthound up -d --wait
-```
-
-Ingest manually:
+Start the optional analysis stack:
 
 ```bash
-agenthound-server ingest scan-<scan_id>.json
+curl -sSfL \
+  https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.0/docker/docker-compose.public.yml \
+  -o agenthound-compose.yml
+docker compose -f agenthound-compose.yml -p agenthound up -d --wait
 ```
 
-Open `http://127.0.0.1:8080`. The dashboard adds full-graph paths, findings, risk, queries, history, and triage. Credential values are masked in normal node properties but are one click from Reveal or Copy.
+Move the artifact to that system and ingest it:
 
-The server is not involved in the foothold-time planner and does not need to be reachable during collection.
+```bash
+docker compose -f agenthound-compose.yml -p agenthound exec -T agenthound \
+  agenthound-server ingest - < scan-6c6306d5.json
+```
+
+If `agenthound-server` is installed directly on the analysis host, use `agenthound-server ingest scan-6c6306d5.json` instead.
+
+Open `http://127.0.0.1:8080` to inspect attack paths, findings, risk, queries, history, and triage. Credential values are masked in the normal property view and remain available through Reveal and Copy.
+
+Next, read the [Scanner guide](../operator/scanner.md) for targeting and mode details or [Attack paths](../operator/attack-paths.md) for analysis.

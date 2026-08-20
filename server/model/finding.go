@@ -56,7 +56,7 @@ type FindingProof struct {
 	CleanupStatus               string `json:"cleanup_status"`
 }
 
-// ExactFindingEvidence is the detector-selected witness snapshot captured
+// ExactFindingEvidence is the detector-selected evidence snapshot captured
 // before publication. It is persisted with the finding so detail responses do
 // not re-run a similar-but-different graph query against a mutable projection.
 type ExactFindingEvidence struct {

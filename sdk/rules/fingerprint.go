@@ -24,9 +24,8 @@ import (
 // It is a sibling of the v1 Rule type (which targets text-field matching
 // inside the existing collectors): a fingerprint rule describes an HTTP
 // probe sequence and a set of matchers that classify the response. When
-// every required matcher passes, the rule emits one or more node kinds
-// (multi-label per Section 3.5 of docs/plans/sprint3-offensive-primitives.md)
-// plus a property bag.
+// every required matcher passes, the rule emits one identity-owning kind,
+// approved umbrella labels, and a property bag.
 //
 // Fingerprint rules live under sdk/rules/builtin/fingerprints/*.yaml and
 // are loaded by LoadFingerprints. They never appear in Engine.Rules() —
@@ -122,9 +121,8 @@ type FingerprintResult struct {
 // and returns the parsed rules. The loader skips files that fail to
 // parse (logging is the caller's job).
 //
-// When the process-global bundle override is set via
-// SetBundleOverridePath (CLI --rules-bundle), bundle rules are merged
-// over the embedded set with same-id rules from the bundle winning.
+// A process-global override hook is available to SDK callers and isolated
+// tests. When set, override rules merge over the embedded set by ID.
 // See sdk/rules/bundle.go for the merge primitives.
 func LoadFingerprints() ([]FingerprintRule, error) {
 	override := getBundleOverridePath()
@@ -324,10 +322,9 @@ func RunFingerprint(ctx context.Context, client *http.Client, baseURL string, ru
 		clone.Timeout = 0
 		client = &clone
 	}
-	// Fingerprinter modules are registered during package init, before Cobra's
-	// persistent pre-run resolves --rules-bundle. Resolve a same-ID override at
-	// execution time from the cached effective set so the rule manifest and the
-	// semantics actually run by the collector cannot drift.
+	// Fingerprinter modules can be registered before an SDK caller installs an
+	// override. Resolve a same-ID override at execution time so the effective
+	// rule manifest and executed semantics cannot drift.
 	if rule.Source == BundleSourceBuiltin && getBundleOverridePath() != "" {
 		effective, err := LoadFingerprints()
 		if err != nil {

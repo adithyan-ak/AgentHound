@@ -1,20 +1,29 @@
 # Writing modules
 
-The public workflow is fixed: every module contributes to `agenthound scan`. Do not add a module-specific CLI verb or flags.
+Modules contribute capabilities to `agenthound scan`. The collector owns orchestration and chooses applicable modules from accumulated evidence.
 
-## Module categories
+## Module types
 
-- `Scanner`: expands bounded target scope.
-- `Fingerprinter`: identifies a concrete endpoint and returns graph evidence.
-- Config/MCP/A2A collectors: parse local configuration or enumerate protocol state.
-- `ServiceCollector`: performs deeper service-specific collection after fingerprinting.
-- `PlannerAction`: generates and executes autonomous candidates using the accumulated local view.
+| Type | Responsibility |
+|---|---|
+| Scanner | Expand and probe bounded target scope. |
+| Fingerprinter | Identify a concrete service endpoint. |
+| Config/MCP/A2A collector | Parse local configuration or enumerate protocol state. |
+| ServiceCollector | Collect service-specific inventory and content. |
+| PlannerAction | Generate and execute autonomous candidates over the current local view. |
 
-The CLI keeps orchestration concrete. Do not introduce a generic workflow engine, DAG schema, policy language, LLM planner, or database dependency.
+The orchestration remains concrete Go code. Module additions must not introduce a workflow language, database, policy engine, or model-driven planner.
 
-## Service collectors
+## Registration
 
-Implement `sdk/action.ServiceCollector` and `sdk/module.Module`, then register the collector from its package:
+1. Create `modules/<name>/`.
+2. Implement `sdk/module.Module` and the applicable interface from `sdk/action`.
+3. Register the module in `init()` with `module.Register`.
+4. Blank-import the package from `collector/cmd/agenthound/main.go`.
+5. Add its packages to `scripts/collector-allowlist.txt`.
+6. Add focused fixtures and tests.
+
+Service collectors implement `sdk/action.ServiceCollector`:
 
 ```go
 type Collector struct{}
@@ -29,15 +38,35 @@ func (*Collector) Collect(
     target action.Target,
     opts action.CollectOptions,
 ) (*action.CollectResult, error) {
-    // bounded, target-specific collection
+    // bounded target-specific collection
 }
 ```
 
-Normal and deep behavior comes from fixed planner presets. A collector must not read removed module-specific CLI flags.
+Normal and deep behavior comes from planner presets. Modules do not define their own operator flags.
+
+## Network boundary
+
+Every AgentHound-owned connection must use `sdk/contact` from request construction through the final dial. This includes redirects, derived URLs, management and cleanup clients, and JWKS retrieval.
+
+Do not use `http.DefaultClient`, an unguarded `http.Transport`, or a bare `net.Dialer`. Tests must demonstrate zero requests to an excluded configured endpoint, resolved IP, and redirect destination.
+
+## Graph results
+
+Return ingest V1 graph facts with deterministic IDs and explicit observation domains. Every collection outcome needs a matching coverage declaration owned by the same collector prefix.
+
+Preserve useful graph data returned with a structured partial error, but propagate the error so the planner does not record a false success.
+
+Credential nodes follow these rules:
+
+- Concrete material goes in `properties.value`.
+- `properties.value_hash` is SHA-256 of the concrete material.
+- Masked, hashed, and unresolved references retain their honest material status and omit `value`.
+- Executable material retains its parsed `auth_method`.
+- Candidate adapters accept explicit authentication schemes rather than inferring compatibility from names or hashes.
 
 ## Planner actions
 
-Planner actions live in the collector orchestration layer when they compose existing modules. They implement:
+Planner actions expose deterministic, side-effect-free candidate generation and bounded execution:
 
 ```go
 type PlannerAction interface {
@@ -47,58 +76,27 @@ type PlannerAction interface {
 }
 ```
 
-Candidate generation must be deterministic and side-effect free. A key binds module ID, canonical target, credential value hash or anonymous identity, resource/tool ID, and deep mode. Raw execution inputs remain memory-only.
+An action needs self-contained prerequisites, a specific target and credential contract, a meaningful oracle, bounded time and output, and an autonomous input strategy. Mutating actions also need exact recovery data and independent confirmation of restoration.
 
-Only add an autonomous action when it has:
+Mutation recovery uses the supplied Journal:
 
-- self-contained prerequisites;
-- a specific target and compatible credential contract;
-- a meaningful observable oracle;
-- bounded time and output;
-- no operator-generated payload requirement;
-- immediate, independently confirmed cleanup for mutation.
+1. Prepare exact original state and credential references.
+2. Require a successful checkpoint before the first write.
+3. Mark and checkpoint the applied state immediately after the write.
+4. Run the oracle.
+5. Restore under a detached bounded context.
+6. Confirm the original independently.
+7. Mark and checkpoint restoration.
 
-Instruction poisoning and config implantation were removed because the collector cannot autonomously choose a meaningful attacker payload or endpoint.
-
-## Contact policy
-
-Every AgentHound-owned connection must carry the scan context and use `sdk/contact` at both request and final-dial boundaries. Never create `http.DefaultClient`, an unguarded `http.Transport`, or a bare `net.Dialer` in module code.
-
-Derived URLs, redirects, cleanup clients, and JWKS retrieval are in scope. Tests must prove an excluded configured endpoint and an excluded redirect destination receive zero requests.
-
-## Graph and credentials
-
-Return ingest V1 graph facts with explicit observation domains. Credential nodes store concrete raw material in `properties.value` and its stable identity in `properties.value_hash`. Never place a mask, hash, or unresolved reference in `value`.
-
-Service result ownership is attached to the scan observation that triggered it; planner execution does not publish a second artifact envelope.
-
-Every emitted coverage outcome must have a matching declaration owned by the same collector prefix, and every declaration must have an outcome. Preserve a useful graph returned alongside structured partial errors, but return the partial error to the planner so the action is not recorded as successful.
-
-Executable credential nodes must preserve the parsed `auth_method`. Candidate adapters must explicitly accept that scheme; never infer Bearer compatibility from a field name or from another credential with the same value hash.
-
-## Mutation journal
-
-Mutation recovery must go through the passed `Journal`:
-
-1. `Prepare` exact original state and credential references;
-2. checkpoint success is required before the first write;
-3. `MarkApplied` immediately after the write;
-4. run the oracle;
-5. restore immediately under a detached bounded context;
-6. confirm original state independently;
-7. `MarkRestored`.
-
-Do not create receipt files, state directories, engagement identifiers, confirmation sentinels, or separate recovery artifacts.
+The action holds the exclusive mutation lease through cleanup. It must not create separate recovery files.
 
 ## Verification
 
-Run focused package tests, then:
-
 ```bash
-go test ./... -race
+go test ./modules/<name> ./sdk/... -race
 go vet ./...
 make deps-check
 make size-check
 ```
 
-The final collector must also cross-compile without CGO for Linux amd64, Darwin arm64, and Windows amd64.
+The collector must continue to cross-compile without CGO for supported Linux, macOS, and Windows targets.

@@ -18,7 +18,7 @@ func BuildRemediation(path *AttackPath, f *model.Finding) []RemediationStep {
 		nodes[node.ID] = node
 	}
 	// Finding-level advice carries detector variant/channel semantics that no
-	// individual witness hop can recover. Retain it alongside hop-specific
+	// individual evidence hop can recover. Retain it alongside hop-specific
 	// advice instead of discarding it whenever a path is present.
 	steps := buildFindingScopedRemediation(f)
 	steps = append([]RemediationStep(nil), steps...)

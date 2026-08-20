@@ -9,12 +9,6 @@ edit_uri: edit/main/docs/
 
 docs_dir: docs
 
-# Internal-only docs: kept in-repo, excluded from the public site + nav.
-# (Squash/relocate later — see CLAUDE.md.)
-exclude_docs: |
-  cfp/
-  plans/
-
 theme:
   name: material
   icon:
@@ -110,21 +104,13 @@ nav:
       - CLI: reference/cli.md
       - API: reference/api.md
       - Graph Model: reference/graph-model.md
-      - Edges:
-          - CAN_REACH: reference/edges/can-reach.md
-          - CAN_EXFILTRATE_VIA: reference/edges/can-exfiltrate-via.md
-          - SHADOWS: reference/edges/shadows.md
       - Detection Rules: reference/detection-rules.md
-      - Rule Syntax: reference/rule-syntax.md
       - Configuration: reference/configuration.md
       - Risk Scoring: reference/risk-scoring.md
   - Architecture:
       - System Design: architecture/system-design.md
-      - Ingest Pipeline: architecture/ingest-pipeline.md
-      - Post-Processors: architecture/post-processors.md
+      - Server Analysis: architecture/server-analysis.md
   - Contributing:
       - Development Setup: contributing/dev-setup.md
       - Writing Modules: contributing/modules.md
       - Authoring Rules: contributing/authoring-rules.md
-  - Decisions:
-      - ADR-0001 Two-Binary Split: adr/0001-two-binary-split.md

@@ -183,7 +183,7 @@ func withHTTPTransportDeadline(transport mcpsdk.Transport, deadline time.Time) m
 // configured headers. MCP target URLs may legitimately carry userinfo, query,
 // or a client-side fragment: those bytes remain identity/transport input but
 // must not enter the public origin parser, which intentionally rejects them for
-// campaign endpoints. The sanitizer preserves the exact origin while removing
+// management endpoints. The sanitizer preserves the exact origin while removing
 // only components that cannot affect it.
 func parseMCPHTTPOrigin(rawURL string) (common.HTTPOrigin, error) {
 	safeEndpoint := ingest.SanitizeHTTPEndpoint(rawURL)

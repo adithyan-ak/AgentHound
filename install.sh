@@ -2,7 +2,8 @@
 # AgentHound collector installer.
 #
 # Pin to a release tag for integrity:
-#   curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/1.0.0/install.sh | sh
+#   curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.0/install.sh \
+#     | AGENTHOUND_VERSION=1.1.0 sh
 #
 # Verifies the downloaded archive against checksums.txt before extracting,
 # and against cosign signatures if cosign is available on $PATH.
@@ -75,8 +76,8 @@ else
 fi
 
 # Optional: cosign signature verification.
-# cosign v3 bundles the signature + Fulcio certificate into one
-# checksums.txt.sigstore.json (the old separate .sig/.pem are gone).
+# cosign v3 bundles the signature and Fulcio certificate into one
+# checksums.txt.sigstore.json file.
 if command -v cosign >/dev/null 2>&1; then
   echo "Verifying cosign signature..."
   curl -sSfL -o "${TMPDIR}/checksums.txt.sigstore.json" "${BASE_URL}/checksums.txt.sigstore.json"

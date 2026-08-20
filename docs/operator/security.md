@@ -1,39 +1,37 @@
-# Security and operational behavior
+# Security and OPSEC
 
-AgentHound is designed for an authorized compromised-host workflow. Its priority is completing useful collection and proof during one access window, not building a credential-management product.
+AgentHound is designed for authorized work from a compromised host. Active collection favors completing useful verification during the available access window.
 
-## Plain credentials
+## Plaintext artifacts
 
-Concrete secret material is stored directly in `Credential.properties.value` inside the scan JSON. `value_hash` remains for identity and planner deduplication. Values are not encrypted, wrapped, moved to a second vault, or omitted from the CLI artifact.
+Concrete secrets are stored directly in `Credential.properties.value` and printed once unless `--quiet` is set. The JSON artifact also contains collected service content, topology, action results, and recovery data.
 
-The CLI prints each newly discovered value once unless `--quiet`. The dashboard masks only the exact `value` property on Credential nodes and offers Reveal and Copy. Query results and JSON exports remain literal.
+Store, transport, and delete the artifact under the assessment's existing evidence-handling rules. The dashboard masks Credential `value` in the normal property view and provides Reveal and Copy; explicit query output and JSON export remain literal.
 
-Masked provider references, hashes, and unresolved environment or vault references remain represented as such and are never mislabeled as concrete secrets.
+## Active and stealth modes
 
-## Active versus stealth
+Active mode can reuse compatible credentials, perform differential MCP reads, invoke the deep Ollama embedding probe, and run an eligible reversible ContextForge marker round trip.
 
-Active mode is the default. It may present compatible credentials to other supported endpoints, perform differential authenticated reads, invoke a bounded Ollama embedding probe in deep mode, and run a reversible ContextForge description marker round trip.
+`--stealth` keeps collection read-only. It permits anonymous requests, exact configured authentication, and protocol-required read-only POSTs. Cross-target credential presentation, model and tool invocation, and mutation are disabled.
 
-`--stealth` disables cross-target reuse and actions. It still permits anonymous collection, exact configured authentication, GETs, and protocol-required read-only POSTs. `--stealth --deep` adds deep read-only collection only.
+## Exclusions
 
-## Network exclusion boundary
+The contact policy checks exact hostnames, IPs, CIDRs, DNS results, redirects, derived URLs, cleanup requests, and final dials. The same normalized policy is recorded for standalone recovery.
 
-One immutable contact policy is built before any network-capable phase. It checks configured targets before enumeration, every discovered or planner-derived target before insertion, and concrete DNS results immediately before dialing. HTTP requests and redirects, service clients, MCP/A2A, cleanup, and JWKS retrieval all use guarded transports.
+The boundary covers AgentHound-owned network connections. A local stdio MCP process is an external child process and is not network-sandboxed by the collector.
 
-The normalized exclusions are persisted in `meta.extra.scan_execution.exclusions`. Standalone recovery reconstructs the same policy; it does not silently broaden the original scan boundary.
+## Reversible actions
 
-The guarantee is limited to AgentHound-owned network connections. AgentHound does not claim to network-sandbox an external stdio MCP process.
+Recovery state is checkpointed before mutation. The action restores immediately under a separate 90-second cleanup context and confirms the original before the planner continues. Unresolved cleanup stops forward work.
 
-## Recovery
+Use the same artifact for a later recovery attempt:
 
-Recovery records live in `meta.extra.scan_execution.recovery` in the same artifact. There are no engagement directories or receipt sidecars.
+```bash
+agenthound revert scan-<scan_id>.json
+```
 
-A mutator must checkpoint `prepared` before writing. It marks and checkpoints `applied` immediately after the write, then restores and confirms the original before returning. Forward cancellation cannot cancel cleanup; cleanup receives its own 90-second context.
+The command observes live state first and refuses to overwrite a third-party change.
 
-If recovery is uncertain, AgentHound stops forward planning. `agenthound revert <scan.json>` observes current state and restores only when the recorded original can be applied without overwriting a third-party change.
+## Analysis server
 
-Restoration is complete only after the independent confirmation succeeds. A partially verified restore remains `indeterminate` and eligible for retry.
-
-## Data handling
-
-The artifact contains secrets and collected service content. Handle or delete it according to the assessment's existing data rules. AgentHound itself deliberately adds no output encryption, public-key workflow, secret service, permission layer, or reveal endpoint.
+`agenthound-server` has no application login and binds to `127.0.0.1:8080` by default. Use an SSH tunnel, private mesh, or authenticated reverse proxy for remote access. Keep PostgreSQL and Neo4j private and back them up as one pair.

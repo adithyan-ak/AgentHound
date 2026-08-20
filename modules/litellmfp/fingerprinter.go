@@ -9,10 +9,10 @@
 // dispatcher that loads that YAML, locates it by service_kind, and
 // runs it via sdk/rules.RunFingerprint.
 //
-// Once a LiteLLMGateway is in the
-// graph, the operator runs `agenthound loot --type litellm` against it
-// to inventory the observed master key, masked provider references, and
-// hashed virtual-key references.
+// Once a LiteLLMGateway is in the graph, the scan planner dispatches the
+// LiteLLM service collector with compatible master-key material to inventory
+// the observed master key, masked provider references, and hashed virtual-key
+// references.
 package litellmfp
 
 import (
