@@ -109,7 +109,7 @@ func TestExtractCredentials_RulesEngine(t *testing.T) {
 
 	engine := testConfigEngine(t)
 
-	creds := ExtractCredentials(env, nil, "/test/config.json", false, engine)
+	creds := ExtractCredentials(env, nil, "/test/config.json", engine)
 
 	if len(creds) != 2 {
 		t.Fatalf("expected 2 credentials, got %d", len(creds))

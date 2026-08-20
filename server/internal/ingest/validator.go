@@ -88,6 +88,12 @@ func Preflight(data *ingest.IngestData) error {
 			Action:    produceV1ArtifactAction,
 		}
 	}
+	if _, legacyCampaign := data.Meta.Extra["campaign_artifact"]; legacyCampaign {
+		return &ValidationError{Errors: []FieldError{{
+			Path:    "meta.extra.campaign_artifact",
+			Message: "legacy campaign artifacts are unsupported; produce a unified scan artifact",
+		}}}
+	}
 	return preflightRegistryContracts(data.Meta.Collection)
 }
 
@@ -100,6 +106,14 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 		return err
 	}
 	var errs []FieldError
+	if value, present := data.Meta.Extra[ingest.ScanExecutionExtraKey]; present {
+		if _, err := ingest.DecodeScanExecution(value); err != nil {
+			errs = append(errs, FieldError{
+				Path:    "meta.extra.scan_execution",
+				Message: err.Error(),
+			})
+		}
+	}
 	declaredCoverage := make(map[string]bool)
 	coverageOutcomes := make(map[string]bool)
 	if data.Meta.Collection == nil {
@@ -458,6 +472,9 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 			// with no default and no compatibility fallback — turns that
 			// endpoint-time 500 into a rejected import.
 			errs = append(errs, validateEdgeRiskWeight(edge.Properties, i)...)
+		}
+		if edge.Kind == "CREDENTIAL_ACCESS_OBSERVED" {
+			errs = append(errs, validateCredentialAccessProof(edge.Properties, i)...)
 		}
 		errs = append(errs, validateStdioChildID(nodesByID, edge, i)...)
 	}
@@ -2092,6 +2109,97 @@ func validateCredentialProperties(properties map[string]any, index int) []FieldE
 	case "exposed", "not_observed", "unknown":
 	default:
 		errs = append(errs, FieldError{Path: path + "exposure_status", Message: "invalid credential exposure status"})
+	}
+	if rawValue, present := properties["value"]; present {
+		value, ok := rawValue.(string)
+		if !ok || value == "" {
+			errs = append(errs, FieldError{Path: path + "value", Message: "must be a non-empty string when present"})
+		} else if valueHash != common.HashCredentialValue(value) {
+			errs = append(errs, FieldError{Path: path + "value_hash", Message: "must equal the hash of Credential.value"})
+		}
+		if mergeKey != "value_hash" {
+			errs = append(errs, FieldError{Path: path + "merge_key", Message: "must be value_hash when Credential.value is present"})
+		}
+		if identityBasis != "value_hash" {
+			errs = append(errs, FieldError{Path: path + "identity_basis", Message: "must be value_hash when Credential.value is present"})
+		}
+		if material != string(common.CredentialMaterialObserved) {
+			errs = append(errs, FieldError{Path: path + "material_status", Message: "must be observed when Credential.value is present"})
+		}
+		if exposure != string(common.CredentialExposureExposed) {
+			errs = append(errs, FieldError{Path: path + "exposure_status", Message: "must be exposed when Credential.value is present"})
+		}
+	}
+	return errs
+}
+
+func validateCredentialAccessProof(properties map[string]any, index int) []FieldError {
+	path := fmt.Sprintf("graph.edges[%d].properties.", index)
+	var errs []FieldError
+
+	requireString := func(key, expected string) string {
+		value, ok := properties[key].(string)
+		if !ok || strings.TrimSpace(value) == "" {
+			errs = append(errs, FieldError{Path: path + key, Message: "must be a non-empty string"})
+			return ""
+		}
+		if expected != "" && value != expected {
+			errs = append(errs, FieldError{Path: path + key, Message: fmt.Sprintf("must be %q", expected)})
+		}
+		return value
+	}
+	requireBool := func(key string) (bool, bool) {
+		value, ok := properties[key].(bool)
+		if !ok {
+			errs = append(errs, FieldError{Path: path + key, Message: "must be a boolean"})
+		}
+		return value, ok
+	}
+
+	if composite, ok := requireBool("is_composite"); ok && composite {
+		errs = append(errs, FieldError{Path: path + "is_composite", Message: "must be false"})
+	}
+	if confidence, ok := numericFloat(properties["confidence"]); !ok || confidence != 1.0 {
+		errs = append(errs, FieldError{Path: path + "confidence", Message: "must be 1"})
+	}
+	if weight, ok := numericFloat(properties["risk_weight"]); !ok || weight != 0.1 {
+		errs = append(errs, FieldError{Path: path + "risk_weight", Message: "must be 0.1"})
+	}
+	requireString("action_id", "")
+	requireString("action", "credential_reach")
+	verifiedAt := requireString("verified_at", "")
+	if verifiedAt != "" {
+		if _, err := time.Parse(time.RFC3339, verifiedAt); err != nil {
+			errs = append(errs, FieldError{Path: path + "verified_at", Message: "must be an RFC3339 timestamp"})
+		}
+	}
+	requireString("proof_type", "differential_resource_read")
+	requireString("outcome", "credential_required")
+	controlStage := requireString("control_stage", "")
+	if controlStage != "" && controlStage != "initialize" && controlStage != "resource_read" {
+		errs = append(errs, FieldError{Path: path + "control_stage", Message: "must be initialize or resource_read"})
+	}
+	requireString("control_status", "denied")
+	controlAddressed, controlAddressedOK := requireBool("control_resource_addressed")
+	if controlAddressedOK && ((controlStage == "initialize" && controlAddressed) ||
+		(controlStage == "resource_read" && !controlAddressed)) {
+		errs = append(errs, FieldError{Path: path + "control_resource_addressed", Message: "must be false for initialize and true for resource_read"})
+	}
+	requireString("credential_stage", "resource_read")
+	requireString("credential_status", "allowed")
+	if addressed, ok := requireBool("credential_resource_addressed"); ok && !addressed {
+		errs = append(errs, FieldError{Path: path + "credential_resource_addressed", Message: "must be true"})
+	}
+	requireString("cleanup_status", "not_applicable")
+
+	for _, legacy := range []string{
+		"scenario_id", "scenario_version", "run_id", "campaign_run_id", "engagement_id",
+		"oracle_type", "witness_fingerprint", "credential_value_hash", "credential_id",
+		"agent_id", "server_id", "resource_id", "evidence_node_ids", "evidence_node_kinds",
+	} {
+		if _, present := properties[legacy]; present {
+			errs = append(errs, FieldError{Path: path + legacy, Message: "campaign/witness property is not allowed on unified scan proof"})
+		}
 	}
 	return errs
 }

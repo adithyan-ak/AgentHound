@@ -13,11 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/pflag"
-
 	"github.com/adithyan-ak/agenthound/modules/mcp"
 	"github.com/adithyan-ak/agenthound/sdk/action"
-	"github.com/adithyan-ak/agenthound/sdk/module"
 )
 
 const DefaultProbeTimeout = contextForgeTimeout
@@ -30,34 +27,34 @@ var (
 )
 
 type Poisoner struct {
-	stateful     module.StatefulModule
-	campaign     bool
+	receipts     ReceiptJournal
+	afterWrite   func(*action.PoisonReceipt) error
 	pollInterval time.Duration
 	pollAttempts int
 }
 
 func New() *Poisoner {
 	return &Poisoner{
-		stateful:     module.NewFileStatefulModule("mcp.poison"),
 		pollInterval: 250 * time.Millisecond,
 		pollAttempts: 12,
 	}
 }
 
-func NewForCampaign() *Poisoner {
-	p := New()
-	p.campaign = true
-	return p
+// ReceiptJournal is the mutator's single crash-safety boundary. The autonomous
+// scan injects an artifact-backed implementation; no module sidecar exists.
+type ReceiptJournal interface {
+	WriteReceipt(string, action.Receipt) (string, error)
+	ReadReceipts(string) ([]action.Receipt, error)
 }
 
-func (p *Poisoner) Stateful() module.StatefulModule { return p.stateful }
+func (p *Poisoner) SetReceiptJournal(journal ReceiptJournal) { p.receipts = journal }
 
-func (p *Poisoner) SetStateful(stateful module.StatefulModule) { p.stateful = stateful }
-
-func (*Poisoner) RegisterFlags(fs *pflag.FlagSet) {
-	fs.String("adapter", "", `Management adapter; MCP tool-description mutation requires "contextforge".`)
-	fs.String("management-url", "", "Optional ContextForge deployment base; derived from a server-scoped MCP URL when omitted.")
-	fs.Bool("insecure", false, "Skip TLS verification for MCP and ContextForge endpoints.")
+// SetAfterWrite installs the autonomous runner's durability boundary. The
+// callback runs immediately after the management write returns and before any
+// oracle or later planner work. A nil callback preserves the legacy module
+// behavior for callers that do not use the scan artifact journal.
+func (p *Poisoner) SetAfterWrite(callback func(*action.PoisonReceipt) error) {
+	p.afterWrite = callback
 }
 
 // Observation is the dual-surface state used by the standalone poison command
@@ -88,8 +85,8 @@ func (p *Poisoner) Poison(ctx context.Context, target action.Target, payload act
 	if payload.InjectionContent == "" {
 		return nil, errors.New("mcp poison: --inject or --inject-file is required")
 	}
-	if strings.TrimSpace(payload.EngagementID) == "" {
-		return nil, errors.New("mcp poison: --engagement-id is required")
+	if strings.TrimSpace(payload.RunID) == "" {
+		return nil, errors.New("mcp poison: --run id is required")
 	}
 	mode := payload.Mode
 	if mode == "" {
@@ -135,7 +132,7 @@ func (p *Poisoner) Poison(ctx context.Context, target action.Target, payload act
 	if hasAgentHoundForwardAttribution(state.tool.ModifiedUserAgent) {
 		return nil, errors.New("mcp poison: the exact ContextForge row is already attributed to an unrestored AgentHound forward operation; recover that receipt before another mutation")
 	}
-	if err := p.rejectRepeatedEngagementTarget(payload.EngagementID, state); err != nil {
+	if err := p.rejectRepeatedRunTarget(payload.RunID, state); err != nil {
 		return nil, err
 	}
 	receipt, err := newContextForgeReceipt(target, payload, mode, state, updated)
@@ -145,7 +142,10 @@ func (p *Poisoner) Poison(ctx context.Context, target action.Target, payload act
 	if payload.DryRun {
 		return receipt, nil
 	}
-	if _, err := p.stateful.WriteReceipt(payload.EngagementID, receipt); err != nil {
+	if p.receipts == nil {
+		return nil, errors.New("mcp poison: scan recovery journal is required before mutation")
+	}
+	if _, err := p.receipts.WriteReceipt(payload.RunID, receipt); err != nil {
 		return nil, fmt.Errorf("persist receipt before ContextForge mutation: %w", err)
 	}
 
@@ -153,6 +153,11 @@ func (p *Poisoner) Poison(ctx context.Context, target action.Target, payload act
 	response, responseErr := state.client.putDescription(
 		ctx, state.tool.ID, updated, contract.Management.ForwardUserAgent,
 	)
+	if p.afterWrite != nil {
+		if err := p.afterWrite(receipt); err != nil {
+			return receipt, fmt.Errorf("checkpoint applied ContextForge mutation: %w", err)
+		}
+	}
 	if responseErr == nil {
 		if err := validateWriteResponse(response, state.tool, updated, contract.Management.ForwardUserAgent); err != nil {
 			responseErr = err
@@ -213,7 +218,7 @@ func (p *Poisoner) Poison(ctx context.Context, target action.Target, payload act
 	slog.Info("mcp poison applied through ContextForge",
 		"target_id", config.ToolName,
 		"server_id", config.ServerID,
-		"engagement_id", payload.EngagementID,
+		"run_id", payload.RunID,
 	)
 	return receipt, nil
 }
@@ -351,10 +356,11 @@ func (p *Poisoner) Revert(ctx context.Context, receipt action.Receipt) error {
 		MCPURL: contract.MCP.URL, ManagementBase: contract.Management.BaseURL,
 		ServerID: contract.Management.ServerID, ToolName: contract.MCP.ToolName,
 	}
+	config.Token, _ = ctx.Value(contextForgeTokenKey{}).(string)
 	if insecure, _ := ctx.Value(action.RevertInsecureKey{}).(bool); insecure {
 		config.Insecure = true
 	}
-	token, err := resolveContextForgeToken(config.MCPURL, config.ManagementBase)
+	token, err := resolveContextForgeToken(config.MCPURL, config.ManagementBase, config.Token)
 	if err != nil {
 		return fmt.Errorf("mcp poison revert: %w", err)
 	}
@@ -434,10 +440,11 @@ func (p *Poisoner) ObserveReceipt(ctx context.Context, receipt *action.PoisonRec
 		MCPURL: contract.MCP.URL, ManagementBase: contract.Management.BaseURL,
 		ServerID: contract.Management.ServerID, ToolName: contract.MCP.ToolName,
 	}
+	config.Token, _ = ctx.Value(contextForgeTokenKey{}).(string)
 	if insecure, _ := ctx.Value(action.RevertInsecureKey{}).(bool); insecure {
 		config.Insecure = true
 	}
-	token, err := resolveContextForgeToken(config.MCPURL, config.ManagementBase)
+	token, err := resolveContextForgeToken(config.MCPURL, config.ManagementBase, config.Token)
 	if err != nil {
 		return Observation{}, err
 	}
@@ -487,7 +494,7 @@ func (p *Poisoner) ObserveReceipt(ctx context.Context, receipt *action.PoisonRec
 }
 
 func (p *Poisoner) preflight(ctx context.Context, config contextForgeConfig) (preflightState, error) {
-	token, err := resolveContextForgeToken(config.MCPURL, config.ManagementBase)
+	token, err := resolveContextForgeToken(config.MCPURL, config.ManagementBase, config.Token)
 	if err != nil {
 		return preflightState{}, fmt.Errorf("mcp poison: %w", err)
 	}
@@ -575,9 +582,15 @@ func containsExactlyOnce(values []string, expected string) bool {
 }
 
 func (p *Poisoner) observeMCP(ctx context.Context, config contextForgeConfig) (mcp.ToolObservation, error) {
-	authorization, err := resolveMCPAuthorization(config.MCPURL)
-	if err != nil {
-		return mcp.ToolObservation{}, err
+	authorization := ""
+	if strings.TrimSpace(config.Token) != "" {
+		authorization = "Bearer " + strings.TrimSpace(config.Token)
+	} else {
+		var err error
+		authorization, err = resolveMCPAuthorization(config.MCPURL)
+		if err != nil {
+			return mcp.ToolObservation{}, err
+		}
 	}
 	headers := map[string]string{}
 	if authorization != "" {
@@ -662,9 +675,6 @@ func (p *Poisoner) attempts() int {
 }
 
 func (p *Poisoner) clientTimeout() time.Duration {
-	if p.campaign {
-		return 0
-	}
 	return contextForgeTimeout
 }
 
@@ -743,10 +753,13 @@ func composeContent(original, injection, mode string) string {
 	}
 }
 
-func (p *Poisoner) rejectRepeatedEngagementTarget(engagementID string, state preflightState) error {
-	receipts, err := p.stateful.ReadReceipts(engagementID)
+func (p *Poisoner) rejectRepeatedRunTarget(runID string, state preflightState) error {
+	if p.receipts == nil {
+		return nil
+	}
+	receipts, err := p.receipts.ReadReceipts(runID)
 	if err != nil {
-		return fmt.Errorf("mcp poison: read existing engagement receipts before mutation: %w", err)
+		return fmt.Errorf("mcp poison: read existing run receipts before mutation: %w", err)
 	}
 	for _, candidate := range receipts {
 		receipt, ok := normalizeReceipt(candidate)
@@ -757,7 +770,7 @@ func (p *Poisoner) rejectRepeatedEngagementTarget(engagementID string, state pre
 		if contract.Management.BaseURL == state.config.ManagementBase &&
 			contract.Management.ToolID == state.tool.ID &&
 			contract.Management.OriginalDescription != state.tool.Description {
-			return errors.New("mcp poison: this engagement already has a live ContextForge receipt for the exact tool; revert it or use a new engagement ID before poisoning the same row again")
+			return errors.New("mcp poison: this run already has a live ContextForge receipt for the exact tool; revert it or use a new scan run before poisoning the same row again")
 		}
 	}
 	return nil
@@ -813,8 +826,7 @@ func newContextForgeReceipt(target action.Target, payload action.PoisonPayload, 
 		},
 	}
 	return &action.PoisonReceipt{
-		ReceiptID: receiptID, ModuleID: "mcp.poison", EngagementID: payload.EngagementID,
-		CampaignRunID: payload.CampaignRunID, StepSequence: payload.StepSequence,
+		ReceiptID: receiptID, ModuleID: "mcp.poison",
 		Target: action.Target{Kind: target.Kind, Address: state.config.MCPURL}, TargetID: state.config.ToolName,
 		OriginalContent: state.tool.Description, InjectedContent: updated, Mode: mode,
 		AppliedAt: time.Now().UTC(), DryRun: payload.DryRun, ContextForge: contract,

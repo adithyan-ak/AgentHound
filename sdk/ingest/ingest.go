@@ -22,16 +22,10 @@ type IngestMeta struct {
 	Ruleset          *RulesetManifest   `json:"ruleset,omitempty"`
 	IdentitySchemes  []IdentityScheme   `json:"identity_schemes,omitempty"`
 
-	// Extra carries collector-specific or scan-mode-specific metadata that
-	// doesn't fit the structured fields above. Network scans use this for the
-	// network-scan watermark (authorization_file_path, authorization_file_sha256,
-	// allow_public_targets, network_scan_spec). Downstream tooling
-	// can refuse to operate on watermark-less public-IP scans by inspecting
-	// these fields.
-	//
-	// The validator at server/internal/ingest/validator.go does not
-	// constrain Extra's contents — it is structured opaque data. The
-	// normalizer passes it through unchanged.
+	// Extra carries scan-mode metadata that does not fit the shared envelope.
+	// Unified scans store their strictly validated action and recovery record
+	// under scan_execution. Other keys remain structured opaque data and pass
+	// through normalization unchanged.
 	Extra map[string]any `json:"extra,omitempty"`
 }
 

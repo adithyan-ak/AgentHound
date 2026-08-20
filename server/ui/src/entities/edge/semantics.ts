@@ -28,7 +28,6 @@ export const EDGE_EXPLOIT = {
   EXPOSES: null,
   EXPOSES_CREDENTIAL: null,
   PROVIDES_MODEL: null,
-  EXTRACTED_FROM: null,
   CAN_REACH: {
     title: "Transitive reachability",
     detail:
@@ -84,10 +83,10 @@ export const EDGE_EXPLOIT = {
     detail:
       "This tool ingests content classified as untrusted. Treat downstream use as an observed input-flow boundary, not proof that exploitation occurred.",
   },
-  CREDENTIAL_REACH_VERIFIED: {
-    title: "Verified credential-gated reach",
+  CREDENTIAL_ACCESS_OBSERVED: {
+    title: "Observed credential-gated access",
     detail:
-      "A read-only differential probe confirmed that this credential — and not anonymous access — grants read access to the exact predicted resource (unauth denied, authed allowed). This is observed evidence that upgrades the predicted CAN_REACH finding; it does not prove agent invocation or downstream impact.",
+      "A differential read proved that this credential grants access to the exact resource while the anonymous control was denied. This is observed access, not proof of agent invocation or downstream impact.",
   },
   PUBLIC_ACCESS_OBSERVED: {
     title: "Anonymous resource access",
@@ -138,9 +137,8 @@ export const EDGE_DESCRIPTION = {
   EXPOSES: "Exposes AI service",
   EXPOSES_CREDENTIAL: "AI service has credential evidence",
   PROVIDES_MODEL: "Serves model artifact",
-  EXTRACTED_FROM: "Extracted from model",
   INGESTS_UNTRUSTED: "Tool ingests untrusted resource",
-  CREDENTIAL_REACH_VERIFIED: "Credential verified to reach resource",
+  CREDENTIAL_ACCESS_OBSERVED: "Credential access to resource observed",
   PUBLIC_ACCESS_OBSERVED: "Resource observed publicly accessible",
   HAS_ACCESS_TO: "Tool can access resource",
   CAN_EXECUTE: "Tool can execute on host",

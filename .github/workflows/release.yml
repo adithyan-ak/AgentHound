@@ -4,15 +4,6 @@ on:
   push:
     tags: ['[0-9]*.[0-9]*.[0-9]*']
   workflow_dispatch:
-    inputs:
-      operation:
-        description: Manual release-control operation
-        required: true
-        default: gate-test
-        type: choice
-        options:
-          - gate-test
-          - bootstrap-staging
 
 concurrency:
   group: agenthound-release
@@ -30,25 +21,8 @@ env:
   PRODUCTION_SERVER: ghcr.io/adithyan-ak/agenthound-server
 
 jobs:
-  gate-test:
-    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'gate-test'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    environment: release-production
-    steps:
-      - name: Confirm the production approval gate resumed
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${GITHUB_REF_TYPE}" != "branch" ]]; then
-            echo "Gate test must be dispatched from a branch" >&2
-            exit 1
-          fi
-          echo "release-production approval resumed a read-only, secret-free gate test for ${GITHUB_REF_NAME}"
-
   bootstrap-staging:
-    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'bootstrap-staging'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -56,7 +30,7 @@ jobs:
     steps:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
         with:
-          go-version: "1.25.12"
+          go-version: "1.25.13"
 
       - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
         with:
@@ -86,7 +60,7 @@ jobs:
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
         with:
-          go-version: "1.25.12"
+          go-version: "1.25.13"
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
         with:
@@ -98,7 +72,7 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Verify one-time migration invariants
+      - name: Verify release invariants
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -111,10 +85,9 @@ jobs:
           ./scripts/version-check.sh
           git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
           latest_release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
-          mode="$(./scripts/release-tag-check.sh candidate \
-            "${GITHUB_REF_NAME}" "${latest_release}" refs/remotes/origin/main)"
-          printf '%s\n' "${mode}" > "${RUNNER_TEMP}/release-mode"
-          printf 'Validated %s release transition.\n' "${mode}"
+          ./scripts/release-tag-check.sh candidate \
+            "${GITHUB_REF_NAME}" "${latest_release}" refs/remotes/origin/main >/dev/null
+          printf 'Validated numeric release transition.\n'
 
       - name: Verify Homebrew tap write access
         env:
@@ -141,9 +114,8 @@ jobs:
           cd server/ui
           npm ci --ignore-scripts
 
-      - name: Install release gate tools
+      - name: Install release registry tool
         run: |
-          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.0
           go install github.com/google/go-containerregistry/cmd/crane@v0.20.6
 
       - name: Run mandatory release gates
@@ -181,7 +153,7 @@ jobs:
 
       - name: Reconfirm private staging packages
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -207,10 +179,9 @@ jobs:
           AGENTHOUND_IMAGE_REPOSITORY: ${{ env.STAGING_COLLECTOR }}
           AGENTHOUND_SERVER_IMAGE_REPOSITORY: ${{ env.STAGING_SERVER }}
 
-      - name: Verify candidate assets, formulas, images, and Go origin
+      - name: Verify candidate assets, formulas, and images
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_ADMIN_GITHUB_TOKEN: ${{ secrets.RELEASE_ADMIN_GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
@@ -302,20 +273,7 @@ jobs:
             grep -Fq 'linux/arm64' <<<"${manifest}"
           done
 
-          direct_json="$(GOWORK=off GOPROXY=direct GOSUMDB=off \
-            go list -m -json "github.com/adithyan-ak/agenthound@${tag}")"
-          [[ "$(jq -r '.Origin.Ref' <<<"${direct_json}")" == "refs/tags/${tag}" ]]
-          [[ "$(jq -r '.Origin.Hash' <<<"${direct_json}")" == "${tag_commit}" ]]
-
-          git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          [[ -n "${RELEASE_ADMIN_GITHUB_TOKEN:-}" ]]
-          admin_auth_header="$(printf 'x-access-token:%s' "${RELEASE_ADMIN_GITHUB_TOKEN}" | base64 | tr -d '\n')"
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${admin_auth_header}" \
-            push --dry-run origin "${tag_commit}:refs/heads/main"
-
           printf '%s\n' "${tag_commit}" > "${candidate_dir}/release-commit"
-          printf '%s\n' "$(git rev-parse "${tag_commit}^")" > "${candidate_dir}/release-parent"
-          cp "${RUNNER_TEMP}/release-mode" "${candidate_dir}/release-mode"
           (
             cd "${candidate_dir}/formulas"
             sha256sum *.rb | sort > "${candidate_dir}/formula-digests.txt"
@@ -328,7 +286,22 @@ jobs:
           name: release-candidate-${{ github.run_id }}
           path: ${{ runner.temp }}/release-candidate
           if-no-files-found: error
-          retention-days: 3
+          overwrite: true
+          retention-days: 14
+
+      - name: Remove an incomplete draft after candidate failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate | \
+            jq -r --arg tag "${GITHUB_REF_NAME}" \
+              '.[] | select(.tag_name == $tag and .draft == true) | .id' | head -n1)"
+          if [[ -n "${release_id}" ]]; then
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${release_id}"
+          fi
 
   publish:
     needs: candidate
@@ -349,7 +322,7 @@ jobs:
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
         with:
-          go-version: "1.25.12"
+          go-version: "1.25.13"
 
       - uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3  # v4.1.0
 
@@ -374,7 +347,7 @@ jobs:
 
       - name: Revalidate the irreversible publication checkpoint
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -382,34 +355,22 @@ jobs:
           records="${RUNNER_TEMP}/release-candidate"
           tag_commit="$(git rev-parse "${tag}^{commit}")"
           recorded_commit="$(cat "${records}/release-commit")"
-          recorded_parent="$(cat "${records}/release-parent")"
-          release_mode="$(cat "${records}/release-mode")"
           [[ "${tag_commit}" == "${recorded_commit}" ]]
           git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          live_main="$(git rev-parse refs/remotes/origin/main)"
-          if [[ "${release_mode}" == migration ]]; then
-            [[ "$(git rev-list --parents -n1 "${tag_commit}" | awk '{print NF}')" == 2 ]]
-            [[ "$(git rev-parse "${tag_commit}^")" == "${recorded_parent}" ]]
-            [[ "${live_main}" == "${recorded_parent}" ]]
-          else
-            [[ "${release_mode}" == normal ]]
-            [[ "${live_main}" == "${recorded_commit}" ]]
-          fi
+          git merge-base --is-ancestor "${tag_commit}" refs/remotes/origin/main
 
           release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
             --jq ".[] | select(.tag_name == \"${tag}\")" | head -n1)"
           [[ -n "${release_json}" ]]
-          [[ "$(jq -r '.draft' <<<"${release_json}")" == true ]]
-          [[ "$(jq -r '.immutable' <<<"${release_json}")" == false ]]
+          draft="$(jq -r '.draft' <<<"${release_json}")"
+          immutable="$(jq -r '.immutable' <<<"${release_json}")"
+          if [[ "${draft}" == true ]]; then
+            [[ "${immutable}" == false ]]
+          else
+            [[ "${draft}" == false && "${immutable}" == true ]]
+          fi
           [[ "$(jq -r '.body' <<<"${release_json}")" == "$(cat "${records}/release-notes.md")" ]]
           [[ "$(gh api "repos/${GITHUB_REPOSITORY}/immutable-releases" --jq '.enabled')" == true ]]
-
-          ruleset_id="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets" --paginate \
-            --jq '.[] | select(.name == "Protect numeric release tags") | .id')"
-          [[ -n "${ruleset_id}" ]]
-          bypass_count="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}" \
-            --jq '[.bypass_actors[] | select(.actor_type == "User" and .actor_id == 34126904 and .bypass_mode == "always")] | length')"
-          [[ "${bypass_count}" == 1 ]]
 
           for package in agenthound-release-staging agenthound-server-release-staging; do
             [[ "$(gh api "users/adithyan-ak/packages/container/${package}" --jq '.visibility')" == private ]]
@@ -456,28 +417,6 @@ jobs:
           [[ "$(jq -r '.body' <<<"${published}")" == "$(cat "${records}/release-notes.md")" ]]
           [[ "$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')" == "${tag}" ]]
 
-      - name: Fast-forward main to the immutable release commit
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          records="${RUNNER_TEMP}/release-candidate"
-          tag_commit="$(cat "${records}/release-commit")"
-          release_parent="$(cat "${records}/release-parent")"
-          git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          live_main="$(git rev-parse refs/remotes/origin/main)"
-          if [[ "${live_main}" == "${release_parent}" ]]; then
-            auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
-            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-              push origin "${tag_commit}:refs/heads/main"
-          elif [[ "${live_main}" != "${tag_commit}" ]]; then
-            echo "main moved unexpectedly to ${live_main}" >&2
-            exit 1
-          fi
-          git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          ./scripts/release-tag-check.sh published "${GITHUB_REF_NAME}" refs/remotes/origin/main >/dev/null
-
       - name: Promote verified image digests and sign production identities
         shell: bash
         run: |
@@ -500,7 +439,12 @@ jobs:
             expected="$(crane digest "${staging}:${tag}")"
             [[ "$(crane digest "${production}:${tag}")" == "${expected}" ]]
             [[ "$(crane digest "${production}:latest")" == "${expected}" ]]
-            cosign sign --yes "${production}@${expected}"
+            if ! cosign verify \
+              --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${tag}" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "${production}@${expected}" >/dev/null 2>&1; then
+              cosign sign --yes "${production}@${expected}"
+            fi
             cosign verify \
               --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${tag}" \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com \
@@ -544,22 +488,40 @@ jobs:
             sha256sum --check "${records}/formula-digests.txt"
           )
 
-      - name: Remove the temporary numeric-tag rollback bypass
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          ruleset_id="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets" --paginate \
-            --jq '.[] | select(.name == "Protect numeric release tags") | .id')"
-          live="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}")"
-          jq '{name, target, enforcement, bypass_actors: [], conditions, rules}' <<<"${live}" \
-            > "${RUNNER_TEMP}/numeric-ruleset.json"
-          gh api --method PUT "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}" \
-            --input "${RUNNER_TEMP}/numeric-ruleset.json" >/dev/null
-          [[ "$(gh api "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}" --jq '.bypass_actors | length')" == 0 ]]
+  release-acceptance:
+    needs: publish
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      attestations: read
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0
 
-      - name: Verify public GitHub, installer, GHCR, Homebrew, and Go surfaces
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+        with:
+          go-version: "1.25.13"
+
+      - uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3  # v4.1.0
+
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
+
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+
+      - name: Install registry verification tool
+        run: go install github.com/google/go-containerregistry/cmd/crane@v0.20.6
+
+      - name: Verify public release surfaces
         env:
           GH_TOKEN: ${{ github.token }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
@@ -567,14 +529,18 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
-          commit="$(cat "${RUNNER_TEMP}/release-candidate/release-commit")"
-          module=github.com/adithyan-ak/agenthound
+          commit="$(git rev-parse "${tag}^{commit}")"
           [[ "$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')" == "${tag}" ]]
-          [[ "$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" --jq '.immutable')" == true ]]
+          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}")"
+          jq -e --arg tag "${tag}" \
+            '.draft == false and .immutable == true and .tag_name == $tag and (.assets | length) == 26' \
+            <<<"${release_json}" >/dev/null
           git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
           ./scripts/release-tag-check.sh published "${tag}" refs/remotes/origin/main >/dev/null
 
-          first_digest="$(head -n1 "${RUNNER_TEMP}/release-candidate/assets.tsv" | cut -f2)"
+          jq -r '.assets[] | [.name, (.digest | sub("^sha256:"; ""))] | @tsv' \
+            <<<"${release_json}" | sort > "${RUNNER_TEMP}/published-assets.tsv"
+          first_digest="$(head -n1 "${RUNNER_TEMP}/published-assets.tsv" | cut -f2)"
           attestation=
           for attempt in $(seq 1 30); do
             candidate="$(gh api "users/adithyan-ak/attestations/sha256:${first_digest}?per_page=100" 2>/dev/null || true)"
@@ -600,13 +566,18 @@ jobs:
             "${RUNNER_TEMP}/release-attestation.json" >/dev/null
           jq -r '.subject[] | select(.name != null) | [.name, .digest.sha256] | @tsv' \
             "${RUNNER_TEMP}/release-attestation.json" | sort > "${RUNNER_TEMP}/attested-assets.tsv"
-          diff -u "${RUNNER_TEMP}/release-candidate/assets.tsv" "${RUNNER_TEMP}/attested-assets.tsv"
+          diff -u "${RUNNER_TEMP}/published-assets.tsv" "${RUNNER_TEMP}/attested-assets.tsv"
 
           for image in "${PRODUCTION_COLLECTOR}" "${PRODUCTION_SERVER}"; do
-            [[ "$(crane digest "${image}:${tag}")" == "$(crane digest "${image}:latest")" ]]
+            digest="$(crane digest "${image}:${tag}")"
+            [[ "${digest}" == "$(crane digest "${image}:latest")" ]]
             manifest="$(docker buildx imagetools inspect "${image}:${tag}")"
             grep -Fq 'linux/amd64' <<<"${manifest}"
             grep -Fq 'linux/arm64' <<<"${manifest}"
+            cosign verify \
+              --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${tag}" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "${image}@${digest}" >/dev/null
           done
           for product in agenthound agenthound-server; do
             image="${PRODUCTION_COLLECTOR}"
@@ -637,53 +608,6 @@ jobs:
             ./scripts/verify-homebrew-formula.sh \
               "${formula}" "${tag}" "${tag}" "${verify_dir}/${formula}.rb" "${verify_dir}/checksums.txt"
           done
-
-          proxy_json=
-          for attempt in $(seq 1 30); do
-            modcache="$(mktemp -d)"
-            candidate="$(GOWORK=off GOMODCACHE="${modcache}" GOPROXY=https://proxy.golang.org \
-              GOSUMDB=sum.golang.org timeout 60s go list -m -json "${module}@${tag}" 2>/dev/null || true)"
-            if jq -e '.Version != null' <<<"${candidate}" >/dev/null 2>&1; then
-              proxy_json="${candidate}"
-              break
-            fi
-            echo "Go proxy has not resolved @${tag}; retry ${attempt}/30"
-            sleep 60
-          done
-          [[ -n "${proxy_json}" ]]
-          proxy_version="$(jq -r '.Version' <<<"${proxy_json}")"
-
-          direct_json="$(GOWORK=off GOPROXY=direct GOSUMDB=off go list -m -json "${module}@${tag}")"
-          [[ "$(jq -r '.Origin.Ref' <<<"${direct_json}")" == "refs/tags/${tag}" ]]
-          [[ "$(jq -r '.Origin.Hash' <<<"${direct_json}")" == "${commit}" ]]
-          proxy_download="$(GOWORK=off GOMODCACHE="$(mktemp -d)" GOPROXY=https://proxy.golang.org \
-            GOSUMDB=sum.golang.org go mod download -json "${module}@${tag}")"
-          direct_download="$(GOWORK=off GOMODCACHE="$(mktemp -d)" GOPROXY=direct \
-            GOSUMDB=off go mod download -json "${module}@${tag}")"
-          if [[ "$(jq -r '.Version' <<<"${proxy_download}")" == "$(jq -r '.Version' <<<"${direct_download}")" ]]; then
-            [[ "$(jq -r '.Sum' <<<"${proxy_download}")" == "$(jq -r '.Sum' <<<"${direct_download}")" ]]
-            [[ "$(jq -r '.GoModSum' <<<"${proxy_download}")" == "$(jq -r '.GoModSum' <<<"${direct_download}")" ]]
-          fi
-
-          go_root="$(mktemp -d)"
-          mkdir -p "${go_root}/bin"
-          for command_path in collector/cmd/agenthound server/cmd/agenthound-server; do
-            GOWORK=off GOBIN="${go_root}/bin" GOMODCACHE="${go_root}/mod" GOCACHE="${go_root}/cache" \
-              GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org \
-              timeout 10m go install "${module}/${command_path}@${tag}"
-          done
-          [[ "$("${go_root}/bin/agenthound" --version)" == "agenthound version ${proxy_version} (commit: none)" ]]
-          [[ "$("${go_root}/bin/agenthound-server" --version)" == "agenthound-server version ${proxy_version} (commit: none)" ]]
-
-      - name: Remove the temporary candidate artifact
-        if: success()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          artifact_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
-            --jq '.artifacts[] | select(.name == "release-candidate-'"${GITHUB_RUN_ID}"'") | .id')"
-          [[ -z "${artifact_id}" ]] || gh api --method DELETE \
-            "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
 
   homebrew-acceptance:
     needs: publish

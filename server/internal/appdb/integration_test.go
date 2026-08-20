@@ -118,7 +118,15 @@ func TestIntegrationMigrations(t *testing.T) {
 	if err := versionRows.Err(); err != nil {
 		t.Fatalf("list migration versions: %v", err)
 	}
-	if want := []int{1}; !reflect.DeepEqual(versions, want) {
+	migrations, err := availableMigrations()
+	if err != nil {
+		t.Fatalf("discover embedded migrations: %v", err)
+	}
+	want := make([]int, 0, len(migrations))
+	for _, migration := range migrations {
+		want = append(want, migration.version)
+	}
+	if !reflect.DeepEqual(versions, want) {
 		t.Fatalf("migration versions = %v, want %v", versions, want)
 	}
 

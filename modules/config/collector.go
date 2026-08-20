@@ -212,7 +212,6 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 			for _, definition := range group.Definitions {
 				creds = append(creds, ExtractServerCredentials(
 					definition,
-					opts.IncludeCredentialValues,
 					engine,
 				)...)
 			}
@@ -271,17 +270,16 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 				)
 				// value_hash is the cross-collector merge primitive — see
 				// sdk/common/hasher.go HashCredentialValue. Always populated
-				// from the ORIGINAL raw value (cred.ValueHash carries that;
-				// cred.Value may already be the hash when
-				// IncludeCredentialValues=false). The credential-chain Cypher
+				// from the original observed value or reference. The credential-chain Cypher
 				// in server/internal/analysis/processors/cross_service_credential_chain
 				// joins on this property between Config Collector emissions
-				// and LiteLLM Looter emissions.
+				// and LiteLLM service-collector emissions.
 				credProps := map[string]any{
 					"type":         cred.Type,
 					"name":         cred.Name,
 					"source":       cred.Source,
 					"location":     cred.Location,
+					"auth_method":  string(cred.AuthMethod),
 					"high_entropy": cred.HighEntropy,
 					"format":       cred.Format,
 					"value_hash":   cred.ValueHash,
@@ -293,9 +291,10 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 					cred.MaterialStatus,
 					cred.ExposureStatus,
 				)
-				// Raw value only when the operator explicitly opts in — the
-				// hash above is sufficient for the chain join.
-				if opts.IncludeCredentialValues {
+				// Only exact observed material is executable. An environment/vault
+				// reference remains honest metadata and must never masquerade as a raw
+				// secret in Credential.value.
+				if cred.MaterialStatus == common.CredentialMaterialObserved {
 					credProps["value"] = cred.Value
 				}
 				addNode(common.NewNode(credID, []string{"Credential"}, credProps), scopeKey)
@@ -431,7 +430,7 @@ func groupServerDefinitions(definitions []ServerDef) []serverDefinitionGroup {
 func ServerNodeProperties(srv ServerDef, engine *rules.Engine) map[string]any {
 	return serverNodeProperties(
 		srv,
-		ExtractServerCredentials(srv, false, engine),
+		ExtractServerCredentials(srv, engine),
 	)
 }
 

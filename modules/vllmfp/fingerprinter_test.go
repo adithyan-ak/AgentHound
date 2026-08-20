@@ -59,9 +59,6 @@ func TestFingerprint_VLLMHappy(t *testing.T) {
 	if got := node.Properties["version"]; got != "0.10.1" {
 		t.Errorf("properties.version = %v, want 0.10.1", got)
 	}
-	if _, fabricated := node.Properties["is_anonymous_loot"]; fabricated {
-		t.Error("vLLM fingerprint must not claim anonymous lootability")
-	}
 	if !strings.HasPrefix(node.ID, "sha256:") {
 		t.Errorf("node.ID = %q, want sha256: prefix", node.ID)
 	}

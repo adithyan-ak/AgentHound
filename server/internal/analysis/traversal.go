@@ -38,7 +38,6 @@ var SecurityTraversalEdgeKinds = []string{
 	"EXPOSES",
 	"EXPOSES_CREDENTIAL",
 	"PROVIDES_MODEL",
-	"EXTRACTED_FROM",
 	"INGESTS_UNTRUSTED",
 	"HAS_ACCESS_TO",
 	"CAN_EXECUTE",

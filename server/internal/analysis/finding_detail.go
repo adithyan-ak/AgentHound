@@ -151,7 +151,7 @@ type Impact struct {
 	DataSensitivity string `json:"data_sensitivity,omitempty"`
 }
 
-// AttackPathFromExactEvidence renders only the detector-selected witness
+// AttackPathFromExactEvidence renders only the detector-selected evidence
 // persisted with the immutable finding snapshot.
 func AttackPathFromExactEvidence(f *model.Finding) *AttackPath {
 	if f == nil || f.ExactEvidence == nil {

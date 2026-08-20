@@ -5,7 +5,7 @@ package prebuilt
 // Critical Paths
 
 // CypherLitellmCredentialLeak reports the credential exposure that the
-// first-party LiteLLM looter can actually observe: an exposed master key.
+// first-party LiteLLM service collector can actually observe: an exposed master key.
 // Provider apiKey and virtual-key nodes are optional context only when their
 // evidence explicitly says the material is masked or hashed and not observed
 // as usable plaintext.

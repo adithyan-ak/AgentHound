@@ -2,138 +2,84 @@
 
 ## Unreleased
 
-## 1.0.0 — 🚀 First Supported Release (2026-07-27)
+## 1.1.0 — ⚡ Autonomous Offensive Collection
 
-AgentHound 1.0.0 is the first supported release of the offensive security
-framework built for AI agent infrastructure. It maps MCP, A2A, agent
-configuration, model infrastructure, credentials, tools, resources, notebooks,
-vector stores, and instruction supply chains into one attack graph—then helps
-operators validate the paths that matter against real systems.
+AgentHound 1.1 is an offensive security framework built for the moment a red-team operator lands on a compromised host. One static collector maps the foothold, captures usable secrets, discovers the reachable agentic estate, expands access with compatible credentials, proves concrete attack paths, and preserves the operation in one JSON artifact.
 
-> **From observation to proof.** Discover the agentic estate, reveal the paths
-> that matter, and validate them against real infrastructure.
+> **One foothold. One scan. Secrets, services, and proof before access disappears.**
 
-| 🗺️ Discover | 🧠 Correlate | 🎯 Validate | 🔎 Investigate | 📦 Ship |
+| 🔎 Discover | 🔑 Collect | 🎯 Prove | 💾 Recover | 🕸️ Analyze |
 |---|---|---|---|---|
-| MCP, A2A, configs, AI services | Temporal attack graph | Reversible campaigns | Evidence-backed UI | Signed multi-platform artifacts |
+| Local and network attack surface | Credentials and service data | Exact access and compute | Continuous checkpoints | Full attack graph and findings |
 
-### 🗺️ Map the agentic attack surface
+### ⚡ Drop once, scan once
 
-- **One graph across the agentic stack.** Model agents, MCP servers, tools,
-  prompts, resources, A2A agents, AI services, credentials, instruction files,
-  hosts, and models share one relationship-driven view.
-- **Broad agent configuration coverage.** Discover MCP and agent configuration
-  across Claude Desktop, Claude Code, VS Code, Windsurf, Continue, Zed, Cline,
-  JetBrains, Kiro, Amazon Q, Augment, Cursor, and GitHub Copilot.
-- **Bounded instruction discovery.** Normal scans inspect registered
-  instruction sources at canonical user and project roots. Deep scans add
-  bounded nested-project discovery while excluding dependency, cache, trash,
-  and symlinked descendant trees.
-- **Protocol-aware MCP and A2A collection.** Enumerate live MCP capabilities
-  through the official SDK and ingest A2A v0.3 and v1.0.1 Agent Cards with
-  schema-aware parsing, preserved interfaces, authentication requirements, and
-  bounded JWS verification.
-- **Port-neutral service discovery.** Fingerprint Ollama, Open WebUI, LiteLLM,
-  vLLM, LangServe, MLflow, Qdrant, and Jupyter from observed protocol behavior
-  instead of assuming a service from its port number.
-- **Evidence-backed inventory.** Read-only looters cover LiteLLM, Ollama,
-  Open WebUI, MLflow, Qdrant, and Jupyter while distinguishing verified
-  anonymous access, authenticated access, partial inventory, and unknown state.
-- **First-class scan upload.** `agenthound scan --ingest <server-url>` saves the
-  local artifact before uploading those exact bytes and returns a correlated
-  ingest receipt with finding counts.
+- **One autonomous workflow.** `agenthound scan` collects the local host, discovers reachable infrastructure, fingerprints services, inventories useful data, reuses compatible credentials, and executes eligible verification actions without making the operator drive individual modules.
+- **Foothold-first targeting.** A targetless scan starts from local agent configuration, instruction files, loopback, active interfaces, configured endpoints, and standard AI-service ports. A hostname, IP, CIDR, or targets file adds network scope without disabling local collection.
+- **Active by default.** The first run can perform credential validation, bounded compute verification, and reversible action proof while access is still available.
+- **Read-only OPSEC when needed.** `--stealth` keeps the same collection workflow read-only, while `--deep` adds recursive instruction discovery, vector payload samples, expensive probes, and bounded model-compute verification.
+- **No database on the foothold.** The collector plans locally with deterministic indexes and standard-library data structures. Neo4j, PostgreSQL, Node.js, and the analysis server stay off the compromised host.
 
-### 🧠 Turn observations into defensible attack paths
+### 🔑 Turn exposed secrets into usable access
 
-- **Deterministic cross-collector identity.** Content-addressed node IDs merge
-  the same infrastructure across collectors, while stable credential hashes
-  correlate a secret observed in configuration with the service that accepts
-  or exposes it—without persisting the raw value by default.
-- **Vantage-aware temporal ingestion.** Collection-point and network-context
-  provenance keep identity, lifecycle, and cross-observation analysis scoped to
-  what a scanner could actually observe.
-- **Coverage-aware truth.** Collection domains declare what they observed
-  completely, partially, or not at all. Complete epochs retire stale facts;
-  incomplete scans cannot silently present an authoritative clean posture.
-- **Resilient publication lifecycle.** Interrupted ingests preserve the last
-  trustworthy publication, expose incomplete coverage, and recover cleanly
-  when a later authoritative scan arrives.
-- **Ordered graph reasoning.** Post-processors derive access, execution,
-  shadowing, poisoned content, reachability, credential chains, exfiltration,
-  impersonation, cross-protocol paths, and risk scores from retained evidence.
-- **Evidence-first findings.** Prebuilt attack paths, finding detail,
-  remediation guidance, graph evidence, and stable witness export keep each
-  security conclusion tied to the nodes, edges, provenance, and publication
-  revision that produced it.
-- **Rules with provenance.** Built-in detection and fingerprint rules cover
-  agent capabilities, credentials, prompt and instruction injection, exposed
-  services, and supply-chain risk, with the effective rule set recorded for
-  each collection.
+- **Concrete credential capture.** Bearer tokens, API keys, master keys, Jupyter tokens, and other resolved material are stored directly in the artifact and deduplicated by `value_hash` while preserving every observed source.
+- **Same-scan credential expansion.** Newly discovered credentials immediately unlock compatible MCP, A2A, LiteLLM, Open WebUI, and Jupyter collection candidates.
+- **Protocol-aware reuse.** Credentials are presented only through adapters that understand their concrete type and destination protocol. Masks, hashes, unresolved references, and arbitrary strings remain evidence rather than guesses.
+- **Useful content, not just banners.** AgentHound collects MCP resources and capabilities, agent cards and skills, gateway posture, model metadata, notebooks, vector collections, MLOps experiments, registry data, service configuration, and returned content.
 
-### 🎯 Validate the graph against real infrastructure
+### 🎯 Prove the path while the foothold is live
 
-- **Predicted-to-verified campaigns.** `agenthound campaign` turns a graph
-  hypothesis into observed evidence. Credential-reach campaigns compare an
-  anonymous control with a hash-matched authenticated probe and upgrade the
-  predicted finding only when gated access is proven.
-- **ContextForge MCP round trips.** Provider-aware campaigns bind a live MCP
-  tool to its exact ContextForge row, apply a benign run-specific marker,
-  verify it through management and MCP surfaces, and restore the original
-  value.
-- **Reversible offensive primitives.** Authorized extraction, poisoning,
-  implantation, campaign, and recovery workflows are dry-run-first. Mutating
-  operations persist recovery receipts before the write and retain them when
-  cleanup is incomplete.
-- **Truthful runtime evidence.** A2A authentication probes, MCP observations,
-  Jupyter access checks, looter results, and campaign outcomes record only
-  states proven by protocol-correct responses.
+- **Differential MCP access proof.** AgentHound compares an anonymous control read with an authenticated read of the exact same resource. A denied control and successful credentialed read becomes `CREDENTIAL_ACCESS_OBSERVED` evidence bound to the credential and resource.
+- **Verified During Scan findings.** Manual ingestion upgrades only the matching credential-to-resource `CAN_REACH` path to verified confidence. Inferred paths remain honestly inferred.
+- **Reversible ContextForge validation.** Eligible tools receive a scan-specific description marker, are observed through MCP, restored immediately, and independently checked before planning resumes.
+- **Bounded model-compute proof.** Deep active mode can invoke an Ollama embedding request to confirm usable inference access.
+- **Deterministic autonomy.** New targets and credentials generate new candidates; completed and failed candidate keys prevent loops; independent failures do not block unrelated collection.
 
-### 🛡️ Built for trustworthy field use
+### 🌐 Map the full agentic attack surface
 
-- **Lean collector boundary.** `agenthound` is a static field binary with no
-  Neo4j, PostgreSQL, web-server, or server implementation dependency.
-  Dependency and stripped-size gates protect that boundary on every release.
-- **Local-first analysis.** `agenthound-server` combines PostgreSQL, Neo4j,
-  post-processing, the REST API, and an embedded React UI while binding to
-  `127.0.0.1:8080` by default.
-- **Automatic storage pairing.** The server generates and validates its
-  PostgreSQL/Neo4j pairing, accepts artifacts from recognized vantages, and
-  reports identity recognition in ingest results.
-- **Strict transport defaults.** MCP and A2A TLS verification is on by default;
-  insecure transport requires an explicit operator choice. Authenticated A2A
-  redirects cannot cross origin or downgrade from HTTPS to HTTP.
-- **Fail-closed inputs.** Invalid custom detection rules, oversized fingerprint
-  bundles, incompatible wire contracts, and unsupported persisted export
-  schemas are rejected instead of being partially trusted.
-- **Explicit authorization.** Active operations require an `AUTHORIZED`
-  acknowledgement and record engagement provenance.
+- **Agent clients and instructions.** Discover Claude Desktop, Claude Code, Cursor, Windsurf, VS Code, Cline, Continue, Zed, JetBrains, Kiro, Amazon Q, Augment, and their instruction surfaces.
+- **Agent protocols.** Enumerate configured and discovered MCP servers, tools, resources, prompts, server instructions, A2A Agent Cards, skills, authentication schemes, interfaces, signatures, and JWKS evidence.
+- **AI and data services.** Fingerprint LiteLLM, Open WebUI, Ollama, vLLM, Qdrant, MLflow, Jupyter, and LangServe from observed protocol behavior, then run the applicable deep service collectors.
+- **One connected evidence model.** Hosts, agent instances, credentials, services, tools, resources, models, configs, and instruction files share deterministic identities and observation provenance.
 
-### 🔎 Investigation-ready frontend
+### 🕸️ Turn one artifact into an attack graph
 
-- **Dashboard and triage.** Review exposure, risk distribution, credential
-  posture, chokepoints, cross-protocol reach, high-risk entities, and current
-  findings from the same published graph revision.
-- **Interactive graph explorer.** Navigate the React Flow + ELK graph through
-  security lenses, search, evidence drawers, relationship semantics, attack
-  paths, and exportable investigation context.
-- **Reviewer-friendly findings.** Finding pages expose the supporting path,
-  verification status, remediation, property evidence, and copy-ready reports
-  without flattening predicted and observed claims into the same state.
-- **Operator-guided collection.** Scan Manager generates origin-correct,
-  copyable commands for configuration, MCP, A2A, discovery, and service
-  collection workflows.
+- **Manual, operator-controlled ingestion.** Move the completed artifact to the analysis system and ingest it with `agenthound-server ingest` when operational timing allows.
+- **Graph-native offensive analysis.** Derive reachability, execution, exfiltration, impersonation, credential-chain, shadowing, poisoning, tainted-flow, and cross-protocol paths from the same evidence.
+- **Evidence-backed findings.** Findings preserve the supporting nodes, edges, confidence, proof, remediation, publication revision, and triage state.
+- **Investigation-ready dashboard.** Inspect risk, attack paths, credentials, findings, queries, scan history, and triage. Raw credential values are masked by default and remain one click away through Reveal and Copy.
+- **Coverage-aware truth.** Complete observations retire stale facts, partial scans remain useful without claiming a clean posture, and publication always points to the last trustworthy graph state.
 
-### 📦 Verifiable multi-platform release
+### 💾 Built for loss of access
 
-- Collector and server archives for macOS, Linux, and Windows on amd64 and
-  arm64.
-- Multi-architecture `agenthound` and `agenthound-server` images on GHCR.
-- SHA-256 checksums, a keyless Sigstore verification bundle, and per-archive
-  software bills of materials.
-- Homebrew formulas for the collector and analysis server.
-- Public Docker Compose deployment with health-checked PostgreSQL, Neo4j, and
-  the loopback-bound AgentHound server.
-- Release archives and containers identify the exact source commit.
-- Release gates protect installer pins, release notes, dependency boundaries,
-  binary size, tests, documentation, cross-compilation, and distribution
-  metadata before publication.
+- **Continuously valid evidence.** AgentHound creates an ingest-valid artifact before collection and checkpoints after every meaningful collector result, action transition, and recovery transition.
+- **Immediate mutation cleanup.** Original state is durably recorded before a mutation. Cleanup runs under a separate bounded context even after interruption, and no new work starts until restoration is confirmed.
+- **Recover from the same artifact.** `agenthound revert <scan.json>` retries unresolved records newest-first, observes current state before writing, and refuses to overwrite third-party changes.
+- **Hard contact exclusions.** One policy enforces exact hostname, IP, CIDR, DNS-result, redirect, derived-URL, JWKS, action, cleanup, and final-dial exclusions.
+- **Operationally honest output.** Raw credentials, collected content, proof, and recovery material remain available in plain JSON. Operators can restrict file permissions without a separate vault or key workflow.
+
+### 📦 Verifiable release delivery
+
+- Collector and server archives for macOS, Linux, and Windows on amd64 and arm64.
+- Multi-architecture collector and server images on GHCR.
+- Homebrew formulas for `agenthound` and `agenthound-server`.
+- SHA-256 checksums, keyless Sigstore verification, release attestations, and per-archive software bills of materials.
+- Version metadata tied to the exact release commit across archives, containers, and Homebrew installs.
+- Release gates for code quality, race tests, vulnerabilities, licenses, Neo4j 4 and 5 integrations, native Windows behavior, real collector-to-server proof, documentation, size, dependencies, containers, and public distribution surfaces.
+
+### 🚀 Start the operation
+
+```bash
+# Install the collector
+curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.0/install.sh \
+  | AGENTHOUND_VERSION=1.1.0 sh
+
+# Collect, expand, and prove in one active scan
+agenthound scan --deep --output scan.json
+
+# On the analysis system
+agenthound-server ingest scan.json
+agenthound-server serve
+```
+
+Active mode performs offensive verification when prerequisites are present. Use AgentHound only on systems you own or are authorized to assess.

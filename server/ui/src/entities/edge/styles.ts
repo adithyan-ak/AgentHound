@@ -32,19 +32,17 @@ export const EDGE_CATEGORY_MAP = {
   USES_CREDENTIAL: "structure",
   LOADS_INSTRUCTIONS: "structure",
   // Raw structural edges. EXPOSES represents a service/backend relationship;
-  // EXPOSES_CREDENTIAL is emitted by credential-producing Looters and is the
+  // EXPOSES_CREDENTIAL is emitted by credential-producing collectors and is the
   // load-bearing edge for credential-chain analysis. Both render in the
   // structure palette to match
   // USES_CREDENTIAL's visual continuity.
   EXPOSES: "structure",
   EXPOSES_CREDENTIAL: "structure",
   PROVIDES_MODEL: "structure",
-  EXTRACTED_FROM: "structure",
   INGESTS_UNTRUSTED: "attack",
-  // campaign-runner evidence. A differentially-verified credential-gated
-  // reach is attack-surface proof; anonymous public access is a neutral
-  // structural fact (never an auto-finding).
-  CREDENTIAL_REACH_VERIFIED: "attack",
+  // A differential read is direct credential-gated access evidence; anonymous
+  // public access is a neutral structural fact (never an auto-finding).
+  CREDENTIAL_ACCESS_OBSERVED: "attack",
   PUBLIC_ACCESS_OBSERVED: "structure",
   CONFUSED_DEPUTY: "attack",
   TAINTS: "attack",
@@ -76,9 +74,8 @@ export const EDGE_COMPOSITE_MAP = {
   EXPOSES: false,
   EXPOSES_CREDENTIAL: false,
   PROVIDES_MODEL: false,
-  EXTRACTED_FROM: false,
   INGESTS_UNTRUSTED: false,
-  CREDENTIAL_REACH_VERIFIED: false,
+  CREDENTIAL_ACCESS_OBSERVED: false,
   PUBLIC_ACCESS_OBSERVED: false,
   HAS_ACCESS_TO: true,
   CAN_EXECUTE: true,

@@ -13,11 +13,12 @@ func TestObservationFactFingerprintIgnoresWriterLifecycleFields(t *testing.T) {
 	const domain = "config:path:sha256:fingerprint"
 	left, err := observationFactFingerprints([]string{domain}, map[string]any{
 		"properties": fingerprintProperties(map[string]any{
-			"endpoint":         "http://mcp.example/mcp",
-			"scan_id":          "scan-one",
-			"last_seen":        "one",
-			"last_verified_at": "2026-07-19T01:00:00Z",
-			"extracted_at":     "2026-07-19T01:00:00Z",
+			"endpoint":            "http://mcp.example/mcp",
+			"scan_id":             "scan-one",
+			"last_seen":           "one",
+			"last_verified_at":    "2026-07-19T01:00:00Z",
+			"observed_content_at": "2026-07-19T01:00:00Z",
+			"extracted_at":        "2026-07-19T01:00:00Z",
 		}),
 	})
 	if err != nil {
@@ -25,11 +26,12 @@ func TestObservationFactFingerprintIgnoresWriterLifecycleFields(t *testing.T) {
 	}
 	right, err := observationFactFingerprints([]string{domain}, map[string]any{
 		"properties": fingerprintProperties(map[string]any{
-			"last_seen":        "two",
-			"scan_id":          "scan-two",
-			"endpoint":         "http://mcp.example/mcp",
-			"last_verified_at": "2026-07-19T02:00:00Z",
-			"extracted_at":     "2026-07-19T02:00:00Z",
+			"last_seen":           "two",
+			"scan_id":             "scan-two",
+			"endpoint":            "http://mcp.example/mcp",
+			"last_verified_at":    "2026-07-19T02:00:00Z",
+			"observed_content_at": "2026-07-19T02:00:00Z",
+			"extracted_at":        "2026-07-19T02:00:00Z",
 		}),
 	})
 	if err != nil {
@@ -184,6 +186,37 @@ func TestPrepareObservationNodesRejectsConflictsBeforeExecution(t *testing.T) {
 	}
 	if calls := recorder.snapshot(); len(calls) != 0 {
 		t.Fatalf("conflicting contributions reached Neo4j execution: %+v", calls)
+	}
+}
+
+func TestPrepareObservationNodesKeepsLatestObservedContentTimestamp(t *testing.T) {
+	const domain = "mcp:target:sha256:observed-content"
+	nodes := []ingest.Node{
+		{
+			ID: "resource", Kinds: []string{"MCPResource"},
+			ObservationDomains: []string{domain},
+			Properties: map[string]any{
+				"observed_content":    "same content",
+				"observed_content_at": "2026-08-19T22:00:00Z",
+			},
+		},
+		{
+			ID: "resource", Kinds: []string{"MCPResource"},
+			ObservationDomains: []string{domain},
+			Properties: map[string]any{
+				"observed_content":    "same content",
+				"observed_content_at": "2026-08-19T22:00:01Z",
+			},
+		},
+	}
+
+	prepared, _, err := prepareObservationNodes(nodes)
+	if err != nil {
+		t.Fatalf("prepare nodes: %v", err)
+	}
+	if len(prepared) != 1 ||
+		prepared[0].Properties["observed_content_at"] != "2026-08-19T22:00:01Z" {
+		t.Fatalf("prepared nodes = %#v, want latest observation timestamp", prepared)
 	}
 }
 

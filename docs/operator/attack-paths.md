@@ -1,364 +1,95 @@
-# Attack Path Analysis
+# Attack paths
 
-Once the offensive lifecycle has collected configs, MCP/A2A enumeration, AI-service posture, looted credentials, and model artifacts, AgentHound's analysis layer turns those facts into attack paths. The graph combines MCP trust relationships, A2A delegation chains, network-discovered AI services, instruction files, untrusted-input signals, and credential reuse into one directed graph where composite edges and Cypher queries reveal multi-hop exploitation routes.
+After ingest, AgentHound combines collector observations with server-side analysis to show how trust, credentials, tools, resources, and protocols connect. Raw graph evidence remains distinguishable from inferred paths and same-scan proof.
 
-The canonical graph schema is in [Graph Model](../reference/graph-model.md). The canonical processor details and cleanup semantics are in [Post-Processors](../architecture/post-processors.md).
+## Evidence states
 
-## Path Families
+| State | Interpretation |
+|---|---|
+| `observed_signal` | A collector directly observed the fact represented by the finding. |
+| `inferred` | Current graph evidence supports a deterministic analysis path. |
+| `verified` | The scan proved exact credential access to the target MCP resource. The dashboard labels this **Verified During Scan**. |
+| `hypothesis` | The relationship is a bounded correlation that requires operator validation. |
+| `reference_only` | The graph contains a masked, hashed, or otherwise non-executable reference. |
+| `unknown` | Available evidence cannot support a stronger classification. |
 
-AgentHound computes 12 composite edge types. Operators usually reason about them in these path families:
+Verification applies to the exact credential-to-resource read. It does not claim that every upstream agent invocation or downstream impact occurred.
 
-| Family | Composite edges | What it answers |
+## Main path families
+
+| Family | Primary edges | Question answered |
 |---|---|---|
-| Reachability | `HAS_ACCESS_TO`, `CAN_REACH` | What can an agent, tool, or A2A boundary reach if trust edges are followed? |
-| Credential chains | `CAN_REACH` with `via_credential` or `source_collector='cross_service_credential_chain'` | Where does credential reuse create implicit access? |
-| Execution and exfiltration | `CAN_EXECUTE`, `CAN_EXFILTRATE_VIA` | Which paths lead to command/code execution or sensitive-data egress? |
-| Poisoning and context manipulation | `SHADOWS`, `POISONED_DESCRIPTION`, `POISONED_INSTRUCTIONS`, `POISONS_CONTEXT` | Which tools or instruction files can steer model behavior? |
-| Untrusted-input data flow | `TAINTS`, `IFC_VIOLATION` | Can attacker-controlled input flow into compatible tools or high-impact sinks? |
-| A2A identity and delegation | `CAN_IMPERSONATE`, `CONFUSED_DEPUTY`, cross-protocol `CAN_REACH` | Can an A2A agent mimic, delegate into, or pivot across trust boundaries? |
+| Reachability | `HAS_ACCESS_TO`, `CAN_REACH` | Which resources or credentials can an agent reach through current trust and capability evidence? |
+| Credential chains | `CAN_REACH` with credential-path properties | Where does observed credential reuse connect services? |
+| Execution | `CAN_EXECUTE` | Which tools expose shell or code execution on a host? |
+| Exfiltration | `CAN_EXFILTRATE_VIA` | Where can sensitive access combine with an outbound channel? |
+| Tool and instruction integrity | `SHADOWS`, `POISONED_DESCRIPTION`, `POISONED_INSTRUCTIONS`, `POISONS_CONTEXT` | Which descriptions or instruction sources can steer privileged behavior? |
+| Untrusted data flow | `TAINTS`, `IFC_VIOLATION` | Can attacker-controlled input reach a compatible or high-impact tool? |
+| A2A trust | `CAN_IMPERSONATE`, `CONFUSED_DEPUTY`, cross-protocol `CAN_REACH` | Where can delegation, similarity, weak authentication, or host correlation cross boundaries? |
 
-Not every composite edge has a named pre-built query. Pre-built queries live under `agenthound-server query --prebuilt <id>`; composite-edge findings are always available through `agenthound-server query --findings` and `GET /api/v1/analysis/findings`.
+The [Graph Model](../reference/graph-model.md) lists every node and edge. [Server Analysis](../architecture/server-analysis.md) explains when composite edges are rebuilt.
 
-## 1. Reachability (`HAS_ACCESS_TO`, `CAN_REACH`)
+## Reachability
 
-`HAS_ACCESS_TO` links tools to resources when capability surface and resource URI scheme line up, or when a tool description references a resource. `CAN_REACH` then folds agent trust into transitive access:
-
-```text
-(:AgentInstance)-[:TRUSTS_SERVER]->(:MCPServer)
-  -[:PROVIDES_TOOL]->(:MCPTool)
-  -[:HAS_ACCESS_TO]->(:MCPResource)
-```
-
-The `can_reach` processor emits:
+A typical MCP resource path is:
 
 ```text
-(:AgentInstance)-[:CAN_REACH {hops: 3, via_server, via_tool}]->(:MCPResource)
+AgentInstance -TRUSTS_SERVER-> MCPServer
+              -PROVIDES_TOOL-> MCPTool
+              -HAS_ACCESS_TO-> MCPResource
 ```
 
-Credential-mediated reachability is also a `CAN_REACH` variant. If an agent can reach a tool that can read credentials, and another MCP server authenticates with one of those credentials, AgentHound emits a longer `CAN_REACH` path with `via_credential` and `hops: 6`.
+The server materializes this as an `AgentInstance -CAN_REACH-> MCPResource` edge with the supporting node IDs, hop count, confidence, and evidence state.
 
-### Pre-built queries
+Credential paths join only concrete material with the same `Credential.value_hash`. Masks, provider references, unresolved values, and identity-only records remain context rather than executable secrets. `Credential.blast_radius` reports how many distinct agents correlate with the observed material.
+
+Useful queries:
 
 ```bash
 agenthound-server query --prebuilt credential-chain
 agenthound-server query --prebuilt shortest-to-database
 agenthound-server query --prebuilt agents-shell-access
-```
-
-## 2. Cross-Service Credential Chains (`value_hash`)
-
-`Credential.value_hash` is the cross-collector merge primitive. Every collector
-and looter that observes a `Credential` value populates it with
-`SHA-256(raw credential value)`. An explicit observed-material hash match
-correlates independently discovered records without returning the raw value.
-Identity-only synthetic hashes are excluded from this join.
-
-Example: a local MCP config exposes a LiteLLM master key, and the LiteLLM looter
-uses that same key to inventory provider and virtual-key references. LiteLLM
-masks provider keys and returns virtual keys as hashes, so those downstream
-records do not imply usable plaintext.
-
-```text
-(:AgentInstance)-[:TRUSTS_SERVER]->(:MCPServer)
-  -[:AUTHENTICATES_WITH]->(:Identity)
-  -[:USES_CREDENTIAL]->(:Credential {value_hash: H1})
-
-(:LiteLLMGateway)-[:EXPOSES_CREDENTIAL]->(:Credential {value_hash: H1})
-(:LiteLLMGateway)-[:EXPOSES_CREDENTIAL]->(:Credential {type: "apiKey"})
-```
-
-The `cross_service_credential_chain` processor joins on `value_hash` and emits:
-
-```text
-(:AgentInstance)-[:CAN_REACH {
-  source_collector: "cross_service_credential_chain",
-  via_gateway,
-  merge_value_hash,
-  upstream_provider,
-  hops: 6
-}]->(:Credential)
-```
-
-`via_gateway` is always traceable: it uses the gateway name when available,
-then its endpoint, and otherwise the immutable gateway object ID emitted by the
-LiteLLM looter.
-
-It also writes `blast_radius` on the joined credential nodes: the number of
-distinct agents correlated with the merged secret. The upstream target remains
-typed as `credential_chain_observed_material` or `credential_chain_reference`;
-masked/hashed references are not usable-secret evidence.
-
-### Pre-built query
-
-```bash
 agenthound-server query --prebuilt litellm-credential-leak
 ```
 
-This pre-built query is centered on observed, exposed LiteLLM master-key
-evidence. Any upstream `apiKey` or virtual-key nodes in its output are explicit
-masked/hashed, not-observed references and are not claimed as usable material.
+## Same-scan access proof
 
-## 3. Cross-Protocol Pivots (`CAN_REACH`)
-
-When an external A2A agent delegates to another A2A agent recorded on the same
-host as an MCP server, AgentHound can emit a cross-protocol `CAN_REACH`
-correlation edge. This is a 50%-confidence shared-host correlation, not proof
-that the A2A actor can invoke the MCP path end to end.
+For an eligible MCP resource, the collector performs an anonymous control read and then an authenticated read with the selected credential. A denied control plus an allowed authenticated read emits:
 
 ```text
-(:A2AAgent)-[:DELEGATES_TO*1..3]->(:A2AAgent)
-  -[:RUNS_ON]->(:Host)<-[:RUNS_ON]-(:MCPServer)
-  -[:PROVIDES_TOOL]->(:MCPTool)
-  -[:HAS_ACCESS_TO]->(:MCPResource)
+Credential -CREDENTIAL_ACCESS_OBSERVED-> MCPResource
 ```
 
-The emitted edge is:
+During analysis, AgentHound requires the exact Credential and MCPResource to occur in an existing `CAN_REACH` evidence path. The matching edge is upgraded to confidence `1.0` and evidence state `verified`. The proof strengthens that finding in place and does not add a second risk item.
 
-```text
-(:A2AAgent)-[:CAN_REACH {
-  cross_protocol: true,
-  source_collector: "a2a",
-  via_host,
-  via_mcp_server,
-  via_mcp_tool
-}]->(:MCPResource)
-```
+## Cross-protocol correlations
 
-The processor requires canonical explicit unauthenticated evidence
-(`auth_assurance = 'unauthenticated'`). Missing authentication evidence is
-unknown and does not match.
-
-### Pre-built query
+An A2A delegation path and an MCP service recorded on the same host can produce a cross-protocol `CAN_REACH` hypothesis. This relationship carries 0.5 confidence because host co-location does not prove that the A2A actor can invoke the MCP service.
 
 ```bash
 agenthound-server query --prebuilt cross-protocol-paths
 ```
 
-## 4. Execution and Exfiltration
+Validate process isolation, identities, authorization, and an authorized end-to-end call before treating the correlation as exploitable.
 
-`CAN_EXECUTE` links an MCP tool to its host when narrow metadata rules classify
-the tool as `shell_access` or `code_execution`. The edge is an 80%-confidence
-candidate; database-only names such as `execute_query` do not match.
+## Findings and traversal
 
-```text
-(:MCPTool)-[:CAN_EXECUTE]->(:Host)
-```
-
-`CAN_EXFILTRATE_VIA` links an agent to a matched output-channel tool when both
-conditions are inferred:
-
-1. The agent can reach a `critical` or `high` sensitivity `MCPResource`.
-2. The agent trusts a server with an outbound-capable tool.
-
-Matched output channel means the tool has one of:
-
-```text
-email_send, network_outbound, file_write, auto_fetch_render, allowlisted_proxy
-```
-
-This is a potential route. It does not record an observed transfer.
-
-### Pre-built query
+List findings from the published projection:
 
 ```bash
-agenthound-server query --prebuilt exfiltration-routes
+agenthound-server query --findings
+agenthound-server query --findings --severity high --format json
+agenthound-server query --findings --fail-on high
 ```
 
-## 5. Poisoning and Context Manipulation
-
-AgentHound models both direct poisoning indicators and graph-level paths where poisoned context can influence high-impact tools.
-
-### `SHADOWS`
-
-A tool on one server references a tool on another server by name in its description. This can support tool-confusion attacks where the agent calls the shadowing tool instead of the intended capability.
-
-```cypher
-MATCH (shadow:MCPTool)-[r:SHADOWS]->(original:MCPTool)
-MATCH (shadow)<-[:PROVIDES_TOOL]-(shadow_server:MCPServer)
-MATCH (original)<-[:PROVIDES_TOOL]-(original_server:MCPServer)
-WHERE shadow_server.objectid <> original_server.objectid
-RETURN shadow.name AS shadowing_tool,
-       shadow_server.name AS shadowing_server,
-       original.name AS shadowed_tool,
-       original_server.name AS shadowed_server,
-       r.confidence AS confidence
-ORDER BY r.confidence DESC
-```
-
-### `POISONED_DESCRIPTION`
-
-A tool description contains injection patterns detected by the rules engine. This is a self-edge on the tool:
-
-```text
-(:MCPTool)-[:POISONED_DESCRIPTION]->(:MCPTool)
-```
-
-### `POISONED_INSTRUCTIONS`
-
-An instruction file loaded by an agent contains suspicious patterns such as imperative overrides, exfiltration commands, or hidden Unicode:
-
-```text
-(:InstructionFile)-[:POISONED_INSTRUCTIONS]->(:InstructionFile)
-```
-
-### `POISONS_CONTEXT`
-
-The `shadows` processor also emits `POISONS_CONTEXT` when an injection-bearing tool can poison the same agent context that drives a high-capability sibling tool:
-
-```text
-(:MCPTool)-[:POISONS_CONTEXT]->(:MCPTool)
-```
-
-The sink tool must carry one of:
-
-```text
-shell_access, code_execution, credential_access, email_send
-```
-
-Fan-out is capped to 20 sinks per `(agent, source tool)` pair to avoid cartesian blowups while still surfacing high-risk sources.
-
-### Pre-built queries
+Find a directed security path:
 
 ```bash
-agenthound-server query --prebuilt tool-shadowing
-agenthound-server query --prebuilt poisoned-tools
-agenthound-server query --prebuilt instruction-poisoning
+agenthound-server query --shortest-path \
+  --from AgentInstance:operator-agent \
+  --to MCPResource:customer-records
 ```
 
-## 6. Untrusted-Input Data Flow (`TAINTS`, `IFC_VIOLATION`)
+Use `--path-mode topology` only when investigating undirected graph connectivity. Security mode follows directed policy relationships and is the correct default for attack-path reasoning.
 
-The MCP collector emits raw `INGESTS_UNTRUSTED` edges for tools tagged by rules such as untrusted web, email, or fileshare input.
-
-```text
-(:MCPTool)-[:INGESTS_UNTRUSTED]->(:MCPResource)
-```
-
-The `taints` processor emits `TAINTS` when an untrusted-input tool shares at least two input-schema keys with a tool on another server:
-
-```text
-(:MCPTool)-[:TAINTS]->(:MCPTool)
-```
-
-The `ifc_violation` processor emits `IFC_VIOLATION` when an untrusted-input tool shares a resource path, within three `HAS_ACCESS_TO` hops, with a high-impact sink:
-
-```text
-(:MCPTool)-[:IFC_VIOLATION]->(:MCPTool)
-```
-
-High-impact sink capabilities are:
-
-```text
-credential_access, file_write, email_send
-```
-
-These edges surface through findings rather than dedicated pre-built query IDs.
-
-## 7. A2A Identity and Delegation
-
-### `CAN_IMPERSONATE`
-
-The `can_impersonate` processor computes TF-IDF cosine similarity over A2A skill descriptions and emits bidirectional `CAN_IMPERSONATE` edges for cross-provider agent pairs with similarity greater than `0.8`.
-
-```text
-(:A2AAgent)-[:CAN_IMPERSONATE]->(:A2AAgent)
-```
-
-### `CONFUSED_DEPUTY`
-
-The `auth_strength` pre-pass preserves collector-owned configured and observed
-fields, then writes one paired `effective_auth_*` tuple and, when supported by
-evidence, a numeric weakness score. An effective `auth_method=none` is
-unauthenticated only when paired with
-`auth_evidence=anonymous_probe_succeeded` and
-`effective_auth_source=observed`; configured none claims and unknown/custom
-methods remain
-unknown. A2A card enumeration alone does not prove anonymous protocol access.
-Only an exact task-not-found result from the bounded read-only nonexistent-task
-lookup authors A2A observed anonymous evidence; protected and inconclusive
-outcomes retain configured card posture. This observation does not claim
-anonymous task creation or message execution.
-
-The `confused_deputy` processor emits `CONFUSED_DEPUTY` when a weakly authenticated A2A agent delegates to a strongly authenticated one:
-
-```text
-(:A2AAgent {effective_auth_assurance: "unauthenticated|weak"})
-  -[:CONFUSED_DEPUTY]->
-(:A2AAgent {effective_auth_assurance: "strong"})
-```
-
-This models a low-trust caller borrowing the privileges of a higher-trust callee.
-
-## Traversal Operations and Minimum Weight
-
-The default path operations use only outgoing relationships in the server's
-explicit security policy. Summary/similarity edges such as `CAN_REACH`,
-`SAME_AUTH_DOMAIN`, `SHADOWS`, and `CAN_IMPERSONATE` are not composable
-security-path steps. Undirected graph navigation is available only through the
-explicit `/api/v1/analysis/topology/...` operations; request bodies have no
-scope field.
-
-Shortest and weighted requests use one deployment-independent bounded
-minimum-cost implementation. Results do not depend on APOC packaging.
-`max_hops` and an expansion cap bound work; response metadata reports the
-direction, relationship kinds, algorithm, and whether the result is complete.
-Weighted traversal requires every traversed relationship to carry a
-non-negative finite `risk_weight`; missing or invalid weights fail the request.
-
-The critical `shortest-to-database` pre-built query always uses security scope.
-
-## Findings and Path Details
-
-The Findings API returns composite-edge findings ranked by severity. The response shape uses `edge_kind`, not a processor name.
-
-```bash
-# Critical findings
-agenthound-server query --findings --severity critical
-
-# High findings (the CLI accepts one exact severity per invocation)
-agenthound-server query --findings --severity high
-
-# All CAN_REACH findings
-curl -s localhost:8080/api/v1/analysis/findings | \
-    jq '.findings[] | select(.edge_kind == "CAN_REACH")'
-
-# Fetch one published finding detail and its persisted exact witness
-finding_id=$(curl -s localhost:8080/api/v1/analysis/findings | jq -r '.findings[0].id')
-curl -s "localhost:8080/api/v1/analysis/findings/${finding_id}" | jq .
-```
-
-The finding detail response serves the detector witness persisted with the
-published row. Its `attack_path` field is a typed evidence graph with shape,
-continuity, direction, completeness, synthetic-join provenance, and nullable
-attack cost. It is never reconstructed from mutable Neo4j.
-
-The Findings panel renders a path strip only for a complete directed linear
-graph. Branched, disconnected, cyclic, mixed-direction, and nodes-only evidence
-is rendered literally as relationships/nodes, without inventing intermediate
-hops. The Graph Explorer allows click-through from graph entities.
-
-## Post-Processor Execution Order
-
-Processors run in dependency order. A processor may only read edges or properties produced by earlier processors.
-
-| # | Processor | Produces | Dependencies |
-|---|-----------|----------|--------------|
-| 1 | `auth_strength` | paired node `effective_auth_*`, `auth_strength`, and effective `TRUSTS_SERVER` assessment properties | None |
-| 2 | `has_access_to` | `HAS_ACCESS_TO` | Raw edges |
-| 3 | `can_execute` | `CAN_EXECUTE` | Raw edges |
-| 4 | `shadows` | `SHADOWS`, `POISONS_CONTEXT` | Raw edges |
-| 5 | `poisoned_description` | `POISONED_DESCRIPTION` | Raw edges |
-| 6 | `poisoned_instructions` | `POISONED_INSTRUCTIONS` | Raw edges |
-| 7 | `taints` | `TAINTS` | `INGESTS_UNTRUSTED`, `schema_keys` |
-| 8 | `can_reach` | `CAN_REACH` | `auth_strength`, `HAS_ACCESS_TO` |
-| 9 | `cross_service_credential_chain` | `CAN_REACH` to upstream credentials, `Credential.blast_radius` | `HAS_ACCESS_TO`, `CAN_REACH`, `value_hash` |
-| 10 | `ifc_violation` | `IFC_VIOLATION` | `HAS_ACCESS_TO`, `INGESTS_UNTRUSTED` |
-| 11 | `can_exfiltrate` | `CAN_EXFILTRATE_VIA` | `CAN_REACH` |
-| 12 | `can_impersonate` | `CAN_IMPERSONATE` | Raw edges |
-| 13 | `confused_deputy` | `CONFUSED_DEPUTY` | `auth_strength`, `CAN_REACH` |
-| 14 | `cross_protocol` | Cross-protocol `CAN_REACH` | `auth_strength`, `HAS_ACCESS_TO`, `DELEGATES_TO` |
-| 15 | `risk_score` | `risk_score` node property | Prior processors |
-
-Each post-processor is idempotent. Promoting any complete raw scope retires the
-entire composite epoch, then re-runs every processor against the retained
-current raw projection. This global replacement ensures narrow MCP, config, or
-A2A rescans also refresh transitive and cross-domain findings.
+The REST equivalents are documented in the [API reference](../reference/api.md). Finding detail includes the persisted evidence subgraph used at publication time, so later graph changes do not silently rewrite the explanation of an existing finding.
