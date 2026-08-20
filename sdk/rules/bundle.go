@@ -230,7 +230,7 @@ func parseBundleRule(data []byte, source string) (*FingerprintRule, error) {
 }
 
 // MergeFingerprintRules merges a base rule set (typically the embedded
-// builtin set) with an override set (from a --rules-bundle path). When
+// builtin set) with an SDK-provided override set. When
 // the same ID appears in both, the override wins. Rules from base that
 // don't appear in override pass through unchanged.
 //

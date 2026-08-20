@@ -1,6 +1,14 @@
 # Upstream compatibility harness
 
-The Docker harness validates the collector and analysis server against pinned upstream implementations.
+The required smoke harness validates the critical collector-to-server path with a real MCP implementation and a minimal PostgreSQL/Neo4j stack:
+
+```bash
+make integration
+```
+
+It collects a configured bearer credential, proves differential MCP resource access in the local planner, validates the JSON artifact, ingests it manually, and requires a verified finding.
+
+The complete compatibility harness validates the collector and analysis server against all pinned upstream implementations.
 
 It performs:
 
@@ -11,10 +19,10 @@ It performs:
 5. assertions over raw credentials, scan execution state, supported service nodes, mode boundaries, access proof, and cleanup;
 6. manual ingestion of the active artifact into the production PostgreSQL/Neo4j stack.
 
-Run from the repository root:
+Run the complete harness from the repository root:
 
 ```bash
-bash test-infra/run-tests.sh
+make upstream-test
 ```
 
 Keep the stack and generated `test-infra/artifacts/<run-id>/` directory for investigation:

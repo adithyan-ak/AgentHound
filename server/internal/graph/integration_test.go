@@ -174,9 +174,14 @@ func TestIntegrationSchemaInitRejectsUnsupportedSchema(t *testing.T) {
 		t.Fatalf("mark unsupported schema: %v", err)
 	}
 	err = InitSchema(ctx, driver)
+	wantError := fmt.Sprintf(
+		"graph schema %d is unsupported; this server requires schema %d",
+		unsupportedVersion,
+		graphSchemaVersion,
+	)
 	if err == nil || !strings.Contains(
 		err.Error(),
-		"graph schema 2 is unsupported; this server requires schema 1",
+		wantError,
 	) {
 		t.Fatalf("unsupported schema rejection = %v", err)
 	}

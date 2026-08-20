@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Enforce the one-time no-v migration and the normal numeric release policy.
+# Enforce the numeric release policy.
 
 set -euo pipefail
 
@@ -39,37 +39,20 @@ case "$mode" in
     git rev-parse --verify "${tag}^{commit}" >/dev/null
     git rev-parse --verify "${main_ref}^{commit}" >/dev/null
     tag_commit=$(git rev-parse "${tag}^{commit}")
-    main_commit=$(git rev-parse "${main_ref}^{commit}")
-
-    if [ "$tag" = "1.0.0" ] && [ "$latest" = "v1.0.1" ]; then
-      parent_line=$(git rev-list --parents -n 1 "$tag_commit")
-      # A non-merge commit produces exactly two words: commit and one parent.
-      if [ "$(printf '%s\n' "$parent_line" | awk '{print NF}')" -ne 2 ]; then
-        echo "release-tag-check: migration candidate must have exactly one parent" >&2
-        exit 1
-      fi
-      parent_commit=$(printf '%s\n' "$parent_line" | awk '{print $2}')
-      if [ "$parent_commit" != "$main_commit" ]; then
-        echo "release-tag-check: migration parent $parent_commit is not current main $main_commit" >&2
-        exit 1
-      fi
-      echo migration
-      exit 0
-    fi
 
     is_numeric_semver "$latest" || {
-      echo "release-tag-check: latest release $latest is not numeric; migration exception is unavailable" >&2
+      echo "release-tag-check: latest release is not strict numeric SemVer: $latest" >&2
       exit 1
     }
     semver_is_greater "$tag" "$latest" || {
       echo "release-tag-check: $tag must be newer than $latest" >&2
       exit 1
     }
-    git merge-base --is-ancestor "$tag_commit" "$main_commit" || {
-      echo "release-tag-check: normal release tag must already be contained in main" >&2
+    git merge-base --is-ancestor "$tag_commit" "${main_ref}^{commit}" || {
+      echo "release-tag-check: release tag must already be contained in main" >&2
       exit 1
     }
-    echo normal
+    echo "$tag_commit"
     ;;
   published)
     [ "$#" -eq 3 ] || usage
@@ -80,9 +63,9 @@ case "$mode" in
       exit 1
     }
     tag_commit=$(git rev-parse --verify "${tag}^{commit}")
-    main_commit=$(git rev-parse --verify "${main_ref}^{commit}")
-    if [ "$tag_commit" != "$main_commit" ]; then
-      echo "release-tag-check: main $main_commit does not equal peeled tag commit $tag_commit" >&2
+    git rev-parse --verify "${main_ref}^{commit}" >/dev/null
+    if ! git merge-base --is-ancestor "$tag_commit" "${main_ref}^{commit}"; then
+      echo "release-tag-check: published release tag is not contained in main" >&2
       exit 1
     fi
     echo "$tag_commit"

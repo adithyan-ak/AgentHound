@@ -205,7 +205,7 @@ func (a ollamaEmbeddingAction) Candidates(view View) []Candidate {
 }
 
 func (a ollamaEmbeddingAction) Execute(ctx context.Context, candidate Candidate, journal Journal) (Result, error) {
-	result, err := (serviceCollectAction{timeout: a.timeout}).Execute(ctx, candidate, journal)
+	result, err := serviceCollectAction(a).Execute(ctx, candidate, journal)
 	if err != nil {
 		return result, err
 	}
@@ -217,7 +217,7 @@ func (a ollamaEmbeddingAction) Execute(ctx context.Context, candidate Candidate,
 		}
 	}
 	result.Outcome = "embedding_compute_not_confirmed"
-	return result, errors.New("Ollama embedding probe did not confirm compute access")
+	return result, errors.New("ollama embedding probe did not confirm compute access")
 }
 
 func credentialCompatibleWithService(node ingest.Node, service string) bool {

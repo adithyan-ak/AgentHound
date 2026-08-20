@@ -125,72 +125,18 @@ new_git_fixture() {
   printf '%s\n' "$root"
 }
 
-migration=$(new_git_fixture migration)
-(
-  cd "$migration"
-  migration_main=$(git rev-parse HEAD)
-  printf 'candidate\n' >> state
-  git commit -qam candidate
-  git tag 1.0.0
-  [ "$(bash scripts/release-tag-check.sh candidate 1.0.0 v1.0.1 "$migration_main")" = migration ]
-  expect_failure "published main has not advanced" \
-    bash scripts/release-tag-check.sh published 1.0.0 "$migration_main"
-  bash scripts/release-tag-check.sh published 1.0.0 HEAD >/dev/null
-)
-
-wrong_parent=$(new_git_fixture wrong-parent)
-(
-  cd "$wrong_parent"
-  old_main=$(git rev-parse HEAD)
-  printf 'intermediate\n' >> state
-  git commit -qam intermediate
-  printf 'candidate\n' >> state
-  git commit -qam candidate
-  git tag 1.0.0
-  expect_failure "migration parent is not current main" \
-    bash scripts/release-tag-check.sh candidate 1.0.0 v1.0.1 "$old_main"
-)
-
-merge_candidate=$(new_git_fixture merge)
-(
-  cd "$merge_candidate"
-  base=$(git rev-parse HEAD)
-  primary=$(git branch --show-current)
-  git switch -qc side
-  printf 'side\n' > side
-  git add side
-  git commit -qm side
-  git switch -q "$primary"
-  printf 'main\n' > main
-  git add main
-  git commit -qm main
-  git merge -q --no-ff side -m merge
-  git tag 1.0.0
-  expect_failure "migration candidate is a merge commit" \
-    bash scripts/release-tag-check.sh candidate 1.0.0 v1.0.1 "$base"
-)
-
-invalid_migration=$(new_git_fixture invalid-migration)
-(
-  cd "$invalid_migration"
-  main=$(git rev-parse HEAD)
-  printf 'candidate\n' >> state
-  git commit -qam candidate
-  git tag 1.0.1
-  expect_failure "migration tag other than 1.0.0" \
-    bash scripts/release-tag-check.sh candidate 1.0.1 v1.0.1 "$main"
-  git tag 1.0.0
-  expect_failure "migration exception with a different latest release" \
-    bash scripts/release-tag-check.sh candidate 1.0.0 v1.0.0 "$main"
-)
-
 normal=$(new_git_fixture normal)
 (
   cd "$normal"
   printf 'candidate\n' >> state
   git commit -qam candidate
   git tag 1.0.1
-  [ "$(bash scripts/release-tag-check.sh candidate 1.0.1 1.0.0 HEAD)" = normal ]
+  tag_commit=$(git rev-parse HEAD)
+  [ "$(bash scripts/release-tag-check.sh candidate 1.0.1 1.0.0 HEAD)" = "$tag_commit" ]
+  bash scripts/release-tag-check.sh published 1.0.1 HEAD >/dev/null
+  printf 'later main change\n' >> state
+  git commit -qam later
+  bash scripts/release-tag-check.sh published 1.0.1 HEAD >/dev/null
   expect_failure "duplicate normal version" \
     bash scripts/release-tag-check.sh candidate 1.0.1 1.0.1 HEAD
   git tag 0.9.0
@@ -208,6 +154,8 @@ normal_off_main=$(new_git_fixture normal-off-main)
   git tag 1.0.1
   expect_failure "normal release tag is not contained in main" \
     bash scripts/release-tag-check.sh candidate 1.0.1 1.0.0 "$main"
+  expect_failure "published release tag is not contained in main" \
+    bash scripts/release-tag-check.sh published 1.0.1 "$main"
 )
 
 echo "release-process-test: all checks passed"

@@ -14,21 +14,15 @@ make test
 ## Before opening a pull request
 
 ```bash
-gofmt -l .
-go build ./...
-go vet ./...
-go test ./... -race
-make deps-check
-make size-check
-cd server/ui && npm test && npm run build
+make check
 ```
 
-`gofmt -l .` must produce no output. CI also runs golangci-lint, govulncheck, license checks, integration tests, cross-compilation, Docker builds, UI architecture checks, and strict documentation validation.
+`make check` runs the same formatting, lint, race-test, dependency, size, UI, and native-build gates used for pull requests. Run `make integration` when a change can affect collection, planning, artifacts, ingestion, or findings. CI also runs security checks, both supported Neo4j versions, native Windows tests, canonical cross-builds, and container builds.
 
 ## Repository conventions
 
 - Go uses `gofmt`; all returned errors must be handled or explicitly discarded.
-- TypeScript uses ESLint, Prettier, and the feature-sliced boundaries in `server/ui/ARCHITECTURE.md`.
+- TypeScript uses ESLint and the feature-sliced boundaries in `server/ui/ARCHITECTURE.md`.
 - Public graph properties use canonical `snake_case` keys.
 - Collector node IDs are deterministic SHA-256 identities.
 - The collector cannot depend on server packages, database drivers, or UI code.
@@ -52,12 +46,10 @@ All additions need focused tests. Use package-local `testdata/` for module fixtu
 ## Integration environment
 
 ```bash
-make up
-make seed
-make down
+make integration
 ```
 
-Database-backed tests use `AGENTHOUND_NEO4J_URI` and `AGENTHOUND_PG_URI`. The compatibility harness under `test-infra/` exercises the collector against pinned upstream implementations.
+This required smoke test runs a real MCP server and proves the full collector → planner → artifact → manual ingest → finding path. Use `make upstream-test` for the larger pinned-upstream compatibility harness. Database-backed package tests use `AGENTHOUND_NEO4J_URI` and `AGENTHOUND_PG_URI`.
 
 ## Reporting issues
 

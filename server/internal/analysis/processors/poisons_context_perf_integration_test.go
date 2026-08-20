@@ -34,9 +34,8 @@ import (
 //     test hermetic — sinks under other agents/scans are never collected, so
 //     the assertion is stable regardless of foreign graph data.
 //
-// We deliberately do NOT assert any per-agent <= 200 bound — shadows.go does
-// not enforce that. The 200 figure is the operator runtime heuristic in
-// scripts/perf-check.sh; the per-(agent, source) cap below is the real invariant.
+// We deliberately assert the implemented per-(agent, source) cap rather than
+// an arbitrary whole-agent threshold.
 func TestIntegrationPoisonsContextPerSourceCap(t *testing.T) {
 	uri := os.Getenv("AGENTHOUND_NEO4J_URI")
 	if uri == "" {

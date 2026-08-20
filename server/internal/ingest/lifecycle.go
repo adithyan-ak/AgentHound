@@ -393,37 +393,6 @@ func promotedScanExecution(extra map[string]any) map[string]any {
 	return promoted
 }
 
-func executionTimestamp(values map[string]any, key string, required bool) (string, bool) {
-	raw, present := values[key]
-	if !present {
-		return "", !required
-	}
-	value, ok := raw.(string)
-	if !ok {
-		return "", false
-	}
-	if _, err := time.Parse(time.RFC3339, value); err != nil {
-		return "", false
-	}
-	return value, true
-}
-
-func boundedInteger(value any) (int64, bool) {
-	switch number := value.(type) {
-	case int:
-		return int64(number), true
-	case int32:
-		return int64(number), true
-	case int64:
-		return number, true
-	case float64:
-		integer := int64(number)
-		return integer, float64(integer) == number
-	default:
-		return 0, false
-	}
-}
-
 func joinedStageErrors(errs ...error) string {
 	var messages []string
 	for _, err := range errs {

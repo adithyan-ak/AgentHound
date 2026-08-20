@@ -43,7 +43,6 @@ flowchart TD
 npm run lint
 npm test
 npm run build
-cd ../.. && bash scripts/slop-check.sh
 ```
 
-The design-system check keeps literal colors in the token sources and shared layouts in the layout layer.
+ESLint enforces import boundaries, while the theme parity tests keep duplicated token sources synchronized.

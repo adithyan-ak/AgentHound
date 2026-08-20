@@ -10,16 +10,10 @@ AgentHound provides autonomous offensive collection and access verification for 
 Before committing:
 
 ```bash
-gofmt -l .
-go build ./...
-go vet ./...
-go test ./... -race
-make deps-check
-make size-check
-cd server/ui && npm test && npm run build
+make check
 ```
 
-`gofmt -l .` must produce no output. Documentation changes also run `make docs-check`.
+Changes spanning collection, planning, artifacts, ingestion, or findings also run `make integration`. Documentation changes run `make docs-check`.
 
 Before a release tag, run `make prerelease` and `make docs-check`. Release tags are numeric SemVer without a `v` prefix. The first numeric heading in `CHANGELOG.md` is the version source of truth; `make sync-version` updates the installer pins in `README.md` and `install.sh`.
 

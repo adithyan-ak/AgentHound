@@ -18,9 +18,6 @@ import (
 
 const defaultProbeTimeout = 30 * time.Second
 
-// defaultProber is the live MCP prober used when RunInput.Prober is nil.
-func defaultProber() Prober { return &mcpProber{} }
-
 // mcpProber performs a single read-only resources/read against a streamable
 // HTTP MCP server, optionally presenting a bearer credential. It never logs the
 // credential; the unified scan may retain content from a successful exact read.

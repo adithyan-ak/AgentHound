@@ -102,7 +102,10 @@ func TestValidatorStrictlyValidatesOptionalScanExecution(t *testing.T) {
 	if err := NewValidator().Validate(data); err != nil {
 		t.Fatalf("valid scan_execution rejected: %v", err)
 	}
-	value := data.Meta.Extra[ingest.ScanExecutionExtraKey].(map[string]any)
+	value, ok := data.Meta.Extra[ingest.ScanExecutionExtraKey].(map[string]any)
+	if !ok {
+		t.Fatalf("scan_execution = %T, want map[string]any", data.Meta.Extra[ingest.ScanExecutionExtraKey])
+	}
 	value["unknown_field"] = true
 	assertValidationError(t, NewValidator().Validate(data), "meta.extra.scan_execution")
 }

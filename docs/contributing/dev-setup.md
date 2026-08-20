@@ -27,6 +27,10 @@ Useful focused targets:
 | `make build-server` | Build the UI and `bin/agenthound-server`. |
 | `make ui-dev` | Start the Vite development server. |
 | `make ui-test` | Run frontend tests. |
+| `make check` | Run the required local pull-request checks. |
+| `make security-check` | Run vulnerability and dependency-license checks. |
+| `make integration` | Run the lean collector-to-ingest smoke test. |
+| `make upstream-test` | Run the complete pinned-upstream compatibility harness. |
 | `make deps-check` | Validate collector/server dependency boundaries. |
 | `make size-check` | Check the stripped collector size budget. |
 | `make docs-check` | Build the MkDocs site in strict mode. |
@@ -34,10 +38,8 @@ Useful focused targets:
 ## Test
 
 ```bash
-go test ./... -race
-go vet ./...
-golangci-lint run ./...
-cd server/ui && npm test && npm run build
+make check
+make integration
 ```
 
 Use `-short` to skip integration tests that require external databases. CI supplies Neo4j and PostgreSQL for database-backed suites.
@@ -67,4 +69,4 @@ docs/        operator, reference, architecture, and contributor manuals
 
 ## Release gate
 
-`make prerelease` runs version consistency, formatting, lint, vet, vulnerability and license checks, builds, race tests, dependency and size checks, UI validation, and collector cross-compilation. Run `make docs-check` separately for documentation changes.
+`make prerelease` runs version consistency, contributor checks, pinned vulnerability and license checks, and canonical Linux, macOS, and Windows cross-builds. Run `make docs-check` separately for documentation changes.

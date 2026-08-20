@@ -76,7 +76,11 @@ func TestDialerUsesOnlyAllowedMixedDNSAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	port := listener.Addr().(*net.TCPAddr).Port
+	tcpAddress, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("listener address = %T, want *net.TCPAddr", listener.Addr())
+	}
+	port := tcpAddress.Port
 	accepted := make(chan struct{}, 1)
 	go func() {
 		conn, acceptErr := listener.Accept()
@@ -157,7 +161,11 @@ func TestGuardTransportRejectsRedirectBeforeDestinationContact(t *testing.T) {
 }
 
 func TestHTTPTransportDisablesProxyBoundary(t *testing.T) {
-	base := http.DefaultTransport.(*http.Transport).Clone()
+	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		t.Fatalf("http.DefaultTransport = %T, want *http.Transport", http.DefaultTransport)
+	}
+	base := defaultTransport.Clone()
 	base.Proxy = func(*http.Request) (*url.URL, error) {
 		return url.Parse("http://proxy.example")
 	}
