@@ -46,6 +46,7 @@ type scanRuntime struct {
 	stealth         bool
 	insecure        bool
 	quiet           bool
+	explicitSpec    string
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -127,10 +128,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 	if err := runtime.collectLocal(collectorTimeout); err != nil {
 		return runtime.finish(err)
 	}
+	if err := runtime.preflightExplicitTarget(args); err != nil {
+		return runtime.finish(err)
+	}
 	if err := runtime.collectConfiguredMCP(collectorTimeout); err != nil {
 		return runtime.finish(err)
 	}
-	if err := runtime.discoverAndFingerprint(args); err != nil {
+	if err := runtime.discoverAndFingerprint(); err != nil {
 		return runtime.finish(err)
 	}
 	if err := runtime.collectDiscoveredProtocols(collectorTimeout); err != nil {
@@ -221,13 +225,27 @@ func (r *scanRuntime) collectConfiguredMCP(timeout time.Duration) error {
 	return nil
 }
 
-func (r *scanRuntime) discoverAndFingerprint(args []string) error {
+func (r *scanRuntime) preflightExplicitTarget(args []string) error {
+	if len(args) != 1 {
+		return nil
+	}
+	r.explicitSpec = strings.TrimSpace(args[0])
+	_, err := networkscan.Expand(r.explicitSpec, networkscan.ExpandOptions{
+		AllowLargeCIDR: true, AllowPublicTargets: true,
+	})
+	if err == nil {
+		return nil
+	}
+	rejection := fmt.Errorf("explicit target %q was rejected: %w", r.explicitSpec, err)
+	r.addFailure("scan", "target_validation", r.explicitSpec, rejection)
+	return rejection
+}
+
+func (r *scanRuntime) discoverAndFingerprint() error {
 	specs := localScanSeeds()
 	specs = append(specs, r.configuredSeeds...)
-	explicitSpec := ""
-	if len(args) == 1 {
-		explicitSpec = strings.TrimSpace(args[0])
-		specs = append(specs, explicitSpec)
+	if r.explicitSpec != "" {
+		specs = append(specs, r.explicitSpec)
 	}
 	specs = uniqueSortedStrings(specs)
 	candidates := registeredFingerprinters()
@@ -244,7 +262,7 @@ func (r *scanRuntime) discoverAndFingerprint(args []string) error {
 				continue
 			}
 		}
-		explicit := explicitSpec != "" && spec == explicitSpec
+		explicit := r.explicitSpec != "" && spec == r.explicitSpec
 		scanner := &networkscan.Scanner{
 			Concurrency: networkscan.DefaultConcurrency,
 			Timeout:     networkscan.DefaultProbeTimeout,
@@ -267,7 +285,9 @@ func (r *scanRuntime) discoverAndFingerprint(args []string) error {
 		report := scanner.LastReport()
 		state := report.State()
 		errorText := ""
-		if report.Unknown() > 0 {
+		if state == ingest.OutcomeNotApplicable {
+			errorText = "skipped by --exclude"
+		} else if report.Unknown() > 0 {
 			errorText = fmt.Sprintf("%d of %d TCP probes inconclusive", report.Unknown(), report.Total)
 		}
 		r.artifact.Meta.Collection.Outcomes = append(r.artifact.Meta.Collection.Outcomes, ingest.CollectionOutcome{
@@ -306,9 +326,13 @@ func (r *scanRuntime) discoverAndFingerprint(args []string) error {
 			}
 		} else {
 			report := protocolScanner.LastReport()
+			errorText := ""
+			if report.State() == ingest.OutcomeNotApplicable {
+				errorText = "skipped by --exclude"
+			}
 			r.artifact.Meta.Collection.Outcomes = append(r.artifact.Meta.Collection.Outcomes, ingest.CollectionOutcome{
 				Collector: "scan", CoverageKey: r.rootKey, Target: spec,
-				Method: "protocol_discovery", State: report.State(), Items: len(protocolTargets),
+				Method: "protocol_discovery", State: report.State(), Items: len(protocolTargets), Error: errorText,
 			})
 			r.recordProtocolDiscoveries(protocolTargets)
 		}

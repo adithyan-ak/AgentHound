@@ -97,10 +97,11 @@ type Scanner struct {
 // ProbeReport records endpoint/protocol coverage from the most recent Scan.
 // Conclusive includes positive protocol matches and definitive negatives.
 type ProbeReport struct {
-	Total      int
-	Conclusive int
-	Targets    networkscan.TargetSetIdentity
-	Protocols  []ProtocolSurface
+	Total         int
+	Conclusive    int
+	ExcludedHosts int
+	Targets       networkscan.TargetSetIdentity
+	Protocols     []ProtocolSurface
 }
 
 // ProtocolSurface is one protocol and the exact port list used to schedule
@@ -111,6 +112,9 @@ type ProtocolSurface struct {
 }
 
 func (r ProbeReport) State() ingest.OutcomeState {
+	if r.Total == 0 && r.ExcludedHosts > 0 {
+		return ingest.OutcomeNotApplicable
+	}
 	return ingest.ProbeOutcomeState(r.Total, r.Conclusive)
 }
 
@@ -171,6 +175,7 @@ func (s *Scanner) Scan(ctx context.Context, spec string) ([]action.Target, error
 	if err != nil {
 		return nil, err
 	}
+	expandedHosts := len(hosts)
 	if s.ContactPolicy != nil {
 		admitted := hosts[:0]
 		for _, host := range hosts {
@@ -317,10 +322,11 @@ dispatch:
 		s.Progress(int(completed.Load()), total)
 	}
 	s.setReport(ProbeReport{
-		Total:      total,
-		Conclusive: int(conclusive.Load()),
-		Targets:    targetSet,
-		Protocols:  protocolSurfaces,
+		Total:         total,
+		Conclusive:    int(conclusive.Load()),
+		ExcludedHosts: expandedHosts - len(hosts),
+		Targets:       targetSet,
+		Protocols:     protocolSurfaces,
 	})
 
 	if cancelled {

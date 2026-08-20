@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -147,12 +149,58 @@ func TestExplicitMissingTargetsFileFailsFinalExecution(t *testing.T) {
 		output: filepath.Join(t.TempDir(), "failed.json"), quiet: true,
 	}
 	missing := "@" + filepath.Join(t.TempDir(), "missing-targets.txt")
-	runErr := runtime.discoverAndFingerprint([]string{missing})
+	runErr := runtime.preflightExplicitTarget([]string{missing})
 	if runErr == nil || !strings.Contains(runErr.Error(), "explicit target") {
-		t.Fatalf("discover error = %v, want explicit target rejection", runErr)
+		t.Fatalf("preflight error = %v, want explicit target rejection", runErr)
+	}
+	if runtime.explicitSpec != missing {
+		t.Fatalf("preflight cached spec = %q, want %q", runtime.explicitSpec, missing)
+	}
+	foundValidationFailure := false
+	for _, outcome := range artifact.Meta.Collection.Outcomes {
+		if outcome.Target == missing && outcome.Method == "target_validation" && outcome.State == ingest.OutcomeFailed {
+			foundValidationFailure = true
+		}
+	}
+	if !foundValidationFailure {
+		t.Fatalf("outcomes = %+v, want failed target_validation outcome", artifact.Meta.Collection.Outcomes)
 	}
 	if err := runtime.finish(runErr); err == nil {
 		t.Fatal("finish accepted rejected explicit target")
+	}
+	if execution.Status != ingest.ScanExecutionFailed {
+		t.Fatalf("execution status = %q, want failed", execution.Status)
+	}
+}
+
+func TestRunScanPreflightsExplicitTargetBeforeExpiredDeadline(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	output := filepath.Join(t.TempDir(), "failed.json")
+	missing := "@" + filepath.Join(t.TempDir(), "missing-targets.txt")
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("deep", false, "")
+	cmd.Flags().Bool("stealth", false, "")
+	cmd.Flags().Duration("timeout", time.Nanosecond, "")
+	cmd.Flags().StringSlice("exclude", nil, "")
+	cmd.Flags().Bool("insecure", false, "")
+	cmd.Flags().String("output", output, "")
+	cmd.Flags().Bool("quiet", true, "")
+
+	runErr := runScan(cmd, []string{missing})
+	if runErr == nil || !strings.Contains(runErr.Error(), "explicit target") {
+		t.Fatalf("runScan error = %v, want explicit target rejection", runErr)
+	}
+	document, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var artifact ingest.IngestData
+	if err := json.Unmarshal(document, &artifact); err != nil {
+		t.Fatal(err)
+	}
+	execution, present, err := ingest.GetScanExecution(artifact.Meta)
+	if err != nil || !present {
+		t.Fatalf("scan execution = (%+v, %t, %v)", execution, present, err)
 	}
 	if execution.Status != ingest.ScanExecutionFailed {
 		t.Fatalf("execution status = %q, want failed", execution.Status)

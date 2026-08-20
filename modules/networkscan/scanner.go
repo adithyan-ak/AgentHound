@@ -103,13 +103,17 @@ type Scanner struct {
 // Conclusive includes successful connects and explicit connection refusals.
 // All other failures, panics, and unstarted probes remain indeterminate.
 type ProbeReport struct {
-	Total      int
-	Conclusive int
-	Targets    TargetSetIdentity
-	Ports      []int
+	Total         int
+	Conclusive    int
+	ExcludedHosts int
+	Targets       TargetSetIdentity
+	Ports         []int
 }
 
 func (r ProbeReport) State() ingest.OutcomeState {
+	if r.Total == 0 && r.ExcludedHosts > 0 {
+		return ingest.OutcomeNotApplicable
+	}
 	return ingest.ProbeOutcomeState(r.Total, r.Conclusive)
 }
 
@@ -163,6 +167,7 @@ func (s *Scanner) Scan(ctx context.Context, cidr string) ([]action.Target, error
 	if err != nil {
 		return nil, fmt.Errorf("expand %q: %w", cidr, err)
 	}
+	expandedHosts := len(hosts)
 	if s.ContactPolicy != nil {
 		admitted := hosts[:0]
 		for _, host := range hosts {
@@ -282,10 +287,11 @@ producer:
 		out = append(out, hostResultToTarget(host, r.openPorts, ports))
 	}
 	s.setReport(ProbeReport{
-		Total:      total,
-		Conclusive: int(conclusive.Load()),
-		Targets:    targetSet,
-		Ports:      ports,
+		Total:         total,
+		Conclusive:    int(conclusive.Load()),
+		ExcludedHosts: expandedHosts - len(hosts),
+		Targets:       targetSet,
+		Ports:         ports,
 	})
 
 	if cancelled {
