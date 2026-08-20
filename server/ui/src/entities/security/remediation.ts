@@ -72,14 +72,22 @@ export function deriveRemediations(
     props.material_status === "observed" &&
     props.merge_key === "value_hash";
   if (kind === "Credential" && observedExposure) {
-    const source =
-      typeof props.source === "string" && props.source.trim() !== ""
-        ? props.source.trim()
-        : null;
+    const sources = new Set<string>();
+    if (typeof props.source === "string" && props.source.trim() !== "") {
+      sources.add(props.source.trim());
+    }
+    if (Array.isArray(props.sources)) {
+      for (const value of props.sources) {
+        if (typeof value === "string" && value.trim() !== "") {
+          sources.add(value.trim());
+        }
+      }
+    }
+    const source = [...sources].sort().join(", ");
     items.push({
       severity: "critical",
       title: "Rotate this credential",
-      body: source
+      body: source !== ""
         ? `AgentHound observed usable exposed credential material from ${source}. Revoke or rotate it, then restrict or remove that recorded source.`
         : "AgentHound observed usable exposed credential material, but the capture source was not recorded. Revoke or rotate it and investigate the producer before choosing a storage remediation.",
     });

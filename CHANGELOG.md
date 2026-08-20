@@ -4,11 +4,10 @@
 
 ### Fixed
 
-- Concrete credentials discovered in multiple agent configurations now share one `value_hash`-based identity while retaining every provenance contribution.
+- Concrete credentials discovered in multiple agent configurations now share one `value_hash`-based identity with deterministic provenance and authentication hints.
 - Positional scan targets now reject malformed hostname syntax before any resolver or network work begins.
 - The installer now validates before promotion and atomically restores the previous binary when installed-path startup validation fails.
 - Legitimate documentation URLs no longer look like Base64 prompt-injection payloads or, by themselves, outbound-network capabilities.
-- Active planning no longer presents credentials to A2A agents with proven anonymous protocol access or to MCP resources whose anonymous exact-resource control succeeds.
 
 ## 1.1.0 — ⚡ Autonomous Offensive Collection
 

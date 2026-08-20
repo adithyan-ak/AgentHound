@@ -58,7 +58,7 @@ Concrete secrets are saved as usable material, deduplicated by value hash, and a
 <td width="50%" valign="top">
 
 🧪 **Proof instead of reachability guesses**<br/>
-For an eligible MCP resource, AgentHound first performs an anonymous control read. If that exact read succeeds, it records public access without presenting a credential. Otherwise, it compares a credentialed read of the same resource; a denied control plus an allowed credentialed read becomes **Verified During Scan** evidence tied to that credential and resource.
+For an eligible MCP resource, AgentHound compares an anonymous control read with an authenticated read using the exact credential. A denied control plus an allowed credentialed read becomes **Verified During Scan** evidence tied to that credential and resource.
 
 </td>
 <td width="50%" valign="top">

@@ -505,7 +505,7 @@ func TestConfigCollector_ObservedCredentialIdentityDeduplicatesByValueHash(t *te
 		"mcpServers": {
 			"vscode-server": {
 				"url": "https://vscode.example/mcp",
-				"headers": {"Authorization": "Bearer `+shared+`"}
+				"headers": {"X-API-Key": "`+shared+`"}
 			}
 		}
 	}`)
@@ -519,25 +519,40 @@ func TestConfigCollector_ObservedCredentialIdentityDeduplicatesByValueHash(t *te
 
 	wantHash := common.HashCredentialValue(shared)
 	ids := make(map[string]bool)
-	domains := make(map[string]bool)
-	sources := make(map[string]bool)
+	var credential *ingest.Node
+	credentialCount := 0
 	for _, node := range result.Graph.Nodes {
 		if !hasNodeKind(node, "Credential") || node.Properties["value_hash"] != wantHash {
 			continue
 		}
+		credentialCount++
 		ids[node.ID] = true
-		for _, domain := range node.ObservationDomains {
-			domains[domain] = true
-		}
-		if source, _ := node.Properties["source"].(string); source != "" {
-			sources[source] = true
+		copy := node
+		credential = &copy
+	}
+	if credentialCount != 1 || len(ids) != 1 || credential == nil {
+		t.Fatalf("concrete credential contributions = %d IDs=%v, want one emitted value-hash identity", credentialCount, ids)
+	}
+	if len(credential.ObservationDomains) != 2 {
+		t.Fatalf("credential observation domains = %v, want both config owners", credential.ObservationDomains)
+	}
+	if got, want := credential.Properties["sources"], []string{"cursor-server", "vscode-server"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("credential sources = %#v, want %#v", got, want)
+	}
+	if got, want := credential.Properties["auth_methods"], []string{string(common.AuthAPIKey), string(common.AuthBearer)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("credential auth methods = %#v, want %#v", got, want)
+	}
+	if _, present := credential.Properties["source"]; present {
+		t.Fatal("ambiguous singular credential source was retained")
+	}
+	uses := 0
+	for _, edge := range result.Graph.Edges {
+		if edge.Kind == "USES_CREDENTIAL" && edge.Target == credential.ID {
+			uses++
 		}
 	}
-	if len(ids) != 1 {
-		t.Fatalf("concrete credential IDs = %v, want one value-hash identity", ids)
-	}
-	if len(domains) != 2 || len(sources) != 2 {
-		t.Fatalf("credential provenance lost: domains=%v sources=%v", domains, sources)
+	if uses != 2 {
+		t.Fatalf("USES_CREDENTIAL paths = %d, want one per source identity", uses)
 	}
 }
 
