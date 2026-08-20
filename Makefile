@@ -81,6 +81,7 @@ check: preflight-build
 security-check:
 	$(GOVULNCHECK) ./...
 	$(GO_LICENSES) check --allowed_licenses=$(ALLOWED_LICENSES) ./collector/cmd/agenthound/... ./server/cmd/agenthound-server/...
+	cd server/ui && npm audit --package-lock-only --omit=dev --audit-level=high
 
 integration: preflight-docker-compose
 	@bash test-infra/run-smoke.sh

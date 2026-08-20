@@ -17,6 +17,18 @@ Changes spanning collection, planning, artifacts, ingestion, or findings also ru
 
 Before a release tag, run `make prerelease` and `make docs-check`. Release tags are numeric SemVer without a `v` prefix. The first numeric heading in `CHANGELOG.md` is the version source of truth; `make sync-version` updates the installer pins in `README.md` and `install.sh`.
 
+Release from a clean commit already merged into `main`:
+
+1. Confirm every PR check is green and `Unreleased` is empty.
+2. Dispatch the Release workflow from `main` once to verify the repository-linked private staging packages.
+3. Run `make prerelease` and `make docs-check` from the exact `main` commit.
+4. Create and push an annotated numeric tag, for example `git tag -a 1.1.0 -m "AgentHound 1.1.0"` followed by `git push origin 1.1.0`.
+5. Wait for the private candidate to pass, approve `release-production`, and require `release-acceptance` and `homebrew-acceptance` to pass.
+
+Numeric release tags are immutable. Rerun a transient failure against the same commit; if source changes are required, prepare the next patch version instead of moving the tag.
+
+Supported release surfaces are GitHub archives, the installer, GHCR, and Homebrew. Numeric tags are intentionally not Go module versions, so release acceptance must not use `go list`, `go mod download`, or `go install` as distribution checks.
+
 ## Hard boundaries
 
 - The collector must not link `chi`, `pgx`, `neo4j-go-driver`, or `server/internal` packages. `scripts/deps-check.sh` enforces the boundary.

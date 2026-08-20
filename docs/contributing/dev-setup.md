@@ -28,7 +28,7 @@ Useful focused targets:
 | `make ui-dev` | Start the Vite development server. |
 | `make ui-test` | Run frontend tests. |
 | `make check` | Run the required local pull-request checks. |
-| `make security-check` | Run vulnerability and dependency-license checks. |
+| `make security-check` | Check reachable Go vulnerabilities, binary licenses, and production dashboard dependencies. |
 | `make integration` | Run the lean collector-to-ingest smoke test. |
 | `make upstream-test` | Run the complete pinned-upstream compatibility harness. |
 | `make deps-check` | Validate collector/server dependency boundaries. |

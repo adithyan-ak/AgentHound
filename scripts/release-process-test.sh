@@ -2,6 +2,11 @@
 
 set -euo pipefail
 
+# The release workflow itself runs on a tag. Fixtures set tag context only for
+# the cases that exercise it; inheriting the real release tag would make every
+# synthetic version fixture fail for the wrong reason.
+unset GITHUB_REF_TYPE GITHUB_REF_NAME
+
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 test_root=$(mktemp -d)
 pin_base=https://raw.githubusercontent.com/adithyan-ak/agenthound
