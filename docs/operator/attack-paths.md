@@ -54,7 +54,7 @@ agenthound-server query --prebuilt litellm-credential-leak
 
 ## Same-scan access proof
 
-For an eligible MCP resource, the collector performs an anonymous control read and then an authenticated read with the selected credential. A denied control plus an allowed authenticated read emits:
+For an eligible MCP resource, the collector performs an anonymous control read first. A successful exact read records public access without presenting a credential. Otherwise, the collector follows with an authenticated read; a denied control plus an allowed authenticated read emits:
 
 ```text
 Credential -CREDENTIAL_ACCESS_OBSERVED-> MCPResource

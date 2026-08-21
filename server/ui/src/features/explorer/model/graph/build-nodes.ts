@@ -1,18 +1,13 @@
 import type { APINode } from "@entities/graph/dto";
+import { displayName } from "@entities/node/model";
 import type { SeverityLevel } from "../lens-config";
 import type { BuildOptions, HexNodeData, LogicalEdge, LogicalHexNode } from "./types";
 import { severityRank } from "./build-edges";
 
 export function nodeLabel(node: APINode): string {
-  const props = node.properties ?? {};
-  const name =
-    (props.name as string) ||
-    (props.hostname as string) ||
-    (props.ip as string) ||
-    (props.uri as string) ||
-    (props.path as string);
+  const name = displayName(node);
   if (name && name.length > 40) return name.slice(0, 38) + "…";
-  return name || node.id.slice(0, 12);
+  return name;
 }
 
 export function kindTag(kind: string): string {

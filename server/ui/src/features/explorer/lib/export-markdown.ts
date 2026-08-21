@@ -1,4 +1,5 @@
 import type { APINode } from "@entities/graph/dto";
+import { displayName } from "@entities/node/model";
 
 const MD_SKIP_KEYS = new Set([
   "objectid",
@@ -67,11 +68,7 @@ export function formatNodeAsMarkdown(
 ): string {
   const props = node.properties ?? {};
   const isCredential = node.kinds.includes("Credential");
-  const name =
-    (typeof props.name === "string" && props.name) ||
-    (typeof props.uri === "string" && props.uri) ||
-    (typeof props.path === "string" && props.path) ||
-    node.id.slice(0, 12);
+  const name = displayName(node);
 
   const lines: string[] = [];
   lines.push(`## ${name}`);

@@ -158,6 +158,7 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 		}
 		data.Graph.Edges = append(data.Graph.Edges, e)
 	}
+	observedCredentials := make(map[string]*observedCredentialAggregate)
 
 	configs := discovery.ParsedConfigs()
 	configsByPath := make(map[string][]ParsedConfig)
@@ -268,6 +269,13 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 					cred.Location,
 					cred.Name,
 				)
+				// Concrete material has one value-hash identity. Aggregate its
+				// source-specific metadata before emission so one Credential can
+				// retain every provenance path without publishing conflicting
+				// scalar properties under the same graph ID.
+				if cred.MaterialStatus == common.CredentialMaterialObserved && cred.ValueHash != "" {
+					credID = ingest.ComputeNodeID("Credential", cred.ValueHash)
+				}
 				// value_hash is the cross-collector merge primitive — see
 				// sdk/common/hasher.go HashCredentialValue. Always populated
 				// from the original observed value or reference. The credential-chain Cypher
@@ -297,7 +305,16 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 				if cred.MaterialStatus == common.CredentialMaterialObserved {
 					credProps["value"] = cred.Value
 				}
-				addNode(common.NewNode(credID, []string{"Credential"}, credProps), scopeKey)
+				if cred.MaterialStatus == common.CredentialMaterialObserved && cred.ValueHash != "" {
+					aggregate := observedCredentials[credID]
+					if aggregate == nil {
+						aggregate = newObservedCredentialAggregate(credProps)
+						observedCredentials[credID] = aggregate
+					}
+					aggregate.add(credProps, scopeKey)
+				} else {
+					addNode(common.NewNode(credID, []string{"Credential"}, credProps), scopeKey)
+				}
 
 				authWeight := identityAuthWeight(identityType)
 				addEdge(common.NewEdge(serverID, identityID, "AUTHENTICATES_WITH", "MCPServer", "Identity",
@@ -311,6 +328,18 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 				}
 			}
 		}
+	}
+	credentialIDs := make([]string, 0, len(observedCredentials))
+	for credentialID := range observedCredentials {
+		credentialIDs = append(credentialIDs, credentialID)
+	}
+	sort.Strings(credentialIDs)
+	for _, credentialID := range credentialIDs {
+		aggregate := observedCredentials[credentialID]
+		addNode(
+			common.NewNode(credentialID, []string{"Credential"}, aggregate.properties()),
+			aggregate.domains...,
+		)
 	}
 
 	type instructionContribution struct {
@@ -569,6 +598,79 @@ func credToIdentityType(cred CredentialInfo) string {
 		return string(common.AuthCustom)
 	}
 	return string(method)
+}
+
+type credentialAggregateField struct {
+	singular string
+	plural   string
+}
+
+var credentialAggregateFields = []credentialAggregateField{
+	{singular: "type", plural: "types"},
+	{singular: "name", plural: "names"},
+	{singular: "source", plural: "sources"},
+	{singular: "location", plural: "locations"},
+	{singular: "auth_method", plural: "auth_methods"},
+	{singular: "format", plural: "formats"},
+}
+
+// observedCredentialAggregate separates secret identity from the many config
+// locations that may present the same material. Neo4j properties can retain
+// sorted scalar arrays, so this needs no occurrence node or schema migration.
+type observedCredentialAggregate struct {
+	stable  map[string]any
+	values  map[string]map[string]bool
+	domains []string
+}
+
+func newObservedCredentialAggregate(properties map[string]any) *observedCredentialAggregate {
+	aggregate := &observedCredentialAggregate{
+		stable: map[string]any{
+			"value":           properties["value"],
+			"value_hash":      properties["value_hash"],
+			"merge_key":       properties["merge_key"],
+			"identity_basis":  properties["identity_basis"],
+			"material_status": properties["material_status"],
+			"exposure_status": properties["exposure_status"],
+			"high_entropy":    properties["high_entropy"],
+		},
+		values: make(map[string]map[string]bool, len(credentialAggregateFields)),
+	}
+	for _, field := range credentialAggregateFields {
+		aggregate.values[field.singular] = make(map[string]bool)
+	}
+	return aggregate
+}
+
+func (a *observedCredentialAggregate) add(properties map[string]any, domain string) {
+	a.domains = ingest.MergeObservationDomains(a.domains, []string{domain})
+	for _, field := range credentialAggregateFields {
+		value, _ := properties[field.singular].(string)
+		value = strings.TrimSpace(value)
+		if value != "" {
+			a.values[field.singular][value] = true
+		}
+	}
+}
+
+func (a *observedCredentialAggregate) properties() map[string]any {
+	properties := make(map[string]any, len(a.stable)+(2*len(credentialAggregateFields)))
+	for key, value := range a.stable {
+		properties[key] = value
+	}
+	for _, field := range credentialAggregateFields {
+		set := a.values[field.singular]
+		values := make([]string, 0, len(set))
+		for value := range set {
+			values = append(values, value)
+		}
+		sort.Strings(values)
+		properties[field.plural] = values
+		if len(values) == 1 {
+			properties[field.singular] = values[0]
+		}
+	}
+	return properties
 }
 
 // Contribution keys deliberately include ownership and semantics. A shared

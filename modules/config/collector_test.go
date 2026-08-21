@@ -488,6 +488,74 @@ func TestConfigCollector_ValueHashAlwaysPopulated(t *testing.T) {
 	}
 }
 
+func TestConfigCollector_ObservedCredentialIdentityDeduplicatesByValueHash(t *testing.T) {
+	tmp := t.TempDir()
+	firstPath := filepath.Join(tmp, "cursor.json")
+	secondPath := filepath.Join(tmp, "vscode.json")
+	const shared = "e2e-identical-credential-material"
+	writeJSON(t, firstPath, `{
+		"mcpServers": {
+			"cursor-server": {
+				"url": "https://cursor.example/mcp",
+				"headers": {"Authorization": "Bearer `+shared+`"}
+			}
+		}
+	}`)
+	writeJSON(t, secondPath, `{
+		"mcpServers": {
+			"vscode-server": {
+				"url": "https://vscode.example/mcp",
+				"headers": {"X-API-Key": "`+shared+`"}
+			}
+		}
+	}`)
+
+	result, err := NewConfigCollector().Collect(context.Background(), collector.CollectOptions{
+		ConfigPaths: []string{firstPath, secondPath}, ScanID: "credential-identity-test",
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	wantHash := common.HashCredentialValue(shared)
+	ids := make(map[string]bool)
+	var credential *ingest.Node
+	credentialCount := 0
+	for _, node := range result.Graph.Nodes {
+		if !hasNodeKind(node, "Credential") || node.Properties["value_hash"] != wantHash {
+			continue
+		}
+		credentialCount++
+		ids[node.ID] = true
+		copy := node
+		credential = &copy
+	}
+	if credentialCount != 1 || len(ids) != 1 || credential == nil {
+		t.Fatalf("concrete credential contributions = %d IDs=%v, want one emitted value-hash identity", credentialCount, ids)
+	}
+	if len(credential.ObservationDomains) != 2 {
+		t.Fatalf("credential observation domains = %v, want both config owners", credential.ObservationDomains)
+	}
+	if got, want := credential.Properties["sources"], []string{"cursor-server", "vscode-server"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("credential sources = %#v, want %#v", got, want)
+	}
+	if got, want := credential.Properties["auth_methods"], []string{string(common.AuthAPIKey), string(common.AuthBearer)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("credential auth methods = %#v, want %#v", got, want)
+	}
+	if _, present := credential.Properties["source"]; present {
+		t.Fatal("ambiguous singular credential source was retained")
+	}
+	uses := 0
+	for _, edge := range result.Graph.Edges {
+		if edge.Kind == "USES_CREDENTIAL" && edge.Target == credential.ID {
+			uses++
+		}
+	}
+	if uses != 2 {
+		t.Fatalf("USES_CREDENTIAL paths = %d, want one per source identity", uses)
+	}
+}
+
 func TestConfigCollector_UnresolvedReferenceIsNotExecutableValue(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	writeJSON(t, configPath, `{

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed
+
+- Concrete credentials discovered in multiple agent configurations now share one `value_hash`-based identity with deterministic provenance and authentication hints.
+- Positional scan targets now reject malformed hostname syntax before any resolver or network work begins.
+- The installer now validates before promotion and atomically restores the previous binary when installed-path startup validation fails.
+- Legitimate documentation URLs no longer look like Base64 prompt-injection payloads or, by themselves, outbound-network capabilities.
+- Active planning avoids redundant credential presentation when the exact MCP resource or A2A card/probe surface has already succeeded anonymously.
+
 ## 1.1.0 — ⚡ Autonomous Offensive Collection
 
 AgentHound 1.1 is an offensive security framework built for the moment a red-team operator lands on a compromised host. One static collector maps the foothold, captures usable secrets, discovers the reachable agentic estate, expands access with compatible credentials, proves concrete attack paths, and preserves the operation in one JSON artifact.

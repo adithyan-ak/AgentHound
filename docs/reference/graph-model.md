@@ -24,7 +24,7 @@ Concrete AI-service nodes also carry the `AIService` label. The umbrella label i
 | `value_hash` | SHA-256 identity used for deduplication and evidence joins. |
 | `material_status` | Whether the material is observed, masked, hashed, or otherwise unavailable. |
 | `exposure_status` | Whether collection observed the credential as exposed. |
-| `source` and provenance fields | Where the material or reference came from. |
+| `source`/`sources` and provenance fields | Where the material or reference came from; repeated observations retain sorted plural values. |
 
 Only concrete `value` material becomes planner input. The normal dashboard property view masks it; explicit query output and JSON export remain literal.
 

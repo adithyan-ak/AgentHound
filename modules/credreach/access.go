@@ -7,7 +7,7 @@ import (
 )
 
 // AccessProof is the complete in-process differential resource-read result.
-// Content is retained only from a successful credentialed read so the unified
+// Content is retained from the successful exact resource read so the unified
 // scan can preserve it on the resource node.
 type AccessProof struct {
 	Control    ProbeResult
@@ -16,8 +16,9 @@ type AccessProof struct {
 	Content    json.RawMessage
 }
 
-// VerifyAccess performs the unauthenticated control and credentialed exact
-// resource read in one invocation.
+// VerifyAccess performs the unauthenticated control first. A successful exact
+// read already establishes public access; otherwise it follows with the
+// credentialed exact resource read needed for differential proof.
 func VerifyAccess(
 	ctx context.Context,
 	endpoint, resourceURI, credential string,
@@ -28,6 +29,12 @@ func VerifyAccess(
 	control, controlContent := prober.probeWithContent(ctx, ProbeRequest{
 		Host: endpoint, ResourceURI: resourceURI, Insecure: insecure, Timeout: timeout,
 	})
+	if exactResourceRead(control) && control.Status == ProbeAllowed {
+		return AccessProof{
+			Control: control, Outcome: Classify(control, ProbeResult{}),
+			Content: credentialedContent(controlContent),
+		}
+	}
 	credentialed, content := prober.probeWithContent(ctx, ProbeRequest{
 		Host: endpoint, ResourceURI: resourceURI, Credential: credential,
 		Insecure: insecure, Timeout: timeout,
