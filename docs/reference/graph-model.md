@@ -28,6 +28,21 @@ Concrete AI-service nodes also carry the `AIService` label. The umbrella label i
 
 Only concrete `value` material becomes planner input. The normal dashboard property view masks it; explicit query output and JSON export remain literal.
 
+### Instruction evidence
+
+`InstructionFile` records the canonical `path`, source `type`, content `hash`, captured `size_bytes`, and `modified_at`. Its classification fields are:
+
+| Property | Meaning |
+|---|---|
+| `instruction_verdict` | `clean`, `signal`, or `poisoning`. |
+| `instruction_scope` | `exact_project`, `exact_user`, or recursive `deep`. |
+| `instruction_signal_count` | Total classified signals before retention limits. |
+| `instruction_signal_truncated` | Whether some signals were omitted from the bounded evidence. |
+| `instruction_evidence_version` | Structured evidence contract version. |
+| `instruction_evidence_json` | Up to 32 ordered signals and 64 KiB of source-exact matched excerpts, local context, positions, and optional decoded previews. Large encoded tokens retain the bounded raw excerpt that maps to the decisive decoded semantics. |
+
+The evidence contains only bounded excerpts, not the complete instruction file.
+
 ## Raw edges
 
 Raw edges come from collectors or same-scan proof actions.
@@ -54,7 +69,8 @@ Raw edges come from collectors or same-scan proof actions.
 | `CAN_EXFILTRATE_VIA` | AgentInstance → MCPTool | Sensitive access combines with an outbound channel. |
 | `SHADOWS` | MCPTool → MCPTool | A tool name or description can shadow another tool. |
 | `POISONED_DESCRIPTION` | MCPTool → MCPTool | Description content contains an injection signal. |
-| `POISONED_INSTRUCTIONS` | InstructionFile → InstructionFile | Instruction content contains an injection signal. |
+| `INSTRUCTION_SIGNAL` | InstructionFile → InstructionFile | A standalone local signal, or strong evidence seen only in recursive deep scope, requires review. |
+| `POISONED_INSTRUCTIONS` | InstructionFile → InstructionFile | Strong, locally correlated poisoning evidence occurs in an exact project or user instruction scope. |
 | `POISONS_CONTEXT` | MCPTool → MCPTool | An injection-bearing tool shares agent context with a high-impact tool. |
 | `TAINTS` | MCPTool → MCPTool | Untrusted input can flow between compatible tool schemas. |
 | `IFC_VIOLATION` | MCPTool → MCPTool | Untrusted input can reach a high-impact sink through shared resources. |
@@ -83,4 +99,4 @@ Composite analysis is rebuilt as one epoch after raw reconciliation. Published s
 
 Findings classify evidence as observed, inferred, verified, hypothesis, reference-only, or unknown. A verified `CAN_REACH` finding contains `evidence.proof` with the action ID, verification time, differential control and credential stages, outcome, and cleanup status.
 
-Finding detail returns the exact evidence subgraph captured at publication. It does not rerun graph discovery when the detail page is opened.
+Finding detail returns the exact evidence subgraph captured at publication. Instruction finding detail additionally returns structured `instruction_evidence` extracted from that immutable snapshot. It does not rerun graph discovery when the detail page is opened.

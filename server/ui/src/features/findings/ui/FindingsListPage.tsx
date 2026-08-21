@@ -1323,10 +1323,16 @@ function FindingRow({
       <td className="px-2 py-3 align-middle">
         <div className="flex items-center gap-1.5 font-mono text-[11px]">
           <MiniHexIcon kind={f.source_kind} />
-          <span className="min-w-0 flex-1 truncate text-foreground/80">{f.source_name}</span>
-          <ArrowRight className="h-3 w-3 shrink-0 text-primary/50" />
-          <MiniHexIcon kind={f.target_kind} />
-          <span className="min-w-0 flex-1 truncate text-foreground/80">{f.target_name}</span>
+          <span className="min-w-0 flex-1 truncate text-foreground/80">
+            {isInstructionFinding(f) ? instructionBasename(f.source_name) : f.source_name}
+          </span>
+          {!isInstructionFinding(f) && (
+            <>
+              <ArrowRight className="h-3 w-3 shrink-0 text-primary/50" />
+              <MiniHexIcon kind={f.target_kind} />
+              <span className="min-w-0 flex-1 truncate text-foreground/80">{f.target_name}</span>
+            </>
+          )}
           {crossProtocol && (
             <span
               className="ml-1 rounded-[2px] bg-purple-500/15 px-1 py-0.5 font-mono text-[8px] font-bold uppercase tracking-[0.06em] text-purple-300"
@@ -1353,8 +1359,21 @@ function FindingRow({
         )}
       </td>
       <td className="px-2 py-3 align-middle">
-        <ConfidencePips value={conf} />
+        {isInstructionFinding(f) ? (
+          <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">content</span>
+        ) : (
+          <ConfidencePips value={conf} />
+        )}
       </td>
     </tr>
   );
+}
+
+function isInstructionFinding(finding: Finding): boolean {
+  return finding.edge_kind === "INSTRUCTION_SIGNAL" || finding.edge_kind === "POISONED_INSTRUCTIONS";
+}
+
+function instructionBasename(path: string): string {
+  const parts = path.replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts.length > 0 ? parts[parts.length - 1]! : path;
 }

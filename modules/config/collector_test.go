@@ -922,8 +922,8 @@ func TestConfigCollector_InstructionFiles(t *testing.T) {
 	for _, n := range instrNodes {
 		if n.Properties["type"] == "claude.md" {
 			found = true
-			if n.Properties["is_suspicious"] != false {
-				t.Error("normal instruction file should not be suspicious")
+			if n.Properties["instruction_verdict"] != "clean" {
+				t.Error("normal instruction file should classify clean")
 			}
 		}
 	}
@@ -970,11 +970,10 @@ func TestConfigCollectorInstructionOverlapMergesIndependentOwners(t *testing.T) 
 
 // TestConfigCollectorInstructionCanonicalGraphContract locks the end-to-end
 // graph shape produced for a canonically-obfuscated instruction file. It pins:
-//   - the exact InstructionFile property set {objectid, path, type, hash,
-//     is_suspicious} — no content/evidence/canonical leakage into the graph;
+//   - the bounded structured InstructionFile evidence contract;
 //   - the node ID scheme ComputeNodeID("InstructionFile", canonicalPath) and
 //     objectid==ID mirror;
-//   - hash is the FULL RAW SHA-256 and is_suspicious is the boolean true;
+//   - hash is the FULL RAW SHA-256 and the compound verdict is poisoning;
 //   - no LOADS_INSTRUCTIONS edge is fabricated without evidence that a
 //     collected agent/client actually loads this instruction file.
 func TestConfigCollectorInstructionCanonicalGraphContract(t *testing.T) {
@@ -1025,17 +1024,24 @@ func TestConfigCollectorInstructionCanonicalGraphContract(t *testing.T) {
 		t.Fatalf("node ID = %q, want ComputeNodeID scheme %q", instr.ID, wantID)
 	}
 
-	// Exact property shape: only these five keys, nothing more.
+	// Exact property shape: bounded metadata and JSON evidence, never the full file.
 	wantKeys := map[string]bool{
-		"objectid":      true,
-		"path":          true,
-		"type":          true,
-		"hash":          true,
-		"is_suspicious": true,
+		"objectid":                     true,
+		"path":                         true,
+		"type":                         true,
+		"hash":                         true,
+		"instruction_verdict":          true,
+		"instruction_scope":            true,
+		"instruction_signal_count":     true,
+		"instruction_signal_truncated": true,
+		"instruction_evidence_version": true,
+		"instruction_evidence_json":    true,
+		"size_bytes":                   true,
+		"modified_at":                  true,
 	}
 	for key := range instr.Properties {
 		if !wantKeys[key] {
-			t.Fatalf("unexpected InstructionFile property %q; graph must stay raw-only (no content/evidence/canonical)", key)
+			t.Fatalf("unexpected InstructionFile property %q", key)
 		}
 	}
 	for key := range wantKeys {
@@ -1059,8 +1065,8 @@ func TestConfigCollectorInstructionCanonicalGraphContract(t *testing.T) {
 	if want := common.HashSHA256(rawContent); instr.Properties["hash"] != want {
 		t.Fatalf("hash = %v, want full raw SHA-256 %q", instr.Properties["hash"], want)
 	}
-	if instr.Properties["is_suspicious"] != true {
-		t.Fatalf("is_suspicious = %v, want boolean true", instr.Properties["is_suspicious"])
+	if instr.Properties["instruction_verdict"] != "poisoning" {
+		t.Fatalf("instruction_verdict = %v, want poisoning", instr.Properties["instruction_verdict"])
 	}
 
 	for i := range result.Graph.Edges {

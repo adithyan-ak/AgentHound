@@ -12,6 +12,7 @@ import (
 
 	collectorcli "github.com/adithyan-ak/agenthound/collector/cli"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
+	sharedinstruction "github.com/adithyan-ak/agenthound/sdk/instruction"
 )
 
 func testCollectionIdentity() ingest.CollectionIdentity {
@@ -90,6 +91,126 @@ func TestValidatorAcceptsValid(t *testing.T) {
 	v := NewValidator()
 	if err := v.Validate(validIngestData()); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func validInstructionEvidenceData(t *testing.T) *ingest.IngestData {
+	t.Helper()
+	data := validIngestData()
+	scope := data.Meta.Collection.CoverageKeys[0]
+	evidence, raw, err := sharedinstruction.MarshalBounded(
+		sharedinstruction.VerdictSignal,
+		[]sharedinstruction.Signal{{
+			RuleID: "instruction-ignore-previous", Label: "Ignore Previous Instructions",
+			Severity: "critical", Strength: sharedinstruction.StrengthPrimary,
+			RawOffset: 7, Line: 2, Column: 1, Match: "Ignore previous instructions",
+			ContextBefore: "line 1\n", ContextAfter: "\nline 3",
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data.Graph.Nodes = []ingest.Node{{
+		ID: "sha256:instruction", Kinds: []string{"InstructionFile"},
+		Properties: map[string]any{
+			"path": "/project/AGENTS.md", "type": "agents.md", "hash": "sha256:" + strings.Repeat("a", 64),
+			"instruction_verdict": string(evidence.Verdict), "instruction_scope": "deep",
+			"instruction_signal_count": evidence.TotalSignals, "instruction_signal_truncated": evidence.Truncated,
+			"instruction_evidence_version": evidence.Version, "instruction_evidence_json": raw,
+			"size_bytes": 64, "modified_at": "2026-08-20T12:00:00Z",
+		},
+		ObservationDomains: []string{scope},
+	}}
+	data.Graph.Edges = []ingest.Edge{}
+	return data
+}
+
+func TestValidatorInstructionEvidenceContract(t *testing.T) {
+	if err := NewValidator().Validate(validInstructionEvidenceData(t)); err != nil {
+		t.Fatalf("valid instruction evidence rejected: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		path string
+		edit func(map[string]any)
+	}{
+		{name: "missing field", path: "graph.nodes[0].properties.instruction_scope", edit: func(p map[string]any) { delete(p, "instruction_scope") }},
+		{name: "verdict mismatch", path: "graph.nodes[0].properties.instruction_evidence_json", edit: func(p map[string]any) { p["instruction_verdict"] = "poisoning" }},
+		{name: "count mismatch", path: "graph.nodes[0].properties.instruction_signal_count", edit: func(p map[string]any) { p["instruction_signal_count"] = 2 }},
+		{name: "version mismatch", path: "graph.nodes[0].properties.instruction_evidence_version", edit: func(p map[string]any) { p["instruction_evidence_version"] = 2 }},
+		{name: "offset outside file", path: "graph.nodes[0].properties.instruction_evidence_json.signals[0].match", edit: func(p map[string]any) { p["size_bytes"] = 7 }},
+		{name: "non UTC timestamp", path: "graph.nodes[0].properties.modified_at", edit: func(p map[string]any) { p["modified_at"] = "2026-08-20T12:00:00-07:00" }},
+		{name: "unknown JSON field", path: "graph.nodes[0].properties.instruction_evidence_json", edit: func(p map[string]any) {
+			raw, ok := p["instruction_evidence_json"].(string)
+			if !ok {
+				panic("instruction evidence fixture is not a string")
+			}
+			p["instruction_evidence_json"] = strings.TrimSuffix(raw, "}") + `,"unknown":true}`
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data := validInstructionEvidenceData(t)
+			test.edit(data.Graph.Nodes[0].Properties)
+			assertValidationError(t, NewValidator().Validate(data), test.path)
+		})
+	}
+}
+
+func TestValidatorInstructionEvidenceSourceSpan(t *testing.T) {
+	tests := []struct {
+		name    string
+		offset  int
+		match   string
+		size    int
+		wantErr bool
+	}{
+		{name: "ends exactly at size", offset: 7, match: "abc", size: 10},
+		{name: "ends one byte past size", offset: 7, match: "abcd", size: 10, wantErr: true},
+		{name: "multibyte uses source bytes", offset: 7, match: "é", size: 9},
+		{name: "multibyte one byte short", offset: 7, match: "é", size: 8, wantErr: true},
+		{name: "replacement character is conservative", offset: 7, match: "\uFFFD", size: 8},
+		{name: "extreme offset cannot overflow", offset: math.MaxInt, match: "abc", size: 64, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data := validInstructionEvidenceData(t)
+			properties := data.Graph.Nodes[0].Properties
+			rawEvidence, ok := properties["instruction_evidence_json"].(string)
+			if !ok {
+				t.Fatal("instruction_evidence_json is not a string")
+			}
+			evidence, err := sharedinstruction.ParseEvidenceJSON(rawEvidence)
+			if err != nil {
+				t.Fatal(err)
+			}
+			evidence.Signals[0].RawOffset = test.offset
+			evidence.Signals[0].Match = test.match
+			encoded, err := json.Marshal(evidence)
+			if err != nil {
+				t.Fatal(err)
+			}
+			properties["instruction_evidence_json"] = string(encoded)
+			properties["size_bytes"] = test.size
+			err = NewValidator().Validate(data)
+			if test.wantErr {
+				assertValidationError(t, err, "graph.nodes[0].properties.instruction_evidence_json.signals[0].match")
+			} else if err != nil {
+				t.Fatalf("valid source span rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidatorAcceptsHistoricalBooleanOnlyInstructionFile(t *testing.T) {
+	data := validInstructionEvidenceData(t)
+	data.Graph.Nodes[0].Properties = map[string]any{
+		"path": "/project/AGENTS.md", "type": "agents.md",
+		"hash": "sha256:" + strings.Repeat("a", 64), "is_suspicious": true,
+	}
+	if err := NewValidator().Validate(data); err != nil {
+		t.Fatalf("historical V1 instruction node rejected: %v", err)
 	}
 }
 

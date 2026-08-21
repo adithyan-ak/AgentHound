@@ -20,7 +20,10 @@ export function kindTag(kind: string): string {
 function isPoisonedSource(n: APINode): boolean {
   const props = n.properties ?? {};
   if (props.has_injection_patterns === true) return true;
-  if (props.is_suspicious === true) return true;
+  if (
+    props.instruction_verdict === "signal" ||
+    props.instruction_verdict === "poisoning"
+  ) return true;
   return false;
 }
 

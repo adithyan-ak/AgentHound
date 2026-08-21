@@ -20,11 +20,13 @@ Local configuration, instruction, and credential collection always runs. One pos
 | `--exclude <value>` | none | Exclude an exact hostname, IP, or CIDR; repeatable. |
 | `--insecure` | `false` | Skip TLS certificate verification. |
 | `--output <path>` | `scan-<scan_id>.json` | Write the artifact to a file. Directories and `-` are rejected. |
-| `--quiet` | `false` | Suppress non-error progress and discovered-secret output. |
+| `--quiet` | `false` | Suppress non-error progress, discovered-secret output, and instruction-signal excerpts. |
 | `--stealth` | `false` | Keep the scan read-only and disable credential reuse and active probes. |
 | `--timeout <duration>` | `15m` | Set the overall scan deadline. |
 
 Success exits `0`. Invalid input, checkpoint failure, fatal scan failure, or unresolved cleanup exits nonzero. Independent collection failures remain recorded in the artifact and do not necessarily make the whole scan fail.
+
+For every non-clean instruction file, normal output includes its path, line, primary rule, and a bounded excerpt. The complete structured evidence remains in the JSON artifact; `--quiet` suppresses the terminal summary only.
 
 ### `agenthound revert`
 

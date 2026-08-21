@@ -380,6 +380,11 @@ func (h *AnalysisHandler) HandleFindingDetail(w http.ResponseWriter, r *http.Req
 		WriteNotFound(w, "finding not found in the published snapshot: "+findingID)
 		return
 	}
+	instructionEvidence := analysis.InstructionEvidenceFromFinding(finding)
+	if (finding.EdgeKind == "INSTRUCTION_SIGNAL" || finding.EdgeKind == "POISONED_INSTRUCTIONS") && instructionEvidence == nil {
+		WriteInternalError(w, r, fmt.Errorf("published instruction finding %s has invalid structured evidence", findingID))
+		return
+	}
 
 	attackPath := analysis.AttackPathFromExactEvidence(finding)
 	evidenceState := analysis.FindingDetailEvidenceUnavailable
@@ -388,10 +393,11 @@ func (h *AnalysisHandler) HandleFindingDetail(w http.ResponseWriter, r *http.Req
 	}
 
 	WriteJSON(w, http.StatusOK, analysis.FindingDetail{
-		Finding:     *finding,
-		AttackPath:  attackPath,
-		Remediation: analysis.BuildRemediation(attackPath, finding),
-		Impact:      analysis.BuildImpact(finding, attackPath),
+		Finding:             *finding,
+		AttackPath:          attackPath,
+		Remediation:         analysis.BuildRemediation(attackPath, finding),
+		Impact:              analysis.BuildImpact(finding, attackPath),
+		InstructionEvidence: instructionEvidence,
 		Snapshot: &analysis.FindingSnapshot{
 			Scope:            "published",
 			ScanID:           scope.ScanID,

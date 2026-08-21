@@ -1,9 +1,8 @@
 id: injection-imperative-override
 name: Imperative Override in Instructions
 description: >
-  Detects imperative identity/instruction override phrases in instruction
-  files, such as "you are now", "your new instructions", or "system prompt:".
-  These indicate attempts to hijack the agent's identity or behavior.
+  Detects explicit replacement of the agent's current identity or controlling
+  role. Bare test personas and documentation labels are supporting context.
 version: 1
 enabled: true
 scope:
@@ -15,7 +14,7 @@ owasp: [MCP09, ASI07]
 tags: [injection, prompt-injection, instruction-poisoning]
 matcher:
   type: regex
-  pattern: '\b(you\s+are\s+now|your\s+new\s+instructions|system\s+prompt\s*:)'
+  pattern: '\b(you\s+are\s+(now|no\s+longer)|from\s+now\s+on(?:\s*,)?\s+(?:you\s+are|pretend\s+you\s+are)|(?:replace|discard)\s+your\s+(?:(?:current|system)\s+)?(?:role|identity|persona)|your\s+new\s+(?:role|identity|persona|instructions))'
   case_insensitive: true
 emit:
   finding_type: has_injection_patterns

@@ -189,6 +189,7 @@ export interface FindingDetail {
   attack_path: AttackPath | null;
   remediation: RemediationStep[];
   impact: Impact | null;
+  instruction_evidence?: InstructionEvidence;
   snapshot: {
     scope: string;
     scan_id: string;
@@ -202,6 +203,34 @@ export interface FindingDetail {
       | "unavailable"
       | "persisted_exact_evidence";
   };
+}
+
+export interface InstructionEvidence {
+  version: 1;
+  verdict: "signal" | "poisoning";
+  scope: "exact_project" | "exact_user" | "deep";
+  path: string;
+  type: string;
+  hash: string;
+  size_bytes: number;
+  modified_at: string;
+  total_signals: number;
+  truncated: boolean;
+  signals: InstructionSignal[];
+}
+
+export interface InstructionSignal {
+  rule_id: string;
+  label: string;
+  severity: "low" | "medium" | "high" | "critical";
+  strength: "decisive" | "primary" | "supporting";
+  raw_offset: number;
+  line: number;
+  column: number;
+  match: string;
+  context_before: string;
+  context_after: string;
+  decoded_excerpt?: string;
 }
 
 // Ascending severity rank (lower = worse) for "critical first" sorting. The

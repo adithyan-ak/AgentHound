@@ -130,11 +130,11 @@ export function deriveRemediations(
   }
 
   // Poisoned instruction file
-  if (kind === "InstructionFile" && props.is_suspicious === true) {
+  if (kind === "InstructionFile" && (props.instruction_verdict === "signal" || props.instruction_verdict === "poisoning")) {
     items.push({
-      severity: "high",
-      title: "Inspect and sanitize this instruction file",
-      body: "This file contains suspicious directives (imperative overrides, outbound curl/wget, or encoded payloads). Review the file, remove any injected directives, and add it to your repo's suspicious-path audit list.",
+      severity: props.instruction_verdict === "poisoning" && props.instruction_scope !== "deep" ? "high" : "medium",
+      title: props.instruction_verdict === "poisoning" ? "Review instruction poisoning evidence" : "Review this instruction signal",
+      body: "Inspect the matched path and line in the finding evidence. Remove unauthorized overrides or payloads, or document why the instruction is expected before an agent loads the file.",
     });
   }
 

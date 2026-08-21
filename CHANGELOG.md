@@ -2,8 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- Instruction findings now preserve bounded matched excerpts, source positions, scope, and file metadata from the scan artifact through the dashboard and copied report.
+- A medium-severity `INSTRUCTION_SIGNAL` finding separates reviewable standalone or deep-scope signals from high-confidence poisoning in active instruction scope.
+
 ### Fixed
 
+- Instruction-file classification now requires deterministic override, identity, hidden-content, decoded-payload, or sensitive-outbound semantics instead of promoting ordinary instruction language and documentation examples.
 - Concrete credentials discovered in multiple agent configurations now share one `value_hash`-based identity with deterministic provenance and authentication hints.
 - Positional scan targets now reject malformed hostname syntax before any resolver or network work begins.
 - The installer now validates before promotion and atomically restores the previous binary when installed-path startup validation fails.

@@ -26,6 +26,7 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/contact"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
+	sharedinstruction "github.com/adithyan-ak/agenthound/sdk/instruction"
 	"github.com/spf13/cobra"
 )
 
@@ -176,6 +177,7 @@ func (r *scanRuntime) collectLocal(timeout time.Duration) error {
 		return fmt.Errorf("checkpoint local collection: %w", err)
 	}
 	r.printNewCredentials()
+	r.printNewInstructionSignals()
 	return nil
 }
 
@@ -735,6 +737,66 @@ func (r *scanRuntime) printNewCredentials() {
 		r.printed[hash] = true
 		_, _ = fmt.Fprintf(r.cmd.OutOrStdout(), "[credential] %s\n", value)
 	}
+}
+
+func (r *scanRuntime) printNewInstructionSignals() {
+	if r.quiet {
+		return
+	}
+	type printable struct {
+		id       string
+		path     string
+		verdict  sharedinstruction.Verdict
+		scope    sharedinstruction.Scope
+		evidence sharedinstruction.Evidence
+	}
+	var findings []printable
+	for _, node := range r.artifact.Graph.Nodes {
+		if !containsString(node.Kinds, "InstructionFile") {
+			continue
+		}
+		rawEvidence, _ := node.Properties["instruction_evidence_json"].(string)
+		evidence, err := sharedinstruction.ParseEvidenceJSON(rawEvidence)
+		if err != nil || evidence.Verdict == sharedinstruction.VerdictClean || len(evidence.Signals) == 0 {
+			continue
+		}
+		findings = append(findings, printable{
+			id: node.ID, path: stringProperty(node.Properties, "path"), verdict: evidence.Verdict,
+			scope: sharedinstruction.Scope(stringProperty(node.Properties, "instruction_scope")), evidence: evidence,
+		})
+	}
+	sort.Slice(findings, func(i, j int) bool { return findings[i].path < findings[j].path })
+	for _, finding := range findings {
+		key := "instruction:" + finding.id
+		if r.printed[key] {
+			continue
+		}
+		r.printed[key] = true
+		primary := finding.evidence.Signals[0]
+		kind := "instruction-signal"
+		if finding.verdict == sharedinstruction.VerdictPoisoning && finding.scope != sharedinstruction.ScopeDeep {
+			kind = "instruction-poisoning"
+		}
+		excerpt := strings.Join(strings.Fields(primary.Match), " ")
+		if len(excerpt) > 120 {
+			excerpt = excerpt[:120] + "…"
+		}
+		additional := ""
+		if finding.evidence.TotalSignals > 1 {
+			additional = fmt.Sprintf(" +%d", finding.evidence.TotalSignals-1)
+		}
+		_, _ = fmt.Fprintf(r.cmd.OutOrStdout(), "[%s] %s:%d %s %q%s\n",
+			kind, finding.path, primary.Line, primary.RuleID, excerpt, additional)
+	}
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func localScanSeeds() []string {

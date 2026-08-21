@@ -9,6 +9,7 @@ const MD_SKIP_KEYS = new Set([
   "description_hash",
   "card_hash",
   "previous_description_hash",
+  "instruction_evidence_json",
 ]);
 
 const MD_PRIORITY_KEYS = [
@@ -40,7 +41,10 @@ const MD_PRIORITY_KEYS = [
   "parameter_size",
   "has_injection_patterns",
   "has_cross_references",
-  "is_suspicious",
+  "instruction_verdict",
+  "instruction_scope",
+  "instruction_signal_count",
+  "instruction_signal_truncated",
   "sensitivity",
   "risk_score",
   "framework",
