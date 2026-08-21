@@ -9,6 +9,22 @@ import (
 )
 
 func BuildRemediation(path *AttackPath, f *model.Finding) []RemediationStep {
+	if evidence := InstructionEvidenceFromFinding(f); evidence != nil && len(evidence.Signals) > 0 {
+		primary := evidence.Signals[0]
+		title := "Review the instruction signal"
+		if f.EdgeKind == "POISONED_INSTRUCTIONS" {
+			title = "Remove unauthorized instruction poisoning"
+		}
+		return normalizeRemediationSteps([]RemediationStep{{
+			Step: 1, Title: title, EdgeKind: f.EdgeKind,
+			Source: actorFromFinding(f.SourceID, evidence.Path, f.SourceKind),
+			Target: actorFromFinding(f.TargetID, evidence.Path, f.TargetKind),
+			Description: fmt.Sprintf(
+				"Inspect %s:%d at rule %s and remove or authorize the matched instruction before the file is loaded by an agent.",
+				evidence.Path, primary.Line, primary.RuleID,
+			),
+		}})
+	}
 	if path == nil || len(path.Edges) == 0 {
 		return normalizeRemediationSteps(buildFindingOnlyRemediation(f))
 	}
@@ -258,7 +274,7 @@ func remediationForRelation(
 			typedRemediationActor(source, "agent"),
 			typedRemediationActor(target, "agent"),
 		)
-	case "POISONED_INSTRUCTIONS":
+	case "POISONED_INSTRUCTIONS", "INSTRUCTION_SIGNAL":
 		step.Title = "Review suspicious instruction content"
 		step.Description = fmt.Sprintf(
 			"Inspect the matched content in %s and remove imperative overrides or hidden payloads that are not authorized.",

@@ -26,7 +26,7 @@ HAS_ACCESS_TO
 CAN_EXECUTE
 SHADOWS and POISONS_CONTEXT
 POISONED_DESCRIPTION
-POISONED_INSTRUCTIONS
+instruction integrity (`INSTRUCTION_SIGNAL` and `POISONED_INSTRUCTIONS`)
 TAINTS
 CAN_REACH
 cross_service_credential_chain
@@ -45,6 +45,12 @@ Processors consume current raw evidence and write composite edges for the new ep
 `CREDENTIAL_ACCESS_OBSERVED` records an anonymous-denied/authenticated-allowed read of one MCP resource. The `CAN_REACH` processor upgrades a path only when that exact resource and Credential ID occur in its evidence node set. The result carries confidence `1.0`, evidence state `verified`, and the bounded fields exposed as `evidence.proof`.
 
 Every base rebuild starts from inferred evidence, so a later current projection without the proof cannot retain a stale verified state.
+
+## Instruction projection
+
+The instruction processor reads only validated structured evidence. A signal in any scope, or a poisoning verdict from recursive deep collection, becomes medium `INSTRUCTION_SIGNAL`. A poisoning verdict in an exact project or user instruction scope becomes high `POISONED_INSTRUCTIONS`. The projections are mutually exclusive and include the InstructionFile as exact evidence.
+
+Finding construction parses the evidence again from the immutable snapshot and exposes it only on finding detail. Instruction projections do not create `LOADS_INSTRUCTIONS`; agent exposure and risk require that observed raw relationship independently.
 
 ## Findings and publication
 

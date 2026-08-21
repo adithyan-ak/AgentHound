@@ -28,7 +28,7 @@ var indexDefs = []struct{ Label, Property string }{
 	{"Credential", "value_hash"},
 }
 
-const graphSchemaVersion = 2
+const graphSchemaVersion = 3
 
 const graphSchemaVersionCypher = `
 OPTIONAL MATCH (schema:SchemaVersion)
@@ -60,12 +60,19 @@ func InitSchema(ctx context.Context, driver neo4j.DriverWithContext) error {
 		schemaState.VersionCount != schemaState.MarkerCount ||
 		schemaState.MinVersion != schemaState.MaxVersion {
 		return fmt.Errorf(
-			"Neo4j graph schema marker is malformed; this server requires exactly one V2 marker",
+			"Neo4j graph schema marker is malformed; this server requires exactly one V3 marker",
 		)
 	}
 	if schemaState.MarkerCount == 1 && schemaState.MinVersion == 1 {
 		if err := migrateGraphV1ToV2(ctx, driver); err != nil {
 			return fmt.Errorf("migrate Neo4j graph schema V1 to V2: %w", err)
+		}
+		schemaState.MinVersion = 2
+		schemaState.MaxVersion = 2
+	}
+	if schemaState.MarkerCount == 1 && schemaState.MinVersion == 2 {
+		if err := migrateGraphV2ToV3(ctx, driver); err != nil {
+			return fmt.Errorf("migrate Neo4j graph schema V2 to V3: %w", err)
 		}
 		schemaState.MinVersion = graphSchemaVersion
 		schemaState.MaxVersion = graphSchemaVersion
@@ -118,8 +125,8 @@ func InitSchema(ctx context.Context, driver neo4j.DriverWithContext) error {
 		slog.Info("created index", "label", idx.Label, "property", idx.Property)
 	}
 
-	// A fresh graph and an already-initialized V1 graph converge on the same
-	// single schema marker.
+	// A fresh graph and every supported prior graph converge on the same single
+	// schema marker.
 	if err := runDDL(ctx, driver, fmt.Sprintf(
 		"MERGE (:SchemaVersion {version: %d})",
 		graphSchemaVersion,
@@ -128,6 +135,19 @@ func InitSchema(ctx context.Context, driver neo4j.DriverWithContext) error {
 	}
 
 	slog.Info("schema initialization complete", "constraints", constraintCount, "indexes", len(indexDefs))
+	return nil
+}
+
+func migrateGraphV2ToV3(ctx context.Context, driver neo4j.DriverWithContext) error {
+	for _, cypher := range []string{
+		`MATCH ()-[legacy:POISONED_INSTRUCTIONS]->() DELETE legacy`,
+		`MATCH (instruction:InstructionFile) REMOVE instruction.is_suspicious`,
+		`MATCH (schema:SchemaVersion {version: 2}) SET schema.version = 3`,
+	} {
+		if err := runDDL(ctx, driver, cypher); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

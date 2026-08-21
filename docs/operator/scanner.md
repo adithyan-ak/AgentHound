@@ -55,6 +55,24 @@ For A2A, a bearer retry remains eligible when the bounded anonymous probe is pro
 
 Anonymous collection covers applicable LiteLLM, Open WebUI, Jupyter, Qdrant, MLflow, and Ollama endpoints. New targets and credentials are indexed as they appear, allowing useful authenticated work during the same scan.
 
+## Instruction integrity
+
+AgentHound classifies collected `AGENTS.md`, `CLAUDE.md`, Cursor, Copilot, and related instruction sources with deterministic content rules. Ordinary policy language such as “never use production credentials” or “use X instead of Y” remains clean. Evidence composes only within a bounded directive and cannot cross headings or inert-region boundaries. Explicitly labeled examples and detector fixtures remain clean unless surrounding text tells the agent to execute them.
+
+Base64 payloads are decoded only when structurally valid. Hex and percent-encoded payloads additionally require related decode-and-activate language before or after the payload. Decoding is strict, bounded to 2 KiB, one pass, and the decoded text must contain instruction semantics. Sensitive actions require a coherent directive, a concrete credential or instruction subject, appropriate material language, and—where applicable—an outbound destination; documentation schemas, hashes, placeholders, routine API authentication, and protective guidance remain clean.
+
+The artifact stores the verdict, scope, file metadata, and bounded matched excerpts on each `InstructionFile`. It does not archive the complete file. For a large encoded token, the raw match is an exact bounded excerpt containing the encoded bytes that map to the decisive decoded semantics; the decoded preview supplies the readable context. A standalone override, identity rewrite, or bidirectional override becomes an instruction signal. Strong compound evidence—such as an override combined with identity rewriting, hidden control content, or a sensitive outbound action—becomes instruction poisoning.
+
+Scope controls promotion:
+
+| Verdict and scope | Server finding |
+|---|---|
+| Signal in any collected scope | Medium `INSTRUCTION_SIGNAL` |
+| Poisoning in recursive deep scope | Medium `INSTRUCTION_SIGNAL` |
+| Poisoning in the exact project or user instruction scope | High `POISONED_INSTRUCTIONS` |
+
+The CLI prints the path, line, primary rule, and matched excerpt for each non-clean file. `--quiet` suppresses these lines. Agent exposure still requires a real `LOADS_INSTRUCTIONS` relationship; the detector does not invent one from file location.
+
 ## Verification actions
 
 The active planner performs three bounded actions when their prerequisites are present:

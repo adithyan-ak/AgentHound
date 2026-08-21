@@ -14,9 +14,20 @@ const HIDDEN_KEYS = new Set([
 
 export function PropertiesTab({ node }: { node: APINode }) {
   const isCredential = node.kinds.includes("Credential");
-  const entries = Object.entries(node.properties ?? {}).filter(
-    ([k, v]) => !HIDDEN_KEYS.has(k) && v !== null && v !== undefined && v !== "",
-  );
+  const isInstruction = node.kinds.includes("InstructionFile");
+  const entries = Object.entries(node.properties ?? {})
+    .filter(
+      ([k, v]) =>
+        !HIDDEN_KEYS.has(k) &&
+        k !== "instruction_evidence_json" &&
+        v !== null &&
+        v !== undefined &&
+        v !== "",
+    );
+  if (isInstruction) {
+    const summary = instructionEvidenceSummary(node.properties?.instruction_evidence_json);
+    if (summary) entries.push(["instruction_evidence", summary]);
+  }
 
   if (entries.length === 0) {
     return (
@@ -47,6 +58,26 @@ export function PropertiesTab({ node }: { node: APINode }) {
       ))}
     </Grid>
   );
+}
+
+function instructionEvidenceSummary(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const evidence = JSON.parse(value) as {
+      verdict?: unknown;
+      total_signals?: unknown;
+      truncated?: unknown;
+    };
+    if (
+      (evidence.verdict !== "clean" && evidence.verdict !== "signal" && evidence.verdict !== "poisoning") ||
+      typeof evidence.total_signals !== "number"
+    ) {
+      return null;
+    }
+    return `${evidence.verdict} · ${evidence.total_signals} signal${evidence.total_signals === 1 ? "" : "s"}${evidence.truncated === true ? " · evidence truncated" : ""}`;
+  } catch {
+    return "invalid structured instruction evidence";
+  }
 }
 
 function CredentialValue({ value }: { value: string }) {

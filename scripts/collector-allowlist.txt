@@ -127,6 +127,7 @@ github.com/adithyan-ak/agenthound/sdk/collector
 github.com/adithyan-ak/agenthound/sdk/common
 github.com/adithyan-ak/agenthound/sdk/contact
 github.com/adithyan-ak/agenthound/sdk/ingest
+github.com/adithyan-ak/agenthound/sdk/instruction
 github.com/adithyan-ak/agenthound/sdk/module
 github.com/adithyan-ak/agenthound/sdk/rules
 github.com/go-jose/go-jose/v4

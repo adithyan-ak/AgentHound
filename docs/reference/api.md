@@ -63,7 +63,9 @@ Scan execution data remains under `meta.extra.scan_execution`. The server stores
 
 Finding list entries include severity, category, affected endpoints, confidence, variant, evidence state, framework mappings, and triage. A scan-verified path includes a bounded `evidence.proof` object. Resource contents and raw credential values stay on their graph nodes instead of being copied into finding metadata.
 
-Finding detail adds the exact evidence nodes and edges selected during publication. Explicit graph and query responses can contain raw Credential `value` properties; clients must treat them as secrets.
+Finding detail adds the exact evidence nodes and edges selected during publication. `INSTRUCTION_SIGNAL` and `POISONED_INSTRUCTIONS` details also include `instruction_evidence`: file path, scope, verdict, metadata, total and truncation counts, retained source-exact excerpts with positions, and decoded previews when an encoded payload contributes to the verdict. For encoded signals, `match` may be a bounded excerpt of a larger token and is selected to contain the bytes corresponding to the decisive decoded semantics. This larger object is intentionally absent from finding lists.
+
+Explicit graph and query responses can contain raw Credential `value` properties and literal instruction evidence JSON; clients must treat them as sensitive operator evidence.
 
 ## Path requests
 

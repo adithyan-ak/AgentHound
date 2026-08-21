@@ -7,9 +7,11 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
+	sharedinstruction "github.com/adithyan-ak/agenthound/sdk/instruction"
 )
 
 type FieldError struct {
@@ -359,6 +361,9 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 			errs = append(errs, validateCanonicalNodeProperties(node, i)...)
 			if hasKind(node.Kinds, "Credential") {
 				errs = append(errs, validateCredentialProperties(node.Properties, i)...)
+			}
+			if hasKind(node.Kinds, "InstructionFile") {
+				errs = append(errs, validateInstructionFileProperties(node.Properties, i)...)
 			}
 		}
 	}
@@ -1363,6 +1368,114 @@ func validateCanonicalNodeProperties(node ingest.Node, index int) []FieldError {
 		errs = append(errs, validateA2ASignatureProperties(node.Properties, index)...)
 	}
 	return errs
+}
+
+func validateInstructionFileProperties(properties map[string]any, index int) []FieldError {
+	base := fmt.Sprintf("graph.nodes[%d].properties.", index)
+	keys := []string{
+		"instruction_verdict",
+		"instruction_scope",
+		"instruction_signal_count",
+		"instruction_signal_truncated",
+		"instruction_evidence_version",
+		"instruction_evidence_json",
+		"size_bytes",
+		"modified_at",
+	}
+	present := 0
+	for _, key := range keys {
+		if _, ok := properties[key]; ok {
+			present++
+		}
+	}
+	// Historical V1 artifacts carried only is_suspicious. They remain valid,
+	// but the old boolean is intentionally not projection input.
+	if present == 0 {
+		return nil
+	}
+	var errs []FieldError
+	if present != len(keys) {
+		for _, key := range keys {
+			if _, ok := properties[key]; !ok {
+				errs = append(errs, FieldError{Path: base + key, Message: "is required by the structured instruction evidence contract"})
+			}
+		}
+		return errs
+	}
+	verdict, verdictOK := properties["instruction_verdict"].(string)
+	if !verdictOK || !sharedinstruction.ValidVerdict(sharedinstruction.Verdict(verdict)) {
+		errs = append(errs, FieldError{Path: base + "instruction_verdict", Message: "must be clean, signal, or poisoning"})
+	}
+	scope, scopeOK := properties["instruction_scope"].(string)
+	if !scopeOK || !sharedinstruction.ValidScope(sharedinstruction.Scope(scope)) {
+		errs = append(errs, FieldError{Path: base + "instruction_scope", Message: "must be exact_project, exact_user, or deep"})
+	}
+	count, countOK := nonNegativeWholeNumber(properties["instruction_signal_count"])
+	if !countOK {
+		errs = append(errs, FieldError{Path: base + "instruction_signal_count", Message: "must be a non-negative integer"})
+	}
+	truncated, truncatedOK := properties["instruction_signal_truncated"].(bool)
+	if !truncatedOK {
+		errs = append(errs, FieldError{Path: base + "instruction_signal_truncated", Message: "must be a boolean"})
+	}
+	version, versionOK := nonNegativeWholeNumber(properties["instruction_evidence_version"])
+	if !versionOK || int(version) != sharedinstruction.EvidenceVersion {
+		errs = append(errs, FieldError{Path: base + "instruction_evidence_version", Message: fmt.Sprintf("must be %d", sharedinstruction.EvidenceVersion)})
+	}
+	rawEvidence, rawOK := properties["instruction_evidence_json"].(string)
+	var evidence sharedinstruction.Evidence
+	if !rawOK {
+		errs = append(errs, FieldError{Path: base + "instruction_evidence_json", Message: "must be a JSON string"})
+	} else {
+		parsed, err := sharedinstruction.ParseEvidenceJSON(rawEvidence)
+		if err != nil {
+			errs = append(errs, FieldError{Path: base + "instruction_evidence_json", Message: err.Error()})
+		} else {
+			evidence = parsed
+			if verdictOK && string(evidence.Verdict) != verdict {
+				errs = append(errs, FieldError{Path: base + "instruction_evidence_json", Message: "verdict does not match instruction_verdict"})
+			}
+			if countOK && evidence.TotalSignals != int(count) {
+				errs = append(errs, FieldError{Path: base + "instruction_signal_count", Message: "does not match instruction evidence total_signals"})
+			}
+			if truncatedOK && evidence.Truncated != truncated {
+				errs = append(errs, FieldError{Path: base + "instruction_signal_truncated", Message: "does not match instruction evidence truncated"})
+			}
+		}
+	}
+	size, sizeOK := nonNegativeWholeNumber(properties["size_bytes"])
+	if !sizeOK || size < 0 {
+		errs = append(errs, FieldError{Path: base + "size_bytes", Message: "must be a non-negative integer"})
+	} else if rawOK && evidence.Version == sharedinstruction.EvidenceVersion {
+		for signalIndex, signal := range evidence.Signals {
+			minimumLength := minimumInstructionSourceBytes(signal.Match)
+			if signal.RawOffset < 0 || float64(signal.RawOffset) > size || float64(minimumLength) > size-float64(signal.RawOffset) {
+				errs = append(errs, FieldError{
+					Path:    fmt.Sprintf("%sinstruction_evidence_json.signals[%d].match", base, signalIndex),
+					Message: "source span must fit inside size_bytes",
+				})
+			}
+		}
+	}
+	modifiedAt, modifiedOK := properties["modified_at"].(string)
+	if !modifiedOK || modifiedAt == "" {
+		errs = append(errs, FieldError{Path: base + "modified_at", Message: "must be a UTC RFC3339 timestamp"})
+	} else if parsed, err := time.Parse(time.RFC3339Nano, modifiedAt); err != nil || parsed.Location() != time.UTC {
+		errs = append(errs, FieldError{Path: base + "modified_at", Message: "must be a UTC RFC3339 timestamp"})
+	}
+	return errs
+}
+
+func minimumInstructionSourceBytes(value string) int {
+	total := 0
+	for _, char := range value {
+		if char == utf8.RuneError {
+			total++
+			continue
+		}
+		total += utf8.RuneLen(char)
+	}
+	return total
 }
 
 func validateA2ASignatureProperties(properties map[string]any, index int) []FieldError {

@@ -207,12 +207,12 @@ Independent collection failures do not block unrelated work. A checkpoint failur
 | **Execution paths** | Which agents can reach tools capable of shell, code, database, or network execution? |
 | **Exfiltration paths** | Where can sensitive resource access combine with an outbound-capable tool? |
 | **Cross-protocol pivots** | Where can MCP, A2A, host context, and AI-service infrastructure bridge trust boundaries? |
-| **Tool and instruction poisoning** | Which descriptions, prompts, or instruction files contain model-steering or prompt-injection signals? |
+| **Instruction poisoning with proof** | Which instruction files contain review signals or strong compound poisoning evidence, and what exact lines triggered the verdict? |
 | **Tool shadowing and rug pulls** | Which lookalike tools or changed descriptions can hijack an expected capability? |
 | **Unauthenticated surfaces** | Which MCP, A2A, notebook, registry, vector, or model services exposed useful data without a credential? |
 | **Risk hotspots** | Which nodes and paths deserve immediate operator attention based on impact, exposure, and graph position? |
 
-Core graph primitives include `CAN_REACH`, `CAN_EXECUTE`, `CAN_EXFILTRATE_VIA`, `CAN_IMPERSONATE`, `SHADOWS`, `POISONED_DESCRIPTION`, `POISONED_INSTRUCTIONS`, `TAINTS`, and `IFC_VIOLATION`. See the [Attack Paths guide](docs/operator/attack-paths.md) and [Graph Model](docs/reference/graph-model.md) for their evidence semantics.
+Core graph primitives include `CAN_REACH`, `CAN_EXECUTE`, `CAN_EXFILTRATE_VIA`, `CAN_IMPERSONATE`, `SHADOWS`, `POISONED_DESCRIPTION`, `INSTRUCTION_SIGNAL`, `POISONED_INSTRUCTIONS`, `TAINTS`, and `IFC_VIOLATION`. Instruction findings retain bounded matched excerpts with paths and line numbers; the hash remains secondary integrity metadata. See the [Attack Paths guide](docs/operator/attack-paths.md) and [Graph Model](docs/reference/graph-model.md) for their evidence semantics.
 
 ## 🛡️ Safety & OPSEC
 

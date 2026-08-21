@@ -12,6 +12,7 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/collector"
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
+	sharedinstruction "github.com/adithyan-ak/agenthound/sdk/instruction"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
 )
 
@@ -350,7 +351,9 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 	for _, observation := range instructions.Observations {
 		absPath := canonicalConfigPath(observation.Info.Path)
 		contribution := instructionByPath[absPath]
-		contribution.info = observation.Info
+		if contribution.info.Path == "" || instructionScopePriority(observation.Info.Scope) < instructionScopePriority(contribution.info.Scope) {
+			contribution.info = observation.Info
+		}
 		contribution.owners = append(contribution.owners, observation.OwnerKey)
 		instructionByPath[absPath] = contribution
 	}
@@ -365,14 +368,32 @@ func (c *ConfigCollector) Collect(ctx context.Context, opts collector.CollectOpt
 		absPath := canonicalConfigPath(inst.Path)
 		instrID := ingest.ComputeNodeID("InstructionFile", absPath)
 		addNode(common.NewNode(instrID, []string{"InstructionFile"}, map[string]any{
-			"path":          absPath,
-			"type":          inst.Type,
-			"hash":          inst.Hash,
-			"is_suspicious": inst.IsSuspicious,
+			"path":                         absPath,
+			"type":                         inst.Type,
+			"hash":                         inst.Hash,
+			"instruction_verdict":          string(inst.Verdict),
+			"instruction_scope":            string(inst.Scope),
+			"instruction_signal_count":     inst.Evidence.TotalSignals,
+			"instruction_signal_truncated": inst.Evidence.Truncated,
+			"instruction_evidence_version": inst.Evidence.Version,
+			"instruction_evidence_json":    inst.EvidenceJSON,
+			"size_bytes":                   inst.SizeBytes,
+			"modified_at":                  inst.ModifiedAt,
 		}), uniqueSorted(contribution.owners)...)
 	}
 
 	return data, nil
+}
+
+func instructionScopePriority(scope sharedinstruction.Scope) int {
+	switch scope {
+	case sharedinstruction.ScopeExactProject:
+		return 0
+	case sharedinstruction.ScopeExactUser:
+		return 1
+	default:
+		return 2
+	}
 }
 
 func canonicalConfigPath(path string) string {
