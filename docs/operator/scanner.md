@@ -51,13 +51,15 @@ AgentHound stores concrete credentials as `Credential.properties.value` and uses
 
 The planner can execute LiteLLM master, bearer, and API keys; Open WebUI bearer and API keys; Jupyter tokens; A2A bearer credentials; and MCP bearer credentials tied to an exact resource. Masks, hashes, unresolved environment references, unresolved secret-provider references, custom strings, and basic-auth guesses are preserved as evidence but are not presented to services.
 
+For A2A, a bearer retry remains eligible when the bounded anonymous probe is protected or inconclusive. When both the public card and protocol probe already succeed anonymously, the planner does not repeat the same card collection with a credential.
+
 Anonymous collection covers applicable LiteLLM, Open WebUI, Jupyter, Qdrant, MLflow, and Ollama endpoints. New targets and credentials are indexed as they appear, allowing useful authenticated work during the same scan.
 
 ## Verification actions
 
 The active planner performs three bounded actions when their prerequisites are present:
 
-- MCP credential access compares an anonymous control read with an authenticated read of the same resource and saves returned content.
+- MCP credential access first reads the exact resource anonymously. If that succeeds, AgentHound records public access and saves the content without presenting a credential. Otherwise, it follows with an authenticated read of the same resource.
 - The ContextForge description round trip writes a scan-specific marker, observes it through MCP, restores the original immediately, and confirms restoration.
 - Deep Ollama verification invokes a bounded embedding request to prove compute access.
 

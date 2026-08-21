@@ -8,6 +8,7 @@
 - Positional scan targets now reject malformed hostname syntax before any resolver or network work begins.
 - The installer now validates before promotion and atomically restores the previous binary when installed-path startup validation fails.
 - Legitimate documentation URLs no longer look like Base64 prompt-injection payloads or, by themselves, outbound-network capabilities.
+- Active planning avoids redundant credential presentation when the exact MCP resource or A2A card/probe surface has already succeeded anonymously.
 
 ## 1.1.0 — ⚡ Autonomous Offensive Collection
 

@@ -264,6 +264,14 @@ func (a a2aCredentialAction) Candidates(view View) []Candidate {
 	var candidates []Candidate
 	seen := make(map[string]bool)
 	for _, agent := range view.ByKind["A2AAgent"] {
+		// This action only refetches the Agent Card with a bearer. When the
+		// initial card fetch and the bounded protocol probe both succeeded
+		// anonymously, another card fetch cannot prove that the bearer was
+		// accepted or expand the collected surface.
+		if stringProperty(agent.Properties, "auth_probe_status") ==
+			a2acollector.A2AAuthProbeStatusAnonymousProtocolAccess {
+			continue
+		}
 		endpoint := stringProperty(agent.Properties, "url")
 		if endpoint == "" {
 			continue

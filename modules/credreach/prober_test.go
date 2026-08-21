@@ -94,6 +94,51 @@ func TestObservedHTTPAuthResponseIsDenied(t *testing.T) {
 	}
 }
 
+func TestVerifyAccessStopsAfterAnonymousExactResourceRead(t *testing.T) {
+	const resourceURI = "test://public-resource"
+	server := mcpsdk.NewServer(
+		&mcpsdk.Implementation{Name: "public-test", Version: "1.0.0"},
+		nil,
+	)
+	server.AddResource(
+		&mcpsdk.Resource{URI: resourceURI, Name: "public resource"},
+		func(_ context.Context, req *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
+			return &mcpsdk.ReadResourceResult{Contents: []*mcpsdk.ResourceContents{{
+				URI: req.Params.URI, Text: "public content",
+			}}}, nil
+		},
+	)
+	mcpHandler := mcpsdk.NewStreamableHTTPHandler(
+		func(*http.Request) *mcpsdk.Server { return server },
+		&mcpsdk.StreamableHTTPOptions{JSONResponse: true},
+	)
+	var credentialRequests atomic.Int32
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			credentialRequests.Add(1)
+		}
+		mcpHandler.ServeHTTP(w, r)
+	}))
+	defer httpServer.Close()
+
+	proof := VerifyAccess(
+		context.Background(), httpServer.URL, resourceURI,
+		"must-not-be-presented", false, time.Second,
+	)
+	if proof.Outcome != OutcomeAnonymousAccessObserved {
+		t.Fatalf("outcome = %q, want anonymous access observed", proof.Outcome)
+	}
+	if credentialRequests.Load() != 0 {
+		t.Fatalf("credential was presented on %d request(s) after anonymous success", credentialRequests.Load())
+	}
+	if len(proof.Content) == 0 {
+		t.Fatal("anonymous resource content was not retained")
+	}
+	if proof.Credential != (ProbeResult{}) {
+		t.Fatalf("credential probe unexpectedly ran: %+v", proof.Credential)
+	}
+}
+
 func TestClassifyTimeout(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
