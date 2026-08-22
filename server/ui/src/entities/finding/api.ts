@@ -163,6 +163,13 @@ export function decodeFindingDetail(value: unknown): FindingDetail {
     detail.snapshot,
     "finding detail.snapshot",
   );
+  const instructionEvidence =
+    detail.instruction_evidence == null
+      ? undefined
+      : decodeInstructionEvidence(
+          detail.instruction_evidence,
+          "finding detail.instruction_evidence",
+        );
   return {
     finding: decodeFinding(detail.finding, "finding detail.finding"),
     attack_path: attackPath,
@@ -171,7 +178,81 @@ export function decodeFindingDetail(value: unknown): FindingDetail {
         decodeRemediationStep(step, `finding detail.remediation[${index}]`),
     ),
     impact,
+    instruction_evidence: instructionEvidence,
     snapshot,
+  };
+}
+
+function decodeInstructionEvidence(
+  value: unknown,
+  path: string,
+): NonNullable<FindingDetail["instruction_evidence"]> {
+  const evidence = record(value, path);
+  if (evidence.version !== 1) throw new TypeError(`${path}.version is invalid`);
+  if (evidence.verdict !== "signal" && evidence.verdict !== "poisoning") {
+    throw new TypeError(`${path}.verdict is invalid`);
+  }
+  if (
+    evidence.scope !== "exact_project" &&
+    evidence.scope !== "exact_user" &&
+    evidence.scope !== "deep"
+  ) {
+    throw new TypeError(`${path}.scope is invalid`);
+  }
+  const totalSignals = nonNegativeInteger(evidence.total_signals, `${path}.total_signals`);
+  const signals = collection(evidence.signals, `${path}.signals`).map((value, index) =>
+    decodeInstructionSignal(value, `${path}.signals[${index}]`),
+  );
+  if (signals.length > 32 || totalSignals < signals.length) {
+    throw new TypeError(`${path}.signals count is invalid`);
+  }
+  const truncated = requiredBoolean(evidence.truncated, `${path}.truncated`);
+  if (truncated !== (totalSignals > signals.length)) {
+    throw new TypeError(`${path}.truncated does not match retained signals`);
+  }
+  return {
+    version: 1,
+    verdict: evidence.verdict,
+    scope: evidence.scope,
+    path: requiredString(evidence.path, `${path}.path`),
+    type: requiredString(evidence.type, `${path}.type`),
+    hash: requiredString(evidence.hash, `${path}.hash`),
+    size_bytes: nonNegativeInteger(evidence.size_bytes, `${path}.size_bytes`),
+    modified_at: requiredString(evidence.modified_at, `${path}.modified_at`),
+    total_signals: totalSignals,
+    truncated,
+    signals,
+  };
+}
+
+function decodeInstructionSignal(
+  value: unknown,
+  path: string,
+): NonNullable<FindingDetail["instruction_evidence"]>["signals"][number] {
+  const signal = record(value, path);
+  if (!new Set(["low", "medium", "high", "critical"]).has(String(signal.severity))) {
+    throw new TypeError(`${path}.severity is invalid`);
+  }
+  if (!new Set(["decisive", "primary", "supporting"]).has(String(signal.strength))) {
+    throw new TypeError(`${path}.strength is invalid`);
+  }
+  const line = positiveInteger(signal.line, `${path}.line`);
+  const column = positiveInteger(signal.column, `${path}.column`);
+  return {
+    rule_id: requiredString(signal.rule_id, `${path}.rule_id`),
+    label: requiredString(signal.label, `${path}.label`),
+    severity: signal.severity as "low" | "medium" | "high" | "critical",
+    strength: signal.strength as "decisive" | "primary" | "supporting",
+    raw_offset: nonNegativeInteger(signal.raw_offset, `${path}.raw_offset`),
+    line,
+    column,
+    match: requiredString(signal.match, `${path}.match`),
+    context_before: stringValue(signal.context_before, `${path}.context_before`),
+    context_after: stringValue(signal.context_after, `${path}.context_after`),
+    decoded_excerpt:
+      signal.decoded_excerpt == null
+        ? undefined
+        : stringValue(signal.decoded_excerpt, `${path}.decoded_excerpt`),
   };
 }
 
@@ -214,88 +295,56 @@ function decodeFindingEvidence(value: unknown, path: string): FindingEvidence {
   if (!FINDING_EVIDENCE_STATES.has(evidence.state as FindingEvidence["state"])) {
     throw new TypeError(`${path}.state is invalid`);
   }
-  const verification =
-    evidence.verification == null
+  const proof =
+    evidence.proof == null
       ? undefined
-      : decodeFindingVerification(evidence.verification, `${path}.verification`);
-  if (evidence.state === "verified" && verification == null) {
-    throw new TypeError(`${path}.verification is required for verified evidence`);
+      : decodeFindingProof(evidence.proof, `${path}.proof`);
+  if (evidence.state === "verified" && proof == null) {
+    throw new TypeError(`${path}.proof is required for verified evidence`);
   }
   return {
     ...(evidence as unknown as FindingEvidence),
     channels: stringCollection(evidence.channels, `${path}.channels`),
-    verification,
+    proof,
   };
 }
 
-function decodeFindingVerification(
+function decodeFindingProof(
   value: unknown,
   path: string,
-): NonNullable<FindingEvidence["verification"]> {
-  const verification = record(value, path);
-  const scenarioVersion = finiteNumber(
-    verification.scenario_version,
-    `${path}.scenario_version`,
-  );
-  if (!Number.isSafeInteger(scenarioVersion) || scenarioVersion < 1) {
-    throw new TypeError(`${path}.scenario_version must be a positive integer`);
-  }
-  const controlStage = requiredString(
-    verification.control_stage,
-    `${path}.control_stage`,
-  );
-  const authedStage = requiredString(
-    verification.authed_stage,
-    `${path}.authed_stage`,
-  );
-  if (!["initialize", "resource_read"].includes(controlStage)) {
-    throw new TypeError(`${path}.control_stage is invalid`);
-  }
-  if (!["initialize", "resource_read"].includes(authedStage)) {
-    throw new TypeError(`${path}.authed_stage is invalid`);
-  }
-  const cleanupStatus = requiredString(
-    verification.cleanup_status,
-    `${path}.cleanup_status`,
-  );
-  if (
-    !["not_applicable", "restored", "conflict", "indeterminate", "failed"].includes(
-      cleanupStatus,
-    )
-  ) {
-    throw new TypeError(`${path}.cleanup_status is invalid`);
-  }
+): NonNullable<FindingEvidence["proof"]> {
+  const proof = record(value, path);
   return {
-    scenario_id: requiredString(verification.scenario_id, `${path}.scenario_id`),
-    scenario_version: scenarioVersion,
-    campaign_run_id: requiredString(
-      verification.campaign_run_id,
-      `${path}.campaign_run_id`,
-    ),
-    verified_at: requiredString(verification.verified_at, `${path}.verified_at`),
-    oracle_type: requiredString(verification.oracle_type, `${path}.oracle_type`),
-    outcome: requiredString(verification.outcome, `${path}.outcome`),
-    control_stage: controlStage as "initialize" | "resource_read",
+    action: requiredString(proof.action, `${path}.action`),
+    action_id: requiredString(proof.action_id, `${path}.action_id`),
+    verified_at: requiredString(proof.verified_at, `${path}.verified_at`),
+    proof_type: requiredString(proof.proof_type, `${path}.proof_type`),
+    outcome: requiredString(proof.outcome, `${path}.outcome`),
+    control_stage: requiredString(proof.control_stage, `${path}.control_stage`),
     control_status: requiredString(
-      verification.control_status,
+      proof.control_status,
       `${path}.control_status`,
     ),
     control_resource_addressed: requiredBoolean(
-      verification.control_resource_addressed,
+      proof.control_resource_addressed,
       `${path}.control_resource_addressed`,
     ),
-    authed_stage: authedStage as "initialize" | "resource_read",
-    authed_status: requiredString(
-      verification.authed_status,
-      `${path}.authed_status`,
+    credential_stage: requiredString(
+      proof.credential_stage,
+      `${path}.credential_stage`,
     ),
-    authed_resource_addressed: requiredBoolean(
-      verification.authed_resource_addressed,
-      `${path}.authed_resource_addressed`,
+    credential_status: requiredString(
+      proof.credential_status,
+      `${path}.credential_status`,
     ),
-    cleanup_status: cleanupStatus as NonNullable<
-      FindingEvidence["verification"]
-    >["cleanup_status"],
+    credential_resource_addressed: requiredBoolean(
+      proof.credential_resource_addressed,
+      `${path}.credential_resource_addressed`,
+    ),
+    cleanup_status: requiredString(
+      proof.cleanup_status,
+      `${path}.cleanup_status`,
+    ),
   };
 }
 
@@ -464,6 +513,20 @@ function finiteNumber(value: unknown, path: string): number {
     throw new TypeError(`${path} must be a finite number`);
   }
   return value;
+}
+
+function nonNegativeInteger(value: unknown, path: string): number {
+  const number = finiteNumber(value, path);
+  if (!Number.isSafeInteger(number) || number < 0) {
+    throw new TypeError(`${path} must be a non-negative integer`);
+  }
+  return number;
+}
+
+function positiveInteger(value: unknown, path: string): number {
+  const number = nonNegativeInteger(value, path);
+  if (number < 1) throw new TypeError(`${path} must be positive`);
+  return number;
 }
 
 function requiredString(value: unknown, path: string): string {

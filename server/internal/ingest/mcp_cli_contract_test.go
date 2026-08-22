@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -45,8 +46,8 @@ func TestProductionCLIComposesValidatorCompatibleMCPEnvelope(t *testing.T) {
 		t.Fatal(err)
 	}
 	artifact := filepath.Join(t.TempDir(), "mcp.json")
-	command := exec.Command(bin, "scan", "--mcp", "--project-dir", project, "--scan-output", artifact, "--quiet")
-	command.Dir = repoRoot
+	command := exec.Command(bin, "scan", "--stealth", "--timeout", "30s", "--output", artifact, "--quiet")
+	command.Dir = project
 	command.Env = append(
 		os.Environ(),
 		"HOME="+home,
@@ -64,17 +65,31 @@ func TestProductionCLIComposesValidatorCompatibleMCPEnvelope(t *testing.T) {
 		t.Fatalf("decode CLI artifact: %v", err)
 	}
 	if err := NewValidator().Validate(&envelope); err != nil {
+		if validation, ok := err.(*ValidationError); ok {
+			t.Logf("validation errors: %+v", validation.Errors)
+			for _, field := range validation.Errors {
+				var index int
+				if _, scanErr := fmt.Sscanf(field.Path, "meta.collection.outcomes[%d].coverage_key", &index); scanErr == nil && index < len(envelope.Meta.Collection.Outcomes) {
+					t.Logf("invalid outcome %d: %+v", index, envelope.Meta.Collection.Outcomes[index])
+				}
+			}
+		}
 		t.Fatalf("production validator rejected CLI artifact: %v", err)
 	}
 
 	rootKey := sdkingest.CollectorRootCoverageKey("mcp")
 	serverKey := sdkingest.CanonicalCoverageKey("mcp", "target", sdkingest.CanonicalURLScope(httpServer.URL))
-	if len(envelope.Meta.Collection.AuthoritativeRoots) != 1 {
-		t.Fatalf("authoritative roots = %+v", envelope.Meta.Collection.AuthoritativeRoots)
+	var foundRoot bool
+	for _, root := range envelope.Meta.Collection.AuthoritativeRoots {
+		if root.CoverageKey == rootKey {
+			foundRoot = true
+			if len(root.ChildCoverageKeys) != 1 || root.ChildCoverageKeys[0] != serverKey {
+				t.Fatalf("MCP authoritative root = %+v, want %s -> [%s]", root, rootKey, serverKey)
+			}
+		}
 	}
-	root := envelope.Meta.Collection.AuthoritativeRoots[0]
-	if root.CoverageKey != rootKey || len(root.ChildCoverageKeys) != 1 || root.ChildCoverageKeys[0] != serverKey {
-		t.Fatalf("authoritative root = %+v, want %s -> [%s]", root, rootKey, serverKey)
+	if !foundRoot {
+		t.Fatalf("MCP authoritative root %q missing from %+v", rootKey, envelope.Meta.Collection.AuthoritativeRoots)
 	}
 	methods := make(map[string]bool)
 	for _, outcome := range envelope.Meta.Collection.Outcomes {

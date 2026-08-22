@@ -10,7 +10,7 @@ import (
 // CrossServiceCredentialChain correlates credential reuse across services:
 // when the Config Collector emits a Credential C1 (observed material
 // referenced by an MCP server, independent of its config location) AND the
-// LiteLLM Looter
+// LiteLLM service collector
 // emits a Credential C1master (the master key the operator supplied),
 // AND C1.value_hash == C1master.value_hash, those two nodes describe
 // the same secret. The LiteLLM gateway also emits masked upstream-provider and
@@ -22,7 +22,7 @@ import (
 //
 //	(:AgentInstance)-[:TRUSTS_SERVER]->(:MCPServer)
 //	    -[:AUTHENTICATES_WITH]->(:Identity)-[:USES_CREDENTIAL]->(:Credential C1)
-//	    where C1.value_hash matches a Credential C1master from a LiteLLM Looter run
+//	    where C1.value_hash matches a Credential C1master from LiteLLM collection
 //	(:LiteLLMGateway:AIService gw)-[:EXPOSES_CREDENTIAL]->(:Credential C1master)
 //	(gw)-[:EXPOSES_CREDENTIAL]->(:Credential C2)
 //	    where C2.type IN ["apiKey", "virtual_key"]
@@ -49,14 +49,14 @@ func (p *CrossServiceCredentialChain) Process(ctx context.Context, db graph.Grap
 	// Config Collector's canonical authentication topology
 	// (MCPServer-[:AUTHENTICATES_WITH]->Identity-[:USES_CREDENTIAL]->c1).
 	// c1master comes
-	// from the LiteLLM Looter ((gw:LiteLLMGateway)-[:EXPOSES_CREDENTIAL]->c1master).
+	// from the LiteLLM collector ((gw:LiteLLMGateway)-[:EXPOSES_CREDENTIAL]->c1master).
 	// gw also -[:EXPOSES_CREDENTIAL]->c2, an upstream provider or virtual-key
 	// Credential reference.
 	//
 	// We require c1 != c1master (otherwise this would only fire on
 	// hand-loaded test fixtures where both nodes happen to share an
 	// objectid; in real graphs they always have different objectids
-	// because the Config Collector and Looter compute IDs differently).
+	// because the config and service collectors compute IDs differently).
 	// Single query (one ExecuteWrite): the same agent→server→credential
 	// join also yields the credential blast radius (count of distinct
 	// agents that can reach the merged secret), which we materialize on
@@ -69,7 +69,7 @@ func (p *CrossServiceCredentialChain) Process(ctx context.Context, db graph.Grap
 	// seven-node object-ID tuple before one winner per (agent, upstream
 	// credential) is selected. Relationship IDs are evidence only and do not
 	// influence the winner, so relationship recreation cannot flip topology.
-	// merge_key filter (U-MED-4): when a Looter cannot observe the raw
+	// merge_key filter (U-MED-4): when a collector cannot observe the raw
 	// credential value (e.g. LiteLLM masks upstream provider api_key
 	// server-side, so /model/info gives us no key material), it emits a
 	// Credential with a SYNTHETIC value_hash = SHA-256("provider:name")

@@ -629,7 +629,8 @@ func buildHostNodes(serverID, serverURL, scanID string) hostResult {
 // on the same server. The edge is a RAW edge (is_composite=false) keyed on
 // (source, target), so re-scans rewrite scan_id idempotently. v1 is a
 // server-scoped fan-out; resource URI-scheme matching is a future
-// tightening (see docs/architecture/post-processors.md).
+// tightening. Current server analysis treats the fan-out as bounded raw
+// evidence; see docs/architecture/server-analysis.md.
 func buildIngestsUntrustedEdges(nodes []ingest.Node, untrustedTools map[string]string, scanID string) []ingest.Edge {
 	if len(untrustedTools) == 0 {
 		return nil

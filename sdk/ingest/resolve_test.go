@@ -25,7 +25,7 @@ func TestConcreteNodeKindAcceptsOnlyDocumentedUmbrellaCompanions(t *testing.T) {
 
 // TestProvidesResource_AcceptsMLflowAndQdrantSources locks in the
 // extension of PROVIDES_RESOURCE to accept :MCPResource emissions from
-// mlflowloot (Model Registry storage URIs) and qdrantloot (scrolled
+// mlflowcollect (Model Registry storage URIs) and qdrantcollect (scrolled
 // point payloads) in addition to the original MCPServer and
 // JupyterServer sources.
 func TestProvidesResource_AcceptsMLflowAndQdrantSources(t *testing.T) {

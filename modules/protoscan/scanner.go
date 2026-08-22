@@ -31,7 +31,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -41,6 +40,7 @@ import (
 	"github.com/adithyan-ak/agenthound/modules/networkscan"
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/contact"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
@@ -79,6 +79,9 @@ type Scanner struct {
 	Timeout     time.Duration
 	Insecure    bool
 	ExpandOpts  networkscan.ExpandOptions
+	// ContactPolicy filters expanded hosts before scheduling and remains
+	// enforced by the guarded HTTP transport.
+	ContactPolicy *contact.Policy
 
 	// Progress, if non-nil, is called periodically with the number of
 	// completed probes and the total probe count (hosts × protocol ports).
@@ -94,10 +97,11 @@ type Scanner struct {
 // ProbeReport records endpoint/protocol coverage from the most recent Scan.
 // Conclusive includes positive protocol matches and definitive negatives.
 type ProbeReport struct {
-	Total      int
-	Conclusive int
-	Targets    networkscan.TargetSetIdentity
-	Protocols  []ProtocolSurface
+	Total         int
+	Conclusive    int
+	ExcludedHosts int
+	Targets       networkscan.TargetSetIdentity
+	Protocols     []ProtocolSurface
 }
 
 // ProtocolSurface is one protocol and the exact port list used to schedule
@@ -108,6 +112,9 @@ type ProtocolSurface struct {
 }
 
 func (r ProbeReport) State() ingest.OutcomeState {
+	if r.Total == 0 && r.ExcludedHosts > 0 {
+		return ingest.OutcomeNotApplicable
+	}
 	return ingest.ProbeOutcomeState(r.Total, r.Conclusive)
 }
 
@@ -168,6 +175,16 @@ func (s *Scanner) Scan(ctx context.Context, spec string) ([]action.Target, error
 	if err != nil {
 		return nil, err
 	}
+	expandedHosts := len(hosts)
+	if s.ContactPolicy != nil {
+		admitted := hosts[:0]
+		for _, host := range hosts {
+			if s.ContactPolicy.AdmitAddress(host) == nil {
+				admitted = append(admitted, host)
+			}
+		}
+		hosts = admitted
+	}
 	if s.Concurrency <= 0 {
 		s.Concurrency = DefaultConcurrency
 	}
@@ -179,12 +196,9 @@ func (s *Scanner) Scan(ctx context.Context, spec string) ([]action.Target, error
 	}
 	s.httpClient = &http.Client{
 		Timeout: s.Timeout,
-		Transport: &http.Transport{
+		Transport: contact.GuardTransport(&http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: s.Insecure}, //nolint:gosec
-			DialContext: (&net.Dialer{
-				Timeout: s.Timeout,
-			}).DialContext,
-		},
+		}),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -308,10 +322,11 @@ dispatch:
 		s.Progress(int(completed.Load()), total)
 	}
 	s.setReport(ProbeReport{
-		Total:      total,
-		Conclusive: int(conclusive.Load()),
-		Targets:    targetSet,
-		Protocols:  protocolSurfaces,
+		Total:         total,
+		Conclusive:    int(conclusive.Load()),
+		ExcludedHosts: expandedHosts - len(hosts),
+		Targets:       targetSet,
+		Protocols:     protocolSurfaces,
 	})
 
 	if cancelled {

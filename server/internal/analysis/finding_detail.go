@@ -5,16 +5,32 @@ import (
 	"strings"
 	"time"
 
+	sharedinstruction "github.com/adithyan-ak/agenthound/sdk/instruction"
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
 	"github.com/adithyan-ak/agenthound/server/model"
 )
 
 type FindingDetail struct {
-	Finding     model.Finding     `json:"finding"`
-	AttackPath  *AttackPath       `json:"attack_path"`
-	Remediation []RemediationStep `json:"remediation"`
-	Impact      *Impact           `json:"impact"`
-	Snapshot    *FindingSnapshot  `json:"snapshot"`
+	Finding             model.Finding        `json:"finding"`
+	AttackPath          *AttackPath          `json:"attack_path"`
+	Remediation         []RemediationStep    `json:"remediation"`
+	Impact              *Impact              `json:"impact"`
+	Snapshot            *FindingSnapshot     `json:"snapshot"`
+	InstructionEvidence *InstructionEvidence `json:"instruction_evidence,omitempty"`
+}
+
+type InstructionEvidence struct {
+	Version      int                        `json:"version"`
+	Verdict      sharedinstruction.Verdict  `json:"verdict"`
+	Scope        sharedinstruction.Scope    `json:"scope"`
+	Path         string                     `json:"path"`
+	Type         string                     `json:"type"`
+	Hash         string                     `json:"hash"`
+	SizeBytes    int64                      `json:"size_bytes"`
+	ModifiedAt   string                     `json:"modified_at"`
+	TotalSignals int                        `json:"total_signals"`
+	Truncated    bool                       `json:"truncated"`
+	Signals      []sharedinstruction.Signal `json:"signals"`
 }
 
 type FindingSnapshot struct {
@@ -151,7 +167,7 @@ type Impact struct {
 	DataSensitivity string `json:"data_sensitivity,omitempty"`
 }
 
-// AttackPathFromExactEvidence renders only the detector-selected witness
+// AttackPathFromExactEvidence renders only the detector-selected evidence
 // persisted with the immutable finding snapshot.
 func AttackPathFromExactEvidence(f *model.Finding) *AttackPath {
 	if f == nil || f.ExactEvidence == nil {
@@ -207,6 +223,92 @@ func stringMapVal(values map[string]any, key string) string {
 	return value
 }
 
+func InstructionEvidenceFromFinding(f *model.Finding) *InstructionEvidence {
+	if f == nil || (f.EdgeKind != "INSTRUCTION_SIGNAL" && f.EdgeKind != "POISONED_INSTRUCTIONS") || f.ExactEvidence == nil {
+		return nil
+	}
+	for _, node := range f.ExactEvidence.Nodes {
+		if !containsKind(node.Kinds, "InstructionFile") {
+			continue
+		}
+		raw, _ := node.Properties["instruction_evidence_json"].(string)
+		evidence, err := sharedinstruction.ParseEvidenceJSON(raw)
+		if err != nil {
+			return nil
+		}
+		verdict := sharedinstruction.Verdict(stringMapVal(node.Properties, "instruction_verdict"))
+		scope := sharedinstruction.Scope(stringMapVal(node.Properties, "instruction_scope"))
+		if verdict != evidence.Verdict || !sharedinstruction.ValidScope(scope) ||
+			!instructionProjectionMatches(f.EdgeKind, verdict, scope) {
+			return nil
+		}
+		version, versionOK := wholeInt64(node.Properties["instruction_evidence_version"])
+		count, countOK := wholeInt64(node.Properties["instruction_signal_count"])
+		truncated, truncatedOK := node.Properties["instruction_signal_truncated"].(bool)
+		if !versionOK || version != int64(evidence.Version) ||
+			!countOK || count != int64(evidence.TotalSignals) ||
+			!truncatedOK || truncated != evidence.Truncated {
+			return nil
+		}
+		size, ok := wholeInt64(node.Properties["size_bytes"])
+		if !ok {
+			return nil
+		}
+		path := stringMapVal(node.Properties, "path")
+		fileType := stringMapVal(node.Properties, "type")
+		hash := stringMapVal(node.Properties, "hash")
+		modifiedAt := stringMapVal(node.Properties, "modified_at")
+		parsedModifiedAt, modifiedAtErr := time.Parse(time.RFC3339Nano, modifiedAt)
+		if path == "" || fileType == "" || hash == "" || modifiedAtErr != nil || parsedModifiedAt.Location() != time.UTC {
+			return nil
+		}
+		return &InstructionEvidence{
+			Version: evidence.Version, Verdict: evidence.Verdict,
+			Scope: scope, Path: path, Type: fileType, Hash: hash, SizeBytes: size,
+			ModifiedAt:   modifiedAt,
+			TotalSignals: evidence.TotalSignals, Truncated: evidence.Truncated,
+			Signals: append([]sharedinstruction.Signal(nil), evidence.Signals...),
+		}
+	}
+	return nil
+}
+
+func instructionProjectionMatches(edgeKind string, verdict sharedinstruction.Verdict, scope sharedinstruction.Scope) bool {
+	switch edgeKind {
+	case "POISONED_INSTRUCTIONS":
+		return verdict == sharedinstruction.VerdictPoisoning &&
+			(scope == sharedinstruction.ScopeExactProject || scope == sharedinstruction.ScopeExactUser)
+	case "INSTRUCTION_SIGNAL":
+		return verdict == sharedinstruction.VerdictSignal ||
+			(verdict == sharedinstruction.VerdictPoisoning && scope == sharedinstruction.ScopeDeep)
+	default:
+		return false
+	}
+}
+
+func containsKind(kinds []string, expected string) bool {
+	for _, kind := range kinds {
+		if kind == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func wholeInt64(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed), typed >= 0
+	case int64:
+		return typed, typed >= 0
+	case float64:
+		converted := int64(typed)
+		return converted, typed >= 0 && float64(converted) == typed
+	default:
+		return 0, false
+	}
+}
+
 var impactTemplates = map[string]struct {
 	summary     string
 	blastRadius string
@@ -252,8 +354,12 @@ var impactTemplates = map[string]struct {
 		blastRadius: "Similarity can confuse discovery or delegation, but does not by itself prove malicious impersonation.",
 	},
 	"POISONED_INSTRUCTIONS": {
-		summary:     "Instruction file %s matched suspicious instruction patterns.",
-		blastRadius: "Agents loading the file may be exposed; the pattern match does not prove that the instructions executed.",
+		summary:     "Instruction file %s contains strong compound instruction-poisoning evidence in an applicable instruction scope.",
+		blastRadius: "Agents loading the file may be exposed; the content evidence does not prove that the instructions executed.",
+	},
+	"INSTRUCTION_SIGNAL": {
+		summary:     "Instruction file %s contains suspicious content that requires review.",
+		blastRadius: "This signal identifies content to inspect; it does not establish malicious intent or instruction execution.",
 	},
 }
 

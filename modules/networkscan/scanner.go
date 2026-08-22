@@ -12,6 +12,7 @@ import (
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/contact"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
@@ -79,6 +80,9 @@ type Scanner struct {
 	Concurrency int
 	Timeout     time.Duration
 	ExpandOpts  ExpandOptions
+	// ContactPolicy filters expanded hosts before scheduling and remains
+	// enforced by the final socket dial.
+	ContactPolicy *contact.Policy
 
 	// Dialer is overridable in tests so the worker pool can be exercised
 	// without binding to real ports. nil → net.Dialer with Timeout.
@@ -99,13 +103,17 @@ type Scanner struct {
 // Conclusive includes successful connects and explicit connection refusals.
 // All other failures, panics, and unstarted probes remain indeterminate.
 type ProbeReport struct {
-	Total      int
-	Conclusive int
-	Targets    TargetSetIdentity
-	Ports      []int
+	Total         int
+	Conclusive    int
+	ExcludedHosts int
+	Targets       TargetSetIdentity
+	Ports         []int
 }
 
 func (r ProbeReport) State() ingest.OutcomeState {
+	if r.Total == 0 && r.ExcludedHosts > 0 {
+		return ingest.OutcomeNotApplicable
+	}
 	return ingest.ProbeOutcomeState(r.Total, r.Conclusive)
 }
 
@@ -159,6 +167,16 @@ func (s *Scanner) Scan(ctx context.Context, cidr string) ([]action.Target, error
 	if err != nil {
 		return nil, fmt.Errorf("expand %q: %w", cidr, err)
 	}
+	expandedHosts := len(hosts)
+	if s.ContactPolicy != nil {
+		admitted := hosts[:0]
+		for _, host := range hosts {
+			if s.ContactPolicy.AdmitAddress(host) == nil {
+				admitted = append(admitted, host)
+			}
+		}
+		hosts = admitted
+	}
 
 	ports := s.Ports
 	if len(ports) == 0 {
@@ -182,7 +200,7 @@ func (s *Scanner) Scan(ctx context.Context, cidr string) ([]action.Target, error
 
 	d := s.Dialer
 	if d == nil {
-		d = &net.Dialer{Timeout: timeout}
+		d = contact.Dialer{Base: &net.Dialer{Timeout: timeout}}
 	}
 
 	results := make(map[string]*hostResult, len(hosts))
@@ -269,10 +287,11 @@ producer:
 		out = append(out, hostResultToTarget(host, r.openPorts, ports))
 	}
 	s.setReport(ProbeReport{
-		Total:      total,
-		Conclusive: int(conclusive.Load()),
-		Targets:    targetSet,
-		Ports:      ports,
+		Total:         total,
+		Conclusive:    int(conclusive.Load()),
+		ExcludedHosts: expandedHosts - len(hosts),
+		Targets:       targetSet,
+		Ports:         ports,
 	})
 
 	if cancelled {

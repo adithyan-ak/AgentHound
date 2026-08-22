@@ -22,11 +22,11 @@ var ingestCmd = &cobra.Command{
 	Short: "Ingest collector JSON output into the graph database",
 	Long: `Ingest collector JSON into the graph database.
 
-Provide a path to a collector JSON file, or '-' to read from stdin. The
-stdin form is the standard pipe target for 'agenthound scan --output -':
+Provide the scan artifact path printed by the collector. '-' remains available
+for generic automation that already has a complete ingest envelope on stdin:
 
-  agenthound scan --output - | agenthound-server ingest -
-  ssh target 'agenthound scan --output -' | agenthound-server ingest -`,
+  agenthound-server ingest scan-<scan_id>.json
+  existing-envelope-producer | agenthound-server ingest -`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()

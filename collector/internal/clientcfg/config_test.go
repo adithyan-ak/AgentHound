@@ -12,7 +12,6 @@ func TestConfigHasNoManualIdentityInputs(t *testing.T) {
 	flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	flags.String("log-level", "", "")
 	flags.String("output", "", "")
-	flags.Int("concurrency", 0, "")
 	cfg := LoadWithFlags(flags)
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)

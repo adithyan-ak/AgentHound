@@ -247,7 +247,7 @@ func TestDiscoverInstructionsIncompleteExactTreeRetainsCompletedFile(t *testing.
 			if len(discovery.Observations) != 1 ||
 				discovery.Observations[0].Info.Path != canonicalReadable ||
 				discovery.Observations[0].OwnerKey != wantChild ||
-				!discovery.Observations[0].Info.IsSuspicious {
+				!discovery.Observations[0].Info.Suspicious() {
 				t.Fatalf("incomplete tree observations = %+v, want suspicious completed child %q", discovery.Observations, wantChild)
 			}
 			assertCompleteInstructionChild(t, discovery, root.CoverageKey, wantChild)
@@ -332,7 +332,7 @@ func TestDiscoverInstructionsDeepCoversSelectedProjectOutsideHome(t *testing.T) 
 	if len(deep.Observations) != 1 ||
 		deep.Observations[0].Info.Path != canonicalSource ||
 		deep.Observations[0].OwnerKey != wantChild ||
-		!deep.Observations[0].Info.IsSuspicious {
+		!deep.Observations[0].Info.Suspicious() {
 		t.Fatalf("outside-home project observations = %+v, want suspicious child %q", deep.Observations, wantChild)
 	}
 	assertCompleteInstructionChild(t, deep, projectDeepRoot, wantChild)
@@ -461,7 +461,7 @@ func TestDiscoverInstructionsDeepSelectedProjectOverridesHomePruning(t *testing.
 			if len(discovery.Observations) != 1 ||
 				discovery.Observations[0].Info.Path != canonicalSource ||
 				discovery.Observations[0].OwnerKey != wantChild ||
-				!discovery.Observations[0].Info.IsSuspicious {
+				!discovery.Observations[0].Info.Suspicious() {
 				t.Fatalf(
 					"selected project beneath %q observations = %+v, want suspicious child %q only",
 					prunedName,
@@ -644,7 +644,7 @@ func TestDiscoverInstructionsIncompleteDeepTreeRetainsCompletedFileFacts(t *test
 	if len(discovery.Observations) != 1 ||
 		discovery.Observations[0].Info.Path != canonicalReadable ||
 		discovery.Observations[0].OwnerKey != wantChild ||
-		!discovery.Observations[0].Info.IsSuspicious {
+		!discovery.Observations[0].Info.Suspicious() {
 		t.Fatalf("partial deep tree observations = %+v, want completed suspicious child %q", discovery.Observations, wantChild)
 	}
 	assertCompleteInstructionChild(t, discovery, root.CoverageKey, wantChild)
@@ -683,7 +683,7 @@ func TestDiscoverInstructionsPartialDeepRetainsCompletedFileFacts(t *testing.T) 
 	if len(discovery.Observations) != 1 ||
 		discovery.Observations[0].Info.Path != canonicalSource ||
 		discovery.Observations[0].OwnerKey != wantChild ||
-		!discovery.Observations[0].Info.IsSuspicious {
+		!discovery.Observations[0].Info.Suspicious() {
 		t.Fatalf("partial deep observations = %+v, want completed suspicious file child %q", discovery.Observations, wantChild)
 	}
 	assertCompleteInstructionChild(t, discovery, root.CoverageKey, wantChild)
@@ -889,7 +889,7 @@ func TestDiscoverInstructionsIncompleteExactRootRetainsCompletedStandaloneFile(t
 			if len(discovery.Observations) != 1 ||
 				discovery.Observations[0].Info.Path != canonicalReadable ||
 				discovery.Observations[0].OwnerKey != wantChild ||
-				discovery.Observations[0].Info.IsSuspicious != test.suspicious {
+				discovery.Observations[0].Info.Suspicious() != test.suspicious {
 				t.Fatalf("incomplete exact observations = %+v, want retained AGENTS child %q", discovery.Observations, wantChild)
 			}
 			assertCompleteInstructionChild(t, discovery, root.CoverageKey, wantChild)
@@ -1169,7 +1169,7 @@ func TestDeepInstructionBudgetReturnsWhileDirectoryOpenIsBlocked(t *testing.T) {
 	if len(activeChildren) != 0 ||
 		len(discovery.Observations) != 1 ||
 		discovery.Observations[0].OwnerKey != projectChild ||
-		!discovery.Observations[0].Info.IsSuspicious {
+		!discovery.Observations[0].Info.Suspicious() {
 		t.Fatalf("concurrent deep discovery = %+v", discovery)
 	}
 
@@ -1247,7 +1247,7 @@ func TestDeepInstructionBudgetRetainsCompletedSuspiciousFile(t *testing.T) {
 	wantChild := instructionChildKey(root.CoverageKey, canonicalSource)
 	if len(discovery.Observations) != 1 ||
 		discovery.Observations[0].OwnerKey != wantChild ||
-		!discovery.Observations[0].Info.IsSuspicious {
+		!discovery.Observations[0].Info.Suspicious() {
 		t.Fatalf("timed-out observations = %+v, want suspicious child %q", discovery.Observations, wantChild)
 	}
 	assertCompleteInstructionChild(t, discovery, root.CoverageKey, wantChild)

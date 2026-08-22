@@ -5,8 +5,6 @@
 # implementation-specific app identity and version under result.app.
 #
 # Auth: by default, Qdrant has no auth. Setting a service key is opt-in.
-# A successful match flags is_anonymous_loot=true so Looters can
-# treat it as anonymous-data-leak surface.
 id: qdrant
 name: Qdrant vector database
 description: 'Identifies Qdrant by GET /telemetry returning its canonical app identity'
@@ -33,5 +31,4 @@ emit:
   properties:
     service_kind: qdrant
     auth_method: none
-    is_anonymous_loot: "true"
     version: "{capture:version}"

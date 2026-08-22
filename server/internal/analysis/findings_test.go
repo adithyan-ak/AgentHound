@@ -86,7 +86,7 @@ func TestQueryFindings_AllEdgeKinds(t *testing.T) {
 
 // TestQueryFindings_VerifiedUpgradeNoDuplicate asserts a CAN_REACH edge carrying
 // reach_evidence_state=verified (set by the CAN_REACH processor's re-correlation
-// of a CREDENTIAL_REACH_VERIFIED edge) yields exactly ONE finding whose evidence
+// of a CREDENTIAL_ACCESS_OBSERVED edge) yields exactly ONE finding whose evidence
 // state is upgraded to verified — the same finding, not a duplicate.
 func TestQueryFindings_VerifiedUpgradeNoDuplicate(t *testing.T) {
 	mock := &graph.MockGraphDB{
@@ -98,19 +98,18 @@ func TestQueryFindings_VerifiedUpgradeNoDuplicate(t *testing.T) {
 				"cross_protocol": false, "target_sensitivity": "critical",
 				"source_collector":                    "mcp",
 				"reach_evidence_state":                "verified",
-				"verified_scenario_id":                "cred-reach",
-				"verified_scenario_version":           1,
-				"verified_run_id":                     "run-verified",
-				"verified_at":                         "2026-07-13T12:00:00Z",
-				"verified_oracle_type":                "differential_credential_reach",
-				"verified_outcome":                    "credential_gated_reach_verified",
-				"verified_control_stage":              "initialize",
-				"verified_control_status":             "denied",
-				"verified_control_resource_addressed": false,
-				"verified_authed_stage":               "resource_read",
-				"verified_authed_status":              "allowed",
-				"verified_authed_resource_addressed":  true,
-				"verified_cleanup_status":             "not_applicable",
+				"proof_action":                        "credential_reach",
+				"proof_action_id":                     "action-verified",
+				"proof_verified_at":                   "2026-07-13T12:00:00Z",
+				"proof_type":                          "differential_resource_read",
+				"proof_outcome":                       "credential_required",
+				"proof_control_stage":                 "initialize",
+				"proof_control_status":                "denied",
+				"proof_control_resource_addressed":    false,
+				"proof_credential_stage":              "resource_read",
+				"proof_credential_status":             "allowed",
+				"proof_credential_resource_addressed": true,
+				"proof_cleanup_status":                "not_applicable",
 			},
 		},
 	}
@@ -128,16 +127,16 @@ func TestQueryFindings_VerifiedUpgradeNoDuplicate(t *testing.T) {
 	if f.Evidence.State != model.FindingEvidenceVerified {
 		t.Fatalf("evidence state = %q, want verified", f.Evidence.State)
 	}
-	verification := f.Evidence.Verification
-	if verification == nil ||
-		verification.ScenarioID != "cred-reach" ||
-		verification.CampaignRunID != "run-verified" ||
-		verification.ControlStage != "initialize" ||
-		verification.ControlResourceAddressed ||
-		verification.AuthedStage != "resource_read" ||
-		!verification.AuthedResourceAddressed ||
-		verification.CleanupStatus != "not_applicable" {
-		t.Fatalf("structured verification metadata = %+v", verification)
+	proof := f.Evidence.Proof
+	if proof == nil ||
+		proof.Action != "credential_reach" ||
+		proof.ActionID != "action-verified" ||
+		proof.ControlStage != "initialize" ||
+		proof.ControlResourceAddressed ||
+		proof.CredentialStage != "resource_read" ||
+		!proof.CredentialResourceAddressed ||
+		proof.CleanupStatus != "not_applicable" {
+		t.Fatalf("structured proof metadata = %+v", proof)
 	}
 	// Verified + critical sensitivity + confidence 1.0 => critical severity.
 	if f.Severity != "critical" {

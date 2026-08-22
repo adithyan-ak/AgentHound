@@ -1,35 +1,19 @@
 # AgentHound modules
 
-Most subdirectories implement an `sdk/action` interface and self-register with
-`sdk/module` via `init()`. The collector binary (`collector/cmd/agenthound`)
-blank-imports those packages so registration happens at startup:
+Modules provide target scanning, fingerprinting, protocol and configuration collection, service collection, and action adapters for the autonomous planner.
 
-    import (
-        _ "github.com/adithyan-ak/agenthound/modules/mcp"
-        _ "github.com/adithyan-ak/agenthound/modules/a2a"
-        _ "github.com/adithyan-ak/agenthound/modules/config"
-    )
+`agenthound scan` selects modules from the current targets, credentials, service kinds, mode, and completed candidate keys. Normal and deep presets keep operator behavior consistent across modules.
 
-The current exceptions are intentional:
+Every module must:
 
-- `config`, `mcp`, and `a2a` register compatibility metadata but their legacy
-  collectors, not `sdk/action.Enumerator`, drive enumeration.
-- `credreach` and `mcproundtrip` register with `sdk/campaign`.
-- `protoscan` is a discovery engine, not an `sdk/module` registration.
+- use the shared contact policy for AgentHound-owned connections;
+- keep collection bounded and deterministic;
+- return ingest V1 graph facts with observation domains and honest outcomes;
+- store concrete credential material in `Credential.properties.value`;
+- preserve parsed authentication schemes for planner compatibility;
+- checkpoint recovery state before mutation and restore immediately;
+- keep the collector dependency and size boundaries intact.
 
-## Adding a new action module
+Public action interfaces live in `sdk/action`; registration lives in `sdk/module`. Planner composition lives in the collector orchestration layer.
 
-1. Create `modules/<name>/`.
-2. Implement a CLI-dispatched `sdk/action` interface (Fingerprinter, Looter,
-   Extractor, Poisoner, Implanter, ...). `Enumerator` is not currently
-   dispatched as a third-party extension point.
-3. Add `register.go`:
-
-       func init() { module.Register(&<Name>{}) }
-
-4. Add the blank-import line to `collector/cmd/agenthound/main.go`.
-5. Add the module package and any new dependency packages to
-   `scripts/collector-allowlist.txt`.
-
-There is no runtime plugin loading or DLL mechanism; registration is compiled
-into the collector.
+See [Writing modules](../docs/contributing/modules.md).

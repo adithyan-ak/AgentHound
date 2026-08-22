@@ -3,20 +3,17 @@ import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 import { ACCENT, ACCENT_BRIGHT, SIGNAL_OK, SEVERITY } from "./tokens";
 
-// The design system keeps its blessed hex sources in lockstep. slop-check bans
-// hex anywhere ELSE but cannot detect when these sources drift apart, so this
-// parity test closes that gap: it derives each overlapping color from its
-// sources and asserts equality. It intentionally hardcodes NO hex literal — it
-// imports the token value and reads the other source's TEXT from disk — so the
-// test itself stays within slop-check rule #1. (Files are read from disk
-// because vitest mocks CSS/asset imports to empty strings.)
+// The design system keeps duplicated color sources in lockstep. This parity
+// test derives each overlapping color from its sources and asserts equality.
+// Files are read from disk because vitest mocks CSS/asset imports to empty
+// strings.
 //
 // There are two duplicated surfaces to guard:
 //   1. tokens.ts  <-> globals.css  (the signature accents).
 //   2. tokens.ts  <-> tailwind.config.ts (the severity palette). Tailwind
 //      needs literal hex to generate `bg-severity-*` classes (e.g.
 //      `bg-severity-medium` in EntityInspector), and tailwind.config.ts lives
-//      OUTSIDE src/ so slop-check never scans it — hence this guard.
+//      outside src/, so this test is the shared consistency guard.
 
 // vitest runs from the UI package root (server/ui), so resolve from cwd.
 const css = readFileSync(

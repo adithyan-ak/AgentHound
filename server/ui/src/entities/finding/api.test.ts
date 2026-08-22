@@ -41,19 +41,18 @@ function verifiedFinding() {
     evidence: {
       state: "verified",
       channels: [],
-      verification: {
-        scenario_id: "cred-reach",
-        scenario_version: 1,
-        campaign_run_id: "run-ui",
+      proof: {
+        action: "credential_reach",
+        action_id: "action-ui",
         verified_at: "2026-07-13T12:00:00Z",
-        oracle_type: "differential_credential_reach",
-        outcome: "credential_gated_reach_verified",
+        proof_type: "differential_resource_read",
+        outcome: "credential_required",
         control_stage: "initialize",
         control_status: "denied",
         control_resource_addressed: false,
-        authed_stage: "resource_read",
-        authed_status: "allowed",
-        authed_resource_addressed: true,
+        credential_stage: "resource_read",
+        credential_status: "allowed",
+        credential_resource_addressed: true,
         cleanup_status: "not_applicable",
       },
     },
@@ -194,18 +193,18 @@ describe("published finding scope", () => {
     const result = await fetchFindings();
     expect(result.findings[0]?.evidence).toMatchObject({
       state: "verified",
-      verification: {
-        campaign_run_id: "run-ui",
+      proof: {
+        action_id: "action-ui",
         control_stage: "initialize",
         control_resource_addressed: false,
-        authed_stage: "resource_read",
-        authed_resource_addressed: true,
+        credential_stage: "resource_read",
+        credential_resource_addressed: true,
         cleanup_status: "not_applicable",
       },
     });
   });
 
-  it("rejects verified evidence without its verification contract", async () => {
+  it("rejects verified evidence without its proof contract", async () => {
     mocks.json.mockResolvedValue({
       findings: [{ ...finding(), evidence: { state: "verified", channels: [] } }],
       scope: {
@@ -222,7 +221,7 @@ describe("published finding scope", () => {
       },
     });
     await expect(fetchFindings()).rejects.toThrow(
-      "findings[0].evidence.verification is required",
+      "findings[0].evidence.proof is required",
     );
   });
 
@@ -269,6 +268,64 @@ describe("published finding scope", () => {
     await fetchFindingDetail("aaaaaaaaaaaaaaaa");
 
     expect(mocks.get).toHaveBeenCalledWith("analysis/findings/aaaaaaaaaaaaaaaa");
+  });
+
+  it("decodes bounded instruction evidence only on finding detail", async () => {
+    const response = exactFindingDetail();
+    mocks.json.mockResolvedValue({
+      ...response,
+      instruction_evidence: {
+        version: 1,
+        verdict: "poisoning",
+        scope: "exact_project",
+        path: "/workspace/AGENTS.md",
+        type: "agents.md",
+        hash: "sha256:abc",
+        size_bytes: 128,
+        modified_at: "2026-08-20T12:00:00Z",
+        total_signals: 1,
+        truncated: false,
+        signals: [
+          {
+            rule_id: "instruction-ignore-previous",
+            label: "Ignore Previous Instructions",
+            severity: "critical",
+            strength: "primary",
+            raw_offset: 12,
+            line: 2,
+            column: 1,
+            match: "Ignore previous instructions",
+            context_before: "first line\n",
+            context_after: "\nand continue",
+          },
+        ],
+      },
+    });
+
+    const detail = await fetchFindingDetail("aaaaaaaaaaaaaaaa");
+    expect(detail.instruction_evidence).toMatchObject({
+      verdict: "poisoning",
+      scope: "exact_project",
+      path: "/workspace/AGENTS.md",
+      signals: [
+        expect.objectContaining({
+          rule_id: "instruction-ignore-previous",
+          line: 2,
+          column: 1,
+        }),
+      ],
+    });
+
+    mocks.json.mockResolvedValue({
+      ...response,
+      instruction_evidence: {
+        ...detail.instruction_evidence,
+        total_signals: 0,
+      },
+    });
+    await expect(fetchFindingDetail("aaaaaaaaaaaaaaaa")).rejects.toThrow(
+      "finding detail.instruction_evidence.signals count is invalid",
+    );
   });
 
   it("accepts canonical detail collections and rejects null fallbacks", async () => {

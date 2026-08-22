@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"testing"
 
-	_ "github.com/adithyan-ak/agenthound/modules/mcppoison"
 	"github.com/adithyan-ak/agenthound/sdk/common"
 )
 
@@ -60,21 +59,5 @@ func TestSetVersion(t *testing.T) {
 	}
 	if got := common.CollectorVersion(); got != "1.2.3" {
 		t.Errorf("collector protocol version = %q, want 1.2.3", got)
-	}
-}
-
-func TestFinalizeModuleFlagsRegistersContextForgeProductionCLI(t *testing.T) {
-	finalizeModuleFlags()
-	finalizeModuleFlags() // production setup is intentionally idempotent
-
-	for _, name := range []string{"adapter", "management-url", "insecure"} {
-		if poisonCmd.Flags().Lookup(name) == nil {
-			t.Errorf("production poison command is missing --%s", name)
-		}
-	}
-	for _, name := range []string{"update-method", "update-path", "list-path", "auth-token"} {
-		if poisonCmd.Flags().Lookup(name) != nil {
-			t.Errorf("production poison command still exposes removed --%s", name)
-		}
 	}
 }

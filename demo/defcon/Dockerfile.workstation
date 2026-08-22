@@ -1,0 +1,26 @@
+FROM golang:1.25.13-alpine AS builder
+WORKDIR /src
+ARG VERSION=defcon34
+ARG COMMIT=none
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
+    -o /bin/agenthound \
+    ./collector/cmd/agenthound
+
+FROM alpine:3.21
+ENV HOME=/home/demo
+RUN apk add --no-cache bash ca-certificates curl \
+    && adduser -D -u 1001 -h /home/demo demo \
+    && printf '%s\n' '7c4100defc0a34aa8e00000000000001' >/etc/machine-id
+COPY --from=builder /bin/agenthound /usr/local/bin/agenthound
+COPY demo/defcon/workstation/home/ /home/demo/
+RUN mkdir -p /home/demo/.agenthound /demo/artifacts \
+    && chown -R demo:demo /home/demo /demo
+USER demo
+WORKDIR /home/demo/project
+ENTRYPOINT ["/bin/sh", "-c"]
+CMD ["sleep infinity"]
