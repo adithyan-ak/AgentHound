@@ -1,8 +1,12 @@
-.PHONY: build build-collector build-server build-all test lint docker docker-collector docker-server docker-standard up down clean seed release ui-build ui-dev ui-test standard standard-run standard-stop deps-check size-check slop-check version-check sync-version docs-check prerelease preflight-build preflight-collector preflight-server preflight-docker preflight-docker-compose preflight-server-running
+.PHONY: build build-collector build-server build-all test lint check security-check integration upstream-test cross-build docker docker-collector docker-server docker-standard up down clean seed release ui-build ui-check ui-dev ui-test standard standard-run standard-stop deps-check size-check installer-test version-check sync-version docs-check prerelease preflight-build preflight-collector preflight-server preflight-docker preflight-docker-compose preflight-server-running
 
 # Release tooling is pinned independently of the project's Go version.
 # Go may download the tool's newer required toolchain on the first local run.
 GORELEASER := go run github.com/goreleaser/goreleaser/v2@v2.15.4
+GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4
+GOVULNCHECK := go run golang.org/x/vuln/cmd/govulncheck@v1.7.0
+GO_LICENSES := go run github.com/google/go-licenses@v1.6.0
+ALLOWED_LICENSES := Apache-2.0,MIT,BSD-2-Clause,BSD-3-Clause,ISC,MPL-2.0,Unlicense,Zlib
 
 # Preflight gates. Verify required tools are present and at the expected
 # major versions BEFORE attempting a build, so newcomers get a friendly
@@ -34,6 +38,12 @@ ui-build:
 	mkdir -p server/internal/api/ui/dist
 	cp -r server/ui/dist/. server/internal/api/ui/dist/
 
+ui-check:
+	cd server/ui && npm ci --ignore-scripts && npm run lint && npm test && npm run build
+	find server/internal/api/ui/dist -mindepth 1 -not -name .gitkeep -delete
+	mkdir -p server/internal/api/ui/dist
+	cp -r server/ui/dist/. server/internal/api/ui/dist/
+
 ui-dev:
 	cd server/ui && npm run dev
 
@@ -55,7 +65,38 @@ test:
 	go test ./... -v -race -count=1
 
 lint:
-	golangci-lint run ./...
+	$(GOLANGCI_LINT) run ./...
+
+# Fast local equivalent of the required non-Docker PR gates.
+check: preflight-build
+	$(MAKE) lint
+	go test ./... -short -race -count=1
+	$(MAKE) deps-check
+	$(MAKE) size-check
+	$(MAKE) installer-test
+	$(MAKE) ui-check
+	mkdir -p bin
+	go build -o bin/agenthound ./collector/cmd/agenthound
+	go build -o bin/agenthound-server ./server/cmd/agenthound-server
+
+security-check:
+	$(GOVULNCHECK) ./...
+	$(GO_LICENSES) check --allowed_licenses=$(ALLOWED_LICENSES) ./collector/cmd/agenthound/... ./server/cmd/agenthound-server/...
+	cd server/ui && npm audit --package-lock-only --omit=dev --audit-level=high
+
+integration: preflight-docker-compose
+	@bash test-infra/run-smoke.sh
+
+upstream-test: preflight-docker-compose
+	@bash test-infra/run-tests.sh
+
+cross-build:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o /dev/null ./collector/cmd/agenthound
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o /dev/null ./server/cmd/agenthound-server
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o /dev/null ./collector/cmd/agenthound
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o /dev/null ./server/cmd/agenthound-server
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o /dev/null ./collector/cmd/agenthound
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o /dev/null ./server/cmd/agenthound-server
 
 docker-collector: preflight-docker
 	docker build -f docker/Dockerfile.agenthound -t agenthound:collector .
@@ -114,10 +155,8 @@ deps-check:
 size-check:
 	@bash scripts/size-check.sh
 
-# UI design-system regression gate — fails if banned slop patterns reappear.
-# Override individual rules with SLOP_SKIP="rule1,rule2".
-slop-check:
-	@bash scripts/slop-check.sh
+installer-test:
+	@bash scripts/install-atomic-test.sh
 
 # Assert the install.sh + README version pins match the CHANGELOG (the version
 # source of truth). Also runs inside `make prerelease`, so release.yml enforces
@@ -142,35 +181,13 @@ docs-check:
 # Docs workflow + `make docs-check`, so it is intentionally NOT folded in here
 # to keep this gate Go/Node-only.)
 prerelease:
-	@echo "=== [1/13] version-check ==="
-	@bash scripts/version-check.sh
-	@bash scripts/release-process-test.sh
-	@echo "=== [2/13] gofmt ==="
-	@test -z "$$(gofmt -l .)" || (echo "FAIL: gofmt found unformatted files:" && gofmt -l . && exit 1)
-	@echo "=== [3/13] golangci-lint ==="
-	golangci-lint run ./...
-	@echo "=== [4/13] go vet ==="
-	go vet ./...
-	@echo "=== [5/13] govulncheck ==="
-	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-	@echo "=== [6/13] go-licenses ==="
-	go run github.com/google/go-licenses@latest check --allowed_licenses=Apache-2.0,MIT,BSD-2-Clause,BSD-3-Clause,ISC,MPL-2.0,Unlicense,Zlib ./collector/cmd/agenthound/... ./server/cmd/agenthound-server/...
-	@echo "=== [7/13] go build ==="
-	go build ./...
-	@echo "=== [8/13] go test -race -short ==="
-	go test ./... -race -short -count=1
-	@echo "=== [9/13] deps-check ==="
-	@bash scripts/deps-check.sh
-	@echo "=== [10/13] size-check ==="
-	@bash scripts/size-check.sh
-	@echo "=== [11/13] slop-check ==="
-	# SLOP_SKIP=hardcoded-grids matches the CI ui job: the dashboard grid-cols ->
-	# Every-Layout migration is a deferred, visually-QA'd task.
-	@SLOP_SKIP=hardcoded-grids bash scripts/slop-check.sh
-	@echo "=== [12/13] UI build ==="
-	cd server/ui && npm run build
-	@echo "=== [13/13] cross-compile (linux/amd64 + darwin/arm64) ==="
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o /dev/null ./collector/cmd/agenthound
-	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o /dev/null ./collector/cmd/agenthound
+	@echo "=== [1/4] version-check ==="
+	$(MAKE) version-check
+	@echo "=== [2/4] contributor checks ==="
+	$(MAKE) check
+	@echo "=== [3/4] security checks ==="
+	$(MAKE) security-check
+	@echo "=== [4/4] canonical cross-builds ==="
+	$(MAKE) cross-build
 	@echo ""
 	@echo "=== ALL GATES PASS — safe to tag ==="

@@ -279,7 +279,6 @@ type fakeScanStore struct {
 	mu            sync.Mutex
 	creates       []*model.Scan
 	updates       []scanUpdate
-	rejections    []appdb.CampaignRejectionAudit
 	dirtyCoverage []string
 	retired       []string
 	resolvedRoots []sdkingest.CoverageRoot
@@ -402,17 +401,6 @@ func (s *fakeScanStore) BeginScan(
 	s.dirtyCoverage = append([]string(nil), merged...)
 	s.mu.Unlock()
 	return merged, s.CreateScan(ctx, scan)
-}
-
-func (s *fakeScanStore) RecordCampaignRejection(
-	_ context.Context,
-	audit appdb.CampaignRejectionAudit,
-) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	audit.ReasonCodes = append([]string(nil), audit.ReasonCodes...)
-	s.rejections = append(s.rejections, audit)
-	return nil
 }
 
 func (s *fakeScanStore) ResolveRetiredCoverage(
@@ -816,7 +804,7 @@ func containsCoverage(keys []string, want string) bool {
 	return false
 }
 
-func TestPipelineStorageVerificationPrecedesEveryMutationAndValidationAudit(t *testing.T) {
+func TestPipelineStorageVerificationPrecedesEveryMutationAndValidation(t *testing.T) {
 	sentinel := errors.New("storage rejected")
 	guard := &rejectStorageVerifier{err: sentinel}
 	writer := &fakeWriter{}
@@ -825,9 +813,9 @@ func TestPipelineStorageVerificationPrecedesEveryMutationAndValidationAudit(t *t
 	pipeline := newTestPipeline(writer, db, scans, noOpRunPP)
 	pipeline.storageGuard = guard
 
-	// Deliberately make this a generic-invalid campaign submission. If the
-	// validator ran first, it would persist a campaign-rejection audit.
-	data := campaignEvidenceIngest()
+	// Deliberately make this a generic-invalid submission. Storage admission
+	// must still fail before validation or any external mutation.
+	data := validIngestDataFor("storage-preflight")
 	data.Graph.Edges[0].ObservationDomains = nil
 
 	result, err := pipeline.Ingest(context.Background(), data)
@@ -840,18 +828,18 @@ func TestPipelineStorageVerificationPrecedesEveryMutationAndValidationAudit(t *t
 	if guard.calls != 1 {
 		t.Fatalf("storage verification calls = %d, want 1", guard.calls)
 	}
-	if len(scans.rejections) != 0 || len(scans.creates) != 0 || len(scans.updates) != 0 ||
+	if len(scans.creates) != 0 || len(scans.updates) != 0 ||
 		len(writer.nodeCalls) != 0 || len(writer.edgeCalls) != 0 ||
 		len(db.CallsTo("Query")) != 0 || len(db.CallsTo("ExecuteWrite")) != 0 {
 		t.Fatalf(
-			"rejected storage pair mutated or queried state: rejections=%d creates=%d updates=%d nodes=%d edges=%d",
-			len(scans.rejections), len(scans.creates), len(scans.updates),
+			"rejected storage pair mutated or queried state: creates=%d updates=%d nodes=%d edges=%d",
+			len(scans.creates), len(scans.updates),
 			len(writer.nodeCalls), len(writer.edgeCalls),
 		)
 	}
 }
 
-func TestPipelineVersionPreflightPrecedesStorageAndAudit(t *testing.T) {
+func TestPipelineVersionPreflightPrecedesStorage(t *testing.T) {
 	guard := &rejectStorageVerifier{err: errors.New("storage must not be read")}
 	writer := &fakeWriter{}
 	scans := &fakeScanStore{}
@@ -859,7 +847,7 @@ func TestPipelineVersionPreflightPrecedesStorageAndAudit(t *testing.T) {
 	pipeline := newTestPipeline(writer, db, scans, noOpRunPP)
 	pipeline.storageGuard = guard
 
-	data := campaignEvidenceIngest()
+	data := validIngestDataFor("version-preflight")
 	data.Meta.Version = sdkingest.CurrentVersion - 1
 	result, err := pipeline.Ingest(context.Background(), data)
 	var versionErr *UnsupportedVersionError
@@ -872,8 +860,7 @@ func TestPipelineVersionPreflightPrecedesStorageAndAudit(t *testing.T) {
 	if guard.calls != 0 {
 		t.Fatalf("storage verification calls = %d, want zero", guard.calls)
 	}
-	if len(scans.rejections) != 0 ||
-		len(scans.creates) != 0 ||
+	if len(scans.creates) != 0 ||
 		len(scans.updates) != 0 ||
 		len(writer.nodeCalls) != 0 ||
 		len(writer.edgeCalls) != 0 ||
@@ -1411,8 +1398,21 @@ func TestPipeline_TruncatedDeepRootPublishesAndPromotesCompleteChildren(t *testi
 				"source_kind": "InstructionFile",
 				"target_id":   "instruction-file", "target_name": "AGENTS.md",
 				"target_kind": "InstructionFile",
-				"edge_kind":   "POISONED_INSTRUCTIONS", "confidence": 1.0,
+				"edge_kind":   "INSTRUCTION_SIGNAL", "confidence": 1.0,
 				"cross_protocol": false, "target_sensitivity": "",
+				"evidence_version": int64(1),
+				"exact_evidence_nodes": []any{map[string]any{
+					"id": "instruction-file", "kinds": []any{"InstructionFile"},
+					"properties": map[string]any{
+						"path": "/tmp/AGENTS.md", "type": "agents.md", "hash": "sha256:abc",
+						"instruction_verdict": "signal", "instruction_scope": "deep",
+						"instruction_signal_count": int64(1), "instruction_signal_truncated": false,
+						"instruction_evidence_version": int64(1), "size_bytes": int64(64),
+						"modified_at":               "2026-08-20T12:00:00Z",
+						"instruction_evidence_json": `{"version":1,"verdict":"signal","total_signals":1,"truncated":false,"signals":[{"rule_id":"injection-ignore-previous","label":"Ignore Previous Instructions","severity":"critical","strength":"primary","raw_offset":1,"line":1,"column":2,"match":"ignore previous instructions","context_before":"","context_after":""}]}`,
+					},
+				}},
+				"exact_evidence_edges": []any{},
 			}}, nil
 		},
 	}
@@ -1435,8 +1435,8 @@ func TestPipeline_TruncatedDeepRootPublishesAndPromotesCompleteChildren(t *testi
 	}
 	finalized := publisher.finalizations[0]
 	if len(finalized.Findings) != 1 ||
-		finalized.Findings[0].EdgeKind != "POISONED_INSTRUCTIONS" {
-		t.Fatalf("limited exact findings = %+v, want positive child finding", finalized.Findings)
+		finalized.Findings[0].EdgeKind != "INSTRUCTION_SIGNAL" {
+		t.Fatalf("limited deep findings = %+v, want review signal", finalized.Findings)
 	}
 	states := sdkingest.CoverageStates(finalized.Collection)
 	var truncatedRootPromoted bool

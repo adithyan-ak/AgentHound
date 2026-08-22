@@ -1,0 +1,20 @@
+id: instruction-override-expanded
+name: Instruction Context Override
+description: >
+  Detects explicit attempts to discard or supersede controlling instructions
+  while retaining exact raw evidence through the instruction canonicalizer.
+version: 1
+enabled: true
+scope:
+  collector: config
+  targets:
+    - instruction.content
+severity: critical
+owasp: [MCP09, ASI07]
+tags: [instruction-poisoning]
+matcher:
+  type: regex
+  pattern: '(?i)\b(?:(?:(?:ignore|disregard|forget|override|bypass|discard|invalidate)|i(?:[\s._/+-]+g){1}[\s._/+-]*n[\s._/+-]*o[\s._/+-]*r[\s._/+-]*e)(?:[\s>+\\./_-]+(?:all|a[\s._/+-]+l[\s._/+-]+l|any|the|every))?[\s>+\\./_-]+(?:previous|prior|earlier|above|original|current)(?:[\s>+\\./_-]+(?:project|repository|system|agent))?[\s>+\\./_-]+(?:instructions?|rules?|guidance|directives?|constraints?|tasks?|messages?)|(?:do[\s>+\\./_-]+not|don''t|never|refuse[\s>+\\./_-]+to)[\s>+\\./_-]+follow(?:[\s>+\\./_-]+the)?[\s>+\\./_-]+(?:(?:previous|prior|earlier|above|original|current)[\s>+\\./_-]+(?:instructions?|rules?|guidance|directives?|constraints?|tasks?|messages?)|(?:instructions?|rules?|guidance|directives?|constraints?|tasks?|messages?)[\s>+\\./_-]+(?:above|previous|prior|earlier|original|current))|(?:previous|prior|earlier|above|original)[\s>+\\./_-]+(?:instructions?|rules?|guidance|directives?)[\s>+\\./_-]+(?:are|is)(?:[\s>+\\./_-]+now)?[\s>+\\./_-]+(?:void|invalid|superseded))\b'
+emit:
+  finding_type: has_injection_patterns
+  labels: [ignore_previous]

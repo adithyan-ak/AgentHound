@@ -1,6 +1,6 @@
 module github.com/adithyan-ak/agenthound
 
-go 1.25.12
+go 1.25.13
 
 // v0.5.0 through v1.0.0 are superseded unsupported publications. The historical
 // v1.0.1 is also unsupported, but a numeric Git tag cannot make that canonical

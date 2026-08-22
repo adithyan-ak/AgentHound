@@ -2,7 +2,7 @@ id: injection-hidden-unicode
 name: Hidden Unicode Characters
 description: >
   Detects zero-width and invisible Unicode characters (ZWSP, ZWNJ, ZWJ,
-  BOM, RLO) that can be used to hide malicious instructions from human
+  word joiner, BOM, RLO) that can be used to hide malicious instructions from human
   review while remaining visible to LLMs.
 version: 1
 enabled: true
@@ -18,7 +18,7 @@ owasp: [MCP04, ASI03]
 tags: [injection, prompt-injection]
 matcher:
   type: regex
-  pattern: "[\u200B\u200C\u200D\uFEFF\u202E]"
+  pattern: "[\u200B\u200C\u200D\u2060\uFEFF\u202E]"
 emit:
   finding_type: has_injection_patterns
   labels: [hidden_unicode]

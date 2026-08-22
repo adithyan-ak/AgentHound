@@ -53,7 +53,7 @@ func TestRegisterAndGet(t *testing.T) {
 func TestRegisterPanicsOnDuplicate(t *testing.T) {
 	resetRegistry()
 	a := &fakeModule{id: "dup.id", action: action.Enumerate, target: "x"}
-	b := &fakeModule{id: "dup.id", action: action.Loot, target: "y"}
+	b := &fakeModule{id: "dup.id", action: action.Collect, target: "y"}
 	Register(a)
 
 	defer func() {
@@ -95,7 +95,7 @@ func TestRegisterPanicsOnEmptyID(t *testing.T) {
 func TestList(t *testing.T) {
 	resetRegistry()
 	Register(&fakeModule{id: "z.last", action: action.Enumerate, target: "z"})
-	Register(&fakeModule{id: "a.first", action: action.Loot, target: "a"})
+	Register(&fakeModule{id: "a.first", action: action.Collect, target: "a"})
 	Register(&fakeModule{id: "m.middle", action: action.Enumerate, target: "m"})
 
 	all := List()
@@ -114,7 +114,7 @@ func TestListByAction(t *testing.T) {
 	resetRegistry()
 	Register(&fakeModule{id: "mcp.enumerate", action: action.Enumerate, target: "mcp"})
 	Register(&fakeModule{id: "a2a.enumerate", action: action.Enumerate, target: "a2a"})
-	Register(&fakeModule{id: "litellm.loot", action: action.Loot, target: "litellm"})
+	Register(&fakeModule{id: "litellm.loot", action: action.Collect, target: "litellm"})
 
 	enums := ListByAction(action.Enumerate)
 	if len(enums) != 2 {
@@ -124,7 +124,7 @@ func TestListByAction(t *testing.T) {
 		t.Errorf("ListByAction not sorted: got %q,%q", enums[0].ID(), enums[1].ID())
 	}
 
-	loots := ListByAction(action.Loot)
+	loots := ListByAction(action.Collect)
 	if len(loots) != 1 || loots[0].ID() != "litellm.loot" {
 		t.Errorf("ListByAction(Loot) = %v, want [litellm.loot]", loots)
 	}
@@ -138,9 +138,9 @@ func TestListByAction(t *testing.T) {
 func TestGetByTarget(t *testing.T) {
 	resetRegistry()
 	Register(&fakeModule{id: "mcp.enumerate", action: action.Enumerate, target: "mcp"})
-	Register(&fakeModule{id: "litellm.loot", action: action.Loot, target: "litellm"})
+	Register(&fakeModule{id: "litellm.loot", action: action.Collect, target: "litellm"})
 
-	m, ok := GetByTarget("litellm", action.Loot)
+	m, ok := GetByTarget("litellm", action.Collect)
 	if !ok {
 		t.Fatal("GetByTarget(litellm, Loot) returned !ok")
 	}

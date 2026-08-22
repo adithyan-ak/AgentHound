@@ -7,8 +7,8 @@
 #   {"experiments":[...]}  (200 OK, possibly with empty list)
 #
 # max_results is required: modern MLflow (2.22.x+) rejects the bare
-# path with INVALID_PARAMETER_VALUE (HTTP 400). Match the looter and
-# the documented probe: ?max_results=1.
+# path with INVALID_PARAMETER_VALUE (HTTP 400). Fingerprinting and service
+# collection both use the documented probe: ?max_results=1.
 #
 # Auth: MLflow ships an optional built-in basic-auth plugin
 # (`mlflow server --app-name basic-auth`) that is OFF by default; a
@@ -38,4 +38,3 @@ emit:
     service_kind: mlflow
     auth_method: none
     auth_evidence: anonymous_probe_succeeded
-    is_anonymous_loot: "true"

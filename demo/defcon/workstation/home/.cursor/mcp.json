@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "crm-mcp": {
+      "url": "http://crm-mcp:8931/mcp",
+      "headers": {
+        "Authorization": "Bearer example"
+      }
+    }
+  }
+}

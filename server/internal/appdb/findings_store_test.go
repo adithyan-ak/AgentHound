@@ -124,16 +124,16 @@ func TestIntegrationFindingStore(t *testing.T) {
 			Evidence: model.FindingEvidence{
 				State: model.FindingEvidenceVerified, Detector: "mcp",
 				Channels: []string{"file_write"},
-				Verification: &model.FindingVerification{
-					ScenarioID: "cred-reach", ScenarioVersion: 1,
-					CampaignRunID: "run-storage", VerifiedAt: "2026-07-13T12:00:00Z",
-					OracleType:   "differential_credential_reach",
-					Outcome:      "credential_gated_reach_verified",
+				Proof: &model.FindingProof{
+					Action: "credential_reach", ActionID: "action-storage",
+					VerifiedAt:   "2026-07-13T12:00:00Z",
+					ProofType:    "differential_resource_read",
+					Outcome:      "credential_required",
 					ControlStage: "initialize", ControlStatus: "denied",
 					ControlResourceAddressed: false,
-					AuthedStage:              "resource_read", AuthedStatus: "allowed",
-					AuthedResourceAddressed: true,
-					CleanupStatus:           "not_applicable",
+					CredentialStage:          "resource_read", CredentialStatus: "allowed",
+					CredentialResourceAddressed: true,
+					CleanupStatus:               "not_applicable",
 				},
 			},
 			ExactEvidence: &model.ExactFindingEvidence{
@@ -174,10 +174,10 @@ func TestIntegrationFindingStore(t *testing.T) {
 				f.Evidence.Channels[0] != "file_write" {
 				t.Fatalf("persisted finding evidence = %+v", f)
 			}
-			if f.Evidence.Verification == nil ||
-				f.Evidence.Verification.CampaignRunID != "run-storage" ||
-				f.Evidence.Verification.CleanupStatus != "not_applicable" {
-				t.Fatalf("persisted verification metadata = %+v", f.Evidence.Verification)
+			if f.Evidence.Proof == nil ||
+				f.Evidence.Proof.ActionID != "action-storage" ||
+				f.Evidence.Proof.CleanupStatus != "not_applicable" {
+				t.Fatalf("persisted proof metadata = %+v", f.Evidence.Proof)
 			}
 			if f.ExactEvidence == nil ||
 				!f.ExactEvidence.Complete ||

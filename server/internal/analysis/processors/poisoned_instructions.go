@@ -15,9 +15,10 @@ func (p *PoisonedInstructions) Dependencies() []string { return nil }
 func (p *PoisonedInstructions) Process(ctx context.Context, db graph.GraphDB, scanID string) (graph.ProcessingStats, error) {
 	start := time.Now()
 
-	cypher := `
+	poisoningCypher := `
 MATCH (f:InstructionFile)
-WHERE f.is_suspicious = true
+WHERE f.instruction_verdict = 'poisoning'
+  AND f.instruction_scope IN ['exact_project', 'exact_user']
 MERGE (f)-[e:POISONED_INSTRUCTIONS]->(f)
 ON CREATE SET e.confidence = 1.0,
               e.is_composite = true,
@@ -39,7 +40,7 @@ ON MATCH SET  e.scan_id = $scan_id,
               e.evidence_relationship_ids = []
 RETURN count(*) AS written`
 
-	n, err := db.ExecuteWrite(ctx, cypher, map[string]any{"scan_id": scanID})
+	n, err := db.ExecuteWrite(ctx, poisoningCypher, map[string]any{"scan_id": scanID})
 	if err != nil {
 		return graph.ProcessingStats{
 			ProcessorName: p.Name(),
@@ -47,9 +48,42 @@ RETURN count(*) AS written`
 		}, err
 	}
 
+	signalCypher := `
+MATCH (f:InstructionFile)
+WHERE f.instruction_verdict = 'signal'
+   OR (f.instruction_verdict = 'poisoning' AND f.instruction_scope = 'deep')
+MERGE (f)-[e:INSTRUCTION_SIGNAL]->(f)
+ON CREATE SET e.confidence = 1.0,
+              e.is_composite = true,
+              e.source_collector = 'config',
+              e.scan_id = $scan_id,
+              e.risk_weight = 0.3,
+              e.last_seen = datetime(),
+              e.evidence_version = 1,
+              e.evidence_node_ids = [f.objectid],
+              e.evidence_relationship_ids = []
+ON MATCH SET  e.scan_id = $scan_id,
+              e.last_seen = datetime(),
+              e.confidence = 1.0,
+              e.is_composite = true,
+              e.source_collector = 'config',
+              e.risk_weight = 0.3,
+              e.evidence_version = 1,
+              e.evidence_node_ids = [f.objectid],
+              e.evidence_relationship_ids = []
+RETURN count(*) AS written`
+	signals, err := db.ExecuteWrite(ctx, signalCypher, map[string]any{"scan_id": scanID})
+	if err != nil {
+		return graph.ProcessingStats{
+			ProcessorName: p.Name(),
+			EdgesCreated:  n,
+			Duration:      time.Since(start),
+		}, err
+	}
+
 	return graph.ProcessingStats{
 		ProcessorName: p.Name(),
-		EdgesCreated:  n,
+		EdgesCreated:  n + signals,
 		Duration:      time.Since(start),
 	}, nil
 }

@@ -21,8 +21,8 @@ const owuiConfigBody = `{"name":"Open WebUI","status":true,"features":{"auth":fa
 
 // TestFingerprint_OpenWebUI_HappyPath — the V1 rule matches on
 // /api/version + /api/config's {"name": "Open WebUI"} shape. Emits
-// exactly 1 OpenWebUIInstance node and 0 edges. Ollama backend URLs are surfaced by the
-// authenticated Looter via /ollama/config).
+// exactly 1 OpenWebUIInstance node and 0 edges. Ollama backend URLs are surfaced
+// by the authenticated service collector via /ollama/config.
 func TestFingerprint_OpenWebUI_HappyPath(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -67,7 +67,7 @@ func TestFingerprint_OpenWebUI_HappyPath(t *testing.T) {
 	if got := props["version"]; got != "0.6.5" {
 		t.Errorf("version = %v, want 0.6.5", got)
 	}
-	for _, key := range []string{"auth_method", "auth_assurance", "auth_evidence", "is_anonymous_loot"} {
+	for _, key := range []string{"auth_method", "auth_assurance", "auth_evidence"} {
 		if _, exists := props[key]; exists {
 			t.Errorf("public identity probe emitted %s: %+v", key, props)
 		}
@@ -113,7 +113,7 @@ func TestFingerprint_OpenWebUI_PublicIdentityDoesNotImplyAnonymousAccess(t *test
 	if got := props["version"]; got != "0.6.5" {
 		t.Errorf("version = %v, want 0.6.5", got)
 	}
-	for _, key := range []string{"auth_method", "auth_assurance", "auth_evidence", "is_anonymous_loot"} {
+	for _, key := range []string{"auth_method", "auth_assurance", "auth_evidence"} {
 		if _, exists := props[key]; exists {
 			t.Errorf("public identity probe emitted %s: %+v", key, props)
 		}
