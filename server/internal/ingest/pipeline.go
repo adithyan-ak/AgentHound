@@ -44,10 +44,6 @@ type scanLifecycleRecorder interface {
 		dirtyCoverage []string,
 		coverageParents map[string]string,
 	) ([]string, error)
-	RecordCampaignRejection(
-		ctx context.Context,
-		audit appdb.CampaignRejectionAudit,
-	) error
 	ResolveRetiredCoverage(
 		ctx context.Context,
 		roots []sdkingest.CoverageRoot,
@@ -142,15 +138,12 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	if data == nil {
 		return nil, fmt.Errorf("ingest data is nil")
 	}
-	// Wire-version and registry-contract rejection is pure and must precede
-	// every external read or write. Full structural validation remains below
-	// the storage guard because invalid campaign handling may write an audit.
+	// Wire-version, retired-artifact, and registry-contract rejection is pure and
+	// must precede every external read or write.
 	if err := Preflight(data); err != nil {
 		return nil, err
 	}
-	// Storage-pair verification is the first external operation. It is read-only
-	// and deliberately precedes full validation because invalid campaign
-	// handling writes a PostgreSQL audit row.
+	// Storage-pair verification is the first external operation.
 	if p.storageGuard == nil {
 		return nil, fmt.Errorf("storage binding admission guard unavailable")
 	}
@@ -174,25 +167,10 @@ func (p *Pipeline) Ingest(ctx context.Context, data *sdkingest.IngestData) (*sdk
 	// Stage 1: Validate
 	stageStart := time.Now()
 	if err := p.validator.Validate(data); err != nil {
-		if isCampaignSubmission(data) {
-			return nil, p.rejectCampaignArtifact(
-				ctx,
-				campaignAuditIdentityFromData(data),
-				campaignRejectionGenericIngestInvalid,
-			)
-		}
 		return nil, err
 	}
 	appendStage(result, "validate", sdkingest.OutcomeComplete, true, stageStart, nil)
 	slog.Info("validation passed", "nodes", len(data.Graph.Nodes), "edges", len(data.Graph.Edges))
-
-	// Campaign artifacts receive their scenario-specific structural and live
-	// topology validation before normalization, BeginScan, canonical writes, or
-	// reconciliation. Rejections are audit-only PostgreSQL rows and cannot dirty
-	// or retire coverage.
-	if err := p.prevalidateCampaignArtifact(ctx, data); err != nil {
-		return nil, err
-	}
 
 	stageStart = time.Now()
 	rulesetState, rulesetErr := rulesetPublicationState(data.Meta.Ruleset)

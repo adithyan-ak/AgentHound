@@ -9,14 +9,8 @@ import (
 // binary. When the user invokes one of these against agenthound-server, we
 // print a one-line redirect and exit non-zero.
 var collectorVerbs = map[string]bool{
-	"scan":    true,
-	"collect": true,
-	"setup":   true,
-	"rules":   true,
-	"loot":    true,
-	"extract": true,
-	"poison":  true,
-	"implant": true,
+	"scan":   true,
+	"revert": true,
 }
 
 // HandleUnknownCommand inspects os.Args for a top-level subcommand that lives
@@ -36,7 +30,8 @@ func HandleUnknownCommand() bool {
 		return false
 	}
 	fmt.Fprintf(os.Stderr,
-		"%q lives in the 'agenthound' collector binary — see https://docs.agenthound.io/adr/0001-two-binary-split/\n",
+		"%q is an agenthound collector command; run 'agenthound %s'.\n",
+		verb,
 		verb)
 	os.Exit(1)
 	return true

@@ -49,7 +49,6 @@ Official sources:
 | MCP Everything reference server | `@modelcontextprotocol/server-everything@2026.7.4`; npm integrity `sha512-ydMW/M6rk9tK23b+U38trsNLHhd5eF+ntiv2Vr+RPMDhbiKY/IKrZU25ukvSXVPUBvy7TxTPWpeV4KcYcXg72w==`; upstream git head `6dd0a683e198783e30feabf7abaf42f925bd18b1` |
 | A2A Python SDK | `a2a-sdk[http-server]==1.1.0` |
 | LangServe | `langserve[server]==0.3.3` |
-| Independent GGUF reader | llama.cpp `gguf==0.17.1` (`gguf-py`) |
 
 The MCP package is the Model Context Protocol project's official client-test
 server and supplies real tools, resources, resource templates, prompts,
@@ -84,16 +83,10 @@ Debian Security snapshots; the A2A signer has no apt dependency.
 | Purpose | Immutable artifact |
 |---|---|
 | vLLM runtime model | `HuggingFaceTB/SmolLM2-135M-Instruct`, revision `12fd25f77366fa6b3b4b768ec3050bf629380bac`; Apache-2.0 safetensors Llama model, 269,060,552-byte weights |
-| Embedding extractor GGUF | `ggml-org/models`, commit `499bc8821c6b12b4e53c5bffcb21ec206f212d81`, path `tinyllamas/stories260K.gguf`, size `1,185,376`, SHA-256 `270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d` |
 | Ollama runtime model | upstream registry name `qwen2:0.5b`; content digest `sha256:6f48b936a09f7743c7dd30e72fdb14cba296bc5861902e4d0c387e8fb5050b39` |
 
-The GGUF downloader verifies both the checksum and the standard on-disk bytes
-`47 47 55 46` (`GGUF`) before the collector is allowed to see it. Source:
-<https://huggingface.co/ggml-org/models/tree/499bc8821c6b12b4e53c5bffcb21ec206f212d81/tinyllamas>.
 The vLLM model revision is published at
 <https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/tree/12fd25f77366fa6b3b4b768ec3050bf629380bac>.
-The exact extraction inventory is recomputed on every run with llama.cpp's
-hash-locked official `gguf-py` reader before AgentHound executes.
 
 ## Client configuration provenance
 

@@ -70,17 +70,14 @@ RETURN count(*) AS written`, compatibleScopePredicate("s1", "s2"))
 	// naming it. Co-residency is scoped to a single AgentInstance — src and
 	// snk must both hang off servers that same agent trusts
 	// (AgentInstance-[:TRUSTS_SERVER]->MCPServer-[:PROVIDES_TOOL]->MCPTool),
-	// per the design in FEATURE_RESEARCH.md §5 and the per-agent counting in
-	// scripts/perf-check.sh. Without that scope the two MATCHes form a global
+	// per the design in FEATURE_RESEARCH.md §5. Without that scope the two MATCHes form a global
 	// cross product (every injection tool poisons every high-cap tool
 	// anywhere), a cross-tenant false-positive cascade.
 	//
 	// The fan-out is capped per (agent, source) at 20 sinks. Grouping by
 	// `a, src` (not `src` alone) is load-bearing: keying on src alone would
 	// union the sink sets of every agent that co-resides with the source,
-	// re-globalizing the cap. perf-check.sh enforces the downstream ≤200
-	// pairs-per-agent operator heuristic (10 sources × 20); the per-source
-	// cap itself is regression-gated by
+	// re-globalizing the cap. The per-source cap is regression-gated by
 	// poisons_context_perf_integration_test.go.
 	//
 	// The cap TRUNCATES, it does not suppress: a (agent, source) pair with

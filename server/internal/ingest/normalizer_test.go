@@ -62,6 +62,21 @@ func TestNormalizerStripsNil(t *testing.T) {
 	}
 }
 
+func TestNormalizerStripsLegacyInstructionSuspicionBoolean(t *testing.T) {
+	data := normalizerFixture(&ingest.IngestData{
+		Graph: ingest.GraphData{Nodes: []ingest.Node{{
+			ID:         "instruction",
+			Kinds:      []string{"InstructionFile"},
+			Properties: map[string]any{"path": "/work/AGENTS.md", "is_suspicious": true},
+		}}},
+	})
+
+	NewNormalizer().Normalize(data)
+	if _, exists := data.Graph.Nodes[0].Properties["is_suspicious"]; exists {
+		t.Fatal("retired instruction suspicion boolean reached normalized graph state")
+	}
+}
+
 func TestNormalizerDoesNotRepairLocalProcessAuth(t *testing.T) {
 	data := &ingest.IngestData{
 		Graph: ingest.GraphData{Nodes: []ingest.Node{{

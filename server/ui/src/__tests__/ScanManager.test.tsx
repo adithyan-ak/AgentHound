@@ -147,6 +147,45 @@ describe("ScanManager", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders scan mode, depth, action results, and cleanup failures", async () => {
+    mockedFetchScanPage.mockResolvedValue(
+      scanPage([
+        {
+          ...mockScans[0]!,
+          id: "scan-execution",
+          metadata: {
+            scan_execution: {
+              version: 1,
+              mode: "stealth",
+              deep: true,
+              status: "interrupted",
+              started_at: "2026-04-07T10:00:00Z",
+              updated_at: "2026-04-07T10:04:00Z",
+              summary: {
+                actions_attempted: 5,
+                actions_succeeded: 3,
+                actions_failed: 2,
+                actions_skipped: 4,
+                cleanup_failures: 1,
+              },
+            },
+          },
+        },
+      ]),
+    );
+
+    render(<ScanManager />, { wrapper: createWrapper() });
+
+    expect(await screen.findByText("stealth")).toBeInTheDocument();
+    expect(screen.getByText("deep · interrupted")).toBeInTheDocument();
+    expect(screen.getByText("3/5").closest("td")).toHaveAttribute(
+      "title",
+      "2 failed; 4 skipped",
+    );
+    expect(screen.getByText("2 failed · 4 skipped")).toBeInTheDocument();
+    expect(screen.getByText("1 failed")).toBeInTheDocument();
+  });
+
   it("renders loading state", () => {
     mockedFetchScanPage.mockReturnValue(new Promise(() => {}));
 
@@ -295,29 +334,24 @@ describe("ScanManager", () => {
     await waitFor(() => {
       expect(
         screen.getByText(
-          /agenthound scan --config/i,
+          /agenthound scan <host\|CIDR\|@targets-file>/i,
         ),
       ).toBeInTheDocument();
     });
     expect(
       screen.getByText(
-        /agenthound scan --output agenthound-scan\.json && agenthound-server ingest agenthound-scan\.json/i,
+        /agenthound-server ingest scan-<id>\.json/i,
       ),
     ).toBeInTheDocument();
     const collectorCommands = screen
       .getAllByText(/^agenthound scan(?: |$)/i)
       .map((element) => element.textContent ?? "");
-    expect(collectorCommands).toHaveLength(5);
+    expect(collectorCommands).toHaveLength(4);
+    expect(screen.getByText(/server connectivity is not required/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/there are no identity flags to configure/i),
+      screen.getByText(/without active proofs, credential reuse, or mutations/i),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByText(/\| agenthound-server ingest/),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByText(/A2A requires the separate targeted command/i),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(/fetch A2A cards/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/--config|--mcp|--a2a/i)).not.toBeInTheDocument();
 
     const dialog = screen.getByRole("dialog");
     expect(dialog).toHaveClass("max-h-[calc(100vh-2rem)]", "overflow-y-auto");

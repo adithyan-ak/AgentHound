@@ -17,7 +17,6 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/adithyan-ak/agenthound/sdk/campaign"
 	"github.com/adithyan-ak/agenthound/sdk/common"
 )
 
@@ -321,32 +320,6 @@ func TestToolObserverBoundsHangingSessionDelete(t *testing.T) {
 	case <-deleteCanceled:
 	case <-time.After(time.Second):
 		t.Fatal("hanging session DELETE was not canceled by the observer HTTP bound")
-	}
-}
-
-func TestToolObserverCountsSDKRequestsAgainstCampaignBudget(t *testing.T) {
-	server := mcpsdk.NewServer(
-		&mcpsdk.Implementation{Name: "budget-test", Version: "1.0.0"}, nil,
-	)
-	addObserverTestTool(server, "tool", "description")
-	httpServer := httptest.NewServer(mcpsdk.NewStreamableHTTPHandler(
-		func(*http.Request) *mcpsdk.Server { return server },
-		&mcpsdk.StreamableHTTPOptions{JSONResponse: true},
-	))
-	defer httpServer.Close()
-
-	ctx, cancel, budget := campaign.NewBudgetContext(context.Background(), campaign.RunLimits{
-		RequestLimit: 16, MutationLimit: 1, ElapsedLimit: time.Second,
-	})
-	defer cancel()
-	_, err := (ToolObserver{}).Observe(ctx, ServerSpec{
-		Name: "budget-test", Transport: "http", URL: httpServer.URL,
-	}, "tool")
-	if err != nil {
-		t.Fatalf("Observe: %v", err)
-	}
-	if got := budget.Snapshot().RequestsUsed; got < 2 {
-		t.Fatalf("requests used = %d, want initialized MCP lifecycle requests", got)
 	}
 }
 

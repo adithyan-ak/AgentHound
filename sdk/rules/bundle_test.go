@@ -28,7 +28,7 @@ emit:
     - AIService
   properties:
     auth_method: none
-    is_anonymous_loot: "true"
+    anonymous_access_observed: "true"
 `
 
 const newRuleYAML = `
@@ -207,9 +207,7 @@ func TestLoadFingerprintsRecordsSkippedBundleFailures(t *testing.T) {
 }
 
 // TestMergeFingerprintRules_OverrideSemantics asserts the load-bearing
-// claim: same-id bundle rule wins over embedded rule. Without this,
-// the rules-bundle loader is useless — operators can't fix broken
-// embedded rules at runtime.
+// claim: a same-ID SDK override wins over an embedded rule.
 func TestMergeFingerprintRules_OverrideSemantics(t *testing.T) {
 	base := []FingerprintRule{
 		{ID: "ollama", Name: "Ollama (embedded)", ServiceKind: "ollama"},

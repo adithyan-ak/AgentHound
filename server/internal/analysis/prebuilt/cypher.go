@@ -5,7 +5,7 @@ package prebuilt
 // Critical Paths
 
 // CypherLitellmCredentialLeak reports the credential exposure that the
-// first-party LiteLLM looter can actually observe: an exposed master key.
+// first-party LiteLLM service collector can actually observe: an exposed master key.
 // Provider apiKey and virtual-key nodes are optional context only when their
 // evidence explicitly says the material is masked or hashed and not observed
 // as usable plaintext.
@@ -200,11 +200,14 @@ RETURN s.name AS server_name,
 ORDER BY s.name`
 
 const CypherInstructionPoisoning = `
-MATCH (f:InstructionFile)-[r:POISONED_INSTRUCTIONS]->(f)
+MATCH (f:InstructionFile)-[r]->(f)
+WHERE type(r) IN ['POISONED_INSTRUCTIONS', 'INSTRUCTION_SIGNAL']
 OPTIONAL MATCH (a:AgentInstance)-[:LOADS_INSTRUCTIONS]->(f)
 RETURN f.path AS file_path,
        f.type AS file_type,
-       r.evidence AS evidence,
+       f.instruction_verdict AS verdict,
+       f.instruction_scope AS scope,
+       f.instruction_signal_count AS signal_count,
        r.confidence AS confidence,
        collect(a.name) AS agent_names,
        f.objectid AS file_id

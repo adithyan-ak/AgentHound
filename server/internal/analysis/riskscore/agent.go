@@ -187,7 +187,8 @@ func agentPoisoning(ctx context.Context, db graph.GraphDB, objectID string) (Ass
 	cypher := `
 MATCH (a {objectid: $id})
 OPTIONAL MATCH (a)-[:LOADS_INSTRUCTIONS]->(i:InstructionFile)
-WHERE i.is_suspicious = true
+WHERE i.instruction_verdict = 'poisoning'
+  AND i.instruction_scope IN ['exact_project', 'exact_user']
 RETURN count(i) AS cnt`
 
 	rows, err := db.Query(ctx, cypher, map[string]any{"id": objectID})

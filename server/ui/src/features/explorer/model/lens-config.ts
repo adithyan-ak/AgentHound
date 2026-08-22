@@ -75,7 +75,6 @@ export const LENS_LIST: LensDefinition[] = [
       "SAME_AUTH_DOMAIN",
       "EXPOSES",
       "PROVIDES_MODEL",
-      "EXTRACTED_FROM",
     ],
     dimOthers: false,
     subPresets: [
@@ -149,12 +148,6 @@ export const LENS_LIST: LensDefinition[] = [
         id: "PROVIDES_MODEL",
         label: "Provides model",
         description: "AI service → model artifact",
-        defaultEnabled: true,
-      },
-      {
-        id: "EXTRACTED_FROM",
-        label: "Extracted from",
-        description: "Model → extracted training signal",
         defaultEnabled: true,
       },
     ],
@@ -285,7 +278,7 @@ export const LENS_LIST: LensDefinition[] = [
       "USES_CREDENTIAL",
       "HAS_ENV_VAR",
       "EXPOSES_CREDENTIAL",
-      "CREDENTIAL_REACH_VERIFIED",
+      "CREDENTIAL_ACCESS_OBSERVED",
     ],
     dimOthers: false,
     subPresets: [
@@ -296,9 +289,9 @@ export const LENS_LIST: LensDefinition[] = [
         defaultEnabled: true,
       },
       {
-        id: "CREDENTIAL_REACH_VERIFIED",
-        label: "Verified credential reach",
-        description: "Credential → resource, differentially verified",
+        id: "CREDENTIAL_ACCESS_OBSERVED",
+        label: "Observed credential access",
+        description: "Credential → resource, proven by a differential read",
         defaultEnabled: true,
       },
       {
@@ -335,6 +328,7 @@ export const LENS_LIST: LensDefinition[] = [
     edgeKinds: [
       "SHADOWS",
       "POISONED_DESCRIPTION",
+      "INSTRUCTION_SIGNAL",
       "POISONED_INSTRUCTIONS",
       "TAINTS",
       "POISONS_CONTEXT",
@@ -351,6 +345,12 @@ export const LENS_LIST: LensDefinition[] = [
         id: "SHADOWS",
         label: "Tool shadowing",
         description: "Tool references another tool by name",
+        defaultEnabled: true,
+      },
+      {
+        id: "INSTRUCTION_SIGNAL",
+        label: "Instruction signal",
+        description: "Instruction content requires operator review",
         defaultEnabled: true,
       },
       {
@@ -449,9 +449,8 @@ export const EDGE_PRIMARY_LENS = {
   EXPOSES: "topology",
   EXPOSES_CREDENTIAL: "credentials",
   PROVIDES_MODEL: "topology",
-  EXTRACTED_FROM: "topology",
   INGESTS_UNTRUSTED: "attack-surface",
-  CREDENTIAL_REACH_VERIFIED: "credentials",
+  CREDENTIAL_ACCESS_OBSERVED: "credentials",
   PUBLIC_ACCESS_OBSERVED: "attack-surface",
   HAS_ACCESS_TO: "attack-surface",
   CAN_EXECUTE: "attack-surface",
@@ -460,6 +459,7 @@ export const EDGE_PRIMARY_LENS = {
   SHADOWS: "poisoning",
   POISONED_DESCRIPTION: "poisoning",
   CAN_IMPERSONATE: "attack-surface",
+  INSTRUCTION_SIGNAL: "poisoning",
   POISONED_INSTRUCTIONS: "poisoning",
   CONFUSED_DEPUTY: "attack-surface",
   TAINTS: "poisoning",

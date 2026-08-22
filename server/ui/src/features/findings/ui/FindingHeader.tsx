@@ -4,6 +4,7 @@ import { ArrowLeft, ArrowRight, Compass, Copy, Check } from "lucide-react";
 import { MiniHexIcon } from "./MiniHexIcon";
 import { TriageControl } from "./TriageControl";
 import { ATLAS_TITLES } from "../lib/owasp-titles";
+import { formatFindingEvidenceState } from "../lib/evidence-label";
 import { cn } from "@shared/lib/utils";
 import { SEVERITY, SEVERITY_BY_KEY } from "@shared/theme/tokens";
 import { useTriage } from "@entities/finding";
@@ -48,6 +49,8 @@ export function FindingHeader({ detail, prevId, nextId, onCopyReport }: FindingH
   const sev = SEVERITY_BY_KEY[f.severity] ?? SEVERITY.low;
   const color = sev.solid;
   const [copied, setCopied] = useState(false);
+  const [copiedField, setCopiedField] = useState<"path" | "hash" | null>(null);
+  const instruction = detail.instruction_evidence;
 
   // The detail's finding comes from the graph (no inline triage), so the
   // dossier control fetches the standalone triage state for this row.
@@ -67,6 +70,12 @@ export function FindingHeader({ detail, prevId, nextId, onCopyReport }: FindingH
     onCopyReport();
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
+  }
+
+  function copyInstructionField(field: "path" | "hash", value: string) {
+    void navigator.clipboard.writeText(value);
+    setCopiedField(field);
+    setTimeout(() => setCopiedField(null), 1500);
   }
 
   return (
@@ -135,11 +144,25 @@ export function FindingHeader({ detail, prevId, nextId, onCopyReport }: FindingH
             </span>
 
             <h1 className="mt-2 text-[19px] font-semibold leading-snug tracking-tight text-foreground">
-              {f.title}
+              {instruction ? instructionBasename(instruction.path) : f.title}
             </h1>
 
+            {instruction && (
+              <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-2 font-mono text-[11px] text-muted-foreground">
+                <span className="min-w-0 max-w-full break-all">{instruction.path}</span>
+                <button
+                  type="button"
+                  className={consoleBtn}
+                  onClick={() => copyInstructionField("path", instruction.path)}
+                >
+                  {copiedField === "path" ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+                  {copiedField === "path" ? "Copied" : "Copy path"}
+                </button>
+              </div>
+            )}
+
             {/* Source -> Target */}
-            <div className="mt-2.5 flex flex-wrap items-center gap-2 font-mono text-sm">
+            {!instruction && <div className="mt-2.5 flex flex-wrap items-center gap-2 font-mono text-sm">
               <MiniHexIcon kind={f.source_kind} />
               <span className="font-medium text-foreground">
                 {f.source_name || f.source_id.slice(0, 12)}
@@ -149,23 +172,46 @@ export function FindingHeader({ detail, prevId, nextId, onCopyReport }: FindingH
               <span className="font-medium text-foreground">
                 {f.target_name || f.target_id.slice(0, 12)}
               </span>
-            </div>
+            </div>}
 
             {/* Metadata chips */}
             <div className="mt-3 flex flex-wrap items-center gap-1.5">
               <Chip>
                 <span className="text-primary/70">ID</span> {f.id.slice(0, 8)}
               </Chip>
-              {typeof hops === "number" && (
+              {!instruction && typeof hops === "number" && (
                 <Chip>
                   <span className="tabular-nums">{hops}</span> hops
                 </Chip>
               )}
-              <Chip>
+              {!instruction && <Chip>
                 <span className="tabular-nums">{Math.round(f.confidence * 100)}%</span> conf
-              </Chip>
-              <Chip>{f.variant.replace(/_/g, " ")}</Chip>
-              <Chip>{f.evidence.state.replace(/_/g, " ")}</Chip>
+              </Chip>}
+              {instruction ? (
+                <>
+                  <Chip className="text-primary/80">{instruction.verdict === "poisoning" ? "Instruction Poisoning" : "Instruction Signal"}</Chip>
+                  <Chip>{instruction.scope.replace(/_/g, " ")}</Chip>
+                  <Chip>{instruction.type}</Chip>
+                  <Chip>{formatBytes(instruction.size_bytes)}</Chip>
+                  <Chip title={instruction.modified_at}>{new Date(instruction.modified_at).toLocaleString()}</Chip>
+                  <Chip>
+                    <span className="normal-case tracking-normal">{instruction.hash}</span>
+                    <button
+                      type="button"
+                      aria-label="Copy instruction hash"
+                      onClick={() => copyInstructionField("hash", instruction.hash)}
+                      className="ml-1 text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      {copiedField === "hash" ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+                    </button>
+                  </Chip>
+                </>
+              ) : (
+                <>
+                  <Chip>{f.variant.replace(/_/g, " ")}</Chip>
+                  <Chip>{formatFindingEvidenceState(f.evidence.state)}</Chip>
+                </>
+              )}
               {detail.snapshot.stale && (
                 <Chip className="text-amber-400/90">
                   stale published snapshot
@@ -209,4 +255,15 @@ export function FindingHeader({ detail, prevId, nextId, onCopyReport }: FindingH
       </div>
     </section>
   );
+}
+
+function instructionBasename(path: string): string {
+  const parts = path.replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts.length > 0 ? parts[parts.length - 1]! : path;
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
 }

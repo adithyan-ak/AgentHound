@@ -118,7 +118,15 @@ func TestIntegrationMigrations(t *testing.T) {
 	if err := versionRows.Err(); err != nil {
 		t.Fatalf("list migration versions: %v", err)
 	}
-	if want := []int{1}; !reflect.DeepEqual(versions, want) {
+	migrations, err := availableMigrations()
+	if err != nil {
+		t.Fatalf("discover embedded migrations: %v", err)
+	}
+	want := make([]int, 0, len(migrations))
+	for _, migration := range migrations {
+		want = append(want, migration.version)
+	}
+	if !reflect.DeepEqual(versions, want) {
 		t.Fatalf("migration versions = %v, want %v", versions, want)
 	}
 
@@ -132,6 +140,126 @@ func TestIntegrationMigrations(t *testing.T) {
 		t.Fatalf("posture singleton rows = %d, want 1", postureRows)
 	}
 
+}
+
+func TestIntegrationInstructionEvidenceMigrationRewritesLegacyPublication(t *testing.T) {
+	skipIfNoPG(t)
+	ctx := context.Background()
+	admin, err := NewPool(os.Getenv("AGENTHOUND_PG_URI"))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer admin.Close()
+
+	schema := fmt.Sprintf("agenthound_instruction_migration_%d", time.Now().UnixNano())
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
+		t.Fatalf("create isolated schema: %v", err)
+	}
+	defer func() {
+		if _, err := admin.Exec(ctx, "DROP SCHEMA "+quotedSchema+" CASCADE"); err != nil {
+			t.Errorf("drop isolated schema: %v", err)
+		}
+	}()
+
+	config, err := pgxpool.ParseConfig(os.Getenv("AGENTHOUND_PG_URI"))
+	if err != nil {
+		t.Fatalf("parse connection config: %v", err)
+	}
+	config.ConnConfig.RuntimeParams["search_path"] = schema
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatalf("connect isolated schema: %v", err)
+	}
+	defer pool.Close()
+
+	for _, name := range []string{"001_initial_v1.sql", "002_remove_campaign_verification.sql"} {
+		migrationSQL, readErr := migrationFS.ReadFile("migrations/" + name)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", name, readErr)
+		}
+		if _, err := pool.Exec(ctx, string(migrationSQL)); err != nil {
+			t.Fatalf("apply %s: %v", name, err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES (1), (2)`); err != nil {
+		t.Fatalf("record legacy schema: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO scans (id, collector) VALUES ('legacy-instruction-scan', 'config')`); err != nil {
+		t.Fatalf("seed scan: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO findings
+        (scan_id, fingerprint, edge_kind, evidence, exact_evidence)
+        VALUES
+        ('legacy-instruction-scan', 'legacypoison0001', 'POISONED_INSTRUCTIONS', '{"state":"observed_signal"}', '{"nodes":[{"id":"sha256:legacy"}],"edges":[]}'),
+        ('legacy-instruction-scan', 'currentsignal001', 'INSTRUCTION_SIGNAL', '{"state":"observed_signal"}', '{"nodes":[{"id":"sha256:current"}],"edges":[]}')`); err != nil {
+		t.Fatalf("seed findings: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO finding_triage (fingerprint, status)
+        VALUES ('legacypoison0001', 'confirmed'), ('currentsignal001', 'confirmed')`); err != nil {
+		t.Fatalf("seed triage: %v", err)
+	}
+	export := `{
+      "findings":[
+        {"id":"legacy","edge_kind":"POISONED_INSTRUCTIONS"},
+        {"id":"current","edge_kind":"INSTRUCTION_SIGNAL"}
+      ],
+      "limits":{"findings":{"returned":2,"total":2,"complete":true}},
+      "graph_before":{"total_edges":2,"edge_counts":{"POISONED_INSTRUCTIONS":1,"INSTRUCTION_SIGNAL":1}},
+      "graph_after":{"total_edges":2,"edge_counts":{"POISONED_INSTRUCTIONS":1,"INSTRUCTION_SIGNAL":1}}
+    }`
+	graphStats := `{"total_edges":2,"edge_counts":{"POISONED_INSTRUCTIONS":1,"INSTRUCTION_SIGNAL":1}}`
+	if _, err := pool.Exec(ctx, `INSERT INTO posture_publications (scan_id, export, graph_stats)
+        VALUES ('legacy-instruction-scan', $1::jsonb, $2::jsonb)`, export, graphStats); err != nil {
+		t.Fatalf("seed publication: %v", err)
+	}
+
+	if err := RunMigrations(ctx, pool); err != nil {
+		t.Fatalf("apply instruction migration: %v", err)
+	}
+
+	var poisonFindings, poisonTriage, currentFindings, currentTriage int
+	if err := pool.QueryRow(ctx, `SELECT
+        count(*) FILTER (WHERE edge_kind = 'POISONED_INSTRUCTIONS'),
+        count(*) FILTER (WHERE edge_kind = 'INSTRUCTION_SIGNAL')
+        FROM findings`).Scan(&poisonFindings, &currentFindings); err != nil {
+		t.Fatalf("read migrated findings: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT
+        count(*) FILTER (WHERE fingerprint = 'legacypoison0001'),
+        count(*) FILTER (WHERE fingerprint = 'currentsignal001')
+        FROM finding_triage`).Scan(&poisonTriage, &currentTriage); err != nil {
+		t.Fatalf("read migrated triage: %v", err)
+	}
+	if poisonFindings != 0 || poisonTriage != 0 || currentFindings != 1 || currentTriage != 1 {
+		t.Fatalf("migration rows poison=(%d,%d) current=(%d,%d)", poisonFindings, poisonTriage, currentFindings, currentTriage)
+	}
+
+	var findingsCount, returned, total, beforeEdges, afterEdges, statsEdges int
+	var hasBeforePoison, hasAfterPoison, hasStatsPoison bool
+	if err := pool.QueryRow(ctx, `SELECT
+        jsonb_array_length(export->'findings'),
+        (export #>> '{limits,findings,returned}')::int,
+        (export #>> '{limits,findings,total}')::int,
+        (export #>> '{graph_before,total_edges}')::int,
+        (export #>> '{graph_after,total_edges}')::int,
+        (graph_stats ->> 'total_edges')::int,
+        (export #> '{graph_before,edge_counts}') ? 'POISONED_INSTRUCTIONS',
+        (export #> '{graph_after,edge_counts}') ? 'POISONED_INSTRUCTIONS',
+        (graph_stats -> 'edge_counts') ? 'POISONED_INSTRUCTIONS'
+        FROM posture_publications`).Scan(
+		&findingsCount, &returned, &total, &beforeEdges, &afterEdges, &statsEdges,
+		&hasBeforePoison, &hasAfterPoison, &hasStatsPoison,
+	); err != nil {
+		t.Fatalf("read migrated publication: %v", err)
+	}
+	if findingsCount != 1 || returned != 1 || total != 1 ||
+		beforeEdges != 1 || afterEdges != 1 || statsEdges != 1 ||
+		hasBeforePoison || hasAfterPoison || hasStatsPoison {
+		t.Fatalf("publication rewrite = findings:%d limits:%d/%d edges:%d/%d/%d legacy:%t/%t/%t",
+			findingsCount, returned, total, beforeEdges, afterEdges, statsEdges,
+			hasBeforePoison, hasAfterPoison, hasStatsPoison)
+	}
 }
 
 func TestIntegrationStorageBindingLifecycle(t *testing.T) {

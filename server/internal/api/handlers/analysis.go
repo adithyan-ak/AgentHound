@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/adithyan-ak/agenthound/sdk/campaign"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 	"github.com/adithyan-ak/agenthound/server/internal/analysis"
 	"github.com/adithyan-ak/agenthound/server/internal/analysis/prebuilt"
@@ -381,6 +380,11 @@ func (h *AnalysisHandler) HandleFindingDetail(w http.ResponseWriter, r *http.Req
 		WriteNotFound(w, "finding not found in the published snapshot: "+findingID)
 		return
 	}
+	instructionEvidence := analysis.InstructionEvidenceFromFinding(finding)
+	if (finding.EdgeKind == "INSTRUCTION_SIGNAL" || finding.EdgeKind == "POISONED_INSTRUCTIONS") && instructionEvidence == nil {
+		WriteInternalError(w, r, fmt.Errorf("published instruction finding %s has invalid structured evidence", findingID))
+		return
+	}
 
 	attackPath := analysis.AttackPathFromExactEvidence(finding)
 	evidenceState := analysis.FindingDetailEvidenceUnavailable
@@ -389,10 +393,11 @@ func (h *AnalysisHandler) HandleFindingDetail(w http.ResponseWriter, r *http.Req
 	}
 
 	WriteJSON(w, http.StatusOK, analysis.FindingDetail{
-		Finding:     *finding,
-		AttackPath:  attackPath,
-		Remediation: analysis.BuildRemediation(attackPath, finding),
-		Impact:      analysis.BuildImpact(finding, attackPath),
+		Finding:             *finding,
+		AttackPath:          attackPath,
+		Remediation:         analysis.BuildRemediation(attackPath, finding),
+		Impact:              analysis.BuildImpact(finding, attackPath),
+		InstructionEvidence: instructionEvidence,
 		Snapshot: &analysis.FindingSnapshot{
 			Scope:            "published",
 			ScanID:           scope.ScanID,
@@ -404,51 +409,6 @@ func (h *AnalysisHandler) HandleFindingDetail(w http.ResponseWriter, r *http.Req
 			Stale:            scope.Stale,
 			EvidenceState:    evidenceState,
 		},
-	})
-}
-
-// HandleWitness exports a stable, sanitized witness for a predicted CAN_REACH
-// finding so the collector-side campaign runner can verify it. The witness is
-// built under a guarded read of the published projection and stamped with that
-// projection's revision, so it reflects a stable, published prediction.
-func (h *AnalysisHandler) HandleWitness(w http.ResponseWriter, r *http.Request) {
-	findingID := chi.URLParam(r, "id")
-	if len(findingID) != 16 {
-		WriteValidationError(w, "finding ID must be a 16-character hex string")
-		return
-	}
-	for _, c := range findingID {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			WriteValidationError(w, "finding ID must be a 16-character hex string")
-			return
-		}
-	}
-
-	witness, projection, err := guardedProjectionRead(
-		r.Context(),
-		h.projectionReader,
-		func() (*campaign.Witness, error) {
-			return analysis.BuildWitness(r.Context(), h.graphDB, findingID)
-		},
-	)
-	if err != nil {
-		if writeProjectionConflict(w, err) {
-			return
-		}
-		WriteNotFound(w, "witness export: "+err.Error())
-		return
-	}
-	witness.PublicationRevision = int(projection.Revision)
-	if err := witness.Validate(); err != nil {
-		WriteInternalError(w, r, fmt.Errorf("witness export: %w", err))
-		return
-	}
-	WriteJSON(w, http.StatusOK, struct {
-		Witness    *campaign.Witness  `json:"witness"`
-		Projection projectionIdentity `json:"projection"`
-	}{
-		Witness:    witness,
-		Projection: projection,
 	})
 }
 
