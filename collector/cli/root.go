@@ -6,53 +6,34 @@ import (
 	"os"
 
 	"github.com/adithyan-ak/agenthound/collector/internal/clientcfg"
-	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/common"
-	"github.com/adithyan-ak/agenthound/sdk/module"
-	"github.com/adithyan-ak/agenthound/sdk/rules"
 	"github.com/spf13/cobra"
 )
 
 var cfg *clientcfg.Config
 
 var rootCmd = &cobra.Command{
-	Use:   "agenthound",
-	Short: "Offensive security framework for AI agent infrastructure — collector",
-	Long: `AgentHound is an offensive security framework for AI agent infrastructure.
-The collector runs the field side of the engagement — recon, fingerprinting,
-enumeration, credential looting, model extraction, poisoning, and config
-implants — and writes the results as JSON to a file or stdout.
-
-The collector is auth-less and offline-by-default. Operators ingest the
-resulting JSON on their analysis box via 'agenthound-server ingest <file>',
-'cat scan.json | agenthound-server ingest -', or by drag-dropping into the
-UI's Scan Manager → Import Scan dialog.`,
+	Use:           "agenthound",
+	Short:         "Autonomous offensive collector for AI agent infrastructure",
+	SilenceUsage:  true,
+	SilenceErrors: true,
+	CompletionOptions: cobra.CompletionOptions{
+		DisableDefaultCmd: true,
+	},
+	Long: `AgentHound collects local and network evidence, captures usable
+credentials, verifies reachable attack paths, and immediately restores any
+temporary mutation in one scan. The result is one local JSON artifact for
+optional manual ingestion with 'agenthound-server ingest <scan.json>'.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		cfg = clientcfg.LoadWithFlags(cmd.Root().PersistentFlags())
+		cfg = clientcfg.Load()
 		if err := cfg.Validate(); err != nil {
 			return err
 		}
-		quiet, _ := cmd.Root().PersistentFlags().GetBool("quiet")
-		jsonLog, _ := cmd.Root().PersistentFlags().GetBool("log-json")
+		quiet, _ := cmd.Flags().GetBool("quiet")
 		if !quiet && os.Getenv("AGENTHOUND_QUIET") == "1" {
 			quiet = true
 		}
-		if !jsonLog && os.Getenv("AGENTHOUND_LOG_JSON") == "1" {
-			jsonLog = true
-		}
-		setupLogger(cfg.LogLevel, quiet, jsonLog)
-
-		// Wire the rules-bundle override BEFORE any module's
-		// Fingerprint() call. rules.SetBundleOverridePath is a
-		// process-global so subsequent rules.LoadFingerprints() reads
-		// inside fingerprinter modules see the merged set transparently.
-		bundle, _ := cmd.Root().PersistentFlags().GetString("rules-bundle")
-		if bundle == "" {
-			bundle = os.Getenv("AGENTHOUND_RULES_BUNDLE")
-		}
-		// Set even when empty so repeated in-process command executions (tests,
-		// embeddings, SDK callers) cannot retain a stale prior override.
-		rules.SetBundleOverridePath(bundle)
+		setupLogger(cfg.LogLevel, quiet, false)
 		return nil
 	},
 }
@@ -63,47 +44,16 @@ func SetVersion(version, commit string) {
 }
 
 func Execute() error {
-	finalizeModuleFlags()
 	return rootCmd.Execute()
 }
 
-// finalizeModuleFlags runs after every blank-imported module has completed its
-// init registration and before Cobra parses argv. Registration is idempotent so
-// embedded callers and tests may execute the command tree repeatedly.
-func finalizeModuleFlags() {
-	for _, mod := range module.ListByAction(action.Loot) {
-		registerFlagsAvoidingDupes(lootCmd, mod)
-	}
-	for _, mod := range module.ListByAction(action.Extract) {
-		registerFlagsAvoidingDupes(extractCmd, mod)
-	}
-	for _, mod := range module.ListByAction(action.Implant) {
-		registerFlagsAvoidingDupes(implantCmd, mod)
-	}
-	for _, mod := range module.ListByAction(action.Poison) {
-		registerFlagsAvoidingDupes(poisonCmd, mod)
-		if mod.Target() == "instruction.file" {
-			registerFlagsAvoidingDupes(implantCmd, mod)
-		}
-	}
-}
-
-func init() {
-	rootCmd.PersistentFlags().String("log-level", "", "Log level: debug, info, warn, error (env: AGENTHOUND_LOG_LEVEL)")
-	rootCmd.PersistentFlags().String("output", "", "Write collected JSON to this path. Use '-' for stdout. Defaults to ./scan-<scan_id>.json in CWD. (env: AGENTHOUND_OUTPUT)")
-	rootCmd.PersistentFlags().Int("concurrency", 0, "Max parallel collector workers (env: AGENTHOUND_CONCURRENCY)")
-	rootCmd.PersistentFlags().Bool("quiet", false, "Suppress non-error log output (env: AGENTHOUND_QUIET=1)")
-	rootCmd.PersistentFlags().Bool("log-json", false, "Emit logs as JSON instead of text (env: AGENTHOUND_LOG_JSON=1)")
-	rootCmd.PersistentFlags().String("rules-bundle", "", "Path to a fingerprint rules bundle (directory or .tar.gz). Same-id rules from the bundle override the embedded set. Verify cosign signature manually before pointing AgentHound at it; see https://docs.agenthound.io/reference/rule-syntax/. (env: AGENTHOUND_RULES_BUNDLE)")
-}
-
 // quietEnabled resolves the effective quiet setting for a command: the
-// --quiet persistent flag OR AGENTHOUND_QUIET=1, mirroring the resolution in
+// --quiet local flag OR AGENTHOUND_QUIET=1, mirroring the resolution in
 // PersistentPreRunE. It is safe to call on a command with no parent (the
 // flag lookup simply fails and we fall back to the env var), so unit tests
 // that build bare commands don't panic.
 func quietEnabled(cmd *cobra.Command) bool {
-	if q, err := cmd.Root().PersistentFlags().GetBool("quiet"); err == nil && q {
+	if q, err := cmd.Flags().GetBool("quiet"); err == nil && q {
 		return true
 	}
 	return os.Getenv("AGENTHOUND_QUIET") == "1"

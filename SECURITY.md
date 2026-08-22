@@ -1,56 +1,42 @@
-# Security Policy
+# Security policy
 
-## Reporting a vulnerability
+## Report a vulnerability
 
-If you discover a security vulnerability in AgentHound, please report it responsibly through [GitHub Security Advisories](https://github.com/adithyan-ak/agenthound/security/advisories/new).
+Report AgentHound vulnerabilities through [GitHub Security Advisories](https://github.com/adithyan-ak/agenthound/security/advisories/new). Do not open a public issue for an undisclosed vulnerability.
 
-**Do not** open a public GitHub issue for security vulnerabilities.
+Include:
 
-### What to include
+- a clear description and affected component;
+- reproduction steps or a minimal proof;
+- expected impact and required preconditions;
+- the collector and server versions;
+- a suggested fix when available.
 
-- Description of the vulnerability
-- Steps to reproduce
-- Potential impact
-- Suggested fix (if any)
+The project aims to acknowledge reports within 48 hours, provide an initial assessment within seven days, and prioritize a fix based on severity and exploitability.
 
-### Response timeline
+## Scope
 
-- **Acknowledgment:** within 48 hours
-- **Initial assessment:** within 7 days
-- **Fix timeline:** depends on severity, typically within 30 days for critical issues
+In scope:
 
-### Scope
+- command, Cypher, or request injection in AgentHound;
+- unintended data exposure outside the documented single-operator boundary;
+- bypass of AgentHound's contact policy, OriginGuard, ingest validation, or storage binding;
+- supply-chain vulnerabilities in AgentHound dependencies;
+- container escape or privilege escalation in the shipped deployment.
 
-The following are in scope:
+Report vulnerabilities in scanned MCP, A2A, or AI services to their maintainers. Resource exhaustion from intentionally adversarial graph volume is evaluated against the documented trusted-operator and bounded-input assumptions.
 
-- Authentication and authorization bypasses
-- Injection vulnerabilities (Cypher injection, command injection)
-- Data exposure (credentials, tokens, PII leaking through API responses or logs)
-- Supply chain issues in AgentHound's own dependencies
-- Container escape or privilege escalation in the Docker deployment
+## Current security design
 
-The following are out of scope:
+- The collector intentionally writes exact observed credentials and collected content to a plain JSON artifact. Treat it as sensitive offensive evidence.
+- The server binds to loopback and has no application login. Remote deployments need an independent access boundary.
+- OriginGuard checks browser origins on mutating routes; CORS does not allow credentials.
+- Ingest validates node and edge kinds, identities, proof structure, coverage, and canonical property names before graph mutation.
+- PostgreSQL and Neo4j share a binding marker and operate as one storage pair.
+- Shipped containers run as non-root users on minimal base images.
 
-- Vulnerabilities in MCP servers or A2A agents that AgentHound scans (report those to their respective maintainers)
-- Denial of service through intentionally large graph data (the tool is designed for trusted operator use)
-- Issues requiring physical access to the host
+See [Security and OPSEC](docs/operator/security.md) for operator guidance.
 
-## Security design
+## Supported release
 
-AgentHound handles sensitive data (credentials, infrastructure topology, attack paths). Key security measures:
-
-- **Credential hashing:** Config Collector hashes credential values by default (SHA-256). Raw values require explicit `--include-credential-values` flag.
-- **Single-user posture:** `agenthound-server` binds to `127.0.0.1:8080` by default and has no application-layer auth. Remote access is the operator's responsibility (SSH tunnel, WireGuard, Tailscale, mTLS reverse proxy).
-- **OriginGuard on mutating endpoints:** browser requests to `POST /ingest`, `POST /query`, `POST /scans`, `DELETE /scans/{id}`, security and explicit topology path operations, and `PATCH /findings/triage/{fingerprint}` are rejected unless the `Origin` header is in `AGENTHOUND_CORS_ORIGINS` (default `http://localhost:8080` and `http://127.0.0.1:8080`). Requests with no `Origin` (curl, agenthound CLI, cron) pass through — same-host processes are inside the trust boundary. CLI tools (`agenthound-server ingest`, `query`) bypass HTTP entirely.
-- **CORS:** `AllowCredentials: false`. The server has no credentials to send; this and OriginGuard together defend the drive-by browser CSRF path.
-- **Input validation:** All API inputs are validated. The `/query` endpoint is OriginGuard-gated; node/edge kinds are checked against an allowlist before being interpolated into Cypher.
-- **Container security:** Non-root user, minimal base image, no unnecessary packages.
-
-For the full threat model see
-[`docs/operator/security.md`](docs/operator/security.md).
-
-## Supported versions
-
-| Version | Supported |
-|---------|-----------|
-| 1.0.x   | Yes       |
+Security updates target the AgentHound 1.1 release line.

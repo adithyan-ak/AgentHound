@@ -15,13 +15,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// bundleOverridePath is the process-global override set by the CLI
-// flag --rules-bundle. When non-empty, LoadFingerprints (the existing
-// entry point every fingerprinter calls) merges bundle rules over the
-// embedded set with same-id overrides winning.
-//
-// Set ONCE during CLI initialization (before any module's Fingerprint()
-// call). Subsequent LoadFingerprints reads see the override transparently.
+// bundleOverridePath is a process-global SDK hook. When non-empty,
+// LoadFingerprints merges its rules over the embedded set by ID. AgentHound's
+// public scan workflow leaves it empty and uses the compiled ruleset.
 var (
 	bundleOverridePathMu sync.RWMutex
 	bundleOverridePath   string
@@ -34,9 +30,9 @@ var (
 	fingerprintCacheErr         error
 )
 
-// SetBundleOverridePath configures the process-global rules-bundle
-// override. Pass an empty string to clear. Subsequent calls to
-// LoadFingerprints merge bundle rules into the embedded set.
+// SetBundleOverridePath configures the process-global SDK override. Pass an
+// empty string to clear it. Subsequent LoadFingerprints calls merge override
+// rules into the embedded set.
 func SetBundleOverridePath(path string) {
 	bundleOverridePathMu.Lock()
 	bundleOverridePath = path
@@ -60,11 +56,9 @@ func getBundleOverridePath() string {
 }
 
 // BundleSource identifies how a fingerprint rule entered the engine. The
-// embedded set ships in the binary; "bundle" entries come from a
-// --rules-bundle <path> override. The Source field on FingerprintRule
-// already carries this for the embedded case ("builtin"); the override
-// path replaces it with the absolute path of the bundle the rule came
-// from so operators have a clear provenance trail.
+// embedded set ships in the binary; "bundle" entries come from an SDK override.
+// The Source field carries "builtin" for embedded rules and the absolute input
+// path for override rules.
 const (
 	BundleSourceBuiltin            = "builtin"
 	maxFingerprintBundleEntryBytes = int64(1 << 20)
@@ -72,13 +66,7 @@ const (
 
 // LoadFingerprintBundle reads fingerprint rules from a directory or
 // tar.gz file and returns them. Same-id rules from the bundle WIN over
-// embedded rules — operators can ship a rule fix without cutting a
-// binary release. Used by the --rules-bundle CLI flag.
-//
-// Cosign signature verification is the operator's responsibility; the loader
-// does not validate signatures.
-// Operators should run cosign verify-blob against the tarball before
-// pointing AgentHound at it; see docs/operator/rules-bundle.md.
+// embedded rules. This low-level SDK function does not validate signatures.
 //
 // path may be:
 //   - a directory containing *.yaml files (each file = one rule)
@@ -242,7 +230,7 @@ func parseBundleRule(data []byte, source string) (*FingerprintRule, error) {
 }
 
 // MergeFingerprintRules merges a base rule set (typically the embedded
-// builtin set) with an override set (from a --rules-bundle path). When
+// builtin set) with an SDK-provided override set. When
 // the same ID appears in both, the override wins. Rules from base that
 // don't appear in override pass through unchanged.
 //

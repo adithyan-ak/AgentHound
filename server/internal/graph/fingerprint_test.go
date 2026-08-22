@@ -2,10 +2,15 @@ package graph
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	configcollector "github.com/adithyan-ak/agenthound/modules/config"
+	"github.com/adithyan-ak/agenthound/sdk/collector"
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
@@ -13,11 +18,12 @@ func TestObservationFactFingerprintIgnoresWriterLifecycleFields(t *testing.T) {
 	const domain = "config:path:sha256:fingerprint"
 	left, err := observationFactFingerprints([]string{domain}, map[string]any{
 		"properties": fingerprintProperties(map[string]any{
-			"endpoint":         "http://mcp.example/mcp",
-			"scan_id":          "scan-one",
-			"last_seen":        "one",
-			"last_verified_at": "2026-07-19T01:00:00Z",
-			"extracted_at":     "2026-07-19T01:00:00Z",
+			"endpoint":            "http://mcp.example/mcp",
+			"scan_id":             "scan-one",
+			"last_seen":           "one",
+			"last_verified_at":    "2026-07-19T01:00:00Z",
+			"observed_content_at": "2026-07-19T01:00:00Z",
+			"extracted_at":        "2026-07-19T01:00:00Z",
 		}),
 	})
 	if err != nil {
@@ -25,11 +31,12 @@ func TestObservationFactFingerprintIgnoresWriterLifecycleFields(t *testing.T) {
 	}
 	right, err := observationFactFingerprints([]string{domain}, map[string]any{
 		"properties": fingerprintProperties(map[string]any{
-			"last_seen":        "two",
-			"scan_id":          "scan-two",
-			"endpoint":         "http://mcp.example/mcp",
-			"last_verified_at": "2026-07-19T02:00:00Z",
-			"extracted_at":     "2026-07-19T02:00:00Z",
+			"last_seen":           "two",
+			"scan_id":             "scan-two",
+			"endpoint":            "http://mcp.example/mcp",
+			"last_verified_at":    "2026-07-19T02:00:00Z",
+			"observed_content_at": "2026-07-19T02:00:00Z",
+			"extracted_at":        "2026-07-19T02:00:00Z",
 		}),
 	})
 	if err != nil {
@@ -149,6 +156,48 @@ func TestPrepareObservationNodesFingerprintsOwnersBeforeUnion(t *testing.T) {
 	}
 }
 
+func TestPrepareObservationNodesAcceptsSharedConfigCredential(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	firstPath := filepath.Join(tmp, "cursor.json")
+	secondPath := filepath.Join(tmp, "vscode.json")
+	const shared = "writer-shared-credential-material"
+	for path, contents := range map[string]string{
+		firstPath:  `{"mcpServers":{"cursor-server":{"url":"https://cursor.example/mcp","headers":{"Authorization":"Bearer ` + shared + `"}}}}`,
+		secondPath: `{"mcpServers":{"vscode-server":{"url":"https://vscode.example/mcp","headers":{"X-API-Key":"` + shared + `"}}}}`,
+	} {
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatalf("write config %s: %v", path, err)
+		}
+	}
+
+	data, err := configcollector.NewConfigCollector().Collect(context.Background(), collector.CollectOptions{
+		ConfigPaths: []string{firstPath, secondPath}, ProjectDir: tmp, ScanID: "shared-credential-writer-test",
+	})
+	if err != nil {
+		t.Fatalf("collect configs: %v", err)
+	}
+	prepared, _, err := prepareObservationNodes(data.Graph.Nodes)
+	if err != nil {
+		t.Fatalf("prepare shared credential: %v", err)
+	}
+
+	wantHash := common.HashCredentialValue(shared)
+	credentials := 0
+	for _, node := range prepared {
+		if ingest.ConcreteNodeKind(node.Kinds) == "Credential" && node.Properties["value_hash"] == wantHash {
+			credentials++
+			if got, want := node.Properties["sources"], []string{"cursor-server", "vscode-server"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("prepared credential sources = %#v, want %#v", got, want)
+			}
+		}
+	}
+	if credentials != 1 {
+		t.Fatalf("prepared shared credentials = %d, want one", credentials)
+	}
+}
+
 func TestPrepareObservationNodesRejectsConflictsBeforeExecution(t *testing.T) {
 	const (
 		domainA = "config:path:sha256:conflict-a"
@@ -184,6 +233,37 @@ func TestPrepareObservationNodesRejectsConflictsBeforeExecution(t *testing.T) {
 	}
 	if calls := recorder.snapshot(); len(calls) != 0 {
 		t.Fatalf("conflicting contributions reached Neo4j execution: %+v", calls)
+	}
+}
+
+func TestPrepareObservationNodesKeepsLatestObservedContentTimestamp(t *testing.T) {
+	const domain = "mcp:target:sha256:observed-content"
+	nodes := []ingest.Node{
+		{
+			ID: "resource", Kinds: []string{"MCPResource"},
+			ObservationDomains: []string{domain},
+			Properties: map[string]any{
+				"observed_content":    "same content",
+				"observed_content_at": "2026-08-19T22:00:00Z",
+			},
+		},
+		{
+			ID: "resource", Kinds: []string{"MCPResource"},
+			ObservationDomains: []string{domain},
+			Properties: map[string]any{
+				"observed_content":    "same content",
+				"observed_content_at": "2026-08-19T22:00:01Z",
+			},
+		},
+	}
+
+	prepared, _, err := prepareObservationNodes(nodes)
+	if err != nil {
+		t.Fatalf("prepare nodes: %v", err)
+	}
+	if len(prepared) != 1 ||
+		prepared[0].Properties["observed_content_at"] != "2026-08-19T22:00:01Z" {
+		t.Fatalf("prepared nodes = %#v, want latest observation timestamp", prepared)
 	}
 }
 

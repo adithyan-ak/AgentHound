@@ -8,10 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	collectorcli "github.com/adithyan-ak/agenthound/collector/cli"
-	"github.com/adithyan-ak/agenthound/sdk/campaign"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
+	sharedinstruction "github.com/adithyan-ak/agenthound/sdk/instruction"
 )
 
 func testCollectionIdentity() ingest.CollectionIdentity {
@@ -93,6 +94,143 @@ func TestValidatorAcceptsValid(t *testing.T) {
 	}
 }
 
+func validInstructionEvidenceData(t *testing.T) *ingest.IngestData {
+	t.Helper()
+	data := validIngestData()
+	scope := data.Meta.Collection.CoverageKeys[0]
+	evidence, raw, err := sharedinstruction.MarshalBounded(
+		sharedinstruction.VerdictSignal,
+		[]sharedinstruction.Signal{{
+			RuleID: "instruction-ignore-previous", Label: "Ignore Previous Instructions",
+			Severity: "critical", Strength: sharedinstruction.StrengthPrimary,
+			RawOffset: 7, Line: 2, Column: 1, Match: "Ignore previous instructions",
+			ContextBefore: "line 1\n", ContextAfter: "\nline 3",
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data.Graph.Nodes = []ingest.Node{{
+		ID: "sha256:instruction", Kinds: []string{"InstructionFile"},
+		Properties: map[string]any{
+			"path": "/project/AGENTS.md", "type": "agents.md", "hash": "sha256:" + strings.Repeat("a", 64),
+			"instruction_verdict": string(evidence.Verdict), "instruction_scope": "deep",
+			"instruction_signal_count": evidence.TotalSignals, "instruction_signal_truncated": evidence.Truncated,
+			"instruction_evidence_version": evidence.Version, "instruction_evidence_json": raw,
+			"size_bytes": 64, "modified_at": "2026-08-20T12:00:00Z",
+		},
+		ObservationDomains: []string{scope},
+	}}
+	data.Graph.Edges = []ingest.Edge{}
+	return data
+}
+
+func TestValidatorInstructionEvidenceContract(t *testing.T) {
+	if err := NewValidator().Validate(validInstructionEvidenceData(t)); err != nil {
+		t.Fatalf("valid instruction evidence rejected: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		path string
+		edit func(map[string]any)
+	}{
+		{name: "missing field", path: "graph.nodes[0].properties.instruction_scope", edit: func(p map[string]any) { delete(p, "instruction_scope") }},
+		{name: "verdict mismatch", path: "graph.nodes[0].properties.instruction_evidence_json", edit: func(p map[string]any) { p["instruction_verdict"] = "poisoning" }},
+		{name: "count mismatch", path: "graph.nodes[0].properties.instruction_signal_count", edit: func(p map[string]any) { p["instruction_signal_count"] = 2 }},
+		{name: "version mismatch", path: "graph.nodes[0].properties.instruction_evidence_version", edit: func(p map[string]any) { p["instruction_evidence_version"] = 2 }},
+		{name: "offset outside file", path: "graph.nodes[0].properties.instruction_evidence_json.signals[0].match", edit: func(p map[string]any) { p["size_bytes"] = 7 }},
+		{name: "non UTC timestamp", path: "graph.nodes[0].properties.modified_at", edit: func(p map[string]any) { p["modified_at"] = "2026-08-20T12:00:00-07:00" }},
+		{name: "unknown JSON field", path: "graph.nodes[0].properties.instruction_evidence_json", edit: func(p map[string]any) {
+			raw, ok := p["instruction_evidence_json"].(string)
+			if !ok {
+				panic("instruction evidence fixture is not a string")
+			}
+			p["instruction_evidence_json"] = strings.TrimSuffix(raw, "}") + `,"unknown":true}`
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data := validInstructionEvidenceData(t)
+			test.edit(data.Graph.Nodes[0].Properties)
+			assertValidationError(t, NewValidator().Validate(data), test.path)
+		})
+	}
+}
+
+func TestValidatorInstructionEvidenceSourceSpan(t *testing.T) {
+	tests := []struct {
+		name    string
+		offset  int
+		match   string
+		size    int
+		wantErr bool
+	}{
+		{name: "ends exactly at size", offset: 7, match: "abc", size: 10},
+		{name: "ends one byte past size", offset: 7, match: "abcd", size: 10, wantErr: true},
+		{name: "multibyte uses source bytes", offset: 7, match: "é", size: 9},
+		{name: "multibyte one byte short", offset: 7, match: "é", size: 8, wantErr: true},
+		{name: "replacement character is conservative", offset: 7, match: "\uFFFD", size: 8},
+		{name: "extreme offset cannot overflow", offset: math.MaxInt, match: "abc", size: 64, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data := validInstructionEvidenceData(t)
+			properties := data.Graph.Nodes[0].Properties
+			rawEvidence, ok := properties["instruction_evidence_json"].(string)
+			if !ok {
+				t.Fatal("instruction_evidence_json is not a string")
+			}
+			evidence, err := sharedinstruction.ParseEvidenceJSON(rawEvidence)
+			if err != nil {
+				t.Fatal(err)
+			}
+			evidence.Signals[0].RawOffset = test.offset
+			evidence.Signals[0].Match = test.match
+			encoded, err := json.Marshal(evidence)
+			if err != nil {
+				t.Fatal(err)
+			}
+			properties["instruction_evidence_json"] = string(encoded)
+			properties["size_bytes"] = test.size
+			err = NewValidator().Validate(data)
+			if test.wantErr {
+				assertValidationError(t, err, "graph.nodes[0].properties.instruction_evidence_json.signals[0].match")
+			} else if err != nil {
+				t.Fatalf("valid source span rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidatorAcceptsHistoricalBooleanOnlyInstructionFile(t *testing.T) {
+	data := validInstructionEvidenceData(t)
+	data.Graph.Nodes[0].Properties = map[string]any{
+		"path": "/project/AGENTS.md", "type": "agents.md",
+		"hash": "sha256:" + strings.Repeat("a", 64), "is_suspicious": true,
+	}
+	if err := NewValidator().Validate(data); err != nil {
+		t.Fatalf("historical V1 instruction node rejected: %v", err)
+	}
+}
+
+func TestValidatorStrictlyValidatesOptionalScanExecution(t *testing.T) {
+	data := validIngestData()
+	execution := ingest.NewScanExecution(ingest.ScanModeActive, true, time.Now().UTC())
+	if err := ingest.SetScanExecution(&data.Meta, execution); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewValidator().Validate(data); err != nil {
+		t.Fatalf("valid scan_execution rejected: %v", err)
+	}
+	value, ok := data.Meta.Extra[ingest.ScanExecutionExtraKey].(map[string]any)
+	if !ok {
+		t.Fatalf("scan_execution = %T, want map[string]any", data.Meta.Extra[ingest.ScanExecutionExtraKey])
+	}
+	value["unknown_field"] = true
+	assertValidationError(t, NewValidator().Validate(data), "meta.extra.scan_execution")
+}
+
 func TestValidatorAcceptsAuthFreeMCPDiscovery(t *testing.T) {
 	data := validIngestData()
 	for _, property := range []string{"auth_method", "auth_assurance", "auth_evidence"} {
@@ -163,130 +301,42 @@ func TestValidatorRejectsInconsistentCollectionIdentity(t *testing.T) {
 	}
 }
 
-// campaignEvidenceIngest builds a "scan"-collector envelope carrying a
-// CREDENTIAL_REACH_VERIFIED edge with both reference_only endpoint nodes, exactly
-// as the campaign runner emits it.
-func campaignEvidenceIngest() *ingest.IngestData {
-	serverID := "sha256:camp-srv"
-	uri := "postgres://prod/customers"
-	serviceScopeID := "sha256:validator-test-network"
-	scopedServerID := ingest.ScopedNodeID(ingest.ScopeNetworkContext, serviceScopeID, serverID)
-	rawResourceID := ingest.ComputeNodeID("MCPResource", serverID, uri)
-	resID := ingest.ScopedNodeID(ingest.ScopeNetworkContext, serviceScopeID, rawResourceID)
-	credID := "sha256:camp-cred"
-	agentID := "sha256:camp-agent"
-	ev := campaign.Evidence{
-		ScenarioID: "cred-reach", ScenarioVersion: 1, RunID: "run-1",
-		EngagementID: "ENG", OracleType: campaign.OracleTypeDifferentialCredentialReach,
-		Outcome:      campaign.OutcomeCredentialGatedReachVerified,
-		ControlStage: campaign.ProbeStageResourceRead, ControlStatus: campaign.ProbeDenied, ControlAddressed: true,
-		AuthedStage: campaign.ProbeStageResourceRead, AuthedStatus: campaign.ProbeAllowed, AuthedAddressed: true,
-		VerifiedAt: "2026-07-12T00:00:00Z",
-		Witness: campaign.Witness{
-			SchemaVersion:                campaign.WitnessSchemaVersion,
-			TopologyNormalizationVersion: campaign.WitnessTopologyNormalizationVersion,
-			PublicationRevision:          1,
-			PredictedEdgeKind:            campaign.PredictedEdgeKindCanReach,
-			AgentID:                      agentID, AgentKind: "AgentInstance",
-			CredentialID: credID, CredentialValueHash: "deadbeef",
-			CredentialKind:     "Credential",
-			CredentialMergeKey: campaign.CredentialMergeKeyValueHash,
-			ServerID:           scopedServerID, ServerKind: "MCPServer",
-			ServerIdentityID: serverID, ServiceScope: ingest.ScopeNetworkContext,
-			ServiceScopeID: serviceScopeID,
-			ResourceID:     resID, ResourceKind: "MCPResource", ResourceIdentityInput: uri,
-			EvidenceNodeIDs:   []string{agentID, scopedServerID, credID, resID},
-			EvidenceNodeKinds: []string{"AgentInstance", "MCPServer", "Credential", "MCPResource"},
-		},
-	}
-	scanID := "scan-camp-001"
-	nodes, edges := ev.EvidenceGraph(scanID)
-	scope := ingest.CanonicalCoverageKey("scan", "campaign", "cred-reach\x001\x00"+agentID+"\x00"+credID+"\x00"+serverID+"\x00"+resID)
-	data := &ingest.IngestData{
-		Meta: ingest.IngestMeta{
-			Version: ingest.CurrentVersion, Type: ingest.IngestType,
-			Identity:  testCollectionIdentity(),
-			Collector: "scan", CollectorVersion: "0.9.0-dev",
-			Timestamp: "2026-07-12T00:00:00Z", ScanID: scanID,
-			Collection: &ingest.CollectionReport{
-				State: ingest.OutcomeComplete, CoverageKeys: []string{scope},
-				Outcomes: []ingest.CollectionOutcome{{
-					Collector: "scan", CoverageKey: scope, Target: serverID,
-					Method: "campaign:cred-reach", State: ingest.OutcomeComplete, Items: len(edges),
-				}},
-			},
-			Ruleset: ingest.EmptyRulesetManifest(), IdentitySchemes: ingest.CurrentIdentitySchemes(),
-		},
-		Graph: ingest.GraphData{Nodes: nodes, Edges: edges},
-	}
-	ingest.TagObservationDomain(&data.Graph, scope)
-	return data
-}
-
-// TestValidatorAcceptsCampaignEvidence: the emitted CREDENTIAL_REACH_VERIFIED
-// edge with reference_only endpoint nodes must pass ingest validation.
-func TestValidatorAcceptsCampaignEvidence(t *testing.T) {
-	data := campaignEvidenceIngest()
-	if err := NewValidator().Validate(data); err != nil {
-		t.Fatalf("campaign evidence envelope rejected: %v", err)
-	}
-}
-
-// TestValidatorRejectsCampaignMissingEndpoint: dropping a reference_only endpoint
-// node must fail validation (the validator requires both edge endpoints present).
-func TestValidatorRejectsCampaignMissingEndpoint(t *testing.T) {
-	data := campaignEvidenceIngest()
-	// Drop the source-agent endpoint node, keep the edge.
-	var kept []ingest.Node
-	for _, n := range data.Graph.Nodes {
-		if !hasKind(n.Kinds, "AgentInstance") {
-			kept = append(kept, n)
-		}
-	}
-	data.Graph.Nodes = kept
-	err := NewValidator().Validate(data)
-	if err == nil {
-		t.Fatal("edge with a missing endpoint node must be rejected")
-	}
-	var verr *ValidationError
-	if !errors.As(err, &verr) {
-		t.Fatalf("expected *ValidationError, got %T: %v", err, err)
-	}
-	found := false
-	for _, fe := range verr.Errors {
-		if strings.Contains(fe.Message, "not present in graph.nodes") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("expected a missing-endpoint field error, got: %+v", verr.Errors)
-	}
-}
-
 func TestValidatorAcceptsCollectorProducedRootCoverage(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
-	configPath := filepath.Join(dir, "config.json")
+	configPath := filepath.Join(dir, ".vscode", "mcp.json")
 	outputPath := filepath.Join(dir, "scan.json")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("create config directory: %v", err)
+	}
 	if err := os.WriteFile(
 		configPath,
-		[]byte(`{"mcpServers":{"local":{"command":"node","args":["server.js"]}}}`),
+		[]byte(`{"servers":{}}`),
 		0o600,
 	); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
 	originalArgs := os.Args
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("change working directory: %v", err)
+	}
 	os.Args = []string{
 		"agenthound",
 		"scan",
-		"--config",
-		"--path", configPath,
-		"--scan-output", outputPath,
+		"--stealth",
+		"--timeout", "30s",
+		"--output", outputPath,
 		"--quiet",
 	}
-	defer func() { os.Args = originalArgs }()
+	defer func() {
+		os.Args = originalArgs
+		_ = os.Chdir(originalDir)
+	}()
 
 	if err := collectorcli.Execute(); err != nil {
 		t.Fatalf("produce scan: %v", err)
@@ -300,15 +350,15 @@ func TestValidatorAcceptsCollectorProducedRootCoverage(t *testing.T) {
 		t.Fatalf("decode scan: %v", err)
 	}
 	if err := NewValidator().Validate(&data); err != nil {
+		if validation, ok := err.(*ValidationError); ok {
+			t.Logf("validation errors: %+v", validation.Errors)
+		}
 		t.Fatalf("collector-produced scan rejected: %v", err)
 	}
 
-	rootKey := ingest.CanonicalCoverageKey("config", "root", "collect")
-	pathKey := ingest.CanonicalCoverageKey("config", "path", configPath)
 	states := ingest.CoverageStates(data.Meta.Collection)
-	if states[rootKey] != ingest.OutcomeComplete ||
-		states[pathKey] != ingest.OutcomeComplete {
-		t.Fatalf("collector coverage states = %v, want complete root and path", states)
+	if _, exists := states[ingest.CollectorRootCoverageKey("scan")]; !exists {
+		t.Fatalf("collector coverage states = %v, want autonomous scan root", states)
 	}
 	if len(data.Meta.Collection.AuthoritativeRoots) != 2 {
 		t.Fatalf("instruction roots = %+v, want exact user and project", data.Meta.Collection.AuthoritativeRoots)
@@ -317,23 +367,6 @@ func TestValidatorAcceptsCollectorProducedRootCoverage(t *testing.T) {
 	for _, root := range data.Meta.Collection.AuthoritativeRoots {
 		if root.RegistryContract == nil || !root.RegistryContract.Equal(currentContract) {
 			t.Fatalf("instruction root contract = %+v, want %+v", root.RegistryContract, currentContract)
-		}
-	}
-	for _, node := range data.Graph.Nodes {
-		if len(node.ObservationDomains) != 1 || node.ObservationDomains[0] != pathKey {
-			t.Fatalf("node %q ownership = %v, want path scope %q", node.ID, node.ObservationDomains, pathKey)
-		}
-	}
-	for _, edge := range data.Graph.Edges {
-		if len(edge.ObservationDomains) != 1 || edge.ObservationDomains[0] != pathKey {
-			t.Fatalf(
-				"edge %s-%s->%s ownership = %v, want path scope %q",
-				edge.Source,
-				edge.Kind,
-				edge.Target,
-				edge.ObservationDomains,
-				pathKey,
-			)
 		}
 	}
 }

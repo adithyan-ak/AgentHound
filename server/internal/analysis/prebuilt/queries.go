@@ -138,12 +138,12 @@ func init() {
 		},
 		"instruction-poisoning": {
 			ID:          "instruction-poisoning",
-			Name:        "Poisoned Instruction Files",
-			Description: "Finds instruction files with suspicious patterns that may manipulate agent behavior.",
+			Name:        "Instruction Integrity Signals",
+			Description: "Finds review signals and strong compound poisoning evidence in collected instruction files.",
 			Category:    "Supply Chain",
 			Severity:    "high",
 			Cypher:      CypherInstructionPoisoning,
-			OWASPMap:    []string{"MCP05", "ASI03"},
+			OWASPMap:    []string{"ASI03"},
 			ATLASMap:    []string{"AML.T0051"},
 		},
 		"unsigned-cards": {

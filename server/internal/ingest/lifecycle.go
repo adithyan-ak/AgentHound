@@ -354,7 +354,43 @@ func buildScanMetadata(
 		"collector_version":        data.Meta.CollectorVersion,
 		"artifact_extra":           data.Meta.Extra,
 	}
+	if execution := promotedScanExecution(data.Meta.Extra); execution != nil {
+		metadata["scan_execution"] = execution
+	}
 	return metadata
+}
+
+// promotedScanExecution returns the bounded scan-execution summary consumed by
+// the dashboard. The validator has already strictly checked the complete
+// journal, which remains untouched in artifact_extra.
+func promotedScanExecution(extra map[string]any) map[string]any {
+	raw, ok := extra["scan_execution"]
+	if !ok {
+		return nil
+	}
+	execution, err := sdkingest.DecodeScanExecution(raw)
+	if err != nil {
+		return nil
+	}
+	promoted := map[string]any{
+		"version":    execution.Version,
+		"mode":       execution.Mode,
+		"deep":       execution.Deep,
+		"status":     execution.Status,
+		"started_at": execution.StartedAt,
+		"updated_at": execution.UpdatedAt,
+		"summary": map[string]any{
+			"actions_attempted": execution.Summary.ActionsAttempted,
+			"actions_succeeded": execution.Summary.ActionsSucceeded,
+			"actions_failed":    execution.Summary.ActionsFailed,
+			"actions_skipped":   execution.Summary.ActionsSkipped,
+			"cleanup_failures":  execution.Summary.CleanupFailures,
+		},
+	}
+	if execution.CompletedAt != nil {
+		promoted["completed_at"] = *execution.CompletedAt
+	}
+	return promoted
 }
 
 func joinedStageErrors(errs ...error) string {

@@ -112,6 +112,20 @@ describe("deriveRemediations evidence states", () => {
     const rotation = observed.find((item) => item.title === "Rotate this credential");
     expect(rotation?.body).toContain("Authorization header");
     expect(rotation?.body).not.toMatch(/config file or environment variable/i);
+
+    const aggregated = deriveRemediations(
+      node("Credential", {
+        material_status: "observed",
+        exposure_status: "exposed",
+        merge_key: "value_hash",
+        sources: ["cursor-server", "vscode-server"],
+      }),
+      "Credential",
+      [],
+    );
+    expect(
+      aggregated.find((item) => item.title === "Rotate this credential")?.body,
+    ).toContain("cursor-server, vscode-server");
   });
 
   it("labels cross-protocol host correlation as a hypothesis", () => {

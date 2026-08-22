@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Finding } from "@entities/finding/model";
-import { buildMarkdownReport } from "./copy-report";
+import { buildFindingsTableMarkdown, buildMarkdownReport } from "./copy-report";
+import { formatFindingEvidenceState } from "./evidence-label";
 
-describe("buildMarkdownReport verification", () => {
-  it("includes structured campaign verification metadata", () => {
+describe("buildMarkdownReport proof", () => {
+  it("includes structured access proof metadata", () => {
     const finding: Finding = {
       id: "aaaaaaaaaaaaaaaa",
       severity: "high",
@@ -22,19 +23,18 @@ describe("buildMarkdownReport verification", () => {
       evidence: {
         state: "verified",
         channels: [],
-        verification: {
-          scenario_id: "cred-reach",
-          scenario_version: 1,
-          campaign_run_id: "run-report",
+        proof: {
+          action: "credential_reach",
+          action_id: "action-report",
           verified_at: "2026-07-13T12:00:00Z",
-          oracle_type: "differential_credential_reach",
-          outcome: "credential_gated_reach_verified",
+          proof_type: "differential_resource_read",
+          outcome: "credential_required",
           control_stage: "initialize",
           control_status: "denied",
           control_resource_addressed: false,
-          authed_stage: "resource_read",
-          authed_status: "allowed",
-          authed_resource_addressed: true,
+          credential_stage: "resource_read",
+          credential_status: "allowed",
+          credential_resource_addressed: true,
           cleanup_status: "not_applicable",
         },
       },
@@ -42,10 +42,14 @@ describe("buildMarkdownReport verification", () => {
       atlas_map: [],
     };
     const report = buildMarkdownReport(finding, null, []);
-    expect(report).toContain("### Campaign Verification");
-    expect(report).toContain("Run: run-report");
+    expect(formatFindingEvidenceState(finding.evidence.state)).toBe("Verified During Scan");
+    expect(report).toContain("Evidence: Verified During Scan");
+    expect(buildFindingsTableMarkdown([finding])).toContain("| Verified During Scan |");
+    expect(report).toContain("### Access Proof");
+    expect(report).toContain("Action ID: action-report");
     expect(report).toContain("Control: initialize / denied / resource_addressed=false");
+    expect(report).toContain("Credential: resource_read / allowed / resource_addressed=true");
     expect(report).toContain("Cleanup: not_applicable");
-    expect(report).toContain("not observed agent invocation or impact");
+    expect(report).toContain("not observed agent invocation or downstream impact");
   });
 });

@@ -44,7 +44,6 @@ const FIXTURE_NODES: APINode[] = [
   n("litellm-1", "LiteLLMGateway"),
   n("ollama-1", "OllamaInstance"),
   n("model-1", "AIModel"),
-  n("signal-1", "ExtractedTrainingSignal"),
 ];
 
 const FIXTURE_EDGES: APIEdge[] = [
@@ -73,7 +72,6 @@ const FIXTURE_EDGES: APIEdge[] = [
   e("a2a-1", "a2a-2", "CAN_IMPERSONATE"),
   e("litellm-1", "ollama-1", "EXPOSES"),
   e("ollama-1", "model-1", "PROVIDES_MODEL"),
-  e("model-1", "signal-1", "EXTRACTED_FROM"),
 ];
 
 const FIXTURE_FINDINGS: Finding[] = [
@@ -211,7 +209,6 @@ describe("buildExplorerGraph", () => {
     expect(kinds.has("SAME_AUTH_DOMAIN")).toBe(true);
     expect(kinds.has("EXPOSES")).toBe(true);
     expect(kinds.has("PROVIDES_MODEL")).toBe(true);
-    expect(kinds.has("EXTRACTED_FROM")).toBe(true);
     expect(kinds.has("CAN_REACH")).toBe(false);
     expect(kinds.has("HAS_ACCESS_TO")).toBe(false);
   });

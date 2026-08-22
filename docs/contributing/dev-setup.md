@@ -1,106 +1,72 @@
-# Development Setup
+# Development setup
 
-Clone to green CI in 5 minutes.
+## Toolchain
 
-## Prerequisites
+| Tool | Purpose |
+|---|---|
+| Go version pinned in `go.mod` | Collector, server, tests, and tooling |
+| Node.js 20+ | React UI build and tests |
+| Docker with Compose v2 | Local storage stack and integration tests |
+| golangci-lint | Go lint gate |
 
-| Tool | Version | Purpose |
-|------|---------|---------|
-| Go | 1.25.12 | Pinned in `go.mod` |
-| Node.js | 20+ | UI build (Vite 8) |
-| Docker + Compose | Latest stable | Integration tests, local Neo4j/Postgres |
-| golangci-lint | v2.11+ | Linting (CI uses this exact version) |
+GoReleaser and cosign are useful for release work but are not required for normal development.
 
-Optional: `goreleaser` v2 for local release builds, `cosign` for signature verification.
-
-## Clone and Build
+## Build
 
 ```bash
 git clone https://github.com/adithyan-ak/agenthound.git
 cd agenthound
-make build          # Builds both binaries (collector + server)
+make build
 ```
 
-`make build` runs `make build-all` which:
-1. `build-collector` -- produces `bin/agenthound`
-2. `build-server` -- runs `ui-build` first (npm ci + vite build + copy to embed dir), then produces `bin/agenthound-server`
+Useful focused targets:
 
-For collector-only work, `make build-collector` skips the UI build entirely.
+| Target | Result |
+|---|---|
+| `make build-collector` | Build `bin/agenthound`. |
+| `make build-server` | Build the UI and `bin/agenthound-server`. |
+| `make ui-dev` | Start the Vite development server. |
+| `make ui-test` | Run frontend tests. |
+| `make check` | Run the required local pull-request checks. |
+| `make security-check` | Check reachable Go vulnerabilities, binary licenses, and production dashboard dependencies. |
+| `make integration` | Run the lean collector-to-ingest smoke test. |
+| `make upstream-test` | Run the complete pinned-upstream compatibility harness. |
+| `make deps-check` | Validate collector/server dependency boundaries. |
+| `make size-check` | Check the stripped collector size budget. |
+| `make docs-check` | Build the MkDocs site in strict mode. |
 
-## Run Tests
+## Test
 
 ```bash
-make test           # go test ./... -v -race -count=1
-make lint           # golangci-lint run ./...
+make check
+make integration
 ```
 
-Unit tests run without external services (`-short` flag skips integration tests that need Neo4j/Postgres).
+Use `-short` to skip integration tests that require external databases. CI supplies Neo4j and PostgreSQL for database-backed suites.
 
-## Pre-Commit Checks (Mandatory)
-
-Run before every commit:
+## Local analysis stack
 
 ```bash
-gofmt -l .                  # Must produce no output
-go build ./...              # Zero errors
-go vet ./...                # Zero warnings
-go test ./... -race         # All tests pass with race detector
+make up
+make seed
+make down
 ```
 
-CI will reject PRs that fail any of these.
+The server binds to `127.0.0.1:8080`; Neo4j and PostgreSQL also bind to loopback. The stack creates its collection and storage identities automatically.
 
-## CI Structure
+## Repository layout
 
-| Job | Trigger | What it does |
-|-----|---------|--------------|
-| `lint` | push + PR | golangci-lint, go-licenses check |
-| `test-unit` | push + PR | `go test -short -race`, coverage gate (55%) |
-| `build` | push + PR | Full build (UI + both binaries), deps-check, size-check |
-| `ui` | push + PR | UI architecture lint, Vitest suite, design-system/slop checks |
-| `test-integration` | PR only | Neo4j + Postgres in Docker, full ingest pipeline tests |
-| `govulncheck` | PR only | Scan all Go packages for reachable known vulnerabilities |
-| `xplatform-build` | PR only | Cross-compile both binaries for Linux, macOS, and Windows on amd64 and arm64 (six tuples) |
-| `docker` | PR only | Validates all Dockerfiles build successfully |
-| Docs `build` | docs PRs + docs pushes | Strict MkDocs link, anchor, and orphan-page validation |
-| `version-check` | release-version file PRs | Verify README/install pins match the first CHANGELOG release header |
-
-## CI Gates (Blocking)
-
-- **deps-check:** Collector binary must NOT link `chi`, `pgx`, `neo4j-go-driver`, or `server/internal/`. Server must NOT link MCP SDK or `modules/`.
-- **size-check:** Collector linux/amd64 stripped binary must stay within baseline + 10%.
-- **go-licenses:** Only Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0, Unlicense, Zlib.
-- **govulncheck:** Zero known vulnerabilities.
-
-## Local Integration Environment
-
-```bash
-make up             # docker compose: neo4j:4.4 + postgres:16 + agenthound-server
-make down           # tear down
-make seed           # Load test data into running instance
+```text
+collector/   collector CLI and planner orchestration
+modules/     scanners, protocol collectors, service collectors, and action adapters
+sdk/         ingest contract, action interfaces, contact policy, registry, and rules
+server/      ingest, graph analysis, API, persistence, CLI, and UI
+docker/      container builds and Compose definitions
+scripts/     validation and release tooling
+test-infra/  pinned upstream compatibility harness
+docs/        operator, reference, architecture, and contributor manuals
 ```
 
-Collector provenance and database storage pairing are automatic; the local
-integration stack requires no identity environment variables.
+## Release gate
 
-## Directory Layout
-
-```
-collector/          # agenthound binary (CLI + module dispatch)
-server/             # agenthound-server binary (API + ingest + analysis + UI)
-sdk/                # Public SDK (ingest contract, action interfaces, module registry, rules engine)
-modules/            # Self-registering modules (fingerprinters, looters, poisoners, etc.)
-docker/             # Dockerfiles + compose
-scripts/            # CI scripts (deps-check, size-check, seed)
-testdata/           # JSON fixtures for ingest tests
-docs/               # Architecture, API reference, contributing guides
-```
-
-## Useful Make Targets
-
-| Target | Purpose |
-|--------|---------|
-| `make build-collector` | Collector binary only (fast iteration) |
-| `make ui-dev` | Vite dev server with HMR |
-| `make ui-test` | Frontend unit tests |
-| `make deps-check` | Run dependency boundary validation locally |
-| `make release` | Local GoReleaser snapshot (no publish) |
+`make prerelease` runs version consistency, contributor checks, pinned vulnerability and license checks, and canonical Linux, macOS, and Windows cross-builds. Run `make docs-check` separately for documentation changes.

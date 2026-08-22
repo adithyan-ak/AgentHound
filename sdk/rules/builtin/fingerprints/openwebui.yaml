@@ -10,7 +10,7 @@
 #
 # $.ollama.base_url is absent from Open WebUI's get_app_config response on
 # every verified tag from v0.1.111 through v0.9.6 (and main). Backend URLs are
-# captured by the openwebuiloot Looter via the admin-gated /ollama/config
+# captured by the Open WebUI service collector via the admin-gated /ollama/config
 # endpoint, which does return OLLAMA_BASE_URLS.
 #
 # The second probe is a public shape guard: /api/config is expected to return

@@ -3,6 +3,7 @@ package processors
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
@@ -33,17 +34,31 @@ func TestPoisonedInstructions_ProcessSuccess(t *testing.T) {
 	if stats.ProcessorName != "poisoned_instructions" {
 		t.Errorf("ProcessorName = %q", stats.ProcessorName)
 	}
-	if stats.EdgesCreated != 1 {
-		t.Errorf("EdgesCreated = %d, want 1", stats.EdgesCreated)
+	if stats.EdgesCreated != 2 {
+		t.Errorf("EdgesCreated = %d, want 2", stats.EdgesCreated)
 	}
 
 	calls := mock.CallsTo("ExecuteWrite")
-	if len(calls) != 1 {
-		t.Fatalf("ExecuteWrite called %d times, want 1", len(calls))
+	if len(calls) != 2 {
+		t.Fatalf("ExecuteWrite called %d times, want 2", len(calls))
 	}
-	params, _ := calls[0].Args[1].(map[string]any)
-	if params["scan_id"] != "scan-1" {
-		t.Errorf("scan_id = %v", params["scan_id"])
+	for _, call := range calls {
+		params, _ := call.Args[1].(map[string]any)
+		if params["scan_id"] != "scan-1" {
+			t.Errorf("scan_id = %v", params["scan_id"])
+		}
+	}
+	poisoningQuery, _ := calls[0].Args[0].(string)
+	if !strings.Contains(poisoningQuery, ":POISONED_INSTRUCTIONS") ||
+		!strings.Contains(poisoningQuery, "f.instruction_verdict = 'poisoning'") ||
+		!strings.Contains(poisoningQuery, "['exact_project', 'exact_user']") {
+		t.Fatalf("poisoning projection does not enforce verdict and active scope:\n%s", poisoningQuery)
+	}
+	signalQuery, _ := calls[1].Args[0].(string)
+	if !strings.Contains(signalQuery, ":INSTRUCTION_SIGNAL") ||
+		!strings.Contains(signalQuery, "f.instruction_verdict = 'signal'") ||
+		!strings.Contains(signalQuery, "f.instruction_scope = 'deep'") {
+		t.Fatalf("signal projection does not include signals and deep poisoning:\n%s", signalQuery)
 	}
 }
 

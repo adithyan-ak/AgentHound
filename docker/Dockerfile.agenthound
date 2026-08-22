@@ -1,7 +1,7 @@
 # Collector image — lean field binary; no UI, no DBs, no chi/pgx/neo4j.
 # Source/CI builds keep honest dev defaults. GoReleaser supplies VERSION and
 # COMMIT so tagged images report the same provenance as release archives.
-FROM golang:1.25-alpine AS builder
+FROM golang:1.25.13-alpine AS builder
 WORKDIR /src
 ARG VERSION=dev
 ARG COMMIT=none

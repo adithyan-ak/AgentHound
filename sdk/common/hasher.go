@@ -13,16 +13,16 @@ func HashSHA256(input string) string {
 
 // HashCredentialValue is the cross-collector merge primitive on
 // :Credential nodes. The Config Collector emits Credential nodes with
-// objectid derived from (config-path, env-var-name); the LiteLLM Looter
+// objectid derived from (config-path, env-var-name); the LiteLLM collector
 // emits Credential nodes with objectid derived from (litellm-endpoint,
 // key-name). Those two objectid derivations are completely different
 // — but if both collectors observed the same secret value, the
 // resulting nodes carry the same value_hash, and the
 // cross_service_credential_chain post-processor can join them.
 //
-// Always populated, regardless of --include-credential-values. The raw
-// Credential.value is omitted in the default safety mode; value_hash
-// stays so the chain still fires.
+// Always populated alongside exact observed Credential.value. Unresolved or
+// masked references retain a hash for stable evidence identity but are marked
+// non-observed and are never indexed as executable planner material.
 //
 // One swap point if the algorithm needs to change later (e.g. salted
 // HMAC for cross-deployment privacy).

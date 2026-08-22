@@ -67,8 +67,8 @@ func ListByAction(a action.Action) []Module {
 	return out
 }
 
-// GetByTarget resolves a (targetKind, action) pair to the single module
-// that handles it. Used by CLI verbs like `agenthound loot 10.0.0.42 --type litellm`.
+// GetByTarget resolves a (targetKind, action) pair to the single module that
+// handles it. The autonomous planner uses this after fingerprinting.
 // Returns false if no module matches; the caller decides how to surface
 // the miss. If multiple modules match (a configuration error), the first
 // in ID-sorted order wins — Register would have panicked on duplicate IDs,

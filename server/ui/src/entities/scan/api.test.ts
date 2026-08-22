@@ -421,6 +421,81 @@ describe("fetchScan", () => {
     });
     expect(getMock).toHaveBeenCalledWith("scans/older%2Fscan");
   });
+
+  it("decodes promoted scan execution metadata", async () => {
+    getMock.mockReturnValue({
+      json: vi.fn().mockResolvedValue(
+        scan({
+          metadata: {
+            scan_execution: {
+              version: 1,
+              mode: "active",
+              deep: true,
+              status: "completed",
+              started_at: "2026-07-10T00:00:00Z",
+              updated_at: "2026-07-10T00:02:00Z",
+              completed_at: "2026-07-10T00:02:00Z",
+              summary: {
+                actions_attempted: 4,
+                actions_succeeded: 3,
+                actions_failed: 1,
+                actions_skipped: 2,
+                cleanup_failures: 0,
+              },
+            },
+          },
+        }),
+      ),
+    });
+
+    await expect(fetchScan("scan")).resolves.toMatchObject({
+      metadata: {
+        scan_execution: {
+          version: 1,
+          mode: "active",
+          deep: true,
+          status: "completed",
+          summary: {
+            actions_attempted: 4,
+            actions_succeeded: 3,
+            actions_failed: 1,
+            actions_skipped: 2,
+            cleanup_failures: 0,
+          },
+        },
+      },
+    });
+  });
+
+  it("rejects malformed scan execution metadata", async () => {
+    getMock.mockReturnValue({
+      json: vi.fn().mockResolvedValue(
+        scan({
+          metadata: {
+            scan_execution: {
+              version: 1,
+              mode: "active",
+              deep: "yes",
+              status: "completed",
+              started_at: "2026-07-10T00:00:00Z",
+              updated_at: "2026-07-10T00:02:00Z",
+              summary: {
+                actions_attempted: 0,
+                actions_succeeded: 0,
+                actions_failed: 0,
+                actions_skipped: 0,
+                cleanup_failures: 0,
+              },
+            },
+          },
+        }),
+      ),
+    });
+
+    await expect(fetchScan("scan")).rejects.toThrow(
+      "scan.metadata.scan_execution.deep must be a boolean",
+    );
+  });
 });
 
 describe("scan freshness queries", () => {

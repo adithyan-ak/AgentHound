@@ -6,22 +6,25 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/adithyan-ak/agenthound/sdk/contact"
 )
 
-// NoRedirectClient returns the looter-standard HTTP client: a fixed
-// timeout and a CheckRedirect that stops at the first response (looters
+// NoRedirectClient returns the service-collector HTTP client: a fixed
+// timeout and a CheckRedirect that stops at the first response (collectors
 // probe a specific endpoint and must not be bounced to an arbitrary host
 // by a 30x).
 func NoRedirectClient(timeout time.Duration) *http.Client {
 	return &http.Client{
-		Timeout: timeout,
+		Timeout:   timeout,
+		Transport: contact.GuardTransport(nil),
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
 }
 
-// GetJSON performs the GET-and-read dance shared by every looter: build a
+// GetJSON performs the GET-and-read dance shared by service collectors: build a
 // GET request, set Accept: application/json, optionally attach a Bearer
 // token, execute, and read at most limit bytes of the body. A Bearer
 // header is attached only when bearer != "". A non-2xx status is returned

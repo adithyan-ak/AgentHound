@@ -178,8 +178,8 @@ export function Dashboard() {
     activeCoverageLimitations.length > 0
       ? "Confirmed evidence is retained, but one or more collection scopes were incomplete. Missing evidence is not proof of absence; rerun the affected collection before treating gaps as clean."
       : exactCoverageNeedsRefresh
-        ? "Registered user or project instruction coverage uses an incomplete or outdated source contract. Run a new config scan before treating missing registered sources as absent."
-        : "The current exact registered-source posture is usable, but retained nested coverage is truncated or uses an older source contract. Run a new config scan with --deep before treating missing nested evidence as absent.";
+        ? "Registered user or project instruction coverage uses an incomplete or outdated source contract. Run agenthound scan before treating missing registered sources as absent."
+        : "The current exact registered-source posture is usable, but retained nested coverage is truncated or uses an older source contract. Run agenthound scan --deep before treating missing nested evidence as absent.";
   const projectionIncomplete =
     posture?.status === "updating" || posture?.status === "incomplete";
   const unknownProjectionWithInventory =

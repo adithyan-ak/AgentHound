@@ -89,6 +89,9 @@ func Expand(spec string, opts ExpandOptions) ([]string, error) {
 // expandSingle classifies a single host token and returns it as a one-element
 // slice if it passes the safety gates.
 func expandSingle(host string, opts ExpandOptions) ([]string, error) {
+	if !validHostToken(host) {
+		return nil, fmt.Errorf("%w: %s", ErrInvalidCIDR, host)
+	}
 	info := common.ClassifyHost(host)
 	if info.IsLinkLocal {
 		return nil, fmt.Errorf("%w: %s", ErrLinkLocal, host)
@@ -105,6 +108,40 @@ func expandSingle(host string, opts ExpandOptions) ([]string, error) {
 	return []string{host}, nil
 }
 
+// validHostToken accepts IP literals and DNS hostnames only. Public-target
+// authorization is a separate gate; it must not turn arbitrary resolver input
+// (spaces, URLs, ports, or punctuation) into a valid scan target.
+func validHostToken(host string) bool {
+	if _, err := netip.ParseAddr(host); err == nil {
+		return true
+	}
+
+	name := strings.TrimSuffix(host, ".")
+	if name == "" || len(name) > 253 {
+		return false
+	}
+	numericDotted := strings.Contains(name, ".")
+	for _, label := range strings.Split(name, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			ch := label[i]
+			if ch < '0' || ch > '9' {
+				numericDotted = false
+			}
+			if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') &&
+				(ch < '0' || ch > '9') && ch != '-' {
+				return false
+			}
+		}
+	}
+	// A dotted all-numeric token is an IPv4 literal, not a DNS hostname. If
+	// netip rejected it above, accepting it here would revive malformed IPs via
+	// resolver-dependent shorthand or legacy parsing.
+	return !numericDotted
+}
+
 // expandCIDR enumerates every host in the CIDR after applying the safety
 // gates. The check happens twice: once on the network address itself
 // (catches link-local/multicast/public network bases) and again per-IP as
@@ -112,9 +149,24 @@ func expandSingle(host string, opts ExpandOptions) ([]string, error) {
 // shouldn't happen for normal RFC1918 ranges but does happen if the
 // operator types something like 169.254.0.0/15 by mistake).
 func expandCIDR(spec string, opts ExpandOptions) ([]string, error) {
+	var out []string
+	err := expandCIDRInto(spec, opts, func(host string) error {
+		out = append(out, host)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// expandCIDRInto validates a CIDR and emits its addresses incrementally. File
+// expansion uses this path so an aggregate cap can stop a multi-line target
+// set without materializing the next complete CIDR first.
+func expandCIDRInto(spec string, opts ExpandOptions, emit func(string) error) error {
 	prefix, err := netip.ParsePrefix(spec)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidCIDR, err)
+		return fmt.Errorf("%w: %v", ErrInvalidCIDR, err)
 	}
 
 	bits := prefix.Bits()
@@ -123,7 +175,7 @@ func expandCIDR(spec string, opts ExpandOptions) ([]string, error) {
 		maxLen = MaxIPv6PrefixLen
 	}
 	if bits < maxLen && !opts.AllowLargeCIDR {
-		return nil, fmt.Errorf("%w: %s (prefix /%d, cap is /%d)",
+		return fmt.Errorf("%w: %s (prefix /%d, cap is /%d)",
 			ErrLargeCIDR, spec, bits, maxLen)
 	}
 
@@ -132,7 +184,7 @@ func expandCIDR(spec string, opts ExpandOptions) ([]string, error) {
 	// enumeration. exp is the host-bit count; uint64(1)<<exp wraps to 0 for
 	// exp >= 64, so the short-circuit guard must run first.
 	if exp := prefix.Addr().BitLen() - bits; exp >= 64 || uint64(1)<<exp > MaxHostsHardCap {
-		return nil, fmt.Errorf("%w: %s (prefix /%d exceeds the %d-host hard cap)",
+		return fmt.Errorf("%w: %s (prefix /%d exceeds the %d-host hard cap)",
 			ErrTooManyHosts, spec, bits, MaxHostsHardCap)
 	}
 
@@ -140,31 +192,34 @@ func expandCIDR(spec string, opts ExpandOptions) ([]string, error) {
 	netAddr := prefix.Addr().String()
 	netInfo := common.ClassifyHost(netAddr)
 	if netInfo.IsLinkLocal {
-		return nil, fmt.Errorf("%w: %s", ErrLinkLocal, spec)
+		return fmt.Errorf("%w: %s", ErrLinkLocal, spec)
 	}
 	if netInfo.IsMulticast {
-		return nil, fmt.Errorf("%w: %s", ErrMulticast, spec)
+		return fmt.Errorf("%w: %s", ErrMulticast, spec)
 	}
 	if netInfo.IsPublic && !opts.AllowPublicTargets {
-		return nil, fmt.Errorf("%w: %s", ErrPublicTarget, spec)
+		return fmt.Errorf("%w: %s", ErrPublicTarget, spec)
 	}
 
-	// Enumerate. For /32 (IPv4) or /128 (IPv6) just return the single addr.
+	// Enumerate. For /32 (IPv4) or /128 (IPv6) just emit the single addr.
 	addr := prefix.Masked().Addr()
-	var out []string
+	emitted := 0
 	for prefix.Contains(addr) {
 		// Per-address gate — catches CIDRs that span classifications.
 		info := common.ClassifyHost(addr.String())
 		if info.IsLinkLocal {
-			return nil, fmt.Errorf("%w: %s within %s", ErrLinkLocal, addr, spec)
+			return fmt.Errorf("%w: %s within %s", ErrLinkLocal, addr, spec)
 		}
 		if info.IsMulticast {
-			return nil, fmt.Errorf("%w: %s within %s", ErrMulticast, addr, spec)
+			return fmt.Errorf("%w: %s within %s", ErrMulticast, addr, spec)
 		}
 		if info.IsPublic && !opts.AllowPublicTargets {
-			return nil, fmt.Errorf("%w: %s within %s", ErrPublicTarget, addr, spec)
+			return fmt.Errorf("%w: %s within %s", ErrPublicTarget, addr, spec)
 		}
-		out = append(out, addr.String())
+		if err := emit(addr.String()); err != nil {
+			return err
+		}
+		emitted++
 		next := addr.Next()
 		if !next.IsValid() {
 			break
@@ -172,16 +227,20 @@ func expandCIDR(spec string, opts ExpandOptions) ([]string, error) {
 		addr = next
 	}
 
-	if len(out) == 0 {
-		return nil, fmt.Errorf("%w: %s expanded to zero hosts", ErrInvalidCIDR, spec)
+	if emitted == 0 {
+		return fmt.Errorf("%w: %s expanded to zero hosts", ErrInvalidCIDR, spec)
 	}
-	return out, nil
+	return nil
 }
 
 // expandFile reads a newline-separated list of specs (one per line), runs
 // each through Expand recursively, and concatenates the results. Comments
 // (`# ...`) and empty lines are skipped.
 func expandFile(path string, opts ExpandOptions) ([]string, error) {
+	return expandFileWithLimit(path, opts, MaxHostsHardCap)
+}
+
+func expandFileWithLimit(path string, opts ExpandOptions, limit int) ([]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("targets file: %w", err)
@@ -189,6 +248,21 @@ func expandFile(path string, opts ExpandOptions) ([]string, error) {
 	defer func() { _ = f.Close() }()
 
 	var out []string
+	seen := make(map[string]struct{})
+	emit := func(host string) error {
+		if _, exists := seen[host]; exists {
+			return nil
+		}
+		if len(out) >= limit {
+			return fmt.Errorf(
+				"%w: targets file %s exceeds the %d-host hard cap",
+				ErrTooManyHosts, path, limit,
+			)
+		}
+		seen[host] = struct{}{}
+		out = append(out, host)
+		return nil
+	}
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -204,11 +278,23 @@ func expandFile(path string, opts ExpandOptions) ([]string, error) {
 		if strings.HasPrefix(line, "@") || strings.HasPrefix(line, "file://") {
 			return nil, fmt.Errorf("%w: %q in %s", ErrNestedTargetsFile, line, path)
 		}
-		hosts, err := Expand(line, opts)
-		if err != nil {
-			return nil, fmt.Errorf("targets file %s: %w", path, err)
+		var expandErr error
+		if strings.Contains(line, "/") {
+			expandErr = expandCIDRInto(line, opts, emit)
+		} else {
+			var hosts []string
+			hosts, expandErr = expandSingle(line, opts)
+			if expandErr == nil {
+				for _, host := range hosts {
+					if expandErr = emit(host); expandErr != nil {
+						break
+					}
+				}
+			}
 		}
-		out = append(out, hosts...)
+		if expandErr != nil {
+			return nil, fmt.Errorf("targets file %s: %w", path, expandErr)
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("targets file %s: %w", path, err)
@@ -216,24 +302,7 @@ func expandFile(path string, opts ExpandOptions) ([]string, error) {
 	if len(out) == 0 {
 		return nil, ErrTargetsFileEmpty
 	}
-	// Overlapping CIDRs or repeated entries across lines can list the same
-	// host more than once; collapse to a unique, order-preserving set so the
-	// scanner does not emit duplicate Targets or re-probe the same host:port.
-	return dedupeHosts(out), nil
-}
-
-// dedupeHosts removes duplicate host strings, preserving first-seen order.
-// The targets-file path is the only spec source that can produce duplicates:
-// a single CIDR enumerates uniquely and a single host/IP is one entry.
-func dedupeHosts(hosts []string) []string {
-	seen := make(map[string]struct{}, len(hosts))
-	out := make([]string, 0, len(hosts))
-	for _, h := range hosts {
-		if _, ok := seen[h]; ok {
-			continue
-		}
-		seen[h] = struct{}{}
-		out = append(out, h)
-	}
-	return out
+	// Hosts were deduplicated while they were emitted, which also allowed the
+	// aggregate hard cap to stop expansion before another full CIDR was held.
+	return out, nil
 }
