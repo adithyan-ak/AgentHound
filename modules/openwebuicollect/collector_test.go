@@ -14,6 +14,7 @@ import (
 	"github.com/adithyan-ak/agenthound/modules/openwebuifp"
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
 // configBody matches Open WebUI's real /api/config shape (verified
@@ -179,6 +180,52 @@ func TestProtectedFingerprintLeavesAuthOwnershipToLooter(t *testing.T) {
 		lootProps["auth_method"] != string(common.AuthUnknown) ||
 		lootProps["auth_evidence"] != common.AuthEvidenceUnknown {
 		t.Errorf("protected looter evidence = %+v", lootProps)
+	}
+}
+
+func TestProtectedPostureIsStableAcrossCredentialAttempts(t *testing.T) {
+	const acceptedKey = "sk-accepted-openwebui-admin-key"
+	srv := openwebuiStub(t, openwebuiStubOptions{
+		apiKey:       acceptedKey,
+		config:       `{"status":true,"name":"Open WebUI","version":"0.6.32","features":{"auth":true,"enable_signup":false}}`,
+		openaiConfig: `{}`,
+	})
+	defer srv.Close()
+
+	target := action.Target{Kind: "host", Address: addrOf(srv)}
+	collect := func(key string) ingest.Node {
+		t.Helper()
+		opts := action.CollectOptions{}
+		if key != "" {
+			opts.Extras = map[string]any{"api-key": key}
+		}
+		result, err := (&Collector{}).Collect(context.Background(), target, opts)
+		if err != nil {
+			t.Fatalf("collect with credential %q: %v", key, err)
+		}
+		return result.IngestData.Graph.Nodes[0]
+	}
+
+	nodes := []ingest.Node{
+		collect(""),
+		collect(acceptedKey),
+		collect("sk-rejected-openwebui-admin-key"),
+	}
+	want := map[string]any{
+		"auth_required":  true,
+		"auth_method":    string(common.AuthUnknown),
+		"auth_assurance": string(common.AuthAssuranceUnknown),
+		"auth_evidence":  common.AuthEvidenceUnknown,
+	}
+	for index, node := range nodes {
+		if node.ID != nodes[0].ID {
+			t.Fatalf("attempt %d service ID = %q, want shared endpoint ID %q", index, node.ID, nodes[0].ID)
+		}
+		for key, value := range want {
+			if node.Properties[key] != value {
+				t.Errorf("attempt %d %s = %v, want %v", index, key, node.Properties[key], value)
+			}
+		}
 	}
 }
 

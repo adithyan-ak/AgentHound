@@ -10,7 +10,7 @@
 // POSTURE properties onto the existing :OpenWebUIInstance node:
 // signup_enabled and auth_required.
 //
-// AUTHENTICATED (planner supplies compatible key material): four admin-gated probes
+// CREDENTIAL-BEARING (planner supplies compatible key material): four admin-gated probes
 // enumerate configured upstream provider API keys and emit one
 // :Credential per key, each linked via an EXPOSES_CREDENTIAL edge:
 //
@@ -152,11 +152,11 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 			props["auth_method"] = string(common.AuthNone)
 			props["auth_assurance"] = string(common.AuthAssuranceUnauthenticated)
 			props["auth_evidence"] = common.AuthEvidenceAnonymousProbeSucceeded
-		} else if apiKey != "" {
-			props["auth_method"] = string(common.AuthCustom)
-			props["auth_assurance"] = string(common.AuthAssuranceUnknown)
-			props["auth_evidence"] = common.AuthEvidenceConfiguredCredential
 		} else {
+			// /api/config proves that a gate exists, but it does not identify the
+			// method or validate any credential supplied to later admin probes.
+			// Keep this endpoint posture invariant across planner attempts so every
+			// contribution to the shared service node reports the same public fact.
 			props["auth_method"] = string(common.AuthUnknown)
 			props["auth_assurance"] = string(common.AuthAssuranceUnknown)
 			props["auth_evidence"] = common.AuthEvidenceUnknown
@@ -172,7 +172,7 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 		return res, nil
 	}
 
-	// 2. AUTHENTICATED probes — four admin-gated endpoints. Each is
+	// 2. CREDENTIAL-BEARING probes — four admin-gated endpoints. Each is
 	//    independent; a failure records a partial and the next probe
 	//    still runs.
 	remaining := maxItems
@@ -185,7 +185,7 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 
 	slog.Info("openwebui collection complete",
 		"endpoint", baseURL,
-		"authenticated", true,
+		"credential_supplied", true,
 		"credentials_found", res.Summary.CredentialsFound,
 		"partial_failures", res.Summary.PartialFailures)
 

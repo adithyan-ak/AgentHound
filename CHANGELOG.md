@@ -15,6 +15,7 @@
 - The installer now validates before promotion and atomically restores the previous binary when installed-path startup validation fails.
 - Legitimate documentation URLs no longer look like Base64 prompt-injection payloads or, by themselves, outbound-network capabilities.
 - Active planning avoids redundant credential presentation when the exact MCP resource or A2A card/probe surface has already succeeded anonymously.
+- Repeated service collection now keeps protected Open WebUI posture stable across credential attempts and gives each distinct LiteLLM master key a contextual `value_hash` identity.
 
 ## 1.1.0 — ⚡ Autonomous Offensive Collection
 

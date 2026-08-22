@@ -28,6 +28,17 @@ Concrete AI-service nodes also carry the `AIService` label. The umbrella label i
 
 Only concrete `value` material becomes planner input. The normal dashboard property view masks it; explicit query output and JSON export remain literal.
 
+Credential identity is role- and scope-aware:
+
+| Observation | Identity rule | Result |
+|---|---|---|
+| Concrete material repeated across agent configurations | `value_hash` within the collection point | One Credential retains sorted plural provenance and every graph association. |
+| Concrete material accepted for a service credential role | Service endpoint, role, and `value_hash` | Repeating the same secret is idempotent; different secrets remain different nodes. |
+| Masked, hashed, or unresolved material | Source-specific identity with `merge_key=identity` | Reference evidence never merges with observed executable material. |
+| The same material observed in different evidence roles | Distinct role-owned nodes correlated by `value_hash` | Topology and provenance remain intact without presenting the same value twice to one endpoint. |
+
+Planner candidate identity includes the endpoint and `value_hash`, so duplicate observations of one concrete secret do not produce duplicate credential-bearing requests to the same surface.
+
 ### Instruction evidence
 
 `InstructionFile` records the canonical `path`, source `type`, content `hash`, captured `size_bytes`, and `modified_at`. Its classification fields are:

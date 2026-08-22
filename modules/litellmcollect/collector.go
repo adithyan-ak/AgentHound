@@ -91,7 +91,10 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 	//    cross_service_credential_chain post-processor joins
 	//    on this property. Without this node the demo fails silently.
 	masterValueHash := common.HashCredentialValue(masterKey)
-	masterID := ingest.ComputeNodeID("Credential", baseURL, "litellm-master")
+	// A gateway can accept more than one concrete master key during an
+	// autonomous scan. Preserve the service role in the identity while using
+	// the value hash to keep repeated presentation of the same key idempotent.
+	masterID := ingest.ComputeNodeID("Credential", baseURL, "litellm-master", masterValueHash)
 	masterProps := map[string]any{
 		"objectid":     masterID,
 		"type":         "master_key",
