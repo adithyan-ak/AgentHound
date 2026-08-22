@@ -193,6 +193,59 @@ func TestCollect_HappyPath(t *testing.T) {
 	}
 }
 
+func TestCollect_MasterCredentialIdentityIncludesValueHash(t *testing.T) {
+	s := newStub(t)
+	s.modelInfoBody = `{"data":[]}`
+	s.keyListBody = `{"keys":[],"total_count":0,"total_pages":0}`
+	srv := httptest.NewServer(s.handler())
+	defer srv.Close()
+
+	target := action.Target{Kind: "host", Address: strings.TrimPrefix(srv.URL, "http://")}
+	collectMaster := func(key string) ingest.Node {
+		t.Helper()
+		res, err := (&Collector{}).Collect(context.Background(), target, action.CollectOptions{
+			Credentials: map[string]string{"master_key": key},
+		})
+		if err != nil {
+			t.Fatalf("collect master key: %v", err)
+		}
+		for _, node := range res.IngestData.Graph.Nodes {
+			if node.Properties["type"] == "master_key" {
+				return node
+			}
+		}
+		t.Fatal("master Credential node not emitted")
+		return ingest.Node{}
+	}
+
+	firstKey := "sk-test-first-litellm-master-key"
+	secondKey := "sk-test-second-litellm-master-key"
+	first := collectMaster(firstKey)
+	repeated := collectMaster(firstKey)
+	second := collectMaster(secondKey)
+
+	if first.ID != repeated.ID {
+		t.Fatalf("same master key IDs differ: %q != %q", first.ID, repeated.ID)
+	}
+	if first.ID == second.ID {
+		t.Fatalf("different master keys share ID %q", first.ID)
+	}
+	for _, test := range []struct {
+		node ingest.Node
+		key  string
+	}{
+		{node: first, key: firstKey},
+		{node: second, key: secondKey},
+	} {
+		want := ingest.ComputeNodeID(
+			"Credential", srv.URL, "litellm-master", common.HashCredentialValue(test.key),
+		)
+		if test.node.ID != want {
+			t.Errorf("master ID = %q, want contextual value-hash ID %q", test.node.ID, want)
+		}
+	}
+}
+
 func TestCollect_GatewayMatchesFingerprintWithoutOwningPosture(t *testing.T) {
 	s := newStub(t)
 	s.modelInfoBody = `{"data":[]}`

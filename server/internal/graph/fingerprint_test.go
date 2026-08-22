@@ -2,6 +2,8 @@ package graph
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,6 +11,9 @@ import (
 	"testing"
 
 	configcollector "github.com/adithyan-ak/agenthound/modules/config"
+	"github.com/adithyan-ak/agenthound/modules/litellmcollect"
+	"github.com/adithyan-ak/agenthound/modules/openwebuicollect"
+	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/collector"
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
@@ -195,6 +200,114 @@ func TestPrepareObservationNodesAcceptsSharedConfigCredential(t *testing.T) {
 	}
 	if credentials != 1 {
 		t.Fatalf("prepared shared credentials = %d, want one", credentials)
+	}
+}
+
+func TestPrepareObservationNodesAcceptsDistinctLiteLLMMasterCredentials(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/model/info":
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		case "/key/list":
+			_, _ = w.Write([]byte(`{"keys":[],"total_count":0,"total_pages":0}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	target := action.Target{
+		Kind: "host", Address: strings.TrimPrefix(server.URL, "http://"),
+	}
+	const domain = "scan:loot:sha256:litellm-multi-credential"
+	var nodes []ingest.Node
+	for _, key := range []string{
+		"sk-first-litellm-master-key",
+		"sk-second-litellm-master-key",
+		"sk-third-litellm-master-key",
+	} {
+		result, err := (&litellmcollect.Collector{}).Collect(
+			context.Background(), target, action.CollectOptions{
+				Credentials: map[string]string{"master_key": key},
+			},
+		)
+		if err != nil {
+			t.Fatalf("collect with key %q: %v", key, err)
+		}
+		graph := result.IngestData.Graph
+		ingest.TagObservationDomain(&graph, domain)
+		nodes = append(nodes, graph.Nodes...)
+	}
+
+	prepared, _, err := prepareObservationNodes(nodes)
+	if err != nil {
+		t.Fatalf("writer preparation rejected distinct LiteLLM credentials: %v", err)
+	}
+	credentialIDs := make(map[string]bool)
+	for _, node := range prepared {
+		if ingest.ConcreteNodeKind(node.Kinds) == "Credential" && node.Properties["type"] == "master_key" {
+			credentialIDs[node.ID] = true
+		}
+	}
+	if len(credentialIDs) != 3 {
+		t.Fatalf("prepared LiteLLM master credential IDs = %v, want three", credentialIDs)
+	}
+}
+
+func TestPrepareObservationNodesAcceptsRepeatedOpenWebUIPosture(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if request.URL.Path == "/api/config" {
+			_, _ = w.Write([]byte(
+				`{"status":true,"features":{"auth":true,"enable_signup":false}}`,
+			))
+			return
+		}
+		if request.Header.Get("Authorization") == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	target := action.Target{
+		Kind: "host", Address: strings.TrimPrefix(server.URL, "http://"),
+	}
+	const domain = "scan:loot:sha256:openwebui-multi-credential"
+	var nodes []ingest.Node
+	for _, key := range []string{"", "sk-first-openwebui-key", "sk-second-openwebui-key"} {
+		opts := action.CollectOptions{}
+		if key != "" {
+			opts.Credentials = map[string]string{"api_key": key}
+		}
+		result, err := (&openwebuicollect.Collector{}).Collect(context.Background(), target, opts)
+		if err != nil {
+			t.Fatalf("collect with key %q: %v", key, err)
+		}
+		graph := result.IngestData.Graph
+		ingest.TagObservationDomain(&graph, domain)
+		nodes = append(nodes, graph.Nodes...)
+	}
+
+	prepared, _, err := prepareObservationNodes(nodes)
+	if err != nil {
+		t.Fatalf("writer preparation rejected repeated OpenWebUI posture: %v", err)
+	}
+	instances := 0
+	for _, node := range prepared {
+		if ingest.ConcreteNodeKind(node.Kinds) != "OpenWebUIInstance" {
+			continue
+		}
+		instances++
+		if node.Properties["auth_method"] != string(common.AuthUnknown) ||
+			node.Properties["auth_evidence"] != common.AuthEvidenceUnknown {
+			t.Fatalf("prepared OpenWebUI posture = %+v, want stable protected unknown", node.Properties)
+		}
+	}
+	if instances != 1 {
+		t.Fatalf("prepared OpenWebUI instances = %d, want one", instances)
 	}
 }
 

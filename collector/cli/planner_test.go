@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	a2acollector "github.com/adithyan-ak/agenthound/modules/a2a"
+	_ "github.com/adithyan-ak/agenthound/modules/litellmcollect"
 	_ "github.com/adithyan-ak/agenthound/modules/ollamacollect"
 	_ "github.com/adithyan-ak/agenthound/modules/qdrantcollect"
 
@@ -107,6 +108,45 @@ func TestAggregatedCredentialHintsPreserveServiceCompatibility(t *testing.T) {
 	for _, service := range []string{"litellm", "openwebui", "jupyter"} {
 		if !credentialCompatibleWithService(credential, service) {
 			t.Fatalf("aggregated credential was not compatible with %s", service)
+		}
+	}
+}
+
+func TestServiceCollectCandidatesDeduplicateCredentialValuesPerEndpoint(t *testing.T) {
+	const endpoint = "https://litellm.example"
+	credential := func(id, value string) ingest.Node {
+		return ingest.Node{ID: id, Kinds: []string{"Credential"}, Properties: map[string]any{
+			"value": value, "value_hash": common.HashCredentialValue(value),
+			"material_status": string(common.CredentialMaterialObserved),
+			"auth_method":     string(common.AuthAPIKey),
+			"type":            "master_key",
+		}}
+	}
+	graph := ingest.GraphData{Nodes: []ingest.Node{
+		{ID: "gateway", Kinds: []string{"LiteLLMGateway", "AIService"}, Properties: map[string]any{
+			"endpoint": endpoint,
+		}},
+		credential("shared-a", "sk-shared-master-key"),
+		credential("shared-b", "sk-shared-master-key"),
+		credential("distinct", "sk-distinct-master-key"),
+	}}
+
+	candidates := (serviceCollectAction{}).Candidates(
+		buildPlannerView(graph, nil, map[string]bool{}, false, false),
+	)
+	if len(candidates) != 2 {
+		t.Fatalf("candidates = %+v, want two distinct credential values", candidates)
+	}
+	values := make(map[string]bool, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.ModuleID != "litellm.collect" || candidate.Target.Address != endpoint {
+			t.Fatalf("candidate = %+v, want LiteLLM endpoint", candidate)
+		}
+		values[candidate.Inputs["credential"]] = true
+	}
+	for _, want := range []string{"sk-shared-master-key", "sk-distinct-master-key"} {
+		if !values[want] {
+			t.Errorf("candidate for %q missing: %+v", want, candidates)
 		}
 	}
 }
