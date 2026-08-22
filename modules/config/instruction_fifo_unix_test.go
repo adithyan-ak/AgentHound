@@ -33,7 +33,7 @@ func TestDiscoverInstructionsExactTreeRejectsFIFOWithoutBlocking(t *testing.T) {
 	if len(discovery.Observations) != 1 ||
 		discovery.Observations[0].Info.Path != canonicalReadable ||
 		discovery.Observations[0].OwnerKey != wantChild ||
-		!discovery.Observations[0].Info.IsSuspicious {
+		!discovery.Observations[0].Info.Suspicious() {
 		t.Fatalf("exact FIFO observations = %+v, want retained completed child %q", discovery.Observations, wantChild)
 	}
 }

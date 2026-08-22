@@ -9,7 +9,8 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/adithyan-ak/agenthound/sdk/campaign"
+	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/contact"
 )
 
 func TestBuildTransportStdio(t *testing.T) {
@@ -206,6 +207,22 @@ func TestBuildHTTPTransport_TLSStrictDefault(t *testing.T) {
 	}
 }
 
+func TestBuildHTTPTransportAlwaysInstallsContactGuard(t *testing.T) {
+	transport, err := buildTransport(ServerSpec{
+		Name: "guarded", Transport: "http", URL: "https://allowed.example/mcp",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamable, ok := transport.(*mcpsdk.StreamableClientTransport)
+	if !ok || streamable.HTTPClient == nil {
+		t.Fatalf("transport = %T, want streamable transport with explicit client", transport)
+	}
+	if _, ok := streamable.HTTPClient.Transport.(contact.RoundTripper); !ok {
+		t.Fatalf("HTTP transport = %T, want contact.RoundTripper", streamable.HTTPClient.Transport)
+	}
+}
+
 // TestHeaderRoundTripper_StripsAuthOnCrossHostRedirect verifies that
 // caller-supplied headers (e.g. Authorization) are sent to the original
 // endpoint host but NOT carried to a different host on a 302 redirect.
@@ -351,9 +368,9 @@ func TestBuildSSETransport(t *testing.T) {
 	}
 }
 
-func mustHTTPOrigin(t *testing.T, endpoint string) campaign.HTTPOrigin {
+func mustHTTPOrigin(t *testing.T, endpoint string) common.HTTPOrigin {
 	t.Helper()
-	origin, err := campaign.ParseHTTPOrigin(endpoint)
+	origin, err := common.ParseHTTPOrigin(endpoint)
 	if err != nil {
 		t.Fatalf("ParseHTTPOrigin(%q): %v", endpoint, err)
 	}

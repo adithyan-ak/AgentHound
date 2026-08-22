@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/contact"
 )
 
 const (
@@ -324,7 +325,7 @@ func observeA2AAuth(
 	if !ok {
 		return unknownA2AAuthProbe("transport_unavailable")
 	}
-	transport := baseTransport.Clone()
+	transport := contact.HTTPTransport(baseTransport)
 	if insecure {
 		if transport.TLSClientConfig == nil {
 			transport.TLSClientConfig = &tls.Config{}
@@ -335,7 +336,7 @@ func observeA2AAuth(
 	}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{
-		Transport: transport,
+		Transport: contact.RoundTripper{Base: transport},
 		Timeout:   probeTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -353,7 +354,7 @@ func observeA2AAuth(
 	case http.StatusForbidden:
 		return protectedA2AAuthProbe("http_forbidden")
 	case http.StatusOK:
-		// Continue with the exact JSON-RPC witness checks below.
+		// Continue with the exact JSON-RPC evidence checks below.
 	default:
 		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 			return unknownA2AAuthProbe("redirect_response")

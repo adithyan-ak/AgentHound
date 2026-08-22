@@ -1,17 +1,16 @@
 package ingest
 
 // ExposesCredentialEdge builds the standard EXPOSES_CREDENTIAL edge from
-// an AIService node to a Credential node. Looters that enumerate exposed
-// upstream/provider secrets (litellmloot, openwebuiloot, ...) share this
+// an AIService node to a Credential node. Service collectors that enumerate
+// upstream/provider secrets (litellmcollect, openwebuicollect, ...) share this
 // constructor so the edge's confidence, risk_weight, and evidence shape
 // stay identical across collectors. SourceKind is AIService to satisfy
 // the kinds registry's EXPOSES_CREDENTIAL constraint (source must be an
 // AIService — see sdk/ingest/kinds.go).
-func ExposesCredentialEdge(sourceID, credID, engagementID, source, endpoint string) Edge {
+func ExposesCredentialEdge(sourceID, credID, source, endpoint string) Edge {
 	return CredentialEvidenceEdge(
 		sourceID,
 		credID,
-		engagementID,
 		source,
 		endpoint,
 		"exposed",
@@ -23,7 +22,7 @@ func ExposesCredentialEdge(sourceID, credID, engagementID, source, endpoint stri
 // explicit. A credential reference with exposure_status=not_observed is not
 // usable secret exposure.
 func CredentialEvidenceEdge(
-	sourceID, credID, engagementID, source, endpoint, exposureStatus string,
+	sourceID, credID, source, endpoint, exposureStatus string,
 ) Edge {
 	riskWeight := 0.0
 	assertionType := "credential_reference"
@@ -42,11 +41,7 @@ func CredentialEvidenceEdge(
 			"risk_weight":     riskWeight,
 			"exposure_status": exposureStatus,
 			"assertion_type":  assertionType,
-			"evidence": map[string]any{
-				"endpoint":      endpoint,
-				"source":        source,
-				"engagement_id": engagementID,
-			},
+			"evidence":        map[string]any{"endpoint": endpoint, "source": source},
 		},
 	}
 }

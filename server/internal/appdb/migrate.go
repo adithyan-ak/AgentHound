@@ -15,6 +15,39 @@ import (
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
+type migration struct {
+	version int
+	name    string
+}
+
+func availableMigrations() ([]migration, error) {
+	entries, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		return nil, fmt.Errorf("read migrations dir: %w", err)
+	}
+
+	var migrations []migration
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		parts := strings.SplitN(entry.Name(), "_", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		version, err := strconv.Atoi(parts[0])
+		if err != nil {
+			continue
+		}
+		migrations = append(migrations, migration{version: version, name: entry.Name()})
+	}
+
+	sort.Slice(migrations, func(i, j int) bool {
+		return migrations[i].version < migrations[j].version
+	})
+	return migrations, nil
+}
+
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	// Ensure schema_migrations table exists
 	_, err := pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -32,36 +65,10 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		return fmt.Errorf("query current version: %w", err)
 	}
 
-	// Read migration files
-	entries, err := migrationFS.ReadDir("migrations")
+	migrations, err := availableMigrations()
 	if err != nil {
-		return fmt.Errorf("read migrations dir: %w", err)
+		return err
 	}
-
-	type migration struct {
-		version int
-		name    string
-	}
-	var migrations []migration
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
-			continue
-		}
-		// Parse version from filename: 001_initial_v1.sql -> 1
-		parts := strings.SplitN(entry.Name(), "_", 2)
-		if len(parts) < 2 {
-			continue
-		}
-		v, err := strconv.Atoi(parts[0])
-		if err != nil {
-			continue
-		}
-		migrations = append(migrations, migration{version: v, name: entry.Name()})
-	}
-
-	sort.Slice(migrations, func(i, j int) bool {
-		return migrations[i].version < migrations[j].version
-	})
 
 	// Apply new migrations
 	applied := 0

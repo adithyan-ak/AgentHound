@@ -12,8 +12,8 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/adithyan-ak/agenthound/sdk/campaign"
 	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/contact"
 )
 
 const defaultObserverResponseBytes int64 = 1 << 20
@@ -125,7 +125,7 @@ func (o ToolObserver) transport(spec ServerSpec, deadline time.Time) (mcpsdk.Tra
 	if spec.Transport != "http" {
 		return buildTransport(spec, o.Insecure)
 	}
-	origin, err := campaign.ParseHTTPOrigin(spec.URL)
+	origin, err := common.ParseHTTPOrigin(spec.URL)
 	if err != nil {
 		return nil, errors.New("http transport requires a valid absolute HTTP(S) URL")
 	}
@@ -133,7 +133,7 @@ func (o ToolObserver) transport(spec ServerSpec, deadline time.Time) (mcpsdk.Tra
 	if !ok {
 		return nil, errors.New("default HTTP transport is not configurable")
 	}
-	base := defaultTransport.Clone()
+	base := contact.HTTPTransport(defaultTransport)
 	if o.Insecure {
 		if base.TLSClientConfig == nil {
 			base.TLSClientConfig = &tls.Config{}
@@ -145,10 +145,7 @@ func (o ToolObserver) transport(spec ServerSpec, deadline time.Time) (mcpsdk.Tra
 	client := &http.Client{
 		Timeout: o.InitTimeout,
 		Transport: deadlineRoundTripper{deadline: deadline, base: headerRoundTripper{
-			base: boundedResponseRoundTripper{
-				base: campaign.CountingTransport{Base: base},
-				max:  o.MaxResponseBytes,
-			},
+			base:    boundedResponseRoundTripper{base: base, max: o.MaxResponseBytes},
 			headers: spec.Headers,
 			origin:  origin,
 		}},

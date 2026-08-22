@@ -2,7 +2,8 @@
 # AgentHound collector installer.
 #
 # Pin to a release tag for integrity:
-#   curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/1.0.0/install.sh | sh
+#   curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.0/install.sh \
+#     | AGENTHOUND_VERSION=1.1.0 sh
 #
 # Verifies the downloaded archive against checksums.txt before extracting,
 # and against cosign signatures if cosign is available on $PATH.
@@ -56,7 +57,50 @@ ARCHIVE="agenthound_${VERSION}_${OS}_${ARCH}.tar.gz"
 BASE_URL="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}"
 TMPDIR=$(mktemp -d)
 STAGE=$(mktemp -d)
-trap 'rm -rf "$TMPDIR" "$STAGE"' EXIT
+INSTALL_TMP=""
+INSTALL_BACKUP=""
+INSTALL_PROMOTED=0
+
+rollback_install() {
+  if [ "$INSTALL_PROMOTED" -ne 1 ]; then
+    return 0
+  fi
+  if [ -n "$INSTALL_BACKUP" ] && [ -e "$INSTALL_BACKUP" ]; then
+    if ! mv "$INSTALL_BACKUP" "${INSTALL_DIR}/agenthound"; then
+      return 1
+    fi
+    INSTALL_BACKUP=""
+  else
+    if ! rm -f "${INSTALL_DIR}/agenthound"; then
+      return 1
+    fi
+  fi
+  INSTALL_PROMOTED=0
+}
+
+cleanup() {
+  status=$?
+  rollback_ok=1
+  trap - EXIT
+  if ! rollback_install; then
+    echo "Error: failed to restore the previous AgentHound installation" >&2
+    if [ -n "$INSTALL_BACKUP" ]; then
+      echo "       Recovery copy preserved at: $INSTALL_BACKUP" >&2
+    fi
+    rollback_ok=0
+    status=1
+  fi
+  rm -rf "$TMPDIR" "$STAGE"
+  if [ -n "$INSTALL_TMP" ]; then
+    rm -f "$INSTALL_TMP"
+  fi
+  if [ -n "$INSTALL_BACKUP" ] && [ "$rollback_ok" -eq 1 ]; then
+    rm -f "$INSTALL_BACKUP"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' HUP INT TERM
 
 echo "Downloading ${ARCHIVE}..."
 curl -sSfL -o "${TMPDIR}/${ARCHIVE}" "${BASE_URL}/${ARCHIVE}"
@@ -75,8 +119,8 @@ else
 fi
 
 # Optional: cosign signature verification.
-# cosign v3 bundles the signature + Fulcio certificate into one
-# checksums.txt.sigstore.json (the old separate .sig/.pem are gone).
+# cosign v3 bundles the signature and Fulcio certificate into one
+# checksums.txt.sigstore.json file.
 if command -v cosign >/dev/null 2>&1; then
   echo "Verifying cosign signature..."
   curl -sSfL -o "${TMPDIR}/checksums.txt.sigstore.json" "${BASE_URL}/checksums.txt.sigstore.json"
@@ -100,18 +144,47 @@ To verify manually, install cosign and run:
 EOF
 fi
 
-# Extract atomically: extract to staging dir, then mv
+# Validate in staging before touching the current installation, then promote a
+# destination-local temporary file with rename(2). A private backup permits an
+# exact rollback if execution fails only from the installed path.
 echo "Installing to ${INSTALL_DIR}/agenthound..."
 mkdir -p "$INSTALL_DIR"
 tar -xzf "${TMPDIR}/${ARCHIVE}" -C "$STAGE"
 chmod 0755 "${STAGE}/agenthound"
-mv "${STAGE}/agenthound" "${INSTALL_DIR}/agenthound"
+if ! "${STAGE}/agenthound" --version >/dev/null 2>&1; then
+  echo "Error: downloaded binary failed to run"
+  exit 1
+fi
+
+INSTALL_TMP=$(mktemp "${INSTALL_DIR}/.agenthound.install.XXXXXX")
+cp "${STAGE}/agenthound" "$INSTALL_TMP"
+chmod 0755 "$INSTALL_TMP"
+
+if [ -e "${INSTALL_DIR}/agenthound" ]; then
+  INSTALL_BACKUP=$(mktemp "${INSTALL_DIR}/.agenthound.backup.XXXXXX")
+  cp -p "${INSTALL_DIR}/agenthound" "$INSTALL_BACKUP"
+fi
+# Do not let a signal land between the atomic rename and the state transition
+# that tells the EXIT trap to restore the backup.
+trap '' HUP INT TERM
+if ! mv "$INSTALL_TMP" "${INSTALL_DIR}/agenthound"; then
+  trap 'exit 130' HUP INT TERM
+  exit 1
+fi
+INSTALL_TMP=""
+INSTALL_PROMOTED=1
+trap 'exit 130' HUP INT TERM
 
 # Verify the installed binary runs
-if "${INSTALL_DIR}/agenthound" --version >/dev/null 2>&1; then
+if installed_version=$("${INSTALL_DIR}/agenthound" --version 2>/dev/null); then
+  INSTALL_PROMOTED=0
+  if [ -n "$INSTALL_BACKUP" ]; then
+    rm -f "$INSTALL_BACKUP"
+    INSTALL_BACKUP=""
+  fi
   echo ""
   echo "  Installed: ${INSTALL_DIR}/agenthound"
-  "${INSTALL_DIR}/agenthound" --version | sed 's/^/  /'
+  printf '%s\n' "$installed_version" | sed 's/^/  /'
   echo ""
   case ":$PATH:" in
     *":${INSTALL_DIR}:"*) ;;
@@ -122,8 +195,8 @@ if "${INSTALL_DIR}/agenthound" --version >/dev/null 2>&1; then
   esac
   echo "  Quick start:"
   echo "    agenthound scan                              # writes ./scan-<scan_id>.json in CWD"
-  echo "    agenthound scan --output scan.json           # explicit path"
-  echo "    agenthound scan --output - | ssh op-box agenthound-server ingest -"
+  echo "    agenthound scan --deep --output scan.json    # deeper collection and active proof"
+  echo "    agenthound-server ingest scan.json           # run later on the analysis host"
   echo ""
 else
   echo "Error: installed binary failed to run"

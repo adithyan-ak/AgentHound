@@ -11,7 +11,7 @@
 // from /api/config, but that field is verified absent from Open WebUI's
 // get_app_config response on every tag from v0.1.111 through v0.9.6 (and
 // main), so the edge never fired in practice. The authenticated
-// openwebuiloot Looter emits the EXPOSES edge from the admin-gated
+// The Open WebUI service collector emits the EXPOSES edge from the admin-gated
 // /ollama/config endpoint (which does return OLLAMA_BASE_URLS).
 package openwebuifp
 
@@ -93,13 +93,12 @@ func (f *Fingerprinter) Fingerprint(ctx context.Context, t action.Target) (*acti
 	// WebUI protects chat and admin surfaces. A successful fingerprint probe
 	// therefore proves service identity only; it must not be promoted into an
 	// anonymous-access claim. Privileged access observations belong to the
-	// looter. Omit the auth fields entirely: writing "unknown" here would
-	// conflict with a looter's affirmative auth=false / anonymous observation
+	// service collector. Omit the auth fields entirely: writing "unknown" here would
+	// conflict with a collector's affirmative auth=false / anonymous observation
 	// when both actions own the same OpenWebUI node.
 	delete(props, "auth_method")
 	delete(props, "auth_assurance")
 	delete(props, "auth_evidence")
-	delete(props, "is_anonymous_loot")
 	props["probe_status"] = string(common.VerificationVerified)
 	props["last_verified_at"] = time.Now().UTC().Format(time.RFC3339)
 
