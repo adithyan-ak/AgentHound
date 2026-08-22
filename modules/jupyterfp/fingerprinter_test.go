@@ -283,7 +283,6 @@ func TestFingerprintStatusDecision(t *testing.T) {
 				"auth_method",
 				"auth_required",
 				"auth_evidence",
-				"is_anonymous_loot",
 			} {
 				if _, exists := node.Properties[protectedConclusion]; exists {
 					t.Errorf(

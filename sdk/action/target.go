@@ -22,7 +22,7 @@ type Target struct {
 // EndpointParts returns the scheme, host, and port for network-like targets.
 // URL-shaped Address values keep their URL scheme unless Meta["scheme"]
 // explicitly overrides it. Host-shaped values keep the historical default
-// scheme and default port behavior used by fingerprinter and looter modules.
+// scheme and default port behavior used by fingerprinter and service-collector modules.
 func EndpointParts(t Target, defaultPort int, defaultScheme string) (string, string, int) {
 	if defaultScheme == "" {
 		defaultScheme = "http"

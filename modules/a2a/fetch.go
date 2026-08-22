@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/contact"
 )
 
 type RawCard struct {
@@ -31,7 +32,7 @@ const (
 func FetchAgentCard(ctx context.Context, targetURL string, authToken string, insecure bool, timeout time.Duration) (*RawCard, error) {
 	base := normalizeBaseURL(targetURL)
 
-	transport := &http.Transport{}
+	transport := contact.HTTPTransport(nil)
 	if insecure {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
@@ -40,7 +41,7 @@ func FetchAgentCard(ctx context.Context, targetURL string, authToken string, ins
 		timeout = 15 * time.Second
 	}
 	client := &http.Client{
-		Transport: transport,
+		Transport: contact.RoundTripper{Base: transport},
 		Timeout:   timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {

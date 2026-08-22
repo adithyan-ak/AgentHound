@@ -155,20 +155,20 @@ func TestHandleFindings_PublishedScopeIsExactAndAttributed(t *testing.T) {
 	}
 }
 
-func TestHandleFindingsSerializesVerificationMetadata(t *testing.T) {
+func TestHandleFindingsSerializesProofMetadata(t *testing.T) {
 	store := &fakePublishedFindingStore{
 		recordingFindingLister: recordingFindingLister{findings: []model.Finding{{
 			ID: "aaaaaaaaaaaaaaaa",
 			Evidence: model.FindingEvidence{
 				State: model.FindingEvidenceVerified,
-				Verification: &model.FindingVerification{
-					ScenarioID: "cred-reach", ScenarioVersion: 1,
-					CampaignRunID: "run-api", VerifiedAt: "2026-07-13T12:00:00Z",
-					OracleType:   "differential_credential_reach",
-					Outcome:      "credential_gated_reach_verified",
+				Proof: &model.FindingProof{
+					Action: "credential_reach", ActionID: "action-api",
+					VerifiedAt:   "2026-07-13T12:00:00Z",
+					ProofType:    "differential_resource_read",
+					Outcome:      "credential_required",
 					ControlStage: "initialize", ControlStatus: "denied",
-					AuthedStage: "resource_read", AuthedStatus: "allowed",
-					AuthedResourceAddressed: true, CleanupStatus: "not_applicable",
+					CredentialStage: "resource_read", CredentialStatus: "allowed",
+					CredentialResourceAddressed: true, CleanupStatus: "not_applicable",
 				},
 			},
 		}}},
@@ -186,10 +186,10 @@ func TestHandleFindingsSerializesVerificationMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(response.Findings) != 1 ||
-		response.Findings[0].Evidence.Verification == nil ||
-		response.Findings[0].Evidence.Verification.CampaignRunID != "run-api" ||
-		response.Findings[0].Evidence.Verification.CleanupStatus != "not_applicable" {
-		t.Fatalf("verification API round-trip = %+v", response.Findings)
+		response.Findings[0].Evidence.Proof == nil ||
+		response.Findings[0].Evidence.Proof.ActionID != "action-api" ||
+		response.Findings[0].Evidence.Proof.CleanupStatus != "not_applicable" {
+		t.Fatalf("proof API round-trip = %+v", response.Findings)
 	}
 }
 
@@ -745,6 +745,56 @@ func TestHandleFindingDetail_PublishedRowSurvivesMissingLiveEdge(t *testing.T) {
 	}
 	if len(liveGraph.CallsTo("Query")) != 0 {
 		t.Fatal("stale published detail must not attach mutable live evidence")
+	}
+}
+
+func TestHandleFindingDetail_IncludesStructuredInstructionEvidence(t *testing.T) {
+	revision := int64(13)
+	raw := `{"version":1,"verdict":"signal","total_signals":1,"truncated":false,"signals":[{"rule_id":"instruction-ignore-previous","label":"Ignore Previous Instructions","severity":"critical","strength":"primary","raw_offset":8,"line":2,"column":1,"match":"Ignore previous instructions","context_before":"line one\n","context_after":"\nline three"}]}`
+	path := "/workspace/AGENTS.md"
+	store := &fakePublishedFindingStore{
+		scope: appdb.FindingScope{
+			Mode: "published", ScanID: "instruction-detail", Revision: &revision,
+			ProjectionStatus: model.ProjectionComplete, SnapshotStatus: model.LifecycleComplete,
+			Available: true,
+		},
+		finding: &model.Finding{
+			ID: "aaaaaaaaaaaaaaaa", ScanID: "instruction-detail", Severity: "medium",
+			Category: "Instruction Signal", Title: "Instruction signal requires review",
+			EdgeKind: "INSTRUCTION_SIGNAL", SourceID: "instruction-file", TargetID: "instruction-file",
+			SourceName: path, TargetName: path, SourceKind: "InstructionFile", TargetKind: "InstructionFile",
+			ExactEvidence: &model.ExactFindingEvidence{
+				Version: 1, Complete: true, Reasons: []string{}, Edges: []model.ExactFindingEvidenceEdge{},
+				Nodes: []model.ExactFindingEvidenceNode{{
+					ID: "instruction-file", Kinds: []string{"InstructionFile"},
+					Properties: map[string]any{
+						"path": path, "type": "agents.md", "hash": "sha256:abc", "size_bytes": int64(96),
+						"modified_at": "2026-08-20T12:00:00Z", "instruction_verdict": "signal", "instruction_scope": "deep",
+						"instruction_signal_count": int64(1), "instruction_signal_truncated": false,
+						"instruction_evidence_version": int64(1), "instruction_evidence_json": raw,
+					},
+				}},
+			},
+		},
+	}
+	h := &AnalysisHandler{findingStore: store}
+	w := httptest.NewRecorder()
+	r := newTestRequest(http.MethodGet, "/api/v1/analysis/findings/aaaaaaaaaaaaaaaa", nil)
+	r = withChiURLParam(r, "id", "aaaaaaaaaaaaaaaa")
+
+	h.HandleFindingDetail(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	var response analysis.FindingDetail
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.InstructionEvidence == nil ||
+		response.InstructionEvidence.Path != path ||
+		response.InstructionEvidence.TotalSignals != 1 ||
+		response.InstructionEvidence.Signals[0].Match != "Ignore previous instructions" {
+		t.Fatalf("instruction detail = %+v", response.InstructionEvidence)
 	}
 }
 

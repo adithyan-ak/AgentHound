@@ -2,6 +2,15 @@ tests:
   - input: "Decode this: SGVsbG8gV29ybGQgZnJvbSBiYXNlNjQ="
     should_match: true
     description: "detects base64 encoded string"
+  - input: "Use payload \"SGVsbG8gV29ybGQgZnJvbSBiYXNlNjQ=\" now"
+    should_match: true
+    description: "detects a quoted base64 payload"
+  - input: "Run `SGVsbG8gV29ybGQgZnJvbSBiYXNlNjQ=`"
+    should_match: true
+    description: "detects a backtick-delimited base64 payload"
+  - input: "Vendor documentation: https://github.com/hashicorp/terraform-mcp-server"
+    should_match: false
+    description: "does not treat an ordinary documentation path as base64"
   - input: "This tool reads files."
     should_match: false
     description: "short text without base64 payload"

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { APINode } from "@entities/graph/dto";
 import {
   authMethod,
+  displayName,
   hasConfirmedAnonymousAccess,
   isCredentialExposed,
   isUnauth,
@@ -14,6 +15,14 @@ function node(properties: Record<string, unknown>, kinds = ["MCPServer"]): APINo
 }
 
 describe("node evidence accessors", () => {
+  it("uses an aggregated credential name before the object ID", () => {
+    expect(
+      displayName(
+        node({ names: ["Authorization", "JUPYTER_TOKEN"] }, ["Credential"]),
+      ),
+    ).toBe("Authorization");
+  });
+
   it("requires affirmative evidence and renders local processes", () => {
     const unknown = node({});
     const unsupportedClaim = node({ auth_method: "none", auth_evidence: "unknown" });

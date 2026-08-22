@@ -35,4 +35,25 @@ describe("formatNodeAsMarkdown authentication evidence", () => {
     );
     expect(markdown).toContain("`effective_auth_source`: observed");
   });
+
+  it("omits a credential's raw value", () => {
+    const markdown = formatNodeAsMarkdown(
+      {
+        id: "sha256:credential",
+        kinds: ["Credential"],
+        properties: {
+          name: "API key",
+          value: "sk-secret-material",
+          material_status: "observed",
+        },
+      },
+      "Credential",
+      false,
+      false,
+    );
+
+    expect(markdown).not.toContain("sk-secret-material");
+    expect(markdown).not.toContain("`value`");
+    expect(markdown).toContain("`material_status`: observed");
+  });
 });

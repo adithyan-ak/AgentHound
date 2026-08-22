@@ -13,12 +13,9 @@ import (
 //
 // Implementations also implement sdk/module.Module.
 //
-// Every Poisoner emits a PoisonReceipt that carries the original content and
-// provider-specific rollback state plus
-// engagement metadata. Receipts are persisted by the StatefulModule
-// sidecar (sdk/module/stateful.go) keyed on engagement-id so
-// `agenthound revert <engagement-id>` walks all module state dirs and
-// dispatches per-module Revert.
+// Every Poisoner emits a PoisonReceipt carrying the original content and
+// provider-specific rollback state. The scan journal checkpoints it before
+// mutation.
 type Poisoner interface {
 	Reverter
 	// Poison returns a non-nil receipt with ErrRevertIndeterminate when a
@@ -39,22 +36,18 @@ type Poisoner interface {
 //	"prepend"  — add InjectionContent at the start of the original
 //	"replace"  — overwrite the original entirely
 //
-// EngagementID is recorded on the receipt and on every emitted edge's
-// evidence map. DryRun=true runs the same read-only preflight and eligibility
-// checks without any mutating HTTP/file write — receipt is written with
-// DryRun=true so `agenthound revert` knows to skip it.
+// RunID is the automatically generated action identity used only for in-process
+// journal lookup. DryRun is retained for module-level preflight tests.
 type PoisonPayload struct {
 	InjectionContent string
 	TargetID         string
 	Mode             string
-	EngagementID     string
-	CampaignRunID    string
-	StepSequence     uint64
+	RunID            string
 	DryRun           bool
 
 	// Extras carries per-Poisoner flag values populated by the CLI dispatch
 	// from the Poisoner's FlagsModule.RegisterFlags surface. Mirrors
-	// LootOptions.Extras — same pattern, different action.
+	// CollectOptions.Extras — same pattern, different action.
 	Extras map[string]any
 }
 
@@ -66,9 +59,6 @@ type PoisonPayload struct {
 type PoisonReceipt struct {
 	ReceiptID       string
 	ModuleID        string
-	EngagementID    string
-	CampaignRunID   string
-	StepSequence    uint64
 	Target          Target
 	TargetID        string
 	OriginalContent string

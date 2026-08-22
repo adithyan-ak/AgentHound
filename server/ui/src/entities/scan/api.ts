@@ -302,6 +302,13 @@ function requiredString(value: unknown, path: string): string {
   return value;
 }
 
+function requiredBoolean(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${path} must be a boolean`);
+  }
+  return value;
+}
+
 function nonNegativeInteger(value: unknown, path: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
     throw new TypeError(`${path} must be a non-negative integer`);
@@ -661,6 +668,10 @@ function decodeGraphTotal(
 function decodeScan(value: unknown, path: string): Scan {
   const scan = record(value, path);
   const graphTotals = record(scan.graph_totals, `${path}.graph_totals`);
+  const metadata =
+    scan.metadata === undefined
+      ? undefined
+      : decodeScanMetadata(scan.metadata, `${path}.metadata`);
   return {
     ...(scan as unknown as Scan),
     id: requiredString(scan.id, `${path}.id`),
@@ -675,6 +686,104 @@ function decodeScan(value: unknown, path: string): Scan {
         `${path}.graph_totals.before`,
       ),
       after: decodeGraphTotal(graphTotals.after, `${path}.graph_totals.after`),
+    },
+    ...(metadata === undefined ? {} : { metadata }),
+  };
+}
+
+function decodeScanMetadata(value: unknown, path: string): Scan["metadata"] {
+  const metadata = record(value, path);
+  if (metadata.scan_execution === undefined) return metadata;
+  return {
+    ...metadata,
+    scan_execution: decodeScanExecution(
+      metadata.scan_execution,
+      `${path}.scan_execution`,
+    ),
+  };
+}
+
+function decodeScanExecution(
+  value: unknown,
+  path: string,
+): NonNullable<Scan["metadata"]>["scan_execution"] {
+  const execution = record(value, path);
+  assertOnlyKeys(
+    execution,
+    [
+      "version",
+      "mode",
+      "deep",
+      "status",
+      "started_at",
+      "updated_at",
+      "completed_at",
+      "summary",
+    ],
+    path,
+  );
+  if (execution.version !== 1) {
+    throw new TypeError(`${path}.version must be 1`);
+  }
+  if (execution.mode !== "active" && execution.mode !== "stealth") {
+    throw new TypeError(`${path}.mode is invalid`);
+  }
+  if (
+    execution.status !== "running" &&
+    execution.status !== "completed" &&
+    execution.status !== "interrupted" &&
+    execution.status !== "failed"
+  ) {
+    throw new TypeError(`${path}.status is invalid`);
+  }
+  const summary = record(execution.summary, `${path}.summary`);
+  assertOnlyKeys(
+    summary,
+    [
+      "actions_attempted",
+      "actions_succeeded",
+      "actions_failed",
+      "actions_skipped",
+      "cleanup_failures",
+    ],
+    `${path}.summary`,
+  );
+  return {
+    version: 1,
+    mode: execution.mode,
+    deep: requiredBoolean(execution.deep, `${path}.deep`),
+    status: execution.status,
+    started_at: requiredString(execution.started_at, `${path}.started_at`),
+    updated_at: requiredString(execution.updated_at, `${path}.updated_at`),
+    ...(execution.completed_at === undefined
+      ? {}
+      : {
+          completed_at: requiredString(
+            execution.completed_at,
+            `${path}.completed_at`,
+          ),
+        }),
+    summary: {
+      actions_attempted: nonNegativeInteger(
+        summary.actions_attempted,
+        `${path}.summary.actions_attempted`,
+      ),
+      actions_succeeded: nonNegativeInteger(
+        summary.actions_succeeded,
+        `${path}.summary.actions_succeeded`,
+      ),
+      actions_failed: nonNegativeInteger(
+        summary.actions_failed,
+        `${path}.summary.actions_failed`,
+      ),
+      actions_skipped: nonNegativeInteger(
+        summary.actions_skipped,
+        `${path}.summary.actions_skipped`,
+      ),
+      cleanup_failures: nonNegativeInteger(
+        summary.cleanup_failures,
+        `${path}.summary.cleanup_failures`,
+      ),
     },
   };
 }

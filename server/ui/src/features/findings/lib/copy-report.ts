@@ -4,9 +4,10 @@ import type {
   FindingDetail,
   RemediationStep,
 } from "@entities/finding/model";
+import { formatFindingEvidenceState } from "./evidence-label";
 
 /**
- * Campaign export: a markdown summary table of multiple findings (the register
+ * Markdown export: a summary table of multiple findings (the register
  * selection). Path-level detail requires per-finding fetches, so this stays a
  * summary — id, severity, relationship, endpoints, OWASP, ATLAS, confidence.
  */
@@ -19,14 +20,13 @@ export function buildFindingsTableMarkdown(findings: Finding[]): string {
   );
   lines.push("|----------|---------|---------|----------|--------------|-----------------|-------|-------------|------|");
   for (const f of findings) {
+    const instructionFinding = f.edge_kind === "INSTRUCTION_SIGNAL" || f.edge_kind === "POISONED_INSTRUCTIONS";
     const src = markdownCell(f.source_name || f.source_id.slice(0, 12));
-    const tgt = markdownCell(f.target_name || f.target_id.slice(0, 12));
+    const tgt = instructionFinding ? "—" : markdownCell(f.target_name || f.target_id.slice(0, 12));
     const owasp = (f.owasp_map ?? []).join(", ") || "—";
     const atlas = (f.atlas_map ?? []).join(", ") || "—";
     lines.push(
-      `| ${markdownCell(f.severity.toUpperCase())} | ${markdownCell(f.title)} | ${markdownCell(f.variant)} | ${markdownCell(f.evidence.state)} | ${markdownCell(f.edge_kind)} | ${src} → ${tgt} | ${markdownCell(owasp)} | ${markdownCell(atlas)} | ${Math.round(
-        f.confidence * 100,
-      )}% |`,
+      `| ${markdownCell(f.severity.toUpperCase())} | ${markdownCell(f.title)} | ${markdownCell(f.variant)} | ${markdownCell(formatFindingEvidenceState(f.evidence.state))} | ${markdownCell(f.edge_kind)} | ${instructionFinding ? src : `${src} → ${tgt}`} | ${markdownCell(owasp)} | ${markdownCell(atlas)} | ${instructionFinding ? "content evidence" : `${Math.round(f.confidence * 100)}%`} |`,
     );
   }
   lines.push("");
@@ -38,6 +38,7 @@ export function buildMarkdownReport(
   path: AttackPath | null,
   remediation: RemediationStep[],
   snapshot?: FindingDetail["snapshot"],
+  instructionEvidence?: FindingDetail["instruction_evidence"],
 ): string {
   const lines: string[] = [];
   const findingChannels = finding.evidence.channels ?? [];
@@ -46,13 +47,20 @@ export function buildMarkdownReport(
     `## [${markdownText(finding.severity.toUpperCase())}] ${markdownText(finding.title)}`,
   );
   lines.push("");
-  lines.push(`**Finding:** ${finding.id} | Confidence: ${Math.round(finding.confidence * 100)}%`);
+
+  lines.push(
+    instructionEvidence
+      ? `**Finding:** ${finding.id}`
+      : `**Finding:** ${finding.id} | Confidence: ${Math.round(finding.confidence * 100)}%`,
+  );
   lines.push(`**References:** OWASP: ${(finding.owasp_map ?? []).join(", ") || "—"} | MITRE ATLAS: ${(finding.atlas_map ?? []).join(", ") || "—"}`);
   lines.push(
-    `**Classification:** ${finding.category} | Variant: ${finding.variant} | Evidence: ${finding.evidence.state}`,
+    `**Classification:** ${finding.category} | Variant: ${finding.variant} | Evidence: ${formatFindingEvidenceState(finding.evidence.state)}`,
   );
-  lines.push(`**Source:** ${markdownText(finding.source_name || finding.source_id)} (${markdownText(finding.source_kind)})`);
-  lines.push(`**Target:** ${markdownText(finding.target_name || finding.target_id)} (${markdownText(finding.target_kind)})`);
+  if (!instructionEvidence) {
+    lines.push(`**Source:** ${markdownText(finding.source_name || finding.source_id)} (${markdownText(finding.source_kind)})`);
+    lines.push(`**Target:** ${markdownText(finding.target_name || finding.target_id)} (${markdownText(finding.target_kind)})`);
+  }
   if (findingChannels.length > 0) {
     lines.push(`**Matched channels:** ${findingChannels.join(", ")}`);
   }
@@ -65,29 +73,50 @@ export function buildMarkdownReport(
   lines.push(markdownText(finding.description));
   lines.push("");
 
-  const verification = finding.evidence.verification;
-  if (finding.evidence.state === "verified" && verification) {
-    lines.push("### Campaign Verification");
+  if (instructionEvidence) {
+    lines.push("### Matched Instruction Evidence");
+    lines.push(`**File:** ${markdownText(instructionEvidence.path)}`);
+    lines.push(`**Classification:** ${markdownText(instructionEvidence.verdict)} | Scope: ${markdownText(instructionEvidence.scope)} | Type: ${markdownText(instructionEvidence.type)}`);
+    lines.push(`**Modified:** ${markdownText(instructionEvidence.modified_at)} | Size: ${instructionEvidence.size_bytes} bytes`);
+    lines.push(`**SHA-256:** ${markdownText(instructionEvidence.hash)}`);
+    lines.push(`**Signals:** ${instructionEvidence.signals.length} retained of ${instructionEvidence.total_signals}`);
+    lines.push("");
+    instructionEvidence.signals.forEach((signal, index) => {
+      lines.push(`${index + 1}. **${markdownText(signal.label)}** (${markdownText(signal.rule_id)}; ${signal.strength}; ${signal.severity})`);
+      lines.push(`   Location: ${markdownText(instructionEvidence.path)}:${signal.line}:${signal.column}`);
+      const excerpt = `${signal.context_before}${signal.match}${signal.context_after}`;
+      for (const line of excerpt.split(/\r?\n/)) lines.push(`       ${line}`);
+      if (signal.decoded_excerpt) {
+        lines.push("   Decoded payload preview:");
+        for (const line of signal.decoded_excerpt.split(/\r?\n/)) lines.push(`       ${line}`);
+      }
+    });
+    lines.push("");
+  }
+
+  const proof = finding.evidence.proof;
+  if (finding.evidence.state === "verified" && proof) {
+    lines.push("### Access Proof");
     lines.push(
-      `Scenario: ${markdownText(verification.scenario_id)} v${verification.scenario_version} | Run: ${markdownText(verification.campaign_run_id)} | Verified: ${markdownText(verification.verified_at)}`,
+      `Action: ${markdownText(proof.action)} | Action ID: ${markdownText(proof.action_id)} | Observed: ${markdownText(proof.verified_at)}`,
     );
     lines.push(
-      `Oracle: ${markdownText(verification.oracle_type)} | Outcome: ${markdownText(verification.outcome)}`,
+      `Proof: ${markdownText(proof.proof_type)} | Outcome: ${markdownText(proof.outcome)}`,
     );
     lines.push(
-      `Control: ${markdownText(verification.control_stage)} / ${markdownText(verification.control_status)} / resource_addressed=${verification.control_resource_addressed}`,
+      `Control: ${markdownText(proof.control_stage)} / ${markdownText(proof.control_status)} / resource_addressed=${proof.control_resource_addressed}`,
     );
     lines.push(
-      `Authenticated: ${markdownText(verification.authed_stage)} / ${markdownText(verification.authed_status)} / resource_addressed=${verification.authed_resource_addressed}`,
+      `Credential: ${markdownText(proof.credential_stage)} / ${markdownText(proof.credential_status)} / resource_addressed=${proof.credential_resource_addressed}`,
     );
-    lines.push(`Cleanup: ${markdownText(verification.cleanup_status)}`);
+    lines.push(`Cleanup: ${markdownText(proof.cleanup_status)}`);
     lines.push(
-      "Proof boundary: exact credential-gated resource reach for the source agent; not observed agent invocation or impact.",
+      "Proof boundary: exact credential-gated resource access; not observed agent invocation or downstream impact.",
     );
     lines.push("");
   }
 
-  if (path && path.edges.length > 0) {
+  if (!instructionEvidence && path && path.edges.length > 0) {
     const linear = isExactLinearEvidence(path);
     lines.push(
       `### ${linear ? "Attack Path" : "Evidence Graph"} (${path.edges.length} ${linear ? "hops" : "relationships"})`,
@@ -123,7 +152,7 @@ export function buildMarkdownReport(
       );
     }
     lines.push("");
-  } else {
+  } else if (!instructionEvidence) {
     lines.push("### Evidence Graph");
     lines.push(
       "No relationship graph is available for this published finding; the source and target above are not presented as a connected hop.",

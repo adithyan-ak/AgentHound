@@ -23,7 +23,7 @@ func (*ConfigEnumerator) ID() string            { return "config.enumerate" }
 func (*ConfigEnumerator) Action() action.Action { return action.Enumerate }
 func (*ConfigEnumerator) Target() string        { return "config" }
 func (*ConfigEnumerator) Description() string {
-	return "Discover and parse local MCP/A2A client configs, instruction files, and credentials"
+	return "Discover and parse local MCP client configs, instruction files, and credentials"
 }
 func (*ConfigEnumerator) Version() string     { return "0.1.0" }
 func (*ConfigEnumerator) IsDestructive() bool { return false }

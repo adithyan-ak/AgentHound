@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "devtools-mcp": {
+      "type": "http",
+      "url": "http://devtools-mcp:3001/mcp"
+    }
+  }
+}

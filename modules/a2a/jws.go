@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/adithyan-ak/agenthound/sdk/contact"
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/gowebpki/jcs"
 )
@@ -406,7 +407,7 @@ func NewJWKSFetcher(timeout time.Duration) *JWKSFetcher {
 		},
 	}
 	transport := &http.Transport{
-		DialContext: dialer.DialContext,
+		DialContext: (contact.Dialer{Base: dialer}).DialContext,
 		TLSClientConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		},
@@ -415,7 +416,7 @@ func NewJWKSFetcher(timeout time.Duration) *JWKSFetcher {
 	}
 	return &JWKSFetcher{
 		client: &http.Client{
-			Transport:     transport,
+			Transport:     contact.RoundTripper{Base: transport},
 			Timeout:       timeout,
 			CheckRedirect: validateJWKSRedirect,
 		},

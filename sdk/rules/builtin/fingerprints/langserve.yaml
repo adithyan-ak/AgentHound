@@ -30,4 +30,3 @@ emit:
   properties:
     service_kind: langserve
     auth_method: none
-    is_anonymous_loot: "false"

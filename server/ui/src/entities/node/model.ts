@@ -24,11 +24,19 @@ export function nodeBool(node: APINode, key: string): boolean {
 
 /** Best available human label, falling back through common identity props. */
 export function displayName(node: APINode): string {
+  const aggregatedName = Array.isArray(node.properties.names)
+    ? node.properties.names.find(
+        (value): value is string =>
+          typeof value === "string" && value.trim() !== "",
+      )
+    : undefined;
   return String(
     node.properties.name ??
+      aggregatedName ??
       node.properties.uri ??
       node.properties.path ??
       node.properties.hostname ??
+      node.properties.ip ??
       node.id.slice(0, 12),
   );
 }

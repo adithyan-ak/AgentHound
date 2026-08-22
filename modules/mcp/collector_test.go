@@ -38,11 +38,15 @@ func TestMCPCollectorOfficialStreamableHandlerUsesCanonicalScope(t *testing.T) {
 		t.Fatalf("Collect: %v", err)
 	}
 	wantKey := mcpCoverageKey(ServerSpec{Transport: "http", URL: httpServer.URL})
-	if len(result.Meta.Collection.CoverageKeys) != 1 || result.Meta.Collection.CoverageKeys[0] != wantKey {
-		t.Fatalf("coverage keys = %v, want [%s]", result.Meta.Collection.CoverageKeys, wantKey)
+	rootKey := ingest.CollectorRootCoverageKey("mcp")
+	if !reflect.DeepEqual(result.Meta.Collection.CoverageKeys, []string{rootKey, wantKey}) {
+		t.Fatalf("coverage keys = %v, want [%s %s]", result.Meta.Collection.CoverageKeys, rootKey, wantKey)
 	}
 	methods := make(map[string]bool)
 	for _, outcome := range result.Meta.Collection.Outcomes {
+		if outcome.CoverageKey == rootKey {
+			continue
+		}
 		if outcome.CoverageKey != wantKey || outcome.Target != httpServer.URL {
 			t.Fatalf("non-canonical outcome = %+v", outcome)
 		}

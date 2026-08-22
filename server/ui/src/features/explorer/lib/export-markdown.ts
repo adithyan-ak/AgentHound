@@ -1,4 +1,5 @@
 import type { APINode } from "@entities/graph/dto";
+import { displayName } from "@entities/node/model";
 
 const MD_SKIP_KEYS = new Set([
   "objectid",
@@ -8,6 +9,7 @@ const MD_SKIP_KEYS = new Set([
   "description_hash",
   "card_hash",
   "previous_description_hash",
+  "instruction_evidence_json",
 ]);
 
 const MD_PRIORITY_KEYS = [
@@ -39,7 +41,10 @@ const MD_PRIORITY_KEYS = [
   "parameter_size",
   "has_injection_patterns",
   "has_cross_references",
-  "is_suspicious",
+  "instruction_verdict",
+  "instruction_scope",
+  "instruction_signal_count",
+  "instruction_signal_truncated",
   "sensitivity",
   "risk_score",
   "framework",
@@ -66,11 +71,8 @@ export function formatNodeAsMarkdown(
   highValue: boolean,
 ): string {
   const props = node.properties ?? {};
-  const name =
-    (typeof props.name === "string" && props.name) ||
-    (typeof props.uri === "string" && props.uri) ||
-    (typeof props.path === "string" && props.path) ||
-    node.id.slice(0, 12);
+  const isCredential = node.kinds.includes("Credential");
+  const name = displayName(node);
 
   const lines: string[] = [];
   lines.push(`## ${name}`);
@@ -92,7 +94,7 @@ export function formatNodeAsMarkdown(
   const bullets: string[] = [];
 
   for (const key of MD_PRIORITY_KEYS) {
-    if (MD_SKIP_KEYS.has(key)) continue;
+    if (MD_SKIP_KEYS.has(key) || (isCredential && key === "value")) continue;
     if (!(key in props)) continue;
     const value = props[key];
     if (value === null || value === undefined || value === "") continue;
@@ -101,7 +103,12 @@ export function formatNodeAsMarkdown(
   }
 
   const remaining = Object.keys(props)
-    .filter((k) => !MD_SKIP_KEYS.has(k) && !seen.has(k))
+    .filter(
+      (k) =>
+        !MD_SKIP_KEYS.has(k) &&
+        !(isCredential && k === "value") &&
+        !seen.has(k),
+    )
     .sort();
   for (const key of remaining) {
     const value = props[key];

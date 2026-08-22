@@ -15,7 +15,8 @@ import { HopEvidenceTimeline } from "./HopEvidenceTimeline";
 import { FindingImpact } from "./FindingImpact";
 import { FindingRemediation } from "./FindingRemediation";
 import { FindingReferences } from "./FindingReferences";
-import { FindingVerification } from "./FindingVerification";
+import { FindingProof } from "./FindingProof";
+import { InstructionEvidencePanel } from "./InstructionEvidencePanel";
 
 export function FindingDetailPage() {
   const { findingId } = useParams<{ findingId: string }>();
@@ -96,6 +97,7 @@ export function FindingDetailPage() {
       detail!.attack_path,
       detail!.remediation,
       detail!.snapshot,
+      detail!.instruction_evidence,
     );
     navigator.clipboard.writeText(md);
   }
@@ -111,7 +113,11 @@ export function FindingDetailPage() {
             onCopyReport={handleCopyReport}
           />
 
-          <AttackPathDiagram
+          {detail.instruction_evidence && (
+            <InstructionEvidencePanel evidence={detail.instruction_evidence} />
+          )}
+
+          {!detail.instruction_evidence && <AttackPathDiagram
             path={detail.attack_path}
             severity={f.severity}
             sourceId={f.source_id}
@@ -122,15 +128,21 @@ export function FindingDetailPage() {
             targetKind={f.target_kind}
             activeHop={activeHop}
             onHopSelect={setActiveHop}
-          />
+          />}
 
-          <Sidebar
+          {detail.instruction_evidence ? (
+            <div className="grid gap-3 lg:grid-cols-3">
+              <FindingImpact impact={detail.impact} path={null} />
+              <FindingRemediation steps={detail.remediation} />
+              <FindingReferences finding={f} />
+            </div>
+          ) : <Sidebar
             sidePosition="right"
             sideWidth="22rem"
             contentMin="58%"
             side={
               <Stack gap="0.75rem">
-                <FindingVerification evidence={f.evidence} />
+                <FindingProof evidence={f.evidence} />
                 <FindingImpact impact={detail.impact} path={detail.attack_path} />
                 <FindingRemediation steps={detail.remediation} />
                 <FindingReferences finding={f} />
@@ -143,7 +155,7 @@ export function FindingDetailPage() {
                 onHopSelect={setActiveHop}
               />
             }
-          />
+          />}
         </Stack>
       </div>
     </div>
