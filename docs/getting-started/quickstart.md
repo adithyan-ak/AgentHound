@@ -39,7 +39,7 @@ Start the optional analysis stack:
 
 ```bash
 curl -sSfL \
-  https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.0/docker/docker-compose.public.yml \
+  https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.1/docker/docker-compose.public.yml \
   -o agenthound-compose.yml
 docker compose -f agenthound-compose.yml -p agenthound up -d --wait
 ```

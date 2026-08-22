@@ -7,8 +7,8 @@ Install the collector on the system where the scan will run. Deploy the analysis
 The release installer selects the platform archive and installs `agenthound` under `$HOME/.local/bin` by default:
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.0/install.sh \
-  | AGENTHOUND_VERSION=1.1.0 sh
+curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.1/install.sh \
+  | AGENTHOUND_VERSION=1.1.1 sh
 export PATH="$HOME/.local/bin:$PATH"
 agenthound version
 ```
@@ -27,7 +27,7 @@ Docker Compose provides `agenthound-server`, Neo4j, and PostgreSQL:
 
 ```bash
 curl -sSfL \
-  https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.0/docker/docker-compose.public.yml \
+  https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.1/docker/docker-compose.public.yml \
   -o agenthound-compose.yml
 docker compose -f agenthound-compose.yml -p agenthound up -d --wait
 ```

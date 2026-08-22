@@ -158,15 +158,15 @@ size-check:
 installer-test:
 	@bash scripts/install-atomic-test.sh
 
-# Assert the install.sh + README version pins match the CHANGELOG (the version
-# source of truth). Also runs inside `make prerelease`, so release.yml enforces
-# it at tag time too.
+# Assert every live installer, environment, and Compose pin matches the
+# CHANGELOG (the version source of truth). Also runs inside `make prerelease`,
+# so release.yml enforces it at tag time too.
 version-check:
 	@bash scripts/version-check.sh
 	@bash scripts/release-process-test.sh
 
-# Rewrite the install.sh + README version pins from the CHANGELOG top header
-# (or VERSION=). Usage: make sync-version   or   make sync-version VERSION=0.7.1
+# Rewrite all live release pins from the CHANGELOG top header (or VERSION=).
+# Usage: make sync-version   or   make sync-version VERSION=0.7.1
 sync-version:
 	@bash scripts/sync-version.sh $(VERSION)
 
@@ -182,7 +182,7 @@ docs-check:
 # to keep this gate Go/Node-only.)
 prerelease:
 	@echo "=== [1/4] version-check ==="
-	$(MAKE) version-check
+	RELEASE_CHECK=1 $(MAKE) version-check
 	@echo "=== [2/4] contributor checks ==="
 	$(MAKE) check
 	@echo "=== [3/4] security checks ==="

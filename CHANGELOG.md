@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.1.1 — Evidence Precision and Reliability
+
 ### Added
 
 - Instruction findings now preserve bounded matched excerpts, source positions, scope, and file metadata from the scan artifact through the dashboard and copied report.

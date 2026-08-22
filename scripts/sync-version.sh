@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Rewrite the repository's two tagged installer URLs to a release version.
+# Rewrite every live public release-version reference to one version.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+
+source scripts/release-version-pins.sh
 
 ver="${1:-}"
 if [ -z "$ver" ]; then
@@ -15,26 +17,32 @@ if ! printf '%s\n' "$ver" | grep -qE '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9
   exit 1
 fi
 
-pin_pattern='https://raw\.githubusercontent\.com/adithyan-ak/agenthound/(v)?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)/install\.sh'
-files=(install.sh README.md)
-
-# Validate both files before mutating either one. This prevents a duplicate or
-# missing URL from producing a partially synchronized release-prep diff.
-for file in "${files[@]}"; do
-  count=$(grep -oE "$pin_pattern" "$file" | wc -l | tr -d '[:space:]' || true)
-  if [ "$count" -ne 1 ]; then
-    echo "sync-version: $file has $count tagged installer URLs, expected exactly 1"
+# Validate every location before mutating any file. This prevents a duplicate
+# or missing reference from producing a partially synchronized release diff.
+total=0
+while IFS='|' read -r kind file expected_count; do
+  if [ ! -f "$file" ]; then
+    echo "sync-version: missing release-version file: $file"
     exit 1
   fi
-done
+  pattern=$(release_version_pin_pattern "$kind")
+  count=$(grep -oE "$pattern" "$file" | wc -l | tr -d '[:space:]' || true)
+  if [ "$count" -ne "$expected_count" ]; then
+    echo "sync-version: $file has $count $kind references, expected exactly $expected_count"
+    exit 1
+  fi
+  total=$((total + expected_count))
+done < <(release_version_pin_specs)
 
 sedi() {
   if sed --version >/dev/null 2>&1; then sed -i "$@"; else sed -i '' "$@"; fi
 }
 
-replacement="https://raw.githubusercontent.com/adithyan-ak/agenthound/${ver}/install.sh"
-for file in "${files[@]}"; do
-  sedi -E "s#${pin_pattern}#${replacement}#g" "$file"
-  echo "sync-version: set ${ver} pin in $file"
-done
-echo "sync-version: updated exactly 2 tagged installer URLs. Run 'make version-check' to confirm."
+while IFS='|' read -r kind file expected_count; do
+  pattern=$(release_version_pin_pattern "$kind")
+  replacement=$(release_version_pin_replacement "$kind" "$ver")
+  sedi -E "s#${pattern}#${replacement}#g" "$file"
+  echo "sync-version: set $expected_count $kind reference(s) in $file to $ver"
+done < <(release_version_pin_specs)
+
+echo "sync-version: updated exactly $total live release references. Run 'make version-check' to confirm."

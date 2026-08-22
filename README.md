@@ -116,11 +116,11 @@ The collector writes an ingest-valid artifact before collection and checkpoints 
 
 ### 1. Install the collector
 
-Install the 1.1.0 static binary to `~/.local/bin`:
+Install the 1.1.1 static binary to `~/.local/bin`:
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.0/install.sh \
-  | AGENTHOUND_VERSION=1.1.0 sh
+curl -sSfL https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.1/install.sh \
+  | AGENTHOUND_VERSION=1.1.1 sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
@@ -170,7 +170,7 @@ The server is optional during collection. Start it on the analysis system when y
 
 ```bash
 curl -sSfL \
-  https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.0/docker/docker-compose.public.yml \
+  https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.1/docker/docker-compose.public.yml \
   -o agenthound-compose.yml
 docker compose -f agenthound-compose.yml -p agenthound up -d --wait
 docker compose -f agenthound-compose.yml -p agenthound exec -T agenthound \

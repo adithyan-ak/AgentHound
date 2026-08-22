@@ -15,7 +15,7 @@ make check
 
 Changes spanning collection, planning, artifacts, ingestion, or findings also run `make integration`. Documentation changes run `make docs-check`.
 
-Before a release tag, run `make prerelease` and `make docs-check`. Release tags are numeric SemVer without a `v` prefix. The first numeric heading in `CHANGELOG.md` is the version source of truth; `make sync-version` updates the installer pins in `README.md` and `install.sh`.
+Before a release tag, run `make prerelease` and `make docs-check`. Release tags are numeric SemVer without a `v` prefix. The first numeric heading in `CHANGELOG.md` is the version source of truth; `make sync-version` updates every live installer, environment, and Docker Compose pin in the README, installer, and operator documentation.
 
 Release from a clean commit already merged into `main`:
 

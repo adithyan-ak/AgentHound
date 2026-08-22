@@ -1,7 +1,7 @@
 name: Version Check
 
 # Early-feedback check on the hand-maintained version strings: surfaces (as a red
-# check) a release-prep PR whose install.sh / README pins disagree with the
+# check) a release-prep PR whose public installation pins disagree with the
 # CHANGELOG. Path-filtered to those files, so do NOT make it a required status
 # check -- a skipped path-filtered workflow stays "pending" and would block
 # code-only PRs. The hard guarantee is the release pipeline: release.yml ->
@@ -13,12 +13,16 @@ on:
       - "install.sh"
       - "README.md"
       - "CHANGELOG.md"
+      - "docs/getting-started/install.md"
+      - "docs/getting-started/quickstart.md"
+      - "docs/operator/deployment.md"
       - "go.mod"
       - ".goreleaser.yml"
       - "Makefile"
       - "scripts/release-notes.sh"
       - "scripts/release-process-test.sh"
       - "scripts/release-tag-check.sh"
+      - "scripts/release-version-pins.sh"
       - "scripts/sync-version.sh"
       - "scripts/verify-homebrew-formula.sh"
       - "scripts/version-check.sh"
