@@ -25,7 +25,7 @@ func TestExtractCredentials_EnvVars(t *testing.T) {
 		"DB_PASSWORD":    "mysecret",
 	}
 
-	creds := ExtractCredentials(env, nil, "/test/config.json", false, engine)
+	creds := ExtractCredentials(env, nil, "/test/config.json", engine)
 	if len(creds) != 2 {
 		t.Fatalf("expected 2 creds (KEY and PASSWORD match), got %d", len(creds))
 	}
@@ -48,8 +48,8 @@ func TestExtractCredentials_EnvVars(t *testing.T) {
 	if !apiKey.IsExposed {
 		t.Error("expected IsExposed = true for hardcoded")
 	}
-	if apiKey.Value == "sk-test1234567890abcdef" {
-		t.Error("value should be hashed when includeValues=false")
+	if apiKey.Value != "sk-test1234567890abcdef" {
+		t.Error("observed value should remain raw")
 	}
 
 	pw := byName["DB_PASSWORD"]
@@ -65,7 +65,7 @@ func TestExtractCredentials_Headers(t *testing.T) {
 		"Content-Type":  "application/json",
 	}
 
-	creds := ExtractCredentials(nil, headers, "/test/config.json", true, engine)
+	creds := ExtractCredentials(nil, headers, "/test/config.json", engine)
 
 	found := false
 	for _, c := range creds {
@@ -106,7 +106,6 @@ func TestExtractCredentialsSkipsTrimEmptyEnvAndHeaderValues(t *testing.T) {
 			"X-Preserved-Secret": headerMaterial,
 		},
 		"/test/config.json",
-		true,
 		engine,
 	)
 	if len(creds) != 2 {
@@ -150,7 +149,7 @@ func TestExtractArgumentCredentialsSkipsTrimEmptyValues(t *testing.T) {
 		"--api-key=",
 		"--token", " \t ",
 		"--client-secret=" + material,
-	}, "test", true, engine)
+	}, "test", engine)
 	if len(creds) != 1 {
 		t.Fatalf("argument credentials = %d, want one non-empty value: %+v", len(creds), creds)
 	}
@@ -166,7 +165,7 @@ func TestExtractURLCredentialsSkipsTrimEmptyValues(t *testing.T) {
 	const material = " query-secret-with-space "
 	rawURL := "https://mcp.example/mcp?api_key=&token=%20%09&client_secret=" +
 		url.QueryEscape(material)
-	creds := extractURLCredentials(rawURL, "test", "url", true, engine)
+	creds := extractURLCredentials(rawURL, "test", "url", engine)
 	if len(creds) != 1 {
 		t.Fatalf("URL credentials = %d, want one non-empty value: %+v", len(creds), creds)
 	}
@@ -183,7 +182,6 @@ func TestExtractURLCredentialsFallsBackToNonEmptyUsername(t *testing.T) {
 		"https://user:%20%20@mcp.example/mcp",
 		"test",
 		"url",
-		true,
 		engine,
 	)
 	if len(creds) != 1 || creds[0].Name != "URL_USERINFO" || creds[0].Value != "user" {
@@ -207,7 +205,7 @@ func TestExtractCredentials_IncludeValues(t *testing.T) {
 		"SECRET_KEY": "mysecretvalue",
 	}
 
-	creds := ExtractCredentials(env, nil, "/test", true, engine)
+	creds := ExtractCredentials(env, nil, "/test", engine)
 	if len(creds) != 1 {
 		t.Fatalf("expected 1 cred, got %d", len(creds))
 	}
@@ -216,20 +214,23 @@ func TestExtractCredentials_IncludeValues(t *testing.T) {
 	}
 }
 
-func TestExtractCredentials_HashByDefault(t *testing.T) {
+func TestExtractCredentials_RawAndHashAlwaysAvailable(t *testing.T) {
 	engine := testCredEngine(t)
 	env := map[string]string{
 		"API_KEY": "testvalue",
 	}
 
-	creds := ExtractCredentials(env, nil, "/test", false, engine)
+	creds := ExtractCredentials(env, nil, "/test", engine)
 	if len(creds) != 1 {
 		t.Fatalf("expected 1 cred, got %d", len(creds))
 	}
 
+	if creds[0].Value != "testvalue" {
+		t.Errorf("value = %q, want raw observed material", creds[0].Value)
+	}
 	expected := common.HashSHA256("testvalue")
-	if creds[0].Value != expected {
-		t.Errorf("value = %q, want SHA-256 hash %q", creds[0].Value, expected)
+	if creds[0].ValueHash != expected {
+		t.Errorf("value_hash = %q, want SHA-256 hash %q", creds[0].ValueHash, expected)
 	}
 }
 
@@ -293,7 +294,7 @@ func TestExtractCredentials_EnvRefNotExposed(t *testing.T) {
 		"API_TOKEN": "$REAL_TOKEN",
 	}
 
-	creds := ExtractCredentials(env, nil, "/test", false, engine)
+	creds := ExtractCredentials(env, nil, "/test", engine)
 	if len(creds) != 1 {
 		t.Fatalf("expected 1 cred, got %d", len(creds))
 	}
@@ -308,6 +309,12 @@ func TestExtractCredentials_EnvRefNotExposed(t *testing.T) {
 		t.Errorf("env ref evidence = material %q exposure %q",
 			creds[0].MaterialStatus, creds[0].ExposureStatus)
 	}
+	if creds[0].Value != "$REAL_TOKEN" {
+		t.Errorf("unresolved value = %q, want honest reference", creds[0].Value)
+	}
+	if creds[0].Value == creds[0].ValueHash {
+		t.Error("unresolved reference was replaced by a hash in value")
+	}
 }
 
 func TestExtractCredentials_VaultRefNotExposed(t *testing.T) {
@@ -316,7 +323,7 @@ func TestExtractCredentials_VaultRefNotExposed(t *testing.T) {
 		"SECRET_KEY": "vault://secrets/mykey",
 	}
 
-	creds := ExtractCredentials(env, nil, "/test", false, engine)
+	creds := ExtractCredentials(env, nil, "/test", engine)
 	if len(creds) != 1 {
 		t.Fatalf("expected 1 cred, got %d", len(creds))
 	}
@@ -343,7 +350,7 @@ func TestExtractCredentials_AuthSchemes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			creds := ExtractCredentials(tt.env, tt.head, "test", false, engine)
+			creds := ExtractCredentials(tt.env, tt.head, "test", engine)
 			if len(creds) != 1 {
 				t.Fatalf("credentials = %d, want 1: %+v", len(creds), creds)
 			}
@@ -365,7 +372,7 @@ func TestExtractCredentials_NonCredentialNamesSkipped(t *testing.T) {
 		"AUTH_TOKEN": "val3",
 	}
 
-	creds := ExtractCredentials(env, nil, "/test", false, engine)
+	creds := ExtractCredentials(env, nil, "/test", engine)
 	names := make(map[string]bool)
 	for _, c := range creds {
 		names[c.Name] = true
@@ -385,7 +392,7 @@ func TestExtractCredentials_HighEntropy(t *testing.T) {
 		"API_KEY": "aB3dE6gH9jKlMnOpQrStUvWxYz012345",
 	}
 
-	creds := ExtractCredentials(env, nil, "/test", false, engine)
+	creds := ExtractCredentials(env, nil, "/test", engine)
 	if len(creds) != 1 {
 		t.Fatalf("expected 1 cred, got %d", len(creds))
 	}

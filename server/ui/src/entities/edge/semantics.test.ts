@@ -59,3 +59,11 @@ describe("CAN_REACH target semantics", () => {
     ).toBe("Agent can reach resource");
   });
 });
+
+describe("CREDENTIAL_ACCESS_OBSERVED semantics", () => {
+  it("states the observed access boundary without claiming execution", () => {
+    expect(edgeDescription("CREDENTIAL_ACCESS_OBSERVED")).toBe(
+      "Credential access to resource observed",
+    );
+  });
+});

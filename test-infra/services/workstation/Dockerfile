@@ -16,7 +16,7 @@ RUN sed -i \
 
 # The production identity policy intentionally makes every authoritative fact
 # artifact-local when a collection point is weak. This disposable workstation
-# exercises cross-artifact Config -> MCP -> Looter joins, so give the fixture
+# exercises Config -> MCP -> service-collection joins, so give the fixture
 # its own deterministic OS identity instead of borrowing identity from the host.
 RUN printf '%s\n' '9f4c0ee2a24d4e11aee29e53b8118a37' >/etc/machine-id
 
@@ -36,13 +36,7 @@ COPY home/ /opt/agenthound-workstation/home/
 COPY entrypoint.sh /usr/local/bin/workstation-entrypoint
 
 RUN chmod 0755 /usr/local/bin/agenthound /usr/local/bin/agenthound-server /usr/local/bin/workstation-entrypoint \
-    && cp -a /opt/agenthound-workstation/home/. /root/ \
-    && mkdir -p /root/.agenthound \
-    && touch \
-        /root/.agenthound/loot-acknowledged \
-        /root/.agenthound/poison-acknowledged \
-        /root/.agenthound/extract-acknowledged \
-        /root/.agenthound/campaign-acknowledged
+    && cp -a /opt/agenthound-workstation/home/. /root/
 
 WORKDIR /root/projects/example
 

@@ -19,32 +19,27 @@ interface NewScanProps {
 // `agenthound-server ingest <file>` or Import on the Scans page (AH-UI-23).
 const COMMANDS = [
   {
-    label: "Default Local Workflow",
-    command: `agenthound scan --output agenthound-scan.json && agenthound-server ingest agenthound-scan.json`,
-    description:
-      "Collect config and MCP evidence, then ingest only if collection succeeds; A2A requires the separate targeted command",
-  },
-  {
-    label: "Default Local Scan",
+    label: "Default Scan",
     command: "agenthound scan",
     description:
-      "Collection only: discover configs and enumerate MCP servers; then import the JSON artifact",
+      "Collect local evidence, enumerate discovered services, and prove eligible access paths in one active run",
   },
   {
-    label: "Config Discovery",
-    command: "agenthound scan --config",
+    label: "Add Network Targets",
+    command: "agenthound scan <host|CIDR|@targets-file>",
     description:
-      "Discover all MCP client configs on this machine; writes a JSON artifact",
+      "Run the same autonomous scan and include the supplied host, network, or target file",
   },
   {
-    label: "MCP Enumeration",
-    command: "agenthound scan --mcp",
-    description: "Enumerate all discovered MCP servers; writes a JSON artifact",
+    label: "Deep Scan",
+    command: "agenthound scan --deep",
+    description: "Include bounded deeper collection while keeping the same workflow",
   },
   {
-    label: "A2A Agent Card",
-    command: "agenthound scan --a2a --target <url>",
-    description: "Fetch an A2A agent card; writes a JSON artifact",
+    label: "Stealth Scan",
+    command: "agenthound scan --stealth",
+    description:
+      "Collect read-only evidence without active proofs, credential reuse, or mutations",
   },
   {
     label: "Ingest Artifact",
@@ -72,11 +67,10 @@ export function NewScan({ open, onClose }: NewScanProps) {
             Collect and Ingest
           </DialogTitle>
           <DialogDescription>
-            A collector scan alone writes JSON and does not update the server.
-            Use the complete local workflow, or collect first and then ingest
-            the artifact with the final command or Import on this page. The
-            collector derives collection-point and network-context provenance
-            automatically; there are no identity flags to configure.
+            Run the collector on the host you already control. It writes one
+            self-contained JSON artifact; transfer that file and import it here
+            for graph analysis. Server connectivity is not required during the
+            scan.
           </DialogDescription>
         </DialogHeader>
 

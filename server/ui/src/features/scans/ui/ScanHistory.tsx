@@ -35,6 +35,7 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 const COLLECTOR_COLOR: Record<string, string> = {
+	scan: NODE_KIND_COLORS.AgentInstance,
   mcp: NODE_KIND_COLORS.MCPServer,
   a2a: NODE_KIND_COLORS.A2AAgent,
   config: NODE_KIND_COLORS.ConfigFile,
@@ -110,6 +111,9 @@ export function ScanHistory({ scans, onDeleted }: ScanHistoryProps) {
               <Th className="w-10 pr-2 text-right">#</Th>
               <Th>ID</Th>
               <Th>Collector</Th>
+              <Th>Mode</Th>
+              <Th className="text-right">Actions</Th>
+              <Th>Cleanup</Th>
               <Th>Status</Th>
               <Th>Started</Th>
               <Th>Completed</Th>
@@ -120,6 +124,7 @@ export function ScanHistory({ scans, onDeleted }: ScanHistoryProps) {
           </thead>
           <tbody>
             {scans.map((scan, i) => {
+              const execution = scan.metadata?.scan_execution;
               const lifecycle = [
                 ["collection", scan.collection_status],
                 ["graph", scan.graph_status],
@@ -165,6 +170,56 @@ export function ScanHistory({ scans, onDeleted }: ScanHistoryProps) {
                       <span className="h-1.5 w-1.5 rounded-[1px]" style={{ backgroundColor: collectorColor }} />
                       {scan.collector}
                     </span>
+                  </td>
+                  <td className="px-3 py-2.5 align-middle">
+                    {execution ? (
+                      <span className="flex flex-col font-mono uppercase">
+                        <span className="text-[10px] font-semibold tracking-[0.08em] text-foreground/80">
+                          {execution.mode}
+                        </span>
+                        <span className="text-[9px] tracking-[0.06em] text-muted-foreground">
+                          {execution.deep ? "deep" : "standard"} · {execution.status}
+                        </span>
+                      </span>
+                    ) : (
+                      <span className="font-mono text-[11px] text-muted-foreground">—</span>
+                    )}
+                  </td>
+                  <td
+                    className="px-3 py-2.5 text-right align-middle font-mono text-[11px] tabular-nums text-foreground"
+                    title={
+                      execution
+                        ? `${execution.summary.actions_failed} failed; ${execution.summary.actions_skipped} skipped`
+                        : undefined
+                    }
+                  >
+                    {execution ? (
+                      <span className="flex flex-col">
+                        <span>{`${execution.summary.actions_succeeded}/${execution.summary.actions_attempted}`}</span>
+                        <span className="text-[9px] text-muted-foreground">
+                          {execution.summary.actions_failed} failed · {execution.summary.actions_skipped} skipped
+                        </span>
+                      </span>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5 align-middle font-mono text-[10px] uppercase tracking-[0.06em]">
+                    {execution ? (
+                      <span
+                        className={
+                          execution.summary.cleanup_failures > 0
+                            ? "text-red-400"
+                            : "text-emerald-400"
+                        }
+                      >
+                        {execution.summary.cleanup_failures > 0
+                          ? `${execution.summary.cleanup_failures} failed`
+                          : "clean"}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </td>
                   <td className="px-3 py-2.5 align-middle">
                     <span

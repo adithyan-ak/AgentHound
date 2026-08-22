@@ -15,14 +15,12 @@ type CredentialInfo struct {
 	Name       string
 	Location   string // "env", "header", or a stable argv position
 	AuthMethod common.AuthMethod
-	Value      string // SHA-256 hash by default, actual value only if includeValues=true
+	Value      string // Exact observed value or unresolved reference; never a substituted hash.
 	ValueHash  string // SHA-256 hash of the original raw value, ALWAYS populated.
 	// ValueHash is the cross-collector merge primitive. Even
-	// when includeValues=false replaces Value with the same hash, the
-	// LiteLLM Looter (which never sees the hashed form) needs an
-	// independent always-populated field to set on its Credential
+	// LiteLLM collector needs an independent always-populated field to set on its Credential
 	// emissions so the cross_service_credential_chain post-processor
-	// can join Config Collector emissions to Looter emissions on this
+	// can join Config Collector emissions to service-collector emissions on this
 	// property. See sdk/common/hasher.go HashCredentialValue.
 	Source         string
 	IsExposed      bool
@@ -33,7 +31,7 @@ type CredentialInfo struct {
 	ExposureStatus common.CredentialExposureStatus
 }
 
-func ExtractCredentials(env map[string]string, headers map[string]string, source string, includeValues bool, engine *rules.Engine) []CredentialInfo {
+func ExtractCredentials(env map[string]string, headers map[string]string, source string, engine *rules.Engine) []CredentialInfo {
 	var creds []CredentialInfo
 
 	for _, name := range sortedMapKeys(env) {
@@ -41,7 +39,7 @@ func ExtractCredentials(env map[string]string, headers map[string]string, source
 		if strings.TrimSpace(value) == "" || !isCredentialName(name, engine) {
 			continue
 		}
-		creds = append(creds, classifyAndBuild(name, value, source, "env", includeValues, engine))
+		creds = append(creds, classifyAndBuild(name, value, source, "env", engine))
 	}
 
 	for _, name := range sortedMapKeys(headers) {
@@ -49,7 +47,7 @@ func ExtractCredentials(env map[string]string, headers map[string]string, source
 		if strings.TrimSpace(value) == "" || !isCredentialName(name, engine) {
 			continue
 		}
-		creds = append(creds, classifyAndBuild(name, value, source, "header", includeValues, engine))
+		creds = append(creds, classifyAndBuild(name, value, source, "header", engine))
 	}
 
 	return creds
@@ -57,24 +55,21 @@ func ExtractCredentials(env map[string]string, headers map[string]string, source
 
 // ExtractServerCredentials covers every configuration surface that can carry
 // authentication material. Raw argv stays in memory; only classified
-// Credential evidence (hashes unless explicitly opted in) may enter an ingest
-// artifact.
+// Credential evidence may enter an ingest artifact. Unresolved references are
+// explicitly marked unobserved so the planner cannot present them as secrets.
 func ExtractServerCredentials(
 	server ServerDef,
-	includeValues bool,
 	engine *rules.Engine,
 ) []CredentialInfo {
 	creds := ExtractCredentials(
 		server.Env,
 		server.Headers,
 		server.Name,
-		includeValues,
 		engine,
 	)
 	creds = append(creds, extractArgumentCredentials(
 		server.Args,
 		server.Name,
-		includeValues,
 		engine,
 	)...)
 	if server.Transport == "http" {
@@ -82,7 +77,6 @@ func ExtractServerCredentials(
 			server.URL,
 			server.Name,
 			"url",
-			includeValues,
 			engine,
 		)...)
 	}
@@ -105,7 +99,6 @@ func extractURLCredentials(
 	rawURL string,
 	source string,
 	locationPrefix string,
-	includeValues bool,
 	engine *rules.Engine,
 ) []CredentialInfo {
 	parsed, err := url.Parse(rawURL)
@@ -122,7 +115,6 @@ func extractURLCredentials(
 			value,
 			source,
 			location,
-			includeValues,
 			engine,
 		))
 	}
@@ -156,7 +148,6 @@ func extractURLCredentials(
 func extractArgumentCredentials(
 	args []string,
 	source string,
-	includeValues bool,
 	engine *rules.Engine,
 ) []CredentialInfo {
 	var creds []CredentialInfo
@@ -166,7 +157,7 @@ func extractArgumentCredentials(
 		if name == "" || strings.TrimSpace(value) == "" {
 			return
 		}
-		credential := classifyAndBuild(name, value, source, location, includeValues, engine)
+		credential := classifyAndBuild(name, value, source, location, engine)
 		key := credential.Name + "\x00" + credential.Location + "\x00" + credential.ValueHash
 		if seen[key] {
 			return
@@ -264,7 +255,7 @@ func classifyCredentialType(name, value string, engine *rules.Engine) string {
 	return "hardcoded"
 }
 
-func classifyAndBuild(name, value, source, location string, includeValues bool, engine *rules.Engine) CredentialInfo {
+func classifyAndBuild(name, value, source, location string, engine *rules.Engine) CredentialInfo {
 	material := credentialMaterial(name, value, location)
 	ci := CredentialInfo{
 		Name:          name,
@@ -293,11 +284,10 @@ func classifyAndBuild(name, value, source, location string, includeValues bool, 
 		ci.ExposureStatus = common.CredentialExposureExposed
 	}
 
-	if includeValues {
-		ci.Value = material
-	} else {
-		ci.Value = ci.ValueHash
-	}
+	// The lean collector always keeps what it actually observed. MaterialStatus,
+	// rather than a legacy serialization toggle, distinguishes executable raw
+	// material from unresolved environment/vault references.
+	ci.Value = material
 
 	return ci
 }

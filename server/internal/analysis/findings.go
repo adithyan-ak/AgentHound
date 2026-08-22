@@ -81,8 +81,14 @@ var findingsMeta = map[string]findingMeta{
 	},
 	"POISONED_INSTRUCTIONS": {
 		category: "Instruction Poisoning",
-		title:    "Suspicious instruction-file patterns",
-		owasp:    []string{"MCP05", "ASI03"},
+		title:    "Instruction poisoning detected",
+		owasp:    []string{"ASI03"},
+		atlas:    []string{"AML.T0051"},
+	},
+	"INSTRUCTION_SIGNAL": {
+		category: "Instruction Signal",
+		title:    "Instruction signal requires review",
+		owasp:    []string{"ASI03"},
 		atlas:    []string{"AML.T0051"},
 	},
 	"CAN_IMPERSONATE": {
@@ -168,7 +174,9 @@ func formatFindingDescription(metaKey string, ctx findingDescriptionContext) str
 	case "SHADOWS":
 		return fmt.Sprintf("%s references %s by name from another server, matching the tool-shadowing heuristic", source, target)
 	case "POISONED_INSTRUCTIONS":
-		return fmt.Sprintf("%s matched suspicious instruction patterns", source)
+		return fmt.Sprintf("%s contains strong compound instruction-poisoning evidence", source)
+	case "INSTRUCTION_SIGNAL":
+		return fmt.Sprintf("%s contains suspicious instruction content requiring operator review", source)
 	case "CAN_IMPERSONATE":
 		return fmt.Sprintf("%s has skill-description similarity to %s above the impersonation heuristic threshold", source, target)
 	case "CAN_EXECUTE":
@@ -270,10 +278,10 @@ CALL {
   ) AS detector_evidence_edges
 }
 RETURN src.objectid AS source_id,
-       src.name AS source_name,
+       coalesce(src.name, src.path, '') AS source_name,
        labels(src)[0] AS source_kind,
        tgt.objectid AS target_id,
-       tgt.name AS target_name,
+       coalesce(tgt.name, tgt.path, '') AS target_name,
        labels(tgt)[0] AS target_kind,
        type(r) AS edge_kind,
        r.confidence AS confidence,
@@ -285,21 +293,20 @@ RETURN src.objectid AS source_id,
        tgt.merge_key AS target_merge_key,
        tgt.material_status AS target_material_status,
        tgt.exposure_status AS target_exposure_status,
-       r.evidence_version AS evidence_version,
-       r.reach_evidence_state AS reach_evidence_state,
-       r.verified_scenario_id AS verified_scenario_id,
-       r.verified_scenario_version AS verified_scenario_version,
-       r.verified_run_id AS verified_run_id,
-       r.verified_at AS verified_at,
-       r.verified_oracle_type AS verified_oracle_type,
-       r.verified_outcome AS verified_outcome,
-       r.verified_control_stage AS verified_control_stage,
-       r.verified_control_status AS verified_control_status,
-       r.verified_control_resource_addressed AS verified_control_resource_addressed,
-       r.verified_authed_stage AS verified_authed_stage,
-       r.verified_authed_status AS verified_authed_status,
-       r.verified_authed_resource_addressed AS verified_authed_resource_addressed,
-       r.verified_cleanup_status AS verified_cleanup_status,
+	       r.evidence_version AS evidence_version,
+	       r.reach_evidence_state AS reach_evidence_state,
+	       r.proof_action AS proof_action,
+	       r.proof_action_id AS proof_action_id,
+	       r.proof_verified_at AS proof_verified_at,
+	       r.proof_type AS proof_type,
+	       r.proof_outcome AS proof_outcome,
+	       r.proof_control_stage AS proof_control_stage,
+	       r.proof_control_status AS proof_control_status,
+	       r.proof_control_resource_addressed AS proof_control_resource_addressed,
+	       r.proof_credential_stage AS proof_credential_stage,
+	       r.proof_credential_status AS proof_credential_status,
+	       r.proof_credential_resource_addressed AS proof_credential_resource_addressed,
+	       r.proof_cleanup_status AS proof_cleanup_status,
        detector_evidence_nodes AS exact_evidence_nodes,
        detector_evidence_edges AS exact_evidence_edges,
        r.evidence_synthetic_edge AS exact_evidence_synthetic_edge
@@ -361,9 +368,9 @@ func QueryFindings(ctx context.Context, db graph.GraphDB, severity string) ([]mo
 		default:
 			sev = classifySeverity(edgeKind, crossProtocol, confidence, targetSensitivity)
 		}
-		// Campaign verification upgrade: when the CAN_REACH processor re-correlated
-		// a CREDENTIAL_REACH_VERIFIED edge, the composite edge carries
-		// reach_evidence_state=verified and confidence was raised to 1.0. This
+		// Same-scan proof upgrade: when the CAN_REACH processor correlates a
+		// CREDENTIAL_ACCESS_OBSERVED edge, the composite edge carries
+		// reach_evidence_state=verified and confidence is raised to 1.0. This
 		// upgrades the SAME finding's evidence state (and, via the higher
 		// confidence already read above, its severity) — no second finding.
 		if stringVal(row, "reach_evidence_state") == string(model.FindingEvidenceVerified) {
@@ -392,7 +399,7 @@ func QueryFindings(ctx context.Context, db graph.GraphDB, severity string) ([]mo
 			confidence:               confidence,
 		})
 
-		findings = append(findings, model.Finding{
+		finding := model.Finding{
 			ID:            findingFingerprint(edgeKind, sourceID, targetID),
 			Severity:      sev,
 			Category:      meta.category,
@@ -411,7 +418,13 @@ func QueryFindings(ctx context.Context, db graph.GraphDB, severity string) ([]mo
 			ExactEvidence: exactFindingEvidenceFromRow(row),
 			OWASPMap:      append([]string{}, meta.owasp...),
 			ATLASMap:      append([]string{}, meta.atlas...),
-		})
+		}
+		if edgeKind == "POISONED_INSTRUCTIONS" || edgeKind == "INSTRUCTION_SIGNAL" {
+			if InstructionEvidenceFromFinding(&finding) == nil {
+				return nil, fmt.Errorf("construct %s finding %s: invalid structured instruction evidence", edgeKind, finding.ID)
+			}
+		}
+		findings = append(findings, finding)
 	}
 
 	return findings, nil
@@ -467,7 +480,7 @@ func buildFindingEvidence(
 	state := model.FindingEvidenceUnknown
 	if detector != "" {
 		state = model.FindingEvidenceInferred
-		if edgeKind == "POISONED_DESCRIPTION" || edgeKind == "POISONED_INSTRUCTIONS" {
+		if edgeKind == "POISONED_DESCRIPTION" || edgeKind == "POISONED_INSTRUCTIONS" || edgeKind == "INSTRUCTION_SIGNAL" {
 			state = model.FindingEvidenceObserved
 		}
 	}
@@ -488,28 +501,27 @@ func buildFindingEvidence(
 		Channels:       append([]string{}, channels...),
 		MaterialStatus: materialStatus,
 		ExposureStatus: exposureStatus,
-		Verification:   buildFindingVerification(row),
+		Proof:          buildFindingProof(row),
 	}
 }
 
-func buildFindingVerification(row map[string]any) *model.FindingVerification {
+func buildFindingProof(row map[string]any) *model.FindingProof {
 	if stringVal(row, "reach_evidence_state") != string(model.FindingEvidenceVerified) {
 		return nil
 	}
-	return &model.FindingVerification{
-		ScenarioID:               stringVal(row, "verified_scenario_id"),
-		ScenarioVersion:          intVal(row, "verified_scenario_version"),
-		CampaignRunID:            stringVal(row, "verified_run_id"),
-		VerifiedAt:               stringVal(row, "verified_at"),
-		OracleType:               stringVal(row, "verified_oracle_type"),
-		Outcome:                  stringVal(row, "verified_outcome"),
-		ControlStage:             stringVal(row, "verified_control_stage"),
-		ControlStatus:            stringVal(row, "verified_control_status"),
-		ControlResourceAddressed: boolVal(row, "verified_control_resource_addressed"),
-		AuthedStage:              stringVal(row, "verified_authed_stage"),
-		AuthedStatus:             stringVal(row, "verified_authed_status"),
-		AuthedResourceAddressed:  boolVal(row, "verified_authed_resource_addressed"),
-		CleanupStatus:            stringVal(row, "verified_cleanup_status"),
+	return &model.FindingProof{
+		Action:                      stringVal(row, "proof_action"),
+		ActionID:                    stringVal(row, "proof_action_id"),
+		VerifiedAt:                  stringVal(row, "proof_verified_at"),
+		ProofType:                   stringVal(row, "proof_type"),
+		Outcome:                     stringVal(row, "proof_outcome"),
+		ControlStage:                stringVal(row, "proof_control_stage"),
+		ControlStatus:               stringVal(row, "proof_control_status"),
+		ControlResourceAddressed:    boolVal(row, "proof_control_resource_addressed"),
+		CredentialStage:             stringVal(row, "proof_credential_stage"),
+		CredentialStatus:            stringVal(row, "proof_credential_status"),
+		CredentialResourceAddressed: boolVal(row, "proof_credential_resource_addressed"),
+		CleanupStatus:               stringVal(row, "proof_cleanup_status"),
 	}
 }
 
@@ -680,7 +692,7 @@ func classifySeverity(edgeKind string, crossProtocol bool, confidence float64, t
 	case "POISONED_DESCRIPTION", "SHADOWS", "POISONED_INSTRUCTIONS",
 		"CONFUSED_DEPUTY", "IFC_VIOLATION", "POISONS_CONTEXT":
 		return "high"
-	case "CAN_IMPERSONATE", "CAN_EXECUTE", "HAS_ACCESS_TO", "TAINTS":
+	case "CAN_IMPERSONATE", "CAN_EXECUTE", "HAS_ACCESS_TO", "TAINTS", "INSTRUCTION_SIGNAL":
 		return "medium"
 	default:
 		return "low"

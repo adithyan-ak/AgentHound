@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -28,6 +29,8 @@ type ResourceSignals struct {
 	SensitivityEvidence string
 }
 
+var httpURL = regexp.MustCompile(`(?i)https?://[^\s]+`)
+
 func computeToolSignals(tool *mcpsdk.Tool, allToolNames map[string]bool, engine *rules.Engine) ToolSignals {
 	schemaMap := inputSchemaAsMap(tool.InputSchema)
 
@@ -35,7 +38,10 @@ func computeToolSignals(tool *mcpsdk.Tool, allToolNames map[string]bool, engine 
 		DescriptionHash: common.DescriptionHash(tool.Name, tool.Description, schemaMap),
 	}
 
-	combined := tool.Name + " " + tool.Description
+	// A documentation link is evidence about the description, not proof that
+	// the tool can make outbound requests. Other action words (fetch, request,
+	// webhook, and so on) and schema keys remain available to capability rules.
+	combined := tool.Name + " " + httpURL.ReplaceAllString(tool.Description, "")
 	if schemaMap != nil {
 		if props, ok := schemaMap["properties"].(map[string]any); ok {
 			for key := range props {

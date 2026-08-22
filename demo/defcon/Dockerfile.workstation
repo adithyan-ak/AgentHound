@@ -1,4 +1,4 @@
-FROM golang:1.25-alpine AS builder
+FROM golang:1.25.13-alpine AS builder
 WORKDIR /src
 ARG VERSION=defcon34
 ARG COMMIT=none
@@ -19,7 +19,6 @@ RUN apk add --no-cache bash ca-certificates curl \
 COPY --from=builder /bin/agenthound /usr/local/bin/agenthound
 COPY demo/defcon/workstation/home/ /home/demo/
 RUN mkdir -p /home/demo/.agenthound /demo/artifacts \
-    && touch /home/demo/.agenthound/campaign-acknowledged \
     && chown -R demo:demo /home/demo /demo
 USER demo
 WORKDIR /home/demo/project

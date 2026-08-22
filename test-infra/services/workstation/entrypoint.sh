@@ -5,12 +5,6 @@ readonly FIXTURE_HOME=/opt/agenthound-workstation/home
 
 restore_fixtures() {
     cp -a "${FIXTURE_HOME}/." "${HOME}/"
-    mkdir -p "${HOME}/.agenthound"
-    touch \
-        "${HOME}/.agenthound/loot-acknowledged" \
-        "${HOME}/.agenthound/poison-acknowledged" \
-        "${HOME}/.agenthound/extract-acknowledged" \
-        "${HOME}/.agenthound/campaign-acknowledged"
 }
 
 if [ "${1:-}" = "restore-fixtures" ]; then

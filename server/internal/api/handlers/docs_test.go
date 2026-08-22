@@ -196,7 +196,7 @@ func TestOpenAPIRuntimeParityContracts(t *testing.T) {
 	}
 }
 
-func TestServedOpenAPICampaignParity(t *testing.T) {
+func TestServedOpenAPIProofParity(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	HandleOpenAPIDocs(
 		recorder,
@@ -214,44 +214,20 @@ func TestServedOpenAPICampaignParity(t *testing.T) {
 	requireSchemaFields(
 		t,
 		schemas,
-		"FindingVerification",
-		"scenario_id",
-		"scenario_version",
-		"campaign_run_id",
+		"FindingProof",
+		"action",
+		"action_id",
 		"verified_at",
-		"oracle_type",
+		"proof_type",
 		"outcome",
 		"control_stage",
 		"control_status",
 		"control_resource_addressed",
-		"authed_stage",
-		"authed_status",
-		"authed_resource_addressed",
+		"credential_stage",
+		"credential_status",
+		"credential_resource_addressed",
 		"cleanup_status",
 	)
-	requireSchemaFields(
-		t,
-		schemas,
-		"CampaignWitness",
-		"schema_version",
-		"topology_normalization_version",
-		"publication_revision",
-		"predicted_edge_kind",
-		"agent_id",
-		"agent_kind",
-		"credential_id",
-		"credential_kind",
-		"credential_value_hash",
-		"credential_merge_key",
-		"server_id",
-		"server_kind",
-		"resource_id",
-		"resource_kind",
-		"resource_identity_input",
-		"evidence_node_ids",
-		"evidence_node_kinds",
-	)
-	requireSchemaFields(t, schemas, "FindingWitnessResponse", "witness", "projection")
 	requireSchemaFields(
 		t,
 		schemas,
@@ -306,16 +282,16 @@ func TestServedOpenAPICampaignParity(t *testing.T) {
 	}
 
 	evidenceProperties := nestedMap(t, schemas, "FindingEvidence", "properties")
-	verification := nestedMap(t, evidenceProperties, "verification")
-	if got := verification["$ref"]; got != "#/components/schemas/FindingVerification" {
-		t.Fatalf("FindingEvidence.verification ref = %v", got)
+	proof := nestedMap(t, evidenceProperties, "proof")
+	if got := proof["$ref"]; got != "#/components/schemas/FindingProof" {
+		t.Fatalf("FindingEvidence.proof ref = %v", got)
 	}
 	evidenceRequired, ok := nestedMap(t, schemas, "FindingEvidence")["required"].([]any)
 	if !ok {
 		t.Fatal("FindingEvidence.required is not an array")
 	}
-	if containsString(evidenceRequired, "verification") {
-		t.Fatal("FindingEvidence.verification must remain optional")
+	if containsString(evidenceRequired, "proof") {
+		t.Fatal("FindingEvidence.proof must remain optional")
 	}
 	state := nestedMap(t, evidenceProperties, "state")
 	enum, ok := state["enum"].([]any)
@@ -324,28 +300,8 @@ func TestServedOpenAPICampaignParity(t *testing.T) {
 	}
 
 	paths := nestedMap(t, spec, "paths")
-	responses := nestedMap(
-		t,
-		paths,
-		"/analysis/findings/{id}/witness",
-		"get",
-		"responses",
-	)
-	for _, status := range []string{"200", "400", "404", "409"} {
-		if _, ok := responses[status]; !ok {
-			t.Errorf("witness export does not document %s", status)
-		}
-	}
-	successSchema := nestedMap(
-		t,
-		responses,
-		"200",
-		"content",
-		"application/json",
-		"schema",
-	)
-	if got := successSchema["$ref"]; got != "#/components/schemas/FindingWitnessResponse" {
-		t.Fatalf("witness 200 schema ref = %v", got)
+	if _, exists := paths["/analysis/findings/{id}/witness"]; exists {
+		t.Fatal("legacy witness export path is still documented")
 	}
 }
 

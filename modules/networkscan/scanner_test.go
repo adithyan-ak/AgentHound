@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/adithyan-ak/agenthound/sdk/contact"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
@@ -138,6 +139,44 @@ func TestScanner_NoOpenPorts(t *testing.T) {
 }
 
 func TestScanner_ProbeOutcomeAccounting(t *testing.T) {
+	t.Run("all excluded is not applicable", func(t *testing.T) {
+		policy, err := contact.NewPolicy([]string{"10.0.0.0/30"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		dialer := &fakeDialer{openSet: map[string]bool{}}
+		s := &Scanner{ContactPolicy: policy, Dialer: dialer}
+		if _, err := s.Scan(context.Background(), "10.0.0.0/30"); err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+		report := s.LastReport()
+		if report.State() != ingest.OutcomeNotApplicable || report.Total != 0 || report.ExcludedHosts != 4 {
+			t.Fatalf("all-excluded report = %+v, want not_applicable with four excluded hosts", report)
+		}
+		if dialer.dialCount != 0 {
+			t.Fatalf("all-excluded scan made %d dials, want zero", dialer.dialCount)
+		}
+	})
+
+	t.Run("partial exclusion scans admitted remainder", func(t *testing.T) {
+		policy, err := contact.NewPolicy([]string{"10.0.0.0/31"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		dialer := &fakeDialer{openSet: map[string]bool{}}
+		s := &Scanner{ContactPolicy: policy, Dialer: dialer, Ports: []int{7001}}
+		if _, err := s.Scan(context.Background(), "10.0.0.0/30"); err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+		report := s.LastReport()
+		if report.State() != ingest.OutcomeComplete || report.Total != 2 || report.ExcludedHosts != 2 {
+			t.Fatalf("partially excluded report = %+v, want complete coverage of two admitted hosts", report)
+		}
+		if dialer.dialCount != 2 {
+			t.Fatalf("partially excluded scan made %d dials, want two", dialer.dialCount)
+		}
+	})
+
 	t.Run("mixed conclusive and unknown is partial", func(t *testing.T) {
 		s := &Scanner{
 			Ports: []int{7001, 7002},

@@ -75,7 +75,9 @@ export function TopFindings() {
                 <div className="min-w-0 flex-1 py-0.5">
                   <p className="truncate font-mono text-[12px] font-medium text-foreground">{f.title}</p>
                   <p className="truncate font-mono text-[10px] text-muted-foreground">
-                    {f.source_name} <span className="text-primary/70">&rarr;</span> {f.target_name}
+                    {f.edge_kind === "INSTRUCTION_SIGNAL" || f.edge_kind === "POISONED_INSTRUCTIONS"
+                      ? instructionBasename(f.source_name)
+                      : <>{f.source_name} <span className="text-primary/70">&rarr;</span> {f.target_name}</>}
                   </p>
                 </div>
                 {f.owasp_map && f.owasp_map.length > 0 && (
@@ -95,4 +97,9 @@ export function TopFindings() {
       </AsyncBoundary>
     </WidgetCard>
   );
+}
+
+function instructionBasename(path: string): string {
+  const parts = path.replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts.length > 0 ? parts[parts.length - 1]! : path;
 }

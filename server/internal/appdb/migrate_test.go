@@ -17,7 +17,7 @@ func TestMigrationsContainCanonicalV1Schema(t *testing.T) {
 			names = append(names, entry.Name())
 		}
 	}
-	if want := []string{"001_initial_v1.sql"}; !reflect.DeepEqual(names, want) {
+	if want := []string{"001_initial_v1.sql", "002_remove_campaign_verification.sql", "003_instruction_evidence.sql"}; !reflect.DeepEqual(names, want) {
 		t.Fatalf("migration files = %v, want %v", names, want)
 	}
 
@@ -56,6 +56,22 @@ func TestMigrationsContainCanonicalV1Schema(t *testing.T) {
 	} {
 		if strings.Contains(sql, forbidden) {
 			t.Errorf("initial V1 migration contains non-initialization operation %q", forbidden)
+		}
+	}
+
+	data, err = migrationFS.ReadFile("migrations/002_remove_campaign_verification.sql")
+	if err != nil {
+		t.Fatalf("read campaign verification removal migration: %v", err)
+	}
+	cleanupSQL := string(data)
+	for _, expected := range []string{
+		"evidence - 'verification'",
+		"'\"inferred\"'::jsonb",
+		"LEAST(confidence, 0.6)",
+		"severity = 'critical'",
+	} {
+		if !strings.Contains(cleanupSQL, expected) {
+			t.Errorf("campaign verification removal migration missing %q", expected)
 		}
 	}
 }

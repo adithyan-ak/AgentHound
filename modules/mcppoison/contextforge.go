@@ -20,7 +20,8 @@ import (
 
 	"github.com/adithyan-ak/agenthound/modules/mcp"
 	"github.com/adithyan-ak/agenthound/sdk/action"
-	"github.com/adithyan-ak/agenthound/sdk/campaign"
+	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/contact"
 )
 
 const (
@@ -186,11 +187,21 @@ type contextForgeConfig struct {
 	ManagementBase string
 	ServerID       string
 	ToolName       string
+	Token          string
 	Insecure       bool
 }
 
+type contextForgeTokenKey struct{}
+
+// WithToken supplies raw bearer material resolved from the scan artifact to a
+// recovery attempt. The value remains in memory and is never copied into the
+// recovery record.
+func WithToken(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, contextForgeTokenKey{}, strings.TrimSpace(token))
+}
+
 // ValidateContextForgeEndpoints validates the provider URL contract without
-// opening a connection. It is shared by direct poisoning and campaign planning.
+// opening a connection. It is used by local planner eligibility checks.
 func ValidateContextForgeEndpoints(mcpURL, managementBase string) error {
 	_, _, derivedBase, err := parseContextForgeMCPURL(mcpURL)
 	if err != nil {
@@ -229,9 +240,10 @@ func parseContextForgeConfig(t action.Target, toolName string, extras map[string
 		return contextForgeConfig{}, fmt.Errorf("mcp poison: invalid --management-url: %w", err)
 	}
 	insecure, _ := extras["insecure"].(bool)
+	token, _ := extras["credential"].(string)
 	return contextForgeConfig{
 		MCPURL: mcpURL, ManagementBase: managementBase, ServerID: serverID,
-		ToolName: toolName, Insecure: insecure,
+		ToolName: toolName, Token: strings.TrimSpace(token), Insecure: insecure,
 	}, nil
 }
 
@@ -377,7 +389,7 @@ func newContextForgeClient(base, token string, insecure bool, timeout time.Durat
 	if err != nil {
 		return nil, err
 	}
-	origin, err := campaign.ParseHTTPOrigin(validated)
+	origin, err := common.ParseHTTPOrigin(validated)
 	if err != nil {
 		return nil, errors.New("management URL has an invalid HTTP origin")
 	}
@@ -385,7 +397,7 @@ func newContextForgeClient(base, token string, insecure bool, timeout time.Durat
 	if !ok {
 		return nil, errors.New("default HTTP transport is not configurable")
 	}
-	transport := defaultTransport.Clone()
+	transport := contact.HTTPTransport(defaultTransport)
 	if insecure {
 		if transport.TLSClientConfig == nil {
 			transport.TLSClientConfig = &tls.Config{}
@@ -399,7 +411,7 @@ func newContextForgeClient(base, token string, insecure bool, timeout time.Durat
 	}
 	client := &http.Client{
 		Timeout:   timeout,
-		Transport: campaign.CountingTransport{Base: bound},
+		Transport: bound,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errors.New("ContextForge redirect rejected")
 		},
@@ -409,7 +421,7 @@ func newContextForgeClient(base, token string, insecure bool, timeout time.Durat
 
 type contextForgeCredentialTransport struct {
 	base          http.RoundTripper
-	origin        campaign.HTTPOrigin
+	origin        common.HTTPOrigin
 	authorization string
 }
 
@@ -567,7 +579,16 @@ type contextForgeClaims struct {
 	APIIdentity string
 }
 
-func resolveContextForgeToken(mcpURL, managementBase string) (string, error) {
+func resolveContextForgeToken(mcpURL, managementBase string, explicit ...string) (string, error) {
+	if len(explicit) > 0 {
+		token := strings.TrimSpace(explicit[0])
+		if token != "" {
+			if strings.ContainsAny(token, "\r\n") {
+				return "", errors.New("ContextForge token contains prohibited control characters")
+			}
+			return token, nil
+		}
+	}
 	token := strings.TrimSpace(os.Getenv("AGENTHOUND_CONTEXTFORGE_TOKEN"))
 	if token != "" {
 		if strings.ContainsAny(token, "\r\n") {
@@ -575,7 +596,7 @@ func resolveContextForgeToken(mcpURL, managementBase string) (string, error) {
 		}
 		return token, nil
 	}
-	mcpOrigin, err := campaign.ParseHTTPOrigin(mcpURL)
+	mcpOrigin, err := common.ParseHTTPOrigin(mcpURL)
 	if err != nil {
 		return "", errors.New("cannot compare MCP and ContextForge credential origins")
 	}

@@ -7,9 +7,11 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
+	sharedinstruction "github.com/adithyan-ak/agenthound/sdk/instruction"
 )
 
 type FieldError struct {
@@ -88,6 +90,12 @@ func Preflight(data *ingest.IngestData) error {
 			Action:    produceV1ArtifactAction,
 		}
 	}
+	if _, legacyCampaign := data.Meta.Extra["campaign_artifact"]; legacyCampaign {
+		return &ValidationError{Errors: []FieldError{{
+			Path:    "meta.extra.campaign_artifact",
+			Message: "legacy campaign artifacts are unsupported; produce a unified scan artifact",
+		}}}
+	}
 	return preflightRegistryContracts(data.Meta.Collection)
 }
 
@@ -100,6 +108,14 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 		return err
 	}
 	var errs []FieldError
+	if value, present := data.Meta.Extra[ingest.ScanExecutionExtraKey]; present {
+		if _, err := ingest.DecodeScanExecution(value); err != nil {
+			errs = append(errs, FieldError{
+				Path:    "meta.extra.scan_execution",
+				Message: err.Error(),
+			})
+		}
+	}
 	declaredCoverage := make(map[string]bool)
 	coverageOutcomes := make(map[string]bool)
 	if data.Meta.Collection == nil {
@@ -346,6 +362,9 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 			if hasKind(node.Kinds, "Credential") {
 				errs = append(errs, validateCredentialProperties(node.Properties, i)...)
 			}
+			if hasKind(node.Kinds, "InstructionFile") {
+				errs = append(errs, validateInstructionFileProperties(node.Properties, i)...)
+			}
 		}
 	}
 
@@ -458,6 +477,9 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 			// with no default and no compatibility fallback — turns that
 			// endpoint-time 500 into a rejected import.
 			errs = append(errs, validateEdgeRiskWeight(edge.Properties, i)...)
+		}
+		if edge.Kind == "CREDENTIAL_ACCESS_OBSERVED" {
+			errs = append(errs, validateCredentialAccessProof(edge.Properties, i)...)
 		}
 		errs = append(errs, validateStdioChildID(nodesByID, edge, i)...)
 	}
@@ -1348,6 +1370,114 @@ func validateCanonicalNodeProperties(node ingest.Node, index int) []FieldError {
 	return errs
 }
 
+func validateInstructionFileProperties(properties map[string]any, index int) []FieldError {
+	base := fmt.Sprintf("graph.nodes[%d].properties.", index)
+	keys := []string{
+		"instruction_verdict",
+		"instruction_scope",
+		"instruction_signal_count",
+		"instruction_signal_truncated",
+		"instruction_evidence_version",
+		"instruction_evidence_json",
+		"size_bytes",
+		"modified_at",
+	}
+	present := 0
+	for _, key := range keys {
+		if _, ok := properties[key]; ok {
+			present++
+		}
+	}
+	// Historical V1 artifacts carried only is_suspicious. They remain valid,
+	// but the old boolean is intentionally not projection input.
+	if present == 0 {
+		return nil
+	}
+	var errs []FieldError
+	if present != len(keys) {
+		for _, key := range keys {
+			if _, ok := properties[key]; !ok {
+				errs = append(errs, FieldError{Path: base + key, Message: "is required by the structured instruction evidence contract"})
+			}
+		}
+		return errs
+	}
+	verdict, verdictOK := properties["instruction_verdict"].(string)
+	if !verdictOK || !sharedinstruction.ValidVerdict(sharedinstruction.Verdict(verdict)) {
+		errs = append(errs, FieldError{Path: base + "instruction_verdict", Message: "must be clean, signal, or poisoning"})
+	}
+	scope, scopeOK := properties["instruction_scope"].(string)
+	if !scopeOK || !sharedinstruction.ValidScope(sharedinstruction.Scope(scope)) {
+		errs = append(errs, FieldError{Path: base + "instruction_scope", Message: "must be exact_project, exact_user, or deep"})
+	}
+	count, countOK := nonNegativeWholeNumber(properties["instruction_signal_count"])
+	if !countOK {
+		errs = append(errs, FieldError{Path: base + "instruction_signal_count", Message: "must be a non-negative integer"})
+	}
+	truncated, truncatedOK := properties["instruction_signal_truncated"].(bool)
+	if !truncatedOK {
+		errs = append(errs, FieldError{Path: base + "instruction_signal_truncated", Message: "must be a boolean"})
+	}
+	version, versionOK := nonNegativeWholeNumber(properties["instruction_evidence_version"])
+	if !versionOK || int(version) != sharedinstruction.EvidenceVersion {
+		errs = append(errs, FieldError{Path: base + "instruction_evidence_version", Message: fmt.Sprintf("must be %d", sharedinstruction.EvidenceVersion)})
+	}
+	rawEvidence, rawOK := properties["instruction_evidence_json"].(string)
+	var evidence sharedinstruction.Evidence
+	if !rawOK {
+		errs = append(errs, FieldError{Path: base + "instruction_evidence_json", Message: "must be a JSON string"})
+	} else {
+		parsed, err := sharedinstruction.ParseEvidenceJSON(rawEvidence)
+		if err != nil {
+			errs = append(errs, FieldError{Path: base + "instruction_evidence_json", Message: err.Error()})
+		} else {
+			evidence = parsed
+			if verdictOK && string(evidence.Verdict) != verdict {
+				errs = append(errs, FieldError{Path: base + "instruction_evidence_json", Message: "verdict does not match instruction_verdict"})
+			}
+			if countOK && evidence.TotalSignals != int(count) {
+				errs = append(errs, FieldError{Path: base + "instruction_signal_count", Message: "does not match instruction evidence total_signals"})
+			}
+			if truncatedOK && evidence.Truncated != truncated {
+				errs = append(errs, FieldError{Path: base + "instruction_signal_truncated", Message: "does not match instruction evidence truncated"})
+			}
+		}
+	}
+	size, sizeOK := nonNegativeWholeNumber(properties["size_bytes"])
+	if !sizeOK || size < 0 {
+		errs = append(errs, FieldError{Path: base + "size_bytes", Message: "must be a non-negative integer"})
+	} else if rawOK && evidence.Version == sharedinstruction.EvidenceVersion {
+		for signalIndex, signal := range evidence.Signals {
+			minimumLength := minimumInstructionSourceBytes(signal.Match)
+			if signal.RawOffset < 0 || float64(signal.RawOffset) > size || float64(minimumLength) > size-float64(signal.RawOffset) {
+				errs = append(errs, FieldError{
+					Path:    fmt.Sprintf("%sinstruction_evidence_json.signals[%d].match", base, signalIndex),
+					Message: "source span must fit inside size_bytes",
+				})
+			}
+		}
+	}
+	modifiedAt, modifiedOK := properties["modified_at"].(string)
+	if !modifiedOK || modifiedAt == "" {
+		errs = append(errs, FieldError{Path: base + "modified_at", Message: "must be a UTC RFC3339 timestamp"})
+	} else if parsed, err := time.Parse(time.RFC3339Nano, modifiedAt); err != nil || parsed.Location() != time.UTC {
+		errs = append(errs, FieldError{Path: base + "modified_at", Message: "must be a UTC RFC3339 timestamp"})
+	}
+	return errs
+}
+
+func minimumInstructionSourceBytes(value string) int {
+	total := 0
+	for _, char := range value {
+		if char == utf8.RuneError {
+			total++
+			continue
+		}
+		total += utf8.RuneLen(char)
+	}
+	return total
+}
+
 func validateA2ASignatureProperties(properties map[string]any, index int) []FieldError {
 	const (
 		statusKey = "signature_verification_status"
@@ -2092,6 +2222,97 @@ func validateCredentialProperties(properties map[string]any, index int) []FieldE
 	case "exposed", "not_observed", "unknown":
 	default:
 		errs = append(errs, FieldError{Path: path + "exposure_status", Message: "invalid credential exposure status"})
+	}
+	if rawValue, present := properties["value"]; present {
+		value, ok := rawValue.(string)
+		if !ok || value == "" {
+			errs = append(errs, FieldError{Path: path + "value", Message: "must be a non-empty string when present"})
+		} else if valueHash != common.HashCredentialValue(value) {
+			errs = append(errs, FieldError{Path: path + "value_hash", Message: "must equal the hash of Credential.value"})
+		}
+		if mergeKey != "value_hash" {
+			errs = append(errs, FieldError{Path: path + "merge_key", Message: "must be value_hash when Credential.value is present"})
+		}
+		if identityBasis != "value_hash" {
+			errs = append(errs, FieldError{Path: path + "identity_basis", Message: "must be value_hash when Credential.value is present"})
+		}
+		if material != string(common.CredentialMaterialObserved) {
+			errs = append(errs, FieldError{Path: path + "material_status", Message: "must be observed when Credential.value is present"})
+		}
+		if exposure != string(common.CredentialExposureExposed) {
+			errs = append(errs, FieldError{Path: path + "exposure_status", Message: "must be exposed when Credential.value is present"})
+		}
+	}
+	return errs
+}
+
+func validateCredentialAccessProof(properties map[string]any, index int) []FieldError {
+	path := fmt.Sprintf("graph.edges[%d].properties.", index)
+	var errs []FieldError
+
+	requireString := func(key, expected string) string {
+		value, ok := properties[key].(string)
+		if !ok || strings.TrimSpace(value) == "" {
+			errs = append(errs, FieldError{Path: path + key, Message: "must be a non-empty string"})
+			return ""
+		}
+		if expected != "" && value != expected {
+			errs = append(errs, FieldError{Path: path + key, Message: fmt.Sprintf("must be %q", expected)})
+		}
+		return value
+	}
+	requireBool := func(key string) (bool, bool) {
+		value, ok := properties[key].(bool)
+		if !ok {
+			errs = append(errs, FieldError{Path: path + key, Message: "must be a boolean"})
+		}
+		return value, ok
+	}
+
+	if composite, ok := requireBool("is_composite"); ok && composite {
+		errs = append(errs, FieldError{Path: path + "is_composite", Message: "must be false"})
+	}
+	if confidence, ok := numericFloat(properties["confidence"]); !ok || confidence != 1.0 {
+		errs = append(errs, FieldError{Path: path + "confidence", Message: "must be 1"})
+	}
+	if weight, ok := numericFloat(properties["risk_weight"]); !ok || weight != 0.1 {
+		errs = append(errs, FieldError{Path: path + "risk_weight", Message: "must be 0.1"})
+	}
+	requireString("action_id", "")
+	requireString("action", "credential_reach")
+	verifiedAt := requireString("verified_at", "")
+	if verifiedAt != "" {
+		if _, err := time.Parse(time.RFC3339, verifiedAt); err != nil {
+			errs = append(errs, FieldError{Path: path + "verified_at", Message: "must be an RFC3339 timestamp"})
+		}
+	}
+	requireString("proof_type", "differential_resource_read")
+	requireString("outcome", "credential_required")
+	controlStage := requireString("control_stage", "")
+	if controlStage != "" && controlStage != "initialize" && controlStage != "resource_read" {
+		errs = append(errs, FieldError{Path: path + "control_stage", Message: "must be initialize or resource_read"})
+	}
+	requireString("control_status", "denied")
+	controlAddressed, controlAddressedOK := requireBool("control_resource_addressed")
+	if controlAddressedOK && ((controlStage == "initialize" && controlAddressed) ||
+		(controlStage == "resource_read" && !controlAddressed)) {
+		errs = append(errs, FieldError{Path: path + "control_resource_addressed", Message: "must be false for initialize and true for resource_read"})
+	}
+	requireString("credential_stage", "resource_read")
+	requireString("credential_status", "allowed")
+	if addressed, ok := requireBool("credential_resource_addressed"); ok && !addressed {
+		errs = append(errs, FieldError{Path: path + "credential_resource_addressed", Message: "must be true"})
+	}
+	requireString("cleanup_status", "not_applicable")
+
+	for _, legacy := range []string{
+		"scenario_id", "scenario_version", "run_id", "campaign_run_id", "engagement_id",
+		"oracle_type", "witness_fingerprint", "credential_value_hash", "credential_id",
+		"agent_id", "server_id", "resource_id", "evidence_node_ids", "evidence_node_kinds",
+	} {
+		if _, present := properties[legacy]; present {
+			errs = append(errs, FieldError{Path: path + legacy, Message: "campaign/witness property is not allowed on unified scan proof"})
+		}
 	}
 	return errs
 }

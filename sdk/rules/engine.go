@@ -395,12 +395,21 @@ func publicMatches(matches []evaluatedMatch) []Match {
 	return out
 }
 
-func (e *Engine) Evaluate(collector, target, text string) []Match {
+// EvaluateContext evaluates one field and cooperatively stops between bounded
+// rule and canonicalization passes when ctx is canceled. Individual RE2
+// matches remain bounded by maxInputBytes.
+func (e *Engine) EvaluateContext(ctx context.Context, collector, target, text string) ([]Match, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	raw := truncateRuleInput(text)
 	candidates := e.resolveCandidates(collector, target)
 
 	var rawMatches []evaluatedMatch
 	for _, cr := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		rawMatches = append(
 			rawMatches,
 			evaluateRuleRaw(cr, raw)...,
@@ -408,9 +417,12 @@ func (e *Engine) Evaluate(collector, target, text string) []Match {
 	}
 	if !isInstructionCanonicalRequest(collector, target) ||
 		!hasInstructionCanonicalCandidate(candidates) {
-		return publicMatches(rawMatches)
+		return publicMatches(rawMatches), ctx.Err()
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	view := canonicalizeInstruction(raw)
 	if view.overflow {
 		slog.Debug(
@@ -421,34 +433,60 @@ func (e *Engine) Evaluate(collector, target, text string) []Match {
 		)
 	}
 	if !view.changed {
-		return publicMatches(rawMatches)
+		return publicMatches(rawMatches), ctx.Err()
 	}
 
 	var shadowMatches []evaluatedMatch
 	for _, cr := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		shadowMatches = append(
 			shadowMatches,
 			evaluateRuleShadow(cr, raw, view)...,
 		)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return publicMatches(
 		mergeInstructionMatches(rawMatches, shadowMatches),
-	)
+	), nil
+}
+
+func (e *Engine) Evaluate(collector, target, text string) []Match {
+	matches, _ := e.EvaluateContext(context.Background(), collector, target, text)
+	return matches
 }
 
 func (e *Engine) EvaluateAll(collector string, fields map[string]string) []Match {
 	ctx, cancel := context.WithTimeout(context.Background(), evaluateTimeout)
 	defer cancel()
-
-	var matches []Match
-	for target, text := range fields {
-		select {
-		case <-ctx.Done():
-			slog.Warn("EvaluateAll timed out", "collector", collector)
-			return matches
-		default:
-		}
-		matches = append(matches, e.Evaluate(collector, target, text)...)
+	matches, err := e.EvaluateAllContext(ctx, collector, fields)
+	if err != nil {
+		slog.Warn("EvaluateAll timed out", "collector", collector)
 	}
 	return matches
+}
+
+// EvaluateAllContext evaluates fields in lexical order so cancellation and
+// partial progress are deterministic.
+func (e *Engine) EvaluateAllContext(ctx context.Context, collector string, fields map[string]string) ([]Match, error) {
+	targets := make([]string, 0, len(fields))
+	for target := range fields {
+		targets = append(targets, target)
+	}
+	sort.Strings(targets)
+	var matches []Match
+	for _, target := range targets {
+		if err := ctx.Err(); err != nil {
+			return matches, err
+		}
+		fieldMatches, err := e.EvaluateContext(ctx, collector, target, fields[target])
+		if err != nil {
+			return matches, err
+		}
+		matches = append(matches, fieldMatches...)
+	}
+	return matches, nil
 }
