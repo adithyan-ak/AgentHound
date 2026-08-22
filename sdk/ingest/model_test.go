@@ -241,8 +241,8 @@ func TestAllNodeLabelsComplete(t *testing.T) {
 }
 
 func TestAllowedEdgeKindsComplete(t *testing.T) {
-	if len(AllowedEdgeKinds) != 31 {
-		t.Errorf("AllowedEdgeKinds: got %d entries, want 31", len(AllowedEdgeKinds))
+	if len(AllowedEdgeKinds) != 32 {
+		t.Errorf("AllowedEdgeKinds: got %d entries, want 32", len(AllowedEdgeKinds))
 	}
 }
 

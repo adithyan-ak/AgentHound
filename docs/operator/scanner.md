@@ -51,13 +51,33 @@ AgentHound stores concrete credentials as `Credential.properties.value` and uses
 
 The planner can execute LiteLLM master, bearer, and API keys; Open WebUI bearer and API keys; Jupyter tokens; A2A bearer credentials; and MCP bearer credentials tied to an exact resource. Masks, hashes, unresolved environment references, unresolved secret-provider references, custom strings, and basic-auth guesses are preserved as evidence but are not presented to services.
 
+For A2A, a bearer retry remains eligible when the bounded anonymous probe is protected or inconclusive. When both the public card and protocol probe already succeed anonymously, the planner does not repeat the same card collection with a credential.
+
 Anonymous collection covers applicable LiteLLM, Open WebUI, Jupyter, Qdrant, MLflow, and Ollama endpoints. New targets and credentials are indexed as they appear, allowing useful authenticated work during the same scan.
+
+## Instruction integrity
+
+AgentHound classifies collected `AGENTS.md`, `CLAUDE.md`, Cursor, Copilot, and related instruction sources with deterministic content rules. Ordinary policy language such as “never use production credentials” or “use X instead of Y” remains clean. Evidence composes only within a bounded directive and cannot cross headings or inert-region boundaries. Explicitly labeled examples and detector fixtures remain clean unless surrounding text tells the agent to execute them.
+
+Base64 payloads are decoded only when structurally valid. Hex and percent-encoded payloads additionally require related decode-and-activate language before or after the payload. Decoding is strict, bounded to 2 KiB, one pass, and the decoded text must contain instruction semantics. Sensitive actions require a coherent directive, a concrete credential or instruction subject, appropriate material language, and—where applicable—an outbound destination; documentation schemas, hashes, placeholders, routine API authentication, and protective guidance remain clean.
+
+The artifact stores the verdict, scope, file metadata, and bounded matched excerpts on each `InstructionFile`. It does not archive the complete file. For a large encoded token, the raw match is an exact bounded excerpt containing the encoded bytes that map to the decisive decoded semantics; the decoded preview supplies the readable context. A standalone override, identity rewrite, or bidirectional override becomes an instruction signal. Strong compound evidence—such as an override combined with identity rewriting, hidden control content, or a sensitive outbound action—becomes instruction poisoning.
+
+Scope controls promotion:
+
+| Verdict and scope | Server finding |
+|---|---|
+| Signal in any collected scope | Medium `INSTRUCTION_SIGNAL` |
+| Poisoning in recursive deep scope | Medium `INSTRUCTION_SIGNAL` |
+| Poisoning in the exact project or user instruction scope | High `POISONED_INSTRUCTIONS` |
+
+The CLI prints the path, line, primary rule, and matched excerpt for each non-clean file. `--quiet` suppresses these lines. Agent exposure still requires a real `LOADS_INSTRUCTIONS` relationship; the detector does not invent one from file location.
 
 ## Verification actions
 
 The active planner performs three bounded actions when their prerequisites are present:
 
-- MCP credential access compares an anonymous control read with an authenticated read of the same resource and saves returned content.
+- MCP credential access first reads the exact resource anonymously. If that succeeds, AgentHound records public access and saves the content without presenting a credential. Otherwise, it follows with an authenticated read of the same resource.
 - The ContextForge description round trip writes a scan-specific marker, observes it through MCP, restores the original immediately, and confirms restoration.
 - Deep Ollama verification invokes a bounded embedding request to prove compute access.
 

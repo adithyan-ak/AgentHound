@@ -2,10 +2,15 @@ package graph
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	configcollector "github.com/adithyan-ak/agenthound/modules/config"
+	"github.com/adithyan-ak/agenthound/sdk/collector"
+	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
@@ -148,6 +153,48 @@ func TestPrepareObservationNodesFingerprintsOwnersBeforeUnion(t *testing.T) {
 			"node preparation depends on input order:\nforward=%#v %#v\nreverse=%#v %#v",
 			prepared, fingerprints, reversedPrepared, reversedFingerprints,
 		)
+	}
+}
+
+func TestPrepareObservationNodesAcceptsSharedConfigCredential(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	firstPath := filepath.Join(tmp, "cursor.json")
+	secondPath := filepath.Join(tmp, "vscode.json")
+	const shared = "writer-shared-credential-material"
+	for path, contents := range map[string]string{
+		firstPath:  `{"mcpServers":{"cursor-server":{"url":"https://cursor.example/mcp","headers":{"Authorization":"Bearer ` + shared + `"}}}}`,
+		secondPath: `{"mcpServers":{"vscode-server":{"url":"https://vscode.example/mcp","headers":{"X-API-Key":"` + shared + `"}}}}`,
+	} {
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatalf("write config %s: %v", path, err)
+		}
+	}
+
+	data, err := configcollector.NewConfigCollector().Collect(context.Background(), collector.CollectOptions{
+		ConfigPaths: []string{firstPath, secondPath}, ProjectDir: tmp, ScanID: "shared-credential-writer-test",
+	})
+	if err != nil {
+		t.Fatalf("collect configs: %v", err)
+	}
+	prepared, _, err := prepareObservationNodes(data.Graph.Nodes)
+	if err != nil {
+		t.Fatalf("prepare shared credential: %v", err)
+	}
+
+	wantHash := common.HashCredentialValue(shared)
+	credentials := 0
+	for _, node := range prepared {
+		if ingest.ConcreteNodeKind(node.Kinds) == "Credential" && node.Properties["value_hash"] == wantHash {
+			credentials++
+			if got, want := node.Properties["sources"], []string{"cursor-server", "vscode-server"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("prepared credential sources = %#v, want %#v", got, want)
+			}
+		}
+	}
+	if credentials != 1 {
+		t.Fatalf("prepared shared credentials = %d, want one", credentials)
 	}
 }
 

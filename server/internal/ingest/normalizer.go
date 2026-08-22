@@ -38,6 +38,11 @@ func (n *Normalizer) Normalize(data *ingest.IngestData) []ingest.NormalizationWa
 		if node.Properties == nil {
 			node.Properties = make(map[string]any)
 		}
+		if hasKind(node.Kinds, "InstructionFile") {
+			// Compatibility artifacts may still contain the retired boolean. It
+			// is accepted by validation but never becomes current graph state.
+			delete(node.Properties, "is_suspicious")
+		}
 
 		// Set objectid
 		node.Properties["objectid"] = node.ID

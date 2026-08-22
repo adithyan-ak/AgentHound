@@ -36,8 +36,19 @@ AgentHound fails closed when the required evidence is missing:
 - Capability classification identifies a candidate surface rather than confirmed command execution.
 - Exfiltration analysis identifies compatible access and output channels rather than an observed transfer.
 - An unmatched resource URI remains unknown rather than being classified as low sensitivity.
+- Ordinary instruction language, documentation URLs, inert security examples, undecodable encoded strings, and supporting-only markup or zero-width characters do not become instruction findings.
 
 Same-scan `CREDENTIAL_ACCESS_OBSERVED` proof can upgrade the exact matching `CAN_REACH` finding to **Verified During Scan**. It strengthens existing analysis and does not create a separate detection or add risk twice.
+
+### Instruction classification
+
+Instruction-file rules feed a bounded classifier rather than promoting every regex match. Standalone override semantics and U+202E bidirectional overrides produce a medium `INSTRUCTION_SIGNAL`. Strong combinations and validated sensitive disclosure, transfer, or decoded payloads produce a poisoning verdict. Evidence combines only within the same or an adjacent structural block, within 256 bytes, and never across headings, fenced-region boundaries, or explicitly inert-region boundaries. That verdict becomes high `POISONED_INSTRUCTIONS` only in an exact project or user scope; recursive deep matches remain medium review signals.
+
+Sensitive-action evidence requires a disclosure or transmission verb near a concrete subject such as credentials, tokens, keys, environment values, system prompts, or instruction context. Transfer verbs require a destination; ambiguous output verbs also require material language such as `raw`, `contents`, or `verbatim`. Protective language and representation-only uses such as schemas, names, hashes, counts, mocks, or redacted examples remain clean.
+
+Base64 candidates use strict RFC 4648 decoding. Hex and percent candidates require nearby language that explicitly directs decoding and execution. All decoders accept 16–2,048 predominantly printable UTF-8 bytes, run once, and do not recursively decode nested content.
+
+Every promoted instruction finding carries bounded, inspectable excerpts. Confidence represents direct observation of the matched content, not certainty about malicious intent or execution.
 
 ## Common prebuilt queries
 

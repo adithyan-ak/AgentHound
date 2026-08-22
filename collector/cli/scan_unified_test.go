@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/contact"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
+	sharedinstruction "github.com/adithyan-ak/agenthound/sdk/instruction"
 	"github.com/spf13/cobra"
 )
 
@@ -108,6 +110,48 @@ func TestExcludedDiscoveryIsNotACollectionFailure(t *testing.T) {
 	}
 	if runtime.artifact.Meta.Collection.State != ingest.OutcomeComplete {
 		t.Fatalf("collection state = %q, want complete for exclusions only", runtime.artifact.Meta.Collection.State)
+	}
+}
+
+func TestInstructionSignalOutputIsPathFirstAndQuietAware(t *testing.T) {
+	evidence, raw, err := sharedinstruction.MarshalBounded(
+		sharedinstruction.VerdictSignal,
+		[]sharedinstruction.Signal{{
+			RuleID: "instruction-ignore-previous", Label: "Ignore Previous Instructions",
+			Severity: "critical", Strength: sharedinstruction.StrengthPrimary,
+			RawOffset: 10, Line: 4, Column: 3, Match: "Ignore previous instructions",
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := common.NewIngestData("scan", "instruction-output")
+	artifact.Graph.Nodes = append(artifact.Graph.Nodes, ingest.Node{
+		ID: "instruction-file", Kinds: []string{"InstructionFile"},
+		Properties: map[string]any{
+			"path": "/workspace/AGENTS.md", "instruction_scope": "deep",
+			"instruction_evidence_json": raw, "instruction_signal_count": evidence.TotalSignals,
+		},
+	})
+	var output bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&output)
+	runtime := &scanRuntime{cmd: cmd, artifact: artifact, printed: make(map[string]bool)}
+	runtime.printNewInstructionSignals()
+	if got := output.String(); !strings.Contains(got, "[instruction-signal] /workspace/AGENTS.md:4 instruction-ignore-previous \"Ignore previous instructions\"") {
+		t.Fatalf("instruction output = %q", got)
+	}
+	runtime.printNewInstructionSignals()
+	if strings.Count(output.String(), "[instruction-signal]") != 1 {
+		t.Fatalf("instruction signal printed more than once: %q", output.String())
+	}
+
+	output.Reset()
+	runtime.quiet = true
+	runtime.printed = make(map[string]bool)
+	runtime.printNewInstructionSignals()
+	if output.Len() != 0 {
+		t.Fatalf("quiet instruction output = %q", output.String())
 	}
 }
 

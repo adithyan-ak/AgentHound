@@ -748,6 +748,56 @@ func TestHandleFindingDetail_PublishedRowSurvivesMissingLiveEdge(t *testing.T) {
 	}
 }
 
+func TestHandleFindingDetail_IncludesStructuredInstructionEvidence(t *testing.T) {
+	revision := int64(13)
+	raw := `{"version":1,"verdict":"signal","total_signals":1,"truncated":false,"signals":[{"rule_id":"instruction-ignore-previous","label":"Ignore Previous Instructions","severity":"critical","strength":"primary","raw_offset":8,"line":2,"column":1,"match":"Ignore previous instructions","context_before":"line one\n","context_after":"\nline three"}]}`
+	path := "/workspace/AGENTS.md"
+	store := &fakePublishedFindingStore{
+		scope: appdb.FindingScope{
+			Mode: "published", ScanID: "instruction-detail", Revision: &revision,
+			ProjectionStatus: model.ProjectionComplete, SnapshotStatus: model.LifecycleComplete,
+			Available: true,
+		},
+		finding: &model.Finding{
+			ID: "aaaaaaaaaaaaaaaa", ScanID: "instruction-detail", Severity: "medium",
+			Category: "Instruction Signal", Title: "Instruction signal requires review",
+			EdgeKind: "INSTRUCTION_SIGNAL", SourceID: "instruction-file", TargetID: "instruction-file",
+			SourceName: path, TargetName: path, SourceKind: "InstructionFile", TargetKind: "InstructionFile",
+			ExactEvidence: &model.ExactFindingEvidence{
+				Version: 1, Complete: true, Reasons: []string{}, Edges: []model.ExactFindingEvidenceEdge{},
+				Nodes: []model.ExactFindingEvidenceNode{{
+					ID: "instruction-file", Kinds: []string{"InstructionFile"},
+					Properties: map[string]any{
+						"path": path, "type": "agents.md", "hash": "sha256:abc", "size_bytes": int64(96),
+						"modified_at": "2026-08-20T12:00:00Z", "instruction_verdict": "signal", "instruction_scope": "deep",
+						"instruction_signal_count": int64(1), "instruction_signal_truncated": false,
+						"instruction_evidence_version": int64(1), "instruction_evidence_json": raw,
+					},
+				}},
+			},
+		},
+	}
+	h := &AnalysisHandler{findingStore: store}
+	w := httptest.NewRecorder()
+	r := newTestRequest(http.MethodGet, "/api/v1/analysis/findings/aaaaaaaaaaaaaaaa", nil)
+	r = withChiURLParam(r, "id", "aaaaaaaaaaaaaaaa")
+
+	h.HandleFindingDetail(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	var response analysis.FindingDetail
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.InstructionEvidence == nil ||
+		response.InstructionEvidence.Path != path ||
+		response.InstructionEvidence.TotalSignals != 1 ||
+		response.InstructionEvidence.Signals[0].Match != "Ignore previous instructions" {
+		t.Fatalf("instruction detail = %+v", response.InstructionEvidence)
+	}
+}
+
 func TestHandleFindingDetail_InvalidID_TooShort(t *testing.T) {
 	h := NewAnalysisHandler(&mockGraphDB{}, nil)
 	w := httptest.NewRecorder()

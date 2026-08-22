@@ -17,7 +17,7 @@ func TestMigrationsContainCanonicalV1Schema(t *testing.T) {
 			names = append(names, entry.Name())
 		}
 	}
-	if want := []string{"001_initial_v1.sql", "002_remove_campaign_verification.sql"}; !reflect.DeepEqual(names, want) {
+	if want := []string{"001_initial_v1.sql", "002_remove_campaign_verification.sql", "003_instruction_evidence.sql"}; !reflect.DeepEqual(names, want) {
 		t.Fatalf("migration files = %v, want %v", names, want)
 	}
 

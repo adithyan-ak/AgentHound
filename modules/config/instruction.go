@@ -16,6 +16,7 @@ import (
 
 	"github.com/adithyan-ak/agenthound/sdk/common"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
+	sharedinstruction "github.com/adithyan-ak/agenthound/sdk/instruction"
 	"github.com/adithyan-ak/agenthound/sdk/rules"
 )
 
@@ -112,8 +113,16 @@ type InstructionFileInfo struct {
 	Path         string
 	Type         string
 	Hash         string
-	IsSuspicious bool
-	Patterns     []common.PatternMatch
+	Verdict      sharedinstruction.Verdict
+	Scope        sharedinstruction.Scope
+	Evidence     sharedinstruction.Evidence
+	EvidenceJSON string
+	SizeBytes    int64
+	ModifiedAt   string
+}
+
+func (i InstructionFileInfo) Suspicious() bool {
+	return i.Verdict != sharedinstruction.VerdictClean
 }
 
 type InstructionObservation struct {
@@ -361,9 +370,9 @@ func (p *deepInstructionProgress) record(observation InstructionObservation) {
 	if p == nil {
 		return
 	}
-	observation.Info.Patterns = append(
-		[]common.PatternMatch(nil),
-		observation.Info.Patterns...,
+	observation.Info.Evidence.Signals = append(
+		[]sharedinstruction.Signal(nil),
+		observation.Info.Evidence.Signals...,
 	)
 	p.mu.Lock()
 	p.observations[observation.OwnerKey] = observation
@@ -374,9 +383,9 @@ func (p *deepInstructionProgress) snapshot(errText string) InstructionDiscovery 
 	p.mu.Lock()
 	observations := make([]InstructionObservation, 0, len(p.observations))
 	for _, observation := range p.observations {
-		observation.Info.Patterns = append(
-			[]common.PatternMatch(nil),
-			observation.Info.Patterns...,
+		observation.Info.Evidence.Signals = append(
+			[]sharedinstruction.Signal(nil),
+			observation.Info.Evidence.Signals...,
 		)
 		observations = append(observations, observation)
 	}
@@ -450,6 +459,7 @@ func discoverExactInstructionRoot(
 	result *InstructionDiscovery,
 ) {
 	rootKey := instructionRootKey(mode, root)
+	scope := instructionScopeFromRootMode(mode)
 	result.CoverageKeys = append(result.CoverageKeys, rootKey)
 	if state, errText := validateInstructionRoot(root); state != ingest.OutcomeComplete {
 		result.Outcomes = append(result.Outcomes, collectionOutcome(
@@ -497,14 +507,14 @@ func discoverExactInstructionRoot(
 				state, errText = ingest.OutcomeFailed, "registered instruction tree is not a directory"
 			} else {
 				state, items, errText, sourceChildren = discoverInstructionTree(
-					ctx, boundary, source, rootKey, instructionTraversalEntryLimit, &directories, &rulesSeen, engine, result, nil,
+					ctx, boundary, source, rootKey, scope, instructionTraversalEntryLimit, &directories, &rulesSeen, engine, result, nil,
 				)
 			}
 		} else {
 			if !entry.Mode().IsRegular() {
 				state, errText = ingest.OutcomeFailed, "registered instruction source is not a regular file"
 			} else {
-				state, items, errText = discoverInstructionFile(boundary, source.fileType, child, engine, result, nil)
+				state, items, errText = discoverInstructionFile(ctx, boundary, source.fileType, child, scope, engine, result, nil)
 				if items > 0 {
 					rulesSeen++
 				}
@@ -519,6 +529,9 @@ func discoverExactInstructionRoot(
 			result.CoverageKeys = append(result.CoverageKeys, child)
 			result.Outcomes = append(result.Outcomes, outcome)
 			activeChildren = append(activeChildren, child)
+		} else if state == ingest.OutcomePartial && errText == "instruction classification canceled" {
+			result.CoverageKeys = append(result.CoverageKeys, child)
+			result.Outcomes = append(result.Outcomes, outcome)
 		}
 	}
 
@@ -625,6 +638,7 @@ func discoverDeepInstructionRoot(
 				boundary,
 				source,
 				rootKey,
+				sharedinstruction.ScopeDeep,
 				deepInstructionEntryLimit,
 				&directories,
 				&rulesSeen,
@@ -641,9 +655,11 @@ func discoverDeepInstructionRoot(
 			} else {
 				rulesSeen++
 				state, items, errText = discoverInstructionFile(
+					ctx,
 					boundary,
 					source.fileType,
 					child,
+					sharedinstruction.ScopeDeep,
 					engine,
 					result,
 					progress,
@@ -658,6 +674,9 @@ func discoverDeepInstructionRoot(
 			result.CoverageKeys = append(result.CoverageKeys, child)
 			result.Outcomes = append(result.Outcomes, outcome)
 			activeChildren = append(activeChildren, child)
+		} else if state == ingest.OutcomePartial && errText == "instruction classification canceled" {
+			result.CoverageKeys = append(result.CoverageKeys, child)
+			result.Outcomes = append(result.Outcomes, outcome)
 		}
 		if state == ingest.OutcomePartial || state == ingest.OutcomeFailed {
 			rootState, rootError = ingest.OutcomePartial, errText
@@ -789,6 +808,7 @@ func discoverInstructionTree(
 	treePath string,
 	source instructionSource,
 	rootKey string,
+	scope sharedinstruction.Scope,
 	directoryLimit int,
 	directories, rulesSeen *int,
 	engine *rules.Engine,
@@ -859,7 +879,18 @@ func discoverInstructionTree(
 		}
 		filePath := canonicalConfigPath(path)
 		child := instructionChildKey(rootKey, filePath)
-		info := AnalyzeInstructionFile(filePath, data, source.fileType, engine)
+		info, classifyErr := AnalyzeInstructionFileWithScopeContext(ctx, filePath, data, source.fileType, scope, engine)
+		if classifyErr != nil {
+			state, errText = ingest.OutcomePartial, "instruction classification canceled"
+			result.CoverageKeys = append(result.CoverageKeys, child)
+			result.Outcomes = append(result.Outcomes, instructionChildOutcome(
+				child, rootKey, filePath, ingest.InstructionMethodSource, ingest.OutcomePartial, 0, errText,
+			))
+			if ctx.Err() != nil {
+				return filepath.SkipAll
+			}
+			return nil
+		}
 		observation := InstructionObservation{Info: info, OwnerKey: child}
 		result.Observations = append(result.Observations, observation)
 		result.CoverageKeys = append(result.CoverageKeys, child)
@@ -1008,7 +1039,9 @@ func walkInstructionDirectory(
 }
 
 func discoverInstructionFile(
+	ctx context.Context,
 	path, fileType, ownerKey string,
+	scope sharedinstruction.Scope,
 	engine *rules.Engine,
 	result *InstructionDiscovery,
 	progress *deepInstructionProgress,
@@ -1017,7 +1050,10 @@ func discoverInstructionFile(
 	if state != ingest.OutcomeComplete {
 		return state, 0, errText
 	}
-	info := AnalyzeInstructionFile(path, data, fileType, engine)
+	info, err := AnalyzeInstructionFileWithScopeContext(ctx, path, data, fileType, scope, engine)
+	if err != nil {
+		return ingest.OutcomePartial, 0, "instruction classification canceled"
+	}
 	observation := InstructionObservation{Info: info, OwnerKey: ownerKey}
 	result.Observations = append(result.Observations, observation)
 	progress.record(observation)
@@ -1106,24 +1142,53 @@ func validateInstructionFile(path string) (ingest.OutcomeState, string) {
 }
 
 func AnalyzeInstructionFile(path string, data []byte, fileType string, engine *rules.Engine) InstructionFileInfo {
-	text := string(data)
-	var patterns []common.PatternMatch
-	matches := engine.EvaluateAll("config", map[string]string{"instruction.content": text})
-	for _, match := range matches {
-		if match.Emit.FindingType != "has_injection_patterns" {
-			continue
-		}
-		label := match.RuleID
-		if len(match.Labels) > 0 {
-			label = match.Labels[0]
-		}
-		patterns = append(patterns, common.PatternMatch{
-			Name: label, Severity: match.Severity, Offset: match.Offset, Text: match.Text,
-		})
+	return AnalyzeInstructionFileWithScope(path, data, fileType, sharedinstruction.ScopeExactProject, engine)
+}
+
+func AnalyzeInstructionFileWithScope(
+	path string,
+	data []byte,
+	fileType string,
+	scope sharedinstruction.Scope,
+	engine *rules.Engine,
+) InstructionFileInfo {
+	info, _ := AnalyzeInstructionFileWithScopeContext(context.Background(), path, data, fileType, scope, engine)
+	return info
+}
+
+func AnalyzeInstructionFileWithScopeContext(
+	ctx context.Context,
+	path string,
+	data []byte,
+	fileType string,
+	scope sharedinstruction.Scope,
+	engine *rules.Engine,
+) (InstructionFileInfo, error) {
+	classification, classifyErr := classifyInstruction(ctx, data, engine, true)
+	if classifyErr != nil {
+		return InstructionFileInfo{}, classifyErr
 	}
+	evidence, evidenceJSON, err := sharedinstruction.MarshalBoundedWithTotal(classification.verdict, classification.signals, classification.totalSignals)
+	if err != nil {
+		return InstructionFileInfo{}, err
+	}
+	size, modifiedAt := instructionFileMetadata(path, data)
 	return InstructionFileInfo{
-		Path: path, Type: fileType, Hash: common.HashSHA256(text),
-		IsSuspicious: len(patterns) > 0, Patterns: patterns,
+		Path: path, Type: fileType, Hash: common.HashSHA256(string(data)),
+		Verdict: classification.verdict, Scope: scope,
+		Evidence: evidence, EvidenceJSON: evidenceJSON,
+		SizeBytes: size, ModifiedAt: modifiedAt,
+	}, nil
+}
+
+func instructionScopeFromRootMode(mode instructionRootMode) sharedinstruction.Scope {
+	switch mode {
+	case instructionRootExactProject:
+		return sharedinstruction.ScopeExactProject
+	case instructionRootExactUser:
+		return sharedinstruction.ScopeExactUser
+	default:
+		return sharedinstruction.ScopeDeep
 	}
 }
 

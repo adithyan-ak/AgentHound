@@ -141,7 +141,7 @@ var RawEdgeKinds = map[string]bool{
 	"PUBLIC_ACCESS_OBSERVED":     true,
 }
 
-// AllowedEdgeKinds includes all 31 edge kinds (19 raw + 12 composite) for Neo4j writer dispatch.
+// AllowedEdgeKinds includes all 32 edge kinds (19 raw + 13 composite) for Neo4j writer dispatch.
 var AllowedEdgeKinds = map[string]bool{
 	// Raw (collector-produced)
 	"TRUSTS_SERVER":              true,
@@ -171,6 +171,7 @@ var AllowedEdgeKinds = map[string]bool{
 	"SHADOWS":               true,
 	"POISONED_DESCRIPTION":  true,
 	"CAN_IMPERSONATE":       true,
+	"INSTRUCTION_SIGNAL":    true,
 	"POISONED_INSTRUCTIONS": true,
 	"CONFUSED_DEPUTY":       true,
 	"TAINTS":                true,
@@ -214,6 +215,7 @@ var EdgeKindEndpoints = map[string]EdgeEndpoints{
 	"SHADOWS":               {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
 	"POISONED_DESCRIPTION":  {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
 	"CAN_IMPERSONATE":       {SourceKinds: []string{"A2AAgent"}, TargetKinds: []string{"A2AAgent"}},
+	"INSTRUCTION_SIGNAL":    {SourceKinds: []string{"InstructionFile"}, TargetKinds: []string{"InstructionFile"}},
 	"POISONED_INSTRUCTIONS": {SourceKinds: []string{"InstructionFile"}, TargetKinds: []string{"InstructionFile"}},
 	"EXPOSES":               {SourceKinds: []string{"AIService", "OpenWebUIInstance"}, TargetKinds: []string{"AIService", "OllamaInstance"}},
 	"EXPOSES_CREDENTIAL":    {SourceKinds: []string{"AIService"}, TargetKinds: []string{"Credential"}},

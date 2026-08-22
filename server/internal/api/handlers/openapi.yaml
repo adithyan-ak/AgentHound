@@ -863,6 +863,8 @@ components:
           allOf:
             - $ref: "#/components/schemas/FindingImpact"
           nullable: true
+        instruction_evidence:
+          $ref: "#/components/schemas/InstructionEvidence"
         snapshot:
           type: object
           additionalProperties: false
@@ -894,6 +896,78 @@ components:
               enum:
                 - unavailable
                 - persisted_exact_evidence
+
+    InstructionEvidence:
+      type: object
+      additionalProperties: false
+      required: [version, verdict, scope, path, type, hash, size_bytes, modified_at, total_signals, truncated, signals]
+      properties:
+        version:
+          type: integer
+          enum: [1]
+        verdict:
+          type: string
+          enum: [signal, poisoning]
+        scope:
+          type: string
+          enum: [exact_project, exact_user, deep]
+        path:
+          type: string
+        type:
+          type: string
+        hash:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+        modified_at:
+          type: string
+          format: date-time
+        total_signals:
+          type: integer
+          minimum: 1
+        truncated:
+          type: boolean
+        signals:
+          type: array
+          maxItems: 32
+          items:
+            $ref: "#/components/schemas/InstructionSignal"
+
+    InstructionSignal:
+      type: object
+      additionalProperties: false
+      required: [rule_id, label, severity, strength, raw_offset, line, column, match, context_before, context_after]
+      properties:
+        rule_id:
+          type: string
+        label:
+          type: string
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+        strength:
+          type: string
+          enum: [decisive, primary, supporting]
+        raw_offset:
+          type: integer
+          minimum: 0
+        line:
+          type: integer
+          minimum: 1
+        column:
+          type: integer
+          minimum: 1
+        match:
+          type: string
+          description: Exact raw matched evidence. For an encoded payload larger than the evidence window, this is the bounded source excerpt corresponding to the decisive decoded semantics.
+        context_before:
+          type: string
+        context_after:
+          type: string
+        decoded_excerpt:
+          type: string
 
     AttackPath:
       type: object

@@ -15,6 +15,14 @@ After ingest, AgentHound combines collector observations with server-side analys
 
 Verification applies to the exact credential-to-resource read. It does not claim that every upstream agent invocation or downstream impact occurred.
 
+## Instruction evidence
+
+Instruction findings are content observations, not inferred attack paths. `INSTRUCTION_SIGNAL` is a medium review item for a standalone signal or strong evidence found only during recursive deep collection. `POISONED_INSTRUCTIONS` is high severity and requires strong compound evidence in an exact project or user instruction scope. Compound evidence must occur within the same bounded directive; unrelated phrases elsewhere in the file are not correlated.
+
+Finding detail shows the canonical path and every retained signal with its rule, strength, severity, line, column, exact match, surrounding lines, and any decoded payload preview. The file hash remains secondary integrity metadata. At most 32 signals and 64 KiB of evidence are retained per file; the total signal count states when the view is truncated.
+
+These self-node findings intentionally have no hop graph or attack cost. Agent risk changes only when the graph separately contains observed `LOADS_INSTRUCTIONS` evidence for the file.
+
 ## Main path families
 
 | Family | Primary edges | Question answered |
@@ -23,7 +31,7 @@ Verification applies to the exact credential-to-resource read. It does not claim
 | Credential chains | `CAN_REACH` with credential-path properties | Where does observed credential reuse connect services? |
 | Execution | `CAN_EXECUTE` | Which tools expose shell or code execution on a host? |
 | Exfiltration | `CAN_EXFILTRATE_VIA` | Where can sensitive access combine with an outbound channel? |
-| Tool and instruction integrity | `SHADOWS`, `POISONED_DESCRIPTION`, `POISONED_INSTRUCTIONS`, `POISONS_CONTEXT` | Which descriptions or instruction sources can steer privileged behavior? |
+| Tool and instruction integrity | `SHADOWS`, `POISONED_DESCRIPTION`, `INSTRUCTION_SIGNAL`, `POISONED_INSTRUCTIONS`, `POISONS_CONTEXT` | Which descriptions or instruction sources contain reviewable steering signals or strong poisoning evidence? |
 | Untrusted data flow | `TAINTS`, `IFC_VIOLATION` | Can attacker-controlled input reach a compatible or high-impact tool? |
 | A2A trust | `CAN_IMPERSONATE`, `CONFUSED_DEPUTY`, cross-protocol `CAN_REACH` | Where can delegation, similarity, weak authentication, or host correlation cross boundaries? |
 
@@ -54,7 +62,7 @@ agenthound-server query --prebuilt litellm-credential-leak
 
 ## Same-scan access proof
 
-For an eligible MCP resource, the collector performs an anonymous control read and then an authenticated read with the selected credential. A denied control plus an allowed authenticated read emits:
+For an eligible MCP resource, the collector performs an anonymous control read first. A successful exact read records public access without presenting a credential. Otherwise, the collector follows with an authenticated read; a denied control plus an allowed authenticated read emits:
 
 ```text
 Credential -CREDENTIAL_ACCESS_OBSERVED-> MCPResource

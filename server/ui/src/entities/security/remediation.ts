@@ -72,14 +72,22 @@ export function deriveRemediations(
     props.material_status === "observed" &&
     props.merge_key === "value_hash";
   if (kind === "Credential" && observedExposure) {
-    const source =
-      typeof props.source === "string" && props.source.trim() !== ""
-        ? props.source.trim()
-        : null;
+    const sources = new Set<string>();
+    if (typeof props.source === "string" && props.source.trim() !== "") {
+      sources.add(props.source.trim());
+    }
+    if (Array.isArray(props.sources)) {
+      for (const value of props.sources) {
+        if (typeof value === "string" && value.trim() !== "") {
+          sources.add(value.trim());
+        }
+      }
+    }
+    const source = [...sources].sort().join(", ");
     items.push({
       severity: "critical",
       title: "Rotate this credential",
-      body: source
+      body: source !== ""
         ? `AgentHound observed usable exposed credential material from ${source}. Revoke or rotate it, then restrict or remove that recorded source.`
         : "AgentHound observed usable exposed credential material, but the capture source was not recorded. Revoke or rotate it and investigate the producer before choosing a storage remediation.",
     });
@@ -122,11 +130,11 @@ export function deriveRemediations(
   }
 
   // Poisoned instruction file
-  if (kind === "InstructionFile" && props.is_suspicious === true) {
+  if (kind === "InstructionFile" && (props.instruction_verdict === "signal" || props.instruction_verdict === "poisoning")) {
     items.push({
-      severity: "high",
-      title: "Inspect and sanitize this instruction file",
-      body: "This file contains suspicious directives (imperative overrides, outbound curl/wget, or encoded payloads). Review the file, remove any injected directives, and add it to your repo's suspicious-path audit list.",
+      severity: props.instruction_verdict === "poisoning" && props.instruction_scope !== "deep" ? "high" : "medium",
+      title: props.instruction_verdict === "poisoning" ? "Review instruction poisoning evidence" : "Review this instruction signal",
+      body: "Inspect the matched path and line in the finding evidence. Remove unauthorized overrides or payloads, or document why the instruction is expected before an agent loads the file.",
     });
   }
 

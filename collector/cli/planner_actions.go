@@ -221,19 +221,24 @@ func (a ollamaEmbeddingAction) Execute(ctx context.Context, candidate Candidate,
 }
 
 func credentialCompatibleWithService(node ingest.Node, service string) bool {
-	if method := common.AuthMethod(stringProperty(node.Properties, "auth_method")); method != "" {
-		switch method {
-		case common.AuthBearer, common.AuthAPIKey:
-			// Supported by the concrete adapters below.
-		default:
+	methods := credentialPropertyValues(node.Properties, "auth_method", "auth_methods")
+	if len(methods) > 0 {
+		supported := false
+		for _, method := range methods {
+			if common.AuthMethod(method) == common.AuthBearer || common.AuthMethod(method) == common.AuthAPIKey {
+				supported = true
+				break
+			}
+		}
+		if !supported {
 			return false
 		}
 	}
-	joined := strings.ToLower(strings.Join([]string{
-		stringProperty(node.Properties, "type"),
-		stringProperty(node.Properties, "name"),
-		stringProperty(node.Properties, "format"),
-	}, " "))
+	hints := append([]string(nil), methods...)
+	for _, field := range [][2]string{{"type", "types"}, {"name", "names"}, {"format", "formats"}} {
+		hints = append(hints, credentialPropertyValues(node.Properties, field[0], field[1])...)
+	}
+	joined := strings.ToLower(strings.Join(hints, " "))
 	switch service {
 	case "litellm":
 		return strings.Contains(joined, "master") || strings.Contains(joined, "bearer") || strings.Contains(joined, "api")
@@ -259,6 +264,14 @@ func (a a2aCredentialAction) Candidates(view View) []Candidate {
 	var candidates []Candidate
 	seen := make(map[string]bool)
 	for _, agent := range view.ByKind["A2AAgent"] {
+		// This action only refetches the Agent Card with a bearer. When the
+		// initial card fetch and the bounded protocol probe both succeeded
+		// anonymously, another card fetch cannot prove that the bearer was
+		// accepted or expand the collected surface.
+		if stringProperty(agent.Properties, "auth_probe_status") ==
+			a2acollector.A2AAuthProbeStatusAnonymousProtocolAccess {
+			continue
+		}
 		endpoint := stringProperty(agent.Properties, "url")
 		if endpoint == "" {
 			continue
@@ -536,7 +549,43 @@ func targetsForEdge(edges []ingest.Edge, kind string) []string {
 }
 
 func bearerCredential(node ingest.Node) bool {
-	return common.AuthMethod(stringProperty(node.Properties, "auth_method")) == common.AuthBearer
+	for _, method := range credentialPropertyValues(node.Properties, "auth_method", "auth_methods") {
+		if common.AuthMethod(method) == common.AuthBearer {
+			return true
+		}
+	}
+	return false
+}
+
+func credentialPropertyValues(properties map[string]any, singular, plural string) []string {
+	seen := make(map[string]bool)
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			seen[value] = true
+		}
+	}
+	if value, ok := properties[singular].(string); ok {
+		add(value)
+	}
+	switch values := properties[plural].(type) {
+	case []string:
+		for _, value := range values {
+			add(value)
+		}
+	case []any:
+		for _, raw := range values {
+			if value, ok := raw.(string); ok {
+				add(value)
+			}
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for value := range seen {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func stringProperty(properties map[string]any, key string) string {

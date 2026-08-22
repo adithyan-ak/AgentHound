@@ -328,6 +328,7 @@ export const LENS_LIST: LensDefinition[] = [
     edgeKinds: [
       "SHADOWS",
       "POISONED_DESCRIPTION",
+      "INSTRUCTION_SIGNAL",
       "POISONED_INSTRUCTIONS",
       "TAINTS",
       "POISONS_CONTEXT",
@@ -344,6 +345,12 @@ export const LENS_LIST: LensDefinition[] = [
         id: "SHADOWS",
         label: "Tool shadowing",
         description: "Tool references another tool by name",
+        defaultEnabled: true,
+      },
+      {
+        id: "INSTRUCTION_SIGNAL",
+        label: "Instruction signal",
+        description: "Instruction content requires operator review",
         defaultEnabled: true,
       },
       {
@@ -452,6 +459,7 @@ export const EDGE_PRIMARY_LENS = {
   SHADOWS: "poisoning",
   POISONED_DESCRIPTION: "poisoning",
   CAN_IMPERSONATE: "attack-surface",
+  INSTRUCTION_SIGNAL: "poisoning",
   POISONED_INSTRUCTIONS: "poisoning",
   CONFUSED_DEPUTY: "attack-surface",
   TAINTS: "poisoning",
