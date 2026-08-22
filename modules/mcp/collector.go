@@ -24,6 +24,16 @@ type MCPCollector struct {
 	maxItems    int
 	insecure    bool
 	engine      *rules.Engine
+	serverSpecs []ServerSpec
+}
+
+// WithServerSpecs supplies already-discovered, policy-admitted endpoint
+// specifications. It prevents Collect from re-running config discovery and
+// contacting an endpoint before the scan's ContactPolicy has admitted it.
+func WithServerSpecs(specs []ServerSpec) Option {
+	return func(c *MCPCollector) {
+		c.serverSpecs = append([]ServerSpec(nil), specs...)
+	}
 }
 
 var resolveMCPProjectRoot = config.ResolveProjectRoot
@@ -92,9 +102,16 @@ func (c *MCPCollector) Collect(ctx context.Context, opts collector.CollectOption
 		}
 	}
 
-	specs, configDiscovery, err := c.buildServerList(ctx, opts)
-	if err != nil {
-		return nil, fmt.Errorf("build server list: %w", err)
+	var specs []ServerSpec
+	var configDiscovery *config.DiscoveryResult
+	var err error
+	if c.serverSpecs != nil {
+		specs = collapseServerSpecs(c.serverSpecs)
+	} else {
+		specs, configDiscovery, err = c.buildServerList(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("build server list: %w", err)
+		}
 	}
 	if len(specs) == 0 && configDiscovery == nil {
 		return nil, fmt.Errorf("no MCP servers to enumerate")
@@ -135,14 +152,18 @@ func (c *MCPCollector) Collect(ctx context.Context, opts collector.CollectOption
 		data.Graph.Edges = append(data.Graph.Edges, edge)
 	}
 	coverage := make(map[string]bool, len(results))
-	report := &ingest.CollectionReport{}
+	rootKey := ingest.CollectorRootCoverageKey("mcp")
+	report := &ingest.CollectionReport{CoverageKeys: []string{rootKey}}
 	if configDiscovery != nil {
-		rootKey := ingest.CollectorRootCoverageKey("mcp")
 		state, items, errorText := summarizeConfigDiscovery(configDiscovery)
-		report.CoverageKeys = append(report.CoverageKeys, rootKey)
 		report.Outcomes = append(report.Outcomes, ingest.CollectionOutcome{
 			Collector: "mcp", CoverageKey: rootKey, Target: "mcp",
 			Method: "discover_configs", State: state, Items: items, Error: errorText,
+		})
+	} else {
+		report.Outcomes = append(report.Outcomes, ingest.CollectionOutcome{
+			Collector: "mcp", CoverageKey: rootKey, Target: "mcp",
+			Method: "enumerate_targets", State: ingest.OutcomeComplete, Items: len(specs),
 		})
 	}
 	for _, r := range results {
@@ -168,10 +189,31 @@ func (c *MCPCollector) Collect(ctx context.Context, opts collector.CollectOption
 		report.CoverageKeys = append(report.CoverageKeys, key)
 	}
 	sort.Strings(report.CoverageKeys)
+	children := make([]string, 0, len(coverage))
+	for key := range coverage {
+		children = append(children, key)
+	}
+	sort.Strings(children)
+	report.AuthoritativeRoots = []ingest.CoverageRoot{{
+		CoverageKey: rootKey, ChildCoverageKeys: children,
+	}}
 	report.State = ingest.AggregateOutcomeState(report.Outcomes)
 	data.Meta.Collection = report
 
 	return data, nil
+}
+
+// DiscoverServerSpecs parses the same local client configuration sources as
+// the MCP collector without constructing a transport or contacting a server.
+// The unified scan filters the returned specs through ContactPolicy before
+// supplying them back with WithServerSpecs.
+func DiscoverServerSpecs(ctx context.Context, projectDir string) ([]ServerSpec, *config.DiscoveryResult, error) {
+	collector := NewMCPCollector()
+	return collector.buildServerList(ctx, collectorapiOptions(projectDir))
+}
+
+func collectorapiOptions(projectDir string) collector.CollectOptions {
+	return collector.CollectOptions{Discover: true, ProjectDir: projectDir}
 }
 
 func mcpNodeContributionKey(node ingest.Node) string {

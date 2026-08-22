@@ -48,12 +48,9 @@ tuple satisfies the protocol evidence contract. A discovery-only or otherwise
 auth-evidence-free node has no effective auth tuple and contributes the existing
 bounded unknown auth factor; absence is not treated as anonymous or safe.
 
-### Campaign verification evidence
+### Same-scan proof evidence
 
-The [campaign runner](../operator/offensive-actions.md#campaign-runner-verify-and-validate) does not add new scored risk:
-
-- `CREDENTIAL_REACH_VERIFIED` and `PUBLIC_ACCESS_OBSERVED` are low-weight (0.1) **supporting-evidence** raw edges, not reach hops. Verified evidence is keyed per source agent and upgrades only the exactly matching existing `CAN_REACH` finding in place; no second scored finding is created.
-- The `mcp-poison-roundtrip` scenario emits **no** graph edge (its result stays in the bounded CLI `RunReport`), so it contributes nothing to any node or path score.
+`CREDENTIAL_ACCESS_OBSERVED` and `PUBLIC_ACCESS_OBSERVED` are low-weight (0.1) supporting evidence, not reach hops. Differential proof upgrades only an existing `CAN_REACH` relationship whose exact Credential and MCPResource occur in the path. It creates no second finding and adds no independently scored risk. ContextForge round-trip status remains in the scan execution journal and contributes no graph edge or score.
 
 ---
 

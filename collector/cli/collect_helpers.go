@@ -1,11 +1,10 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
-	"log/slog"
-	"os"
-	"path/filepath"
+	"strings"
 
 	collectoridentity "github.com/adithyan-ak/agenthound/collector/internal/identity"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
@@ -19,7 +18,50 @@ func prepareCollectorArtifact(data *ingest.IngestData) error {
 	}
 	data.Meta.Identity = deriveCollectionIdentity(data.Meta.ScanID)
 	ingest.EnsureCoverageParentage(data.Meta.Collection)
+	if err := validateCollectorCoverage(data.Meta.Collection); err != nil {
+		return err
+	}
 	return data.Meta.Identity.Validate()
+}
+
+// validateCollectorCoverage enforces the two ingest invariants the unified
+// scan itself composes: every outcome key is declared, and its collector owns
+// that key prefix. Module reports are still validated fully by the server.
+func validateCollectorCoverage(report *ingest.CollectionReport) error {
+	if report == nil {
+		return fmt.Errorf("collection report is required")
+	}
+	declared := make(map[string]bool, len(report.CoverageKeys))
+	covered := make(map[string]bool, len(report.Outcomes))
+	for _, key := range report.CoverageKeys {
+		if strings.TrimSpace(key) == "" {
+			return fmt.Errorf("collection coverage key is empty")
+		}
+		if declared[key] {
+			return fmt.Errorf("collection coverage key %q is duplicated", key)
+		}
+		declared[key] = true
+	}
+	for _, outcome := range report.Outcomes {
+		if !declared[outcome.CoverageKey] {
+			return fmt.Errorf("collection outcome key %q is not declared", outcome.CoverageKey)
+		}
+		prefix, _, present := strings.Cut(outcome.CoverageKey, ":")
+		if !present || prefix != outcome.Collector {
+			return fmt.Errorf(
+				"collection outcome key %q is not owned by collector %q",
+				outcome.CoverageKey,
+				outcome.Collector,
+			)
+		}
+		covered[outcome.CoverageKey] = true
+	}
+	for key := range declared {
+		if !covered[key] {
+			return fmt.Errorf("collection coverage key %q has no outcome", key)
+		}
+	}
+	return nil
 }
 
 func marshalCollectorArtifact(data *ingest.IngestData) ([]byte, error) {
@@ -30,74 +72,9 @@ func marshalCollectorArtifact(data *ingest.IngestData) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal JSON: %w", err)
 	}
+	var decoded ingest.IngestData
+	if err := ingest.DecodeStrict(bytes.NewReader(encoded), &decoded); err != nil {
+		return nil, fmt.Errorf("validate encoded ingest v1 artifact: %w", err)
+	}
 	return encoded, nil
-}
-
-func writeCollectorOutput(data *ingest.IngestData, outputPath string) error {
-	if outputPath == "" {
-		encoded, err := marshalCollectorArtifact(data)
-		if err != nil {
-			return err
-		}
-		if _, err := os.Stdout.Write(encoded); err != nil {
-			return fmt.Errorf("write stdout: %w", err)
-		}
-		fmt.Println()
-		return nil
-	}
-
-	if err := writeCollectorOutputFile(data, outputPath); err != nil {
-		return err
-	}
-	_, _ = fmt.Fprintf(os.Stderr, "Next: agenthound-server ingest %s\n", outputPath)
-	return nil
-}
-
-// writeCollectorOutputFile persists an artifact without printing workflow
-// guidance. The scan command uses this path so it can qualify or suppress its
-// ingest hint based on collection completeness. Other collector verbs retain
-// writeCollectorOutput's existing unconditional hint.
-func writeCollectorOutputFile(data *ingest.IngestData, outputPath string) error {
-	encoded, err := marshalCollectorArtifact(data)
-	if err != nil {
-		return err
-	}
-
-	if err := writeOutputAtomic(outputPath, encoded); err != nil {
-		return fmt.Errorf("write file: %w", err)
-	}
-	slog.Info("output written", "path", outputPath, "nodes", len(data.Graph.Nodes), "edges", len(data.Graph.Edges))
-	return nil
-}
-
-// writeOutputAtomic writes data to path via a temp file in the same directory
-// followed by os.Rename. A SIGINT or crash mid-write cannot leave a half-written
-// file at path. The temp file is chmod'd to 0o600 (POSIX; on NTFS this is a no-op
-// and the file inherits the directory's NTFS ACL — see
-// docs/operator/security.md).
-func writeOutputAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".agenthound-*.json")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	// Best-effort cleanup if rename never happens.
-	defer func() { _ = os.Remove(tmpName) }()
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmpName, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
 }

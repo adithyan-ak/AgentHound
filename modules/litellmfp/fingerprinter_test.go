@@ -52,9 +52,6 @@ func TestFingerprint_LiteLLMHappy(t *testing.T) {
 	if got := node.Properties["service_kind"]; got != "litellm" {
 		t.Errorf("properties.service_kind = %v, want litellm", got)
 	}
-	if got := node.Properties["is_anonymous_loot"]; got != "false" {
-		t.Errorf("properties.is_anonymous_loot = %v, want false", got)
-	}
 }
 
 func TestFingerprint_NotLiteLLM(t *testing.T) {

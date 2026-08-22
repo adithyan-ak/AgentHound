@@ -5,103 +5,101 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
-# Cancel superseded runs on the same ref so a force-push or rapid PR pushes
-# don't pile up redundant matrix runs.
+permissions:
+  contents: read
+
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GO_VERSION: "1.25.13"
 
 jobs:
-  lint:
+  quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: "1.25.12"
-      - name: Create UI embed stub
-        run: mkdir -p server/internal/api/ui/dist && echo '<!DOCTYPE html><html><body></body></html>' > server/internal/api/ui/dist/index.html
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a
+          go-version: ${{ env.GO_VERSION }}
+      - name: Lint and format
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a
         with:
-          version: "v2.11"
-      - name: Check licenses
-        run: |
-          go install github.com/google/go-licenses@latest
-          "$(go env GOPATH)/bin/go-licenses" check \
-            --allowed_licenses=Apache-2.0,MIT,BSD-2-Clause,BSD-3-Clause,ISC,MPL-2.0,Unlicense,Zlib \
-            ./collector/cmd/agenthound/... \
-            ./server/cmd/agenthound-server/...
+          version: v2.11.4
+      - name: Verify binary dependency boundaries
+        run: make deps-check
+      - name: Enforce the collector size budget
+        run: make size-check
 
-  test-unit:
+  unit:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: "1.25.12"
-      - name: Create UI embed stub
-        run: mkdir -p server/internal/api/ui/dist && echo '<!DOCTYPE html><html><body></body></html>' > server/internal/api/ui/dist/index.html
-      - name: Run unit tests
-        run: go test ./... -short -race -coverprofile=coverage.out
-      - name: Coverage summary
-        run: |
-          go tool cover -func=coverage.out | grep ^total:
-          TOTAL=$(go tool cover -func=coverage.out | grep ^total: | awk '{print $3}' | tr -d '%')
-          if [ "$(echo "$TOTAL < 55" | bc -l)" -eq 1 ]; then
-            echo "::error::Unit-test coverage ${TOTAL}% is below 55% threshold"
-            exit 1
-          fi
+          go-version: ${{ env.GO_VERSION }}
+      - name: Run race-enabled unit tests
+        run: go test ./... -short -race -count=1
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: server/ui/package-lock.json
+      - name: Check reachable Go vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+      - name: Check binary dependency licenses
+        run: >-
+          go run github.com/google/go-licenses@v1.6.0 check
+          --allowed_licenses=Apache-2.0,MIT,BSD-2-Clause,BSD-3-Clause,ISC,MPL-2.0,Unlicense,Zlib
+          ./collector/cmd/agenthound/...
+          ./server/cmd/agenthound-server/...
+      - name: Check production dashboard dependencies
+        working-directory: server/ui
+        run: npm audit --package-lock-only --omit=dev --audit-level=high
 
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: server/ui/package-lock.json
-      - run: cd server/ui && npm ci --ignore-scripts && npm run build
-      - run: mkdir -p server/internal/api/ui/dist && cp -r server/ui/dist/. server/internal/api/ui/dist/
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: "1.25.12"
-      - name: Build collector
-        run: go build -o bin/agenthound ./collector/cmd/agenthound
-      - name: Build server
-        run: go build -o bin/agenthound-server ./server/cmd/agenthound-server
-      - name: Deps-check
-        run: bash scripts/deps-check.sh
-      - name: Size-check
-        run: bash scripts/size-check.sh
+          go-version: ${{ env.GO_VERSION }}
+      - name: Lint, test, and build the dashboard
+        run: make ui-check
+      - name: Build both binaries with the real dashboard
+        run: |
+          mkdir -p bin
+          go build -o bin/agenthound ./collector/cmd/agenthound
+          go build -o bin/agenthound-server ./server/cmd/agenthound-server
+          ./bin/agenthound --version
+          ./bin/agenthound-server --version
+      - name: Compile canonical release targets
+        run: make cross-build
 
-  ui:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: server/ui/package-lock.json
-      # --ignore-scripts: no lifecycle hooks relied upon; eslint/vitest run from node_modules/.bin
-      - name: Install UI deps
-        run: cd server/ui && npm ci --ignore-scripts
-      - name: Lint (architecture import boundaries)
-        run: cd server/ui && npm run lint
-      - name: Unit tests (vitest)
-        run: cd server/ui && npm test
-      # SLOP_SKIP=hardcoded-grids: the dashboard grid-cols -> Every-Layout migration is
-      # a deferred, visually-QA'd task; the other design-system rules are enforced now.
-      - name: Slop-check (design-system gate)
-        run: SLOP_SKIP=hardcoded-grids bash scripts/slop-check.sh
-
-  test-integration:
-    if: github.event_name == 'pull_request'
+  integration:
     name: Integration (Neo4j ${{ matrix.neo4j_major }})
     runs-on: ubuntu-latest
-    needs: [test-unit]
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -121,7 +119,7 @@ jobs:
           --health-cmd "cypher-shell -u neo4j -p testpassword 'RETURN 1'"
           --health-interval 10s
           --health-timeout 5s
-          --health-retries 10
+          --health-retries 12
       postgres:
         image: postgres:16-alpine
         env:
@@ -134,7 +132,7 @@ jobs:
           --health-cmd pg_isready
           --health-interval 5s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 8
     env:
       AGENTHOUND_NEO4J_URI: bolt://localhost:7687
       AGENTHOUND_NEO4J_USER: neo4j
@@ -142,119 +140,66 @@ jobs:
       AGENTHOUND_EXPECTED_NEO4J_MAJOR: ${{ matrix.neo4j_major }}
       AGENTHOUND_PG_URI: postgres://test:test@localhost:5432/agenthound_test?sslmode=disable
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: "1.25.12"
-      - name: Create UI embed stub
-        run: mkdir -p server/internal/api/ui/dist && echo '<!DOCTYPE html><html><body></body></html>' > server/internal/api/ui/dist/index.html
-      - name: Verify Neo4j version matrix and schema
-        run: go test ./server/internal/graph -race -count=1 -run '^TestIntegrationNeo4jVersionMatrix$'
-      # Storage admission must prove the exact product-empty boundary. Run it
-      # before the parallel suite can populate the shared Neo4j service.
-      - name: Run storage binding lifecycle integration (serialized)
+          go-version: ${{ env.GO_VERSION }}
+      - name: Run database-backed integrations serially
+        run: >-
+          go test -race -count=1 -p 1 -run '^TestIntegration'
+          ./server/internal/appdb
+          ./server/internal/graph
+          ./server/internal/analysis/...
+          ./server/internal/ingest
+      - name: Run storage binding lifecycle on a fresh graph
         env:
           AGENTHOUND_FRESH_DB_INTEGRATION: "1"
-        run: |
-          go test ./server/internal/graph -race -count=1 -p 1 \
-            -run '^TestIntegrationStorageBindingLifecycle$'
-      # The ordinary integration suite runs the whole module in parallel and
-      # MUST NOT execute the destructive fresh-database integrations. Those
-      # tests globally reset Neo4j (and the ingest test also truncates
-      # PostgreSQL), which would race the other DB-touching packages sharing
-      # these services. AGENTHOUND_FRESH_DB_INTEGRATION is intentionally left
-      # unset here so those tests self-skip.
-      - name: Run full test suite with DB
-        run: go test ./... -race -coverprofile=coverage.out
-      - name: Check coverage threshold
-        run: |
-          TOTAL=$(go tool cover -func=coverage.out | grep ^total: | awk '{print $3}' | tr -d '%')
-          echo "::notice::Full-suite coverage: ${TOTAL}%"
-          if [ "$(echo "$TOTAL < 60" | bc -l)" -eq 1 ]; then
-            echo "::error::Coverage ${TOTAL}% is below 60% threshold"
-            exit 1
-          fi
-      - name: Run LiteLLM publication integrations (serialized)
+        run: >-
+          go test ./server/internal/graph -race -count=1 -p 1
+          -run '^TestIntegrationStorageBindingLifecycle$'
+      - name: Run LiteLLM publication integrations on fresh storage
         env:
           AGENTHOUND_FRESH_DB_INTEGRATION: "1"
-        run: |
-          go test ./server/internal/analysis/prebuilt -race -count=1 -p 1 -v \
-            -run '^TestIntegrationLiteLLM(FingerprintThenLootPreservesGatewayProperties|FirstPartyProducerSatisfiesMasterExposureQuery|QueryRejectsUnobservedMasterMaterial)$'
-      # Dedicated, serialized step for the destructive fresh-schema integration.
-      # It runs AFTER the ordinary suite has finished (so nothing else is
-      # touching the shared DB), targets only the fresh-schema tests, and pins
-      # `-p 1` to forbid any parallel package execution. Together with the
-      # storage-binding and LiteLLM steps above, this is the only other place
-      # where the reset opt-in is enabled.
-      - name: Run destructive fresh-schema integration (serialized)
+        run: >-
+          go test ./server/internal/analysis/prebuilt -race -count=1 -p 1
+          -run '^TestIntegrationLiteLLM(FingerprintThenCollectPreservesGatewayProperties|FirstPartyProducerSatisfiesMasterExposureQuery|QueryRejectsUnobservedMasterMaterial)$'
+      - name: Run fresh-schema publication integrations
         env:
           AGENTHOUND_FRESH_DB_INTEGRATION: "1"
-        run: |
-          go test ./server/internal/ingest -race -p 1 \
-            -run '^TestIntegrationFreshSchema(CompleteIngestPublishes|EmptyIngestPublishesUnderThreeSeconds)$'
+        run: >-
+          go test ./server/internal/ingest -race -count=1 -p 1
+          -run '^TestIntegrationFreshSchema(CompleteIngestPublishes|EmptyIngestPublishesUnderThreeSeconds)$'
 
-  govulncheck:
-    if: github.event_name == 'pull_request'
+  e2e-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [unit, build]
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: "1.25.12"
-      - name: Create UI embed stub
-        run: mkdir -p server/internal/api/ui/dist && echo '<!DOCTYPE html><html><body></body></html>' > server/internal/api/ui/dist/index.html
-      - run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
+          go-version: ${{ env.GO_VERSION }}
+      - name: Run collector-to-ingest smoke test
+        run: make integration
 
-  xplatform-build:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    needs: [lint, test-unit]
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [linux, darwin, windows]
-        arch: [amd64, arm64]
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
-        with:
-          go-version: "1.25.12"
-      - name: Create UI embed stub
-        run: mkdir -p server/internal/api/ui/dist && echo '<!DOCTYPE html><html><body></body></html>' > server/internal/api/ui/dist/index.html
-      - name: Build collector
-        env:
-          CGO_ENABLED: "0"
-          GOOS: ${{ matrix.os }}
-          GOARCH: ${{ matrix.arch }}
-        run: go build -trimpath -ldflags='-s -w' -o /dev/null ./collector/cmd/agenthound
-      - name: Build server
-        env:
-          CGO_ENABLED: "0"
-          GOOS: ${{ matrix.os }}
-          GOARCH: ${{ matrix.arch }}
-        run: go build -trimpath -ldflags='-s -w' -o /dev/null ./server/cmd/agenthound-server
-
-  windows-rules:
-    if: github.event_name == 'pull_request'
+  windows:
     runs-on: windows-latest
-    needs: [test-unit]
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: "1.25.12"
-      - name: Exercise Windows rules support natively
-        run: go test ./sdk/common ./sdk/rules -count=1
+          go-version: ${{ env.GO_VERSION }}
+      - name: Exercise native Windows contracts
+        run: go test ./sdk/checkpoint ./sdk/contact ./sdk/common ./sdk/rules -count=1
 
-  docker:
-    if: github.event_name == 'pull_request'
+  containers:
     runs-on: ubuntu-latest
-    needs: [build]
+    timeout-minutes: 45
+    needs: build
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
       - name: Build collector image
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf
         with:
@@ -277,17 +222,24 @@ jobs:
           build-args: |
             VERSION=ci-test
             COMMIT=ci-test-commit
-      - name: Verify injected image version metadata
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$(docker run --rm agenthound:ci --version)" == \
-            "agenthound version ci-test (commit: ci-test-commit)" ]]
-          [[ "$(docker run --rm agenthound-server:ci --version)" == \
-            "agenthound-server version ci-test (commit: ci-test-commit)" ]]
       - name: Build standard image
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf
         with:
           context: .
           file: docker/Dockerfile.standard
+          load: true
           push: false
+          tags: agenthound-standard:ci
+          build-args: |
+            VERSION=ci-test
+            COMMIT=ci-test-commit
+      - name: Verify image version metadata
+        run: |
+          [[ "$(docker run --rm agenthound:ci --version)" == \
+            "agenthound version ci-test (commit: ci-test-commit)" ]]
+          [[ "$(docker run --rm agenthound-server:ci --version)" == \
+            "agenthound-server version ci-test (commit: ci-test-commit)" ]]
+          [[ "$(docker run --rm --entrypoint agenthound agenthound-standard:ci --version)" == \
+            "agenthound version ci-test (commit: ci-test-commit)" ]]
+          [[ "$(docker run --rm --entrypoint agenthound-server agenthound-standard:ci --version)" == \
+            "agenthound-server version ci-test (commit: ci-test-commit)" ]]

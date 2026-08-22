@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -20,7 +19,6 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
-	"github.com/adithyan-ak/agenthound/sdk/module"
 )
 
 const (
@@ -256,7 +254,7 @@ func (f *contextForgeFixture) target() action.Target {
 func (f *contextForgeFixture) payload(engagement string, dryRun bool) action.PoisonPayload {
 	return action.PoisonPayload{
 		TargetID: testToolName, InjectionContent: testUpdated, Mode: "replace",
-		EngagementID: engagement, DryRun: dryRun,
+		RunID: engagement, DryRun: dryRun,
 		Extras: map[string]any{
 			"adapter": action.ContextForgeProfile, "management-url": f.managementHTTP.URL,
 		},
@@ -305,9 +303,31 @@ func newTestPoisoner(t *testing.T) *Poisoner {
 	t.Setenv("AGENTHOUND_STATE_DIR", t.TempDir())
 	t.Setenv("AGENTHOUND_MCP_TOKEN", "")
 	p := New()
+	p.SetReceiptJournal(&memoryReceiptJournal{})
 	p.pollInterval = 0
 	p.pollAttempts = 3
 	return p
+}
+
+type memoryReceiptJournal struct {
+	mu       sync.Mutex
+	receipts map[string][]action.Receipt
+}
+
+func (journal *memoryReceiptJournal) WriteReceipt(runID string, receipt action.Receipt) (string, error) {
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	if journal.receipts == nil {
+		journal.receipts = make(map[string][]action.Receipt)
+	}
+	journal.receipts[runID] = append(journal.receipts[runID], receipt)
+	return "memory", nil
+}
+
+func (journal *memoryReceiptJournal) ReadReceipts(runID string) ([]action.Receipt, error) {
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	return append([]action.Receipt(nil), journal.receipts[runID]...), nil
 }
 
 func authorizeFixture(t *testing.T) {
@@ -418,10 +438,10 @@ func TestContextForgePoisonPersistsTypedReceiptBeforeWriteAndReverts(t *testing.
 	fixture := newContextForgeFixture(t)
 	p := newTestPoisoner(t)
 	engagement := "ENG-CONTEXTFORGE"
-	receiptPath := filepath.Join(p.Stateful().StateDir(), engagement+".json")
 	fixture.onWrite = func() {
-		if _, err := os.Stat(receiptPath); err != nil {
-			t.Errorf("receipt was not persisted before management write: %v", err)
+		receipts, _ := p.receipts.ReadReceipts(engagement)
+		if len(receipts) != 1 {
+			t.Errorf("receipt was not journaled before management write")
 		}
 	}
 
@@ -455,7 +475,7 @@ func TestContextForgePoisonPersistsTypedReceiptBeforeWriteAndReverts(t *testing.
 		record.ModifiedUserAgent != state.Management.ForwardUserAgent {
 		t.Fatalf("post-poison state = %+v, writes=%d", record, writes)
 	}
-	persisted, err := p.Stateful().ReadReceipts(engagement)
+	persisted, err := p.receipts.ReadReceipts(engagement)
 	if err != nil || len(persisted) != 1 {
 		t.Fatalf("persisted receipts = %d, %v", len(persisted), err)
 	}
@@ -513,7 +533,7 @@ func TestContextForgeRejectsOversizedOutboundBeforeReceiptOrWrite(t *testing.T) 
 	if writes != 0 {
 		t.Fatalf("oversized outbound issued %d writes", writes)
 	}
-	persisted, readErr := p.Stateful().ReadReceipts(payload.EngagementID)
+	persisted, readErr := p.receipts.ReadReceipts(payload.RunID)
 	if readErr != nil || len(persisted) != 0 {
 		t.Fatalf("oversized outbound persisted receipts = %d, %v", len(persisted), readErr)
 	}
@@ -570,7 +590,7 @@ func TestContextForgeRejectsUpdateWithoutExactToolResponseHeadroom(t *testing.T)
 	if writes != 0 {
 		t.Fatalf("insufficient response headroom issued %d writes", writes)
 	}
-	persisted, readErr := p.Stateful().ReadReceipts(payload.EngagementID)
+	persisted, readErr := p.receipts.ReadReceipts(payload.RunID)
 	if readErr != nil || len(persisted) != 0 {
 		t.Fatalf("insufficient response headroom persisted receipts = %d, %v", len(persisted), readErr)
 	}
@@ -595,7 +615,7 @@ func TestContextForgeRejectsOriginalDescriptionOutsideRestoreRequestBound(t *tes
 	if writes != 0 {
 		t.Fatalf("unrestorable original issued %d writes", writes)
 	}
-	persisted, readErr := p.Stateful().ReadReceipts(payload.EngagementID)
+	persisted, readErr := p.receipts.ReadReceipts(payload.RunID)
 	if readErr != nil || len(persisted) != 0 {
 		t.Fatalf("unrestorable original persisted receipts = %d, %v", len(persisted), readErr)
 	}
@@ -619,7 +639,7 @@ func TestContextForgeRejectsRepeatedSameToolReceiptWithinEngagement(t *testing.T
 	if writes != 1 || record.Description != testUpdated {
 		t.Fatalf("second poison state = %+v, writes=%d", record, writes)
 	}
-	persisted, readErr := p.Stateful().ReadReceipts(engagement)
+	persisted, readErr := p.receipts.ReadReceipts(engagement)
 	if readErr != nil || len(persisted) != 1 {
 		t.Fatalf("persisted receipts = %d, %v", len(persisted), readErr)
 	}
@@ -672,7 +692,7 @@ func TestContextForgeRejectsUnrestoredForwardAcrossEngagements(t *testing.T) {
 	if writes != 1 || record.Description != testUpdated {
 		t.Fatalf("cross-engagement stack state = %+v, writes=%d", record, writes)
 	}
-	persisted, readErr := p.Stateful().ReadReceipts(secondPayload.EngagementID)
+	persisted, readErr := p.receipts.ReadReceipts(secondPayload.RunID)
 	if readErr != nil || len(persisted) != 0 {
 		t.Fatalf("cross-engagement rejection persisted receipts = %d, %v", len(persisted), readErr)
 	}
@@ -695,7 +715,7 @@ func TestContextForgeDryRunRejectsUnrestoredForwardAttributedRow(t *testing.T) {
 	if writes != 1 || record.Description != testUpdated {
 		t.Fatalf("dry-run eligibility state = %+v, writes=%d", record, writes)
 	}
-	persisted, readErr := p.Stateful().ReadReceipts(payload.EngagementID)
+	persisted, readErr := p.receipts.ReadReceipts(payload.RunID)
 	if readErr != nil || len(persisted) != 0 {
 		t.Fatalf("rejected dry-run persisted receipts = %d, %v", len(persisted), readErr)
 	}
@@ -1306,15 +1326,16 @@ func TestContextForgeFinalPreflightDetectsDriftBeforeReceiptOrWrite(t *testing.T
 	if writes != 0 {
 		t.Fatalf("final preflight drift issued %d writes", writes)
 	}
-	if _, statErr := os.Stat(filepath.Join(p.Stateful().StateDir(), "ENG-DRIFT.json")); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("final preflight drift persisted receipt: %v", statErr)
+	persisted, _ := p.receipts.ReadReceipts("ENG-DRIFT")
+	if len(persisted) != 0 {
+		t.Fatalf("final preflight drift journaled %d receipt(s)", len(persisted))
 	}
 }
 
 func TestContextForgeRevertRejectsMissingTypedReceiptBeforeNetworking(t *testing.T) {
 	t.Setenv("AGENTHOUND_CONTEXTFORGE_TOKEN", "")
 	err := newTestPoisoner(t).Revert(context.Background(), &action.PoisonReceipt{
-		ModuleID: "mcp.poison", EngagementID: "ENG-UNTYPED",
+		ModuleID:        "mcp.poison",
 		OriginalContent: testOriginal, InjectedContent: testUpdated,
 	})
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "typed") {
@@ -1634,5 +1655,3 @@ func TestDryRunProducesTypedReceiptWithoutWrite(t *testing.T) {
 		t.Fatalf("dry-run issued %d writes", writes)
 	}
 }
-
-var _ = module.NewFileStatefulModule

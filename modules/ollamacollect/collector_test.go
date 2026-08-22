@@ -1,0 +1,433 @@
+package ollamacollect
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/adithyan-ak/agenthound/modules/ollamafp"
+	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/common"
+)
+
+const tagsBody = `{
+	"models":[
+		{"name":"llama3:latest","model":"llama3:latest","digest":"sha256:abcdef0123456789","size":4661211808,"modified_at":"2026-04-01T12:00:00Z"},
+		{"name":"support-agent-v3:latest","model":"support-agent-v3:latest","digest":"sha256:fedcba9876543210","size":4700000000,"modified_at":"2026-04-15T09:00:00Z"}
+	]
+}`
+
+const modelfileLlama = "FROM llama3\n"
+const modelfileFinetune = "FROM llama3\nSYSTEM \"\"\"You are SupportBot for Acme Corp.\"\"\"\n"
+
+func ollamaStubServer(t *testing.T, opts stubOpts) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/version":
+			_, _ = w.Write([]byte(`{"version":"0.5.1"}`))
+		case "/api/tags":
+			_, _ = w.Write([]byte(tagsBody))
+		case "/api/show":
+			defer func() { _ = r.Body.Close() }()
+			body, _ := readAllString(r)
+			if strings.Contains(body, "support-agent") {
+				_, _ = w.Write([]byte(`{"modelfile":` + jsonString(modelfileFinetune) + `,"template":"{{ .System }}","system":"You are SupportBot for Acme Corp.","details":{"family":"llama","parameter_size":"8B","quantization_level":"Q4_0"}}`))
+			} else {
+				_, _ = w.Write([]byte(`{"modelfile":` + jsonString(modelfileLlama) + `,"template":"{{ .Prompt }}","details":{"family":"llama","parameter_size":"8B","quantization_level":"Q4_0"}}`))
+			}
+		case "/api/embeddings":
+			if !opts.allowEmbeddings {
+				w.WriteHeader(404)
+				return
+			}
+			_, _ = w.Write([]byte(`{"embedding":[0.1,0.2,0.3]}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+}
+
+func TestFingerprintAndLootPropertiesComposeOnSameEndpoint(t *testing.T) {
+	srv := ollamaStubServer(t, stubOpts{})
+	defer srv.Close()
+	target := action.Target{Kind: "host", Address: strings.TrimPrefix(srv.URL, "http://")}
+
+	fingerprinter, err := ollamafp.New()
+	if err != nil {
+		t.Fatalf("new fingerprinter: %v", err)
+	}
+	fingerprint, err := fingerprinter.Fingerprint(context.Background(), target)
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+	collection, err := (&Collector{}).Collect(context.Background(), target, action.CollectOptions{})
+	if err != nil {
+		t.Fatalf("collection: %v", err)
+	}
+	fingerprintNode := fingerprint.IngestData.Graph.Nodes[0]
+	lootNode := collection.IngestData.Graph.Nodes[0]
+	if fingerprintNode.ID != lootNode.ID {
+		t.Fatalf("same endpoint IDs differ: %q != %q", fingerprintNode.ID, lootNode.ID)
+	}
+	for key, fingerprintValue := range fingerprintNode.Properties {
+		if key == "last_verified_at" {
+			continue
+		}
+		if lootValue, shared := lootNode.Properties[key]; shared &&
+			!reflect.DeepEqual(fingerprintValue, lootValue) {
+			t.Errorf("shared property %q conflicts: fingerprint=%#v collection=%#v", key, fingerprintValue, lootValue)
+		}
+	}
+	if fingerprintNode.Properties["discovered_via"] != "network_scan" ||
+		lootNode.Properties["collection_observed"] != true {
+		t.Errorf("action provenance not separated: fingerprint=%+v collection=%+v", fingerprintNode.Properties, lootNode.Properties)
+	}
+}
+
+type stubOpts struct {
+	allowEmbeddings bool
+}
+
+func TestCollect_AnonymousHappyPath(t *testing.T) {
+	srv := ollamaStubServer(t, stubOpts{})
+	defer srv.Close()
+
+	l := &Collector{}
+	res, err := l.Collect(context.Background(), action.Target{
+		Kind:    "host",
+		Address: strings.TrimPrefix(srv.URL, "http://"),
+	}, action.CollectOptions{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if res.IngestData == nil {
+		t.Fatal("IngestData nil")
+	}
+	// 1 OllamaInstance + 2 AIModel = 3 nodes; 2 PROVIDES_MODEL edges.
+	if len(res.IngestData.Graph.Nodes) != 3 {
+		t.Errorf("nodes: got %d, want 3", len(res.IngestData.Graph.Nodes))
+	}
+	if len(res.IngestData.Graph.Edges) != 2 {
+		t.Errorf("edges: got %d, want 2", len(res.IngestData.Graph.Edges))
+	}
+
+	var ollama, modelLlama, modelFinetune int
+	for _, n := range res.IngestData.Graph.Nodes {
+		switch n.Kinds[0] {
+		case "OllamaInstance":
+			ollama++
+			if n.Properties["collection_observed"] != true {
+				t.Errorf("OllamaInstance missing collection_observed: %+v", n.Properties)
+			}
+			if _, exists := n.Properties["discovered_via"]; exists {
+				t.Errorf("direct collection claimed discovery provenance: %+v", n.Properties)
+			}
+		case "AIModel":
+			ps, _ := n.Properties["parameter_size"].(string)
+			if ps == "" {
+				t.Errorf("AIModel.parameter_size should be populated (canonical field per graph-model.md)")
+			}
+			if _, legacy := n.Properties["parameters"]; legacy {
+				t.Error("AIModel emitted legacy parameters alias")
+			}
+			if name, _ := n.Properties["name"].(string); strings.Contains(name, "support-agent") {
+				modelFinetune++
+				if got, _ := n.Properties["is_finetune"].(bool); !got {
+					t.Errorf("support-agent should be flagged is_finetune=true")
+				}
+				if vh, _ := n.Properties["value_hash"].(string); vh == "" {
+					t.Errorf("AIModel.value_hash should be populated for fine-tune")
+				}
+				if got, _ := n.Properties["has_system_prompt"].(bool); !got {
+					t.Errorf("support-agent should be flagged has_system_prompt=true")
+				}
+				if _, ok := n.Properties["modelfile"]; !ok {
+					t.Errorf("modelfile should be retained by the autonomous collector")
+				}
+			} else {
+				modelLlama++
+			}
+		}
+	}
+	if ollama != 1 || modelLlama != 1 || modelFinetune != 1 {
+		t.Errorf("expected 1 OllamaInstance + 1 plain + 1 fine-tune; got %d/%d/%d",
+			ollama, modelLlama, modelFinetune)
+	}
+	assertAnonymousInventoryClaim(t, res.IngestData.Graph.Nodes[0].Properties)
+
+	for _, e := range res.IngestData.Graph.Edges {
+		if e.Kind != "PROVIDES_MODEL" {
+			t.Errorf("edge kind = %q, want PROVIDES_MODEL", e.Kind)
+		}
+		if e.SourceKind != "OllamaInstance" || e.TargetKind != "AIModel" {
+			t.Errorf("edge endpoints = %s -> %s, want OllamaInstance -> AIModel", e.SourceKind, e.TargetKind)
+		}
+	}
+}
+
+func TestCollect_TagsFailureDoesNotClaimAnonymousAccess(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "authentication denial", status: http.StatusUnauthorized, body: `{}`},
+		{name: "malformed success shape", status: http.StatusOK, body: `{}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer srv.Close()
+
+			res, err := (&Collector{}).Collect(context.Background(), action.Target{
+				Kind:    "host",
+				Address: strings.TrimPrefix(srv.URL, "http://"),
+			}, action.CollectOptions{})
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			assertNoAnonymousInventoryClaim(t, res.IngestData.Graph.Nodes[0].Properties)
+			if res.Summary.PartialFailures != 1 {
+				t.Fatalf("PartialFailures = %d, want 1", res.Summary.PartialFailures)
+			}
+		})
+	}
+
+	t.Run("transport failure", func(t *testing.T) {
+		srv := httptest.NewServer(http.NotFoundHandler())
+		address := strings.TrimPrefix(srv.URL, "http://")
+		srv.Close()
+
+		res, err := (&Collector{}).Collect(context.Background(), action.Target{
+			Kind: "host", Address: address,
+		}, action.CollectOptions{})
+		if err != nil {
+			t.Fatalf("Collect: %v", err)
+		}
+		assertNoAnonymousInventoryClaim(t, res.IngestData.Graph.Nodes[0].Properties)
+		if res.Summary.PartialFailures != 1 {
+			t.Fatalf("PartialFailures = %d, want 1", res.Summary.PartialFailures)
+		}
+	})
+}
+
+func assertAnonymousInventoryClaim(t *testing.T, props map[string]any) {
+	t.Helper()
+	if props["auth_method"] != string(common.AuthNone) ||
+		props["auth_assurance"] != string(common.AuthAssuranceUnauthenticated) ||
+		props["auth_evidence"] != common.AuthEvidenceAnonymousProbeSucceeded ||
+		props["probe_status"] != string(common.VerificationVerified) {
+		t.Fatalf("anonymous inventory evidence = %+v", props)
+	}
+	if _, ok := props["last_verified_at"].(string); !ok {
+		t.Fatalf("last_verified_at missing from anonymous inventory evidence: %+v", props)
+	}
+}
+
+func assertNoAnonymousInventoryClaim(t *testing.T, props map[string]any) {
+	t.Helper()
+	for _, key := range []string{
+		"auth_method", "auth_assurance", "auth_evidence", "probe_status",
+		"last_verified_at",
+	} {
+		if value, present := props[key]; present {
+			t.Errorf("failed inventory fabricated %s=%v: %+v", key, value, props)
+		}
+	}
+}
+
+func TestCollect_DeepEmitsModelfile(t *testing.T) {
+	srv := ollamaStubServer(t, stubOpts{})
+	defer srv.Close()
+
+	l := &Collector{}
+	res, err := l.Collect(context.Background(), action.Target{
+		Kind:    "host",
+		Address: strings.TrimPrefix(srv.URL, "http://"),
+	}, action.CollectOptions{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	var saw bool
+	for _, n := range res.IngestData.Graph.Nodes {
+		if n.Kinds[0] != "AIModel" {
+			continue
+		}
+		if mf, _ := n.Properties["modelfile"].(string); strings.Contains(mf, "SupportBot") {
+			saw = true
+			if sp, _ := n.Properties["system_prompt"].(string); sp == "" {
+				t.Errorf("system_prompt should be populated from observed modelfile")
+			}
+		}
+	}
+	if !saw {
+		t.Error("modelfile not surfaced on any AIModel node")
+	}
+}
+
+func TestCollect_IncludeEmbeddingsProbesPOST(t *testing.T) {
+	srv := ollamaStubServer(t, stubOpts{allowEmbeddings: true})
+	defer srv.Close()
+
+	l := &Collector{}
+	res, err := l.Collect(context.Background(), action.Target{
+		Kind:    "host",
+		Address: strings.TrimPrefix(srv.URL, "http://"),
+	}, action.CollectOptions{
+		Extras: map[string]any{"include-embeddings": true},
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	confirmed, _ := res.IngestData.Graph.Nodes[0].Properties["embedding_capability_confirmed"].(bool)
+	if !confirmed {
+		t.Error("embedding_capability_confirmed should be true after successful probe")
+	}
+}
+
+// TestCollect_Ollama_ShowUsesModelField locks in the /api/show request
+// body shape: canonical field is {"model": ...}, not legacy {"name": ...}.
+// Ollama's ShowHandler accepts both, but "model" matches current api.md.
+func TestCollect_Ollama_ShowUsesModelField(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		gotBody  []byte
+		gotCount int
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/tags":
+			_, _ = w.Write([]byte(tagsBody))
+		case "/api/show":
+			b, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			if gotCount == 0 {
+				gotBody = b
+			}
+			gotCount++
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"modelfile":"FROM llama3\n","details":{"family":"llama","parameter_size":"8B"}}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	l := &Collector{}
+	_, err := l.Collect(context.Background(), action.Target{
+		Kind:    "host",
+		Address: strings.TrimPrefix(srv.URL, "http://"),
+	}, action.CollectOptions{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if gotCount == 0 {
+		t.Fatal("no /api/show call observed")
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(gotBody, &parsed); err != nil {
+		t.Fatalf("first /api/show body not valid JSON: %v (%s)", err, string(gotBody))
+	}
+	if _, ok := parsed["model"]; !ok {
+		t.Errorf("/api/show body missing canonical `model` field: %s", string(gotBody))
+	}
+	if _, ok := parsed["name"]; ok {
+		t.Errorf("/api/show body still sends deprecated `name` field: %s", string(gotBody))
+	}
+}
+
+// TestCollect_Ollama_EmbeddingsKeepAliveZero — the --include-embeddings
+// probe must send keep_alive: 0 so the runner is unloaded immediately
+// after the probe (verified against Ollama server/sched.go:389-398).
+func TestCollect_Ollama_EmbeddingsKeepAliveZero(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		gotBody  []byte
+		observed bool
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/tags":
+			_, _ = w.Write([]byte(tagsBody))
+		case "/api/show":
+			_, _ = w.Write([]byte(`{"modelfile":"FROM llama3\n","details":{"family":"llama","parameter_size":"8B"}}`))
+		case "/api/embeddings":
+			b, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			gotBody = b
+			observed = true
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"embedding":[0.1,0.2,0.3]}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	l := &Collector{}
+	_, err := l.Collect(context.Background(), action.Target{
+		Kind:    "host",
+		Address: strings.TrimPrefix(srv.URL, "http://"),
+	}, action.CollectOptions{
+		Extras: map[string]any{"include-embeddings": true},
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !observed {
+		t.Fatal("no /api/embeddings probe observed")
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(gotBody, &parsed); err != nil {
+		t.Fatalf("embeddings body not valid JSON: %v (%s)", err, string(gotBody))
+	}
+	ka, ok := parsed["keep_alive"]
+	if !ok {
+		t.Fatalf("/api/embeddings body missing keep_alive: %s", string(gotBody))
+	}
+	f, _ := ka.(float64)
+	if f != 0 {
+		t.Errorf("keep_alive = %v, want 0 (immediate unload per sched.go:389-398)", ka)
+	}
+}
+
+func TestCollect_NoModels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/tags" {
+			_, _ = w.Write([]byte(`{"models":[]}`))
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+	l := &Collector{}
+	res, err := l.Collect(context.Background(), action.Target{
+		Kind:    "host",
+		Address: strings.TrimPrefix(srv.URL, "http://"),
+	}, action.CollectOptions{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	// 1 OllamaInstance, 0 AIModels.
+	if got := len(res.IngestData.Graph.Nodes); got != 1 {
+		t.Errorf("nodes: got %d, want 1 (OllamaInstance only)", got)
+	}
+	if got := len(res.IngestData.Graph.Edges); got != 0 {
+		t.Errorf("edges: got %d, want 0", got)
+	}
+}

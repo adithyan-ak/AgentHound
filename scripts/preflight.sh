@@ -2,9 +2,9 @@
 # AgentHound build preflight.
 #
 # Checks that the tools needed for a target are present on $PATH and
-# meet minimum major versions. Fails fast with an actionable error block
-# when something is missing; warns (but does not fail) when a tool exists
-# but is below the project's pinned major version.
+# meet minimum versions. Fails fast with an actionable error block when a
+# required tool is missing or Go is older than the version declared in go.mod;
+# warns when Node is below the supported major version.
 #
 # Usage:
 #   scripts/preflight.sh build              # go + node + npm
@@ -17,15 +17,20 @@
 set -e
 
 TARGET="${1:-build}"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+GO_REQUIRED=$(awk '$1 == "go" { print $2; exit }' "${SCRIPT_DIR}/../go.mod")
+
+if [ -z "${GO_REQUIRED}" ]; then
+  echo "preflight: could not read the required Go version from go.mod" >&2
+  exit 1
+fi
 
 if [ "${AGENTHOUND_SKIP_PREFLIGHT:-0}" = "1" ]; then
   echo ">>> AgentHound preflight skipped (AGENTHOUND_SKIP_PREFLIGHT=1)"
   exit 0
 fi
 
-# Project pins (kept in sync with go.mod + .github/workflows/ci.yml).
-GO_MIN_MAJOR=1
-GO_MIN_MINOR=25
+# Project pins. Go is read from go.mod so local checks and CI cannot drift.
 NODE_MIN_MAJOR=20
 
 # Accumulators. POSIX sh has no arrays, so newline-separated strings.
@@ -39,16 +44,16 @@ print_status() {
 }
 
 # Compare two dotted versions: returns 0 if $1 >= $2.
-# Only looks at the first two components (major.minor).
 ge_version() {
-  have_major=$(echo "$1" | awk -F. '{print $1+0}')
-  have_minor=$(echo "$1" | awk -F. '{print $2+0}')
-  need_major=$(echo "$2" | awk -F. '{print $1+0}')
-  need_minor=$(echo "$2" | awk -F. '{print $2+0}')
-  if [ "$have_major" -gt "$need_major" ]; then return 0; fi
-  if [ "$have_major" -lt "$need_major" ]; then return 1; fi
-  if [ "$have_minor" -ge "$need_minor" ]; then return 0; fi
-  return 1
+  awk -v have="$1" -v need="$2" 'BEGIN {
+    split(have, h, "."); split(need, n, ".")
+    for (i = 1; i <= 3; i++) {
+      hv = h[i] + 0; nv = n[i] + 0
+      if (hv > nv) exit 0
+      if (hv < nv) exit 1
+    }
+    exit 0
+  }'
 }
 
 check_go() {
@@ -57,14 +62,14 @@ check_go() {
     MISSING="${MISSING}go\n"
     return
   fi
-  # `go version` -> "go version go1.25.12 darwin/arm64"
+  # `go version` -> "go version go1.25.13 darwin/arm64"
   ver=$(go version 2>/dev/null | awk '{print $3}' | sed 's/^go//')
-  need="${GO_MIN_MAJOR}.${GO_MIN_MINOR}"
+  need="${GO_REQUIRED}"
   if ge_version "$ver" "$need"; then
     print_status OK go "$ver" "(need >= ${need})"
   else
-    print_status WARN go "$ver" "(project pins >= ${need} — CI uses 1.25.12)"
-    HAS_WARN=1
+    print_status FAIL go "$ver" "(project requires >= ${need})"
+    MISSING="${MISSING}go-version\n"
   fi
 }
 
@@ -218,7 +223,8 @@ if [ -n "$MISSING" ]; then
   printf "$MISSING" | while IFS= read -r tool; do
     [ -z "$tool" ] && continue
     case "$tool" in
-      go)             echo "    go              — install Go 1.25+ from https://go.dev/dl/" ;;
+      go)             echo "    go              — install Go ${GO_REQUIRED}+ from https://go.dev/dl/" ;;
+      go-version)     echo "    go              — upgrade to Go ${GO_REQUIRED}+ from https://go.dev/dl/" ;;
       node)           echo "    node            — install Node.js 20+ from https://nodejs.org/en/download" ;;
       npm)            echo "    npm             — usually installed with Node.js. https://nodejs.org/en/download" ;;
       docker)         echo "    docker          — install Docker Desktop / Engine from https://docs.docker.com/engine/install/" ;;

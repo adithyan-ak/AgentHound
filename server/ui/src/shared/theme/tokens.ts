@@ -34,14 +34,13 @@ export const NODE_KIND_COLORS = {
   JupyterServer: "#F57C00",      // deep orange — distinct from MCPPrompt #FB923C (orange-400)
   LangServeApp: "#9CCC65",       // chartreuse — distinct from AIService purple AND OpenWebUI green
   OpenWebUIInstance: "#66BB6A",  // green — chat-UI identity
-  // Model-artifact node — emitted by the Ollama Looter (one per /api/tags
+  // Model-artifact node — emitted by the Ollama collector (one per /api/tags
   // entry, properties from /api/show). Deep purple chosen because it sits next
   // to AIService #7E57C2 and A2AAgent #A855F7 in hue but is materially darker,
   // so the explorer renders model artifacts as the "weight" beneath their AI
   // service. Plan suggested #F44336 red but it collides with MCPResource
   // #EF4444 — readers can't distinguish a sensitive resource from a model.
   AIModel: "#6A1B9A",            // deep purple — distinct from A2AAgent / AIService / QdrantInstance
-  ExtractedTrainingSignal: "#2DD4BF", // teal signal — extraction output, distinct from model/service nodes
 } as const satisfies Record<string, string>;
 
 export type NodeKind = keyof typeof NODE_KIND_COLORS;

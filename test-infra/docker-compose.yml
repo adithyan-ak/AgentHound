@@ -7,8 +7,7 @@ name: agenthound-test
 
 # A single YAML scalar feeds the real LiteLLM process, the enforcing MCP
 # bearer gate, and the runtime-rendered client header. Keeping one anchor is a
-# hard guarantee that the cross-service lane correlates the same material; the
-# collector artifacts retain only its SHA-256 value_hash.
+# hard guarantee that the same concrete material reaches the unified scan.
 x-litellm-master-key: &litellm-master-key sk-local-agenthound-master-key-not-production
 x-cross-service-proof: &cross-service-proof 4a8f2c1d9e3b7a0f5c6d8e2b1a4f7c3d
 x-a2a-protected-api-key: &a2a-protected-api-key agenthound-a2a-api-key-not-production
@@ -30,13 +29,6 @@ volumes:
   analysis-neo4j-data:
 
 services:
-  gguf-verifier:
-    profiles: ["tools"]
-    build:
-      context: ./services/gguf-verifier
-    volumes:
-      - ./fixtures:/fixtures:ro
-
   ollama:
     image: ollama/ollama:0.12.0@sha256:14def4e0b9ac8c91b3ec6f7fa7684c924ffe244541d5fd827d9b89035cc33310
     networks:

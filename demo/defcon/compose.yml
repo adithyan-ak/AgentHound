@@ -52,6 +52,8 @@ services:
       AGENTHOUND_LOG_LEVEL: info
     ports:
       - "127.0.0.1:18080:8080"
+    volumes:
+      - ./artifacts:/demo/artifacts:ro
     depends_on:
       graph-db:
         condition: service_healthy
@@ -109,7 +111,6 @@ services:
     # immediately selectable by the host browser on native Linux and Docker Desktop.
     user: "${AGENTHOUND_DEMO_UID:?set AGENTHOUND_DEMO_UID}:${AGENTHOUND_DEMO_GID:?set AGENTHOUND_DEMO_GID}"
     environment:
-      AGENTHOUND_CAMPAIGN_CREDENTIAL: ${DEFCON_CRM_TOKEN:-example}
       MCP_URL: http://crm-mcp:8931/mcp
     volumes:
       - ./artifacts:/demo/artifacts

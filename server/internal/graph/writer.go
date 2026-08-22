@@ -27,6 +27,7 @@ var observationVolatilePropertyKeys = []string{
 	"first_seen",
 	"last_seen",
 	"last_verified_at",
+	"observed_content_at",
 	"scan_id",
 }
 

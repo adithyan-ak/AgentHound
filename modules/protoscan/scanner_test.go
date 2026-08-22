@@ -22,6 +22,7 @@ import (
 	"github.com/adithyan-ak/agenthound/modules/networkscan"
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/contact"
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
@@ -129,6 +130,21 @@ func TestScanReportExcludesInactiveProtocolPorts(t *testing.T) {
 	if !reflect.DeepEqual(first.LastReport(), second.LastReport()) {
 		t.Fatalf("inactive A2A ports changed report: first=%+v second=%+v",
 			first.LastReport(), second.LastReport())
+	}
+}
+
+func TestScanReportTreatsAllExcludedHostsAsNotApplicable(t *testing.T) {
+	policy, err := contact.NewPolicy([]string{"127.0.0.0/30"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Scanner{Mode: ModeBoth, ContactPolicy: policy}
+	if _, err := s.Scan(context.Background(), "127.0.0.0/30"); err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	report := s.LastReport()
+	if report.State() != ingest.OutcomeNotApplicable || report.Total != 0 || report.ExcludedHosts != 4 {
+		t.Fatalf("all-excluded report = %+v, want not_applicable with four excluded hosts", report)
 	}
 }
 
