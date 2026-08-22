@@ -488,6 +488,74 @@ func TestConfigCollector_ValueHashAlwaysPopulated(t *testing.T) {
 	}
 }
 
+func TestConfigCollector_ObservedCredentialIdentityDeduplicatesByValueHash(t *testing.T) {
+	tmp := t.TempDir()
+	firstPath := filepath.Join(tmp, "cursor.json")
+	secondPath := filepath.Join(tmp, "vscode.json")
+	const shared = "e2e-identical-credential-material"
+	writeJSON(t, firstPath, `{
+		"mcpServers": {
+			"cursor-server": {
+				"url": "https://cursor.example/mcp",
+				"headers": {"Authorization": "Bearer `+shared+`"}
+			}
+		}
+	}`)
+	writeJSON(t, secondPath, `{
+		"mcpServers": {
+			"vscode-server": {
+				"url": "https://vscode.example/mcp",
+				"headers": {"X-API-Key": "`+shared+`"}
+			}
+		}
+	}`)
+
+	result, err := NewConfigCollector().Collect(context.Background(), collector.CollectOptions{
+		ConfigPaths: []string{firstPath, secondPath}, ScanID: "credential-identity-test",
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	wantHash := common.HashCredentialValue(shared)
+	ids := make(map[string]bool)
+	var credential *ingest.Node
+	credentialCount := 0
+	for _, node := range result.Graph.Nodes {
+		if !hasNodeKind(node, "Credential") || node.Properties["value_hash"] != wantHash {
+			continue
+		}
+		credentialCount++
+		ids[node.ID] = true
+		copy := node
+		credential = &copy
+	}
+	if credentialCount != 1 || len(ids) != 1 || credential == nil {
+		t.Fatalf("concrete credential contributions = %d IDs=%v, want one emitted value-hash identity", credentialCount, ids)
+	}
+	if len(credential.ObservationDomains) != 2 {
+		t.Fatalf("credential observation domains = %v, want both config owners", credential.ObservationDomains)
+	}
+	if got, want := credential.Properties["sources"], []string{"cursor-server", "vscode-server"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("credential sources = %#v, want %#v", got, want)
+	}
+	if got, want := credential.Properties["auth_methods"], []string{string(common.AuthAPIKey), string(common.AuthBearer)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("credential auth methods = %#v, want %#v", got, want)
+	}
+	if _, present := credential.Properties["source"]; present {
+		t.Fatal("ambiguous singular credential source was retained")
+	}
+	uses := 0
+	for _, edge := range result.Graph.Edges {
+		if edge.Kind == "USES_CREDENTIAL" && edge.Target == credential.ID {
+			uses++
+		}
+	}
+	if uses != 2 {
+		t.Fatalf("USES_CREDENTIAL paths = %d, want one per source identity", uses)
+	}
+}
+
 func TestConfigCollector_UnresolvedReferenceIsNotExecutableValue(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	writeJSON(t, configPath, `{
@@ -854,8 +922,8 @@ func TestConfigCollector_InstructionFiles(t *testing.T) {
 	for _, n := range instrNodes {
 		if n.Properties["type"] == "claude.md" {
 			found = true
-			if n.Properties["is_suspicious"] != false {
-				t.Error("normal instruction file should not be suspicious")
+			if n.Properties["instruction_verdict"] != "clean" {
+				t.Error("normal instruction file should classify clean")
 			}
 		}
 	}
@@ -902,11 +970,10 @@ func TestConfigCollectorInstructionOverlapMergesIndependentOwners(t *testing.T) 
 
 // TestConfigCollectorInstructionCanonicalGraphContract locks the end-to-end
 // graph shape produced for a canonically-obfuscated instruction file. It pins:
-//   - the exact InstructionFile property set {objectid, path, type, hash,
-//     is_suspicious} — no content/evidence/canonical leakage into the graph;
+//   - the bounded structured InstructionFile evidence contract;
 //   - the node ID scheme ComputeNodeID("InstructionFile", canonicalPath) and
 //     objectid==ID mirror;
-//   - hash is the FULL RAW SHA-256 and is_suspicious is the boolean true;
+//   - hash is the FULL RAW SHA-256 and the compound verdict is poisoning;
 //   - no LOADS_INSTRUCTIONS edge is fabricated without evidence that a
 //     collected agent/client actually loads this instruction file.
 func TestConfigCollectorInstructionCanonicalGraphContract(t *testing.T) {
@@ -957,17 +1024,24 @@ func TestConfigCollectorInstructionCanonicalGraphContract(t *testing.T) {
 		t.Fatalf("node ID = %q, want ComputeNodeID scheme %q", instr.ID, wantID)
 	}
 
-	// Exact property shape: only these five keys, nothing more.
+	// Exact property shape: bounded metadata and JSON evidence, never the full file.
 	wantKeys := map[string]bool{
-		"objectid":      true,
-		"path":          true,
-		"type":          true,
-		"hash":          true,
-		"is_suspicious": true,
+		"objectid":                     true,
+		"path":                         true,
+		"type":                         true,
+		"hash":                         true,
+		"instruction_verdict":          true,
+		"instruction_scope":            true,
+		"instruction_signal_count":     true,
+		"instruction_signal_truncated": true,
+		"instruction_evidence_version": true,
+		"instruction_evidence_json":    true,
+		"size_bytes":                   true,
+		"modified_at":                  true,
 	}
 	for key := range instr.Properties {
 		if !wantKeys[key] {
-			t.Fatalf("unexpected InstructionFile property %q; graph must stay raw-only (no content/evidence/canonical)", key)
+			t.Fatalf("unexpected InstructionFile property %q", key)
 		}
 	}
 	for key := range wantKeys {
@@ -991,8 +1065,8 @@ func TestConfigCollectorInstructionCanonicalGraphContract(t *testing.T) {
 	if want := common.HashSHA256(rawContent); instr.Properties["hash"] != want {
 		t.Fatalf("hash = %v, want full raw SHA-256 %q", instr.Properties["hash"], want)
 	}
-	if instr.Properties["is_suspicious"] != true {
-		t.Fatalf("is_suspicious = %v, want boolean true", instr.Properties["is_suspicious"])
+	if instr.Properties["instruction_verdict"] != "poisoning" {
+		t.Fatalf("instruction_verdict = %v, want poisoning", instr.Properties["instruction_verdict"])
 	}
 
 	for i := range result.Graph.Edges {

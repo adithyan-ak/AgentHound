@@ -270,6 +270,64 @@ describe("published finding scope", () => {
     expect(mocks.get).toHaveBeenCalledWith("analysis/findings/aaaaaaaaaaaaaaaa");
   });
 
+  it("decodes bounded instruction evidence only on finding detail", async () => {
+    const response = exactFindingDetail();
+    mocks.json.mockResolvedValue({
+      ...response,
+      instruction_evidence: {
+        version: 1,
+        verdict: "poisoning",
+        scope: "exact_project",
+        path: "/workspace/AGENTS.md",
+        type: "agents.md",
+        hash: "sha256:abc",
+        size_bytes: 128,
+        modified_at: "2026-08-20T12:00:00Z",
+        total_signals: 1,
+        truncated: false,
+        signals: [
+          {
+            rule_id: "instruction-ignore-previous",
+            label: "Ignore Previous Instructions",
+            severity: "critical",
+            strength: "primary",
+            raw_offset: 12,
+            line: 2,
+            column: 1,
+            match: "Ignore previous instructions",
+            context_before: "first line\n",
+            context_after: "\nand continue",
+          },
+        ],
+      },
+    });
+
+    const detail = await fetchFindingDetail("aaaaaaaaaaaaaaaa");
+    expect(detail.instruction_evidence).toMatchObject({
+      verdict: "poisoning",
+      scope: "exact_project",
+      path: "/workspace/AGENTS.md",
+      signals: [
+        expect.objectContaining({
+          rule_id: "instruction-ignore-previous",
+          line: 2,
+          column: 1,
+        }),
+      ],
+    });
+
+    mocks.json.mockResolvedValue({
+      ...response,
+      instruction_evidence: {
+        ...detail.instruction_evidence,
+        total_signals: 0,
+      },
+    });
+    await expect(fetchFindingDetail("aaaaaaaaaaaaaaaa")).rejects.toThrow(
+      "finding detail.instruction_evidence.signals count is invalid",
+    );
+  });
+
   it("accepts canonical detail collections and rejects null fallbacks", async () => {
     mocks.json.mockResolvedValue({
       finding: finding(),

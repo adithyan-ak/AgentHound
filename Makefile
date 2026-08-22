@@ -1,4 +1,4 @@
-.PHONY: build build-collector build-server build-all test lint check security-check integration upstream-test cross-build docker docker-collector docker-server docker-standard up down clean seed release ui-build ui-check ui-dev ui-test standard standard-run standard-stop deps-check size-check version-check sync-version docs-check prerelease preflight-build preflight-collector preflight-server preflight-docker preflight-docker-compose preflight-server-running
+.PHONY: build build-collector build-server build-all test lint check security-check integration upstream-test cross-build docker docker-collector docker-server docker-standard up down clean seed release ui-build ui-check ui-dev ui-test standard standard-run standard-stop deps-check size-check installer-test version-check sync-version docs-check prerelease preflight-build preflight-collector preflight-server preflight-docker preflight-docker-compose preflight-server-running
 
 # Release tooling is pinned independently of the project's Go version.
 # Go may download the tool's newer required toolchain on the first local run.
@@ -73,6 +73,7 @@ check: preflight-build
 	go test ./... -short -race -count=1
 	$(MAKE) deps-check
 	$(MAKE) size-check
+	$(MAKE) installer-test
 	$(MAKE) ui-check
 	mkdir -p bin
 	go build -o bin/agenthound ./collector/cmd/agenthound
@@ -153,6 +154,9 @@ deps-check:
 
 size-check:
 	@bash scripts/size-check.sh
+
+installer-test:
+	@bash scripts/install-atomic-test.sh
 
 # Assert the install.sh + README version pins match the CHANGELOG (the version
 # source of truth). Also runs inside `make prerelease`, so release.yml enforces

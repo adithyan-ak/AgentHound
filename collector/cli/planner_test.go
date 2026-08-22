@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	a2acollector "github.com/adithyan-ak/agenthound/modules/a2a"
 	_ "github.com/adithyan-ak/agenthound/modules/ollamacollect"
 	_ "github.com/adithyan-ak/agenthound/modules/qdrantcollect"
 
@@ -76,19 +77,36 @@ func TestPlannerIndexesOnlyObservedCredentialMaterial(t *testing.T) {
 
 func TestBearerCandidatesRequireDeclaredBearerMethod(t *testing.T) {
 	for _, test := range []struct {
-		method common.AuthMethod
-		want   bool
+		name       string
+		properties map[string]any
+		want       bool
 	}{
-		{method: common.AuthBearer, want: true},
-		{method: common.AuthBasic},
-		{method: common.AuthCustom},
-		{method: common.AuthUnknown},
+		{name: "singular bearer", properties: map[string]any{"auth_method": string(common.AuthBearer)}, want: true},
+		{name: "aggregated bearer", properties: map[string]any{"auth_methods": []string{string(common.AuthAPIKey), string(common.AuthBearer)}}, want: true},
+		{name: "decoded aggregate", properties: map[string]any{"auth_methods": []any{string(common.AuthBearer)}}, want: true},
+		{name: "basic", properties: map[string]any{"auth_method": string(common.AuthBasic)}},
+		{name: "custom", properties: map[string]any{"auth_method": string(common.AuthCustom)}},
+		{name: "unknown", properties: map[string]any{"auth_method": string(common.AuthUnknown)}},
 	} {
-		node := ingest.Node{Properties: map[string]any{
-			"name": "Authorization", "type": "hardcoded", "auth_method": string(test.method),
-		}}
-		if got := bearerCredential(node); got != test.want {
-			t.Fatalf("bearerCredential(%q) = %t, want %t", test.method, got, test.want)
+		t.Run(test.name, func(t *testing.T) {
+			node := ingest.Node{Properties: test.properties}
+			if got := bearerCredential(node); got != test.want {
+				t.Fatalf("bearerCredential() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestAggregatedCredentialHintsPreserveServiceCompatibility(t *testing.T) {
+	credential := ingest.Node{Properties: map[string]any{
+		"auth_methods": []string{string(common.AuthAPIKey), string(common.AuthBearer)},
+		"names":        []string{"Authorization", "JUPYTER_TOKEN"},
+		"types":        []string{"hardcoded"},
+		"formats":      []string{"generic"},
+	}}
+	for _, service := range []string{"litellm", "openwebui", "jupyter"} {
+		if !credentialCompatibleWithService(credential, service) {
+			t.Fatalf("aggregated credential was not compatible with %s", service)
 		}
 	}
 }
@@ -162,6 +180,41 @@ func TestCredentialReachSkipsResourceAlreadyProvenPublic(t *testing.T) {
 	view := buildPlannerView(graph, nil, map[string]bool{}, false, false)
 	if candidates := (credentialReachAction{}).Candidates(view); len(candidates) != 0 {
 		t.Fatalf("candidates = %+v, want none after public access was proven", candidates)
+	}
+}
+
+func TestA2ACredentialActionSkipsOnlyProvenAnonymousAgent(t *testing.T) {
+	const (
+		agentID      = "agent"
+		credentialID = "credential"
+	)
+	credential := ingest.Node{ID: credentialID, Kinds: []string{"Credential"}, Properties: map[string]any{
+		"value":           "compatible-bearer",
+		"value_hash":      common.HashCredentialValue("compatible-bearer"),
+		"material_status": string(common.CredentialMaterialObserved),
+		"auth_method":     string(common.AuthBearer),
+	}}
+	for _, test := range []struct {
+		name       string
+		probeState string
+		want       int
+	}{
+		{name: "anonymous access proven", probeState: a2acollector.A2AAuthProbeStatusAnonymousProtocolAccess, want: 0},
+		{name: "authentication required", probeState: a2acollector.A2AAuthProbeStatusAuthenticationRequired, want: 1},
+		{name: "probe unknown", probeState: a2acollector.A2AAuthProbeStatusUnknown, want: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			graph := ingest.GraphData{Nodes: []ingest.Node{
+				{ID: agentID, Kinds: []string{"A2AAgent"}, Properties: map[string]any{
+					"url": "https://a2a.example", "auth_probe_status": test.probeState,
+				}},
+				credential,
+			}}
+			view := buildPlannerView(graph, nil, map[string]bool{}, false, false)
+			if candidates := (a2aCredentialAction{}).Candidates(view); len(candidates) != test.want {
+				t.Fatalf("candidates = %+v, want %d", candidates, test.want)
+			}
+		})
 	}
 }
 

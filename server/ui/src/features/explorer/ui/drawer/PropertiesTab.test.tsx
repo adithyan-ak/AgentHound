@@ -47,4 +47,19 @@ describe("PropertiesTab credential values", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Copy")).toBeInTheDocument();
   });
+
+  it("summarizes instruction evidence without rendering the raw JSON", () => {
+    const raw = JSON.stringify({ verdict: "signal", total_signals: 2, truncated: false, signals: [] });
+    render(
+      <PropertiesTab
+        node={{
+          id: "instruction-1",
+          kinds: ["InstructionFile"],
+          properties: { path: "/work/AGENTS.md", instruction_evidence_json: raw },
+        }}
+      />,
+    );
+    expect(screen.getByText("signal · 2 signals")).toBeInTheDocument();
+    expect(screen.queryByText(raw)).not.toBeInTheDocument();
+  });
 });

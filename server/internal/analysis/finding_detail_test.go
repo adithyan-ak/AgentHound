@@ -8,6 +8,57 @@ import (
 	"github.com/adithyan-ak/agenthound/server/model"
 )
 
+func TestInstructionEvidenceFromFinding(t *testing.T) {
+	evidenceJSON, err := json.Marshal(map[string]any{
+		"version": 1, "verdict": "signal", "total_signals": 1, "truncated": false,
+		"signals": []any{map[string]any{
+			"rule_id": "injection-ignore-previous", "label": "Ignore Previous Instructions",
+			"severity": "critical", "strength": "primary", "raw_offset": 10,
+			"line": 2, "column": 3, "match": "ignore previous instructions",
+			"context_before": "before\n", "context_after": "\nafter",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding := &model.Finding{
+		EdgeKind: "INSTRUCTION_SIGNAL",
+		ExactEvidence: &model.ExactFindingEvidence{Nodes: []model.ExactFindingEvidenceNode{{
+			ID: "instruction-1", Kinds: []string{"InstructionFile"}, Properties: map[string]any{
+				"path": "/work/AGENTS.md", "type": "agents.md", "hash": "sha256:abc",
+				"instruction_verdict": "signal", "instruction_scope": "deep",
+				"instruction_signal_count": int64(1), "instruction_signal_truncated": false,
+				"instruction_evidence_version": int64(1), "instruction_evidence_json": string(evidenceJSON),
+				"size_bytes": int64(100), "modified_at": "2026-08-20T12:00:00Z",
+			},
+		}}, Complete: true},
+	}
+	got := InstructionEvidenceFromFinding(finding)
+	if got == nil || got.Path != "/work/AGENTS.md" || got.TotalSignals != 1 || got.Signals[0].Line != 2 {
+		t.Fatalf("instruction evidence = %+v", got)
+	}
+}
+
+func TestInstructionEvidenceFromFindingRejectsProjectionMismatch(t *testing.T) {
+	finding := &model.Finding{
+		EdgeKind: "POISONED_INSTRUCTIONS",
+		ExactEvidence: &model.ExactFindingEvidence{Nodes: []model.ExactFindingEvidenceNode{{
+			Kinds: []string{"InstructionFile"},
+			Properties: map[string]any{
+				"path": "/work/AGENTS.md", "type": "agents.md", "hash": "sha256:abc",
+				"instruction_verdict": "signal", "instruction_scope": "exact_project",
+				"instruction_signal_count": int64(1), "instruction_signal_truncated": false,
+				"instruction_evidence_version": int64(1), "size_bytes": int64(100),
+				"modified_at":               "2026-08-20T12:00:00Z",
+				"instruction_evidence_json": `{"version":1,"verdict":"signal","total_signals":1,"truncated":false,"signals":[{"rule_id":"rule","label":"Rule","severity":"medium","strength":"primary","raw_offset":1,"line":1,"column":2,"match":"x","context_before":"","context_after":""}]}`,
+			},
+		}}},
+	}
+	if got := InstructionEvidenceFromFinding(finding); got != nil {
+		t.Fatalf("projection mismatch produced instruction evidence: %+v", got)
+	}
+}
+
 func TestAttackPathFromExactEvidenceUsesPersistedWitness(t *testing.T) {
 	finding := &model.Finding{
 		SourceID: "source",

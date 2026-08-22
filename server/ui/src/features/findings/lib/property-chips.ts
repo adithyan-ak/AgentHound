@@ -82,7 +82,9 @@ export function getPropertyChips(kind: string, properties: Record<string, unknow
     case "InstructionFile": {
       const type = properties.type;
       if (typeof type === "string") chips.push(type);
-      if (properties.is_suspicious === true) chips.push("suspicious");
+      const verdict = properties.instruction_verdict;
+      if (verdict === "signal") chips.push("instruction signal");
+      if (verdict === "poisoning") chips.push("instruction poisoning");
       break;
     }
     case "ConfigFile": {

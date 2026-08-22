@@ -1398,8 +1398,21 @@ func TestPipeline_TruncatedDeepRootPublishesAndPromotesCompleteChildren(t *testi
 				"source_kind": "InstructionFile",
 				"target_id":   "instruction-file", "target_name": "AGENTS.md",
 				"target_kind": "InstructionFile",
-				"edge_kind":   "POISONED_INSTRUCTIONS", "confidence": 1.0,
+				"edge_kind":   "INSTRUCTION_SIGNAL", "confidence": 1.0,
 				"cross_protocol": false, "target_sensitivity": "",
+				"evidence_version": int64(1),
+				"exact_evidence_nodes": []any{map[string]any{
+					"id": "instruction-file", "kinds": []any{"InstructionFile"},
+					"properties": map[string]any{
+						"path": "/tmp/AGENTS.md", "type": "agents.md", "hash": "sha256:abc",
+						"instruction_verdict": "signal", "instruction_scope": "deep",
+						"instruction_signal_count": int64(1), "instruction_signal_truncated": false,
+						"instruction_evidence_version": int64(1), "size_bytes": int64(64),
+						"modified_at":               "2026-08-20T12:00:00Z",
+						"instruction_evidence_json": `{"version":1,"verdict":"signal","total_signals":1,"truncated":false,"signals":[{"rule_id":"injection-ignore-previous","label":"Ignore Previous Instructions","severity":"critical","strength":"primary","raw_offset":1,"line":1,"column":2,"match":"ignore previous instructions","context_before":"","context_after":""}]}`,
+					},
+				}},
+				"exact_evidence_edges": []any{},
 			}}, nil
 		},
 	}
@@ -1422,8 +1435,8 @@ func TestPipeline_TruncatedDeepRootPublishesAndPromotesCompleteChildren(t *testi
 	}
 	finalized := publisher.finalizations[0]
 	if len(finalized.Findings) != 1 ||
-		finalized.Findings[0].EdgeKind != "POISONED_INSTRUCTIONS" {
-		t.Fatalf("limited exact findings = %+v, want positive child finding", finalized.Findings)
+		finalized.Findings[0].EdgeKind != "INSTRUCTION_SIGNAL" {
+		t.Fatalf("limited deep findings = %+v, want review signal", finalized.Findings)
 	}
 	states := sdkingest.CoverageStates(finalized.Collection)
 	var truncatedRootPromoted bool

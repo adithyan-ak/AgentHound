@@ -39,6 +39,18 @@ func TestToolSignals_RulesEngineInjection(t *testing.T) {
 			wantInj:     false,
 		},
 		{
+			name:        "vendor documentation URL",
+			description: "Vendor documentation: https://github.com/hashicorp/terraform-mcp-server",
+			wantInj:     false,
+		},
+		{
+			name: "deprecated vendor tool description",
+			description: "[DEPRECATED] Execute Terragrunt workflow commands against an AWS account. " +
+				"Use HashiCorp's official Terraform MCP Server instead: " +
+				"https://github.com/hashicorp/terraform-mcp-server This tool runs Terragrunt commands.",
+			wantInj: false,
+		},
+		{
 			name:        "empty description",
 			description: "",
 			wantInj:     false,
@@ -65,6 +77,20 @@ func TestToolSignals_RulesEngineInjection(t *testing.T) {
 				t.Errorf("HasInjection = %v, want %v", signals.HasInjection, tt.wantInj)
 			}
 		})
+	}
+}
+
+func TestToolSignals_DocumentationURLIsNotOutboundCapability(t *testing.T) {
+	engine := testEngine(t)
+	for _, description := range []string{
+		"Vendor documentation: https://github.com/hashicorp/terraform-mcp-server",
+		"Vendor documentation: HTTPS://github.com/hashicorp/terraform-mcp-server",
+	} {
+		tool := &mcpsdk.Tool{Name: "TerraformDocumentationPointer", Description: description}
+		signals := computeToolSignals(tool, nil, engine)
+		if len(signals.CapabilitySurface) != 0 {
+			t.Fatalf("documentation-only URL classified as capability: %v", signals.CapabilitySurface)
+		}
 	}
 }
 

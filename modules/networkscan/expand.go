@@ -89,6 +89,9 @@ func Expand(spec string, opts ExpandOptions) ([]string, error) {
 // expandSingle classifies a single host token and returns it as a one-element
 // slice if it passes the safety gates.
 func expandSingle(host string, opts ExpandOptions) ([]string, error) {
+	if !validHostToken(host) {
+		return nil, fmt.Errorf("%w: %s", ErrInvalidCIDR, host)
+	}
 	info := common.ClassifyHost(host)
 	if info.IsLinkLocal {
 		return nil, fmt.Errorf("%w: %s", ErrLinkLocal, host)
@@ -103,6 +106,40 @@ func expandSingle(host string, opts ExpandOptions) ([]string, error) {
 		return nil, fmt.Errorf("%w: %s", ErrPublicTarget, host)
 	}
 	return []string{host}, nil
+}
+
+// validHostToken accepts IP literals and DNS hostnames only. Public-target
+// authorization is a separate gate; it must not turn arbitrary resolver input
+// (spaces, URLs, ports, or punctuation) into a valid scan target.
+func validHostToken(host string) bool {
+	if _, err := netip.ParseAddr(host); err == nil {
+		return true
+	}
+
+	name := strings.TrimSuffix(host, ".")
+	if name == "" || len(name) > 253 {
+		return false
+	}
+	numericDotted := strings.Contains(name, ".")
+	for _, label := range strings.Split(name, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			ch := label[i]
+			if ch < '0' || ch > '9' {
+				numericDotted = false
+			}
+			if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') &&
+				(ch < '0' || ch > '9') && ch != '-' {
+				return false
+			}
+		}
+	}
+	// A dotted all-numeric token is an IPv4 literal, not a DNS hostname. If
+	// netip rejected it above, accepting it here would revive malformed IPs via
+	// resolver-dependent shorthand or legacy parsing.
+	return !numericDotted
 }
 
 // expandCIDR enumerates every host in the CIDR after applying the safety

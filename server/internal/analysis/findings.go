@@ -81,8 +81,14 @@ var findingsMeta = map[string]findingMeta{
 	},
 	"POISONED_INSTRUCTIONS": {
 		category: "Instruction Poisoning",
-		title:    "Suspicious instruction-file patterns",
-		owasp:    []string{"MCP05", "ASI03"},
+		title:    "Instruction poisoning detected",
+		owasp:    []string{"ASI03"},
+		atlas:    []string{"AML.T0051"},
+	},
+	"INSTRUCTION_SIGNAL": {
+		category: "Instruction Signal",
+		title:    "Instruction signal requires review",
+		owasp:    []string{"ASI03"},
 		atlas:    []string{"AML.T0051"},
 	},
 	"CAN_IMPERSONATE": {
@@ -168,7 +174,9 @@ func formatFindingDescription(metaKey string, ctx findingDescriptionContext) str
 	case "SHADOWS":
 		return fmt.Sprintf("%s references %s by name from another server, matching the tool-shadowing heuristic", source, target)
 	case "POISONED_INSTRUCTIONS":
-		return fmt.Sprintf("%s matched suspicious instruction patterns", source)
+		return fmt.Sprintf("%s contains strong compound instruction-poisoning evidence", source)
+	case "INSTRUCTION_SIGNAL":
+		return fmt.Sprintf("%s contains suspicious instruction content requiring operator review", source)
 	case "CAN_IMPERSONATE":
 		return fmt.Sprintf("%s has skill-description similarity to %s above the impersonation heuristic threshold", source, target)
 	case "CAN_EXECUTE":
@@ -270,10 +278,10 @@ CALL {
   ) AS detector_evidence_edges
 }
 RETURN src.objectid AS source_id,
-       src.name AS source_name,
+       coalesce(src.name, src.path, '') AS source_name,
        labels(src)[0] AS source_kind,
        tgt.objectid AS target_id,
-       tgt.name AS target_name,
+       coalesce(tgt.name, tgt.path, '') AS target_name,
        labels(tgt)[0] AS target_kind,
        type(r) AS edge_kind,
        r.confidence AS confidence,
@@ -391,7 +399,7 @@ func QueryFindings(ctx context.Context, db graph.GraphDB, severity string) ([]mo
 			confidence:               confidence,
 		})
 
-		findings = append(findings, model.Finding{
+		finding := model.Finding{
 			ID:            findingFingerprint(edgeKind, sourceID, targetID),
 			Severity:      sev,
 			Category:      meta.category,
@@ -410,7 +418,13 @@ func QueryFindings(ctx context.Context, db graph.GraphDB, severity string) ([]mo
 			ExactEvidence: exactFindingEvidenceFromRow(row),
 			OWASPMap:      append([]string{}, meta.owasp...),
 			ATLASMap:      append([]string{}, meta.atlas...),
-		})
+		}
+		if edgeKind == "POISONED_INSTRUCTIONS" || edgeKind == "INSTRUCTION_SIGNAL" {
+			if InstructionEvidenceFromFinding(&finding) == nil {
+				return nil, fmt.Errorf("construct %s finding %s: invalid structured instruction evidence", edgeKind, finding.ID)
+			}
+		}
+		findings = append(findings, finding)
 	}
 
 	return findings, nil
@@ -466,7 +480,7 @@ func buildFindingEvidence(
 	state := model.FindingEvidenceUnknown
 	if detector != "" {
 		state = model.FindingEvidenceInferred
-		if edgeKind == "POISONED_DESCRIPTION" || edgeKind == "POISONED_INSTRUCTIONS" {
+		if edgeKind == "POISONED_DESCRIPTION" || edgeKind == "POISONED_INSTRUCTIONS" || edgeKind == "INSTRUCTION_SIGNAL" {
 			state = model.FindingEvidenceObserved
 		}
 	}
@@ -678,7 +692,7 @@ func classifySeverity(edgeKind string, crossProtocol bool, confidence float64, t
 	case "POISONED_DESCRIPTION", "SHADOWS", "POISONED_INSTRUCTIONS",
 		"CONFUSED_DEPUTY", "IFC_VIOLATION", "POISONS_CONTEXT":
 		return "high"
-	case "CAN_IMPERSONATE", "CAN_EXECUTE", "HAS_ACCESS_TO", "TAINTS":
+	case "CAN_IMPERSONATE", "CAN_EXECUTE", "HAS_ACCESS_TO", "TAINTS", "INSTRUCTION_SIGNAL":
 		return "medium"
 	default:
 		return "low"

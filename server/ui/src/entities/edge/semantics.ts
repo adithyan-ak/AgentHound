@@ -51,7 +51,12 @@ export const EDGE_EXPLOIT = {
   POISONED_INSTRUCTIONS: {
     title: "Instruction file poisoning",
     detail:
-      "An instruction file loaded by the agent matched suspicious imperative-override or hidden-Unicode patterns. Review the content; the match does not prove execution.",
+      "An applicable instruction file contains strong compound poisoning evidence. Review the exact matched content; the finding does not prove execution.",
+  },
+  INSTRUCTION_SIGNAL: {
+    title: "Instruction signal",
+    detail:
+      "An instruction file contains suspicious content that requires review. Deep-discovered signals do not establish that an agent loads the file or that the content is malicious.",
   },
   SHADOWS: {
     title: "Tool name shadowing",
@@ -144,6 +149,7 @@ export const EDGE_DESCRIPTION = {
   CAN_EXECUTE: "Tool can execute on host",
   SHADOWS: "Tool shadows another tool",
   POISONED_DESCRIPTION: "Poisoned tool description",
+  INSTRUCTION_SIGNAL: "Instruction signal",
   POISONED_INSTRUCTIONS: "Poisoned instruction file",
   CAN_REACH: "Agent can reach target",
   CAN_EXFILTRATE_VIA: "Agent can exfiltrate via tool",

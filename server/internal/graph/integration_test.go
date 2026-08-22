@@ -141,6 +141,66 @@ func TestIntegrationSchemaInit(t *testing.T) {
 	}
 }
 
+func TestIntegrationSchemaV3RemovesLegacyInstructionProjection(t *testing.T) {
+	ctx := testDriver(t)
+	driver, err := NewDriver(
+		os.Getenv("AGENTHOUND_NEO4J_URI"),
+		os.Getenv("AGENTHOUND_NEO4J_USER"),
+		os.Getenv("AGENTHOUND_NEO4J_PASSWORD"),
+	)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer driver.Close(ctx)
+
+	cleanup := func() {
+		_, _ = integrationWrite(ctx, driver, `
+MATCH (n)
+WHERE n:InstructionMigrationFixture OR n:SchemaVersion
+DETACH DELETE n`, nil)
+		_ = runDDL(ctx, driver, fmt.Sprintf("CREATE (:SchemaVersion {version: %d})", graphSchemaVersion))
+	}
+	cleanup()
+	defer cleanup()
+
+	if _, err := integrationWrite(ctx, driver, `
+MATCH (schema:SchemaVersion) DELETE schema
+CREATE (:SchemaVersion {version: 2}),
+       (file:InstructionFile:InstructionMigrationFixture {
+         objectid: 'instruction-migration-fixture',
+         path: '/legacy/AGENTS.md',
+         is_suspicious: true
+       }),
+       (file)-[:POISONED_INSTRUCTIONS {is_composite: true}]->(file)
+RETURN 1`, nil); err != nil {
+		t.Fatalf("seed V2 instruction projection: %v", err)
+	}
+	if err := InitSchema(ctx, driver); err != nil {
+		t.Fatalf("migrate graph to V3: %v", err)
+	}
+
+	reader := NewReader(driver)
+	rows, err := reader.Query(ctx, `
+MATCH (file:InstructionMigrationFixture)
+OPTIONAL MATCH (file)-[legacy:POISONED_INSTRUCTIONS]->(file)
+MATCH (schema:SchemaVersion)
+RETURN count(legacy) AS legacy_edges,
+       file.is_suspicious IS NOT NULL AS has_legacy_property,
+       schema.version AS schema_version`, nil)
+	if err != nil {
+		t.Fatalf("read migrated graph: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("migration rows = %d", len(rows))
+	}
+	legacyEdges, _ := rows[0]["legacy_edges"].(int64)
+	hasLegacyProperty, _ := rows[0]["has_legacy_property"].(bool)
+	schemaVersion, _ := rows[0]["schema_version"].(int64)
+	if legacyEdges != 0 || hasLegacyProperty || schemaVersion != graphSchemaVersion {
+		t.Fatalf("migrated graph edges=%d property=%t schema=%d", legacyEdges, hasLegacyProperty, schemaVersion)
+	}
+}
+
 func TestIntegrationSchemaInitRejectsUnsupportedSchema(t *testing.T) {
 	ctx := testDriver(t)
 	driver, err := NewDriver(

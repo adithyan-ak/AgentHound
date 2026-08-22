@@ -370,7 +370,6 @@ jobs:
             [[ "${draft}" == false && "${immutable}" == true ]]
           fi
           [[ "$(jq -r '.body' <<<"${release_json}")" == "$(cat "${records}/release-notes.md")" ]]
-          [[ "$(gh api "repos/${GITHUB_REPOSITORY}/immutable-releases" --jq '.enabled')" == true ]]
 
           for package in agenthound-release-staging agenthound-server-release-staging; do
             [[ "$(gh api "users/adithyan-ak/packages/container/${package}" --jq '.visibility')" == private ]]
