@@ -14,9 +14,10 @@ trap 'rm -rf "$test_root"' EXIT
 
 new_fixture() {
   local name=$1 root="$test_root/$1"
-  mkdir -p "$root/scripts"
+  mkdir -p "$root/scripts" "$root/docs/getting-started" "$root/docs/operator"
   cp "$repo_root/scripts/version-check.sh" "$root/scripts/"
   cp "$repo_root/scripts/sync-version.sh" "$root/scripts/"
+  cp "$repo_root/scripts/release-version-pins.sh" "$root/scripts/"
   cp "$repo_root/scripts/release-notes.sh" "$root/scripts/"
   cp "$repo_root/scripts/release-tag-check.sh" "$root/scripts/"
   cat > "$root/CHANGELOG.md" <<'EOF'
@@ -28,8 +29,27 @@ new_fixture() {
 
 Release body.
 EOF
-  printf '# curl -sSfL %s/1.0.0/install.sh | sh\n' "$pin_base" > "$root/install.sh"
-  printf 'curl -sSfL %s/1.0.0/install.sh | sh\n' "$pin_base" > "$root/README.md"
+  cat > "$root/install.sh" <<EOF
+# curl -sSfL ${pin_base}/1.0.0/install.sh \\
+#   | AGENTHOUND_VERSION=1.0.0 sh
+EOF
+  cat > "$root/README.md" <<EOF
+Install the 1.0.0 static binary:
+curl -sSfL ${pin_base}/1.0.0/install.sh \\
+  | AGENTHOUND_VERSION=1.0.0 sh
+curl -sSfL ${pin_base}/1.0.0/docker/docker-compose.public.yml
+EOF
+  cat > "$root/docs/getting-started/install.md" <<EOF
+curl -sSfL ${pin_base}/1.0.0/install.sh \\
+  | AGENTHOUND_VERSION=1.0.0 sh
+curl -sSfL ${pin_base}/1.0.0/docker/docker-compose.public.yml
+EOF
+  printf 'curl -sSfL %s/1.0.0/docker/docker-compose.public.yml\n' "$pin_base" \
+    > "$root/docs/getting-started/quickstart.md"
+  cat > "$root/docs/operator/deployment.md" <<EOF
+curl -sSfL ${pin_base}/1.0.0/docker/docker-compose.public.yml
+curl -sSfL ${pin_base}/1.0.0/docker/docker-compose.public.yml
+EOF
   printf '%s\n' "$root"
 }
 
@@ -47,9 +67,16 @@ happy=$(new_fixture happy)
 (cd "$happy" && GITHUB_REF_TYPE=tag GITHUB_REF_NAME=1.0.0 bash scripts/version-check.sh >/dev/null)
 
 mismatch=$(new_fixture mismatch)
-sed -i.bak 's/1\.0\.0/1.0.1/' "$mismatch/README.md"
+sed -i.bak 's/AGENTHOUND_VERSION=1\.0\.0/AGENTHOUND_VERSION=1.0.1/' "$mismatch/README.md"
 rm "$mismatch/README.md.bak"
-expect_failure "mismatched installer pin" bash "$mismatch/scripts/version-check.sh"
+expect_failure "mismatched environment pin" bash "$mismatch/scripts/version-check.sh"
+
+compose_mismatch=$(new_fixture compose-mismatch)
+sed -i.bak 's#/1\.0\.0/docker/#/1.0.1/docker/#' \
+  "$compose_mismatch/docs/getting-started/quickstart.md"
+rm "$compose_mismatch/docs/getting-started/quickstart.md.bak"
+expect_failure "mismatched documentation Compose pin" \
+  bash "$compose_mismatch/scripts/version-check.sh"
 
 duplicate=$(new_fixture duplicate)
 printf '%s/1.0.0/install.sh\n' "$pin_base" >> "$duplicate/README.md"
@@ -74,13 +101,13 @@ Pending change.' "$unreleased/CHANGELOG.md"
 rm "$unreleased/CHANGELOG.md.bak"
 expect_failure "non-empty Unreleased on tag" env GITHUB_REF_TYPE=tag GITHUB_REF_NAME=1.0.0 \
   bash "$unreleased/scripts/version-check.sh"
+expect_failure "non-empty Unreleased in pre-tag release mode" env RELEASE_CHECK=1 \
+  bash "$unreleased/scripts/version-check.sh"
 
 sync=$(new_fixture sync)
+(sed -i.bak 's/## 1\.0\.0 —/## 1.0.2 —/' "$sync/CHANGELOG.md" && rm "$sync/CHANGELOG.md.bak")
 (cd "$sync" && bash scripts/sync-version.sh 1.0.2 >/dev/null)
-if [ "$(grep -RhoE 'agenthound/[0-9]+\.[0-9]+\.[0-9]+/install\.sh' "$sync/install.sh" "$sync/README.md" | sort -u)" != "agenthound/1.0.2/install.sh" ]; then
-  echo "release-process-test: sync did not update both pins" >&2
-  exit 1
-fi
+(cd "$sync" && RELEASE_CHECK=1 bash scripts/version-check.sh >/dev/null)
 
 notes=$(new_fixture notes)
 rendered=$(cd "$notes" && sh scripts/release-notes.sh CHANGELOG.md 1.0.0)

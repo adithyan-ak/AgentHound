@@ -8,7 +8,7 @@ Run the published stack:
 
 ```bash
 curl -sSfL \
-  https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.0/docker/docker-compose.public.yml \
+  https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.1/docker/docker-compose.public.yml \
   -o agenthound-compose.yml
 docker compose -f agenthound-compose.yml -p agenthound up -d --wait
 ```
@@ -74,7 +74,7 @@ Use the same timestamp or release identifier for both files. Test restores on an
 
 ```bash
 curl -sSfL \
-  https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.0/docker/docker-compose.public.yml \
+  https://raw.githubusercontent.com/adithyan-ak/agenthound/1.1.1/docker/docker-compose.public.yml \
   -o agenthound-compose.yml
 docker compose -f agenthound-compose.yml -p agenthound pull
 docker compose -f agenthound-compose.yml -p agenthound up -d --wait
