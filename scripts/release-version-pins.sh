@@ -17,6 +17,7 @@ environment|docs/getting-started/install.md|1
 compose|docs/getting-started/install.md|1
 compose|docs/getting-started/quickstart.md|1
 compose|docs/operator/deployment.md|2
+server-image|docker/docker-compose.public.yml|1
 EOF
 }
 
@@ -35,6 +36,9 @@ release_version_pin_pattern() {
       ;;
     readme-label)
       printf '%s' "Install the ${semver} static binary"
+      ;;
+    server-image)
+      printf '%s' "ghcr\.io/adithyan-ak/agenthound-server:${semver}"
       ;;
     *)
       echo "unknown release-version pin kind: $kind" >&2
@@ -57,6 +61,9 @@ release_version_pin_replacement() {
       ;;
     readme-label)
       printf 'Install the %s static binary' "$version"
+      ;;
+    server-image)
+      printf 'ghcr.io/adithyan-ak/agenthound-server:%s' "$version"
       ;;
     *)
       echo "unknown release-version pin kind: $kind" >&2

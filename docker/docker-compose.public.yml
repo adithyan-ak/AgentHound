@@ -37,7 +37,7 @@ services:
   # Pulls the pre-built server image from GHCR — no source checkout needed.
   # Operators who want to build from source should use docker-compose.yml instead.
   agenthound:
-    image: ghcr.io/adithyan-ak/agenthound-server:latest
+    image: ghcr.io/adithyan-ak/agenthound-server:1.1.1
     ports:
       # Bind on the loopback interface only — the server has no application-layer
       # auth. To reach it from another machine, use a VPN / SSH tunnel / Tailscale,

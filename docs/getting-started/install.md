@@ -34,6 +34,11 @@ docker compose -f agenthound-compose.yml -p agenthound up -d --wait
 
 Open `http://127.0.0.1:8080`. The server binds to loopback by default.
 
+Use the matching collector and server release by default. Exact Compose image
+pinning starts with the first release after `1.1.1`; older immutable Compose
+files retain their historical `latest` reference. The collector still runs
+offline and does not need a live server while it scans.
+
 Homebrew packages the server separately:
 
 ```bash

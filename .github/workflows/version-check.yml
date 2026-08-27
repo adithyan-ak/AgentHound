@@ -16,6 +16,7 @@ on:
       - "docs/getting-started/install.md"
       - "docs/getting-started/quickstart.md"
       - "docs/operator/deployment.md"
+      - "docker/docker-compose.public.yml"
       - "go.mod"
       - ".goreleaser.yml"
       - "Makefile"

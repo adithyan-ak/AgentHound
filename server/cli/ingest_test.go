@@ -63,12 +63,15 @@ func TestIngestCommandRejectsUnsupportedV1ContractBeforeBootstrap(t *testing.T) 
 			if bootstrapCalled {
 				t.Fatal("Bootstrap ran before contract preflight")
 			}
-			if err == nil || err.Error() != "unsupported V1 ingest contract" {
-				t.Fatalf(
-					"error = %T %v, want generic unsupported V1 contract error",
-					err,
-					err,
-				)
+			if err == nil || !strings.Contains(err.Error(), "V1") {
+				t.Fatalf("error = %T %v, want supported contract diagnostic", err, err)
+			}
+			if name == "non-v1" {
+				for _, want := range []string{"contract V2", `collector "dev"`, "upgrade agenthound-server"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("error missing %q: %v", want, err)
+					}
+				}
 			}
 		})
 	}
@@ -126,6 +129,55 @@ func TestWriteIngestResultComplete(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestFinishIngestCommandReportsCompatibilityOnSuccess(t *testing.T) {
+	revision := int64(7)
+	result := &ingest.IngestResult{
+		ScanID:            "scan-compatible",
+		Outcome:           ingest.OutcomeComplete,
+		ProjectionStatus:  model.ProjectionComplete,
+		PublishedRevision: &revision,
+		Collection:        ingest.CollectionReport{State: ingest.OutcomeComplete},
+	}
+
+	var output bytes.Buffer
+	err := finishIngestCommand(&output, result, nil, ingestCompatibility{
+		CollectorVersion: "1.0.0",
+		ContractVersion:  ingest.CurrentVersion,
+		ServerVersion:    "1.1.1 (commit: test)",
+	})
+	if err != nil {
+		t.Fatalf("finishIngestCommand returned error: %v", err)
+	}
+	for _, want := range []string{
+		`Collector version:  "1.0.0"`,
+		"Artifact contract:  V1",
+		"Server version:     1.1.1 (commit: test)",
+		"Ingest complete",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("output missing %q:\n%s", want, output.String())
+		}
+	}
+}
+
+func TestWriteIngestCompatibilityEscapesUntrustedCollectorVersion(t *testing.T) {
+	var output bytes.Buffer
+	err := writeIngestCompatibility(&output, ingestCompatibility{
+		CollectorVersion: "\x1b[31mdev\nspoof",
+		ContractVersion:  ingest.CurrentVersion,
+		ServerVersion:    "1.1.1",
+	})
+	if err != nil {
+		t.Fatalf("writeIngestCompatibility returned error: %v", err)
+	}
+	if strings.Contains(output.String(), "\x1b") || strings.Contains(output.String(), "dev\nspoof") {
+		t.Fatalf("compatibility output contains raw terminal controls: %q", output.String())
+	}
+	if !strings.Contains(output.String(), `"\x1b[31mdev\nspoof"`) {
+		t.Fatalf("compatibility output did not quote collector version: %q", output.String())
 	}
 }
 
@@ -231,11 +283,18 @@ func TestFinishIngestCommandRendersFailedResultAndPreservesPipelineError(t *test
 	}
 
 	var output bytes.Buffer
-	err := finishIngestCommand(&output, result, pipelineErr)
+	err := finishIngestCommand(&output, result, pipelineErr, ingestCompatibility{
+		CollectorVersion: "1.0.0",
+		ContractVersion:  ingest.CurrentVersion,
+		ServerVersion:    "1.1.1 (commit: test)",
+	})
 	if !errors.Is(err, pipelineErr) {
 		t.Fatalf("finish error = %v, want wrapped pipeline error", err)
 	}
 	for _, want := range []string{
+		`Collector version:  "1.0.0"`,
+		"Artifact contract:  V1",
+		"Server version:     1.1.1 (commit: test)",
 		"Ingest failed:",
 		"Scan ID:            scan-write-failure",
 		"Node write rows:    3",

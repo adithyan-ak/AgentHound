@@ -27,7 +27,10 @@ func (e *ValidationError) Error() string {
 	return fmt.Sprintf("validation failed: %d errors", len(e.Errors))
 }
 
-const produceV1ArtifactAction = "produce a V1 artifact with the same collector and server build"
+const (
+	upgradeServerForArtifactAction  = "upgrade agenthound-server to a release that supports this artifact contract"
+	produceCompatibleRegistryAction = "produce a V1 artifact with a compatible instruction registry contract"
+)
 
 type UnsupportedVersionError struct {
 	Received  int    `json:"received_version"`
@@ -87,7 +90,7 @@ func Preflight(data *ingest.IngestData) error {
 		return &UnsupportedVersionError{
 			Received:  data.Meta.Version,
 			Supported: ingest.CurrentVersion,
-			Action:    produceV1ArtifactAction,
+			Action:    upgradeServerForArtifactAction,
 		}
 	}
 	if _, legacyCampaign := data.Meta.Extra["campaign_artifact"]; legacyCampaign {
@@ -594,7 +597,7 @@ func preflightRegistryContracts(report *ingest.CollectionReport) error {
 				RootCoverageKey: root.CoverageKey,
 				Received:        cloneRegistryContract(root.RegistryContract),
 				Supported:       current,
-				Action:          produceV1ArtifactAction,
+				Action:          produceCompatibleRegistryAction,
 			}
 		}
 		rootState := stateByRoot[root.CoverageKey]
