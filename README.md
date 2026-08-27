@@ -6,7 +6,7 @@
 
 **MCP · A2A · agent clients · model gateways · inference servers · vector stores · MLOps · notebooks**
 
-[![DEF CON 34 · Red Team Village](https://img.shields.io/badge/🎤_DEF_CON_34-Red_Team_Village-E4002B?style=for-the-badge)](https://redteamvillage.io/)
+<a href="https://redteamvillage.io/"><img src="https://img.shields.io/badge/🎤_DEF_CON_34-Red_Team_Village-E4002B?style=for-the-badge" alt="DEF CON 34 · Red Team Village" height="28"></a> <a href="https://trendshift.io/repositories/96078?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-96078" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/96078" alt="adithyan-ak/AgentHound | Trendshift" height="28"></a>
 
 [Quickstart](#-quick-start) ·
 [Capabilities](#-offensive-capabilities) ·
@@ -131,20 +131,22 @@ brew install adithyan-ak/agenthound/agenthound
 ```
 
 The collector has no Neo4j, PostgreSQL, Node.js, or server dependency.
+The shell installer supports macOS and Linux on amd64 or arm64. Windows builds
+are available from [GitHub Releases](https://github.com/adithyan-ak/AgentHound/releases).
 
 ### 2. Run one scan
 
 Start with the compromised host and everything it can immediately reveal:
 
 ```bash
-agenthound scan
+agenthound scan --output scan.json
 ```
 
 Add a host, CIDR, or targets file without disabling local collection:
 
 ```bash
-agenthound scan 10.20.0.0/24
-agenthound scan @targets.txt --deep --exclude 10.20.0.15
+agenthound scan 10.20.0.0/24 --output scan.json
+agenthound scan @targets.txt --deep --exclude 10.20.0.15 --output scan.json
 ```
 
 Choose the mode that matches the operation:
@@ -156,12 +158,12 @@ Choose the mode that matches the operation:
 | `agenthound scan --stealth` | Anonymous and exact configured read-only collection; no cross-target credential reuse, model invocation, tool invocation, or mutation |
 | `agenthound scan --stealth --deep` | Adds deep filesystem and payload reads while retaining stealth restrictions |
 
-The result is `scan-<scan_id>.json` unless `--output` selects another file. Concrete credentials and collected content are stored directly in the artifact; treat it as operationally sensitive.
+These commands are alternatives and write `scan.json`. Without `--output`, the result is `scan-<scan_id>.json`. An explicit output path replaces an existing file, so use a new name for each scan. Concrete credentials and collected content are stored directly in the artifact; treat it as operationally sensitive.
 
 If the final summary reports unresolved cleanup, preserve the artifact and retry safely:
 
 ```bash
-agenthound revert scan-<scan_id>.json
+agenthound revert scan.json
 ```
 
 ### 3. Analyze the attack graph
@@ -174,16 +176,16 @@ curl -sSfL \
   -o agenthound-compose.yml
 docker compose -f agenthound-compose.yml -p agenthound up -d --wait
 docker compose -f agenthound-compose.yml -p agenthound exec -T agenthound \
-  agenthound-server ingest - < scan-6c6306d5.json
+  agenthound-server ingest - < scan.json
 ```
 
 Open [http://127.0.0.1:8080](http://127.0.0.1:8080/) to inspect findings, attack paths, credentials, risk, queries, scan history, and triage.
 
-Collector and server are released as one coordinated version. Compose files
-created under the current release policy pin that exact server image; historical
-releases through `1.1.1` retain their original `latest` reference. The current
-server accepts supported historical V1 artifacts; upgrade the server if a newer
-artifact reports an unsupported ingest contract.
+Use the collector and server from the same release. Releases after `1.1.1` pin
+the exact server image in Compose; older Compose files retain their historical
+`latest` reference. A current server accepts supported older V1 artifacts. If
+ingest reports an unsupported contract, upgrade the server instead of editing
+the artifact.
 
 <p align="center">
   <img src="docs/readme-assets/agenthound-dashboard.png" alt="AgentHound attack-surface dashboard" width="900">

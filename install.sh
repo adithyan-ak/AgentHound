@@ -132,14 +132,11 @@ if command -v cosign >/dev/null 2>&1; then
 else
   cat <<EOF >&2
 
-NOTE: cosign not found on PATH; skipping signature verification.
-To verify manually, install cosign and run:
+NOTE: cosign not found on PATH. The archive checksum was verified, but the
+release signature was not. Install cosign before rerunning this installer if
+signature verification is required.
 
-  cosign verify-blob \\
-    --bundle ${BASE_URL}/checksums.txt.sigstore.json \\
-    --certificate-identity 'https://github.com/${GITHUB_REPO}/.github/workflows/release.yml@refs/tags/${VERSION}' \\
-    --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
-    checksums.txt
+See https://docs.agenthound.io/getting-started/install/#verify-a-release
 
 EOF
 fi
