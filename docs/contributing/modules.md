@@ -54,6 +54,11 @@ Do not use `http.DefaultClient`, an unguarded `http.Transport`, or a bare `net.D
 
 Return ingest V1 graph facts with deterministic IDs and explicit observation domains. Every collection outcome needs a matching coverage declaration owned by the same collector prefix.
 
+Treat V1 as a backward-compatible wire contract: new fields must be optional,
+and the current server must continue accepting the frozen historical V1
+fixtures. Any required or otherwise breaking wire change starts a new contract
+version instead of tightening V1 in place.
+
 Preserve useful graph data returned with a structured partial error, but propagate the error so the planner does not record a false success.
 
 Credential nodes follow these rules:

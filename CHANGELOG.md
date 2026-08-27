@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+
+- Public Compose deployments now pin the coordinated AgentHound server release, and release publication verifies the signed production image before making the GitHub release public.
+- Server ingestion now reports collector, artifact-contract, and server versions while retaining backward compatibility with supported historical V1 artifacts.
+
 ## 1.1.1 — Evidence Precision and Reliability
 
 ### Added

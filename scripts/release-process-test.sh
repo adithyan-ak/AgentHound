@@ -14,7 +14,7 @@ trap 'rm -rf "$test_root"' EXIT
 
 new_fixture() {
   local name=$1 root="$test_root/$1"
-  mkdir -p "$root/scripts" "$root/docs/getting-started" "$root/docs/operator"
+  mkdir -p "$root/scripts" "$root/docs/getting-started" "$root/docs/operator" "$root/docker"
   cp "$repo_root/scripts/version-check.sh" "$root/scripts/"
   cp "$repo_root/scripts/sync-version.sh" "$root/scripts/"
   cp "$repo_root/scripts/release-version-pins.sh" "$root/scripts/"
@@ -50,7 +50,22 @@ EOF
 curl -sSfL ${pin_base}/1.0.0/docker/docker-compose.public.yml
 curl -sSfL ${pin_base}/1.0.0/docker/docker-compose.public.yml
 EOF
+  cat > "$root/docker/docker-compose.public.yml" <<'EOF'
+services:
+  agenthound:
+    image: ghcr.io/adithyan-ak/agenthound-server:1.0.0
+EOF
   printf '%s\n' "$root"
+}
+
+fixture_checksum() {
+  local root=$1
+  (
+    cd "$root"
+    cksum install.sh README.md docs/getting-started/install.md \
+      docs/getting-started/quickstart.md docs/operator/deployment.md \
+      docker/docker-compose.public.yml | sort
+  )
 }
 
 expect_failure() {
@@ -77,6 +92,41 @@ sed -i.bak 's#/1\.0\.0/docker/#/1.0.1/docker/#' \
 rm "$compose_mismatch/docs/getting-started/quickstart.md.bak"
 expect_failure "mismatched documentation Compose pin" \
   bash "$compose_mismatch/scripts/version-check.sh"
+
+server_image_mismatch=$(new_fixture server-image-mismatch)
+sed -i.bak 's/agenthound-server:1\.0\.0/agenthound-server:1.0.1/' \
+  "$server_image_mismatch/docker/docker-compose.public.yml"
+rm "$server_image_mismatch/docker/docker-compose.public.yml.bak"
+expect_failure "mismatched Compose server image pin" \
+  bash "$server_image_mismatch/scripts/version-check.sh"
+
+server_image_missing=$(new_fixture server-image-missing)
+sed -i.bak '/agenthound-server:/d' "$server_image_missing/docker/docker-compose.public.yml"
+rm "$server_image_missing/docker/docker-compose.public.yml.bak"
+expect_failure "missing Compose server image pin" \
+  bash "$server_image_missing/scripts/version-check.sh"
+before_sync=$(fixture_checksum "$server_image_missing")
+expect_failure "sync with missing Compose server image pin" \
+  bash "$server_image_missing/scripts/sync-version.sh" 1.0.2
+after_sync=$(fixture_checksum "$server_image_missing")
+if [ "$before_sync" != "$after_sync" ]; then
+  echo "release-process-test: failed image-pin sync mutated a fixture" >&2
+  exit 1
+fi
+
+server_image_duplicate=$(new_fixture server-image-duplicate)
+printf '    image: ghcr.io/adithyan-ak/agenthound-server:1.0.0\n' \
+  >> "$server_image_duplicate/docker/docker-compose.public.yml"
+expect_failure "duplicate Compose server image pin" \
+  bash "$server_image_duplicate/scripts/version-check.sh"
+before_sync=$(fixture_checksum "$server_image_duplicate")
+expect_failure "sync with duplicate Compose server image pin" \
+  bash "$server_image_duplicate/scripts/sync-version.sh" 1.0.2
+after_sync=$(fixture_checksum "$server_image_duplicate")
+if [ "$before_sync" != "$after_sync" ]; then
+  echo "release-process-test: failed duplicate image-pin sync mutated a fixture" >&2
+  exit 1
+fi
 
 duplicate=$(new_fixture duplicate)
 printf '%s/1.0.0/install.sh\n' "$pin_base" >> "$duplicate/README.md"
@@ -108,6 +158,8 @@ sync=$(new_fixture sync)
 (sed -i.bak 's/## 1\.0\.0 —/## 1.0.2 —/' "$sync/CHANGELOG.md" && rm "$sync/CHANGELOG.md.bak")
 (cd "$sync" && bash scripts/sync-version.sh 1.0.2 >/dev/null)
 (cd "$sync" && RELEASE_CHECK=1 bash scripts/version-check.sh >/dev/null)
+grep -Fqx '    image: ghcr.io/adithyan-ak/agenthound-server:1.0.2' \
+  "$sync/docker/docker-compose.public.yml"
 
 notes=$(new_fixture notes)
 rendered=$(cd "$notes" && sh scripts/release-notes.sh CHANGELOG.md 1.0.0)

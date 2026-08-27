@@ -179,6 +179,12 @@ docker compose -f agenthound-compose.yml -p agenthound exec -T agenthound \
 
 Open [http://127.0.0.1:8080](http://127.0.0.1:8080/) to inspect findings, attack paths, credentials, risk, queries, scan history, and triage.
 
+Collector and server are released as one coordinated version. Compose files
+created under the current release policy pin that exact server image; historical
+releases through `1.1.1` retain their original `latest` reference. The current
+server accepts supported historical V1 artifacts; upgrade the server if a newer
+artifact reports an unsupported ingest contract.
+
 <p align="center">
   <img src="docs/readme-assets/agenthound-dashboard.png" alt="AgentHound attack-surface dashboard" width="900">
 </p>

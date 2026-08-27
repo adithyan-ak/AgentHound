@@ -388,6 +388,56 @@ jobs:
             [[ "$(crane digest "${image}")" == "${digest}" ]]
           done < "${records}/images.tsv"
 
+      - name: Promote, sign, and verify immutable production images
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          records="${RUNNER_TEMP}/release-candidate"
+          for pair in \
+            "${STAGING_COLLECTOR} ${PRODUCTION_COLLECTOR}" \
+            "${STAGING_SERVER} ${PRODUCTION_SERVER}"; do
+            read -r staging production <<<"${pair}"
+            for arch in amd64 arm64; do
+              crane copy "${staging}:${tag}-${arch}" "${production}:${tag}-${arch}"
+              expected="$(crane digest "${staging}:${tag}-${arch}")"
+              [[ "$(crane digest "${production}:${tag}-${arch}")" == "${expected}" ]]
+            done
+            crane copy "${staging}:${tag}" "${production}:${tag}"
+            expected="$(crane digest "${staging}:${tag}")"
+            [[ "$(crane digest "${production}:${tag}")" == "${expected}" ]]
+            if ! cosign verify \
+              --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${tag}" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "${production}@${expected}" >/dev/null 2>&1; then
+              cosign sign --yes "${production}@${expected}"
+            fi
+            cosign verify \
+              --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${tag}" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "${production}@${expected}" >/dev/null
+          done
+
+          while IFS=$'\t' read -r staging_ref expected; do
+            staging_repo="${staging_ref%%:*}"
+            suffix="${staging_ref##*:}"
+            production="${PRODUCTION_COLLECTOR}"
+            [[ "${staging_repo}" == "${STAGING_SERVER}" ]] && production="${PRODUCTION_SERVER}"
+            [[ "$(crane digest "${production}:${suffix}")" == "${expected}" ]]
+          done < "${records}/images.tsv"
+
+          mapfile -t compose_refs < <(
+            grep -E '^[[:space:]]+image:[[:space:]]+ghcr\.io/adithyan-ak/agenthound-server:' \
+              docker/docker-compose.public.yml |
+              sed -E 's/^[[:space:]]+image:[[:space:]]+//'
+          )
+          [[ "${#compose_refs[@]}" == 1 ]]
+          [[ "${compose_refs[0]}" == "${PRODUCTION_SERVER}:${tag}" ]]
+          expected_server="$(awk -F '\t' -v ref="${STAGING_SERVER}:${tag}" \
+            '$1 == ref { print $2 }' "${records}/images.tsv")"
+          [[ -n "${expected_server}" ]]
+          [[ "$(crane digest "${compose_refs[0]}")" == "${expected_server}" ]]
+
       - name: Publish and prove the immutable GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -416,47 +466,24 @@ jobs:
           [[ "$(jq -r '.body' <<<"${published}")" == "$(cat "${records}/release-notes.md")" ]]
           [[ "$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')" == "${tag}" ]]
 
-      - name: Promote verified image digests and sign production identities
+      - name: Update mutable latest image aliases
         shell: bash
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
-          records="${RUNNER_TEMP}/release-candidate"
           for pair in \
             "${STAGING_COLLECTOR} ${PRODUCTION_COLLECTOR}" \
             "${STAGING_SERVER} ${PRODUCTION_SERVER}"; do
             read -r staging production <<<"${pair}"
             for arch in amd64 arm64; do
-              crane copy "${staging}:${tag}-${arch}" "${production}:${tag}-${arch}"
               crane copy "${staging}:${tag}-${arch}" "${production}:latest-${arch}"
               expected="$(crane digest "${staging}:${tag}-${arch}")"
-              [[ "$(crane digest "${production}:${tag}-${arch}")" == "${expected}" ]]
               [[ "$(crane digest "${production}:latest-${arch}")" == "${expected}" ]]
             done
-            crane copy "${staging}:${tag}" "${production}:${tag}"
             crane copy "${staging}:${tag}" "${production}:latest"
             expected="$(crane digest "${staging}:${tag}")"
-            [[ "$(crane digest "${production}:${tag}")" == "${expected}" ]]
             [[ "$(crane digest "${production}:latest")" == "${expected}" ]]
-            if ! cosign verify \
-              --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${tag}" \
-              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-              "${production}@${expected}" >/dev/null 2>&1; then
-              cosign sign --yes "${production}@${expected}"
-            fi
-            cosign verify \
-              --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${tag}" \
-              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-              "${production}@${expected}" >/dev/null
           done
-
-          while IFS=$'\t' read -r staging_ref expected; do
-            staging_repo="${staging_ref%%:*}"
-            suffix="${staging_ref##*:}"
-            production="${PRODUCTION_COLLECTOR}"
-            [[ "${staging_repo}" == "${STAGING_SERVER}" ]] && production="${PRODUCTION_SERVER}"
-            [[ "$(crane digest "${production}:${suffix}")" == "${expected}" ]]
-          done < "${records}/images.tsv"
 
       - name: Publish the exact verified Homebrew formulas
         env:

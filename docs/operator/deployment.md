@@ -80,7 +80,26 @@ docker compose -f agenthound-compose.yml -p agenthound pull
 docker compose -f agenthound-compose.yml -p agenthound up -d --wait
 ```
 
-The server applies PostgreSQL migrations and Neo4j schema initialization during startup. Keep the collector and server on the same release when ingesting artifacts with same-scan action proof.
+The server applies PostgreSQL migrations and Neo4j schema initialization during startup. Use the coordinated collector and server release pair by default; the artifact compatibility policy is described below.
+
+## Collector and server compatibility
+
+AgentHound publishes the collector and server together under one product
+version. For releases created under this policy, the installation examples pin
+that matching pair so a deployment does not depend on mutable image aliases.
+
+Artifact admission is based on the ingest contract, not exact binary version
+equality. The current server accepts supported historical V1 artifacts,
+including artifacts whose `collector_version` is older. An older server is not
+guaranteed to understand artifacts from a newer collector; when ingest reports
+an unsupported contract or structure, upgrade the server. Additive V1 changes
+must remain optional and backward-compatible. A breaking wire-format change
+requires a new contract version such as V2.
+
+Exact server-image pinning applies to releases created after this policy was
+introduced. Historical tags `1.0.0` through `1.1.1` retain their original
+Compose file, which referenced the mutable `latest` image; those immutable Git
+tags are not rewritten.
 
 ## Capacity
 

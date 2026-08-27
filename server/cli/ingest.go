@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,6 +17,12 @@ import (
 )
 
 var bootstrapForIngest = Bootstrap
+
+type ingestCompatibility struct {
+	CollectorVersion string
+	ContractVersion  int
+	ServerVersion    string
+}
 
 var ingestCmd = &cobra.Command{
 	Use:   "ingest <file.json | ->",
@@ -47,13 +54,42 @@ for generic automation that already has a complete ingest envelope on stdin:
 		}
 
 		version, err := ingest.DecodeVersion(data)
-		if err != nil || version != ingest.CurrentVersion {
-			return fmt.Errorf("unsupported V1 ingest contract")
+		if err != nil {
+			return fmt.Errorf(
+				"invalid ingest artifact; agenthound-server %s requires contract V%d: %w",
+				serverVersionDisplay(),
+				ingest.CurrentVersion,
+				err,
+			)
+		}
+		if version <= 0 {
+			return fmt.Errorf(
+				"invalid ingest artifact; agenthound-server %s requires a positive contract version and supports V%d",
+				serverVersionDisplay(),
+				ingest.CurrentVersion,
+			)
+		}
+		collectorVersion := decodeCollectorVersion(data)
+		if version != ingest.CurrentVersion {
+			return fmt.Errorf(
+				"artifact uses ingest contract V%d from collector %q; agenthound-server %s supports V%d; upgrade agenthound-server to a release that supports V%d",
+				version,
+				collectorVersion,
+				serverVersionDisplay(),
+				ingest.CurrentVersion,
+				version,
+			)
 		}
 
 		var ingestData ingest.IngestData
 		if err := ingest.DecodeStrict(bytes.NewReader(data), &ingestData); err != nil {
-			return fmt.Errorf("unsupported V1 ingest contract")
+			return fmt.Errorf(
+				"artifact from collector %q is not compatible with agenthound-server %s (supported contract V%d); upgrade the server or use a collector and server from one coordinated release: %w",
+				collectorVersion,
+				serverVersionDisplay(),
+				ingest.CurrentVersion,
+				err,
+			)
 		}
 		if err := serveringest.Preflight(&ingestData); err != nil {
 			return fmt.Errorf("ingest preflight: %w", err)
@@ -66,18 +102,50 @@ for generic automation that already has a complete ingest envelope on stdin:
 		defer cleanup()
 
 		result, ingestErr := infra.Pipeline.Ingest(ctx, &ingestData)
-		return finishIngestCommand(cmd.OutOrStdout(), result, ingestErr)
+		return finishIngestCommand(cmd.OutOrStdout(), result, ingestErr, ingestCompatibility{
+			CollectorVersion: ingestData.Meta.CollectorVersion,
+			ContractVersion:  ingestData.Meta.Version,
+			ServerVersion:    serverVersionDisplay(),
+		})
 	},
+}
+
+func decodeCollectorVersion(document []byte) string {
+	var envelope struct {
+		Meta *struct {
+			CollectorVersion string `json:"collector_version"`
+		} `json:"meta"`
+	}
+	if err := json.Unmarshal(document, &envelope); err != nil || envelope.Meta == nil {
+		return "unknown"
+	}
+	version := strings.TrimSpace(envelope.Meta.CollectorVersion)
+	if version == "" {
+		return "unknown"
+	}
+	return version
+}
+
+func serverVersionDisplay() string {
+	version := strings.TrimSpace(rootCmd.Version)
+	if version == "" {
+		return "dev"
+	}
+	return version
 }
 
 func finishIngestCommand(
 	w io.Writer,
 	result *ingest.IngestResult,
 	ingestErr error,
+	compatibility ingestCompatibility,
 ) error {
 	var resultErr error
 	if result != nil {
-		resultErr = writeIngestResult(w, result)
+		resultErr = writeIngestCompatibility(w, compatibility)
+		if resultErr == nil {
+			resultErr = writeIngestResult(w, result)
+		}
 	}
 	if ingestErr != nil {
 		// A write-stage failure can return a useful typed result and the original
@@ -90,6 +158,20 @@ func finishIngestCommand(
 		return fmt.Errorf("ingest returned no result")
 	}
 	return resultErr
+}
+
+func writeIngestCompatibility(w io.Writer, compatibility ingestCompatibility) error {
+	_, err := fmt.Fprintf(
+		w,
+		"Compatibility:\n  Collector version:  %q\n  Artifact contract:  V%d\n  Server version:     %s\n",
+		compatibility.CollectorVersion,
+		compatibility.ContractVersion,
+		compatibility.ServerVersion,
+	)
+	if err != nil {
+		return fmt.Errorf("write ingest compatibility: %w", err)
+	}
+	return nil
 }
 
 func writeIngestResult(w io.Writer, result *ingest.IngestResult) error {

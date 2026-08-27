@@ -1008,6 +1008,9 @@ func TestValidatorRejectsBadVersion(t *testing.T) {
 	if !strings.Contains(versionErr.Error(), "requires version 1") {
 		t.Fatalf("version error is not actionable: %v", versionErr)
 	}
+	if !strings.Contains(versionErr.Action, "upgrade agenthound-server") {
+		t.Fatalf("version action is not actionable: %q", versionErr.Action)
+	}
 }
 
 func TestValidatorRejectsMissingVersion(t *testing.T) {
