@@ -148,6 +148,13 @@ func TestValidatorTypedResourceRequiresExactPairAndEvidence(t *testing.T) {
 			name: "missing timestamp", path: "graph.edges[0].properties.last_seen",
 			edit: func(data *ingest.IngestData) { delete(data.Graph.Edges[0].Properties, "last_seen") },
 		},
+		{
+			name: "wrong parent identity", path: "graph.edges[0].target",
+			edit: func(data *ingest.IngestData) {
+				data.Graph.Nodes[1].ID = "sha256:wrong"
+				data.Graph.Edges[0].Target = "sha256:wrong"
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			data := validVectorCollectionData()

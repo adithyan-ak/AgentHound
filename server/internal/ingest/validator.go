@@ -498,7 +498,7 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 		if ingest.RequiresEvidenceState(edge.Kind, edge.SourceKind, edge.TargetKind) {
 			errs = append(errs, validateRawEvidence(edge.Properties, i)...)
 		}
-		errs = append(errs, validateStdioChildID(nodesByID, edge, i)...)
+		errs = append(errs, validateParentChildID(nodesByID, edge, i)...)
 	}
 
 	if len(errs) > 0 {
@@ -1636,15 +1636,13 @@ func validA2ASignatureStatusProvenance(status, source, trust string) bool {
 	}
 }
 
-func validateStdioChildID(
+func validateParentChildID(
 	nodesByID map[string]ingest.Node,
 	edge ingest.Edge,
 	index int,
 ) []FieldError {
 	source, sourceExists := nodesByID[edge.Source]
-	if !sourceExists ||
-		!hasKind(source.Kinds, "MCPServer") ||
-		source.Properties["transport"] != "stdio" {
+	if !sourceExists {
 		return nil
 	}
 	target, targetExists := nodesByID[edge.Target]
@@ -1652,29 +1650,48 @@ func validateStdioChildID(
 		return nil
 	}
 
-	var prefix, componentProperty string
-	switch edge.Kind {
-	case "PROVIDES_TOOL":
-		prefix, componentProperty = "MCPTool", "name"
-	case "PROVIDES_RESOURCE":
-		switch edge.TargetKind {
-		case "MCPResource":
-			prefix, componentProperty = "MCPResource", "uri"
-		case "VectorCollection":
-			prefix, componentProperty = "VectorCollection", "name"
-		default:
-			return nil
+	var expected string
+	switch {
+	case edge.Kind == "PROVIDES_RESOURCE" &&
+		edge.SourceKind == "QdrantInstance" && edge.TargetKind == "VectorCollection":
+		name, _ := target.Properties["name"].(string)
+		if name != "" {
+			expected = ingest.ComputeNodeID("VectorCollection", edge.Source, name)
 		}
-	case "PROVIDES_PROMPT":
-		prefix, componentProperty = "MCPPrompt", "name"
-	default:
+	case edge.Kind == "PROVIDES_RESOURCE" &&
+		edge.SourceKind == "JupyterServer" && edge.TargetKind == "WorkspaceFile":
+		workspacePath, _ := target.Properties["path"].(string)
+		if workspacePath != "" {
+			expected = ingest.ComputeNodeID("WorkspaceFile", edge.Source, workspacePath)
+		}
+	case edge.Kind == "PROVIDES_RESOURCE" &&
+		edge.SourceKind == "MLflowServer" && edge.TargetKind == "ModelArtifact":
+		name, _ := target.Properties["name"].(string)
+		version, _ := target.Properties["version"].(string)
+		if name != "" && version != "" {
+			expected = ingest.ComputeNodeID("ModelArtifact", edge.Source, name, version)
+		}
+	case hasKind(source.Kinds, "MCPServer") && source.Properties["transport"] == "stdio":
+		var prefix, componentProperty string
+		switch edge.Kind {
+		case "PROVIDES_TOOL":
+			prefix, componentProperty = "MCPTool", "name"
+		case "PROVIDES_RESOURCE":
+			if edge.TargetKind == "MCPResource" {
+				prefix, componentProperty = "MCPResource", "uri"
+			}
+		case "PROVIDES_PROMPT":
+			prefix, componentProperty = "MCPPrompt", "name"
+		}
+		component, _ := target.Properties[componentProperty].(string)
+		if prefix != "" && component != "" {
+			expected = ingest.ComputeNodeID(prefix, edge.Source, component)
+		}
+	}
+	if expected == "" {
 		return nil
 	}
-	component, _ := target.Properties[componentProperty].(string)
-	if component == "" {
-		return nil
-	}
-	if edge.Target == ingest.ComputeNodeID(prefix, edge.Source, component) {
+	if edge.Target == expected {
 		return nil
 	}
 	return []FieldError{{
