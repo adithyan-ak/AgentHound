@@ -10,7 +10,9 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/adithyan-ak/agenthound/modules/mlflowfp"
 	"github.com/adithyan-ak/agenthound/sdk/action"
@@ -490,5 +492,92 @@ func TestCollect_MLflow_RegistryPartialFailure(t *testing.T) {
 	// Registry probes recorded as partials.
 	if res.Summary.PartialFailures < 2 {
 		t.Errorf("partial failures: got %d, want at least 2 (registered-models + model-versions)", res.Summary.PartialFailures)
+	}
+}
+
+func TestCollect_CancellationStopsPerItemWalks(t *testing.T) {
+	tests := []struct {
+		name            string
+		cancelPath      string
+		experimentsBody string
+		versionsBody    string
+		wantProbes      int
+	}{
+		{
+			name:            "runs",
+			cancelPath:      "/api/2.0/mlflow/runs/search",
+			experimentsBody: `{"experiments":[{"experiment_id":"1"},{"experiment_id":"2"},{"experiment_id":"3"}]}`,
+			versionsBody:    `{"model_versions":[]}`,
+			wantProbes:      3,
+		},
+		{
+			name:            "download URI",
+			cancelPath:      "/api/2.0/mlflow/model-versions/get-download-uri",
+			experimentsBody: `{"experiments":[]}`,
+			versionsBody:    `{"model_versions":[{"name":"one","version":"1"},{"name":"two","version":"1"},{"name":"three","version":"1"}]}`,
+			wantProbes:      5,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			started := make(chan struct{})
+			requestRelease := make(chan struct{})
+			var canceledCalls atomic.Int32
+			var signalOnce sync.Once
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == tc.cancelPath {
+					canceledCalls.Add(1)
+					signalOnce.Do(func() { close(started) })
+					<-requestRelease
+					return
+				}
+				switch r.URL.Path {
+				case "/api/2.0/mlflow/experiments/search":
+					_, _ = w.Write([]byte(tc.experimentsBody))
+				case "/api/2.0/mlflow/registered-models/search":
+					_, _ = w.Write([]byte(`{"registered_models":[]}`))
+				case "/api/2.0/mlflow/model-versions/search":
+					_, _ = w.Write([]byte(tc.versionsBody))
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer srv.Close()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan *action.CollectResult, 1)
+			go func() {
+				res, _ := (&Collector{}).Collect(ctx, action.Target{
+					Kind:    "host",
+					Address: strings.TrimPrefix(srv.URL, "http://"),
+				}, action.CollectOptions{})
+				done <- res
+			}()
+
+			select {
+			case <-started:
+				cancel()
+				close(requestRelease)
+			case <-time.After(2 * time.Second):
+				cancel()
+				close(requestRelease)
+				t.Fatalf("request to %s did not start", tc.cancelPath)
+			}
+
+			var res *action.CollectResult
+			select {
+			case res = <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("Collect did not return after cancellation")
+			}
+			if got := canceledCalls.Load(); got != 1 {
+				t.Fatalf("requests to %s after cancellation = %d, want 1", tc.cancelPath, got)
+			}
+			if got := res.Summary.EndpointsProbed; got != tc.wantProbes {
+				t.Fatalf("endpoints probed = %d, want %d", got, tc.wantProbes)
+			}
+		})
 	}
 }

@@ -104,10 +104,16 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 		props["experiment_count"] = len(experiments)
 		markAnonymousInventorySuccess(props)
 	}
+	if ctx.Err() != nil {
+		return res, nil
+	}
 
 	// 2. /runs/search per experiment (paginated).
 	var totalRuns int
 	for _, exp := range experiments {
+		if ctx.Err() != nil {
+			break
+		}
 		runs, err := fetchRuns(ctx, client, baseURL, exp.ID, maxItems)
 		res.Summary.EndpointsProbed++
 		if err != nil {
@@ -117,6 +123,9 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 		totalRuns += len(runs)
 	}
 	res.IngestData.Graph.Nodes[0].Properties["total_runs"] = totalRuns
+	if ctx.Err() != nil {
+		return res, nil
+	}
 
 	// 3. Model Registry: registered-models/search + model-versions/search
 	//    + per-version get-download-uri. All GET, all paginated. Any
@@ -136,6 +145,9 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 		}
 		res.IngestData.Graph.Nodes[0].Properties["registered_models"] = names
 	}
+	if ctx.Err() != nil {
+		return res, nil
+	}
 
 	versions, verErr := fetchModelVersions(ctx, client, baseURL, maxItems)
 	res.Summary.EndpointsProbed++
@@ -146,11 +158,17 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 	} else {
 		res.IngestData.Graph.Nodes[0].Properties["model_version_count"] = len(versions)
 	}
+	if ctx.Err() != nil {
+		return res, nil
+	}
 
 	// For each model version, fetch the download URI and emit an
 	// :MCPResource + PROVIDES_RESOURCE edge. Individual failures are
 	// per-version partials — one bad model shouldn't kill the walk.
 	for _, v := range versions {
+		if ctx.Err() != nil {
+			break
+		}
 		uri, err := fetchDownloadURI(ctx, client, baseURL, v.Name, v.Version)
 		res.Summary.EndpointsProbed++
 		if err != nil {

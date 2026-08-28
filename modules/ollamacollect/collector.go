@@ -129,6 +129,9 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 	markAnonymousInventorySuccess(res.IngestData.Graph.Nodes[0].Properties)
 
 	for _, tag := range tags {
+		if ctx.Err() != nil {
+			break
+		}
 		showURL := strings.TrimRight(baseURL, "/") + "/api/show"
 		show, showErr := fetchShow(ctx, client, showURL, tag.Model)
 		res.Summary.EndpointsProbed++
@@ -175,6 +178,11 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 		res.IngestData.Graph.Edges = append(res.IngestData.Graph.Edges,
 			providesModelEdge(ollamaID, modelID, tag.Digest))
 		res.Summary.CredentialsFound++
+	}
+
+	// Do not start optional work after the caller has canceled collection.
+	if ctx.Err() != nil {
+		return res, nil
 	}
 
 	// 3. Flag-gated embedding probe (POST exception — see package doc).
