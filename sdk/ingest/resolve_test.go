@@ -23,11 +23,9 @@ func TestConcreteNodeKindAcceptsOnlyDocumentedUmbrellaCompanions(t *testing.T) {
 	}
 }
 
-// TestProvidesResource_AcceptsMLflowAndQdrantSources locks in the
-// extension of PROVIDES_RESOURCE to accept :MCPResource emissions from
-// mlflowcollect (Model Registry storage URIs) and qdrantcollect (scrolled
-// point payloads) in addition to the original MCPServer and
-// JupyterServer sources.
+// TestProvidesResource_AcceptsHistoricalAndTypedPairs locks exact endpoint
+// pairs so additive V1 support does not make every service/resource cross-pair
+// semantically valid.
 func TestProvidesResource_AcceptsMLflowAndQdrantSources(t *testing.T) {
 	ep, ok := EdgeKindEndpoints["PROVIDES_RESOURCE"]
 	if !ok {
@@ -52,6 +50,25 @@ func TestProvidesResource_AcceptsMLflowAndQdrantSources(t *testing.T) {
 		}
 		if !TargetKindAllowed("PROVIDES_RESOURCE", "MCPResource") {
 			t.Error("PROVIDES_RESOURCE must accept explicit MCPResource target")
+		}
+	}
+	wantPairs := []EdgeEndpointPair{
+		{SourceKind: "MCPServer", TargetKind: "MCPResource"},
+		{SourceKind: "JupyterServer", TargetKind: "WorkspaceFile"},
+		{SourceKind: "MLflowServer", TargetKind: "ModelArtifact"},
+		{SourceKind: "QdrantInstance", TargetKind: "VectorCollection"},
+	}
+	for _, pair := range wantPairs {
+		if !EndpointKindsAllowed("PROVIDES_RESOURCE", pair.SourceKind, pair.TargetKind) {
+			t.Errorf("PROVIDES_RESOURCE rejected %s -> %s", pair.SourceKind, pair.TargetKind)
+		}
+	}
+	for _, pair := range []EdgeEndpointPair{
+		{SourceKind: "MCPServer", TargetKind: "VectorCollection"},
+		{SourceKind: "QdrantInstance", TargetKind: "WorkspaceFile"},
+	} {
+		if EndpointKindsAllowed("PROVIDES_RESOURCE", pair.SourceKind, pair.TargetKind) {
+			t.Errorf("PROVIDES_RESOURCE accepted invalid %s -> %s", pair.SourceKind, pair.TargetKind)
 		}
 	}
 }

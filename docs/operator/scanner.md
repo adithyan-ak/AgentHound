@@ -22,7 +22,7 @@ An invalid positional target fails before configured network enumeration begins.
 | Mode | Collection and actions |
 |---|---|
 | Active | Uses configured authentication, reuses compatible credentials, verifies MCP resource access, and runs eligible reversible ContextForge probes. |
-| Active with `--deep` | Adds recursive instruction collection, Qdrant payload samples, expensive probes, and bounded Ollama embedding verification. |
+| Active with `--deep` | Adds recursive instruction collection, Qdrant sampling summaries, expensive probes, and bounded Ollama embedding verification. |
 | `--stealth` | Performs anonymous read-only collection and exact configured authentication. Credential reuse, compute, tool invocation, and mutation are disabled. |
 | `--stealth --deep` | Adds deep filesystem and payload reads while retaining stealth restrictions. |
 

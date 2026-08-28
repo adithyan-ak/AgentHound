@@ -384,6 +384,22 @@ func TestServiceCollectionRetainsPartialGraphButReturnsFailure(t *testing.T) {
 	if result.Outcome != "collection_partial" || len(result.Graph.Nodes) != 1 {
 		t.Fatalf("partial result = %+v, want retained graph with partial outcome", result)
 	}
+	if len(result.InventoryOutcomes) != 1 || result.InventoryOutcomes[0].State != ingest.OutcomePartial {
+		t.Fatalf("inventory outcomes = %+v, want one partial surface", result.InventoryOutcomes)
+	}
+	root := ingest.CollectorRootCoverageKey("scan")
+	if result.InventoryOutcomes[0].ParentCoverageKey != root {
+		t.Fatalf("inventory parent = %q, want scan root %q", result.InventoryOutcomes[0].ParentCoverageKey, root)
+	}
+	for _, domain := range result.Graph.Nodes[0].ObservationDomains {
+		if domain == root {
+			t.Fatal("service inventory fact was assigned to the shared scan root")
+		}
+	}
+	if len(result.Graph.Nodes[0].ObservationDomains) != 1 ||
+		result.Graph.Nodes[0].ObservationDomains[0] != result.InventoryOutcomes[0].CoverageKey {
+		t.Fatalf("fact domains = %v, want inventory surface", result.Graph.Nodes[0].ObservationDomains)
+	}
 }
 
 func TestA2AActionRequiresSuccessfulTargetOutcome(t *testing.T) {

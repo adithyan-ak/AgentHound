@@ -11,10 +11,13 @@ AgentHound stores collector observations as raw nodes and edges, then builds com
 | Local context | `AgentInstance`, `Host`, `ConfigFile`, `InstructionFile` |
 | Authentication | `Identity`, `Credential` |
 | AI services | `OllamaInstance`, `VLLMInstance`, `QdrantInstance`, `MLflowServer`, `LiteLLMGateway`, `JupyterServer`, `LangServeApp`, `OpenWebUIInstance` |
-| Model inventory | `AIModel` |
+| Served models | `AIModel` |
+| Typed resources | `VectorCollection`, `WorkspaceFile`, `ModelArtifact`, `ArtifactStore` |
 | Query umbrella | `AIService` |
 
 Concrete AI-service nodes also carry the `AIService` label. The umbrella label is for queries and does not own identity.
+
+`AIModel` is a model served by a runtime such as Ollama. A persisted MLflow model version is a `ModelArtifact`, not an `AIModel`. `VectorCollection` represents a Qdrant collection rather than an individual point, and `WorkspaceFile` represents either a notebook or a regular file through its `entry_type` property.
 
 ### Credential material
 
@@ -64,11 +67,15 @@ Raw edges come from collectors or same-scan proof actions.
 | A2A topology | `ADVERTISES_SKILL`, `DELEGATES_TO`, `SAME_AUTH_DOMAIN` |
 | Authentication | `AUTHENTICATES_WITH`, `USES_CREDENTIAL`, `HAS_ENV_VAR`, `EXPOSES_CREDENTIAL` |
 | Host and configuration | `RUNS_ON`, `CONFIGURED_IN`, `LOADS_INSTRUCTIONS` |
-| Service inventory | `EXPOSES`, `PROVIDES_MODEL` |
+| Service inventory | `EXPOSES` (historical), `PROVIDES_MODEL`, `PROVIDES_RESOURCE`, `USES_BACKEND`, `STORED_IN` |
 | Untrusted input | `INGESTS_UNTRUSTED` |
 | Access observations | `CREDENTIAL_ACCESS_OBSERVED`, `PUBLIC_ACCESS_OBSERVED` |
 
 `CREDENTIAL_ACCESS_OBSERVED` connects a Credential to the exact MCPResource read successfully after the anonymous control was denied. `PUBLIC_ACCESS_OBSERVED` connects the MCPServer to a resource read anonymously. Both are supporting evidence rather than general traversal shortcuts.
+
+`PROVIDES_RESOURCE` retains historical service-to-`MCPResource` variants for V1 artifacts. New collection emits typed pairs: QdrantInstance→VectorCollection, JupyterServer→WorkspaceFile, and MLflowServer→ModelArtifact. `USES_BACKEND` records an explicit service dependency; `STORED_IN` records a model artifact's reported physical store.
+
+New typed-resource and backend edges include `evidence_state`: `configured` proves only that the source contains the reference, `observed` means the source API reported it, and `verified` requires authoritative enumeration or a bounded request through the source. Probing a destination separately does not upgrade a configured backend relationship.
 
 ## Composite edges
 
@@ -102,7 +109,7 @@ Display names, timestamps, and mutable descriptions do not define identity. Refe
 
 ## Coverage and lifecycle
 
-Each collector reports outcomes such as `complete`, `partial`, `failed`, `truncated`, or `not_applicable`. Complete authoritative roots can reconcile their current children. Other outcomes add evidence without asserting that omitted nodes or edges disappeared.
+Each collector reports outcomes such as `complete`, `partial`, `failed`, `truncated`, or `not_applicable`. Service resources belong to a stable service-instance inventory surface. Only a complete surface can reconcile its children; failed credential guesses, truncation, and partial traversal preserve earlier facts. The shared autonomous-scan root becomes complete only when every blocking inventory surface is complete.
 
 Composite analysis is rebuilt as one epoch after raw reconciliation. Published scan metadata records both submitted counts and the resulting graph totals.
 

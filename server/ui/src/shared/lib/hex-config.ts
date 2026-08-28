@@ -22,6 +22,10 @@ import {
   Link2,
   MessageSquare,
   Boxes,
+  Layers,
+  Folder,
+  Package,
+  HardDrive,
 } from "lucide-react";
 import {
   SEVERITY,
@@ -237,6 +241,38 @@ export const HEX_CONFIG: Record<string, HexKindConfig> = {
     kindTag: "AI MODEL",
     column: 3,
     groupLabel: "AI Models",
+  },
+  VectorCollection: {
+    strokeColor: NODE_KIND_COLORS.VectorCollection,
+    fillColor: EXPLORER_HEX_FILL,
+    icon: Layers,
+    kindTag: "VECTOR COLLECTION",
+    column: 3,
+    groupLabel: "Resources",
+  },
+  WorkspaceFile: {
+    strokeColor: NODE_KIND_COLORS.WorkspaceFile,
+    fillColor: EXPLORER_HEX_FILL,
+    icon: Folder,
+    kindTag: "WORKSPACE FILE",
+    column: 4,
+    groupLabel: "Resources",
+  },
+  ModelArtifact: {
+    strokeColor: NODE_KIND_COLORS.ModelArtifact,
+    fillColor: EXPLORER_HEX_FILL,
+    icon: Package,
+    kindTag: "MODEL ARTIFACT",
+    column: 3,
+    groupLabel: "AI Models",
+  },
+  ArtifactStore: {
+    strokeColor: NODE_KIND_COLORS.ArtifactStore,
+    fillColor: EXPLORER_HEX_FILL,
+    icon: HardDrive,
+    kindTag: "ARTIFACT STORE",
+    column: 4,
+    groupLabel: "Resources",
   },
 };
 

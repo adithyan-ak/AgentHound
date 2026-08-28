@@ -754,6 +754,123 @@ func TestIntegrationProbeContractRetiresOnlyExactCoverageKey(t *testing.T) {
 	}
 }
 
+func TestIntegrationServiceInventoryPreservesThenRetiresLegacyResources(t *testing.T) {
+	ctx, pipeline, db, _, _ := publicationIntegrationHarness(t, false)
+	root := sdkingest.CollectorRootCoverageKey("scan")
+	endpoint := "http://qdrant:6333"
+	qdrantID := sdkingest.ComputeNodeID("QdrantInstance", endpoint)
+	inventory := sdkingest.CanonicalCoverageKey(
+		"scan", "service_inventory", "qdrant.collect\x00"+qdrantID+"\x00collections",
+	)
+	legacyURI := "qdrant://qdrant:6333/docs/point-1"
+	legacyID := sdkingest.ComputeNodeID("MCPResource", qdrantID, legacyURI)
+	collectionID := sdkingest.ComputeNodeID("VectorCollection", qdrantID, "docs")
+
+	report := func(rootState, inventoryState sdkingest.OutcomeState) *sdkingest.CollectionReport {
+		outcomes := []sdkingest.CollectionOutcome{{
+			Collector: "scan", CoverageKey: root, Target: "scan", Method: "collect",
+			State: rootState,
+		}}
+		keys := []string{root}
+		if inventoryState != sdkingest.OutcomeUnknown {
+			keys = append(keys, inventory)
+			outcomes = append(outcomes, sdkingest.CollectionOutcome{
+				Collector: "scan", CoverageKey: inventory, ParentCoverageKey: root,
+				Target: qdrantID, Method: "service_inventory:collections", State: inventoryState,
+			})
+		}
+		return &sdkingest.CollectionReport{
+			State: sdkingest.AggregateOutcomeState(outcomes), CoverageKeys: keys, Outcomes: outcomes,
+		}
+	}
+	serviceNode := func(scope string) sdkingest.Node {
+		return sdkingest.Node{
+			ID: qdrantID, Kinds: []string{"QdrantInstance", "AIService"},
+			Properties: map[string]any{
+				"objectid": qdrantID, "name": "qdrant", "endpoint": endpoint,
+				"auth_method": "unknown", "auth_assurance": "unknown", "auth_evidence": "unknown",
+			},
+			ObservationDomains: []string{scope},
+		}
+	}
+	typedGraph := func(includeCollection bool) sdkingest.GraphData {
+		graphData := sdkingest.GraphData{
+			Nodes: []sdkingest.Node{serviceNode(inventory)}, Edges: []sdkingest.Edge{},
+		}
+		if !includeCollection {
+			return graphData
+		}
+		graphData.Nodes = append(graphData.Nodes, sdkingest.Node{
+			ID: collectionID, Kinds: []string{"VectorCollection"},
+			Properties:         map[string]any{"objectid": collectionID, "name": "docs"},
+			ObservationDomains: []string{inventory},
+		})
+		graphData.Edges = append(graphData.Edges, sdkingest.Edge{
+			Source: qdrantID, Target: collectionID, Kind: "PROVIDES_RESOURCE",
+			SourceKind: "QdrantInstance", TargetKind: "VectorCollection",
+			Properties: map[string]any{
+				"risk_weight": 0.2, "confidence": 1.0, "evidence_state": "verified",
+				"last_seen": "2026-08-27T12:00:00Z",
+				"evidence":  map[string]any{"source": "collections", "collection": "docs"},
+			},
+			ObservationDomains: []string{inventory},
+		})
+		return graphData
+	}
+	present := func(id string) bool {
+		t.Helper()
+		node, _, err := db.GetNode(ctx, id)
+		if err != nil {
+			t.Fatalf("query node %s: %v", id, err)
+		}
+		return node != nil
+	}
+	ingestArtifact := func(scanID string, collection *sdkingest.CollectionReport, graphData sdkingest.GraphData) {
+		t.Helper()
+		data := newPublicationIntegrationData("scan", scanID)
+		data.Meta.Collection = collection
+		data.Graph = graphData
+		if _, err := pipeline.Ingest(ctx, data); err != nil {
+			t.Fatalf("ingest %s: %v", scanID, err)
+		}
+	}
+
+	legacy := sdkingest.GraphData{
+		Nodes: []sdkingest.Node{
+			serviceNode(root),
+			{
+				ID: legacyID, Kinds: []string{"MCPResource"},
+				Properties:         map[string]any{"objectid": legacyID, "name": "point-1", "uri": legacyURI},
+				ObservationDomains: []string{root},
+			},
+		},
+		Edges: []sdkingest.Edge{{
+			Source: qdrantID, Target: legacyID, Kind: "PROVIDES_RESOURCE",
+			SourceKind: "QdrantInstance", TargetKind: "MCPResource",
+			Properties: map[string]any{"risk_weight": 0.2}, ObservationDomains: []string{root},
+		}},
+	}
+	ingestArtifact("service-inventory-legacy", report(sdkingest.OutcomeComplete, sdkingest.OutcomeUnknown), legacy)
+	if !present(legacyID) {
+		t.Fatal("legacy resource was not written")
+	}
+
+	ingestArtifact("service-inventory-partial", report(sdkingest.OutcomePartial, sdkingest.OutcomePartial), typedGraph(true))
+	if !present(legacyID) || !present(collectionID) {
+		t.Fatal("partial replacement did not preserve legacy and write typed resource")
+	}
+
+	ingestArtifact("service-inventory-complete", report(sdkingest.OutcomeComplete, sdkingest.OutcomeComplete), typedGraph(true))
+	if present(legacyID) || !present(collectionID) {
+		t.Fatal("complete replacement did not retire legacy resource after writing typed resource")
+	}
+
+	ingestArtifact("service-inventory-empty", report(sdkingest.OutcomeComplete, sdkingest.OutcomeComplete), typedGraph(false))
+	if present(collectionID) {
+		t.Fatal("subsequent complete inventory did not retire stale typed resource")
+	}
+}
+
 func TestIntegrationExhaustiveRootRemovesMissingChildAcrossGraphAndPublication(t *testing.T) {
 	ctx, pipeline, db, _, pool := freshPublicationIntegrationHarness(t)
 	root := sdkingest.CanonicalCoverageKey("mcp", "root", "collect")

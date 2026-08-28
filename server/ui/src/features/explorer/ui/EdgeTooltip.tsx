@@ -27,7 +27,15 @@ export function EdgeTooltip() {
   const viaCred = props["via_credential"] ? String(props["via_credential"]) : "";
   const hops = typeof props["hops"] === "number" ? (props["hops"] as number) : null;
   const confidence = d.confidence || Number(props["confidence"] ?? 0);
-  const configuredReference = props["assertion_type"] === "configured_reference";
+  const evidenceState =
+    props["evidence_state"] === "configured" ||
+    props["evidence_state"] === "observed" ||
+    props["evidence_state"] === "verified"
+      ? String(props["evidence_state"])
+      : "";
+  const configuredReference =
+    evidenceState === "configured" ||
+    props["assertion_type"] === "configured_reference";
   const configurationConfidence =
     configuredReference &&
     props["confidence_scope"] === "configuration_presence";
@@ -102,6 +110,9 @@ export function EdgeTooltip() {
           )}
           {d.isComposite && <span>composite</span>}
           {configuredReference && <span>configured-only</span>}
+          {evidenceState && evidenceState !== "configured" && (
+            <span>{evidenceState}</span>
+          )}
         </div>
 
         {(viaServer || viaTool || viaCred) && (

@@ -33,6 +33,11 @@ var serviceNodeKinds = map[string]string{
 	"OllamaInstance":    "ollama",
 }
 
+var serviceInventoryNames = map[string]string{
+	"litellm": "inventory", "openwebui": "backends", "jupyter": "contents",
+	"qdrant": "collections", "mlflow": "model_registry", "ollama": "models",
+}
+
 func (a serviceCollectAction) Candidates(view View) []Candidate {
 	var candidates []Candidate
 	seen := make(map[string]bool)
@@ -53,6 +58,7 @@ func (a serviceCollectAction) Candidates(view View) []Candidate {
 				},
 				Inputs: map[string]string{
 					"service": service, "node_id": node.ID,
+					"inventory_name":      serviceInventoryNames[service],
 					"observation_domains": strings.Join(node.ObservationDomains, "\x1f"),
 				},
 			}
@@ -109,13 +115,14 @@ func (a serviceCollectAction) Candidates(view View) []Candidate {
 }
 
 func (a serviceCollectAction) Execute(ctx context.Context, candidate Candidate, _ Journal) (Result, error) {
+	defaultInventory := serviceInventoryOutcome(candidate, nil, ingest.OutcomeFailed, 0, "collection did not complete")
 	mod, ok := module.Get(candidate.ModuleID)
 	if !ok {
-		return Result{}, fmt.Errorf("service collector %q is not registered", candidate.ModuleID)
+		return Result{InventoryOutcomes: []ingest.CollectionOutcome{defaultInventory}}, fmt.Errorf("service collector %q is not registered", candidate.ModuleID)
 	}
 	collector, ok := mod.(action.ServiceCollector)
 	if !ok {
-		return Result{}, fmt.Errorf("module %q is not a service collector", candidate.ModuleID)
+		return Result{InventoryOutcomes: []ingest.CollectionOutcome{defaultInventory}}, fmt.Errorf("module %q is not a service collector", candidate.ModuleID)
 	}
 	credentials := map[string]string{}
 	extras := map[string]any{}
@@ -144,25 +151,75 @@ func (a serviceCollectAction) Execute(ctx context.Context, candidate Candidate, 
 		Extras: extras,
 	})
 	if err != nil {
-		return Result{}, err
+		defaultInventory.Error = err.Error()
+		return Result{InventoryOutcomes: []ingest.CollectionOutcome{defaultInventory}}, err
 	}
 	if result == nil || result.IngestData == nil {
-		return Result{}, fmt.Errorf("service collector %q returned no graph", candidate.ModuleID)
+		err := fmt.Errorf("service collector %q returned no graph", candidate.ModuleID)
+		defaultInventory.Error = err.Error()
+		return Result{InventoryOutcomes: []ingest.CollectionOutcome{defaultInventory}}, err
 	}
+	inventoryState := ingest.OutcomeComplete
+	inventoryItems := len(result.IngestData.Graph.Nodes)
+	inventoryError := ""
+	if result.Summary.PartialFailures > 0 || len(result.PartialErrors) > 0 {
+		inventoryState = ingest.OutcomePartial
+		inventoryError = strings.Join(result.PartialErrors, "; ")
+	}
+	if result.Inventory != nil {
+		inventoryState = result.Inventory.State
+		inventoryItems = result.Inventory.Items
+		inventoryError = result.Inventory.Error
+	}
+	inventory := serviceInventoryOutcome(
+		candidate,
+		result.Inventory,
+		inventoryState,
+		inventoryItems,
+		inventoryError,
+	)
 	graph := result.IngestData.Graph
-	domains := splitNonEmpty(candidate.Inputs["observation_domains"], "\x1f")
-	if len(domains) == 0 {
-		domains = []string{ingest.CollectorRootCoverageKey("scan")}
+	ingest.TagObservationDomain(&graph, inventory.CoverageKey)
+	plannerResult := Result{
+		Graph: graph, InventoryOutcomes: []ingest.CollectionOutcome{inventory},
+		Outcome: "collection_observed",
 	}
-	for _, domain := range domains {
-		ingest.TagObservationDomain(&graph, domain)
-	}
-	plannerResult := Result{Graph: graph, Outcome: "collection_observed"}
 	if result.Summary.PartialFailures > 0 || len(result.PartialErrors) > 0 {
 		plannerResult.Outcome = "collection_partial"
 		return plannerResult, collectionPartialError(candidate.ModuleID, result)
 	}
 	return plannerResult, nil
+}
+
+func serviceInventoryOutcome(
+	candidate Candidate,
+	report *action.InventoryResult,
+	state ingest.OutcomeState,
+	items int,
+	errorText string,
+) ingest.CollectionOutcome {
+	name := strings.TrimSpace(candidate.Inputs["inventory_name"])
+	if name == "" {
+		name = "inventory"
+	}
+	if report != nil && strings.TrimSpace(report.Name) != "" {
+		name = strings.TrimSpace(report.Name)
+	}
+	serviceID := strings.TrimSpace(candidate.Inputs["node_id"])
+	if serviceID == "" {
+		serviceID = canonicalTarget(candidate.Target.Address)
+	}
+	key := ingest.CanonicalCoverageKey(
+		"scan",
+		"service_inventory",
+		candidate.ModuleID+"\x00"+serviceID+"\x00"+name,
+	)
+	return ingest.CollectionOutcome{
+		Collector: "scan", CoverageKey: key,
+		ParentCoverageKey: ingest.CollectorRootCoverageKey("scan"),
+		Target:            serviceID, Method: "service_inventory:" + name,
+		State: state, Items: items, Error: errorText,
+	}
 }
 
 // ollamaEmbeddingAction is deliberately separate from ordinary Ollama

@@ -269,7 +269,8 @@ func referenceFollowsCoverageScope(kind string) bool {
 	case "ConfigFile", "InstructionFile", "AgentInstance", "Identity", "Credential", "Host",
 		"MCPServer", "MCPTool", "MCPResource", "MCPPrompt", "A2AAgent", "A2ASkill",
 		"OllamaInstance", "VLLMInstance", "QdrantInstance", "MLflowServer",
-		"LiteLLMGateway", "JupyterServer", "LangServeApp", "OpenWebUIInstance":
+		"LiteLLMGateway", "JupyterServer", "LangServeApp", "OpenWebUIInstance",
+		"VectorCollection", "WorkspaceFile", "ModelArtifact", "ArtifactStore":
 		return true
 	default:
 		return false
@@ -297,7 +298,7 @@ func inheritsSourceScope(kind string) bool {
 	switch kind {
 	case "PROVIDES_TOOL", "PROVIDES_RESOURCE", "PROVIDES_PROMPT", "ADVERTISES_SKILL",
 		"PROVIDES_MODEL", "AUTHENTICATES_WITH", "USES_CREDENTIAL",
-		"HAS_ENV_VAR", "EXPOSES_CREDENTIAL":
+		"HAS_ENV_VAR", "EXPOSES_CREDENTIAL", "STORED_IN":
 		return true
 	default:
 		return false

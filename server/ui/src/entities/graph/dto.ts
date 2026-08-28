@@ -24,7 +24,11 @@ export type NodeKind =
   | "LangServeApp"
   | "OpenWebUIInstance"
   | "AIService"
-  | "AIModel";
+  | "AIModel"
+  | "VectorCollection"
+  | "WorkspaceFile"
+  | "ModelArtifact"
+  | "ArtifactStore";
 
 export const EDGE_KINDS = [
   "TRUSTS_SERVER",
@@ -46,6 +50,8 @@ export const EDGE_KINDS = [
   "INGESTS_UNTRUSTED",
   "CREDENTIAL_ACCESS_OBSERVED",
   "PUBLIC_ACCESS_OBSERVED",
+  "USES_BACKEND",
+  "STORED_IN",
   "HAS_ACCESS_TO",
   "CAN_EXECUTE",
   "CAN_REACH",

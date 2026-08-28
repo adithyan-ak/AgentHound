@@ -454,6 +454,17 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 				Message: fmt.Sprintf("target_kind %q is not a valid target for edge kind %q", edge.TargetKind, edge.Kind),
 			})
 		}
+		if edge.SourceKind != "" && edge.TargetKind != "" &&
+			ingest.RawEdgeKinds[edge.Kind] &&
+			!ingest.EndpointKindsAllowed(edge.Kind, edge.SourceKind, edge.TargetKind) {
+			errs = append(errs, FieldError{
+				Path: fmt.Sprintf("graph.edges[%d]", i),
+				Message: fmt.Sprintf(
+					"endpoint pair %q -> %q is not valid for edge kind %q",
+					edge.SourceKind, edge.TargetKind, edge.Kind,
+				),
+			})
+		}
 
 		// Validate explicit endpoint kinds against the referenced node labels.
 		if ingest.RawEdgeKinds[edge.Kind] {
@@ -483,6 +494,9 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 		}
 		if edge.Kind == "CREDENTIAL_ACCESS_OBSERVED" {
 			errs = append(errs, validateCredentialAccessProof(edge.Properties, i)...)
+		}
+		if ingest.RequiresEvidenceState(edge.Kind, edge.SourceKind, edge.TargetKind) {
+			errs = append(errs, validateRawEvidence(edge.Properties, i)...)
 		}
 		errs = append(errs, validateStdioChildID(nodesByID, edge, i)...)
 	}
@@ -1643,7 +1657,14 @@ func validateStdioChildID(
 	case "PROVIDES_TOOL":
 		prefix, componentProperty = "MCPTool", "name"
 	case "PROVIDES_RESOURCE":
-		prefix, componentProperty = "MCPResource", "uri"
+		switch edge.TargetKind {
+		case "MCPResource":
+			prefix, componentProperty = "MCPResource", "uri"
+		case "VectorCollection":
+			prefix, componentProperty = "VectorCollection", "name"
+		default:
+			return nil
+		}
 	case "PROVIDES_PROMPT":
 		prefix, componentProperty = "MCPPrompt", "name"
 	default:
@@ -1695,6 +1716,33 @@ func validateEdgeRiskWeight(properties map[string]any, index int) []FieldError {
 		}}
 	}
 	return nil
+}
+
+func validateRawEvidence(properties map[string]any, index int) []FieldError {
+	base := fmt.Sprintf("graph.edges[%d].properties.", index)
+	var errs []FieldError
+	state, ok := properties["evidence_state"].(string)
+	if !ok || !ingest.ValidEvidenceState(state) {
+		errs = append(errs, FieldError{
+			Path: base + "evidence_state", Message: "must be configured, observed, or verified",
+		})
+	}
+	confidence, ok := numericFloat(properties["confidence"])
+	if !ok || math.IsNaN(confidence) || math.IsInf(confidence, 0) || confidence < 0 || confidence > 1 {
+		errs = append(errs, FieldError{
+			Path: base + "confidence", Message: "must be a finite number between 0 and 1",
+		})
+	}
+	lastSeen, ok := properties["last_seen"].(string)
+	if !ok || strings.TrimSpace(lastSeen) == "" {
+		errs = append(errs, FieldError{Path: base + "last_seen", Message: "must be an RFC3339 timestamp"})
+	} else if _, err := time.Parse(time.RFC3339, lastSeen); err != nil {
+		errs = append(errs, FieldError{Path: base + "last_seen", Message: "must be an RFC3339 timestamp"})
+	}
+	if evidence, ok := properties["evidence"].(map[string]any); !ok || len(evidence) == 0 {
+		errs = append(errs, FieldError{Path: base + "evidence", Message: "must be a non-empty sanitized object"})
+	}
+	return errs
 }
 
 // numericFloat coerces a JSON-decoded numeric value to float64. JSON numbers

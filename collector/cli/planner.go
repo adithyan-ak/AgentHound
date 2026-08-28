@@ -24,9 +24,10 @@ type Candidate struct {
 }
 
 type Result struct {
-	Graph      ingest.GraphData
-	NewTargets []action.Target
-	Outcome    string
+	Graph             ingest.GraphData
+	NewTargets        []action.Target
+	InventoryOutcomes []ingest.CollectionOutcome
+	Outcome           string
 }
 
 type PlannerAction interface {

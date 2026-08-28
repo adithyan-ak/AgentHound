@@ -1176,8 +1176,7 @@ func validateRawWriterEdges(edges []ingest.Edge) error {
 		if !ingest.RawEdgeKinds[edge.Kind] {
 			return fmt.Errorf("edge %d (%s) is not a raw edge kind", i, edge.Kind)
 		}
-		if !ingest.SourceKindAllowed(edge.Kind, edge.SourceKind) ||
-			!ingest.TargetKindAllowed(edge.Kind, edge.TargetKind) {
+		if !ingest.EndpointKindsAllowed(edge.Kind, edge.SourceKind, edge.TargetKind) {
 			return fmt.Errorf(
 				"edge %d (%s) has invalid explicit endpoint kinds %s -> %s",
 				i,
