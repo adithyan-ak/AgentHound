@@ -9,7 +9,9 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/adithyan-ak/agenthound/modules/ollamafp"
 	"github.com/adithyan-ak/agenthound/sdk/action"
@@ -429,5 +431,62 @@ func TestCollect_NoModels(t *testing.T) {
 	}
 	if got := len(res.IngestData.Graph.Edges); got != 0 {
 		t.Errorf("edges: got %d, want 0", got)
+	}
+}
+
+func TestCollect_CancellationStopsShowWalk(t *testing.T) {
+	started := make(chan struct{})
+	requestRelease := make(chan struct{})
+	var showCalls atomic.Int32
+	var signalOnce sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/tags":
+			_, _ = w.Write([]byte(`{"models":[{"model":"one"},{"model":"two"},{"model":"three"}]}`))
+		case "/api/show":
+			showCalls.Add(1)
+			signalOnce.Do(func() { close(started) })
+			<-requestRelease
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan *action.CollectResult, 1)
+	go func() {
+		res, _ := (&Collector{}).Collect(ctx, action.Target{
+			Kind:    "host",
+			Address: strings.TrimPrefix(srv.URL, "http://"),
+		}, action.CollectOptions{})
+		done <- res
+	}()
+
+	select {
+	case <-started:
+		cancel()
+		close(requestRelease)
+	case <-time.After(2 * time.Second):
+		cancel()
+		close(requestRelease)
+		t.Fatal("first /api/show request did not start")
+	}
+
+	var res *action.CollectResult
+	select {
+	case res = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Collect did not return after cancellation")
+	}
+	if got := showCalls.Load(); got != 1 {
+		t.Fatalf("/api/show calls after cancellation = %d, want 1", got)
+	}
+	if got := res.Summary.EndpointsProbed; got != 3 {
+		t.Fatalf("endpoints probed = %d, want 3", got)
+	}
+	if got := len(res.IngestData.Graph.Nodes); got != 2 {
+		t.Fatalf("nodes = %d, want Ollama instance plus first partial model", got)
 	}
 }
