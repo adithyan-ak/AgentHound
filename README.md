@@ -110,7 +110,7 @@ The collector writes an ingest-valid artifact before collection and checkpoints 
 | **Qdrant** | Typed vector collections, point counts, schema context, and bounded point references in deep mode | Anonymous exposure and sensitive vector-data analysis without retaining vector payloads |
 | **MLflow** | Experiment/run counts, typed model versions, sanitized storage URIs, and safely identified artifact-store roots | Anonymous tracking and registry exposure analysis without treating persisted artifacts as served models |
 | **Jupyter** | Sessions and typed workspace files from bounded notebook/content trees, first anonymously and then with a compatible token | Distinguishes public from credential-gated notebook access; incomplete walks preserve earlier files |
-| **Open WebUI / LangServe** | Open WebUI authentication posture and authenticated upstream/RAG credential inventory; LangServe fingerprinting | Credential expansion and exposed-service analysis |
+| **Open WebUI / LangServe** | Open WebUI authentication posture, explicit configured Ollama/Qdrant backends, and authenticated upstream/RAG credential inventory; LangServe fingerprinting | Credential expansion and exposed-service analysis; configured backend links do not overclaim reachability |
 
 ## 🚀 Quick start
 

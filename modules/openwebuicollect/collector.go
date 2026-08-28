@@ -10,14 +10,15 @@
 // POSTURE properties onto the existing :OpenWebUIInstance node:
 // signup_enabled and auth_required.
 //
-// CREDENTIAL-BEARING (planner supplies compatible key material): four admin-gated probes
-// enumerate configured upstream provider API keys and emit one
+// CREDENTIAL-BEARING (planner supplies compatible key material): admin-gated probes
+// enumerate configured backends and upstream provider API keys and emit one
 // :Credential per key, each linked via an EXPOSES_CREDENTIAL edge:
 //
 //	GET /openai/config              — OPENAI_API_KEYS[] + OPENAI_API_BASE_URLS[]
 //	GET /ollama/config              — OLLAMA_BASE_URLS[] + OLLAMA_API_CONFIGS{key}
 //	GET /api/v1/retrieval/config    — RAG / OCR / websearch keys (recursive walker)
 //	GET /api/v1/retrieval/embedding — nested openai_config.key / ollama_config.key / ...
+//	GET /api/v1/knowledge/external/connections — sanitized external knowledge backends
 //
 // The Open WebUI upstream field name is `key` (per
 // backend/open_webui/routers/ollama.py:189-192 `get_api_key`); the
@@ -44,6 +45,7 @@
 //	GET /ollama/config             — authenticated Ollama upstream keys
 //	GET /api/v1/retrieval/config   — authenticated RAG + external keys
 //	GET /api/v1/retrieval/embedding — authenticated embedding config
+//	GET /api/v1/knowledge/external/connections — authenticated backend inventory
 //
 // /api/v1/retrieval/reranking does NOT exist on Open WebUI (verified
 // via full route enumeration in retrieval.py). Rerank config
@@ -57,6 +59,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -116,7 +119,13 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 
 	client := common.NoRedirectClient(timeout)
 
-	res := &action.CollectResult{IngestData: &ingest.IngestData{}}
+	res := &action.CollectResult{
+		IngestData: &ingest.IngestData{},
+		Inventory: &action.InventoryResult{
+			Name: "configuration", State: ingest.OutcomeFailed,
+			Error: "authenticated backend configuration was not read",
+		},
+	}
 
 	res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, ingest.Node{
 		ID:    openwebuiID,
@@ -177,11 +186,19 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 	//    still runs.
 	remaining := maxItems
 	remaining = runOpenAIConfig(ctx, client, res, opts, openwebuiID, baseURL, apiKey, remaining)
-	remaining = runOllamaConfig(ctx, client, res, opts, openwebuiID, baseURL, apiKey, remaining)
+	remaining, ollamaInventory := runOllamaConfig(
+		ctx, client, res, opts, openwebuiID, baseURL, apiKey, remaining, maxItems,
+	)
+	qdrantInventory := runExternalKnowledgeConnections(
+		ctx, client, res, openwebuiID, baseURL, apiKey,
+		maxItems-ollamaInventory.Items,
+	)
+	res.Inventory = combineBackendInventory(ollamaInventory, qdrantInventory)
 	remaining = runRetrievalWalk(ctx, client, res, opts, openwebuiID, baseURL, apiKey,
 		"/api/v1/retrieval/config", "retrieval_config", remaining)
-	_ = runRetrievalWalk(ctx, client, res, opts, openwebuiID, baseURL, apiKey,
+	remaining = runRetrievalWalk(ctx, client, res, opts, openwebuiID, baseURL, apiKey,
 		"/api/v1/retrieval/embedding", "retrieval_embedding", remaining)
+	finalizeConfigurationInventory(res, remaining, maxItems)
 
 	slog.Info("openwebui collection complete",
 		"endpoint", baseURL,
@@ -251,6 +268,84 @@ func probeGET(
 		return nil
 	}
 	return body
+}
+
+type backendInventoryProbe struct {
+	State ingest.OutcomeState
+	Items int
+	Error string
+}
+
+func combineBackendInventory(probes ...backendInventoryProbe) *action.InventoryResult {
+	result := &action.InventoryResult{Name: "configuration", State: ingest.OutcomeComplete}
+	var hasFailure, hasPartial, hasTruncation bool
+	for _, probe := range probes {
+		result.Items += probe.Items
+		result.Error = appendInventoryError(result.Error, probe.Error)
+		switch probe.State {
+		case ingest.OutcomeFailed, ingest.OutcomeNotApplicable, ingest.OutcomeUnknown:
+			hasFailure = true
+		case ingest.OutcomePartial:
+			hasPartial = true
+		case ingest.OutcomeTruncated:
+			hasTruncation = true
+		}
+	}
+	switch {
+	case hasFailure && result.Items == 0:
+		result.State = ingest.OutcomeFailed
+	case hasFailure || hasPartial:
+		result.State = ingest.OutcomePartial
+	case hasTruncation:
+		result.State = ingest.OutcomeTruncated
+	}
+	if result.State == ingest.OutcomeComplete {
+		result.Error = ""
+	}
+	return result
+}
+
+func finalizeConfigurationInventory(res *action.CollectResult, remaining, maxItems int) {
+	if res.Inventory == nil {
+		return
+	}
+	hasNonTruncationFailure := false
+	for _, message := range res.PartialErrors {
+		if !strings.Contains(message, "truncated at max_items=") {
+			hasNonTruncationFailure = true
+		}
+		res.Inventory.Error = appendInventoryError(res.Inventory.Error, message)
+	}
+	if res.Inventory.State == ingest.OutcomeFailed && res.Inventory.Items == 0 {
+		return
+	}
+	if res.Inventory.State == ingest.OutcomePartial || hasNonTruncationFailure {
+		res.Inventory.State = ingest.OutcomePartial
+		return
+	}
+	if remaining <= 0 || res.Inventory.State == ingest.OutcomeTruncated {
+		message := fmt.Sprintf("Open WebUI configuration inventory truncated at max_items=%d", maxItems)
+		res.Inventory.State = ingest.OutcomeTruncated
+		res.Inventory.Error = appendInventoryError(res.Inventory.Error, message)
+		if !strings.Contains(strings.Join(res.PartialErrors, "; "), message) {
+			res.PartialErrors = append(res.PartialErrors, message)
+			res.Summary.PartialFailures++
+		}
+		return
+	}
+	res.Inventory.State = ingest.OutcomeComplete
+	res.Inventory.Error = ""
+}
+
+func appendInventoryError(current, next string) string {
+	next = strings.TrimSpace(next)
+	if next == "" || strings.Contains(current, next) {
+		return current
+	}
+	if current == "" {
+		return next
+	}
+	return current + "; " + next
 }
 
 // emitUpstreamCredential builds a :Credential node + EXPOSES_CREDENTIAL
@@ -346,7 +441,7 @@ func runOpenAIConfig(
 // runOllamaConfig probes GET /ollama/config. For each entry in
 // OLLAMA_BASE_URLS:
 //
-//   - Emits a placeholder :OllamaInstance node + :EXPOSES edge from
+//   - Emits a placeholder :OllamaInstance node + :USES_BACKEND edge from
 //     OpenWebUIInstance → OllamaInstance (matches what the old
 //     fingerprinter tried to emit via the dead $.ollama.base_url capture).
 //   - Looks up per-URL API key via OLLAMA_API_CONFIGS (keyed by index
@@ -361,26 +456,30 @@ func runOllamaConfig(
 	opts action.CollectOptions,
 	openwebuiID, baseURL, apiKey string,
 	remaining int,
-) int {
-	if remaining <= 0 {
-		return 0
-	}
+	backendLimit int,
+) (int, backendInventoryProbe) {
 	body := probeGET(ctx, client, res, opts, baseURL, "/ollama/config", apiKey)
 	if body == nil {
-		return remaining
+		return remaining, backendInventoryProbe{
+			State: ingest.OutcomeFailed, Error: "ollama/config was not readable",
+		}
 	}
 	var raw struct {
 		BaseURLs   []string                   `json:"OLLAMA_BASE_URLS"`
 		APIConfigs map[string]json.RawMessage `json:"OLLAMA_API_CONFIGS"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
-		res.PartialErrors = append(res.PartialErrors, fmt.Sprintf("ollama/config decode: %v", err))
+		message := fmt.Sprintf("ollama/config decode: %v", err)
+		res.PartialErrors = append(res.PartialErrors, message)
 		res.Summary.PartialFailures++
-		return remaining
+		return remaining, backendInventoryProbe{State: ingest.OutcomeFailed, Error: message}
 	}
 
 	// Track canonical URLs to promote onto the instance node.
 	canonicalBaseURLs := make([]string, 0, len(raw.BaseURLs))
+	seenBackends := make(map[string]bool)
+	inventory := backendInventoryProbe{State: ingest.OutcomeComplete}
+	lastSeen := time.Now().UTC().Format(time.RFC3339)
 
 	for i, base := range raw.BaseURLs {
 		base = strings.TrimSpace(base)
@@ -389,11 +488,31 @@ func runOllamaConfig(
 		}
 		canon := canonicalizeBackendURL(base)
 		if canon == "" {
+			message := fmt.Sprintf("ollama/config backend %d has an invalid endpoint", i)
+			res.PartialErrors = append(res.PartialErrors, message)
+			res.Summary.PartialFailures++
+			inventory.State = ingest.OutcomePartial
+			inventory.Error = appendInventoryError(inventory.Error, message)
 			continue
 		}
+		if seenBackends[canon] {
+			continue
+		}
+		seenBackends[canon] = true
+		if inventory.Items >= backendLimit {
+			message := fmt.Sprintf("backend inventory truncated at max_items=%d", backendLimit)
+			if !strings.Contains(inventory.Error, message) {
+				res.PartialErrors = append(res.PartialErrors, message)
+				res.Summary.PartialFailures++
+			}
+			inventory.State = ingest.OutcomeTruncated
+			inventory.Error = appendInventoryError(inventory.Error, message)
+			continue
+		}
+		inventory.Items++
 		canonicalBaseURLs = append(canonicalBaseURLs, canon)
 
-		// Emit placeholder :OllamaInstance node + :EXPOSES edge — one
+		// Emit placeholder :OllamaInstance node + :USES_BACKEND edge — one
 		// per canonical backend URL. Uses ComputeNodeID with the
 		// canonical URL so ollamafp / ollamacollect fold into the same
 		// node via MERGE-by-objectid.
@@ -414,14 +533,12 @@ func runOllamaConfig(
 		res.IngestData.Graph.Edges = append(res.IngestData.Graph.Edges, ingest.Edge{
 			Source:     openwebuiID,
 			Target:     ollamaID,
-			Kind:       "EXPOSES",
+			Kind:       "USES_BACKEND",
 			SourceKind: "OpenWebUIInstance",
 			TargetKind: "OllamaInstance",
 			Properties: map[string]any{
-				"confidence":       1.0,
-				"risk_weight":      0.3,
-				"assertion_type":   "configured_reference",
-				"confidence_scope": "configuration_presence",
+				"confidence": 1.0, "risk_weight": 0.3,
+				"evidence_state": string(ingest.EvidenceConfigured), "last_seen": lastSeen,
 				"evidence": map[string]any{
 					"endpoint":    baseURL,
 					"source":      "ollama_config",
@@ -452,6 +569,11 @@ func runOllamaConfig(
 			APIKey string `json:"api_key"`
 		}
 		if err := json.Unmarshal(cfgRaw, &cfg); err != nil {
+			message := fmt.Sprintf("ollama/config API config %d decode: %v", i, err)
+			res.PartialErrors = append(res.PartialErrors, message)
+			res.Summary.PartialFailures++
+			inventory.State = ingest.OutcomePartial
+			inventory.Error = appendInventoryError(inventory.Error, message)
 			continue
 		}
 		key := strings.TrimSpace(cfg.Key)
@@ -473,7 +595,138 @@ func runOllamaConfig(
 		props := res.IngestData.Graph.Nodes[0].Properties
 		props["ollama_backend_urls"] = canonicalBaseURLs
 	}
-	return remaining
+	return remaining, inventory
+}
+
+type externalKnowledgeConnection struct {
+	ID             string `json:"id"`
+	Provider       string `json:"provider"`
+	Endpoint       string `json:"endpoint"`
+	AuthConfigured bool   `json:"auth_configured"`
+	Enabled        bool   `json:"enabled"`
+}
+
+// runExternalKnowledgeConnections reads Open WebUI's admin-sanitized external
+// knowledge configuration. It consumes only enabled Qdrant endpoints and
+// deliberately has no field capable of decoding auth_config material.
+func runExternalKnowledgeConnections(
+	ctx context.Context,
+	client *http.Client,
+	res *action.CollectResult,
+	openwebuiID, baseURL, apiKey string,
+	backendLimit int,
+) backendInventoryProbe {
+	const route = "/api/v1/knowledge/external/connections"
+	body := probeGET(ctx, client, res, action.CollectOptions{}, baseURL, route, apiKey)
+	if body == nil {
+		return backendInventoryProbe{
+			State: ingest.OutcomeFailed,
+			Error: "knowledge external connections were not readable",
+		}
+	}
+	var response struct {
+		Items []externalKnowledgeConnection `json:"items"`
+		Total int                           `json:"total"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		message := fmt.Sprintf("api/v1/knowledge/external/connections decode: %v", err)
+		res.PartialErrors = append(res.PartialErrors, message)
+		res.Summary.PartialFailures++
+		return backendInventoryProbe{State: ingest.OutcomeFailed, Error: message}
+	}
+	inventory := backendInventoryProbe{State: ingest.OutcomeComplete}
+	if response.Total != len(response.Items) {
+		message := fmt.Sprintf(
+			"knowledge external connections total=%d but response contained %d items",
+			response.Total, len(response.Items),
+		)
+		res.PartialErrors = append(res.PartialErrors, message)
+		res.Summary.PartialFailures++
+		inventory.State = ingest.OutcomePartial
+		inventory.Error = message
+	}
+
+	type aggregatedConnection struct {
+		IDs            []string
+		AuthConfigured bool
+	}
+	byEndpoint := make(map[string]aggregatedConnection)
+	for index, connection := range response.Items {
+		if !connection.Enabled || !strings.EqualFold(strings.TrimSpace(connection.Provider), "qdrant") {
+			continue
+		}
+		endpoint := canonicalizeQdrantBackendURL(connection.Endpoint)
+		if endpoint == "" {
+			message := fmt.Sprintf("external Qdrant connection %d has an invalid endpoint", index)
+			res.PartialErrors = append(res.PartialErrors, message)
+			res.Summary.PartialFailures++
+			inventory.State = ingest.OutcomePartial
+			inventory.Error = appendInventoryError(inventory.Error, message)
+			continue
+		}
+		aggregated := byEndpoint[endpoint]
+		if id := strings.TrimSpace(connection.ID); id != "" {
+			aggregated.IDs = append(aggregated.IDs, id)
+		}
+		aggregated.AuthConfigured = aggregated.AuthConfigured || connection.AuthConfigured
+		byEndpoint[endpoint] = aggregated
+	}
+	endpoints := make([]string, 0, len(byEndpoint))
+	for endpoint := range byEndpoint {
+		endpoints = append(endpoints, endpoint)
+	}
+	sort.Strings(endpoints)
+	lastSeen := time.Now().UTC().Format(time.RFC3339)
+	emittedEndpoints := make([]string, 0, len(endpoints))
+	for _, endpoint := range endpoints {
+		if inventory.Items >= backendLimit {
+			message := fmt.Sprintf("backend inventory truncated at max_items=%d", backendLimit)
+			if !strings.Contains(inventory.Error, message) {
+				res.PartialErrors = append(res.PartialErrors, message)
+				res.Summary.PartialFailures++
+			}
+			inventory.State = ingest.OutcomeTruncated
+			inventory.Error = appendInventoryError(inventory.Error, message)
+			continue
+		}
+		inventory.Items++
+		emittedEndpoints = append(emittedEndpoints, endpoint)
+		connection := byEndpoint[endpoint]
+		sort.Strings(connection.IDs)
+		_, host, _ := action.EndpointParts(
+			action.Target{Kind: "url", Address: endpoint}, 6333, "http",
+		)
+		qdrantID := ingest.ComputeNodeID("QdrantInstance", endpoint)
+		configuredAuthMethod := string(common.AuthUnknown)
+		if connection.AuthConfigured {
+			configuredAuthMethod = string(common.AuthAPIKey)
+		}
+		res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, ingest.Node{
+			ID: qdrantID, Kinds: []string{"QdrantInstance", "AIService"},
+			Properties: map[string]any{
+				"objectid": qdrantID, "endpoint": endpoint, "name": host,
+				"service_kind": "qdrant", "configuration_observed": true,
+				"configured_auth_method": configuredAuthMethod,
+			},
+		})
+		res.IngestData.Graph.Edges = append(res.IngestData.Graph.Edges, ingest.Edge{
+			Source: openwebuiID, Target: qdrantID, Kind: "USES_BACKEND",
+			SourceKind: "OpenWebUIInstance", TargetKind: "QdrantInstance",
+			Properties: map[string]any{
+				"confidence": 1.0, "risk_weight": 0.3,
+				"evidence_state": string(ingest.EvidenceConfigured), "last_seen": lastSeen,
+				"evidence": map[string]any{
+					"source": "knowledge_external_connections", "endpoint": endpoint,
+					"connection_ids":  connection.IDs,
+					"auth_configured": connection.AuthConfigured,
+				},
+			},
+		})
+	}
+	if len(emittedEndpoints) > 0 {
+		res.IngestData.Graph.Nodes[0].Properties["qdrant_backend_urls"] = emittedEndpoints
+	}
+	return inventory
 }
 
 // runRetrievalWalk probes an admin-gated retrieval endpoint and runs
