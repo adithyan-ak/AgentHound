@@ -19,7 +19,7 @@ Local configuration, instruction, and credential collection always runs. One pos
 | `--deep` | `false` | Add bounded recursive and high-cost evidence collection. |
 | `--exclude <value>` | none | Exclude an exact hostname, IP, or CIDR; repeatable. |
 | `--insecure` | `false` | Skip TLS certificate verification. |
-| `--output <path>` | `scan-<scan_id>.json` | Write the artifact to a file. Directories and `-` are rejected. |
+| `--output <path>` | `scan-<scan_id>.json` | Write the artifact to a file, replacing an existing file at that path. Directories and `-` are rejected. |
 | `--quiet` | `false` | Suppress non-error progress, discovered-secret output, and instruction-signal excerpts. |
 | `--stealth` | `false` | Keep the scan read-only and disable credential reuse and active probes. |
 | `--timeout <duration>` | `15m` | Set the overall scan deadline. |
@@ -70,8 +70,13 @@ Starts the REST API and embedded dashboard after validating the PostgreSQL and N
 Ingests a complete JSON envelope from a file. `-` reads a complete envelope from standard input for automation.
 
 ```bash
-agenthound-server ingest scan-6c6306d5.json
+agenthound-server ingest scan.json
 ```
+
+A completed ingest prints the collector version, artifact contract, and running
+server version. Unsupported-contract errors include the same compatibility
+details, reject the artifact before database bootstrap or writes, and tell the
+operator to upgrade the server.
 
 ### `agenthound-server query`
 
