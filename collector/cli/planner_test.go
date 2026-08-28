@@ -402,6 +402,30 @@ func TestServiceCollectionRetainsPartialGraphButReturnsFailure(t *testing.T) {
 	}
 }
 
+func TestServiceCollectionScopesOnlyChildFactsToInventory(t *testing.T) {
+	root := ingest.CollectorRootCoverageKey("scan")
+	inventory := ingest.CanonicalCoverageKey("scan", "service_inventory", "qdrant\x00collections")
+	graph := ingest.GraphData{
+		Nodes: []ingest.Node{
+			{ID: "service", Kinds: []string{"QdrantInstance"}},
+			{ID: "collection", Kinds: []string{"VectorCollection"}},
+		},
+		Edges: []ingest.Edge{{
+			Source: "service", Target: "collection", Kind: "PROVIDES_RESOURCE",
+		}},
+	}
+	tagServiceCollectionGraph(&graph, "service", []string{root}, inventory)
+	if got := graph.Nodes[0].ObservationDomains; len(got) != 1 || got[0] != root {
+		t.Fatalf("service domains = %v, want scan root", got)
+	}
+	if got := graph.Nodes[1].ObservationDomains; len(got) != 1 || got[0] != inventory {
+		t.Fatalf("child domains = %v, want inventory surface", got)
+	}
+	if got := graph.Edges[0].ObservationDomains; len(got) != 1 || got[0] != inventory {
+		t.Fatalf("ownership edge domains = %v, want inventory surface", got)
+	}
+}
+
 func TestA2AActionRequiresSuccessfulTargetOutcome(t *testing.T) {
 	report := &ingest.CollectionReport{
 		State: ingest.OutcomeFailed,

@@ -179,7 +179,13 @@ func (a serviceCollectAction) Execute(ctx context.Context, candidate Candidate, 
 		inventoryError,
 	)
 	graph := result.IngestData.Graph
-	ingest.TagObservationDomain(&graph, inventory.CoverageKey)
+	serviceDomains := splitNonEmpty(candidate.Inputs["observation_domains"], "\x1f")
+	if len(serviceDomains) == 0 {
+		serviceDomains = []string{ingest.CollectorRootCoverageKey("scan")}
+	}
+	tagServiceCollectionGraph(
+		&graph, candidate.Inputs["node_id"], serviceDomains, inventory.CoverageKey,
+	)
 	plannerResult := Result{
 		Graph: graph, InventoryOutcomes: []ingest.CollectionOutcome{inventory},
 		Outcome: "collection_observed",
@@ -189,6 +195,31 @@ func (a serviceCollectAction) Execute(ctx context.Context, candidate Candidate, 
 		return plannerResult, collectionPartialError(candidate.ModuleID, result)
 	}
 	return plannerResult, nil
+}
+
+func tagServiceCollectionGraph(
+	graph *ingest.GraphData,
+	serviceID string,
+	serviceDomains []string,
+	inventoryDomain string,
+) {
+	if graph == nil {
+		return
+	}
+	for index := range graph.Nodes {
+		domains := []string{inventoryDomain}
+		if serviceID != "" && graph.Nodes[index].ID == serviceID {
+			domains = serviceDomains
+		}
+		graph.Nodes[index].ObservationDomains = ingest.MergeObservationDomains(
+			graph.Nodes[index].ObservationDomains, domains,
+		)
+	}
+	for index := range graph.Edges {
+		graph.Edges[index].ObservationDomains = ingest.MergeObservationDomains(
+			graph.Edges[index].ObservationDomains, []string{inventoryDomain},
+		)
+	}
 }
 
 func serviceInventoryOutcome(
