@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	pathpkg "path"
 	"strings"
 	"time"
 
@@ -40,7 +41,7 @@ func (l *Collector) Collect(
 	target action.Target,
 	opts action.CollectOptions,
 ) (*action.CollectResult, error) {
-	_, host, port := action.EndpointParts(target, DefaultPort, "http")
+	_, host, _ := action.EndpointParts(target, DefaultPort, "http")
 	baseURL := action.EndpointBaseURL(target, DefaultPort, "http")
 	jupyterID := ingest.ComputeNodeID("JupyterServer", baseURL)
 
@@ -62,7 +63,12 @@ func (l *Collector) Collect(
 	}
 
 	client := common.NoRedirectClient(timeout)
-	res := &action.CollectResult{IngestData: &ingest.IngestData{}}
+	res := &action.CollectResult{
+		IngestData: &ingest.IngestData{},
+		Inventory: &action.InventoryResult{
+			Name: "contents", State: ingest.OutcomeFailed,
+		},
+	}
 
 	sessions, sessionsAccess, sessionsErr := fetchSessionsWithFallback(
 		ctx,
@@ -97,6 +103,7 @@ func (l *Collector) Collect(
 			fmt.Sprintf("api/contents: %v", contentsErr),
 		)
 		res.Summary.PartialFailures++
+		res.Inventory.Error = fmt.Sprintf("api/contents: %v", contentsErr)
 	}
 	if contentsTruncation.maxItems {
 		res.PartialErrors = append(
@@ -104,6 +111,11 @@ func (l *Collector) Collect(
 			fmt.Sprintf("api/contents: truncated at max_items=%d", maxItems),
 		)
 		res.Summary.PartialFailures++
+		res.Inventory.State = ingest.OutcomeTruncated
+		res.Inventory.Error = appendInventoryError(
+			res.Inventory.Error,
+			fmt.Sprintf("truncated at max_items=%d", maxItems),
+		)
 	}
 	if contentsTruncation.maxDepth {
 		res.PartialErrors = append(
@@ -111,6 +123,11 @@ func (l *Collector) Collect(
 			fmt.Sprintf("api/contents: truncated at max_depth=%d", maxDepth),
 		)
 		res.Summary.PartialFailures++
+		res.Inventory.State = ingest.OutcomeTruncated
+		res.Inventory.Error = appendInventoryError(
+			res.Inventory.Error,
+			fmt.Sprintf("truncated at max_depth=%d", maxDepth),
+		)
 	}
 	for _, perDirectoryErr := range perDirErrs {
 		slog.Debug(
@@ -120,6 +137,16 @@ func (l *Collector) Collect(
 		)
 		res.PartialErrors = append(res.PartialErrors, perDirectoryErr)
 		res.Summary.PartialFailures++
+		if res.Inventory.State != ingest.OutcomeTruncated {
+			res.Inventory.State = ingest.OutcomePartial
+		}
+		res.Inventory.Error = appendInventoryError(res.Inventory.Error, perDirectoryErr)
+	}
+	res.Inventory.Items = len(notebooks)
+	if contentsErr == nil && !contentsTruncation.maxItems &&
+		!contentsTruncation.maxDepth && len(perDirErrs) == 0 {
+		res.Inventory.State = ingest.OutcomeComplete
+		res.Inventory.Error = ""
 	}
 
 	props := map[string]any{
@@ -142,18 +169,27 @@ func (l *Collector) Collect(
 		},
 	)
 
+	lastSeen := time.Now().UTC().Format(time.RFC3339)
 	for _, nb := range notebooks {
-		uri := fmt.Sprintf("jupyter://%s:%d/%s", host, port, nb.Path)
-		resID := ingest.ComputeNodeID("MCPResource", jupyterID, uri)
+		workspacePath := normalizeWorkspacePath(nb.Path)
+		if workspacePath == "" {
+			message := fmt.Sprintf("api/contents: entry %q has no usable path", nb.Name)
+			res.PartialErrors = append(res.PartialErrors, message)
+			res.Summary.PartialFailures++
+			res.Inventory.State = ingest.OutcomePartial
+			res.Inventory.Error = appendInventoryError(res.Inventory.Error, message)
+			continue
+		}
+		resID := ingest.ComputeNodeID("WorkspaceFile", jupyterID, workspacePath)
 		res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, ingest.Node{
 			ID:    resID,
-			Kinds: []string{"MCPResource"},
+			Kinds: []string{"WorkspaceFile"},
 			Properties: map[string]any{
 				"objectid":    resID,
-				"uri":         uri,
+				"path":        workspacePath,
 				"name":        nb.Name,
+				"entry_type":  nb.Type,
 				"mime_type":   nb.MimeType,
-				"uri_scheme":  "jupyter",
 				"sensitivity": "high",
 			},
 		})
@@ -163,13 +199,16 @@ func (l *Collector) Collect(
 				Target:     resID,
 				Kind:       "PROVIDES_RESOURCE",
 				SourceKind: "JupyterServer",
-				TargetKind: "MCPResource",
+				TargetKind: "WorkspaceFile",
 				Properties: map[string]any{
-					"confidence":  1.0,
-					"risk_weight": 0.2,
+					"confidence":     1.0,
+					"risk_weight":    0.2,
+					"evidence_state": string(ingest.EvidenceVerified),
+					"last_seen":      lastSeen,
 					"evidence": map[string]any{
 						"endpoint": baseURL,
 						"source":   "api/contents",
+						"path":     workspacePath,
 					},
 				},
 			})
@@ -181,6 +220,25 @@ func (l *Collector) Collect(
 		"per_directory_failures", len(perDirErrs),
 		"partial_failures", res.Summary.PartialFailures)
 	return res, nil
+}
+
+func normalizeWorkspacePath(raw string) string {
+	raw = strings.ReplaceAll(strings.TrimSpace(raw), "\\", "/")
+	if raw == "" {
+		return ""
+	}
+	cleaned := pathpkg.Clean("/" + strings.TrimLeft(raw, "/"))
+	return strings.TrimPrefix(cleaned, "/")
+}
+
+func appendInventoryError(current, next string) string {
+	if current == "" {
+		return next
+	}
+	if next == "" || strings.Contains(current, next) {
+		return current
+	}
+	return current + "; " + next
 }
 
 type accessEvidence struct {

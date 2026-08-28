@@ -23,6 +23,17 @@ describe("node evidence accessors", () => {
     ).toBe("Authorization");
   });
 
+  it("uses an explicit display name for versioned artifacts", () => {
+    expect(
+      displayName(
+        node(
+          { name: "fraud-detector", display_name: "fraud-detector:3" },
+          ["ModelArtifact"],
+        ),
+      ),
+    ).toBe("fraud-detector:3");
+  });
+
   it("requires affirmative evidence and renders local processes", () => {
     const unknown = node({});
     const unsupportedClaim = node({ auth_method: "none", auth_evidence: "unknown" });

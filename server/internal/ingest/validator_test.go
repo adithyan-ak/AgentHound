@@ -164,6 +164,91 @@ func TestValidatorTypedResourceRequiresExactPairAndEvidence(t *testing.T) {
 	}
 }
 
+func TestValidatorAcceptsJupyterAndMLflowTypedResources(t *testing.T) {
+	evidence := func(state string) map[string]any {
+		return map[string]any{
+			"risk_weight": 0.2, "confidence": 1.0, "evidence_state": state,
+			"last_seen": "2026-08-27T12:00:00Z",
+			"evidence":  map[string]any{"source": "collector"},
+		}
+	}
+	t.Run("Jupyter workspace file", func(t *testing.T) {
+		data := validIngestData()
+		scope := data.Meta.Collection.CoverageKeys[0]
+		serverID := "sha256:jupyter"
+		fileID := ingest.ComputeNodeID("WorkspaceFile", serverID, "work/demo.ipynb")
+		data.Graph.Nodes = []ingest.Node{
+			{
+				ID: serverID, Kinds: []string{"JupyterServer", "AIService"},
+				Properties:         map[string]any{"objectid": serverID, "endpoint": "http://jupyter:8888"},
+				ObservationDomains: []string{scope},
+			},
+			{
+				ID: fileID, Kinds: []string{"WorkspaceFile"},
+				Properties: map[string]any{
+					"objectid": fileID, "path": "work/demo.ipynb", "entry_type": "notebook",
+				},
+				ObservationDomains: []string{scope},
+			},
+		}
+		data.Graph.Edges = []ingest.Edge{{
+			Source: serverID, Target: fileID, Kind: "PROVIDES_RESOURCE",
+			SourceKind: "JupyterServer", TargetKind: "WorkspaceFile",
+			Properties: evidence("verified"), ObservationDomains: []string{scope},
+		}}
+		if err := NewValidator().Validate(data); err != nil {
+			t.Fatalf("valid WorkspaceFile graph rejected: %v", err)
+		}
+		data.Graph.Nodes[1].ID = "sha256:wrong"
+		data.Graph.Edges[0].Target = "sha256:wrong"
+		assertValidationError(t, NewValidator().Validate(data), "graph.edges[0].target")
+	})
+
+	t.Run("MLflow model artifact and store", func(t *testing.T) {
+		data := validIngestData()
+		scope := data.Meta.Collection.CoverageKeys[0]
+		serverID := "sha256:mlflow"
+		artifactID := ingest.ComputeNodeID("ModelArtifact", serverID, "fraud", "3")
+		storeID := ingest.ComputeNodeID("ArtifactStore", "s3://models")
+		data.Graph.Nodes = []ingest.Node{
+			{
+				ID: serverID, Kinds: []string{"MLflowServer", "AIService"},
+				Properties:         map[string]any{"objectid": serverID, "endpoint": "http://mlflow:5000"},
+				ObservationDomains: []string{scope},
+			},
+			{
+				ID: artifactID, Kinds: []string{"ModelArtifact"},
+				Properties:         map[string]any{"objectid": artifactID, "name": "fraud", "version": "3"},
+				ObservationDomains: []string{scope},
+			},
+			{
+				ID: storeID, Kinds: []string{"ArtifactStore"},
+				Properties:         map[string]any{"objectid": storeID, "root_uri": "s3://models"},
+				ObservationDomains: []string{scope},
+			},
+		}
+		data.Graph.Edges = []ingest.Edge{
+			{
+				Source: serverID, Target: artifactID, Kind: "PROVIDES_RESOURCE",
+				SourceKind: "MLflowServer", TargetKind: "ModelArtifact",
+				Properties: evidence("verified"), ObservationDomains: []string{scope},
+			},
+			{
+				Source: artifactID, Target: storeID, Kind: "STORED_IN",
+				SourceKind: "ModelArtifact", TargetKind: "ArtifactStore",
+				Properties: evidence("observed"), ObservationDomains: []string{scope},
+			},
+		}
+		if err := NewValidator().Validate(data); err != nil {
+			t.Fatalf("valid MLflow typed graph rejected: %v", err)
+		}
+		data.Graph.Nodes[1].ID = "sha256:wrong"
+		data.Graph.Edges[0].Target = "sha256:wrong"
+		data.Graph.Edges[1].Source = "sha256:wrong"
+		assertValidationError(t, NewValidator().Validate(data), "graph.edges[0].target")
+	})
+}
+
 func validInstructionEvidenceData(t *testing.T) *ingest.IngestData {
 	t.Helper()
 	data := validIngestData()

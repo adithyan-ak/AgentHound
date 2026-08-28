@@ -19,6 +19,8 @@ Concrete AI-service nodes also carry the `AIService` label. The umbrella label i
 
 `AIModel` is a model served by a runtime such as Ollama. A persisted MLflow model version is a `ModelArtifact`, not an `AIModel`. `VectorCollection` represents a Qdrant collection; bounded deep reads retain individual point references as `VectorPoint` without treating them as MCP resources. `WorkspaceFile` represents either a notebook or a regular file through its `entry_type` property.
 
+Resource identities use the owning service identity plus the resource's stable key: exact Qdrant collection name, normalized Jupyter workspace path, or MLflow registered-model name and immutable version. Mutable storage URIs never define `ModelArtifact` identity.
+
 ### Credential material
 
 | Property | Meaning |
@@ -74,6 +76,8 @@ Raw edges come from collectors or same-scan proof actions.
 `CREDENTIAL_ACCESS_OBSERVED` connects a Credential to the exact MCPResource read successfully after the anonymous control was denied. `PUBLIC_ACCESS_OBSERVED` connects the MCPServer to a resource read anonymously. Both are supporting evidence rather than general traversal shortcuts.
 
 `PROVIDES_RESOURCE` retains historical service-to-`MCPResource` variants for V1 artifacts. New collection emits typed pairs: QdrantInstance→VectorCollection, VectorCollection→VectorPoint, JupyterServer→WorkspaceFile, and MLflowServer→ModelArtifact. `USES_BACKEND` records an explicit service dependency; `STORED_IN` records a model artifact's reported physical store.
+
+`ArtifactStore` is created only for a safely canonicalized physical root such as a cloud bucket, container, filesystem, DBFS root, or HDFS authority. Local filesystem and DBFS roots are scoped to their owning MLflow service. Indirect `models:`, `runs:`, and `mlflow-artifacts:` locators remain sanitized `ModelArtifact` metadata and do not create a store node.
 
 New typed-resource and backend edges include `evidence_state`: `configured` proves only that the source contains the reference, `observed` means the source API reported it, and `verified` requires authoritative enumeration or a bounded request through the source. Probing a destination separately does not upgrade a configured backend relationship.
 

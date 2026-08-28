@@ -44,6 +44,34 @@ export function getPropertyChips(kind: string, properties: Record<string, unknow
       chips.push(typeof sensitivity === "string" ? sensitivity : "unknown");
       break;
     }
+    case "VectorCollection": {
+      const pointCount = properties.point_count;
+      if (typeof pointCount === "number") chips.push(`${pointCount} points`);
+      const sensitivity = properties.sensitivity;
+      if (typeof sensitivity === "string") chips.push(sensitivity);
+      break;
+    }
+    case "WorkspaceFile": {
+      const entryType = properties.entry_type;
+      if (typeof entryType === "string") chips.push(entryType);
+      const mimeType = properties.mime_type;
+      if (typeof mimeType === "string" && mimeType !== "") chips.push(mimeType);
+      break;
+    }
+    case "ModelArtifact": {
+      const version = properties.version;
+      if (typeof version === "string") chips.push(`v${version}`);
+      const scheme = properties.storage_scheme;
+      if (typeof scheme === "string" && scheme !== "") chips.push(`${scheme}://`);
+      break;
+    }
+    case "ArtifactStore": {
+      const provider = properties.provider;
+      if (typeof provider === "string") chips.push(provider);
+      const scope = properties.scope;
+      if (typeof scope === "string") chips.push(scope);
+      break;
+    }
     case "Host": {
       const hostname = properties.hostname;
       if (typeof hostname === "string") chips.push(hostname);
