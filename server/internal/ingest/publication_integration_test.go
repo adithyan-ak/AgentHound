@@ -756,6 +756,7 @@ func TestIntegrationProbeContractRetiresOnlyExactCoverageKey(t *testing.T) {
 
 func TestIntegrationServiceInventoryPreservesThenRetiresLegacyResources(t *testing.T) {
 	ctx, pipeline, db, _, _ := publicationIntegrationHarness(t, false)
+	identity := testCollectionIdentity()
 	root := sdkingest.CollectorRootCoverageKey("scan")
 	endpoint := "http://qdrant:6333"
 	qdrantID := sdkingest.ComputeNodeID("QdrantInstance", endpoint)
@@ -817,8 +818,11 @@ func TestIntegrationServiceInventoryPreservesThenRetiresLegacyResources(t *testi
 		})
 		return graphData
 	}
-	present := func(id string) bool {
+	present := func(rawID string) bool {
 		t.Helper()
+		id := sdkingest.ScopedNodeID(
+			sdkingest.ScopeNetworkContext, identity.NetworkContextID, rawID,
+		)
 		node, _, err := db.GetNode(ctx, id)
 		if err != nil {
 			t.Fatalf("query node %s: %v", id, err)
