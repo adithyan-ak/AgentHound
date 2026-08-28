@@ -59,3 +59,29 @@ describe("authentication property chips", () => {
     expect(chips).not.toContain("auth-unknown");
   });
 });
+
+describe("typed resource property chips", () => {
+  it("shows the stable distinguishing metadata", () => {
+    expect(
+      getPropertyChips("VectorCollection", {
+        point_count: 1200,
+        sensitivity: "high",
+      }),
+    ).toEqual(["1200 points", "high"]);
+    expect(
+      getPropertyChips("WorkspaceFile", {
+        entry_type: "notebook",
+        mime_type: "application/x-ipynb+json",
+      }),
+    ).toEqual(["notebook", "application/x-ipynb+json"]);
+    expect(
+      getPropertyChips("ModelArtifact", {
+        version: "3",
+        storage_scheme: "s3",
+      }),
+    ).toEqual(["v3", "s3://"]);
+    expect(
+      getPropertyChips("ArtifactStore", { provider: "s3", scope: "remote" }),
+    ).toEqual(["s3", "remote"]);
+  });
+});
