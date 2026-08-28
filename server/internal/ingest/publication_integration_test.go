@@ -1031,6 +1031,112 @@ func TestIntegrationTypedResourceMigrationKeepsHistoricalScan(t *testing.T) {
 	}
 }
 
+func TestIntegrationOpenWebUIBackendReplacementWaitsForCompleteInventory(t *testing.T) {
+	ctx, pipeline, db, _, _ := publicationIntegrationHarness(t, false)
+	root := sdkingest.CollectorRootCoverageKey("scan")
+	openwebuiEndpoint := "http://openwebui:3000"
+	ollamaEndpoint := "http://ollama:11434"
+	openwebuiID := sdkingest.ComputeNodeID("OpenWebUIInstance", openwebuiEndpoint)
+	ollamaID := sdkingest.ComputeNodeID("OllamaInstance", ollamaEndpoint)
+	inventory := sdkingest.CanonicalCoverageKey(
+		"scan", "service_inventory", "openwebui.collect\x00"+openwebuiID+"\x00configuration",
+	)
+
+	report := func(rootState, inventoryState sdkingest.OutcomeState) *sdkingest.CollectionReport {
+		outcomes := []sdkingest.CollectionOutcome{{
+			Collector: "scan", CoverageKey: root, Target: "scan", Method: "collect",
+			State: rootState,
+		}}
+		keys := []string{root}
+		if inventoryState != sdkingest.OutcomeUnknown {
+			keys = append(keys, inventory)
+			outcomes = append(outcomes, sdkingest.CollectionOutcome{
+				Collector: "scan", CoverageKey: inventory, ParentCoverageKey: root,
+				Target: openwebuiID, Method: "service_inventory:configuration", State: inventoryState,
+			})
+		}
+		return &sdkingest.CollectionReport{
+			State: sdkingest.AggregateOutcomeState(outcomes), CoverageKeys: keys, Outcomes: outcomes,
+		}
+	}
+	serviceNodes := func(scope string) []sdkingest.Node {
+		return []sdkingest.Node{
+			{
+				ID: openwebuiID, Kinds: []string{"OpenWebUIInstance", "AIService"},
+				Properties: map[string]any{
+					"objectid": openwebuiID, "name": "openwebui", "endpoint": openwebuiEndpoint,
+				},
+				ObservationDomains: []string{scope},
+			},
+			{
+				ID: ollamaID, Kinds: []string{"OllamaInstance", "AIService"},
+				Properties: map[string]any{
+					"objectid": ollamaID, "name": "ollama", "endpoint": ollamaEndpoint,
+				},
+				ObservationDomains: []string{scope},
+			},
+		}
+	}
+	legacyGraph := sdkingest.GraphData{
+		Nodes: serviceNodes(root),
+		Edges: []sdkingest.Edge{{
+			Source: openwebuiID, Target: ollamaID, Kind: "EXPOSES",
+			SourceKind: "OpenWebUIInstance", TargetKind: "OllamaInstance",
+			Properties: map[string]any{"risk_weight": 0.3}, ObservationDomains: []string{root},
+		}},
+	}
+	typedGraph := func() sdkingest.GraphData {
+		return sdkingest.GraphData{
+			Nodes: serviceNodes(inventory),
+			Edges: []sdkingest.Edge{{
+				Source: openwebuiID, Target: ollamaID, Kind: "USES_BACKEND",
+				SourceKind: "OpenWebUIInstance", TargetKind: "OllamaInstance",
+				Properties: map[string]any{
+					"risk_weight": 0.3, "confidence": 1.0,
+					"evidence_state": "configured", "last_seen": "2026-08-27T12:00:00Z",
+					"evidence": map[string]any{"source": "ollama_config"},
+				},
+				ObservationDomains: []string{inventory},
+			}},
+		}
+	}
+	ingestArtifact := func(scanID string, collection *sdkingest.CollectionReport, graphData sdkingest.GraphData) {
+		t.Helper()
+		data := newPublicationIntegrationData("scan", scanID)
+		data.Meta.Collection = collection
+		data.Graph = graphData
+		if _, err := pipeline.Ingest(ctx, data); err != nil {
+			t.Fatalf("ingest %s: %v", scanID, err)
+		}
+	}
+	edgeCount := func(kind string) int64 {
+		t.Helper()
+		rows, err := db.Query(ctx, `MATCH ()-[r]->() WHERE type(r) = $kind RETURN count(r) AS count`, map[string]any{
+			"kind": kind,
+		})
+		if err != nil {
+			t.Fatalf("query %s edges: %v", kind, err)
+		}
+		count, _ := int64Property(rows[0], "count")
+		return count
+	}
+
+	ingestArtifact("openwebui-backend-legacy", report(sdkingest.OutcomeComplete, sdkingest.OutcomeUnknown), legacyGraph)
+	if edgeCount("EXPOSES") != 1 {
+		t.Fatal("legacy EXPOSES edge was not written")
+	}
+
+	ingestArtifact("openwebui-backend-partial", report(sdkingest.OutcomePartial, sdkingest.OutcomePartial), typedGraph())
+	if edgeCount("EXPOSES") != 1 || edgeCount("USES_BACKEND") != 1 {
+		t.Fatal("partial replacement did not preserve legacy edge and write typed edge")
+	}
+
+	ingestArtifact("openwebui-backend-complete", report(sdkingest.OutcomeComplete, sdkingest.OutcomeComplete), typedGraph())
+	if edgeCount("EXPOSES") != 0 || edgeCount("USES_BACKEND") != 1 {
+		t.Fatal("complete replacement did not retire legacy edge after writing typed edge")
+	}
+}
+
 func TestIntegrationExhaustiveRootRemovesMissingChildAcrossGraphAndPublication(t *testing.T) {
 	ctx, pipeline, db, _, pool := freshPublicationIntegrationHarness(t)
 	root := sdkingest.CanonicalCoverageKey("mcp", "root", "collect")

@@ -1,16 +1,10 @@
 package openwebuicollect
 
-import (
-	"fmt"
-	"net/url"
-	"strconv"
-	"strings"
-)
+import "github.com/adithyan-ak/agenthound/sdk/action"
 
-// canonicalizeBackendURL normalizes a captured backend URL to
-// "scheme://host:port" (no path, no query). Returns empty when the
-// input is unparseable so the caller skips the emission rather than
-// producing a junk endpoint.
+// canonicalizeBackendURL applies the same endpoint identity used by Ollama's
+// direct collectors. Absolute URLs use ordinary HTTP effective ports; the
+// Ollama default applies only to host-shaped values.
 //
 // Open WebUI's OLLAMA_BASE_URLS entries may lack a scheme (Open WebUI
 // stores host:port in some flows) — we default to http:// so url.Parse
@@ -24,29 +18,21 @@ import (
 // canonicalizes each entry before emitting placeholder OllamaInstance
 // nodes.
 func canonicalizeBackendURL(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
+	canonical, err := action.CanonicalEndpointIdentity(
+		action.Target{Kind: "url", Address: raw}, 11434, "http",
+	)
+	if err != nil {
 		return ""
 	}
-	if !strings.Contains(raw, "://") {
-		raw = "http://" + raw
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
+	return canonical
+}
+
+func canonicalizeQdrantBackendURL(raw string) string {
+	canonical, err := action.CanonicalEndpointIdentity(
+		action.Target{Kind: "url", Address: raw}, 6333, "http",
+	)
+	if err != nil {
 		return ""
 	}
-	host := u.Hostname()
-	port := u.Port()
-	if port == "" {
-		// Default Ollama port — matches what ollamafp uses for objectid.
-		port = "11434"
-	}
-	if _, err := strconv.Atoi(port); err != nil {
-		return ""
-	}
-	scheme := u.Scheme
-	if scheme == "" {
-		scheme = "http"
-	}
-	return fmt.Sprintf("%s://%s:%s", scheme, host, port)
+	return canonical
 }

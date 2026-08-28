@@ -35,12 +35,13 @@ type stubRoute struct {
 
 // openwebuiStubOptions configures which endpoints the stub serves.
 type openwebuiStubOptions struct {
-	apiKey             string
-	config             string
-	openaiConfig       string
-	ollamaConfig       string
-	retrievalConfig    string
-	retrievalEmbedding string
+	apiKey              string
+	config              string
+	openaiConfig        string
+	ollamaConfig        string
+	retrievalConfig     string
+	retrievalEmbedding  string
+	externalConnections string
 	// If not nil, override with explicit status codes for specific paths.
 	overrides map[string]stubRoute
 	// Tracks all (method, path) pairs the stub sees.
@@ -77,29 +78,35 @@ func openwebuiStub(t *testing.T, opts openwebuiStubOptions) *httptest.Server {
 			}
 			_, _ = w.Write([]byte(body))
 		case "/openai/config":
-			if opts.openaiConfig == "" {
-				w.WriteHeader(404)
-				return
+			body := opts.openaiConfig
+			if body == "" {
+				body = `{}`
 			}
-			_, _ = w.Write([]byte(opts.openaiConfig))
+			_, _ = w.Write([]byte(body))
 		case "/ollama/config":
-			if opts.ollamaConfig == "" {
-				w.WriteHeader(404)
-				return
+			body := opts.ollamaConfig
+			if body == "" {
+				body = `{}`
 			}
-			_, _ = w.Write([]byte(opts.ollamaConfig))
+			_, _ = w.Write([]byte(body))
 		case "/api/v1/retrieval/config":
-			if opts.retrievalConfig == "" {
-				w.WriteHeader(404)
-				return
+			body := opts.retrievalConfig
+			if body == "" {
+				body = `{}`
 			}
-			_, _ = w.Write([]byte(opts.retrievalConfig))
+			_, _ = w.Write([]byte(body))
 		case "/api/v1/retrieval/embedding":
-			if opts.retrievalEmbedding == "" {
-				w.WriteHeader(404)
-				return
+			body := opts.retrievalEmbedding
+			if body == "" {
+				body = `{}`
 			}
-			_, _ = w.Write([]byte(opts.retrievalEmbedding))
+			_, _ = w.Write([]byte(body))
+		case "/api/v1/knowledge/external/connections":
+			body := opts.externalConnections
+			if body == "" {
+				body = `{"items":[],"total":0}`
+			}
+			_, _ = w.Write([]byte(body))
 		default:
 			w.WriteHeader(404)
 		}
@@ -274,6 +281,9 @@ func TestCollect_OpenWebUI_AnonymousPosture(t *testing.T) {
 	if got := len(res.IngestData.Graph.Edges); got != 0 {
 		t.Errorf("edges: got %d, want 0 in anonymous mode", got)
 	}
+	if res.Inventory == nil || res.Inventory.Name != "configuration" || res.Inventory.State != ingest.OutcomeFailed {
+		t.Fatalf("anonymous backend inventory = %+v, want failed until admin config is read", res.Inventory)
+	}
 }
 
 // TestCollect_OpenWebUI_AuthenticatedCredentials — /openai/config path
@@ -433,7 +443,7 @@ func TestCollect_OpenWebUI_AuthRejected(t *testing.T) {
 	if res.Summary.CredentialsFound != 0 {
 		t.Errorf("CredentialsFound = %d, want 0 when auth rejected", res.Summary.CredentialsFound)
 	}
-	// Four authenticated probes all 401 → 4 partial failures.
+	// Authenticated probes all return 401 and remain non-fatal journal evidence.
 	if res.Summary.PartialFailures < 1 {
 		t.Errorf("PartialFailures = %d, want at least 1", res.Summary.PartialFailures)
 	}
@@ -441,7 +451,7 @@ func TestCollect_OpenWebUI_AuthRejected(t *testing.T) {
 
 // TestCollect_OpenWebUI_OllamaConfig_KeyField — the primary shape:
 // OLLAMA_API_CONFIGS keyed by string index, per-URL config uses `key`.
-// Asserts 1 Credential + 1 :OllamaInstance placeholder + 1 :EXPOSES
+// Asserts 1 Credential + 1 :OllamaInstance placeholder + 1 :USES_BACKEND
 // edge + canonicalized backend URL list.
 func TestCollect_OpenWebUI_OllamaConfig_KeyField(t *testing.T) {
 	const key = "admin-jwt"
@@ -460,7 +470,7 @@ func TestCollect_OpenWebUI_OllamaConfig_KeyField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	var credCount, ollamaCount, exposesCount int
+	var credCount, ollamaCount, backendEdgeCount int
 	for _, n := range res.IngestData.Graph.Nodes {
 		switch n.Kinds[0] {
 		case "Credential":
@@ -497,22 +507,168 @@ func TestCollect_OpenWebUI_OllamaConfig_KeyField(t *testing.T) {
 	}
 	for _, e := range res.IngestData.Graph.Edges {
 		if e.Kind == "EXPOSES" {
-			exposesCount++
+			t.Fatalf("collector emitted deprecated Open WebUI backend edge: %+v", e)
+		}
+		if e.Kind == "USES_BACKEND" {
+			backendEdgeCount++
 			if e.SourceKind != "OpenWebUIInstance" || e.TargetKind != "OllamaInstance" {
-				t.Errorf("EXPOSES edge kinds = %s -> %s", e.SourceKind, e.TargetKind)
+				t.Errorf("USES_BACKEND edge kinds = %s -> %s", e.SourceKind, e.TargetKind)
 			}
-			if e.Properties["assertion_type"] != "configured_reference" ||
-				e.Properties["confidence_scope"] != "configuration_presence" {
+			if e.Properties["evidence_state"] != "configured" {
 				t.Errorf("configured edge overclaimed verification: %+v", e.Properties)
 			}
 		}
 	}
-	if exposesCount != 1 {
-		t.Errorf("EXPOSES edge count = %d, want 1", exposesCount)
+	if backendEdgeCount != 1 {
+		t.Errorf("USES_BACKEND edge count = %d, want 1", backendEdgeCount)
 	}
 	urls, _ := res.IngestData.Graph.Nodes[0].Properties["ollama_backend_urls"].([]string)
 	if len(urls) != 1 || urls[0] != "http://10.0.0.5:11434" {
 		t.Errorf("ollama_backend_urls = %v, want [http://10.0.0.5:11434]", urls)
+	}
+	if res.Inventory == nil || res.Inventory.State != ingest.OutcomeComplete || res.Inventory.Items != 1 {
+		t.Fatalf("backend inventory = %+v, want complete with one Ollama backend", res.Inventory)
+	}
+}
+
+func TestCollect_OpenWebUI_EnabledQdrantBackendIsTypedAndRedacted(t *testing.T) {
+	const key = "admin-jwt"
+	srv := openwebuiStub(t, openwebuiStubOptions{
+		apiKey:       key,
+		ollamaConfig: `{}`,
+		externalConnections: `{
+			"items":[
+				{"id":"q-1","provider":"qdrant","endpoint":"qdrant","enabled":true,"auth_configured":true,"auth_config":{"api_key":"must-not-leak"}},
+				{"id":"q-2","provider":"QDRANT","endpoint":"http://QDRANT:6333/","enabled":true,"auth_configured":false},
+				{"id":"q-disabled","provider":"qdrant","endpoint":"http://disabled:6333","enabled":false,"auth_configured":false},
+				{"id":"milvus","provider":"milvus","endpoint":"http://milvus:19530","enabled":true,"auth_configured":false}
+			],
+			"total":4
+		}`,
+	})
+	defer srv.Close()
+
+	res, err := (&Collector{}).Collect(context.Background(), action.Target{
+		Kind: "host", Address: addrOf(srv),
+	}, action.CollectOptions{Extras: map[string]any{"api-key": key}})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	qdrantID := ingest.ComputeNodeID("QdrantInstance", "http://qdrant:6333")
+	var qdrantNodes, backendEdges int
+	for _, node := range res.IngestData.Graph.Nodes {
+		if node.Kinds[0] != "QdrantInstance" {
+			continue
+		}
+		qdrantNodes++
+		if node.ID != qdrantID || node.Properties["endpoint"] != "http://qdrant:6333" {
+			t.Errorf("Qdrant identity = %+v", node)
+		}
+		if node.Properties["configured_auth_method"] != "apiKey" {
+			t.Errorf("aggregated auth posture = %+v", node.Properties)
+		}
+	}
+	for _, edge := range res.IngestData.Graph.Edges {
+		if edge.Kind == "EXPOSES" {
+			t.Fatalf("collector emitted deprecated Open WebUI backend edge: %+v", edge)
+		}
+		if edge.Kind != "USES_BACKEND" || edge.TargetKind != "QdrantInstance" {
+			continue
+		}
+		backendEdges++
+		if edge.SourceKind != "OpenWebUIInstance" || edge.Target != qdrantID ||
+			edge.Properties["evidence_state"] != "configured" {
+			t.Errorf("Qdrant backend edge = %+v", edge)
+		}
+	}
+	if qdrantNodes != 1 || backendEdges != 1 {
+		t.Fatalf("Qdrant topology = nodes:%d edges:%d, want one converged path", qdrantNodes, backendEdges)
+	}
+	if res.Inventory == nil || res.Inventory.State != ingest.OutcomeComplete || res.Inventory.Items != 1 {
+		t.Fatalf("backend inventory = %+v, want complete one-backend surface", res.Inventory)
+	}
+	encoded, err := json.Marshal(res.IngestData.Graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "must-not-leak") || credCount(res) != 0 {
+		t.Fatalf("external backend credential leaked into graph: %s", encoded)
+	}
+}
+
+func TestCollect_OpenWebUI_IncompleteExternalConnectionsStayNonAuthoritative(t *testing.T) {
+	const key = "admin-jwt"
+	srv := openwebuiStub(t, openwebuiStubOptions{
+		apiKey:       key,
+		ollamaConfig: `{}`,
+		externalConnections: `{
+			"items":[{"id":"q-1","provider":"qdrant","endpoint":"http://qdrant:6333","enabled":true}],
+			"total":2
+		}`,
+	})
+	defer srv.Close()
+	res, err := (&Collector{}).Collect(context.Background(), action.Target{
+		Address: addrOf(srv),
+	}, action.CollectOptions{Extras: map[string]any{"api-key": key}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Inventory == nil || res.Inventory.State != ingest.OutcomePartial {
+		t.Fatalf("incomplete response inventory = %+v, want partial", res.Inventory)
+	}
+}
+
+func TestCollect_OpenWebUI_ConfigurationFailurePreventsAuthoritativeInventory(t *testing.T) {
+	const key = "admin-jwt"
+	srv := openwebuiStub(t, openwebuiStubOptions{
+		apiKey:       key,
+		ollamaConfig: `{"OLLAMA_BASE_URLS":["http://ollama:11434"]}`,
+		overrides: map[string]stubRoute{
+			"/api/v1/retrieval/config": {status: http.StatusInternalServerError},
+		},
+	})
+	defer srv.Close()
+	res, err := (&Collector{}).Collect(context.Background(), action.Target{
+		Address: addrOf(srv),
+	}, action.CollectOptions{Extras: map[string]any{"api-key": key}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Inventory == nil || res.Inventory.State != ingest.OutcomePartial {
+		t.Fatalf("failed configuration read inventory = %+v, want partial", res.Inventory)
+	}
+}
+
+func TestCollect_OpenWebUI_BackendLimitReportsTruncation(t *testing.T) {
+	const key = "admin-jwt"
+	srv := openwebuiStub(t, openwebuiStubOptions{
+		apiKey: key,
+		externalConnections: `{
+			"items":[
+				{"id":"q-1","provider":"qdrant","endpoint":"http://qdrant-a:6333","enabled":true},
+				{"id":"q-2","provider":"qdrant","endpoint":"http://qdrant-b:6333","enabled":true}
+			],
+			"total":2
+		}`,
+	})
+	defer srv.Close()
+	res, err := (&Collector{}).Collect(context.Background(), action.Target{
+		Address: addrOf(srv),
+	}, action.CollectOptions{MaxItems: 1, Extras: map[string]any{"api-key": key}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Inventory == nil || res.Inventory.State != ingest.OutcomeTruncated || res.Inventory.Items != 1 {
+		t.Fatalf("bounded configuration inventory = %+v, want one emitted item and truncated", res.Inventory)
+	}
+	var qdrantNodes int
+	for _, node := range res.IngestData.Graph.Nodes {
+		if node.Kinds[0] == "QdrantInstance" {
+			qdrantNodes++
+		}
+	}
+	if qdrantNodes != 1 {
+		t.Fatalf("Qdrant nodes = %d, want bounded emission of one", qdrantNodes)
 	}
 }
 
@@ -802,15 +958,14 @@ func TestCollect_OpenWebUI_RetrievalRerankingRouteAbsent(t *testing.T) {
 	}
 }
 
-// TestCanonicalizeBackendURL exercises the URL normalizer that used to
-// live in openwebuifp. Ported verbatim from the fingerprinter test.
+// TestCanonicalizeBackendURL locks in effective HTTP-port identity.
 func TestCanonicalizeBackendURL(t *testing.T) {
 	tests := []struct {
 		input string
 		want  string
 	}{
 		{"http://ollama:11434", "http://ollama:11434"},
-		{"https://ollama.example.com", "https://ollama.example.com:11434"},
+		{"https://ollama.example.com", "https://ollama.example.com"},
 		{"ollama-backend:11434", "http://ollama-backend:11434"},
 		{"ollama-backend", "http://ollama-backend:11434"},
 		{"", ""},
@@ -822,6 +977,30 @@ func TestCanonicalizeBackendURL(t *testing.T) {
 				t.Errorf("canonicalizeBackendURL(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCanonicalizeQdrantBackendURLUsesEffectivePorts(t *testing.T) {
+	tests := []struct {
+		left, right string
+		equal       bool
+	}{
+		{left: "qdrant", right: "qdrant:6333", equal: true},
+		{left: "http://qdrant", right: "http://qdrant:80", equal: true},
+		{left: "https://qdrant", right: "https://qdrant:443", equal: true},
+		{left: "http://qdrant", right: "http://qdrant:6333", equal: false},
+	}
+	for _, tc := range tests {
+		left := canonicalizeQdrantBackendURL(tc.left)
+		right := canonicalizeQdrantBackendURL(tc.right)
+		if (left == right) != tc.equal {
+			t.Errorf("canonical endpoints %q and %q equality = %t, want %t", left, right, left == right, tc.equal)
+		}
+		leftID := ingest.ComputeNodeID("QdrantInstance", left)
+		rightID := ingest.ComputeNodeID("QdrantInstance", right)
+		if (leftID == rightID) != tc.equal {
+			t.Errorf("Qdrant IDs for %q and %q equality = %t, want %t", tc.left, tc.right, leftID == rightID, tc.equal)
+		}
 	}
 }
 

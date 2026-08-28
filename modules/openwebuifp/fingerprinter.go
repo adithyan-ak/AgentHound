@@ -10,9 +10,9 @@
 // OllamaInstance. The old edge was fenced on capturing $.ollama.base_url
 // from /api/config, but that field is verified absent from Open WebUI's
 // get_app_config response on every tag from v0.1.111 through v0.9.6 (and
-// main), so the edge never fired in practice. The authenticated
-// The Open WebUI service collector emits the EXPOSES edge from the admin-gated
-// /ollama/config endpoint (which does return OLLAMA_BASE_URLS).
+// main), so the edge never fired in practice. The authenticated Open WebUI
+// service collector now emits USES_BACKEND from the admin-gated configuration
+// endpoints. EXPOSES remains ingest-compatible only for historical artifacts.
 package openwebuifp
 
 import (

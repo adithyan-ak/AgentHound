@@ -75,7 +75,7 @@ Raw edges come from collectors or same-scan proof actions.
 
 `CREDENTIAL_ACCESS_OBSERVED` connects a Credential to the exact MCPResource read successfully after the anonymous control was denied. `PUBLIC_ACCESS_OBSERVED` connects the MCPServer to a resource read anonymously. Both are supporting evidence rather than general traversal shortcuts.
 
-`PROVIDES_RESOURCE` retains historical service-to-`MCPResource` variants for V1 artifacts. New collection emits typed pairs: QdrantInstance→VectorCollection, VectorCollection→VectorPoint, JupyterServer→WorkspaceFile, and MLflowServer→ModelArtifact. `USES_BACKEND` records an explicit service dependency; `STORED_IN` records a model artifact's reported physical store.
+`PROVIDES_RESOURCE` retains historical service-to-`MCPResource` variants for V1 artifacts. New collection emits typed pairs: QdrantInstance→VectorCollection, VectorCollection→VectorPoint, JupyterServer→WorkspaceFile, and MLflowServer→ModelArtifact. `USES_BACKEND` records an explicit service dependency; Open WebUI currently emits it for configured Ollama and enabled Qdrant backends. `STORED_IN` records a model artifact's reported physical store. `EXPOSES` remains accepted for historical V1 artifacts but is no longer emitted for Open WebUI backends.
 
 `ArtifactStore` is created only for a safely canonicalized physical root such as a cloud bucket, container, filesystem, DBFS root, or HDFS authority. Azure ABFS/WASB filesystem or container names are part of that root identity. Object-store key paths are retained as reported rather than cleaned as local filesystem paths. Local filesystem and DBFS roots are scoped to their owning MLflow service. Indirect `models:`, `runs:`, and `mlflow-artifacts:` locators remain sanitized `ModelArtifact` metadata and do not create a store node.
 
@@ -119,7 +119,7 @@ The migrated resource kinds are not inputs to the existing finding processors, s
 
 ## Coverage and lifecycle
 
-Each collector reports outcomes such as `complete`, `partial`, `failed`, `truncated`, or `not_applicable`. Service resources belong to a stable service-instance inventory surface. Only a complete surface can reconcile its children; failed credential guesses, truncation, and partial traversal preserve earlier facts. The shared autonomous-scan root becomes complete only when every blocking inventory surface is complete.
+Each collector reports outcomes such as `complete`, `partial`, `failed`, `truncated`, or `not_applicable`. Service resources belong to a stable service-instance inventory surface. Only a complete surface can reconcile its children; failed credential guesses, truncation, and partial traversal preserve earlier facts. For Open WebUI, one authorized exhaustive configuration pass completes only that service's configuration surface and stops later credential guesses; earlier failed attempts remain journal evidence without downgrading it. The shared autonomous-scan root becomes complete only when every blocking inventory surface is complete.
 
 Composite analysis is rebuilt as one epoch after raw reconciliation. Published scan metadata records both submitted counts and the resulting graph totals.
 

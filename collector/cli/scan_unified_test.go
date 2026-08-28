@@ -143,6 +143,9 @@ func TestInventoryOutcomeSuccessDominatesFailedCredentialAttempts(t *testing.T) 
 	if !runtime.inventoryCoverageComplete() {
 		t.Fatal("authoritative success was downgraded by a failed guess")
 	}
+	if !runtime.completed[completedInventoryKey(key)] {
+		t.Fatal("complete Open WebUI inventory did not suppress later credential guesses")
+	}
 	var matches []ingest.CollectionOutcome
 	for _, outcome := range runtime.artifact.Meta.Collection.Outcomes {
 		if outcome.CoverageKey == key {

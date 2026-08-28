@@ -34,7 +34,7 @@ var serviceNodeKinds = map[string]string{
 }
 
 var serviceInventoryNames = map[string]string{
-	"litellm": "inventory", "openwebui": "backends", "jupyter": "contents",
+	"litellm": "inventory", "openwebui": "configuration", "jupyter": "contents",
 	"qdrant": "collections", "mlflow": "model_registry", "ollama": "models",
 }
 
@@ -51,6 +51,11 @@ func (a serviceCollectAction) Candidates(view View) []Candidate {
 			if !ok {
 				continue
 			}
+			inventoryName := serviceInventoryNames[service]
+			inventoryKey := serviceInventoryCoverageKey(mod.ID(), node.ID, inventoryName)
+			if service == "openwebui" && view.Completed[completedInventoryKey(inventoryKey)] {
+				continue
+			}
 			base := Candidate{
 				ModuleID: mod.ID(), Target: action.Target{
 					Kind: "url", Address: endpoint,
@@ -58,7 +63,7 @@ func (a serviceCollectAction) Candidates(view View) []Candidate {
 				},
 				Inputs: map[string]string{
 					"service": service, "node_id": node.ID,
-					"inventory_name":      serviceInventoryNames[service],
+					"inventory_name":      inventoryName,
 					"observation_domains": strings.Join(node.ObservationDomains, "\x1f"),
 				},
 			}
@@ -240,17 +245,23 @@ func serviceInventoryOutcome(
 	if serviceID == "" {
 		serviceID = canonicalTarget(candidate.Target.Address)
 	}
-	key := ingest.CanonicalCoverageKey(
-		"scan",
-		"service_inventory",
-		candidate.ModuleID+"\x00"+serviceID+"\x00"+name,
-	)
+	key := serviceInventoryCoverageKey(candidate.ModuleID, serviceID, name)
 	return ingest.CollectionOutcome{
 		Collector: "scan", CoverageKey: key,
 		ParentCoverageKey: ingest.CollectorRootCoverageKey("scan"),
 		Target:            serviceID, Method: "service_inventory:" + name,
 		State: state, Items: items, Error: errorText,
 	}
+}
+
+func serviceInventoryCoverageKey(moduleID, serviceID, name string) string {
+	return ingest.CanonicalCoverageKey(
+		"scan", "service_inventory", moduleID+"\x00"+serviceID+"\x00"+name,
+	)
+}
+
+func completedInventoryKey(coverageKey string) string {
+	return "service_inventory_complete\x00" + coverageKey
 }
 
 // ollamaEmbeddingAction is deliberately separate from ordinary Ollama

@@ -692,6 +692,12 @@ func (r *scanRuntime) mergeInventoryOutcome(outcome ingest.CollectionOutcome) {
 			r.artifact.Meta.Collection.Outcomes,
 		)
 	}()
+	if outcome.State == ingest.OutcomeComplete {
+		if r.completed == nil {
+			r.completed = make(map[string]bool)
+		}
+		r.completed[completedInventoryKey(outcome.CoverageKey)] = true
+	}
 	declared := false
 	for _, key := range r.artifact.Meta.Collection.CoverageKeys {
 		if key == outcome.CoverageKey {
