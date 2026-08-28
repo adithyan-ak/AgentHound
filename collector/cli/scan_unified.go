@@ -742,7 +742,7 @@ func (r *scanRuntime) inventoryCoverageComplete() bool {
 		if !strings.HasPrefix(outcome.Method, "service_inventory:") {
 			continue
 		}
-		if outcome.State != ingest.OutcomeComplete && outcome.State != ingest.OutcomeNotApplicable {
+		if outcome.State != ingest.OutcomeComplete {
 			return false
 		}
 	}

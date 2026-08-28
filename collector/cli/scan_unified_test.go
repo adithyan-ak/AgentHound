@@ -154,6 +154,30 @@ func TestInventoryOutcomeSuccessDominatesFailedCredentialAttempts(t *testing.T) 
 	}
 }
 
+func TestUnsupportedServiceInventoryDoesNotMakeRootAuthoritative(t *testing.T) {
+	root := ingest.CollectorRootCoverageKey("scan")
+	runtime := &scanRuntime{artifact: &ingest.IngestData{Meta: ingest.IngestMeta{
+		Collection: &ingest.CollectionReport{
+			State: ingest.OutcomePartial, CoverageKeys: []string{root},
+			Outcomes: []ingest.CollectionOutcome{{
+				Collector: "scan", CoverageKey: root, Method: "autonomous_scan",
+				State: ingest.OutcomePartial,
+			}},
+		},
+	}}}
+	runtime.mergeInventoryOutcome(ingest.CollectionOutcome{
+		Collector: "scan",
+		CoverageKey: ingest.CanonicalCoverageKey(
+			"scan", "service_inventory", "openwebui\x00node\x00backends",
+		),
+		ParentCoverageKey: root, Method: "service_inventory:backends",
+		State: ingest.OutcomeNotApplicable,
+	})
+	if runtime.inventoryCoverageComplete() {
+		t.Fatal("unsupported service inventory made the shared root authoritative")
+	}
+}
+
 func TestInstructionSignalOutputIsPathFirstAndQuietAware(t *testing.T) {
 	evidence, raw, err := sharedinstruction.MarshalBounded(
 		sharedinstruction.VerdictSignal,
