@@ -7,7 +7,7 @@
 //
 //	GET  /collections                            — list collection names
 //	GET  /collections/{name}                     — per-collection details (points_count, etc.)
-//	POST /collections/{name}/points/scroll       — paginated payload sampling (opt-in)
+//	POST /collections/{name}/points/scroll       — paginated point-reference sampling (opt-in)
 //
 // The GET-only default has ONE POST exception: /points/scroll, which
 // Qdrant's OpenAPI exposes only via POST. It is idempotent and
@@ -15,13 +15,9 @@
 // documented at openapi.json ScrollRequest:10273 / ScrollResult:10411.
 // The collector runs it only under the fixed deep-scan preset.
 //
-// Inventory emissions land as PROPERTIES on the existing
-// :QdrantInstance node (same objectid as qdrantfp via
-// ComputeNodeID("QdrantInstance", endpoint), so the writer's
-// MERGE-by-objectid fold enriches the fingerprinter's node rather than
-// duplicating it). Scrolled point payloads (in deep mode)
-// set) land as :MCPResource nodes joined to QdrantInstance via
-// PROVIDES_RESOURCE edges.
+// Each collection is represented once as :VectorCollection and joined to its
+// QdrantInstance via PROVIDES_RESOURCE. Deep mode retains its bounded point
+// references as :VectorPoint children without treating them as MCP resources.
 package qdrantcollect
 
 import (
@@ -37,7 +33,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
@@ -61,9 +56,8 @@ const (
 	// /points/scroll per collection under the deep preset.
 	DefaultPointsPerCollection = 100
 
-	// DefaultMaxTotalResources caps the global number of :MCPResource
-	// nodes the Collector will emit across all collections. Guards against
-	// runaway scrolling on large Qdrant deployments.
+	// DefaultMaxTotalResources caps the global number of point references
+	// retained across all collections.
 	DefaultMaxTotalResources = 5000
 
 	// scrollPageLimit is the per-request limit sent to /points/scroll.
@@ -77,9 +71,8 @@ type Collector struct{}
 
 // Collect probes a Qdrant REST API anonymously, listing collections and
 // their per-collection point counts, then folds an inventory summary
-// onto the existing QdrantInstance node. In deep mode,
-// additionally samples each collection's payloads via POST
-// /points/scroll and emits :MCPResource nodes.
+// onto the existing QdrantInstance node and emits one VectorCollection per
+// collection. Deep mode additionally records bounded point-sampling summaries.
 //
 // opts.Extras keys consumed by this Collector:
 //
@@ -88,7 +81,10 @@ type Collector struct{}
 //	"max-total-resources"    int   — global cap across all collections
 func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.CollectOptions) (*action.CollectResult, error) {
 	_, host, port := action.EndpointParts(t, DefaultPort, "http")
-	baseURL := action.EndpointBaseURL(t, DefaultPort, "http")
+	baseURL, err := action.CanonicalEndpointIdentity(t, DefaultPort, "http")
+	if err != nil {
+		return nil, fmt.Errorf("qdrant collection: canonical endpoint: %w", err)
+	}
 	qdrantID := ingest.ComputeNodeID("QdrantInstance", baseURL)
 
 	timeout := opts.Timeout
@@ -112,7 +108,12 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 
 	client := common.NoRedirectClient(timeout)
 
-	res := &action.CollectResult{IngestData: &ingest.IngestData{}}
+	res := &action.CollectResult{
+		IngestData: &ingest.IngestData{},
+		Inventory: &action.InventoryResult{
+			Name: "collections", State: ingest.OutcomeFailed,
+		},
+	}
 
 	res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, ingest.Node{
 		ID:    qdrantID,
@@ -127,7 +128,7 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 	})
 	res.Summary.EndpointsProbed++
 
-	names, err := fetchCollections(ctx, client, baseURL, maxItems)
+	names, truncated, err := fetchCollections(ctx, client, baseURL, maxItems)
 	res.Summary.EndpointsProbed++
 	if err != nil {
 		slog.Warn("qdrant collection: /collections failed",
@@ -135,11 +136,21 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 			"error", err)
 		res.PartialErrors = append(res.PartialErrors, fmt.Sprintf("collections: %v", err))
 		res.Summary.PartialFailures++
+		res.Inventory.Error = res.PartialErrors[len(res.PartialErrors)-1]
 		return res, nil
 	}
 	markAnonymousInventorySuccess(res.IngestData.Graph.Nodes[0].Properties)
 
 	sort.Strings(names)
+	res.Inventory.Items = len(names)
+	res.Inventory.State = ingest.OutcomeComplete
+	if truncated {
+		message := fmt.Sprintf("collections: truncated at max_items=%d", maxItems)
+		res.PartialErrors = append(res.PartialErrors, message)
+		res.Summary.PartialFailures++
+		res.Inventory.State = ingest.OutcomeTruncated
+		res.Inventory.Error = message
+	}
 
 	// Per-collection point-count fetches — bounded worker pool.
 	conc := DefaultCollectionConcurrency
@@ -174,9 +185,11 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 
 	var totalPoints int64
 	var pointsCountUnknown int
+	var pointDetailFailures int
 	for i := range names {
 		res.Summary.EndpointsProbed++
 		if detErrs[i] != "" {
+			pointDetailFailures++
 			slog.Debug("qdrant collection: collection detail failed",
 				"collection", names[i],
 				"error", detErrs[i])
@@ -196,17 +209,87 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 	props := res.IngestData.Graph.Nodes[0].Properties
 	props["collection_count"] = len(names)
 	props["collections"] = names
-	props["total_points"] = totalPoints
-	props["points_count_unknown"] = pointsCountUnknown
+	if pointDetailFailures == 0 && pointsCountUnknown == 0 {
+		props["total_points"] = totalPoints
+	} else {
+		res.IngestData.Graph.Nodes[0].PropertySemantics = ingest.NodePropertySemanticsPreserveOmissions
+	}
+	props["points_count_unknown"] = pointsCountUnknown + pointDetailFailures
 	props["anonymous_listing"] = true
 
+	collectionNodeIndex := make(map[string]int, len(names))
+	lastSeen := time.Now().UTC().Format(time.RFC3339)
+	for i, name := range names {
+		collectionID := ingest.ComputeNodeID("VectorCollection", qdrantID, name)
+		collectionProps := map[string]any{
+			"objectid": collectionID, "name": name,
+			"sensitivity": "high", "inventory_observed": true,
+		}
+		if detErrs[i] == "" && points[i] != nil {
+			collectionProps["point_count"] = *points[i]
+		}
+		collectionNodeIndex[name] = len(res.IngestData.Graph.Nodes)
+		collectionNode := ingest.Node{
+			ID: collectionID, Kinds: []string{"VectorCollection"}, Properties: collectionProps,
+		}
+		if detErrs[i] != "" || points[i] == nil || !includePoints {
+			collectionNode.PropertySemantics = ingest.NodePropertySemanticsPreserveOmissions
+		}
+		res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, collectionNode)
+		res.IngestData.Graph.Edges = append(res.IngestData.Graph.Edges, ingest.Edge{
+			Source: qdrantID, Target: collectionID, Kind: "PROVIDES_RESOURCE",
+			SourceKind: "QdrantInstance", TargetKind: "VectorCollection",
+			Properties: map[string]any{
+				"confidence": 1.0, "risk_weight": 0.2,
+				"evidence_state": string(ingest.EvidenceVerified), "last_seen": lastSeen,
+				"evidence": map[string]any{
+					"endpoint": baseURL, "source": "collections", "collection": name,
+				},
+			},
+		})
+	}
+
 	// Deep mode samples payloads via POST /points/scroll.
-	var scrolledResources int
+	var sampledPoints int
 	if includePoints && len(names) > 0 {
-		scrolledResources = scrollAllCollections(
-			ctx, client, res, opts, qdrantID, baseURL, host, port,
-			names, perCollectionCap, globalCap)
-		props["points_scrolled_resources"] = scrolledResources
+		samples := scrollAllCollections(
+			ctx, client, res, baseURL, host, port, names, perCollectionCap, globalCap,
+		)
+		for i, sample := range samples {
+			sampledPoints += sample.Count
+			collectionID := ingest.ComputeNodeID("VectorCollection", qdrantID, names[i])
+			node := &res.IngestData.Graph.Nodes[collectionNodeIndex[names[i]]]
+			node.Properties["sampled_point_count"] = sample.Count
+			node.Properties["sample_complete"] = sample.Complete
+			node.Properties["sample_limit"] = perCollectionCap
+			if !sample.Complete {
+				node.PropertySemantics = ingest.NodePropertySemanticsPreserveOmissions
+			}
+			for _, point := range sample.Points {
+				pointNodeID := ingest.ComputeNodeID("VectorPoint", collectionID, point.ID)
+				res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, ingest.Node{
+					ID: pointNodeID, Kinds: []string{"VectorPoint"},
+					Properties: map[string]any{
+						"objectid": pointNodeID, "name": names[i] + "/" + point.ID,
+						"point_id": point.ID, "uri": point.URI, "uri_scheme": "qdrant",
+						"sensitivity": "high",
+					},
+				})
+				res.IngestData.Graph.Edges = append(res.IngestData.Graph.Edges, ingest.Edge{
+					Source: collectionID, Target: pointNodeID, Kind: "PROVIDES_RESOURCE",
+					SourceKind: "VectorCollection", TargetKind: "VectorPoint",
+					Properties: map[string]any{
+						"confidence": 1.0, "risk_weight": 0.2,
+						"evidence_state": string(ingest.EvidenceVerified), "last_seen": lastSeen,
+						"evidence": map[string]any{
+							"endpoint": baseURL, "source": "points_scroll",
+							"collection": names[i], "point_id": point.ID,
+						},
+					},
+				})
+			}
+		}
+		props["points_sampled"] = sampledPoints
 	}
 
 	slog.Info("qdrant collection complete",
@@ -214,7 +297,7 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 		"collections", len(names),
 		"total_points", totalPoints,
 		"points_count_unknown", pointsCountUnknown,
-		"scrolled_resources", scrolledResources,
+		"sampled_points", sampledPoints,
 		"partial_failures", res.Summary.PartialFailures)
 
 	return res, nil
@@ -225,37 +308,37 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 // Parsing is defensive — a missing or empty result yields an empty
 // slice, not an error (an anonymous Qdrant with zero collections is
 // still a finding).
-func fetchCollections(ctx context.Context, client *http.Client, baseURL string, maxItems int) ([]string, error) {
+func fetchCollections(ctx context.Context, client *http.Client, baseURL string, maxItems int) ([]string, bool, error) {
 	body, err := common.GetJSON(ctx, client, strings.TrimRight(baseURL, "/")+"/collections", "", 4<<20)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var envelope struct {
 		Result json.RawMessage `json:"result"`
 		Status string          `json:"status"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, fmt.Errorf("decode /collections: %w", err)
+		return nil, false, fmt.Errorf("decode /collections: %w", err)
 	}
 	resultJSON := bytes.TrimSpace(envelope.Result)
 	if envelope.Status != "ok" || len(resultJSON) == 0 || resultJSON[0] != '{' {
-		return nil, errors.New("decode /collections: expected an ok result object")
+		return nil, false, errors.New("decode /collections: expected an ok result object")
 	}
 	var result struct {
 		Collections json.RawMessage `json:"collections"`
 	}
 	if err := json.Unmarshal(resultJSON, &result); err != nil {
-		return nil, fmt.Errorf("decode /collections result: %w", err)
+		return nil, false, fmt.Errorf("decode /collections result: %w", err)
 	}
 	collectionsJSON := bytes.TrimSpace(result.Collections)
 	if len(collectionsJSON) == 0 || collectionsJSON[0] != '[' {
-		return nil, errors.New("decode /collections: expected a collections array")
+		return nil, false, errors.New("decode /collections: expected a collections array")
 	}
 	var collections []struct {
 		Name string `json:"name"`
 	}
 	if err := json.Unmarshal(collectionsJSON, &collections); err != nil {
-		return nil, fmt.Errorf("decode /collections array: %w", err)
+		return nil, false, fmt.Errorf("decode /collections array: %w", err)
 	}
 	out := make([]string, 0, len(collections))
 	for _, c := range collections {
@@ -267,7 +350,7 @@ func fetchCollections(ctx context.Context, client *http.Client, baseURL string, 
 			break
 		}
 	}
-	return out, nil
+	return out, len(collections) > len(out), nil
 }
 
 func markAnonymousInventorySuccess(props map[string]any) {
@@ -300,28 +383,31 @@ func fetchCollectionPoints(ctx context.Context, client *http.Client, baseURL, na
 	return parsed.Result.PointsCount, nil
 }
 
-// scrollAllCollections runs the POST /points/scroll probe for every
-// collection under a global emission cap. Returns the total number of
-// :MCPResource nodes emitted.
-//
-// Each collection scrolls up to perCollectionCap points, paginating
-// via result.next_page_offset until null (or the caps are hit). An
-// atomic counter guards the global cap so workers stop cleanly.
+type pointSampleSummary struct {
+	Count    int
+	Complete bool
+	Points   []pointReference
+}
+
+type pointReference struct {
+	ID  string
+	URI string
+}
+
+// scrollAllCollections runs the bounded POST /points/scroll read for each
+// collection and returns summaries in the same order as names.
 func scrollAllCollections(
 	ctx context.Context,
 	client *http.Client,
 	res *action.CollectResult,
-	opts action.CollectOptions,
-	qdrantID, baseURL, host string,
+	baseURL, host string,
 	port int,
 	names []string,
 	perCollectionCap, globalCap int,
-) int {
-	var (
-		globalCount atomic.Int64
-		mu          sync.Mutex
-	)
-	globalCap64 := int64(globalCap)
+) []pointSampleSummary {
+	var mu sync.Mutex
+	globalCount := 0
+	summaries := make([]pointSampleSummary, len(names))
 
 	conc := DefaultCollectionConcurrency
 	if conc > len(names) {
@@ -334,9 +420,9 @@ func scrollAllCollections(
 		go func() {
 			defer wg.Done()
 			for i := range idxs {
-				// Global cap check BEFORE starting the scroll: no
-				// point beginning a page if we've already hit the cap.
-				remaining := globalCap64 - globalCount.Load()
+				mu.Lock()
+				remaining := globalCap - globalCount
+				mu.Unlock()
 				if remaining <= 0 {
 					slog.Info("qdrant collection: global points cap reached; skipping remaining scrolls",
 						"collection", names[i],
@@ -344,32 +430,31 @@ func scrollAllCollections(
 					continue
 				}
 				perColl := perCollectionCap
-				if int64(perColl) > remaining {
-					perColl = int(remaining)
+				if perColl > remaining {
+					perColl = remaining
 				}
-				resources, err := fetchScrolledPoints(
-					ctx, client, baseURL, host, port, qdrantID, names[i], perColl)
+				summary, err := fetchScrolledPointSummary(
+					ctx, client, baseURL, host, port, names[i], perColl,
+				)
+				mu.Lock()
+				accepted := summary.Count
+				if accepted > globalCap-globalCount {
+					accepted = globalCap - globalCount
+					summary.Complete = false
+				}
+				if accepted < 0 {
+					accepted = 0
+				}
+				summary.Count = accepted
+				if len(summary.Points) > accepted {
+					summary.Points = summary.Points[:accepted]
+				}
+				summaries[i] = summary
+				globalCount += accepted
 				if err != nil {
-					mu.Lock()
 					res.PartialErrors = append(res.PartialErrors,
 						fmt.Sprintf("collections/%s/points/scroll: %v", names[i], err))
 					res.Summary.PartialFailures++
-					mu.Unlock()
-					continue
-				}
-				if len(resources) == 0 {
-					continue
-				}
-				mu.Lock()
-				for _, pr := range resources {
-					// Re-check the cap under the mutex — another
-					// worker may have emitted since we sized perColl.
-					if globalCount.Load() >= globalCap64 {
-						break
-					}
-					res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, pr.node)
-					res.IngestData.Graph.Edges = append(res.IngestData.Graph.Edges, pr.edge)
-					globalCount.Add(1)
 				}
 				mu.Unlock()
 			}
@@ -380,37 +465,27 @@ func scrollAllCollections(
 	}
 	close(idxs)
 	wg.Wait()
-	return int(globalCount.Load())
+	return summaries
 }
 
-// pointResource pairs an :MCPResource node with its PROVIDES_RESOURCE
-// edge for atomic append by the scroll orchestrator.
-type pointResource struct {
-	node ingest.Node
-	edge ingest.Edge
-}
-
-// fetchScrolledPoints POSTs /collections/{name}/points/scroll,
-// iterating result.next_page_offset until null OR perCollectionCap is
-// reached. Returns one pointResource per point.
-func fetchScrolledPoints(
+func fetchScrolledPointSummary(
 	ctx context.Context,
 	client *http.Client,
 	baseURL, host string,
 	port int,
-	qdrantID, collection string,
+	collection string,
 	perCollectionCap int,
-) ([]pointResource, error) {
+) (pointSampleSummary, error) {
 	if perCollectionCap <= 0 {
-		return nil, nil
+		return pointSampleSummary{}, nil
 	}
 	scrollURL := strings.TrimRight(baseURL, "/") + "/collections/" + url.PathEscape(collection) + "/points/scroll"
 
-	var out []pointResource
+	summary := pointSampleSummary{}
 	var nextOffset json.RawMessage // opaque per Qdrant OpenAPI (anyOf integer|string|uuid)
 
 	for {
-		remaining := perCollectionCap - len(out)
+		remaining := perCollectionCap - summary.Count
 		if remaining <= 0 {
 			break
 		}
@@ -420,7 +495,7 @@ func fetchScrolledPoints(
 		}
 		body := map[string]any{
 			"limit":        limit,
-			"with_payload": true,
+			"with_payload": false,
 			"with_vector":  false,
 		}
 		if len(nextOffset) > 0 && string(nextOffset) != "null" {
@@ -430,90 +505,60 @@ func fetchScrolledPoints(
 
 		respBody, err := postJSON(ctx, client, scrollURL, payload)
 		if err != nil {
-			if len(out) == 0 {
-				return nil, err
-			}
-			return out, fmt.Errorf("page: %w", err)
+			return summary, fmt.Errorf("page: %w", err)
 		}
 		var parsed struct {
 			Result struct {
 				Points []struct {
-					ID      json.RawMessage `json:"id"`
-					Payload json.RawMessage `json:"payload"`
+					ID json.RawMessage `json:"id"`
 				} `json:"points"`
 				NextPageOffset json.RawMessage `json:"next_page_offset"`
 			} `json:"result"`
 		}
 		if err := json.Unmarshal(respBody, &parsed); err != nil {
-			return out, fmt.Errorf("decode scroll: %w", err)
+			return summary, fmt.Errorf("decode scroll: %w", err)
 		}
-		for _, p := range parsed.Result.Points {
-			pointID := formatPointID(p.ID)
+		for _, point := range parsed.Result.Points {
+			pointID := formatPointID(point.ID)
 			if pointID == "" {
-				continue
+				return summary, errors.New("decode scroll: point is missing id")
 			}
-			uri := fmt.Sprintf("qdrant://%s:%d/%s/%s", host, port, collection, pointID)
-			resourceID := ingest.ComputeNodeID("MCPResource", qdrantID, uri)
-			node := ingest.Node{
-				ID:    resourceID,
-				Kinds: []string{"MCPResource"},
-				Properties: map[string]any{
-					"objectid":    resourceID,
-					"uri":         uri,
-					"name":        collection + "/" + pointID,
-					"mime_type":   "application/json",
-					"uri_scheme":  "qdrant",
-					"sensitivity": "high",
-				},
-			}
-			edge := ingest.Edge{
-				Source:     qdrantID,
-				Target:     resourceID,
-				Kind:       "PROVIDES_RESOURCE",
-				SourceKind: "QdrantInstance",
-				TargetKind: "MCPResource",
-				Properties: map[string]any{
-					"confidence":  1.0,
-					"risk_weight": 0.2,
-					"evidence": map[string]any{
-						"endpoint":   baseURL,
-						"source":     "points_scroll",
-						"collection": collection,
-						"point_id":   pointID,
-					},
-				},
-			}
-			out = append(out, pointResource{node: node, edge: edge})
-			if len(out) >= perCollectionCap {
+			summary.Points = append(summary.Points, pointReference{
+				ID: pointID,
+				URI: fmt.Sprintf(
+					"qdrant://%s:%d/%s/%s", host, port, collection, pointID,
+				),
+			})
+			if len(summary.Points) >= perCollectionCap {
 				break
 			}
 		}
+		summary.Count = len(summary.Points)
 		// Terminal: next_page_offset is JSON null / absent / empty.
 		if len(parsed.Result.NextPageOffset) == 0 ||
 			string(parsed.Result.NextPageOffset) == "null" ||
 			len(parsed.Result.Points) == 0 {
+			summary.Complete = true
 			break
 		}
 		nextOffset = parsed.Result.NextPageOffset
 	}
-	return out, nil
+	return summary, nil
 }
 
-// formatPointID renders a Qdrant point ID (integer or UUID/string) as
-// a URL-safe string component.
+// formatPointID renders a Qdrant integer or string point ID as the same
+// URL-safe reference retained by earlier artifacts.
 func formatPointID(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
 	s := strings.TrimSpace(string(raw))
-	// String IDs come in quoted; unquote to a plain token.
 	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
 		var unquoted string
 		if err := json.Unmarshal(raw, &unquoted); err == nil {
 			return url.PathEscape(unquoted)
 		}
 	}
-	// Integer IDs (unquoted) come through as decimal strings — safe.
 	return s
 }
 

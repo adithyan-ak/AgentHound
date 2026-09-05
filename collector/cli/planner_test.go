@@ -384,6 +384,46 @@ func TestServiceCollectionRetainsPartialGraphButReturnsFailure(t *testing.T) {
 	if result.Outcome != "collection_partial" || len(result.Graph.Nodes) != 1 {
 		t.Fatalf("partial result = %+v, want retained graph with partial outcome", result)
 	}
+	if len(result.InventoryOutcomes) != 1 || result.InventoryOutcomes[0].State != ingest.OutcomePartial {
+		t.Fatalf("inventory outcomes = %+v, want one partial surface", result.InventoryOutcomes)
+	}
+	root := ingest.CollectorRootCoverageKey("scan")
+	if result.InventoryOutcomes[0].ParentCoverageKey != root {
+		t.Fatalf("inventory parent = %q, want scan root %q", result.InventoryOutcomes[0].ParentCoverageKey, root)
+	}
+	for _, domain := range result.Graph.Nodes[0].ObservationDomains {
+		if domain == root {
+			t.Fatal("service inventory fact was assigned to the shared scan root")
+		}
+	}
+	if len(result.Graph.Nodes[0].ObservationDomains) != 1 ||
+		result.Graph.Nodes[0].ObservationDomains[0] != result.InventoryOutcomes[0].CoverageKey {
+		t.Fatalf("fact domains = %v, want inventory surface", result.Graph.Nodes[0].ObservationDomains)
+	}
+}
+
+func TestServiceCollectionScopesOnlyChildFactsToInventory(t *testing.T) {
+	root := ingest.CollectorRootCoverageKey("scan")
+	inventory := ingest.CanonicalCoverageKey("scan", "service_inventory", "qdrant\x00collections")
+	graph := ingest.GraphData{
+		Nodes: []ingest.Node{
+			{ID: "service", Kinds: []string{"QdrantInstance"}},
+			{ID: "collection", Kinds: []string{"VectorCollection"}},
+		},
+		Edges: []ingest.Edge{{
+			Source: "service", Target: "collection", Kind: "PROVIDES_RESOURCE",
+		}},
+	}
+	tagServiceCollectionGraph(&graph, "service", []string{root}, inventory)
+	if got := graph.Nodes[0].ObservationDomains; len(got) != 1 || got[0] != root {
+		t.Fatalf("service domains = %v, want scan root", got)
+	}
+	if got := graph.Nodes[1].ObservationDomains; len(got) != 1 || got[0] != inventory {
+		t.Fatalf("child domains = %v, want inventory surface", got)
+	}
+	if got := graph.Edges[0].ObservationDomains; len(got) != 1 || got[0] != inventory {
+		t.Fatalf("ownership edge domains = %v, want inventory surface", got)
+	}
 }
 
 func TestA2AActionRequiresSuccessfulTargetOutcome(t *testing.T) {

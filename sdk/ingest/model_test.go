@@ -229,26 +229,39 @@ func TestIngestEvidenceMetadataJSONRoundTrip(t *testing.T) {
 }
 
 func TestAllowedNodeKindsComplete(t *testing.T) {
-	if len(AllowedNodeKinds) != 22 {
-		t.Errorf("AllowedNodeKinds: got %d entries, want 22", len(AllowedNodeKinds))
+	if len(AllowedNodeKinds) != 27 {
+		t.Errorf("AllowedNodeKinds: got %d entries, want 27", len(AllowedNodeKinds))
 	}
 }
 
 func TestAllNodeLabelsComplete(t *testing.T) {
-	if len(AllNodeLabels) != 22 {
-		t.Errorf("AllNodeLabels: got %d entries, want 22", len(AllNodeLabels))
+	if len(AllNodeLabels) != 27 {
+		t.Errorf("AllNodeLabels: got %d entries, want 27", len(AllNodeLabels))
 	}
 }
 
 func TestAllowedEdgeKindsComplete(t *testing.T) {
-	if len(AllowedEdgeKinds) != 32 {
-		t.Errorf("AllowedEdgeKinds: got %d entries, want 32", len(AllowedEdgeKinds))
+	if len(AllowedEdgeKinds) != 34 {
+		t.Errorf("AllowedEdgeKinds: got %d entries, want 34", len(AllowedEdgeKinds))
 	}
 }
 
 func TestRawEdgeKindsComplete(t *testing.T) {
-	if len(RawEdgeKinds) != 19 {
-		t.Errorf("RawEdgeKinds: got %d entries, want 19", len(RawEdgeKinds))
+	if len(RawEdgeKinds) != 21 {
+		t.Errorf("RawEdgeKinds: got %d entries, want 21", len(RawEdgeKinds))
+	}
+}
+
+func TestTypedResourceAndBackendKindsRegistered(t *testing.T) {
+	for _, kind := range []string{"VectorCollection", "VectorPoint", "WorkspaceFile", "ModelArtifact", "ArtifactStore"} {
+		if !AllowedNodeKinds[kind] {
+			t.Errorf("AllowedNodeKinds missing %q", kind)
+		}
+	}
+	for _, kind := range []string{"USES_BACKEND", "STORED_IN"} {
+		if !RawEdgeKinds[kind] || !AllowedEdgeKinds[kind] {
+			t.Errorf("raw topology edge %q is not fully registered", kind)
+		}
 	}
 }
 

@@ -453,6 +453,9 @@ func (r *scanRuntime) runPlanner(timeout time.Duration) error {
 		candidate.Inputs["scan_id"] = r.artifact.Meta.ScanID
 		result, executeErr := plannerAction.Execute(r.ctx, candidate, r.journal)
 		r.completed[candidate.Key] = true
+		for _, outcome := range result.InventoryOutcomes {
+			r.mergeInventoryOutcome(outcome)
+		}
 		r.artifact.Graph.Nodes = append(r.artifact.Graph.Nodes, result.Graph.Nodes...)
 		r.artifact.Graph.Edges = append(r.artifact.Graph.Edges, result.Graph.Edges...)
 		for _, target := range result.NewTargets {
@@ -589,8 +592,12 @@ func (r *scanRuntime) finish(runErr error) error {
 	}
 	if len(r.artifact.Meta.Collection.Outcomes) > 0 {
 		switch {
-		case runErr == nil:
+		case runErr == nil && r.inventoryCoverageComplete():
 			r.artifact.Meta.Collection.Outcomes[0].State = ingest.OutcomeComplete
+			r.artifact.Meta.Collection.Outcomes[0].Error = ""
+		case runErr == nil:
+			r.artifact.Meta.Collection.Outcomes[0].State = ingest.OutcomePartial
+			r.artifact.Meta.Collection.Outcomes[0].Error = "one or more service inventories were incomplete"
 		case errors.Is(runErr, context.Canceled), errors.Is(runErr, context.DeadlineExceeded):
 			r.artifact.Meta.Collection.Outcomes[0].State = ingest.OutcomePartial
 		default:
@@ -671,6 +678,75 @@ func (r *scanRuntime) addOutcome(outcome ingest.CollectionOutcome) {
 	}
 	r.artifact.Meta.Collection.Outcomes = append(r.artifact.Meta.Collection.Outcomes, outcome)
 	r.artifact.Meta.Collection.State = ingest.AggregateOutcomeState(r.artifact.Meta.Collection.Outcomes)
+}
+
+// mergeInventoryOutcome keeps one finalized outcome per service inventory.
+// A complete authoritative attempt wins over failed credential guesses; until
+// then, partial/truncated evidence remains non-authoritative.
+func (r *scanRuntime) mergeInventoryOutcome(outcome ingest.CollectionOutcome) {
+	if r.artifact.Meta.Collection == nil {
+		r.artifact.Meta.Collection = &ingest.CollectionReport{}
+	}
+	defer func() {
+		r.artifact.Meta.Collection.State = ingest.AggregateOutcomeState(
+			r.artifact.Meta.Collection.Outcomes,
+		)
+	}()
+	declared := false
+	for _, key := range r.artifact.Meta.Collection.CoverageKeys {
+		if key == outcome.CoverageKey {
+			declared = true
+			break
+		}
+	}
+	if !declared {
+		r.artifact.Meta.Collection.CoverageKeys = append(
+			r.artifact.Meta.Collection.CoverageKeys,
+			outcome.CoverageKey,
+		)
+		sort.Strings(r.artifact.Meta.Collection.CoverageKeys)
+	}
+	for index := range r.artifact.Meta.Collection.Outcomes {
+		current := &r.artifact.Meta.Collection.Outcomes[index]
+		if current.CoverageKey != outcome.CoverageKey {
+			continue
+		}
+		if current.State == ingest.OutcomeComplete {
+			return
+		}
+		if outcome.State == ingest.OutcomeComplete {
+			*current = outcome
+			return
+		}
+		state := ingest.AggregateOutcomeState([]ingest.CollectionOutcome{*current, outcome})
+		current.State = state
+		if outcome.Items > current.Items {
+			current.Items = outcome.Items
+		}
+		if outcome.Error != "" && !strings.Contains(current.Error, outcome.Error) {
+			if current.Error != "" {
+				current.Error += "; "
+			}
+			current.Error += outcome.Error
+		}
+		return
+	}
+	r.artifact.Meta.Collection.Outcomes = append(r.artifact.Meta.Collection.Outcomes, outcome)
+}
+
+func (r *scanRuntime) inventoryCoverageComplete() bool {
+	if r.artifact.Meta.Collection == nil {
+		return true
+	}
+	for _, outcome := range r.artifact.Meta.Collection.Outcomes {
+		if !strings.HasPrefix(outcome.Method, "service_inventory:") {
+			continue
+		}
+		if outcome.State != ingest.OutcomeComplete {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *scanRuntime) recordProtocolDiscoveries(targets []action.Target) {

@@ -94,6 +94,76 @@ func TestValidatorAcceptsValid(t *testing.T) {
 	}
 }
 
+func validVectorCollectionData() *ingest.IngestData {
+	data := validIngestData()
+	scope := data.Meta.Collection.CoverageKeys[0]
+	qdrantID := "sha256:qdrant"
+	collectionID := ingest.ComputeNodeID("VectorCollection", qdrantID, "docs")
+	data.Graph.Nodes = []ingest.Node{
+		{
+			ID: qdrantID, Kinds: []string{"QdrantInstance", "AIService"},
+			Properties: map[string]any{
+				"objectid": qdrantID, "endpoint": "http://qdrant:6333",
+				"auth_method": "unknown", "auth_assurance": "unknown", "auth_evidence": "unknown",
+			},
+			ObservationDomains: []string{scope},
+		},
+		{
+			ID: collectionID, Kinds: []string{"VectorCollection"},
+			Properties:         map[string]any{"objectid": collectionID, "name": "docs"},
+			ObservationDomains: []string{scope},
+		},
+	}
+	data.Graph.Edges = []ingest.Edge{{
+		Source: qdrantID, Target: collectionID, Kind: "PROVIDES_RESOURCE",
+		SourceKind: "QdrantInstance", TargetKind: "VectorCollection",
+		Properties: map[string]any{
+			"risk_weight": 0.2, "confidence": 1.0,
+			"evidence_state": "verified", "last_seen": "2026-08-27T12:00:00Z",
+			"evidence": map[string]any{"source": "collections"},
+		},
+		ObservationDomains: []string{scope},
+	}}
+	return data
+}
+
+func TestValidatorTypedResourceRequiresExactPairAndEvidence(t *testing.T) {
+	if err := NewValidator().Validate(validVectorCollectionData()); err != nil {
+		t.Fatalf("valid typed resource rejected: %v", err)
+	}
+	for _, test := range []struct {
+		name string
+		path string
+		edit func(*ingest.IngestData)
+	}{
+		{
+			name: "invalid pair", path: "graph.edges[0]",
+			edit: func(data *ingest.IngestData) { data.Graph.Edges[0].SourceKind = "MCPServer" },
+		},
+		{
+			name: "missing evidence state", path: "graph.edges[0].properties.evidence_state",
+			edit: func(data *ingest.IngestData) { delete(data.Graph.Edges[0].Properties, "evidence_state") },
+		},
+		{
+			name: "missing timestamp", path: "graph.edges[0].properties.last_seen",
+			edit: func(data *ingest.IngestData) { delete(data.Graph.Edges[0].Properties, "last_seen") },
+		},
+		{
+			name: "wrong parent identity", path: "graph.edges[0].target",
+			edit: func(data *ingest.IngestData) {
+				data.Graph.Nodes[1].ID = "sha256:wrong"
+				data.Graph.Edges[0].Target = "sha256:wrong"
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data := validVectorCollectionData()
+			test.edit(data)
+			assertValidationError(t, NewValidator().Validate(data), test.path)
+		})
+	}
+}
+
 func validInstructionEvidenceData(t *testing.T) *ingest.IngestData {
 	t.Helper()
 	data := validIngestData()

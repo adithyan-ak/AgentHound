@@ -454,6 +454,17 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 				Message: fmt.Sprintf("target_kind %q is not a valid target for edge kind %q", edge.TargetKind, edge.Kind),
 			})
 		}
+		if edge.SourceKind != "" && edge.TargetKind != "" &&
+			ingest.RawEdgeKinds[edge.Kind] &&
+			!ingest.EndpointKindsAllowed(edge.Kind, edge.SourceKind, edge.TargetKind) {
+			errs = append(errs, FieldError{
+				Path: fmt.Sprintf("graph.edges[%d]", i),
+				Message: fmt.Sprintf(
+					"endpoint pair %q -> %q is not valid for edge kind %q",
+					edge.SourceKind, edge.TargetKind, edge.Kind,
+				),
+			})
+		}
 
 		// Validate explicit endpoint kinds against the referenced node labels.
 		if ingest.RawEdgeKinds[edge.Kind] {
@@ -484,7 +495,10 @@ func (v *Validator) Validate(data *ingest.IngestData) error {
 		if edge.Kind == "CREDENTIAL_ACCESS_OBSERVED" {
 			errs = append(errs, validateCredentialAccessProof(edge.Properties, i)...)
 		}
-		errs = append(errs, validateStdioChildID(nodesByID, edge, i)...)
+		if ingest.RequiresEvidenceState(edge.Kind, edge.SourceKind, edge.TargetKind) {
+			errs = append(errs, validateRawEvidence(edge.Properties, i)...)
+		}
+		errs = append(errs, validateParentChildID(nodesByID, edge, i)...)
 	}
 
 	if len(errs) > 0 {
@@ -1052,6 +1066,8 @@ func validateNodePropertySemantics(node ingest.Node, index int) []FieldError {
 	path := fmt.Sprintf("graph.nodes[%d].property_semantics", index)
 	switch node.PropertySemantics {
 	case "":
+		return nil
+	case ingest.NodePropertySemanticsPreserveOmissions:
 		return nil
 	case ingest.NodePropertySemanticsReferenceOnly:
 		if len(node.Properties) != 0 {
@@ -1622,15 +1638,13 @@ func validA2ASignatureStatusProvenance(status, source, trust string) bool {
 	}
 }
 
-func validateStdioChildID(
+func validateParentChildID(
 	nodesByID map[string]ingest.Node,
 	edge ingest.Edge,
 	index int,
 ) []FieldError {
 	source, sourceExists := nodesByID[edge.Source]
-	if !sourceExists ||
-		!hasKind(source.Kinds, "MCPServer") ||
-		source.Properties["transport"] != "stdio" {
+	if !sourceExists {
 		return nil
 	}
 	target, targetExists := nodesByID[edge.Target]
@@ -1638,22 +1652,54 @@ func validateStdioChildID(
 		return nil
 	}
 
-	var prefix, componentProperty string
-	switch edge.Kind {
-	case "PROVIDES_TOOL":
-		prefix, componentProperty = "MCPTool", "name"
-	case "PROVIDES_RESOURCE":
-		prefix, componentProperty = "MCPResource", "uri"
-	case "PROVIDES_PROMPT":
-		prefix, componentProperty = "MCPPrompt", "name"
-	default:
+	var expected string
+	switch {
+	case edge.Kind == "PROVIDES_RESOURCE" &&
+		edge.SourceKind == "QdrantInstance" && edge.TargetKind == "VectorCollection":
+		name, _ := target.Properties["name"].(string)
+		if name != "" {
+			expected = ingest.ComputeNodeID("VectorCollection", edge.Source, name)
+		}
+	case edge.Kind == "PROVIDES_RESOURCE" &&
+		edge.SourceKind == "VectorCollection" && edge.TargetKind == "VectorPoint":
+		pointID, _ := target.Properties["point_id"].(string)
+		if pointID != "" {
+			expected = ingest.ComputeNodeID("VectorPoint", edge.Source, pointID)
+		}
+	case edge.Kind == "PROVIDES_RESOURCE" &&
+		edge.SourceKind == "JupyterServer" && edge.TargetKind == "WorkspaceFile":
+		workspacePath, _ := target.Properties["path"].(string)
+		if workspacePath != "" {
+			expected = ingest.ComputeNodeID("WorkspaceFile", edge.Source, workspacePath)
+		}
+	case edge.Kind == "PROVIDES_RESOURCE" &&
+		edge.SourceKind == "MLflowServer" && edge.TargetKind == "ModelArtifact":
+		name, _ := target.Properties["name"].(string)
+		version, _ := target.Properties["version"].(string)
+		if name != "" && version != "" {
+			expected = ingest.ComputeNodeID("ModelArtifact", edge.Source, name, version)
+		}
+	case hasKind(source.Kinds, "MCPServer") && source.Properties["transport"] == "stdio":
+		var prefix, componentProperty string
+		switch edge.Kind {
+		case "PROVIDES_TOOL":
+			prefix, componentProperty = "MCPTool", "name"
+		case "PROVIDES_RESOURCE":
+			if edge.TargetKind == "MCPResource" {
+				prefix, componentProperty = "MCPResource", "uri"
+			}
+		case "PROVIDES_PROMPT":
+			prefix, componentProperty = "MCPPrompt", "name"
+		}
+		component, _ := target.Properties[componentProperty].(string)
+		if prefix != "" && component != "" {
+			expected = ingest.ComputeNodeID(prefix, edge.Source, component)
+		}
+	}
+	if expected == "" {
 		return nil
 	}
-	component, _ := target.Properties[componentProperty].(string)
-	if component == "" {
-		return nil
-	}
-	if edge.Target == ingest.ComputeNodeID(prefix, edge.Source, component) {
+	if edge.Target == expected {
 		return nil
 	}
 	return []FieldError{{
@@ -1695,6 +1741,33 @@ func validateEdgeRiskWeight(properties map[string]any, index int) []FieldError {
 		}}
 	}
 	return nil
+}
+
+func validateRawEvidence(properties map[string]any, index int) []FieldError {
+	base := fmt.Sprintf("graph.edges[%d].properties.", index)
+	var errs []FieldError
+	state, ok := properties["evidence_state"].(string)
+	if !ok || !ingest.ValidEvidenceState(state) {
+		errs = append(errs, FieldError{
+			Path: base + "evidence_state", Message: "must be configured, observed, or verified",
+		})
+	}
+	confidence, ok := numericFloat(properties["confidence"])
+	if !ok || math.IsNaN(confidence) || math.IsInf(confidence, 0) || confidence < 0 || confidence > 1 {
+		errs = append(errs, FieldError{
+			Path: base + "confidence", Message: "must be a finite number between 0 and 1",
+		})
+	}
+	lastSeen, ok := properties["last_seen"].(string)
+	if !ok || strings.TrimSpace(lastSeen) == "" {
+		errs = append(errs, FieldError{Path: base + "last_seen", Message: "must be an RFC3339 timestamp"})
+	} else if _, err := time.Parse(time.RFC3339, lastSeen); err != nil {
+		errs = append(errs, FieldError{Path: base + "last_seen", Message: "must be an RFC3339 timestamp"})
+	}
+	if evidence, ok := properties["evidence"].(map[string]any); !ok || len(evidence) == 0 {
+		errs = append(errs, FieldError{Path: base + "evidence", Message: "must be a non-empty sanitized object"})
+	}
+	return errs
 }
 
 // numericFloat coerces a JSON-decoded numeric value to float64. JSON numbers

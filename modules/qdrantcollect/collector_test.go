@@ -16,6 +16,7 @@ import (
 	"github.com/adithyan-ak/agenthound/modules/qdrantfp"
 	"github.com/adithyan-ak/agenthound/sdk/action"
 	"github.com/adithyan-ak/agenthound/sdk/common"
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
 const collectionsBody = `{"result":{"collections":[{"name":"docs"},{"name":"chat-history"}]},"status":"ok","time":0.001}`
@@ -85,8 +86,8 @@ func TestCollect_QdrantHappy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if got := len(res.IngestData.Graph.Nodes); got != 1 {
-		t.Fatalf("nodes: got %d, want 1 (QdrantInstance)", got)
+	if got := len(res.IngestData.Graph.Nodes); got != 3 {
+		t.Fatalf("nodes: got %d, want QdrantInstance plus two VectorCollections", got)
 	}
 	node := res.IngestData.Graph.Nodes[0]
 	if node.Kinds[0] != "QdrantInstance" {
@@ -117,6 +118,16 @@ func TestCollect_QdrantHappy(t *testing.T) {
 	}
 	if res.Summary.PartialFailures != 0 {
 		t.Errorf("PartialFailures = %d, want 0", res.Summary.PartialFailures)
+	}
+	for _, name := range []string{"chat-history", "docs"} {
+		collection := vectorCollection(t, res, name)
+		if collection.Properties["point_count"] == nil {
+			t.Errorf("VectorCollection %q missing point_count", name)
+		}
+	}
+	if res.Inventory == nil || res.Inventory.Name != "collections" ||
+		res.Inventory.State != "complete" || res.Inventory.Items != 2 {
+		t.Fatalf("inventory = %+v, want complete collections surface", res.Inventory)
 	}
 	assertAnonymousInventoryClaim(t, node.Properties)
 }
@@ -150,13 +161,45 @@ func TestCollect_Qdrant_CollectionDetailBadJSON(t *testing.T) {
 	if cc, _ := node.Properties["collection_count"].(int); cc != 1 {
 		t.Errorf("collection_count = %v, want 1", node.Properties["collection_count"])
 	}
-	if tp, _ := node.Properties["total_points"].(int64); tp != 0 {
-		t.Errorf("total_points = %v, want 0 (bad detail must not fabricate points)", node.Properties["total_points"])
+	if _, present := node.Properties["total_points"]; present {
+		t.Errorf("total_points = %v, want omitted when detail is incomplete", node.Properties["total_points"])
 	}
 	if res.Summary.PartialFailures != 1 {
 		t.Errorf("PartialFailures = %d, want 1", res.Summary.PartialFailures)
 	}
+	collection := vectorCollection(t, res, "docs")
+	if _, present := collection.Properties["point_count"]; present {
+		t.Error("failed detail fabricated a point_count")
+	}
+	if collection.PropertySemantics != ingest.NodePropertySemanticsPreserveOmissions {
+		t.Errorf("collection property semantics = %q, want preserve_omissions", collection.PropertySemantics)
+	}
+	if res.Inventory == nil || res.Inventory.State != "complete" {
+		t.Fatalf("collection membership should remain complete after detail failure: %+v", res.Inventory)
+	}
 	assertAnonymousInventoryClaim(t, res.IngestData.Graph.Nodes[0].Properties)
+}
+
+func TestCollect_Qdrant_TruncatedCollectionListIsNotAuthoritative(t *testing.T) {
+	srv := qdrantStub(t)
+	defer srv.Close()
+
+	res, err := (&Collector{}).Collect(context.Background(), action.Target{
+		Kind: "host", Address: strings.TrimPrefix(srv.URL, "http://"),
+	}, action.CollectOptions{MaxItems: 1})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if res.Inventory == nil || res.Inventory.State != ingest.OutcomeTruncated ||
+		res.Inventory.Items != 1 {
+		t.Fatalf("inventory = %+v, want one truncated collection", res.Inventory)
+	}
+	if got := len(res.IngestData.Graph.Nodes); got != 2 {
+		t.Fatalf("nodes = %d, want service plus one bounded collection", got)
+	}
+	if got := len(res.IngestData.Graph.Edges); got != 1 {
+		t.Fatalf("edges = %d, want one collection ownership edge", got)
+	}
 }
 
 func TestCollect_Qdrant_CollectionsMalformedOrUnavailableDoesNotClaimAnonymousAccess(t *testing.T) {
@@ -247,8 +290,8 @@ func TestCollect_Qdrant_CollectionsListFails(t *testing.T) {
 // TestCollect_Qdrant_ManyCollectionsConcurrent exercises the bounded worker
 // pool with more collections than the concurrency bound, where half the
 // per-collection detail probes fail. It asserts the aggregation is
-// correct and order-independent: total_points sums only the good
-// collections, PartialFailures counts the bad ones, and the collections
+// correct and order-independent: an incomplete detail surface does not claim
+// a total, PartialFailures counts the bad ones, and the collections
 // list stays sorted regardless of goroutine completion order. Run under
 // -race, it also guards the disjoint-slot writes against data races.
 func TestCollect_Qdrant_ManyCollectionsConcurrent(t *testing.T) {
@@ -256,7 +299,6 @@ func TestCollect_Qdrant_ManyCollectionsConcurrent(t *testing.T) {
 	names := make([]string, 0, n)
 	points := make(map[string]int64, n)
 	bad := make(map[string]bool, n)
-	var wantTotal int64
 	wantFailures := 0
 	for i := 0; i < n; i++ {
 		nm := fmt.Sprintf("col-%02d", i)
@@ -267,7 +309,6 @@ func TestCollect_Qdrant_ManyCollectionsConcurrent(t *testing.T) {
 		} else {
 			p := int64((i + 1) * 10)
 			points[nm] = p
-			wantTotal += p
 		}
 	}
 
@@ -309,8 +350,14 @@ func TestCollect_Qdrant_ManyCollectionsConcurrent(t *testing.T) {
 	if cc, _ := node.Properties["collection_count"].(int); cc != n {
 		t.Errorf("collection_count = %v, want %d", node.Properties["collection_count"], n)
 	}
-	if tp, _ := node.Properties["total_points"].(int64); tp != wantTotal {
-		t.Errorf("total_points = %v, want %d", node.Properties["total_points"], wantTotal)
+	if _, exists := node.Properties["total_points"]; exists {
+		t.Errorf("total_points = %v, want omitted for incomplete detail", node.Properties["total_points"])
+	}
+	if got := node.Properties["points_count_unknown"]; got != wantFailures {
+		t.Errorf("points_count_unknown = %v, want %d", got, wantFailures)
+	}
+	if node.PropertySemantics != ingest.NodePropertySemanticsPreserveOmissions {
+		t.Errorf("property semantics = %q, want preserve_omissions", node.PropertySemantics)
 	}
 	if res.Summary.PartialFailures != wantFailures {
 		t.Errorf("PartialFailures = %d, want %d", res.Summary.PartialFailures, wantFailures)
@@ -421,8 +468,8 @@ func TestCollect_Qdrant_PointsCountAbsent(t *testing.T) {
 	if got, _ := node.Properties["points_count_unknown"].(int); got != 1 {
 		t.Errorf("points_count_unknown = %v, want 1 (grey-status → nil)", got)
 	}
-	if tp, _ := node.Properties["total_points"].(int64); tp != 0 {
-		t.Errorf("total_points = %v, want 0 (real-empty contributes 0; grey-status is not counted)", tp)
+	if _, present := node.Properties["total_points"]; present {
+		t.Errorf("total_points = %v, want omitted when one count is unknown", node.Properties["total_points"])
 	}
 }
 
@@ -459,9 +506,8 @@ func TestCollect_Qdrant_PointsScrollDisabled(t *testing.T) {
 	}
 }
 
-// TestCollect_Qdrant_PointsScrollEnabled_SinglePage — one page with 3
-// points and next_page_offset=null → 3 :MCPResource + 3
-// PROVIDES_RESOURCE edges from one POST.
+// TestCollect_Qdrant_PointsScrollEnabled_SinglePage records a bounded summary
+// and retains the point references with Qdrant semantics.
 func TestCollect_Qdrant_PointsScrollEnabled_SinglePage(t *testing.T) {
 	var postCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -493,25 +539,39 @@ func TestCollect_Qdrant_PointsScrollEnabled_SinglePage(t *testing.T) {
 	if got := postCount.Load(); got != 1 {
 		t.Errorf("POST /points/scroll count = %d, want 1", got)
 	}
-	var resourceCount, edgeCount int
+	var mcpResourceCount, pointCount, collectionEdges, pointEdges int
 	for _, n := range res.IngestData.Graph.Nodes {
 		if n.Kinds[0] == "MCPResource" {
-			resourceCount++
+			mcpResourceCount++
+		}
+		if n.Kinds[0] == "VectorPoint" {
+			pointCount++
+			if n.Properties["uri_scheme"] != "qdrant" || n.Properties["uri"] == "" {
+				t.Errorf("VectorPoint properties = %+v", n.Properties)
+			}
 		}
 	}
 	for _, e := range res.IngestData.Graph.Edges {
 		if e.Kind == "PROVIDES_RESOURCE" {
-			edgeCount++
-			if e.SourceKind != "QdrantInstance" || e.TargetKind != "MCPResource" {
-				t.Errorf("edge kinds = %s → %s", e.SourceKind, e.TargetKind)
+			switch {
+			case e.SourceKind == "QdrantInstance" && e.TargetKind == "VectorCollection":
+				collectionEdges++
+			case e.SourceKind == "VectorCollection" && e.TargetKind == "VectorPoint":
+				pointEdges++
+			default:
+				t.Errorf("unexpected edge kinds = %s → %s", e.SourceKind, e.TargetKind)
 			}
 		}
 	}
-	if resourceCount != 3 {
-		t.Errorf("MCPResource count = %d, want 3", resourceCount)
+	if mcpResourceCount != 0 {
+		t.Errorf("MCPResource count = %d, want 0", mcpResourceCount)
 	}
-	if edgeCount != 3 {
-		t.Errorf("PROVIDES_RESOURCE count = %d, want 3", edgeCount)
+	if pointCount != 3 || collectionEdges != 1 || pointEdges != 3 {
+		t.Errorf("typed point graph = points:%d collection-edges:%d point-edges:%d", pointCount, collectionEdges, pointEdges)
+	}
+	collection := vectorCollection(t, res, "docs")
+	if collection.Properties["sampled_point_count"] != 3 || collection.Properties["sample_complete"] != true {
+		t.Errorf("sample summary = %+v, want 3 complete", collection.Properties)
 	}
 }
 
@@ -576,14 +636,9 @@ func TestCollect_Qdrant_PointsScrollEnabled_Paginated(t *testing.T) {
 	if got[0] != "start" || got[1] != "100" || got[2] != "200" {
 		t.Errorf("offset sequence = %v, want [start 100 200]", got)
 	}
-	var resourceCount int
-	for _, n := range res.IngestData.Graph.Nodes {
-		if n.Kinds[0] == "MCPResource" {
-			resourceCount++
-		}
-	}
-	if resourceCount != 9 {
-		t.Errorf("MCPResource count across pagination = %d, want 9", resourceCount)
+	collection := vectorCollection(t, res, "docs")
+	if collection.Properties["sampled_point_count"] != 9 || collection.Properties["sample_complete"] != true {
+		t.Errorf("paginated sample summary = %+v, want 9 complete", collection.Properties)
 	}
 }
 
@@ -624,14 +679,9 @@ func TestCollect_Qdrant_PointsScrollEnabled_PerCollectionCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	var resourceCount int
-	for _, n := range res.IngestData.Graph.Nodes {
-		if n.Kinds[0] == "MCPResource" {
-			resourceCount++
-		}
-	}
-	if resourceCount != 5 {
-		t.Errorf("per-collection cap emission count = %d, want 5", resourceCount)
+	collection := vectorCollection(t, res, "docs")
+	if collection.Properties["sampled_point_count"] != 5 || collection.Properties["sample_complete"] != false {
+		t.Errorf("capped sample summary = %+v, want 5 incomplete", collection.Properties)
 	}
 }
 
@@ -667,16 +717,28 @@ func TestCollect_Qdrant_PointsScrollEnabled_GlobalCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	var resourceCount int
+	var sampled int
 	for _, n := range res.IngestData.Graph.Nodes {
-		if n.Kinds[0] == "MCPResource" {
-			resourceCount++
+		if n.Kinds[0] == "VectorCollection" {
+			value, _ := n.Properties["sampled_point_count"].(int)
+			sampled += value
 		}
 	}
-	if resourceCount > 4 {
-		t.Errorf("global cap emission count = %d, want ≤ 4", resourceCount)
+	if sampled > 4 {
+		t.Errorf("global sampled count = %d, want ≤ 4", sampled)
 	}
-	if resourceCount == 0 {
-		t.Errorf("global cap emission count = 0, want > 0 (cap is a bound, not a block)")
+	if sampled == 0 {
+		t.Errorf("global sampled count = 0, want > 0 (cap is a bound, not a block)")
 	}
+}
+
+func vectorCollection(t *testing.T, res *action.CollectResult, name string) ingest.Node {
+	t.Helper()
+	for _, node := range res.IngestData.Graph.Nodes {
+		if len(node.Kinds) > 0 && node.Kinds[0] == "VectorCollection" && node.Properties["name"] == name {
+			return node
+		}
+	}
+	t.Fatalf("VectorCollection %q not found", name)
+	return ingest.Node{}
 }

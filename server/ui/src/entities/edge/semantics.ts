@@ -28,6 +28,8 @@ export const EDGE_EXPLOIT = {
   EXPOSES: null,
   EXPOSES_CREDENTIAL: null,
   PROVIDES_MODEL: null,
+  USES_BACKEND: null,
+  STORED_IN: null,
   CAN_REACH: {
     title: "Transitive reachability",
     detail:
@@ -142,6 +144,8 @@ export const EDGE_DESCRIPTION = {
   EXPOSES: "Exposes AI service",
   EXPOSES_CREDENTIAL: "AI service has credential evidence",
   PROVIDES_MODEL: "Serves model artifact",
+  USES_BACKEND: "Service uses configured backend",
+  STORED_IN: "Model artifact is stored in store",
   INGESTS_UNTRUSTED: "Tool ingests untrusted resource",
   CREDENTIAL_ACCESS_OBSERVED: "Credential access to resource observed",
   PUBLIC_ACCESS_OBSERVED: "Resource observed publicly accessible",

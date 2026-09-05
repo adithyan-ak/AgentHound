@@ -113,6 +113,71 @@ func TestExcludedDiscoveryIsNotACollectionFailure(t *testing.T) {
 	}
 }
 
+func TestInventoryOutcomeSuccessDominatesFailedCredentialAttempts(t *testing.T) {
+	root := ingest.CollectorRootCoverageKey("scan")
+	runtime := &scanRuntime{artifact: &ingest.IngestData{Meta: ingest.IngestMeta{
+		Collection: &ingest.CollectionReport{
+			State: ingest.OutcomePartial, CoverageKeys: []string{root},
+			Outcomes: []ingest.CollectionOutcome{{
+				Collector: "scan", CoverageKey: root, Target: "scan",
+				Method: "autonomous_scan", State: ingest.OutcomePartial,
+			}},
+		},
+	}}}
+	key := ingest.CanonicalCoverageKey("scan", "service_inventory", "openwebui\x00node\x00backends")
+	failed := ingest.CollectionOutcome{
+		Collector: "scan", CoverageKey: key, ParentCoverageKey: root,
+		Target: "node", Method: "service_inventory:backends",
+		State: ingest.OutcomeFailed, Error: "credential rejected",
+	}
+	complete := failed
+	complete.State = ingest.OutcomeComplete
+	complete.Items = 2
+	complete.Error = ""
+	runtime.mergeInventoryOutcome(failed)
+	if runtime.inventoryCoverageComplete() {
+		t.Fatal("failed credential attempt made the inventory complete")
+	}
+	runtime.mergeInventoryOutcome(complete)
+	runtime.mergeInventoryOutcome(failed)
+	if !runtime.inventoryCoverageComplete() {
+		t.Fatal("authoritative success was downgraded by a failed guess")
+	}
+	var matches []ingest.CollectionOutcome
+	for _, outcome := range runtime.artifact.Meta.Collection.Outcomes {
+		if outcome.CoverageKey == key {
+			matches = append(matches, outcome)
+		}
+	}
+	if len(matches) != 1 || matches[0].State != ingest.OutcomeComplete || matches[0].Items != 2 {
+		t.Fatalf("final inventory outcome = %+v, want one complete result", matches)
+	}
+}
+
+func TestUnsupportedServiceInventoryDoesNotMakeRootAuthoritative(t *testing.T) {
+	root := ingest.CollectorRootCoverageKey("scan")
+	runtime := &scanRuntime{artifact: &ingest.IngestData{Meta: ingest.IngestMeta{
+		Collection: &ingest.CollectionReport{
+			State: ingest.OutcomePartial, CoverageKeys: []string{root},
+			Outcomes: []ingest.CollectionOutcome{{
+				Collector: "scan", CoverageKey: root, Method: "autonomous_scan",
+				State: ingest.OutcomePartial,
+			}},
+		},
+	}}}
+	runtime.mergeInventoryOutcome(ingest.CollectionOutcome{
+		Collector: "scan",
+		CoverageKey: ingest.CanonicalCoverageKey(
+			"scan", "service_inventory", "openwebui\x00node\x00backends",
+		),
+		ParentCoverageKey: root, Method: "service_inventory:backends",
+		State: ingest.OutcomeNotApplicable,
+	})
+	if runtime.inventoryCoverageComplete() {
+		t.Fatal("unsupported service inventory made the shared root authoritative")
+	}
+}
+
 func TestInstructionSignalOutputIsPathFirstAndQuietAware(t *testing.T) {
 	evidence, raw, err := sharedinstruction.MarshalBounded(
 		sharedinstruction.VerdictSignal,

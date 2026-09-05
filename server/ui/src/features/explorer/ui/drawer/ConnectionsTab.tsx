@@ -82,6 +82,7 @@ function EdgeRow({
 }) {
   const isComposite = edge.properties?.is_composite === true;
   const confidence = Number(edge.properties?.confidence ?? 0);
+  const evidenceState = edge.properties?.evidence_state;
 
   return (
     <button
@@ -105,6 +106,13 @@ function EdgeRow({
       {confidence > 0 && (
         <div className="flex-shrink-0 font-mono text-[9px] tabular-nums text-muted-foreground">
           {(confidence * 100).toFixed(0)}%
+        </div>
+      )}
+      {(evidenceState === "configured" ||
+        evidenceState === "observed" ||
+        evidenceState === "verified") && (
+        <div className="flex-shrink-0 font-mono text-[9px] uppercase text-muted-foreground">
+          {evidenceState}
         </div>
       )}
     </button>
