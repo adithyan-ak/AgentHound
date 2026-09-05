@@ -19,6 +19,8 @@ Concrete AI-service nodes also carry the `AIService` label. The umbrella label i
 
 `AIModel` is a model served by a runtime such as Ollama. A persisted MLflow model version is a `ModelArtifact`, not an `AIModel`. `VectorCollection` represents a Qdrant collection; bounded deep reads retain individual point references as `VectorPoint` without treating them as MCP resources. `WorkspaceFile` represents either a notebook or a regular file through its `entry_type` property.
 
+Resource identities use the owning service identity plus the resource's stable key: exact Qdrant collection name, the source-reported Jupyter workspace path, or MLflow registered-model name and immutable version. Mutable storage URIs never define `ModelArtifact` identity. Jupyter path identity preserves whitespace and literal backslashes because the contents API can report them as filename material.
+
 ### Credential material
 
 | Property | Meaning |
@@ -75,6 +77,8 @@ Raw edges come from collectors or same-scan proof actions.
 
 `PROVIDES_RESOURCE` retains historical service-to-`MCPResource` variants for V1 artifacts. New collection emits typed pairs: QdrantInstance→VectorCollection, VectorCollection→VectorPoint, JupyterServer→WorkspaceFile, and MLflowServer→ModelArtifact. `USES_BACKEND` records an explicit service dependency; `STORED_IN` records a model artifact's reported physical store.
 
+`ArtifactStore` is created only for a safely canonicalized physical root such as a cloud bucket, container, filesystem, DBFS root, or HDFS authority. Azure ABFS/WASB filesystem or container names are part of that root identity. Object-store key paths are retained as reported rather than cleaned as local filesystem paths. Local filesystem and DBFS roots are scoped to their owning MLflow service. Indirect `models:`, `runs:`, and `mlflow-artifacts:` locators remain sanitized `ModelArtifact` metadata and do not create a store node.
+
 New typed-resource and backend edges include `evidence_state`: `configured` proves only that the source contains the reference, `observed` means the source API reported it, and `verified` requires authoritative enumeration or a bounded request through the source. Probing a destination separately does not upgrade a configured backend relationship.
 
 ## Composite edges
@@ -106,6 +110,12 @@ Raw IDs are deterministic SHA-256 values derived from kind-specific identity fie
 - Global value identity is reserved for explicit merge primitives such as concrete credential hashes.
 
 Display names, timestamps, and mutable descriptions do not define identity. Reference-only contributions follow the authoritative observation for the same raw ID.
+
+### Typed-resource migration
+
+The current server continues to accept historical V1 `JupyterServer`, `MLflowServer`, and `QdrantInstance` relationships to `MCPResource`. A new complete observation replaces those current-projection rows with the corresponding typed resource; partial or failed observations preserve them. Historical scan artifacts and captured finding evidence remain attached to their original scan and IDs.
+
+The migrated resource kinds are not inputs to the existing finding processors, so this change does not create or rename a finding fingerprint and does not move cross-scan triage. A copied raw graph `objectid` is an identity for that representation, not a permanent alias: use the typed resource's source key (`path`, model `name` plus `version`, collection `name`, or point `uri`) to locate the same reported object after migration.
 
 ## Coverage and lifecycle
 
