@@ -535,7 +535,7 @@ func TestCollect_OpenWebUI_EnabledQdrantBackendIsTypedAndRedacted(t *testing.T) 
 	const key = "admin-jwt"
 	srv := openwebuiStub(t, openwebuiStubOptions{
 		apiKey:       key,
-		ollamaConfig: `{}`,
+		ollamaConfig: `{"OLLAMA_BASE_URLS":[]}`,
 		externalConnections: `{
 			"items":[
 				{"id":"q-1","provider":"qdrant","endpoint":"qdrant","enabled":true,"auth_configured":true,"auth_config":{"api_key":"must-not-leak"}},
@@ -642,7 +642,8 @@ func TestCollect_OpenWebUI_ConfigurationFailurePreventsAuthoritativeInventory(t 
 func TestCollect_OpenWebUI_BackendLimitReportsTruncation(t *testing.T) {
 	const key = "admin-jwt"
 	srv := openwebuiStub(t, openwebuiStubOptions{
-		apiKey: key,
+		apiKey:       key,
+		ollamaConfig: `{"OLLAMA_BASE_URLS":[]}`,
 		externalConnections: `{
 			"items":[
 				{"id":"q-1","provider":"qdrant","endpoint":"http://qdrant-a:6333","enabled":true},
@@ -966,6 +967,7 @@ func TestCanonicalizeBackendURL(t *testing.T) {
 	}{
 		{"http://ollama:11434", "http://ollama:11434"},
 		{"https://ollama.example.com", "https://ollama.example.com"},
+		{"https://ollama.example.com:443", "https://ollama.example.com:443"},
 		{"ollama-backend:11434", "http://ollama-backend:11434"},
 		{"ollama-backend", "http://ollama-backend:11434"},
 		{"", ""},
@@ -975,6 +977,66 @@ func TestCanonicalizeBackendURL(t *testing.T) {
 			got := canonicalizeBackendURL(tt.input)
 			if got != tt.want {
 				t.Errorf("canonicalizeBackendURL(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCanonicalizeBackendURLMatchesDirectOllamaIdentity(t *testing.T) {
+	raw := "https://ollama.example.com:443"
+	direct := action.EndpointBaseURL(
+		action.Target{Kind: "url", Address: raw}, 11434, "http",
+	)
+	if configured := canonicalizeBackendURL(raw); configured != direct {
+		t.Fatalf("configured identity %q differs from direct identity %q", configured, direct)
+	}
+}
+
+func TestBackendInventoryRequiresResponseFields(t *testing.T) {
+	freshResult := func() *action.CollectResult {
+		return &action.CollectResult{IngestData: &ingest.IngestData{
+			Graph: ingest.GraphData{Nodes: []ingest.Node{{
+				ID: "openwebui", Properties: map[string]any{},
+			}}},
+		}}
+	}
+	tests := []struct {
+		name                string
+		ollamaConfig        string
+		externalConnections string
+	}{
+		{name: "missing", ollamaConfig: `{}`, externalConnections: `{}`},
+		{
+			name:                "null",
+			ollamaConfig:        `{"OLLAMA_BASE_URLS":null}`,
+			externalConnections: `{"items":null,"total":0}`,
+		},
+		{
+			name:                "wrong shape",
+			ollamaConfig:        `{"OLLAMA_BASE_URLS":{}}`,
+			externalConnections: `{"items":{},"total":0}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv := openwebuiStub(t, openwebuiStubOptions{
+				ollamaConfig:        test.ollamaConfig,
+				externalConnections: test.externalConnections,
+			})
+			defer srv.Close()
+
+			_, ollama := runOllamaConfig(
+				context.Background(), srv.Client(), freshResult(), action.CollectOptions{},
+				"openwebui", srv.URL, "", 10, 10,
+			)
+			if ollama.State == ingest.OutcomeComplete {
+				t.Fatal("invalid OLLAMA_BASE_URLS was accepted as complete inventory")
+			}
+			qdrant := runExternalKnowledgeConnections(
+				context.Background(), srv.Client(), freshResult(), "openwebui", srv.URL, "", 10,
+			)
+			if qdrant.State == ingest.OutcomeComplete {
+				t.Fatal("invalid items or total was accepted as complete inventory")
 			}
 		})
 	}
