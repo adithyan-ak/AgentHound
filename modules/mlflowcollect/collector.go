@@ -528,7 +528,7 @@ func fetchDownloadURI(ctx context.Context, client *http.Client, baseURL, name, v
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return "", fmt.Errorf("decode get-download-uri: %w", err)
 	}
-	return strings.TrimSpace(parsed.ArtifactURI), nil
+	return parsed.ArtifactURI, nil
 }
 
 // parseURIScheme extracts the scheme (before "://") from a storage URI.
@@ -622,8 +622,7 @@ type artifactStoreRef struct {
 // sanitizeArtifactURI removes credential-bearing and request-specific URL
 // components before a registry locator is retained as graph metadata.
 func sanitizeArtifactURI(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
+	if strings.TrimSpace(raw) == "" {
 		return ""
 	}
 	parsed, err := url.Parse(raw)
@@ -637,7 +636,18 @@ func sanitizeArtifactURI(raw string) string {
 		return path.Clean(parsed.Path)
 	}
 	parsed.Scheme = strings.ToLower(parsed.Scheme)
-	parsed.User = nil
+	containerUserScheme := parsed.Scheme == "abfs" || parsed.Scheme == "abfss" ||
+		parsed.Scheme == "wasb" || parsed.Scheme == "wasbs"
+	if containerUserScheme {
+		// Azure ABFS/WASB locators encode the filesystem/container before @;
+		// it is identity, not authentication. Retain it while dropping any
+		// nonstandard password component.
+		if parsed.User != nil {
+			parsed.User = url.User(parsed.User.Username())
+		}
+	} else {
+		parsed.User = nil
+	}
 	parsed.RawQuery = ""
 	parsed.ForceQuery = false
 	parsed.Fragment = ""
@@ -655,7 +665,7 @@ func sanitizeArtifactURI(raw string) string {
 			parsed.Host = host
 		}
 	}
-	if parsed.Path != "" {
+	if parsed.Path != "" && (parsed.Scheme == "file" || parsed.Scheme == "dbfs") {
 		parsed.Path = path.Clean(parsed.Path)
 		if parsed.Path == "." {
 			parsed.Path = ""
@@ -686,7 +696,14 @@ func canonicalArtifactStore(raw, mlflowID string) (artifactStoreRef, bool) {
 		if parsed.Hostname() == "" {
 			return artifactStoreRef{}, false
 		}
-		root := (&url.URL{Scheme: scheme, Host: parsed.Host}).String()
+		rootURL := &url.URL{Scheme: scheme, Host: parsed.Host}
+		if scheme == "abfs" || scheme == "abfss" || scheme == "wasb" || scheme == "wasbs" {
+			if parsed.User == nil || parsed.User.Username() == "" {
+				return artifactStoreRef{}, false
+			}
+			rootURL.User = url.User(parsed.User.Username())
+		}
+		root := rootURL.String()
 		return artifactStoreRef{
 			ID: ingest.ComputeNodeID("ArtifactStore", root), Provider: scheme,
 			RootURI: root, Scope: "remote",
