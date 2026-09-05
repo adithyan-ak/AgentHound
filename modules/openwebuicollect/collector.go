@@ -465,7 +465,7 @@ func runOllamaConfig(
 		}
 	}
 	var raw struct {
-		BaseURLs   []string                   `json:"OLLAMA_BASE_URLS"`
+		BaseURLs   json.RawMessage            `json:"OLLAMA_BASE_URLS"`
 		APIConfigs map[string]json.RawMessage `json:"OLLAMA_API_CONFIGS"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
@@ -474,14 +474,27 @@ func runOllamaConfig(
 		res.Summary.PartialFailures++
 		return remaining, backendInventoryProbe{State: ingest.OutcomeFailed, Error: message}
 	}
+	if len(raw.BaseURLs) == 0 || string(raw.BaseURLs) == "null" {
+		message := "ollama/config response omitted OLLAMA_BASE_URLS"
+		res.PartialErrors = append(res.PartialErrors, message)
+		res.Summary.PartialFailures++
+		return remaining, backendInventoryProbe{State: ingest.OutcomeFailed, Error: message}
+	}
+	var baseURLs []string
+	if err := json.Unmarshal(raw.BaseURLs, &baseURLs); err != nil {
+		message := fmt.Sprintf("ollama/config OLLAMA_BASE_URLS decode: %v", err)
+		res.PartialErrors = append(res.PartialErrors, message)
+		res.Summary.PartialFailures++
+		return remaining, backendInventoryProbe{State: ingest.OutcomeFailed, Error: message}
+	}
 
 	// Track canonical URLs to promote onto the instance node.
-	canonicalBaseURLs := make([]string, 0, len(raw.BaseURLs))
+	canonicalBaseURLs := make([]string, 0, len(baseURLs))
 	seenBackends := make(map[string]bool)
 	inventory := backendInventoryProbe{State: ingest.OutcomeComplete}
 	lastSeen := time.Now().UTC().Format(time.RFC3339)
 
-	for i, base := range raw.BaseURLs {
+	for i, base := range baseURLs {
 		base = strings.TrimSpace(base)
 		if base == "" {
 			continue
@@ -625,8 +638,8 @@ func runExternalKnowledgeConnections(
 		}
 	}
 	var response struct {
-		Items []externalKnowledgeConnection `json:"items"`
-		Total int                           `json:"total"`
+		Items json.RawMessage `json:"items"`
+		Total *int            `json:"total"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
 		message := fmt.Sprintf("api/v1/knowledge/external/connections decode: %v", err)
@@ -634,11 +647,24 @@ func runExternalKnowledgeConnections(
 		res.Summary.PartialFailures++
 		return backendInventoryProbe{State: ingest.OutcomeFailed, Error: message}
 	}
+	if len(response.Items) == 0 || string(response.Items) == "null" || response.Total == nil {
+		message := "api/v1/knowledge/external/connections response omitted items or total"
+		res.PartialErrors = append(res.PartialErrors, message)
+		res.Summary.PartialFailures++
+		return backendInventoryProbe{State: ingest.OutcomeFailed, Error: message}
+	}
+	var items []externalKnowledgeConnection
+	if err := json.Unmarshal(response.Items, &items); err != nil {
+		message := fmt.Sprintf("api/v1/knowledge/external/connections items decode: %v", err)
+		res.PartialErrors = append(res.PartialErrors, message)
+		res.Summary.PartialFailures++
+		return backendInventoryProbe{State: ingest.OutcomeFailed, Error: message}
+	}
 	inventory := backendInventoryProbe{State: ingest.OutcomeComplete}
-	if response.Total != len(response.Items) {
+	if *response.Total < 0 || *response.Total != len(items) {
 		message := fmt.Sprintf(
 			"knowledge external connections total=%d but response contained %d items",
-			response.Total, len(response.Items),
+			*response.Total, len(items),
 		)
 		res.PartialErrors = append(res.PartialErrors, message)
 		res.Summary.PartialFailures++
@@ -651,7 +677,7 @@ func runExternalKnowledgeConnections(
 		AuthConfigured bool
 	}
 	byEndpoint := make(map[string]aggregatedConnection)
-	for index, connection := range response.Items {
+	for index, connection := range items {
 		if !connection.Enabled || !strings.EqualFold(strings.TrimSpace(connection.Provider), "qdrant") {
 			continue
 		}

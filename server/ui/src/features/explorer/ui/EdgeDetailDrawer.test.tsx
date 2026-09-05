@@ -78,4 +78,47 @@ describe("EdgeDetailDrawer relationship semantics", () => {
     expect(screen.getByText("Agent can reach credential")).toBeInTheDocument();
     expect(screen.queryByText("Agent can reach resource")).not.toBeInTheDocument();
   });
+
+  it("shows configured backend evidence and observation time", () => {
+    const properties = {
+      evidence_state: "configured",
+      last_seen: "2026-08-27T12:00:00Z",
+      evidence: {
+        source: "knowledge_external_connections",
+        connection_ids: ["fixture-link"],
+      },
+    };
+    useExplorerStore.setState({
+      selectedEdge: {
+        id: "agent|credential|USES_BACKEND",
+        source: "agent",
+        target: "credential",
+        data: {
+          ...credentialReach,
+          kind: "USES_BACKEND",
+          bundledKinds: ["USES_BACKEND"],
+          bundledEdges: [
+            {
+              kind: "USES_BACKEND",
+              confidence: 1,
+              severity: null,
+              properties,
+            },
+          ],
+          properties,
+        },
+      },
+    });
+
+    render(
+      <MemoryRouter>
+        <EdgeDetailDrawer />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText(/knowledge_external_connections/)).toBeInTheDocument();
+    expect(screen.getByText("observed at")).toBeInTheDocument();
+    expect(screen.getByText("2026-08-27T12:00:00Z")).toBeInTheDocument();
+    expect(screen.getByText(/not directly verified/)).toBeInTheDocument();
+  });
 });
