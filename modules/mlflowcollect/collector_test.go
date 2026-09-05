@@ -518,6 +518,31 @@ func TestCanonicalArtifactStoreIdentityAndRedaction(t *testing.T) {
 	}
 }
 
+func TestArtifactLocationPreservesSchemeSpecificIdentity(t *testing.T) {
+	t.Run("Azure filesystem is part of identity", func(t *testing.T) {
+		alpha := "abfss://alpha@account.dfs.core.windows.net/models/v1"
+		beta := "abfss://beta@account.dfs.core.windows.net/models/v1"
+		if got := sanitizeArtifactURI(alpha); got != alpha {
+			t.Fatalf("sanitized ABFSS locator = %q, want %q", got, alpha)
+		}
+		alphaStore, alphaOK := canonicalArtifactStore(alpha, "mlflow")
+		betaStore, betaOK := canonicalArtifactStore(beta, "mlflow")
+		if !alphaOK || !betaOK || alphaStore.ID == betaStore.ID {
+			t.Fatalf("distinct Azure filesystems collapsed: %+v/%t %+v/%t", alphaStore, alphaOK, betaStore, betaOK)
+		}
+		if alphaStore.RootURI != "abfss://alpha@account.dfs.core.windows.net" {
+			t.Fatalf("Azure root = %q", alphaStore.RootURI)
+		}
+	})
+
+	t.Run("object key path is reported material", func(t *testing.T) {
+		raw := "s3://fixture-bucket/models/./version"
+		if got := sanitizeArtifactURI(raw); got != raw {
+			t.Fatalf("sanitized object locator = %q, want %q", got, raw)
+		}
+	})
+}
+
 func TestCollect_MLflow_RegistryLimitAndLookupFailureAreIncomplete(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

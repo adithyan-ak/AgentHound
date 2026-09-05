@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	pathpkg "path"
 	"strings"
 	"time"
 
@@ -223,12 +222,13 @@ func (l *Collector) Collect(
 }
 
 func normalizeWorkspacePath(raw string) string {
-	raw = strings.ReplaceAll(strings.TrimSpace(raw), "\\", "/")
 	if raw == "" {
 		return ""
 	}
-	cleaned := pathpkg.Clean("/" + strings.TrimLeft(raw, "/"))
-	return strings.TrimPrefix(cleaned, "/")
+	// Jupyter's contents API returns a slash-delimited path relative to the
+	// workspace root. Preserve every source-significant character; a literal
+	// backslash and trailing whitespace are valid Unix filename material.
+	return strings.TrimLeft(raw, "/")
 }
 
 func appendInventoryError(current, next string) string {

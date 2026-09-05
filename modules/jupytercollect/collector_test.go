@@ -496,14 +496,21 @@ func notebookPaths(res *action.CollectResult) []string {
 
 func TestNormalizeWorkspacePathAndIdentity(t *testing.T) {
 	serverID := "jupyter-server"
-	for _, spelling := range []string{"work/./notes.ipynb", "/work/notes.ipynb", `work\\notes.ipynb`} {
-		path := normalizeWorkspacePath(spelling)
-		if path != "work/notes.ipynb" {
-			t.Fatalf("normalizeWorkspacePath(%q) = %q", spelling, path)
+	if got := normalizeWorkspacePath("/work/notes.ipynb"); got != "work/notes.ipynb" {
+		t.Fatalf("leading-root normalization = %q", got)
+	}
+	for _, pair := range [][2]string{
+		{"notes ", "notes"},
+		{`folder/a\b.ipynb`, "folder/a/b.ipynb"},
+	} {
+		left := normalizeWorkspacePath(pair[0])
+		right := normalizeWorkspacePath(pair[1])
+		if left == right {
+			t.Fatalf("distinct workspace paths collapsed: %q and %q", pair[0], pair[1])
 		}
-		if got, want := ingest.ComputeNodeID("WorkspaceFile", serverID, path),
-			ingest.ComputeNodeID("WorkspaceFile", serverID, "work/notes.ipynb"); got != want {
-			t.Fatalf("equivalent workspace paths produced different IDs: %q != %q", got, want)
+		if ingest.ComputeNodeID("WorkspaceFile", serverID, left) ==
+			ingest.ComputeNodeID("WorkspaceFile", serverID, right) {
+			t.Fatalf("distinct workspace paths produced the same identity: %q and %q", left, right)
 		}
 	}
 }

@@ -896,6 +896,141 @@ func TestIntegrationServiceInventoryPreservesThenRetiresLegacyResources(t *testi
 	}
 }
 
+func TestIntegrationTypedResourceMigrationKeepsHistoricalScan(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		serviceKind     string
+		endpoint        string
+		inventoryName   string
+		legacyURI       string
+		typedKind       string
+		typedProperties map[string]any
+	}{
+		{
+			name: "jupyter", serviceKind: "JupyterServer", endpoint: "http://jupyter.example:8888",
+			inventoryName: "contents", legacyURI: "jupyter://jupyter.example:8888/work/demo.ipynb",
+			typedKind: "WorkspaceFile", typedProperties: map[string]any{
+				"name": "demo.ipynb", "path": "work/demo.ipynb", "entry_type": "notebook",
+			},
+		},
+		{
+			name: "mlflow", serviceKind: "MLflowServer", endpoint: "http://mlflow.example:5000",
+			inventoryName: "model_registry", legacyURI: "s3://models/fraud/3",
+			typedKind: "ModelArtifact", typedProperties: map[string]any{
+				"name": "fraud", "version": "3", "storage_uri": "s3://models/fraud/3",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, pipeline, db, _, pool := publicationIntegrationHarness(t, false)
+			identity := testCollectionIdentity()
+			root := sdkingest.CollectorRootCoverageKey("scan")
+			serviceID := sdkingest.ComputeNodeID(test.serviceKind, test.endpoint)
+			inventory := sdkingest.CanonicalCoverageKey(
+				"scan", "service_inventory", test.name+".collect\x00"+serviceID+"\x00"+test.inventoryName,
+			)
+			legacyID := sdkingest.ComputeNodeID("MCPResource", serviceID, test.legacyURI)
+			var typedID string
+			switch test.typedKind {
+			case "WorkspaceFile":
+				workspacePath, ok := test.typedProperties["path"].(string)
+				if !ok {
+					t.Fatalf("workspace path fixture = %v", test.typedProperties["path"])
+				}
+				typedID = sdkingest.ComputeNodeID(test.typedKind, serviceID, workspacePath)
+			case "ModelArtifact":
+				name, nameOK := test.typedProperties["name"].(string)
+				version, versionOK := test.typedProperties["version"].(string)
+				if !nameOK || !versionOK {
+					t.Fatalf("model identity fixture = %+v", test.typedProperties)
+				}
+				typedID = sdkingest.ComputeNodeID(
+					test.typedKind, serviceID, name, version,
+				)
+			}
+			serviceNode := func() sdkingest.Node {
+				return sdkingest.Node{
+					ID: serviceID, Kinds: []string{test.serviceKind, "AIService"},
+					Properties:         map[string]any{"objectid": serviceID, "name": test.name, "endpoint": test.endpoint},
+					ObservationDomains: []string{root},
+				}
+			}
+			report := func(withInventory bool) *sdkingest.CollectionReport {
+				outcomes := []sdkingest.CollectionOutcome{{
+					Collector: "scan", CoverageKey: root, Target: "scan", Method: "collect", State: sdkingest.OutcomeComplete,
+				}}
+				keys := []string{root}
+				if withInventory {
+					keys = append(keys, inventory)
+					outcomes = append(outcomes, sdkingest.CollectionOutcome{
+						Collector: "scan", CoverageKey: inventory, ParentCoverageKey: root,
+						Target: serviceID, Method: "service_inventory:" + test.inventoryName, State: sdkingest.OutcomeComplete,
+					})
+				}
+				return &sdkingest.CollectionReport{State: sdkingest.OutcomeComplete, CoverageKeys: keys, Outcomes: outcomes}
+			}
+			ingestGraph := func(scanID string, collection *sdkingest.CollectionReport, graphData sdkingest.GraphData) {
+				t.Helper()
+				data := newPublicationIntegrationData("scan", scanID)
+				data.Meta.Collection = collection
+				data.Graph = graphData
+				if _, err := pipeline.Ingest(ctx, data); err != nil {
+					t.Fatalf("ingest %s: %v", scanID, err)
+				}
+			}
+
+			oldScanID := "typed-migration-" + test.name + "-old"
+			ingestGraph(oldScanID, report(false), sdkingest.GraphData{
+				Nodes: []sdkingest.Node{serviceNode(), {
+					ID: legacyID, Kinds: []string{"MCPResource"},
+					Properties:         map[string]any{"objectid": legacyID, "name": test.name + " legacy", "uri": test.legacyURI},
+					ObservationDomains: []string{root},
+				}},
+				Edges: []sdkingest.Edge{{
+					Source: serviceID, Target: legacyID, Kind: "PROVIDES_RESOURCE",
+					SourceKind: test.serviceKind, TargetKind: "MCPResource",
+					Properties: map[string]any{"risk_weight": 0.2}, ObservationDomains: []string{root},
+				}},
+			})
+
+			typedProps := map[string]any{"objectid": typedID, "sensitivity": "high"}
+			for key, value := range test.typedProperties {
+				typedProps[key] = value
+			}
+			ingestGraph("typed-migration-"+test.name+"-new", report(true), sdkingest.GraphData{
+				Nodes: []sdkingest.Node{serviceNode(), {
+					ID: typedID, Kinds: []string{test.typedKind}, Properties: typedProps,
+					ObservationDomains: []string{inventory},
+				}},
+				Edges: []sdkingest.Edge{{
+					Source: serviceID, Target: typedID, Kind: "PROVIDES_RESOURCE",
+					SourceKind: test.serviceKind, TargetKind: test.typedKind,
+					Properties: map[string]any{
+						"risk_weight": 0.2, "confidence": 1.0, "evidence_state": "verified",
+						"last_seen": "2026-09-04T12:00:00Z", "evidence": map[string]any{"source": test.inventoryName},
+					},
+					ObservationDomains: []string{inventory},
+				}},
+			})
+
+			present := func(rawID string) bool {
+				scopedID := sdkingest.ScopedNodeID(sdkingest.ScopeNetworkContext, identity.NetworkContextID, rawID)
+				node, _, err := db.GetNode(ctx, scopedID)
+				if err != nil {
+					t.Fatalf("read node %s: %v", scopedID, err)
+				}
+				return node != nil
+			}
+			if present(legacyID) || !present(typedID) {
+				t.Fatalf("current projection did not migrate %s resource", test.name)
+			}
+			if historical, err := appdb.NewScanStore(pool).GetScan(ctx, oldScanID); err != nil || historical == nil {
+				t.Fatalf("historical scan after migration = %+v, %v", historical, err)
+			}
+		})
+	}
+}
+
 func TestIntegrationExhaustiveRootRemovesMissingChildAcrossGraphAndPublication(t *testing.T) {
 	ctx, pipeline, db, _, pool := freshPublicationIntegrationHarness(t)
 	root := sdkingest.CanonicalCoverageKey("mcp", "root", "collect")
