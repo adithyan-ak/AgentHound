@@ -7,7 +7,7 @@
 //
 //	GET  /collections                            — list collection names
 //	GET  /collections/{name}                     — per-collection details (points_count, etc.)
-//	POST /collections/{name}/points/scroll       — paginated payload sampling (opt-in)
+//	POST /collections/{name}/points/scroll       — paginated point-reference sampling (opt-in)
 //
 // The GET-only default has ONE POST exception: /points/scroll, which
 // Qdrant's OpenAPI exposes only via POST. It is idempotent and
@@ -16,9 +16,8 @@
 // The collector runs it only under the fixed deep-scan preset.
 //
 // Each collection is represented once as :VectorCollection and joined to its
-// QdrantInstance via PROVIDES_RESOURCE. Deep mode records only bounded sample
-// counts on that collection; individual vector points never become graph
-// nodes.
+// QdrantInstance via PROVIDES_RESOURCE. Deep mode retains its bounded point
+// references as :VectorPoint children without treating them as MCP resources.
 package qdrantcollect
 
 import (
@@ -57,8 +56,8 @@ const (
 	// /points/scroll per collection under the deep preset.
 	DefaultPointsPerCollection = 100
 
-	// DefaultMaxTotalResources caps the global number of points sampled across
-	// all collections. It bounds work without expanding graph cardinality.
+	// DefaultMaxTotalResources caps the global number of point references
+	// retained across all collections.
 	DefaultMaxTotalResources = 5000
 
 	// scrollPageLimit is the per-request limit sent to /points/scroll.
@@ -81,7 +80,7 @@ type Collector struct{}
 //	"points-per-collection"  int   — per-collection sampling cap
 //	"max-total-resources"    int   — global cap across all collections
 func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.CollectOptions) (*action.CollectResult, error) {
-	_, host, _ := action.EndpointParts(t, DefaultPort, "http")
+	_, host, port := action.EndpointParts(t, DefaultPort, "http")
 	baseURL, err := action.CanonicalEndpointIdentity(t, DefaultPort, "http")
 	if err != nil {
 		return nil, fmt.Errorf("qdrant collection: canonical endpoint: %w", err)
@@ -186,9 +185,11 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 
 	var totalPoints int64
 	var pointsCountUnknown int
+	var pointDetailFailures int
 	for i := range names {
 		res.Summary.EndpointsProbed++
 		if detErrs[i] != "" {
+			pointDetailFailures++
 			slog.Debug("qdrant collection: collection detail failed",
 				"collection", names[i],
 				"error", detErrs[i])
@@ -208,8 +209,12 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 	props := res.IngestData.Graph.Nodes[0].Properties
 	props["collection_count"] = len(names)
 	props["collections"] = names
-	props["total_points"] = totalPoints
-	props["points_count_unknown"] = pointsCountUnknown
+	if pointDetailFailures == 0 && pointsCountUnknown == 0 {
+		props["total_points"] = totalPoints
+	} else {
+		res.IngestData.Graph.Nodes[0].PropertySemantics = ingest.NodePropertySemanticsPreserveOmissions
+	}
+	props["points_count_unknown"] = pointsCountUnknown + pointDetailFailures
 	props["anonymous_listing"] = true
 
 	collectionNodeIndex := make(map[string]int, len(names))
@@ -224,9 +229,13 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 			collectionProps["point_count"] = *points[i]
 		}
 		collectionNodeIndex[name] = len(res.IngestData.Graph.Nodes)
-		res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, ingest.Node{
+		collectionNode := ingest.Node{
 			ID: collectionID, Kinds: []string{"VectorCollection"}, Properties: collectionProps,
-		})
+		}
+		if detErrs[i] != "" || points[i] == nil || !includePoints {
+			collectionNode.PropertySemantics = ingest.NodePropertySemanticsPreserveOmissions
+		}
+		res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, collectionNode)
 		res.IngestData.Graph.Edges = append(res.IngestData.Graph.Edges, ingest.Edge{
 			Source: qdrantID, Target: collectionID, Kind: "PROVIDES_RESOURCE",
 			SourceKind: "QdrantInstance", TargetKind: "VectorCollection",
@@ -244,14 +253,41 @@ func (l *Collector) Collect(ctx context.Context, t action.Target, opts action.Co
 	var sampledPoints int
 	if includePoints && len(names) > 0 {
 		samples := scrollAllCollections(
-			ctx, client, res, baseURL, names, perCollectionCap, globalCap,
+			ctx, client, res, baseURL, host, port, names, perCollectionCap, globalCap,
 		)
 		for i, sample := range samples {
 			sampledPoints += sample.Count
+			collectionID := ingest.ComputeNodeID("VectorCollection", qdrantID, names[i])
 			node := &res.IngestData.Graph.Nodes[collectionNodeIndex[names[i]]]
 			node.Properties["sampled_point_count"] = sample.Count
 			node.Properties["sample_complete"] = sample.Complete
 			node.Properties["sample_limit"] = perCollectionCap
+			if !sample.Complete {
+				node.PropertySemantics = ingest.NodePropertySemanticsPreserveOmissions
+			}
+			for _, point := range sample.Points {
+				pointNodeID := ingest.ComputeNodeID("VectorPoint", collectionID, point.ID)
+				res.IngestData.Graph.Nodes = append(res.IngestData.Graph.Nodes, ingest.Node{
+					ID: pointNodeID, Kinds: []string{"VectorPoint"},
+					Properties: map[string]any{
+						"objectid": pointNodeID, "name": names[i] + "/" + point.ID,
+						"point_id": point.ID, "uri": point.URI, "uri_scheme": "qdrant",
+						"sensitivity": "high",
+					},
+				})
+				res.IngestData.Graph.Edges = append(res.IngestData.Graph.Edges, ingest.Edge{
+					Source: collectionID, Target: pointNodeID, Kind: "PROVIDES_RESOURCE",
+					SourceKind: "VectorCollection", TargetKind: "VectorPoint",
+					Properties: map[string]any{
+						"confidence": 1.0, "risk_weight": 0.2,
+						"evidence_state": string(ingest.EvidenceVerified), "last_seen": lastSeen,
+						"evidence": map[string]any{
+							"endpoint": baseURL, "source": "points_scroll",
+							"collection": names[i], "point_id": point.ID,
+						},
+					},
+				})
+			}
 		}
 		props["points_sampled"] = sampledPoints
 	}
@@ -350,6 +386,12 @@ func fetchCollectionPoints(ctx context.Context, client *http.Client, baseURL, na
 type pointSampleSummary struct {
 	Count    int
 	Complete bool
+	Points   []pointReference
+}
+
+type pointReference struct {
+	ID  string
+	URI string
 }
 
 // scrollAllCollections runs the bounded POST /points/scroll read for each
@@ -358,7 +400,8 @@ func scrollAllCollections(
 	ctx context.Context,
 	client *http.Client,
 	res *action.CollectResult,
-	baseURL string,
+	baseURL, host string,
+	port int,
 	names []string,
 	perCollectionCap, globalCap int,
 ) []pointSampleSummary {
@@ -391,7 +434,7 @@ func scrollAllCollections(
 					perColl = remaining
 				}
 				summary, err := fetchScrolledPointSummary(
-					ctx, client, baseURL, names[i], perColl,
+					ctx, client, baseURL, host, port, names[i], perColl,
 				)
 				mu.Lock()
 				accepted := summary.Count
@@ -403,6 +446,9 @@ func scrollAllCollections(
 					accepted = 0
 				}
 				summary.Count = accepted
+				if len(summary.Points) > accepted {
+					summary.Points = summary.Points[:accepted]
+				}
 				summaries[i] = summary
 				globalCount += accepted
 				if err != nil {
@@ -425,7 +471,9 @@ func scrollAllCollections(
 func fetchScrolledPointSummary(
 	ctx context.Context,
 	client *http.Client,
-	baseURL, collection string,
+	baseURL, host string,
+	port int,
+	collection string,
 	perCollectionCap int,
 ) (pointSampleSummary, error) {
 	if perCollectionCap <= 0 {
@@ -447,7 +495,7 @@ func fetchScrolledPointSummary(
 		}
 		body := map[string]any{
 			"limit":        limit,
-			"with_payload": true,
+			"with_payload": false,
 			"with_vector":  false,
 		}
 		if len(nextOffset) > 0 && string(nextOffset) != "null" {
@@ -461,18 +509,31 @@ func fetchScrolledPointSummary(
 		}
 		var parsed struct {
 			Result struct {
-				Points         []json.RawMessage `json:"points"`
-				NextPageOffset json.RawMessage   `json:"next_page_offset"`
+				Points []struct {
+					ID json.RawMessage `json:"id"`
+				} `json:"points"`
+				NextPageOffset json.RawMessage `json:"next_page_offset"`
 			} `json:"result"`
 		}
 		if err := json.Unmarshal(respBody, &parsed); err != nil {
 			return summary, fmt.Errorf("decode scroll: %w", err)
 		}
-		count := len(parsed.Result.Points)
-		if count > remaining {
-			count = remaining
+		for _, point := range parsed.Result.Points {
+			pointID := formatPointID(point.ID)
+			if pointID == "" {
+				return summary, errors.New("decode scroll: point is missing id")
+			}
+			summary.Points = append(summary.Points, pointReference{
+				ID: pointID,
+				URI: fmt.Sprintf(
+					"qdrant://%s:%d/%s/%s", host, port, collection, pointID,
+				),
+			})
+			if len(summary.Points) >= perCollectionCap {
+				break
+			}
 		}
-		summary.Count += count
+		summary.Count = len(summary.Points)
 		// Terminal: next_page_offset is JSON null / absent / empty.
 		if len(parsed.Result.NextPageOffset) == 0 ||
 			string(parsed.Result.NextPageOffset) == "null" ||
@@ -483,6 +544,22 @@ func fetchScrolledPointSummary(
 		nextOffset = parsed.Result.NextPageOffset
 	}
 	return summary, nil
+}
+
+// formatPointID renders a Qdrant integer or string point ID as the same
+// URL-safe reference retained by earlier artifacts.
+func formatPointID(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	s := strings.TrimSpace(string(raw))
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		var unquoted string
+		if err := json.Unmarshal(raw, &unquoted); err == nil {
+			return url.PathEscape(unquoted)
+		}
+	}
+	return s
 }
 
 // postJSON issues a POST with a JSON body and returns the response

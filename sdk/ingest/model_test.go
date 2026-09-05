@@ -229,14 +229,14 @@ func TestIngestEvidenceMetadataJSONRoundTrip(t *testing.T) {
 }
 
 func TestAllowedNodeKindsComplete(t *testing.T) {
-	if len(AllowedNodeKinds) != 26 {
-		t.Errorf("AllowedNodeKinds: got %d entries, want 26", len(AllowedNodeKinds))
+	if len(AllowedNodeKinds) != 27 {
+		t.Errorf("AllowedNodeKinds: got %d entries, want 27", len(AllowedNodeKinds))
 	}
 }
 
 func TestAllNodeLabelsComplete(t *testing.T) {
-	if len(AllNodeLabels) != 26 {
-		t.Errorf("AllNodeLabels: got %d entries, want 26", len(AllNodeLabels))
+	if len(AllNodeLabels) != 27 {
+		t.Errorf("AllNodeLabels: got %d entries, want 27", len(AllNodeLabels))
 	}
 }
 
@@ -253,7 +253,7 @@ func TestRawEdgeKindsComplete(t *testing.T) {
 }
 
 func TestTypedResourceAndBackendKindsRegistered(t *testing.T) {
-	for _, kind := range []string{"VectorCollection", "WorkspaceFile", "ModelArtifact", "ArtifactStore"} {
+	for _, kind := range []string{"VectorCollection", "VectorPoint", "WorkspaceFile", "ModelArtifact", "ArtifactStore"} {
 		if !AllowedNodeKinds[kind] {
 			t.Errorf("AllowedNodeKinds missing %q", kind)
 		}

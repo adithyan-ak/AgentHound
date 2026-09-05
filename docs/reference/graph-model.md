@@ -12,12 +12,12 @@ AgentHound stores collector observations as raw nodes and edges, then builds com
 | Authentication | `Identity`, `Credential` |
 | AI services | `OllamaInstance`, `VLLMInstance`, `QdrantInstance`, `MLflowServer`, `LiteLLMGateway`, `JupyterServer`, `LangServeApp`, `OpenWebUIInstance` |
 | Served models | `AIModel` |
-| Typed resources | `VectorCollection`, `WorkspaceFile`, `ModelArtifact`, `ArtifactStore` |
+| Typed resources | `VectorCollection`, `VectorPoint`, `WorkspaceFile`, `ModelArtifact`, `ArtifactStore` |
 | Query umbrella | `AIService` |
 
 Concrete AI-service nodes also carry the `AIService` label. The umbrella label is for queries and does not own identity.
 
-`AIModel` is a model served by a runtime such as Ollama. A persisted MLflow model version is a `ModelArtifact`, not an `AIModel`. `VectorCollection` represents a Qdrant collection rather than an individual point, and `WorkspaceFile` represents either a notebook or a regular file through its `entry_type` property.
+`AIModel` is a model served by a runtime such as Ollama. A persisted MLflow model version is a `ModelArtifact`, not an `AIModel`. `VectorCollection` represents a Qdrant collection; bounded deep reads retain individual point references as `VectorPoint` without treating them as MCP resources. `WorkspaceFile` represents either a notebook or a regular file through its `entry_type` property.
 
 ### Credential material
 
@@ -73,7 +73,7 @@ Raw edges come from collectors or same-scan proof actions.
 
 `CREDENTIAL_ACCESS_OBSERVED` connects a Credential to the exact MCPResource read successfully after the anonymous control was denied. `PUBLIC_ACCESS_OBSERVED` connects the MCPServer to a resource read anonymously. Both are supporting evidence rather than general traversal shortcuts.
 
-`PROVIDES_RESOURCE` retains historical service-to-`MCPResource` variants for V1 artifacts. New collection emits typed pairs: QdrantInstance→VectorCollection, JupyterServer→WorkspaceFile, and MLflowServer→ModelArtifact. `USES_BACKEND` records an explicit service dependency; `STORED_IN` records a model artifact's reported physical store.
+`PROVIDES_RESOURCE` retains historical service-to-`MCPResource` variants for V1 artifacts. New collection emits typed pairs: QdrantInstance→VectorCollection, VectorCollection→VectorPoint, JupyterServer→WorkspaceFile, and MLflowServer→ModelArtifact. `USES_BACKEND` records an explicit service dependency; `STORED_IN` records a model artifact's reported physical store.
 
 New typed-resource and backend edges include `evidence_state`: `configured` proves only that the source contains the reference, `observed` means the source API reported it, and `verified` requires authoritative enumeration or a bounded request through the source. Probing a destination separately does not upgrade a configured backend relationship.
 

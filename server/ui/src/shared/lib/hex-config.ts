@@ -23,6 +23,7 @@ import {
   MessageSquare,
   Boxes,
   Layers,
+  CircleDot,
   Folder,
   Package,
   HardDrive,
@@ -248,6 +249,14 @@ export const HEX_CONFIG: Record<string, HexKindConfig> = {
     icon: Layers,
     kindTag: "VECTOR COLLECTION",
     column: 3,
+    groupLabel: "Resources",
+  },
+  VectorPoint: {
+    strokeColor: NODE_KIND_COLORS.VectorPoint,
+    fillColor: EXPLORER_HEX_FILL,
+    icon: CircleDot,
+    kindTag: "VECTOR POINT",
+    column: 4,
     groupLabel: "Resources",
   },
   WorkspaceFile: {

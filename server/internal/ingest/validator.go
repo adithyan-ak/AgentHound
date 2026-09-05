@@ -1067,6 +1067,8 @@ func validateNodePropertySemantics(node ingest.Node, index int) []FieldError {
 	switch node.PropertySemantics {
 	case "":
 		return nil
+	case ingest.NodePropertySemanticsPreserveOmissions:
+		return nil
 	case ingest.NodePropertySemanticsReferenceOnly:
 		if len(node.Properties) != 0 {
 			return []FieldError{{
@@ -1657,6 +1659,12 @@ func validateParentChildID(
 		name, _ := target.Properties["name"].(string)
 		if name != "" {
 			expected = ingest.ComputeNodeID("VectorCollection", edge.Source, name)
+		}
+	case edge.Kind == "PROVIDES_RESOURCE" &&
+		edge.SourceKind == "VectorCollection" && edge.TargetKind == "VectorPoint":
+		pointID, _ := target.Properties["point_id"].(string)
+		if pointID != "" {
+			expected = ingest.ComputeNodeID("VectorPoint", edge.Source, pointID)
 		}
 	case edge.Kind == "PROVIDES_RESOURCE" &&
 		edge.SourceKind == "JupyterServer" && edge.TargetKind == "WorkspaceFile":

@@ -149,6 +149,8 @@ func (w *Writer) writeNodesBatched(
 					"complete_domain_prefixes":                completePrefixes,
 					"reference_only": n.PropertySemantics ==
 						ingest.NodePropertySemanticsReferenceOnly,
+					"preserve_omissions": n.PropertySemantics ==
+						ingest.NodePropertySemanticsPreserveOmissions,
 				}
 			}
 
@@ -193,7 +195,8 @@ WITH n, node, observation_created,
      old_first_seen, old_tokens, old_reference_tokens, old_fact_fingerprints,
      old_properties_complete,
      [token IN old_tokens WHERE NOT token IN old_reference_tokens] AS old_authoritative_tokens,
-     (size(node.observation_tokens) > 0
+     (NOT node.preserve_omissions
+      AND size(node.observation_tokens) > 0
       AND all(token IN node.observation_tokens WHERE
           any(prefix IN node.complete_domain_prefixes WHERE token STARTS WITH prefix))) AS incoming_authoritative
 WITH n, node, observation_created,
@@ -1145,6 +1148,7 @@ func validateWriterNodes(nodes []ingest.Node) error {
 		}
 		switch node.PropertySemantics {
 		case "":
+		case ingest.NodePropertySemanticsPreserveOmissions:
 		case ingest.NodePropertySemanticsReferenceOnly:
 			for key := range node.Properties {
 				if key != "objectid" {

@@ -28,6 +28,7 @@ var AllowedNodeKinds = map[string]bool{
 	"AIService":         true,
 	"AIModel":           true,
 	"VectorCollection":  true,
+	"VectorPoint":       true,
 	"WorkspaceFile":     true,
 	"ModelArtifact":     true,
 	"ArtifactStore":     true,
@@ -44,7 +45,7 @@ var PublicNodeLabels = []string{
 	"ConfigFile", "InstructionFile",
 	"OllamaInstance", "VLLMInstance", "QdrantInstance", "MLflowServer",
 	"LiteLLMGateway", "JupyterServer", "LangServeApp", "OpenWebUIInstance",
-	"AIModel", "VectorCollection", "WorkspaceFile", "ModelArtifact",
+	"AIModel", "VectorCollection", "VectorPoint", "WorkspaceFile", "ModelArtifact",
 	"ArtifactStore", "AIService",
 }
 
@@ -58,7 +59,7 @@ var AllNodeLabels = []string{
 	"ConfigFile", "InstructionFile",
 	"OllamaInstance", "VLLMInstance", "QdrantInstance", "MLflowServer",
 	"LiteLLMGateway", "JupyterServer", "LangServeApp", "OpenWebUIInstance",
-	"AIService", "AIModel", "VectorCollection", "WorkspaceFile",
+	"AIService", "AIModel", "VectorCollection", "VectorPoint", "WorkspaceFile",
 	"ModelArtifact", "ArtifactStore",
 }
 
@@ -217,8 +218,8 @@ var EdgeKindEndpoints = map[string]EdgeEndpoints{
 	"TRUSTS_SERVER": {SourceKinds: []string{"AgentInstance"}, TargetKinds: []string{"MCPServer"}},
 	"PROVIDES_TOOL": {SourceKinds: []string{"MCPServer"}, TargetKinds: []string{"MCPTool"}},
 	"PROVIDES_RESOURCE": {
-		SourceKinds: []string{"MCPServer", "JupyterServer", "MLflowServer", "QdrantInstance"},
-		TargetKinds: []string{"MCPResource", "WorkspaceFile", "ModelArtifact", "VectorCollection"},
+		SourceKinds: []string{"MCPServer", "JupyterServer", "MLflowServer", "QdrantInstance", "VectorCollection"},
+		TargetKinds: []string{"MCPResource", "WorkspaceFile", "ModelArtifact", "VectorCollection", "VectorPoint"},
 		Pairs: []EdgeEndpointPair{
 			{SourceKind: "MCPServer", TargetKind: "MCPResource"},
 			{SourceKind: "JupyterServer", TargetKind: "MCPResource"},
@@ -227,6 +228,7 @@ var EdgeKindEndpoints = map[string]EdgeEndpoints{
 			{SourceKind: "MLflowServer", TargetKind: "ModelArtifact"},
 			{SourceKind: "QdrantInstance", TargetKind: "MCPResource"},
 			{SourceKind: "QdrantInstance", TargetKind: "VectorCollection"},
+			{SourceKind: "VectorCollection", TargetKind: "VectorPoint"},
 		},
 	},
 	"PROVIDES_PROMPT":       {SourceKinds: []string{"MCPServer"}, TargetKinds: []string{"MCPPrompt"}},

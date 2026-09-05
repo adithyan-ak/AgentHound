@@ -196,6 +196,12 @@ func artifactNodeScopes(data *IngestData, coverageScopes map[string]scopeRef) ma
 			} else {
 				scopes[node.ID] = networkScope
 			}
+		case "ArtifactStore":
+			// Remote stores have endpoint-derived identity. Do not inherit the
+			// scope of whichever STORED_IN parent happens to be processed first.
+			if node.Properties["scope"] == "remote" {
+				scopes[node.ID] = networkScope
+			}
 		}
 	}
 
@@ -270,7 +276,7 @@ func referenceFollowsCoverageScope(kind string) bool {
 		"MCPServer", "MCPTool", "MCPResource", "MCPPrompt", "A2AAgent", "A2ASkill",
 		"OllamaInstance", "VLLMInstance", "QdrantInstance", "MLflowServer",
 		"LiteLLMGateway", "JupyterServer", "LangServeApp", "OpenWebUIInstance",
-		"VectorCollection", "WorkspaceFile", "ModelArtifact", "ArtifactStore":
+		"VectorCollection", "VectorPoint", "WorkspaceFile", "ModelArtifact", "ArtifactStore":
 		return true
 	default:
 		return false

@@ -18,6 +18,7 @@ const NODE_KEY_BY_LENS: Record<string, NodeKeyItem[]> = {
     { color: NODE_KIND_COLORS.MCPTool, label: "Tool" },
     { color: NODE_KIND_COLORS.MCPResource, label: "Resource" },
     { color: NODE_KIND_COLORS.VectorCollection, label: "Vector collection" },
+    { color: NODE_KIND_COLORS.VectorPoint, label: "Vector point" },
     { color: NODE_KIND_COLORS.WorkspaceFile, label: "Workspace file" },
     { color: NODE_KIND_COLORS.ModelArtifact, label: "Model artifact" },
     { color: NODE_KIND_COLORS.ArtifactStore, label: "Artifact store" },

@@ -766,6 +766,7 @@ func TestIntegrationServiceInventoryPreservesThenRetiresLegacyResources(t *testi
 	legacyURI := "qdrant://qdrant:6333/docs/point-1"
 	legacyID := sdkingest.ComputeNodeID("MCPResource", qdrantID, legacyURI)
 	collectionID := sdkingest.ComputeNodeID("VectorCollection", qdrantID, "docs")
+	pointID := sdkingest.ComputeNodeID("VectorPoint", collectionID, "point-1")
 
 	report := func(rootState, inventoryState sdkingest.OutcomeState) *sdkingest.CollectionReport {
 		outcomes := []sdkingest.CollectionOutcome{{
@@ -794,7 +795,7 @@ func TestIntegrationServiceInventoryPreservesThenRetiresLegacyResources(t *testi
 			ObservationDomains: []string{scope},
 		}
 	}
-	typedGraph := func(includeCollection bool) sdkingest.GraphData {
+	typedGraph := func(includeCollection, includePoint bool) sdkingest.GraphData {
 		graphData := sdkingest.GraphData{
 			Nodes: []sdkingest.Node{serviceNode(inventory)}, Edges: []sdkingest.Edge{},
 		}
@@ -816,6 +817,26 @@ func TestIntegrationServiceInventoryPreservesThenRetiresLegacyResources(t *testi
 			},
 			ObservationDomains: []string{inventory},
 		})
+		if includePoint {
+			graphData.Nodes = append(graphData.Nodes, sdkingest.Node{
+				ID: pointID, Kinds: []string{"VectorPoint"},
+				Properties: map[string]any{
+					"objectid": pointID, "name": "docs/point-1", "point_id": "point-1",
+					"uri": legacyURI, "uri_scheme": "qdrant", "sensitivity": "high",
+				},
+				ObservationDomains: []string{inventory},
+			})
+			graphData.Edges = append(graphData.Edges, sdkingest.Edge{
+				Source: collectionID, Target: pointID, Kind: "PROVIDES_RESOURCE",
+				SourceKind: "VectorCollection", TargetKind: "VectorPoint",
+				Properties: map[string]any{
+					"risk_weight": 0.2, "confidence": 1.0, "evidence_state": "verified",
+					"last_seen": "2026-08-27T12:00:00Z",
+					"evidence":  map[string]any{"source": "points_scroll", "collection": "docs", "point_id": "point-1"},
+				},
+				ObservationDomains: []string{inventory},
+			})
+		}
 		return graphData
 	}
 	present := func(rawID string) bool {
@@ -859,18 +880,18 @@ func TestIntegrationServiceInventoryPreservesThenRetiresLegacyResources(t *testi
 		t.Fatal("legacy resource was not written")
 	}
 
-	ingestArtifact("service-inventory-partial", report(sdkingest.OutcomePartial, sdkingest.OutcomePartial), typedGraph(true))
+	ingestArtifact("service-inventory-partial", report(sdkingest.OutcomePartial, sdkingest.OutcomePartial), typedGraph(true, false))
 	if !present(legacyID) || !present(collectionID) {
 		t.Fatal("partial replacement did not preserve legacy and write typed resource")
 	}
 
-	ingestArtifact("service-inventory-complete", report(sdkingest.OutcomeComplete, sdkingest.OutcomeComplete), typedGraph(true))
-	if present(legacyID) || !present(collectionID) {
-		t.Fatal("complete replacement did not retire legacy resource after writing typed resource")
+	ingestArtifact("service-inventory-complete", report(sdkingest.OutcomeComplete, sdkingest.OutcomeComplete), typedGraph(true, true))
+	if present(legacyID) || !present(collectionID) || !present(pointID) {
+		t.Fatal("complete replacement did not replace the legacy point with typed collection and point resources")
 	}
 
-	ingestArtifact("service-inventory-empty", report(sdkingest.OutcomeComplete, sdkingest.OutcomeComplete), typedGraph(false))
-	if present(collectionID) {
+	ingestArtifact("service-inventory-empty", report(sdkingest.OutcomeComplete, sdkingest.OutcomeComplete), typedGraph(false, false))
+	if present(collectionID) || present(pointID) {
 		t.Fatal("subsequent complete inventory did not retire stale typed resource")
 	}
 }

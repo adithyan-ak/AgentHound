@@ -78,7 +78,7 @@ AgentHound maps MCP, A2A, twelve agent-client configuration formats, model gatew
 <td width="50%" valign="top">
 
 🧬 **Deep service and model intelligence**<br/>
-Inventory Ollama served models, modelfiles, templates, and system prompts; LiteLLM credential references and virtual-key context; MLflow experiments and model registries; Jupyter sessions and files; and Qdrant collections. Deep mode adds recursive instruction discovery, bounded vector sampling summaries, and Ollama compute verification.
+Inventory Ollama served models, modelfiles, templates, and system prompts; LiteLLM credential references and virtual-key context; MLflow experiments and model registries; Jupyter sessions and files; and Qdrant collections. Deep mode adds recursive instruction discovery, bounded vector point references, and Ollama compute verification.
 
 </td>
 </tr>
@@ -107,7 +107,7 @@ The collector writes an ingest-valid artifact before collection and checkpoints 
 | **A2A** | Agent cards, skills, delegation, authentication schemes, signatures, and remote JWKS evidence | Authenticated agent-card enrichment, impersonation and confused-deputy analysis, and cross-protocol pathing |
 | **LiteLLM** | Gateway posture, observed master keys, upstream-provider references, virtual-key hashes, models, aliases, and spend context | Compatible credential reuse, credential-chain correlation, and exposed-master-key findings |
 | **Ollama / vLLM** | Ollama model inventory, digests, modelfiles, templates, system prompts, and fine-tune signals; vLLM fingerprinting | Deep active mode invokes a bounded embedding request to prove model-compute access |
-| **Qdrant** | Typed vector collections, point counts, schema context, and bounded sampling summaries in deep mode | Anonymous exposure and sensitive vector-data analysis without per-point graph expansion |
+| **Qdrant** | Typed vector collections, point counts, schema context, and bounded point references in deep mode | Anonymous exposure and sensitive vector-data analysis without retaining vector payloads |
 | **MLflow** | Experiments, runs, registered models, model versions, and artifact/storage URIs | Anonymous tracking and registry exposure analysis |
 | **Jupyter** | Sessions and bounded notebook/content trees, first anonymously and then with a compatible token | Distinguishes public from credential-gated notebook access |
 | **Open WebUI / LangServe** | Open WebUI authentication posture and authenticated upstream/RAG credential inventory; LangServe fingerprinting | Credential expansion and exposed-service analysis |
@@ -154,7 +154,7 @@ Choose the mode that matches the operation:
 | Command | Behavior |
 |---|---|
 | `agenthound scan` | Active collection, compatible credential reuse, MCP access proof, and eligible reversible ContextForge validation |
-| `agenthound scan --deep` | Adds recursive instruction discovery, Qdrant sampling summaries, expensive service probes, and bounded Ollama embedding invocation |
+| `agenthound scan --deep` | Adds recursive instruction discovery, bounded Qdrant point references, expensive service probes, and bounded Ollama embedding invocation |
 | `agenthound scan --stealth` | Anonymous and exact configured read-only collection; no cross-target credential reuse, model invocation, tool invocation, or mutation |
 | `agenthound scan --stealth --deep` | Adds deep filesystem and payload reads while retaining stealth restrictions |
 

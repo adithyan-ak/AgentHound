@@ -42,6 +42,7 @@ export const NODE_KIND_COLORS = {
   // #EF4444 — readers can't distinguish a sensitive resource from a model.
   AIModel: "#6A1B9A",            // deep purple — distinct from A2AAgent / AIService / QdrantInstance
   VectorCollection: "#7986CB",   // light indigo — Qdrant-owned collection boundary
+  VectorPoint: "#90A4AE",        // blue-grey — bounded point reference within a collection
   WorkspaceFile: "#FFB74D",      // warm amber — interactive workspace content
   ModelArtifact: "#AB47BC",      // purple — persisted model package, not a served model
   ArtifactStore: "#607D8B",      // blue-grey — storage boundary

@@ -57,6 +57,7 @@ func TestProvidesResource_AcceptsMLflowAndQdrantSources(t *testing.T) {
 		{SourceKind: "JupyterServer", TargetKind: "WorkspaceFile"},
 		{SourceKind: "MLflowServer", TargetKind: "ModelArtifact"},
 		{SourceKind: "QdrantInstance", TargetKind: "VectorCollection"},
+		{SourceKind: "VectorCollection", TargetKind: "VectorPoint"},
 	}
 	for _, pair := range wantPairs {
 		if !EndpointKindsAllowed("PROVIDES_RESOURCE", pair.SourceKind, pair.TargetKind) {

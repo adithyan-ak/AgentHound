@@ -36,7 +36,8 @@ export function getPropertyChips(kind: string, properties: Record<string, unknow
       }
       break;
     }
-    case "MCPResource": {
+    case "MCPResource":
+    case "VectorPoint": {
       const scheme = properties.uri_scheme;
       if (typeof scheme === "string") chips.push(scheme + "://");
       const sensitivity = properties.sensitivity;

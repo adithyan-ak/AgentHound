@@ -26,6 +26,7 @@ export type NodeKind =
   | "AIService"
   | "AIModel"
   | "VectorCollection"
+  | "VectorPoint"
   | "WorkspaceFile"
   | "ModelArtifact"
   | "ArtifactStore";
