@@ -55,6 +55,8 @@ For A2A, a bearer retry remains eligible when the bounded anonymous probe is pro
 
 Anonymous collection covers applicable LiteLLM, Open WebUI, Jupyter, Qdrant, MLflow, and Ollama endpoints. New targets and credentials are indexed as they appear, allowing useful authenticated work during the same scan.
 
+Open WebUI configuration inventory requires an authorized credential. AgentHound reads the configured Ollama backends and enabled Qdrant external-knowledge connections, but never stores their backend authentication material. One successful exhaustive configuration pass completes that Open WebUI inventory and suppresses remaining credential guesses; earlier rejected guesses remain in the action journal and do not erase the successful result. A failed or truncated configuration endpoint keeps the inventory incomplete. Backend links mean “configured,” not “reachable”: AgentHound does not infer them from matching hosts or upgrade them because a separate destination probe succeeded.
+
 ## Instruction integrity
 
 AgentHound classifies collected `AGENTS.md`, `CLAUDE.md`, Cursor, Copilot, and related instruction sources with deterministic content rules. Ordinary policy language such as “never use production credentials” or “use X instead of Y” remains clean. Evidence composes only within a bounded directive and cannot cross headings or inert-region boundaries. Explicitly labeled examples and detector fixtures remain clean unless surrounding text tells the agent to execute them.

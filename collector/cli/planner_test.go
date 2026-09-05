@@ -11,6 +11,7 @@ import (
 	a2acollector "github.com/adithyan-ak/agenthound/modules/a2a"
 	_ "github.com/adithyan-ak/agenthound/modules/litellmcollect"
 	_ "github.com/adithyan-ak/agenthound/modules/ollamacollect"
+	_ "github.com/adithyan-ak/agenthound/modules/openwebuicollect"
 	_ "github.com/adithyan-ak/agenthound/modules/qdrantcollect"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
@@ -349,6 +350,37 @@ func TestDeepServiceCollectionDoesNotRepeatBaseInventory(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestCompleteOpenWebUIInventorySuppressesRemainingCredentialGuesses(t *testing.T) {
+	const serviceID = "openwebui-1"
+	graph := ingest.GraphData{Nodes: []ingest.Node{
+		{
+			ID: serviceID, Kinds: []string{"OpenWebUIInstance", "AIService"},
+			Properties: map[string]any{"endpoint": "http://openwebui:3000"},
+		},
+		{
+			ID: "credential-1", Kinds: []string{"Credential"},
+			Properties: map[string]any{
+				"value": "admin-token", "value_hash": "hash",
+				"material_status": string(common.CredentialMaterialObserved),
+				"auth_method":     string(common.AuthAPIKey), "type": "api_key",
+			},
+		},
+	}}
+	coverageKey := serviceInventoryCoverageKey("openwebui.collect", serviceID, "configuration")
+	baseline := buildPlannerView(graph, nil, map[string]bool{}, false, false)
+	if got := len((serviceCollectAction{}).Candidates(baseline)); got < 2 {
+		t.Fatalf("baseline Open WebUI candidates = %d, want anonymous and credential attempts", got)
+	}
+	view := buildPlannerView(
+		graph, nil, map[string]bool{completedInventoryKey(coverageKey): true}, false, false,
+	)
+	for _, candidate := range (serviceCollectAction{}).Candidates(view) {
+		if candidate.Inputs["service"] == "openwebui" {
+			t.Fatalf("complete configuration inventory scheduled another Open WebUI attempt: %+v", candidate)
+		}
 	}
 }
 

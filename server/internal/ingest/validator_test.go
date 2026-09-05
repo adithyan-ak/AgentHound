@@ -249,6 +249,53 @@ func TestValidatorAcceptsJupyterAndMLflowTypedResources(t *testing.T) {
 	})
 }
 
+func TestValidatorAcceptsConfiguredOpenWebUIBackends(t *testing.T) {
+	for _, target := range []struct {
+		name     string
+		kind     string
+		endpoint string
+	}{
+		{name: "Ollama", kind: "OllamaInstance", endpoint: "http://ollama:11434"},
+		{name: "Qdrant", kind: "QdrantInstance", endpoint: "http://qdrant:6333"},
+	} {
+		t.Run(target.name, func(t *testing.T) {
+			data := validIngestData()
+			scope := data.Meta.Collection.CoverageKeys[0]
+			openwebuiID := ingest.ComputeNodeID("OpenWebUIInstance", "http://openwebui:3000")
+			backendID := ingest.ComputeNodeID(target.kind, target.endpoint)
+			data.Graph.Nodes = []ingest.Node{
+				{
+					ID: openwebuiID, Kinds: []string{"OpenWebUIInstance", "AIService"},
+					Properties: map[string]any{
+						"objectid": openwebuiID, "endpoint": "http://openwebui:3000",
+					},
+					ObservationDomains: []string{scope},
+				},
+				{
+					ID: backendID, Kinds: []string{target.kind, "AIService"},
+					Properties: map[string]any{
+						"objectid": backendID, "endpoint": target.endpoint,
+					},
+					ObservationDomains: []string{scope},
+				},
+			}
+			data.Graph.Edges = []ingest.Edge{{
+				Source: openwebuiID, Target: backendID, Kind: "USES_BACKEND",
+				SourceKind: "OpenWebUIInstance", TargetKind: target.kind,
+				Properties: map[string]any{
+					"risk_weight": 0.3, "confidence": 1.0,
+					"evidence_state": "configured", "last_seen": "2026-08-27T12:00:00Z",
+					"evidence": map[string]any{"source": "openwebui_config"},
+				},
+				ObservationDomains: []string{scope},
+			}}
+			if err := NewValidator().Validate(data); err != nil {
+				t.Fatalf("valid configured backend rejected: %v", err)
+			}
+		})
+	}
+}
+
 func validInstructionEvidenceData(t *testing.T) *ingest.IngestData {
 	t.Helper()
 	data := validIngestData()
