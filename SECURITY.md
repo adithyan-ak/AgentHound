@@ -8,7 +8,7 @@ AgentHound welcomes reports that help protect its users, their assessment data, 
 | --- | --- |
 | Latest stable release in the `1.1.x` line | Yes |
 | Current `main` branch | Yes |
-| Prerelease, development, and older releases | No |
+| Other prerelease builds and older release lines | No |
 
 If an issue affects an unsupported version, please still report it if you can reproduce it on a supported version or believe it materially affects users of the current release.
 
