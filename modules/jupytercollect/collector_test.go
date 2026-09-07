@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
+	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
 // sessionsBody now includes an empty-path console kernel — must still
@@ -95,22 +96,32 @@ func TestCollect_JupyterHappy(t *testing.T) {
 		props["contents_access"] != "anonymous" {
 		t.Errorf("protected endpoint access = %+v", props)
 	}
-	// Every subsequent node is an :MCPResource with jupyter:// URI.
+	// Every subsequent node is a typed workspace file with a normalized path.
 	for _, n := range res.IngestData.Graph.Nodes[1:] {
-		if n.Kinds[0] != "MCPResource" {
-			t.Errorf("resource node kind = %v, want MCPResource", n.Kinds)
+		if n.Kinds[0] != "WorkspaceFile" {
+			t.Errorf("resource node kind = %v, want WorkspaceFile", n.Kinds)
 		}
-		if uri, _ := n.Properties["uri"].(string); !strings.HasPrefix(uri, "jupyter://") {
-			t.Errorf("uri = %q, want jupyter:// prefix", uri)
+		if path, _ := n.Properties["path"].(string); path == "" || strings.HasPrefix(path, "/") {
+			t.Errorf("path = %q, want normalized workspace-relative path", path)
+		}
+		if entryType, _ := n.Properties["entry_type"].(string); entryType != "notebook" && entryType != "file" {
+			t.Errorf("entry_type = %q, want notebook or file", entryType)
 		}
 	}
 	for _, e := range res.IngestData.Graph.Edges {
 		if e.Kind != "PROVIDES_RESOURCE" {
 			t.Errorf("edge kind = %q, want PROVIDES_RESOURCE", e.Kind)
 		}
-		if e.SourceKind != "JupyterServer" || e.TargetKind != "MCPResource" {
-			t.Errorf("edge endpoints = %s -> %s, want JupyterServer -> MCPResource", e.SourceKind, e.TargetKind)
+		if e.SourceKind != "JupyterServer" || e.TargetKind != "WorkspaceFile" {
+			t.Errorf("edge endpoints = %s -> %s, want JupyterServer -> WorkspaceFile", e.SourceKind, e.TargetKind)
 		}
+		if e.Properties["evidence_state"] != "verified" {
+			t.Errorf("edge evidence = %+v, want verified", e.Properties)
+		}
+	}
+	if res.Inventory == nil || res.Inventory.Name != "contents" ||
+		res.Inventory.State != ingest.OutcomeComplete || res.Inventory.Items != 4 {
+		t.Fatalf("inventory = %+v, want complete four-file contents", res.Inventory)
 	}
 }
 
@@ -156,6 +167,9 @@ func TestCollect_Jupyter_SessionsFail(t *testing.T) {
 		props["contents_access"] != "anonymous" {
 		t.Errorf("mixed protected endpoint access = %+v", props)
 	}
+	if res.Inventory == nil || res.Inventory.State != ingest.OutcomeComplete {
+		t.Fatalf("sessions failure downgraded complete contents inventory: %+v", res.Inventory)
+	}
 }
 
 func TestCollect_Jupyter_AllFail(t *testing.T) {
@@ -183,6 +197,9 @@ func TestCollect_Jupyter_AllFail(t *testing.T) {
 		props["auth_assurance"] != "unknown" ||
 		props["auth_evidence"] != "unknown" {
 		t.Errorf("indeterminate protected endpoint posture = %+v", props)
+	}
+	if res.Inventory == nil || res.Inventory.State != ingest.OutcomeFailed {
+		t.Fatalf("failed contents inventory = %+v, want failed", res.Inventory)
 	}
 }
 
@@ -347,6 +364,9 @@ func TestCollect_Jupyter_MaxDepthCap(t *testing.T) {
 		!strings.Contains(res.PartialErrors[0], "max_depth=2") {
 		t.Fatalf("depth truncation diagnostic = %v", res.PartialErrors)
 	}
+	if res.Inventory == nil || res.Inventory.State != ingest.OutcomeTruncated {
+		t.Fatalf("depth-limited inventory = %+v, want truncated", res.Inventory)
+	}
 }
 
 func TestFetchContentsRecursiveCountsDirectoriesAgainstMaxItems(t *testing.T) {
@@ -449,6 +469,9 @@ func TestCollect_Jupyter_SubdirForbidden(t *testing.T) {
 	if !sawForbidden {
 		t.Errorf("PartialErrors missing entry with prefix %q; got %v", wantPrefix, res.PartialErrors)
 	}
+	if res.Inventory == nil || res.Inventory.State != ingest.OutcomePartial {
+		t.Fatalf("directory-failed inventory = %+v, want partial", res.Inventory)
+	}
 	// Confirm the forbidden dir was probed exactly once (walk did not
 	// retry).
 	mu.Lock()
@@ -458,27 +481,38 @@ func TestCollect_Jupyter_SubdirForbidden(t *testing.T) {
 	mu.Unlock()
 }
 
-// notebookPaths returns the path property of every :MCPResource node.
+// notebookPaths returns the normalized path of every WorkspaceFile node.
 func notebookPaths(res *action.CollectResult) []string {
 	var out []string
 	for _, n := range res.IngestData.Graph.Nodes {
-		if len(n.Kinds) == 0 || n.Kinds[0] != "MCPResource" {
+		if len(n.Kinds) == 0 || n.Kinds[0] != "WorkspaceFile" {
 			continue
 		}
-		uri, _ := n.Properties["uri"].(string)
-		// Extract the path portion after jupyter://host:port/
-		idx := strings.Index(uri, "://")
-		if idx < 0 {
-			continue
-		}
-		rest := uri[idx+3:]
-		slash := strings.Index(rest, "/")
-		if slash < 0 {
-			continue
-		}
-		out = append(out, rest[slash+1:])
+		path, _ := n.Properties["path"].(string)
+		out = append(out, path)
 	}
 	return out
+}
+
+func TestNormalizeWorkspacePathAndIdentity(t *testing.T) {
+	serverID := "jupyter-server"
+	if got := normalizeWorkspacePath("/work/notes.ipynb"); got != "work/notes.ipynb" {
+		t.Fatalf("leading-root normalization = %q", got)
+	}
+	for _, pair := range [][2]string{
+		{"notes ", "notes"},
+		{`folder/a\b.ipynb`, "folder/a/b.ipynb"},
+	} {
+		left := normalizeWorkspacePath(pair[0])
+		right := normalizeWorkspacePath(pair[1])
+		if left == right {
+			t.Fatalf("distinct workspace paths collapsed: %q and %q", pair[0], pair[1])
+		}
+		if ingest.ComputeNodeID("WorkspaceFile", serverID, left) ==
+			ingest.ComputeNodeID("WorkspaceFile", serverID, right) {
+			t.Fatalf("distinct workspace paths produced the same identity: %q and %q", left, right)
+		}
+	}
 }
 
 // Force fmt import so build stays green if imports narrow later.

@@ -45,7 +45,10 @@ func (f *Fingerprinter) Fingerprint(ctx context.Context, t action.Target) (*acti
 		return nil, errors.New("qdrant fingerprinter: rule not loaded")
 	}
 	_, host, _ := action.EndpointParts(t, DefaultPort, "http")
-	baseURL := action.EndpointBaseURL(t, DefaultPort, "http")
+	baseURL, err := action.CanonicalEndpointIdentity(t, DefaultPort, "http")
+	if err != nil {
+		return nil, fmt.Errorf("qdrant fingerprinter: canonical endpoint: %w", err)
+	}
 
 	client := rules.DefaultFingerprintHTTPClient(DefaultProbeTimeout)
 	res, err := rules.RunFingerprint(ctx, client, baseURL, *f.rule)

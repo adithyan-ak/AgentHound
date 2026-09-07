@@ -456,6 +456,57 @@ func TestScopeArtifactEndpointChildrenPreferOwningTopologyOverBroadCoverage(t *t
 	}
 }
 
+func TestScopeArtifactRemoteStoreScopeIsIndependentOfEdgeOrder(t *testing.T) {
+	identity := strongTestIdentity("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	root := CollectorRootCoverageKey("scan")
+	storeID := ComputeNodeID("ArtifactStore", "s3://fixture-bucket")
+	localID := ComputeNodeID("MLflowServer", "http://127.0.0.1:5000")
+	remoteID := ComputeNodeID("MLflowServer", "http://mlflow.example:5000")
+	localArtifactID := ComputeNodeID("ModelArtifact", localID, "fixture", "1")
+	remoteArtifactID := ComputeNodeID("ModelArtifact", remoteID, "fixture", "1")
+
+	scoped := func(reverse bool) (string, string) {
+		nodes := []Node{
+			{ID: localID, Kinds: []string{"MLflowServer", "AIService"}, Properties: map[string]any{"endpoint": "http://127.0.0.1:5000"}, ObservationDomains: []string{root}},
+			{ID: remoteID, Kinds: []string{"MLflowServer", "AIService"}, Properties: map[string]any{"endpoint": "http://mlflow.example:5000"}, ObservationDomains: []string{root}},
+			{ID: localArtifactID, Kinds: []string{"ModelArtifact"}, Properties: map[string]any{"name": "fixture", "version": "1"}, ObservationDomains: []string{root}},
+			{ID: remoteArtifactID, Kinds: []string{"ModelArtifact"}, Properties: map[string]any{"name": "fixture", "version": "1"}, ObservationDomains: []string{root}},
+			{ID: storeID, Kinds: []string{"ArtifactStore"}, Properties: map[string]any{"root_uri": "s3://fixture-bucket", "scope": "remote"}, ObservationDomains: []string{root}},
+		}
+		edges := []Edge{
+			{Source: localID, Target: localArtifactID, Kind: "PROVIDES_RESOURCE", SourceKind: "MLflowServer", TargetKind: "ModelArtifact", ObservationDomains: []string{root}},
+			{Source: remoteID, Target: remoteArtifactID, Kind: "PROVIDES_RESOURCE", SourceKind: "MLflowServer", TargetKind: "ModelArtifact", ObservationDomains: []string{root}},
+			{Source: localArtifactID, Target: storeID, Kind: "STORED_IN", SourceKind: "ModelArtifact", TargetKind: "ArtifactStore", ObservationDomains: []string{root}},
+			{Source: remoteArtifactID, Target: storeID, Kind: "STORED_IN", SourceKind: "ModelArtifact", TargetKind: "ArtifactStore", ObservationDomains: []string{root}},
+		}
+		if reverse {
+			edges[2], edges[3] = edges[3], edges[2]
+		}
+		data := &IngestData{
+			Meta: IngestMeta{Version: CurrentVersion, ScanID: "remote-store-scope", Identity: identity, Collection: &CollectionReport{
+				State: OutcomeComplete, CoverageKeys: []string{root},
+				Outcomes: []CollectionOutcome{{Collector: "scan", CoverageKey: root, Target: "scan", Method: "collect", State: OutcomeComplete}},
+			}},
+			Graph: GraphData{Nodes: nodes, Edges: edges},
+		}
+		if err := ScopeArtifact(data); err != nil {
+			t.Fatal(err)
+		}
+		store := data.Graph.Nodes[4]
+		identityScope, ok := store.Properties["identity_scope"].(string)
+		if !ok {
+			t.Fatalf("remote store identity_scope = %v", store.Properties["identity_scope"])
+		}
+		return store.ID, identityScope
+	}
+
+	firstID, firstScope := scoped(false)
+	secondID, secondScope := scoped(true)
+	if firstID != secondID || firstScope != string(ScopeNetworkContext) || secondScope != string(ScopeNetworkContext) {
+		t.Fatalf("remote store scope changed with edge order: %s/%s vs %s/%s", firstID, firstScope, secondID, secondScope)
+	}
+}
+
 func TestScopeArtifactConfigCredentialRemainsPointScopedForRemoteService(t *testing.T) {
 	identity := strongTestIdentity("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 	coverageKey := CanonicalCoverageKey("config", "path", "/tmp/mcp.json")

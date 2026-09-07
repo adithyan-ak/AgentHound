@@ -13,7 +13,7 @@ func (*Collector) ID() string            { return "qdrant.collect" }
 func (*Collector) Action() action.Action { return action.Collect }
 func (*Collector) Target() string        { return "qdrant" }
 func (*Collector) Description() string {
-	return "Collect Qdrant collections and point counts, with bounded payload sampling in deep mode"
+	return "Collect Qdrant collections and point counts, with bounded point-reference sampling in deep mode"
 }
 func (*Collector) Version() string     { return "0.4.0-dev" }
 func (*Collector) IsDestructive() bool { return false }

@@ -22,7 +22,7 @@ An invalid positional target fails before configured network enumeration begins.
 | Mode | Collection and actions |
 |---|---|
 | Active | Uses configured authentication, reuses compatible credentials, verifies MCP resource access, and runs eligible reversible ContextForge probes. |
-| Active with `--deep` | Adds recursive instruction collection, Qdrant payload samples, expensive probes, and bounded Ollama embedding verification. |
+| Active with `--deep` | Adds recursive instruction collection, bounded Qdrant point references, expensive probes, and bounded Ollama embedding verification. |
 | `--stealth` | Performs anonymous read-only collection and exact configured authentication. Credential reuse, compute, tool invocation, and mutation are disabled. |
 | `--stealth --deep` | Adds deep filesystem and payload reads while retaining stealth restrictions. |
 
@@ -54,6 +54,8 @@ The planner can execute LiteLLM master, bearer, and API keys; Open WebUI bearer 
 For A2A, a bearer retry remains eligible when the bounded anonymous probe is protected or inconclusive. When both the public card and protocol probe already succeed anonymously, the planner does not repeat the same card collection with a credential.
 
 Anonymous collection covers applicable LiteLLM, Open WebUI, Jupyter, Qdrant, MLflow, and Ollama endpoints. New targets and credentials are indexed as they appear, allowing useful authenticated work during the same scan.
+
+Open WebUI configuration inventory requires an authorized credential. AgentHound reads the configured Ollama backends and enabled Qdrant external-knowledge connections, but never stores their backend authentication material. One successful exhaustive configuration pass completes that Open WebUI inventory and suppresses remaining credential guesses; earlier rejected guesses remain in the action journal and do not erase the successful result. A failed or truncated configuration endpoint keeps the inventory incomplete. Backend links mean “configured,” not “reachable”: AgentHound does not infer them from matching hosts or upgrade them because a separate destination probe succeeded.
 
 ## Instruction integrity
 

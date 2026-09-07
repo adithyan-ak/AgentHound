@@ -11,10 +11,15 @@ AgentHound stores collector observations as raw nodes and edges, then builds com
 | Local context | `AgentInstance`, `Host`, `ConfigFile`, `InstructionFile` |
 | Authentication | `Identity`, `Credential` |
 | AI services | `OllamaInstance`, `VLLMInstance`, `QdrantInstance`, `MLflowServer`, `LiteLLMGateway`, `JupyterServer`, `LangServeApp`, `OpenWebUIInstance` |
-| Model inventory | `AIModel` |
+| Served models | `AIModel` |
+| Typed resources | `VectorCollection`, `VectorPoint`, `WorkspaceFile`, `ModelArtifact`, `ArtifactStore` |
 | Query umbrella | `AIService` |
 
 Concrete AI-service nodes also carry the `AIService` label. The umbrella label is for queries and does not own identity.
+
+`AIModel` is a model served by a runtime such as Ollama. A persisted MLflow model version is a `ModelArtifact`, not an `AIModel`. `VectorCollection` represents a Qdrant collection; bounded deep reads retain individual point references as `VectorPoint` without treating them as MCP resources. `WorkspaceFile` represents either a notebook or a regular file through its `entry_type` property.
+
+Resource identities use the owning service identity plus the resource's stable key: exact Qdrant collection name, the source-reported Jupyter workspace path, or MLflow registered-model name and immutable version. Mutable storage URIs never define `ModelArtifact` identity. Jupyter path identity preserves whitespace and literal backslashes because the contents API can report them as filename material.
 
 ### Credential material
 
@@ -64,11 +69,17 @@ Raw edges come from collectors or same-scan proof actions.
 | A2A topology | `ADVERTISES_SKILL`, `DELEGATES_TO`, `SAME_AUTH_DOMAIN` |
 | Authentication | `AUTHENTICATES_WITH`, `USES_CREDENTIAL`, `HAS_ENV_VAR`, `EXPOSES_CREDENTIAL` |
 | Host and configuration | `RUNS_ON`, `CONFIGURED_IN`, `LOADS_INSTRUCTIONS` |
-| Service inventory | `EXPOSES`, `PROVIDES_MODEL` |
+| Service inventory | `EXPOSES` (historical), `PROVIDES_MODEL`, `PROVIDES_RESOURCE`, `USES_BACKEND`, `STORED_IN` |
 | Untrusted input | `INGESTS_UNTRUSTED` |
 | Access observations | `CREDENTIAL_ACCESS_OBSERVED`, `PUBLIC_ACCESS_OBSERVED` |
 
 `CREDENTIAL_ACCESS_OBSERVED` connects a Credential to the exact MCPResource read successfully after the anonymous control was denied. `PUBLIC_ACCESS_OBSERVED` connects the MCPServer to a resource read anonymously. Both are supporting evidence rather than general traversal shortcuts.
+
+`PROVIDES_RESOURCE` retains historical service-to-`MCPResource` variants for V1 artifacts. New collection emits typed pairs: QdrantInstance→VectorCollection, VectorCollection→VectorPoint, JupyterServer→WorkspaceFile, and MLflowServer→ModelArtifact. `USES_BACKEND` records an explicit service dependency; Open WebUI currently emits it for configured Ollama and enabled Qdrant backends. `STORED_IN` records a model artifact's reported physical store. `EXPOSES` remains accepted for historical V1 artifacts but is no longer emitted for Open WebUI backends.
+
+`ArtifactStore` is created only for a safely canonicalized physical root such as a cloud bucket, container, filesystem, DBFS root, or HDFS authority. Azure ABFS/WASB filesystem or container names are part of that root identity. Object-store key paths are retained as reported rather than cleaned as local filesystem paths. Local filesystem and DBFS roots are scoped to their owning MLflow service. Indirect `models:`, `runs:`, and `mlflow-artifacts:` locators remain sanitized `ModelArtifact` metadata and do not create a store node.
+
+New typed-resource and backend edges include `evidence_state`: `configured` proves only that the source contains the reference, `observed` means the source API reported it, and `verified` requires authoritative enumeration or a bounded request through the source. Probing a destination separately does not upgrade a configured backend relationship.
 
 ## Composite edges
 
@@ -100,9 +111,15 @@ Raw IDs are deterministic SHA-256 values derived from kind-specific identity fie
 
 Display names, timestamps, and mutable descriptions do not define identity. Reference-only contributions follow the authoritative observation for the same raw ID.
 
+### Typed-resource migration
+
+The current server continues to accept historical V1 `JupyterServer`, `MLflowServer`, and `QdrantInstance` relationships to `MCPResource`. A new complete observation replaces those current-projection rows with the corresponding typed resource; partial or failed observations preserve them. Historical scan artifacts and captured finding evidence remain attached to their original scan and IDs.
+
+The migrated resource kinds are not inputs to the existing finding processors, so this change does not create or rename a finding fingerprint and does not move cross-scan triage. A copied raw graph `objectid` is an identity for that representation, not a permanent alias: use the typed resource's source key (`path`, model `name` plus `version`, collection `name`, or point `uri`) to locate the same reported object after migration.
+
 ## Coverage and lifecycle
 
-Each collector reports outcomes such as `complete`, `partial`, `failed`, `truncated`, or `not_applicable`. Complete authoritative roots can reconcile their current children. Other outcomes add evidence without asserting that omitted nodes or edges disappeared.
+Each collector reports outcomes such as `complete`, `partial`, `failed`, `truncated`, or `not_applicable`. Service resources belong to a stable service-instance inventory surface. Only a complete surface can reconcile its children; failed credential guesses, truncation, and partial traversal preserve earlier facts. For Open WebUI, one authorized exhaustive configuration pass completes only that service's configuration surface and stops later credential guesses; earlier failed attempts remain journal evidence without downgrading it. The shared autonomous-scan root becomes complete only when every blocking inventory surface is complete.
 
 Composite analysis is rebuilt as one epoch after raw reconciliation. Published scan metadata records both submitted counts and the resulting graph totals.
 

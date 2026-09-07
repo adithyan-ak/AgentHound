@@ -16,7 +16,17 @@ import { EDGE_COLORS, SEVERITY, SEVERITY_BY_KEY } from "@shared/theme/tokens";
 import { cn } from "@shared/lib/utils";
 import { useEscapeKey } from "@shared/lib/useEscapeKey";
 
-const HIDDEN_PROPS = new Set(["scan_id", "last_seen", "is_composite"]);
+const HIDDEN_PROPS = new Set(["scan_id", "is_composite"]);
+
+function displayProperty(value: unknown): string {
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
 
 function Endpoint({ id, name, kind }: { id: string; name: string; kind: string }) {
   const config = getHexConfig(kind);
@@ -62,6 +72,9 @@ function RelationshipCard({
   const entries = Object.entries(props).filter(
     ([k, v]) => !HIDDEN_PROPS.has(k) && v != null && v !== "",
   );
+  const configuredReference =
+    props["evidence_state"] === "configured" ||
+    props["assertion_type"] === "configured_reference";
 
   return (
     <div
@@ -82,7 +95,7 @@ function RelationshipCard({
           })}
         </span>
       </div>
-      {props["assertion_type"] === "configured_reference" && (
+      {configuredReference && (
         <div className="mt-2 rounded-[3px] border border-amber-400/30 bg-amber-400/10 px-2.5 py-2 text-[11px] leading-relaxed text-amber-100">
           Configuration reference only. The target service and its
           authentication were not directly verified.
@@ -110,10 +123,13 @@ function RelationshipCard({
           {entries.map(([key, val]) => (
             <div key={key} className="flex items-baseline gap-1.5">
               <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
-                {key.replace(/_/g, " ")}
+                {key === "last_seen" ? "observed at" : key.replace(/_/g, " ")}
               </span>
-              <span className="truncate font-mono text-[10px] text-foreground" title={String(val)}>
-                {typeof val === "boolean" ? (val ? "yes" : "no") : String(val)}
+              <span
+                className="truncate font-mono text-[10px] text-foreground"
+                title={displayProperty(val)}
+              >
+                {displayProperty(val)}
               </span>
             </div>
           ))}

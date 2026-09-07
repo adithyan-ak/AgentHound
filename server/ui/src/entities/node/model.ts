@@ -31,7 +31,8 @@ export function displayName(node: APINode): string {
       )
     : undefined;
   return String(
-    node.properties.name ??
+    node.properties.display_name ??
+      node.properties.name ??
       aggregatedName ??
       node.properties.uri ??
       node.properties.path ??

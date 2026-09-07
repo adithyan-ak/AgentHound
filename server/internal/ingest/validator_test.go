@@ -94,6 +94,208 @@ func TestValidatorAcceptsValid(t *testing.T) {
 	}
 }
 
+func validVectorCollectionData() *ingest.IngestData {
+	data := validIngestData()
+	scope := data.Meta.Collection.CoverageKeys[0]
+	qdrantID := "sha256:qdrant"
+	collectionID := ingest.ComputeNodeID("VectorCollection", qdrantID, "docs")
+	data.Graph.Nodes = []ingest.Node{
+		{
+			ID: qdrantID, Kinds: []string{"QdrantInstance", "AIService"},
+			Properties: map[string]any{
+				"objectid": qdrantID, "endpoint": "http://qdrant:6333",
+				"auth_method": "unknown", "auth_assurance": "unknown", "auth_evidence": "unknown",
+			},
+			ObservationDomains: []string{scope},
+		},
+		{
+			ID: collectionID, Kinds: []string{"VectorCollection"},
+			Properties:         map[string]any{"objectid": collectionID, "name": "docs"},
+			ObservationDomains: []string{scope},
+		},
+	}
+	data.Graph.Edges = []ingest.Edge{{
+		Source: qdrantID, Target: collectionID, Kind: "PROVIDES_RESOURCE",
+		SourceKind: "QdrantInstance", TargetKind: "VectorCollection",
+		Properties: map[string]any{
+			"risk_weight": 0.2, "confidence": 1.0,
+			"evidence_state": "verified", "last_seen": "2026-08-27T12:00:00Z",
+			"evidence": map[string]any{"source": "collections"},
+		},
+		ObservationDomains: []string{scope},
+	}}
+	return data
+}
+
+func TestValidatorTypedResourceRequiresExactPairAndEvidence(t *testing.T) {
+	if err := NewValidator().Validate(validVectorCollectionData()); err != nil {
+		t.Fatalf("valid typed resource rejected: %v", err)
+	}
+	for _, test := range []struct {
+		name string
+		path string
+		edit func(*ingest.IngestData)
+	}{
+		{
+			name: "invalid pair", path: "graph.edges[0]",
+			edit: func(data *ingest.IngestData) { data.Graph.Edges[0].SourceKind = "MCPServer" },
+		},
+		{
+			name: "missing evidence state", path: "graph.edges[0].properties.evidence_state",
+			edit: func(data *ingest.IngestData) { delete(data.Graph.Edges[0].Properties, "evidence_state") },
+		},
+		{
+			name: "missing timestamp", path: "graph.edges[0].properties.last_seen",
+			edit: func(data *ingest.IngestData) { delete(data.Graph.Edges[0].Properties, "last_seen") },
+		},
+		{
+			name: "wrong parent identity", path: "graph.edges[0].target",
+			edit: func(data *ingest.IngestData) {
+				data.Graph.Nodes[1].ID = "sha256:wrong"
+				data.Graph.Edges[0].Target = "sha256:wrong"
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data := validVectorCollectionData()
+			test.edit(data)
+			assertValidationError(t, NewValidator().Validate(data), test.path)
+		})
+	}
+}
+
+func TestValidatorAcceptsJupyterAndMLflowTypedResources(t *testing.T) {
+	evidence := func(state string) map[string]any {
+		return map[string]any{
+			"risk_weight": 0.2, "confidence": 1.0, "evidence_state": state,
+			"last_seen": "2026-08-27T12:00:00Z",
+			"evidence":  map[string]any{"source": "collector"},
+		}
+	}
+	t.Run("Jupyter workspace file", func(t *testing.T) {
+		data := validIngestData()
+		scope := data.Meta.Collection.CoverageKeys[0]
+		serverID := "sha256:jupyter"
+		fileID := ingest.ComputeNodeID("WorkspaceFile", serverID, "work/demo.ipynb")
+		data.Graph.Nodes = []ingest.Node{
+			{
+				ID: serverID, Kinds: []string{"JupyterServer", "AIService"},
+				Properties:         map[string]any{"objectid": serverID, "endpoint": "http://jupyter:8888"},
+				ObservationDomains: []string{scope},
+			},
+			{
+				ID: fileID, Kinds: []string{"WorkspaceFile"},
+				Properties: map[string]any{
+					"objectid": fileID, "path": "work/demo.ipynb", "entry_type": "notebook",
+				},
+				ObservationDomains: []string{scope},
+			},
+		}
+		data.Graph.Edges = []ingest.Edge{{
+			Source: serverID, Target: fileID, Kind: "PROVIDES_RESOURCE",
+			SourceKind: "JupyterServer", TargetKind: "WorkspaceFile",
+			Properties: evidence("verified"), ObservationDomains: []string{scope},
+		}}
+		if err := NewValidator().Validate(data); err != nil {
+			t.Fatalf("valid WorkspaceFile graph rejected: %v", err)
+		}
+		data.Graph.Nodes[1].ID = "sha256:wrong"
+		data.Graph.Edges[0].Target = "sha256:wrong"
+		assertValidationError(t, NewValidator().Validate(data), "graph.edges[0].target")
+	})
+
+	t.Run("MLflow model artifact and store", func(t *testing.T) {
+		data := validIngestData()
+		scope := data.Meta.Collection.CoverageKeys[0]
+		serverID := "sha256:mlflow"
+		artifactID := ingest.ComputeNodeID("ModelArtifact", serverID, "fraud", "3")
+		storeID := ingest.ComputeNodeID("ArtifactStore", "s3://models")
+		data.Graph.Nodes = []ingest.Node{
+			{
+				ID: serverID, Kinds: []string{"MLflowServer", "AIService"},
+				Properties:         map[string]any{"objectid": serverID, "endpoint": "http://mlflow:5000"},
+				ObservationDomains: []string{scope},
+			},
+			{
+				ID: artifactID, Kinds: []string{"ModelArtifact"},
+				Properties:         map[string]any{"objectid": artifactID, "name": "fraud", "version": "3"},
+				ObservationDomains: []string{scope},
+			},
+			{
+				ID: storeID, Kinds: []string{"ArtifactStore"},
+				Properties:         map[string]any{"objectid": storeID, "root_uri": "s3://models"},
+				ObservationDomains: []string{scope},
+			},
+		}
+		data.Graph.Edges = []ingest.Edge{
+			{
+				Source: serverID, Target: artifactID, Kind: "PROVIDES_RESOURCE",
+				SourceKind: "MLflowServer", TargetKind: "ModelArtifact",
+				Properties: evidence("verified"), ObservationDomains: []string{scope},
+			},
+			{
+				Source: artifactID, Target: storeID, Kind: "STORED_IN",
+				SourceKind: "ModelArtifact", TargetKind: "ArtifactStore",
+				Properties: evidence("observed"), ObservationDomains: []string{scope},
+			},
+		}
+		if err := NewValidator().Validate(data); err != nil {
+			t.Fatalf("valid MLflow typed graph rejected: %v", err)
+		}
+		data.Graph.Nodes[1].ID = "sha256:wrong"
+		data.Graph.Edges[0].Target = "sha256:wrong"
+		data.Graph.Edges[1].Source = "sha256:wrong"
+		assertValidationError(t, NewValidator().Validate(data), "graph.edges[0].target")
+	})
+}
+
+func TestValidatorAcceptsConfiguredOpenWebUIBackends(t *testing.T) {
+	for _, target := range []struct {
+		name     string
+		kind     string
+		endpoint string
+	}{
+		{name: "Ollama", kind: "OllamaInstance", endpoint: "http://ollama:11434"},
+		{name: "Qdrant", kind: "QdrantInstance", endpoint: "http://qdrant:6333"},
+	} {
+		t.Run(target.name, func(t *testing.T) {
+			data := validIngestData()
+			scope := data.Meta.Collection.CoverageKeys[0]
+			openwebuiID := ingest.ComputeNodeID("OpenWebUIInstance", "http://openwebui:3000")
+			backendID := ingest.ComputeNodeID(target.kind, target.endpoint)
+			data.Graph.Nodes = []ingest.Node{
+				{
+					ID: openwebuiID, Kinds: []string{"OpenWebUIInstance", "AIService"},
+					Properties: map[string]any{
+						"objectid": openwebuiID, "endpoint": "http://openwebui:3000",
+					},
+					ObservationDomains: []string{scope},
+				},
+				{
+					ID: backendID, Kinds: []string{target.kind, "AIService"},
+					Properties: map[string]any{
+						"objectid": backendID, "endpoint": target.endpoint,
+					},
+					ObservationDomains: []string{scope},
+				},
+			}
+			data.Graph.Edges = []ingest.Edge{{
+				Source: openwebuiID, Target: backendID, Kind: "USES_BACKEND",
+				SourceKind: "OpenWebUIInstance", TargetKind: target.kind,
+				Properties: map[string]any{
+					"risk_weight": 0.3, "confidence": 1.0,
+					"evidence_state": "configured", "last_seen": "2026-08-27T12:00:00Z",
+					"evidence": map[string]any{"source": "openwebui_config"},
+				},
+				ObservationDomains: []string{scope},
+			}}
+			if err := NewValidator().Validate(data); err != nil {
+				t.Fatalf("valid configured backend rejected: %v", err)
+			}
+		})
+	}
+}
+
 func validInstructionEvidenceData(t *testing.T) *ingest.IngestData {
 	t.Helper()
 	data := validIngestData()

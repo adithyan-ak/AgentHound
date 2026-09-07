@@ -141,6 +141,53 @@ func TestIntegrationSchemaInit(t *testing.T) {
 	}
 }
 
+func TestIntegrationCompleteMembershipPreservesUnavailableNodeDetail(t *testing.T) {
+	ctx := testDriver(t)
+	driver, err := NewDriver(
+		os.Getenv("AGENTHOUND_NEO4J_URI"),
+		os.Getenv("AGENTHOUND_NEO4J_USER"),
+		os.Getenv("AGENTHOUND_NEO4J_PASSWORD"),
+	)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer driver.Close(ctx)
+
+	domain := ingest.CanonicalCoverageKey("scan", "service_inventory", "qdrant.partial-detail.fixture")
+	id := ingest.ComputeNodeID("VectorCollection", "qdrant.partial-detail.fixture", "docs")
+	cleanup := func() {
+		_, _ = integrationWrite(ctx, driver, "MATCH (n {objectid: $id}) DETACH DELETE n", map[string]any{"id": id})
+	}
+	cleanup()
+	defer cleanup()
+
+	writer := NewWriter(driver)
+	old := ingest.Node{
+		ID: id, Kinds: []string{"VectorCollection"},
+		Properties:         map[string]any{"objectid": id, "name": "docs", "point_count": int64(123)},
+		ObservationDomains: []string{domain},
+	}
+	if _, err := writer.WriteObservationNodes(ctx, []ingest.Node{old}, "qdrant-detail-old", []string{domain}); err != nil {
+		t.Fatalf("write complete detail: %v", err)
+	}
+	next := ingest.Node{
+		ID: id, Kinds: []string{"VectorCollection"},
+		Properties:         map[string]any{"objectid": id, "name": "docs"},
+		ObservationDomains: []string{domain},
+		PropertySemantics:  ingest.NodePropertySemanticsPreserveOmissions,
+	}
+	if _, err := writer.WriteObservationNodes(ctx, []ingest.Node{next}, "qdrant-detail-unavailable", []string{domain}); err != nil {
+		t.Fatalf("write unavailable detail: %v", err)
+	}
+	node, _, err := NewDB(NewReader(driver), writer).GetNode(ctx, id)
+	if err != nil {
+		t.Fatalf("read collection: %v", err)
+	}
+	if node == nil || node.Properties["point_count"] != int64(123) {
+		t.Fatalf("collection after unavailable detail = %+v, want retained point_count", node)
+	}
+}
+
 func TestIntegrationSchemaV3RemovesLegacyInstructionProjection(t *testing.T) {
 	ctx := testDriver(t)
 	driver, err := NewDriver(

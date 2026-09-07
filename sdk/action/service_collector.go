@@ -22,9 +22,25 @@ type CollectOptions struct {
 }
 
 type CollectResult struct {
-	IngestData    *ingest.IngestData
+	IngestData *ingest.IngestData
+	// Inventory describes the exhaustive membership surface owned by this
+	// service collection. The autonomous planner converts it into one stable,
+	// service-instance coverage outcome. Probe/enrichment failures may still be
+	// reported through PartialErrors without making a successfully enumerated
+	// membership surface incomplete.
+	Inventory     *InventoryResult
 	PartialErrors []string
 	Summary       CollectSummary
+}
+
+// InventoryResult reports whether a service-owned inventory was exhaustive.
+// Name is a stable, non-secret surface identifier such as "collections" or
+// "contents"; it is combined with the service node ID to derive coverage.
+type InventoryResult struct {
+	Name  string
+	State ingest.OutcomeState
+	Items int
+	Error string
 }
 
 type CollectSummary struct {

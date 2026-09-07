@@ -11,6 +11,7 @@ import (
 	a2acollector "github.com/adithyan-ak/agenthound/modules/a2a"
 	_ "github.com/adithyan-ak/agenthound/modules/litellmcollect"
 	_ "github.com/adithyan-ak/agenthound/modules/ollamacollect"
+	_ "github.com/adithyan-ak/agenthound/modules/openwebuicollect"
 	_ "github.com/adithyan-ak/agenthound/modules/qdrantcollect"
 
 	"github.com/adithyan-ak/agenthound/sdk/action"
@@ -303,6 +304,60 @@ func TestOllamaEmbeddingCandidateRequiresDeepActiveMode(t *testing.T) {
 	}
 }
 
+func TestOllamaInventoryCoverageIsStableAcrossScanModes(t *testing.T) {
+	graph := ingest.GraphData{Nodes: []ingest.Node{{
+		ID: "ollama-1", Kinds: []string{"OllamaInstance"},
+		Properties: map[string]any{"endpoint": "http://127.0.0.1:11434"},
+	}}}
+	views := []struct {
+		name       string
+		candidates []Candidate
+	}{
+		{
+			name: "normal active",
+			candidates: (serviceCollectAction{}).Candidates(
+				buildPlannerView(graph, nil, map[string]bool{}, false, false),
+			),
+		},
+		{
+			name: "deep active",
+			candidates: (ollamaEmbeddingAction{}).Candidates(
+				buildPlannerView(graph, nil, map[string]bool{}, true, false),
+			),
+		},
+		{
+			name: "deep stealth",
+			candidates: (serviceCollectAction{}).Candidates(
+				buildPlannerView(graph, nil, map[string]bool{}, true, true),
+			),
+		},
+	}
+
+	var coverageKey string
+	for _, view := range views {
+		t.Run(view.name, func(t *testing.T) {
+			if len(view.candidates) != 1 {
+				t.Fatalf("candidates = %d, want 1", len(view.candidates))
+			}
+			candidate := view.candidates[0]
+			if got := candidate.Inputs["inventory_name"]; got != "models" {
+				t.Fatalf("inventory_name = %q, want models", got)
+			}
+			outcome := serviceInventoryOutcome(
+				candidate, nil, ingest.OutcomeComplete, 0, "",
+			)
+			if outcome.Method != "service_inventory:models" {
+				t.Fatalf("method = %q, want service_inventory:models", outcome.Method)
+			}
+			if coverageKey == "" {
+				coverageKey = outcome.CoverageKey
+			} else if outcome.CoverageKey != coverageKey {
+				t.Fatalf("coverage key = %q, want %q", outcome.CoverageKey, coverageKey)
+			}
+		})
+	}
+}
+
 func TestDeepServiceCollectionDoesNotRepeatBaseInventory(t *testing.T) {
 	graph := ingest.GraphData{Nodes: []ingest.Node{
 		{
@@ -352,6 +407,37 @@ func TestDeepServiceCollectionDoesNotRepeatBaseInventory(t *testing.T) {
 	}
 }
 
+func TestCompleteOpenWebUIInventorySuppressesRemainingCredentialGuesses(t *testing.T) {
+	const serviceID = "openwebui-1"
+	graph := ingest.GraphData{Nodes: []ingest.Node{
+		{
+			ID: serviceID, Kinds: []string{"OpenWebUIInstance", "AIService"},
+			Properties: map[string]any{"endpoint": "http://openwebui:3000"},
+		},
+		{
+			ID: "credential-1", Kinds: []string{"Credential"},
+			Properties: map[string]any{
+				"value": "admin-token", "value_hash": "hash",
+				"material_status": string(common.CredentialMaterialObserved),
+				"auth_method":     string(common.AuthAPIKey), "type": "api_key",
+			},
+		},
+	}}
+	coverageKey := serviceInventoryCoverageKey("openwebui.collect", serviceID, "configuration")
+	baseline := buildPlannerView(graph, nil, map[string]bool{}, false, false)
+	if got := len((serviceCollectAction{}).Candidates(baseline)); got < 2 {
+		t.Fatalf("baseline Open WebUI candidates = %d, want anonymous and credential attempts", got)
+	}
+	view := buildPlannerView(
+		graph, nil, map[string]bool{completedInventoryKey(coverageKey): true}, false, false,
+	)
+	for _, candidate := range (serviceCollectAction{}).Candidates(view) {
+		if candidate.Inputs["service"] == "openwebui" {
+			t.Fatalf("complete configuration inventory scheduled another Open WebUI attempt: %+v", candidate)
+		}
+	}
+}
+
 type partialCollectorModule struct{}
 
 func (*partialCollectorModule) ID() string            { return "test.partial.collect" }
@@ -383,6 +469,46 @@ func TestServiceCollectionRetainsPartialGraphButReturnsFailure(t *testing.T) {
 	}
 	if result.Outcome != "collection_partial" || len(result.Graph.Nodes) != 1 {
 		t.Fatalf("partial result = %+v, want retained graph with partial outcome", result)
+	}
+	if len(result.InventoryOutcomes) != 1 || result.InventoryOutcomes[0].State != ingest.OutcomePartial {
+		t.Fatalf("inventory outcomes = %+v, want one partial surface", result.InventoryOutcomes)
+	}
+	root := ingest.CollectorRootCoverageKey("scan")
+	if result.InventoryOutcomes[0].ParentCoverageKey != root {
+		t.Fatalf("inventory parent = %q, want scan root %q", result.InventoryOutcomes[0].ParentCoverageKey, root)
+	}
+	for _, domain := range result.Graph.Nodes[0].ObservationDomains {
+		if domain == root {
+			t.Fatal("service inventory fact was assigned to the shared scan root")
+		}
+	}
+	if len(result.Graph.Nodes[0].ObservationDomains) != 1 ||
+		result.Graph.Nodes[0].ObservationDomains[0] != result.InventoryOutcomes[0].CoverageKey {
+		t.Fatalf("fact domains = %v, want inventory surface", result.Graph.Nodes[0].ObservationDomains)
+	}
+}
+
+func TestServiceCollectionScopesOnlyChildFactsToInventory(t *testing.T) {
+	root := ingest.CollectorRootCoverageKey("scan")
+	inventory := ingest.CanonicalCoverageKey("scan", "service_inventory", "qdrant\x00collections")
+	graph := ingest.GraphData{
+		Nodes: []ingest.Node{
+			{ID: "service", Kinds: []string{"QdrantInstance"}},
+			{ID: "collection", Kinds: []string{"VectorCollection"}},
+		},
+		Edges: []ingest.Edge{{
+			Source: "service", Target: "collection", Kind: "PROVIDES_RESOURCE",
+		}},
+	}
+	tagServiceCollectionGraph(&graph, "service", []string{root}, inventory)
+	if got := graph.Nodes[0].ObservationDomains; len(got) != 1 || got[0] != root {
+		t.Fatalf("service domains = %v, want scan root", got)
+	}
+	if got := graph.Nodes[1].ObservationDomains; len(got) != 1 || got[0] != inventory {
+		t.Fatalf("child domains = %v, want inventory surface", got)
+	}
+	if got := graph.Edges[0].ObservationDomains; len(got) != 1 || got[0] != inventory {
+		t.Fatalf("ownership edge domains = %v, want inventory surface", got)
 	}
 }
 

@@ -1039,6 +1039,33 @@ func TestPartialObservationUsesAdditivePropertyUpdates(t *testing.T) {
 	}
 }
 
+func TestCompleteDomainPreservesPropertiesOmittedByPartialNodeDetail(t *testing.T) {
+	scope := "scan:service_inventory:sha256:qdrant"
+	recorder := &recordedExec{}
+	writer := newTestWriter(recorder.exec, false)
+	node := ingest.Node{
+		ID:                 "collection",
+		Kinds:              []string{"VectorCollection"},
+		ObservationDomains: []string{scope},
+		Properties:         map[string]any{"name": "docs"},
+		PropertySemantics:  ingest.NodePropertySemanticsPreserveOmissions,
+	}
+
+	if _, err := writer.WriteObservationNodes(
+		context.Background(), []ingest.Node{node}, "scan-current", []string{scope},
+	); err != nil {
+		t.Fatalf("WriteObservationNodes: %v", err)
+	}
+	call := recorder.snapshot()[0]
+	row := rowsAt(t, call.Params, "nodes")[0]
+	if preserve, _ := row["preserve_omissions"].(bool); !preserve {
+		t.Fatalf("writer row = %+v, want preserve_omissions", row)
+	}
+	if !strings.Contains(call.Cypher, "NOT node.preserve_omissions") {
+		t.Fatalf("writer query does not prevent complete-domain replacement:\n%s", call.Cypher)
+	}
+}
+
 func TestRelationshipWritersRejectCompatibleOwnerRecoveryShortcut(
 	t *testing.T,
 ) {

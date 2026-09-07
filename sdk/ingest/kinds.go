@@ -1,8 +1,9 @@
 package ingest
 
-// AllowedNodeKinds are the 22 collector-produced node kinds accepted in ingest
+// AllowedNodeKinds are the collector-produced node kinds accepted in ingest
 // input. AIService is the multi-label umbrella carried by each concrete
-// AI-service node; AIModel represents a model artifact.
+// AI-service node; AIModel represents a served model, while persisted model
+// packages use ModelArtifact.
 var AllowedNodeKinds = map[string]bool{
 	"MCPServer":         true,
 	"MCPTool":           true,
@@ -26,6 +27,11 @@ var AllowedNodeKinds = map[string]bool{
 	"OpenWebUIInstance": true,
 	"AIService":         true,
 	"AIModel":           true,
+	"VectorCollection":  true,
+	"VectorPoint":       true,
+	"WorkspaceFile":     true,
+	"ModelArtifact":     true,
+	"ArtifactStore":     true,
 }
 
 // PublicNodeLabels is the ordered set of node labels exposed by inventory
@@ -39,7 +45,8 @@ var PublicNodeLabels = []string{
 	"ConfigFile", "InstructionFile",
 	"OllamaInstance", "VLLMInstance", "QdrantInstance", "MLflowServer",
 	"LiteLLMGateway", "JupyterServer", "LangServeApp", "OpenWebUIInstance",
-	"AIModel", "AIService",
+	"AIModel", "VectorCollection", "VectorPoint", "WorkspaceFile", "ModelArtifact",
+	"ArtifactStore", "AIService",
 }
 
 // AllNodeLabels includes all collector-produced node labels for Neo4j schema
@@ -52,7 +59,8 @@ var AllNodeLabels = []string{
 	"ConfigFile", "InstructionFile",
 	"OllamaInstance", "VLLMInstance", "QdrantInstance", "MLflowServer",
 	"LiteLLMGateway", "JupyterServer", "LangServeApp", "OpenWebUIInstance",
-	"AIService", "AIModel",
+	"AIService", "AIModel", "VectorCollection", "VectorPoint", "WorkspaceFile",
+	"ModelArtifact", "ArtifactStore",
 }
 
 // UmbrellaLabels are labels that nodes carry as a multi-label *companion* to a
@@ -112,7 +120,7 @@ func ConcreteNodeKind(kinds []string) string {
 	return concrete
 }
 
-// RawEdgeKinds are the 19 collector-produced edge kinds accepted in ingest
+// RawEdgeKinds are the 21 collector-produced edge kinds accepted in ingest
 // input. EXPOSES_CREDENTIAL is emitted by credential-producing collectors;
 // PROVIDES_MODEL is emitted by the Ollama collector; INGESTS_UNTRUSTED is emitted by
 // the MCP Collector for tools whose rule-derived source_trust is untrusted;
@@ -139,9 +147,11 @@ var RawEdgeKinds = map[string]bool{
 	"INGESTS_UNTRUSTED":          true,
 	"CREDENTIAL_ACCESS_OBSERVED": true,
 	"PUBLIC_ACCESS_OBSERVED":     true,
+	"USES_BACKEND":               true,
+	"STORED_IN":                  true,
 }
 
-// AllowedEdgeKinds includes all 32 edge kinds (19 raw + 13 composite) for Neo4j writer dispatch.
+// AllowedEdgeKinds includes all 34 edge kinds (21 raw + 13 composite) for Neo4j writer dispatch.
 var AllowedEdgeKinds = map[string]bool{
 	// Raw (collector-produced)
 	"TRUSTS_SERVER":              true,
@@ -163,6 +173,8 @@ var AllowedEdgeKinds = map[string]bool{
 	"INGESTS_UNTRUSTED":          true,
 	"CREDENTIAL_ACCESS_OBSERVED": true,
 	"PUBLIC_ACCESS_OBSERVED":     true,
+	"USES_BACKEND":               true,
+	"STORED_IN":                  true,
 	// Composite (post-processor produced)
 	"HAS_ACCESS_TO":         true,
 	"CAN_EXECUTE":           true,
@@ -191,13 +203,34 @@ var AllowedCollectors = map[string]bool{
 type EdgeEndpoints struct {
 	SourceKinds []string
 	TargetKinds []string
+	// Pairs narrows a multi-kind registry entry to exact valid combinations.
+	// Empty means the SourceKinds × TargetKinds cross-product is valid.
+	Pairs []EdgeEndpointPair
+}
+
+type EdgeEndpointPair struct {
+	SourceKind string
+	TargetKind string
 }
 
 // EdgeKindEndpoints maps each edge kind to its expected source/target node labels.
 var EdgeKindEndpoints = map[string]EdgeEndpoints{
-	"TRUSTS_SERVER":         {SourceKinds: []string{"AgentInstance"}, TargetKinds: []string{"MCPServer"}},
-	"PROVIDES_TOOL":         {SourceKinds: []string{"MCPServer"}, TargetKinds: []string{"MCPTool"}},
-	"PROVIDES_RESOURCE":     {SourceKinds: []string{"MCPServer", "JupyterServer", "MLflowServer", "QdrantInstance"}, TargetKinds: []string{"MCPResource"}},
+	"TRUSTS_SERVER": {SourceKinds: []string{"AgentInstance"}, TargetKinds: []string{"MCPServer"}},
+	"PROVIDES_TOOL": {SourceKinds: []string{"MCPServer"}, TargetKinds: []string{"MCPTool"}},
+	"PROVIDES_RESOURCE": {
+		SourceKinds: []string{"MCPServer", "JupyterServer", "MLflowServer", "QdrantInstance", "VectorCollection"},
+		TargetKinds: []string{"MCPResource", "WorkspaceFile", "ModelArtifact", "VectorCollection", "VectorPoint"},
+		Pairs: []EdgeEndpointPair{
+			{SourceKind: "MCPServer", TargetKind: "MCPResource"},
+			{SourceKind: "JupyterServer", TargetKind: "MCPResource"},
+			{SourceKind: "JupyterServer", TargetKind: "WorkspaceFile"},
+			{SourceKind: "MLflowServer", TargetKind: "MCPResource"},
+			{SourceKind: "MLflowServer", TargetKind: "ModelArtifact"},
+			{SourceKind: "QdrantInstance", TargetKind: "MCPResource"},
+			{SourceKind: "QdrantInstance", TargetKind: "VectorCollection"},
+			{SourceKind: "VectorCollection", TargetKind: "VectorPoint"},
+		},
+	},
 	"PROVIDES_PROMPT":       {SourceKinds: []string{"MCPServer"}, TargetKinds: []string{"MCPPrompt"}},
 	"ADVERTISES_SKILL":      {SourceKinds: []string{"A2AAgent"}, TargetKinds: []string{"A2ASkill"}},
 	"DELEGATES_TO":          {SourceKinds: []string{"A2AAgent"}, TargetKinds: []string{"A2AAgent"}},
@@ -228,6 +261,8 @@ var EdgeKindEndpoints = map[string]EdgeEndpoints{
 	// not an auto-finding.
 	"CREDENTIAL_ACCESS_OBSERVED": {SourceKinds: []string{"Credential"}, TargetKinds: []string{"MCPResource"}},
 	"PUBLIC_ACCESS_OBSERVED":     {SourceKinds: []string{"MCPServer"}, TargetKinds: []string{"MCPResource"}},
+	"USES_BACKEND":               {SourceKinds: []string{"AIService", "OpenWebUIInstance"}, TargetKinds: []string{"AIService", "ArtifactStore", "OllamaInstance", "QdrantInstance"}},
+	"STORED_IN":                  {SourceKinds: []string{"ModelArtifact"}, TargetKinds: []string{"ArtifactStore"}},
 	"CONFUSED_DEPUTY":            {SourceKinds: []string{"A2AAgent"}, TargetKinds: []string{"A2AAgent"}},
 	"TAINTS":                     {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
 	"IFC_VIOLATION":              {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
@@ -264,4 +299,24 @@ func TargetKindAllowed(edgeKind, targetKind string) bool {
 		return false
 	}
 	return endpointKindAllowed(ep.TargetKinds, targetKind)
+}
+
+// EndpointKindsAllowed validates the source/target combination, including an
+// exact-pair allowlist when an edge kind intentionally supports multiple
+// independently typed variants.
+func EndpointKindsAllowed(edgeKind, sourceKind, targetKind string) bool {
+	ep, ok := EdgeKindEndpoints[edgeKind]
+	if !ok || !endpointKindAllowed(ep.SourceKinds, sourceKind) ||
+		!endpointKindAllowed(ep.TargetKinds, targetKind) {
+		return false
+	}
+	if len(ep.Pairs) == 0 {
+		return true
+	}
+	for _, pair := range ep.Pairs {
+		if pair.SourceKind == sourceKind && pair.TargetKind == targetKind {
+			return true
+		}
+	}
+	return false
 }
