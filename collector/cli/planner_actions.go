@@ -285,6 +285,7 @@ func (a ollamaEmbeddingAction) Candidates(view View) []Candidate {
 			PathNodeIDs: []string{node.ID},
 			Inputs: map[string]string{
 				"service": "ollama", "node_id": node.ID, "deep": "true",
+				"inventory_name":      serviceInventoryNames["ollama"],
 				"observation_domains": strings.Join(node.ObservationDomains, "\x1f"),
 			},
 		})

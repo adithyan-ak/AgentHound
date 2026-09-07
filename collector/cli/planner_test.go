@@ -303,6 +303,60 @@ func TestOllamaEmbeddingCandidateRequiresDeepActiveMode(t *testing.T) {
 	}
 }
 
+func TestOllamaInventoryCoverageIsStableAcrossScanModes(t *testing.T) {
+	graph := ingest.GraphData{Nodes: []ingest.Node{{
+		ID: "ollama-1", Kinds: []string{"OllamaInstance"},
+		Properties: map[string]any{"endpoint": "http://127.0.0.1:11434"},
+	}}}
+	views := []struct {
+		name       string
+		candidates []Candidate
+	}{
+		{
+			name: "normal active",
+			candidates: (serviceCollectAction{}).Candidates(
+				buildPlannerView(graph, nil, map[string]bool{}, false, false),
+			),
+		},
+		{
+			name: "deep active",
+			candidates: (ollamaEmbeddingAction{}).Candidates(
+				buildPlannerView(graph, nil, map[string]bool{}, true, false),
+			),
+		},
+		{
+			name: "deep stealth",
+			candidates: (serviceCollectAction{}).Candidates(
+				buildPlannerView(graph, nil, map[string]bool{}, true, true),
+			),
+		},
+	}
+
+	var coverageKey string
+	for _, view := range views {
+		t.Run(view.name, func(t *testing.T) {
+			if len(view.candidates) != 1 {
+				t.Fatalf("candidates = %d, want 1", len(view.candidates))
+			}
+			candidate := view.candidates[0]
+			if got := candidate.Inputs["inventory_name"]; got != "models" {
+				t.Fatalf("inventory_name = %q, want models", got)
+			}
+			outcome := serviceInventoryOutcome(
+				candidate, nil, ingest.OutcomeComplete, 0, "",
+			)
+			if outcome.Method != "service_inventory:models" {
+				t.Fatalf("method = %q, want service_inventory:models", outcome.Method)
+			}
+			if coverageKey == "" {
+				coverageKey = outcome.CoverageKey
+			} else if outcome.CoverageKey != coverageKey {
+				t.Fatalf("coverage key = %q, want %q", outcome.CoverageKey, coverageKey)
+			}
+		})
+	}
+}
+
 func TestDeepServiceCollectionDoesNotRepeatBaseInventory(t *testing.T) {
 	graph := ingest.GraphData{Nodes: []ingest.Node{
 		{
