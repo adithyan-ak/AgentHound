@@ -15,9 +15,16 @@ import (
 	"github.com/adithyan-ak/agenthound/sdk/ingest"
 )
 
-// tasksCapabilityState represents only claims that can be made from the raw
-// initialize response. The v1.6.1 MCP SDK does not expose the standard tasks
-// capability, so its typed InitializeResult cannot distinguish these states.
+const (
+	initializeMethod        = "initialize"
+	discoverMethod          = "server/discover"
+	discoverProtocolVersion = "2026-07-28"
+)
+
+// tasksCapabilityState represents only claims that can be made from a raw MCP
+// handshake response. The SDK does not expose the standard tasks capability in
+// its typed result, so AgentHound observes both legacy initialize and modern
+// server/discover responses without altering their transport behavior.
 type tasksCapabilityState uint8
 
 const (
@@ -26,13 +33,14 @@ const (
 	tasksCapabilityPresent
 )
 
-type initializeWireObserver struct {
-	mu    sync.RWMutex
-	seen  bool
-	tasks tasksCapabilityState
+type capabilityWireObserver struct {
+	mu     sync.RWMutex
+	seen   bool
+	tasks  tasksCapabilityState
+	method string
 }
 
-func (o *initializeWireObserver) observeResult(result json.RawMessage) bool {
+func (o *capabilityWireObserver) observeResult(method string, result json.RawMessage) bool {
 	state, ok := rawTasksCapability(result)
 	if !ok {
 		return false
@@ -40,11 +48,12 @@ func (o *initializeWireObserver) observeResult(result json.RawMessage) bool {
 	o.mu.Lock()
 	o.seen = true
 	o.tasks = state
+	o.method = method
 	o.mu.Unlock()
 	return true
 }
 
-func (o *initializeWireObserver) tasksState() tasksCapabilityState {
+func (o *capabilityWireObserver) tasksState() tasksCapabilityState {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	if !o.seen {
@@ -53,13 +62,29 @@ func (o *initializeWireObserver) tasksState() tasksCapabilityState {
 	return o.tasks
 }
 
+func (o *capabilityWireObserver) handshakeMethod(protocolVersion string) string {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	if o.method != "" {
+		return o.method
+	}
+	if protocolVersion >= discoverProtocolVersion {
+		return discoverMethod
+	}
+	return initializeMethod
+}
+
+func isCapabilityHandshakeMethod(method string) bool {
+	return method == initializeMethod || method == discoverMethod
+}
+
 func rawTasksCapability(result json.RawMessage) (tasksCapabilityState, bool) {
-	var initialize map[string]json.RawMessage
-	if err := json.Unmarshal(result, &initialize); err != nil || initialize == nil {
+	var handshake map[string]json.RawMessage
+	if err := json.Unmarshal(result, &handshake); err != nil || handshake == nil {
 		return tasksCapabilityUnknown, false
 	}
 
-	capabilitiesJSON, ok := initialize["capabilities"]
+	capabilitiesJSON, ok := handshake["capabilities"]
 	if !ok || bytes.Equal(bytes.TrimSpace(capabilitiesJSON), []byte("null")) {
 		return tasksCapabilityUnknown, true
 	}
@@ -83,25 +108,25 @@ func rawTasksCapability(result json.RawMessage) (tasksCapabilityState, bool) {
 	return tasksCapabilityPresent, true
 }
 
-// withInitializeWireObserver instruments the concrete transports built by this
+// withCapabilityWireObserver instruments the concrete transports built by this
 // module without changing the streamable HTTP connection type. The SDK relies
 // on a private method on that connection to install the negotiated protocol
 // version, session ID behavior, and standalone SSE listener.
-func withInitializeWireObserver(transport mcpsdk.Transport) (mcpsdk.Transport, *initializeWireObserver) {
-	observer := &initializeWireObserver{}
+func withCapabilityWireObserver(transport mcpsdk.Transport) (mcpsdk.Transport, *capabilityWireObserver) {
+	observer := &capabilityWireObserver{}
 	switch transport := transport.(type) {
 	case *mcpsdk.StreamableClientTransport:
 		clone := *transport
 		clone.HTTPClient = observingHTTPClient(transport.HTTPClient, observer)
 		return &clone, observer
 	case *mcpsdk.CommandTransport, *mcpsdk.SSEClientTransport:
-		return &initializeObservingTransport{base: transport, observer: observer}, observer
+		return &capabilityObservingTransport{base: transport, observer: observer}, observer
 	default:
 		return transport, observer
 	}
 }
 
-func observingHTTPClient(client *http.Client, observer *initializeWireObserver) *http.Client {
+func observingHTTPClient(client *http.Client, observer *capabilityWireObserver) *http.Client {
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -110,65 +135,68 @@ func observingHTTPClient(client *http.Client, observer *initializeWireObserver) 
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	clone.Transport = initializeObservingRoundTripper{base: base, observer: observer}
+	clone.Transport = capabilityObservingRoundTripper{base: base, observer: observer}
 	return &clone
 }
 
-type initializeObservingRoundTripper struct {
+type capabilityObservingRoundTripper struct {
 	base     http.RoundTripper
-	observer *initializeWireObserver
+	observer *capabilityWireObserver
 }
 
-func (t initializeObservingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	initializeID, isInitialize := initializeRequestID(req)
+func (t capabilityObservingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	requestID, method, isHandshake := capabilityRequest(req)
 	resp, err := t.base.RoundTrip(req)
-	if err != nil || !isInitialize || resp.Body == nil {
+	if err != nil || !isHandshake || resp.Body == nil {
 		return resp, err
 	}
-	resp.Body = &initializeObservingBody{
-		ReadCloser:   resp.Body,
-		observer:     t.observer,
-		initializeID: initializeID,
-		contentType:  resp.Header.Get("Content-Type"),
+	resp.Body = &capabilityObservingBody{
+		ReadCloser:  resp.Body,
+		observer:    t.observer,
+		requestID:   requestID,
+		method:      method,
+		contentType: resp.Header.Get("Content-Type"),
 	}
 	return resp, nil
 }
 
-func initializeRequestID(req *http.Request) (string, bool) {
+func capabilityRequest(req *http.Request) (requestID, method string, ok bool) {
 	if req.Method != http.MethodPost || req.GetBody == nil {
-		return "", false
+		return "", "", false
 	}
 	body, err := req.GetBody()
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	defer body.Close()
 	raw, err := io.ReadAll(io.LimitReader(body, defaultObserverResponseBytes+1))
 	if err != nil || int64(len(raw)) > defaultObserverResponseBytes {
-		return "", false
+		return "", "", false
 	}
 	var request struct {
 		ID     json.RawMessage `json:"id"`
 		Method string          `json:"method"`
 	}
-	if err := json.Unmarshal(raw, &request); err != nil || request.Method != "initialize" {
-		return "", false
+	if err := json.Unmarshal(raw, &request); err != nil || !isCapabilityHandshakeMethod(request.Method) {
+		return "", "", false
 	}
-	return canonicalJSONRPCID(request.ID)
+	requestID, ok = canonicalJSONRPCID(request.ID)
+	return requestID, request.Method, ok
 }
 
-type initializeObservingBody struct {
+type capabilityObservingBody struct {
 	io.ReadCloser
-	observer     *initializeWireObserver
-	initializeID string
-	contentType  string
-	mu           sync.Mutex
-	buffer       []byte
-	resolved     bool
-	overflowed   bool
+	observer    *capabilityWireObserver
+	requestID   string
+	method      string
+	contentType string
+	mu          sync.Mutex
+	buffer      []byte
+	resolved    bool
+	overflowed  bool
 }
 
-func (b *initializeObservingBody) Read(p []byte) (int, error) {
+func (b *capabilityObservingBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
 	if n > 0 {
 		b.appendAndInspect(p[:n], false)
@@ -179,12 +207,12 @@ func (b *initializeObservingBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (b *initializeObservingBody) Close() error {
+func (b *capabilityObservingBody) Close() error {
 	b.inspect(true)
 	return b.ReadCloser.Close()
 }
 
-func (b *initializeObservingBody) appendAndInspect(data []byte, final bool) {
+func (b *capabilityObservingBody) appendAndInspect(data []byte, final bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.resolved || b.overflowed {
@@ -200,13 +228,13 @@ func (b *initializeObservingBody) appendAndInspect(data []byte, final bool) {
 	b.inspectLocked(final)
 }
 
-func (b *initializeObservingBody) inspect(final bool) {
+func (b *capabilityObservingBody) inspect(final bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.inspectLocked(final)
 }
 
-func (b *initializeObservingBody) inspectLocked(final bool) {
+func (b *capabilityObservingBody) inspectLocked(final bool) {
 	if b.resolved || b.overflowed {
 		return
 	}
@@ -224,7 +252,7 @@ func (b *initializeObservingBody) inspectLocked(final bool) {
 	}
 }
 
-func (b *initializeObservingBody) observeEnvelope(payload []byte) bool {
+func (b *capabilityObservingBody) observeEnvelope(payload []byte) bool {
 	var response struct {
 		ID     json.RawMessage `json:"id"`
 		Result json.RawMessage `json:"result"`
@@ -233,10 +261,10 @@ func (b *initializeObservingBody) observeEnvelope(payload []byte) bool {
 		return false
 	}
 	responseID, ok := canonicalJSONRPCID(response.ID)
-	if !ok || responseID != b.initializeID || len(response.Result) == 0 {
+	if !ok || responseID != b.requestID || len(response.Result) == 0 {
 		return false
 	}
-	return b.observer.observeResult(response.Result)
+	return b.observer.observeResult(b.method, response.Result)
 }
 
 func completeSSEData(raw []byte, final bool) [][]byte {
@@ -272,56 +300,70 @@ func completeSSEData(raw []byte, final bool) [][]byte {
 	return result
 }
 
-type initializeObservingTransport struct {
+type capabilityObservingTransport struct {
 	base     mcpsdk.Transport
-	observer *initializeWireObserver
+	observer *capabilityWireObserver
 }
 
-func (t *initializeObservingTransport) Connect(ctx context.Context) (mcpsdk.Connection, error) {
+func (t *capabilityObservingTransport) Connect(ctx context.Context) (mcpsdk.Connection, error) {
 	connection, err := t.base.Connect(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return &initializeObservingConnection{Connection: connection, observer: t.observer}, nil
+	return &capabilityObservingConnection{Connection: connection, observer: t.observer}, nil
 }
 
-type initializeObservingConnection struct {
+type capabilityObservingConnection struct {
 	mcpsdk.Connection
-	observer *initializeWireObserver
+	observer *capabilityWireObserver
 
-	mu           sync.RWMutex
-	initializeID string
+	mu       sync.Mutex
+	requests map[string]string
 }
 
-func (c *initializeObservingConnection) Write(ctx context.Context, message jsonrpc.Message) error {
-	if request, ok := message.(*jsonrpc.Request); ok && request.Method == "initialize" {
-		if requestID, ok := canonicalSDKID(request.ID); ok {
-			c.mu.Lock()
-			c.initializeID = requestID
-			c.mu.Unlock()
-		}
+func (c *capabilityObservingConnection) Write(ctx context.Context, message jsonrpc.Message) error {
+	request, isRequest := message.(*jsonrpc.Request)
+	if !isRequest || !isCapabilityHandshakeMethod(request.Method) {
+		return c.Connection.Write(ctx, message)
 	}
-	return c.Connection.Write(ctx, message)
+	requestID, ok := canonicalSDKID(request.ID)
+	if !ok {
+		return c.Connection.Write(ctx, message)
+	}
+	c.mu.Lock()
+	if c.requests == nil {
+		c.requests = make(map[string]string)
+	}
+	c.requests[requestID] = request.Method
+	c.mu.Unlock()
+	if err := c.Connection.Write(ctx, message); err != nil {
+		c.mu.Lock()
+		delete(c.requests, requestID)
+		c.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
-func (c *initializeObservingConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
+func (c *capabilityObservingConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 	message, err := c.Connection.Read(ctx)
 	if err != nil {
 		return message, err
 	}
 	response, ok := message.(*jsonrpc.Response)
-	if !ok || len(response.Result) == 0 {
+	if !ok {
 		return message, nil
 	}
 	responseID, ok := canonicalSDKID(response.ID)
 	if !ok {
 		return message, nil
 	}
-	c.mu.RLock()
-	initializeID := c.initializeID
-	c.mu.RUnlock()
-	if initializeID != "" && responseID == initializeID {
-		c.observer.observeResult(response.Result)
+	c.mu.Lock()
+	method := c.requests[responseID]
+	delete(c.requests, responseID)
+	c.mu.Unlock()
+	if method != "" && len(response.Result) > 0 {
+		c.observer.observeResult(method, response.Result)
 	}
 	return message, nil
 }
@@ -356,7 +398,7 @@ func canonicalJSONRPCID(raw json.RawMessage) (string, bool) {
 	}
 }
 
-func applyInitializeWireObservation(node *ingest.Node, observer *initializeWireObserver) {
+func applyCapabilityWireObservation(node *ingest.Node, observer *capabilityWireObserver) {
 	if node == nil || observer == nil {
 		return
 	}

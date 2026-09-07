@@ -236,7 +236,9 @@ func classifyStructuredError(err error) (ProbeStatus, bool) {
 		return "", false
 	}
 	switch wire.Code {
-	case mcpsdk.CodeResourceNotFound:
+	case jsonrpc.CodeInvalidParams:
+		// MCP resources/read uses InvalidParams for an unknown resource. SDK
+		// 1.7 deprecates its ResourceNotFound alias in favor of this code.
 		return ProbeNotFound, true
 	case mcpsdk.CodeHeaderMismatch:
 		return ProbeMalformedAuth, true

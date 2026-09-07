@@ -137,6 +137,7 @@ github.com/gowebpki/jcs
 github.com/google/jsonschema-go/jsonschema
 github.com/google/uuid
 github.com/modelcontextprotocol/go-sdk/auth
+github.com/modelcontextprotocol/go-sdk/internal/authutil
 github.com/modelcontextprotocol/go-sdk/internal/json
 github.com/modelcontextprotocol/go-sdk/internal/jsonrpc2
 github.com/modelcontextprotocol/go-sdk/internal/mcpgodebug
@@ -163,10 +164,12 @@ github.com/yosida95/uritemplate/v3
 golang.org/x/oauth2
 golang.org/x/oauth2/internal
 golang.org/x/net/route
+golang.org/x/sync/errgroup
 golang.org/x/sys/cpu
 golang.org/x/sys/unix
 golang.org/x/text/transform
 golang.org/x/text/unicode/norm
+golang.org/x/time/rate
 gopkg.in/yaml.v3
 hash
 hash/crc32

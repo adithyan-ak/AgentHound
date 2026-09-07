@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/adithyan-ak/agenthound/sdk/collector"
@@ -66,7 +67,7 @@ func TestMCPCollectorObservesRawTasksAndPreservesBoundedStreamableSessionState(t
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if request.Method != "initialize" &&
+		if !isCapabilityHandshakeMethod(request.Method) &&
 			(r.Header.Get("MCP-Protocol-Version") != protocolVersion ||
 				r.Header.Get("Mcp-Session-Id") != sessionID) {
 			badHeaders.Store(true)
@@ -75,6 +76,9 @@ func TestMCPCollectorObservesRawTasksAndPreservesBoundedStreamableSessionState(t
 		}
 
 		switch request.Method {
+		case discoverMethod:
+			w.Header().Set("Content-Type", "application/json")
+			writeRawError(t, w, request.ID, jsonrpc.CodeMethodNotFound, "method not found")
 		case "initialize":
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Mcp-Session-Id", sessionID)
@@ -134,7 +138,91 @@ func TestMCPCollectorObservesRawTasksAndPreservesBoundedStreamableSessionState(t
 	}
 }
 
-func TestInitializeTasksPresenceSemantics(t *testing.T) {
+func TestMCPCollectorObservesRawTasksFromDiscover(t *testing.T) {
+	const protocolVersion = discoverProtocolVersion
+	var (
+		discoverSeen   atomic.Bool
+		initializeSeen atomic.Bool
+		toolsSeen      atomic.Bool
+	)
+
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var request struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch request.Method {
+		case discoverMethod:
+			discoverSeen.Store(true)
+			writeRawResult(t, w, request.ID, map[string]any{
+				"resultType":        "complete",
+				"ttlMs":             0,
+				"cacheScope":        "public",
+				"supportedVersions": []string{protocolVersion},
+				"_meta": map[string]any{
+					"io.modelcontextprotocol/serverInfo": map[string]any{
+						"name": "discover-server", "version": "1.0.0",
+					},
+				},
+				"capabilities": map[string]any{
+					"tools": map[string]any{},
+					"tasks": map[string]any{"list": map[string]any{}},
+				},
+			})
+		case initializeMethod:
+			initializeSeen.Store(true)
+			writeRawError(t, w, request.ID, jsonrpc.CodeMethodNotFound, "legacy initialize is not supported")
+		case "tools/list":
+			toolsSeen.Store(true)
+			writeRawResult(t, w, request.ID, map[string]any{"tools": []any{}})
+		default:
+			writeRawError(t, w, request.ID, jsonrpc.CodeMethodNotFound, "method not found")
+		}
+	}))
+	defer httpServer.Close()
+
+	data, err := NewMCPCollector().Collect(context.Background(), collector.CollectOptions{
+		TargetURL: httpServer.URL,
+		ScanID:    "raw-tasks-discover",
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	serverNode := nodeWithKind(t, data.Graph.Nodes, "MCPServer")
+	if got := serverNode.Properties["protocol_version"]; got != protocolVersion {
+		t.Fatalf("protocol_version = %#v, want %q", got, protocolVersion)
+	}
+	if got := serverNode.Properties["has_tasks_capability"]; got != true {
+		t.Fatalf("has_tasks_capability = %#v, want true", got)
+	}
+	capabilities, ok := serverNode.Properties["capabilities"].([]string)
+	if !ok || !slices.Contains(capabilities, "tasks") {
+		t.Fatalf("capabilities = %#v, want raw tasks capability", serverNode.Properties["capabilities"])
+	}
+	if !discoverSeen.Load() || initializeSeen.Load() || !toolsSeen.Load() {
+		t.Fatalf(
+			"unexpected handshake lifecycle: discover=%t initialize=%t tools=%t",
+			discoverSeen.Load(), initializeSeen.Load(), toolsSeen.Load(),
+		)
+	}
+	for _, outcome := range data.Meta.Collection.Outcomes {
+		if outcome.Method == discoverMethod && outcome.State == ingest.OutcomeComplete {
+			return
+		}
+	}
+	t.Fatalf("collection outcomes do not contain a complete %q handshake: %#v", discoverMethod, data.Meta.Collection.Outcomes)
+}
+
+func TestTasksCapabilityPresenceSemantics(t *testing.T) {
 	tests := []struct {
 		name       string
 		result     string
@@ -151,12 +239,12 @@ func TestInitializeTasksPresenceSemantics(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			observer := &initializeWireObserver{}
-			if !observer.observeResult(json.RawMessage(test.result)) {
+			observer := &capabilityWireObserver{}
+			if !observer.observeResult(initializeMethod, json.RawMessage(test.result)) {
 				t.Fatal("valid initialize result was not observed")
 			}
 			node := ingest.Node{Properties: map[string]any{"capabilities": []string{"tools"}}}
-			applyInitializeWireObservation(&node, observer)
+			applyCapabilityWireObservation(&node, observer)
 
 			got, exists := node.Properties["has_tasks_capability"]
 			if exists != test.wantExists || (exists && got != test.wantValue) {
@@ -173,7 +261,7 @@ func TestInitializeTasksPresenceSemantics(t *testing.T) {
 	}
 }
 
-func TestInitializeObserverCapturesLegacySSE(t *testing.T) {
+func TestCapabilityObserverCapturesLegacySSE(t *testing.T) {
 	events := make(chan []byte, 4)
 	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -204,7 +292,23 @@ func TestInitializeObserverCapturesLegacySSE(t *testing.T) {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			if request.Method == "initialize" {
+			switch request.Method {
+			case discoverMethod:
+				response, err := json.Marshal(map[string]any{
+					"jsonrpc": "2.0",
+					"id":      request.ID,
+					"error": map[string]any{
+						"code":    jsonrpc.CodeMethodNotFound,
+						"message": "method not found",
+					},
+				})
+				if err != nil {
+					t.Errorf("marshal SSE error response: %v", err)
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				events <- response
+			case initializeMethod:
 				response, err := json.Marshal(map[string]any{
 					"jsonrpc": "2.0",
 					"id":      request.ID,
@@ -228,7 +332,7 @@ func TestInitializeObserverCapturesLegacySSE(t *testing.T) {
 	}))
 	defer httpServer.Close()
 
-	transport, observer := withInitializeWireObserver(&mcpsdk.SSEClientTransport{Endpoint: httpServer.URL + "/sse"})
+	transport, observer := withCapabilityWireObserver(&mcpsdk.SSEClientTransport{Endpoint: httpServer.URL + "/sse"})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "observer-test", Version: "1.0.0"}, nil)
@@ -244,10 +348,10 @@ func TestInitializeObserverCapturesLegacySSE(t *testing.T) {
 	}
 }
 
-func TestInitializeObserverCapturesStdio(t *testing.T) {
-	command := exec.Command(os.Args[0], "-test.run=^TestInitializeObserverStdioHelperProcess$")
+func TestCapabilityObserverCapturesLegacyStdio(t *testing.T) {
+	command := exec.Command(os.Args[0], "-test.run=^TestCapabilityObserverStdioHelperProcess$")
 	command.Env = append(os.Environ(), "AGENTHOUND_MCP_STDIO_HELPER=1")
-	transport, observer := withInitializeWireObserver(&mcpsdk.CommandTransport{
+	transport, observer := withCapabilityWireObserver(&mcpsdk.CommandTransport{
 		Command:           command,
 		TerminateDuration: 5 * time.Second,
 	})
@@ -266,7 +370,39 @@ func TestInitializeObserverCapturesStdio(t *testing.T) {
 	}
 }
 
-func TestInitializeObserverStdioHelperProcess(t *testing.T) {
+func TestCapabilityObserverCapturesDiscoverOverStdio(t *testing.T) {
+	command := exec.Command(os.Args[0], "-test.run=^TestCapabilityObserverStdioHelperProcess$")
+	command.Env = append(
+		os.Environ(),
+		"AGENTHOUND_MCP_STDIO_HELPER=1",
+		"AGENTHOUND_MCP_STDIO_HELPER_MODE=discover",
+	)
+	transport, observer := withCapabilityWireObserver(&mcpsdk.CommandTransport{
+		Command:           command,
+		TerminateDuration: 5 * time.Second,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "observer-test", Version: "1.0.0"}, nil)
+	session, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		t.Fatalf("Connect stdio discover: %v", err)
+	}
+	if got := session.InitializeResult().ProtocolVersion; got != discoverProtocolVersion {
+		t.Fatalf("stdio discover protocol = %q, want %s", got, discoverProtocolVersion)
+	}
+	if got := observer.tasksState(); got != tasksCapabilityPresent {
+		t.Fatalf("stdio discover tasks state = %v, want present", got)
+	}
+	if got := observer.handshakeMethod(session.InitializeResult().ProtocolVersion); got != discoverMethod {
+		t.Fatalf("stdio handshake method = %q, want %q", got, discoverMethod)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close stdio discover: %v", err)
+	}
+}
+
+func TestCapabilityObserverStdioHelperProcess(t *testing.T) {
 	if os.Getenv("AGENTHOUND_MCP_STDIO_HELPER") != "1" {
 		return
 	}
@@ -280,7 +416,43 @@ func TestInitializeObserverStdioHelperProcess(t *testing.T) {
 		if err := json.Unmarshal(scanner.Bytes(), &request); err != nil {
 			os.Exit(2)
 		}
-		if request.Method != "initialize" {
+		if request.Method == discoverMethod && os.Getenv("AGENTHOUND_MCP_STDIO_HELPER_MODE") == "discover" {
+			if err := encoder.Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      request.ID,
+				"result": map[string]any{
+					"resultType":        "complete",
+					"ttlMs":             0,
+					"cacheScope":        "public",
+					"supportedVersions": []string{discoverProtocolVersion},
+					"_meta": map[string]any{
+						"io.modelcontextprotocol/serverInfo": map[string]any{
+							"name": "stdio-discover", "version": "1.0.0",
+						},
+					},
+					"capabilities": map[string]any{
+						"tasks": map[string]any{"list": map[string]any{}},
+					},
+				},
+			}); err != nil {
+				os.Exit(2)
+			}
+			continue
+		}
+		if request.Method == discoverMethod {
+			if err := encoder.Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      request.ID,
+				"error": map[string]any{
+					"code":    jsonrpc.CodeMethodNotFound,
+					"message": "method not found",
+				},
+			}); err != nil {
+				os.Exit(2)
+			}
+			continue
+		}
+		if request.Method != initializeMethod {
 			continue
 		}
 		if err := encoder.Encode(map[string]any{
@@ -306,6 +478,20 @@ func writeRawResult(t *testing.T, w http.ResponseWriter, id json.RawMessage, res
 		"result":  result,
 	}); err != nil {
 		t.Errorf("encode JSON-RPC response: %v", err)
+	}
+}
+
+func writeRawError(t *testing.T, w http.ResponseWriter, id json.RawMessage, code int, message string) {
+	t.Helper()
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"error": map[string]any{
+			"code":    code,
+			"message": message,
+		},
+	}); err != nil {
+		t.Errorf("encode JSON-RPC error: %v", err)
 	}
 }
 
