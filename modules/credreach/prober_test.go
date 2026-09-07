@@ -17,7 +17,7 @@ import (
 )
 
 func TestClassifyStructuredErrors(t *testing.T) {
-	notFound := &jsonrpc.Error{Code: mcpsdk.CodeResourceNotFound, Message: "resource not found"}
+	notFound := &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "resource not found"}
 	if got := classifyProbeError(context.Background(), notFound); got != ProbeNotFound {
 		t.Fatalf("resource-not-found code => %q, want not_found", got)
 	}
@@ -152,7 +152,7 @@ func TestClassifyTimeout(t *testing.T) {
 // a control-denied + authed-404 pair must never collapse to not_observed.
 func TestNotFoundStaysIndeterminate(t *testing.T) {
 	authed404 := classifyProbeError(context.Background(),
-		&jsonrpc.Error{Code: mcpsdk.CodeResourceNotFound, Message: "missing"})
+		&jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "missing"})
 	control := ProbeResult{
 		Stage:             ProbeStageResourceRead,
 		ResourceAddressed: true,

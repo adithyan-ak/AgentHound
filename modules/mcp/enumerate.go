@@ -69,7 +69,7 @@ func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, sca
 	if deadline, ok := ctx.Deadline(); ok {
 		transport = withHTTPTransportDeadline(transport, deadline)
 	}
-	transport, initializeObserver := withInitializeWireObserver(transport)
+	transport, capabilityObserver := withCapabilityWireObserver(transport)
 
 	client := mcpsdk.NewClient(
 		&mcpsdk.Implementation{Name: "AgentHound", Version: common.CollectorVersion()},
@@ -94,11 +94,12 @@ func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, sca
 	defer session.Close()
 
 	initResult := session.InitializeResult()
+	handshakeMethod := capabilityObserver.handshakeMethod(initResult.ProtocolVersion)
 
 	serverNode := buildServerNode(serverID, spec, initResult, c.engine)
-	applyInitializeWireObservation(&serverNode, initializeObserver)
+	applyCapabilityWireObservation(&serverNode, capabilityObserver)
 	result.Nodes = append(result.Nodes, serverNode)
-	result.Outcomes = append(result.Outcomes, methodOutcome(spec, "initialize", ingest.OutcomeComplete, 1, nil))
+	result.Outcomes = append(result.Outcomes, methodOutcome(spec, handshakeMethod, ingest.OutcomeComplete, 1, nil))
 
 	if spec.Transport == "http" && spec.URL != "" {
 		hostResult := buildHostNodes(serverID, spec.URL, scanID)
@@ -175,7 +176,7 @@ func (c *MCPCollector) retryWithSSE(ctx context.Context, spec ServerSpec, scanID
 	if deadline, ok := ctx.Deadline(); ok {
 		sseTransport = withHTTPTransportDeadline(sseTransport, deadline)
 	}
-	sseTransport, initializeObserver := withInitializeWireObserver(sseTransport)
+	sseTransport, capabilityObserver := withCapabilityWireObserver(sseTransport)
 
 	client := mcpsdk.NewClient(
 		&mcpsdk.Implementation{Name: "AgentHound", Version: common.CollectorVersion()},
@@ -197,11 +198,12 @@ func (c *MCPCollector) retryWithSSE(ctx context.Context, spec ServerSpec, scanID
 	defer session.Close()
 
 	initResult := session.InitializeResult()
+	handshakeMethod := capabilityObserver.handshakeMethod(initResult.ProtocolVersion)
 
 	serverNode := buildServerNode(serverID, spec, initResult, c.engine)
-	applyInitializeWireObservation(&serverNode, initializeObserver)
+	applyCapabilityWireObservation(&serverNode, capabilityObserver)
 	result.Nodes = append(result.Nodes, serverNode)
-	result.Outcomes = append(result.Outcomes, methodOutcome(spec, "initialize", ingest.OutcomeComplete, 1, nil))
+	result.Outcomes = append(result.Outcomes, methodOutcome(spec, handshakeMethod, ingest.OutcomeComplete, 1, nil))
 
 	if spec.URL != "" {
 		hostResult := buildHostNodes(serverID, spec.URL, scanID)
@@ -499,7 +501,7 @@ func buildServerNode(serverID string, spec ServerSpec, initResult *mcpsdk.Initia
 		if initResult.Capabilities.Prompts != nil {
 			capabilities = append(capabilities, "prompts")
 		}
-		if initResult.Capabilities.Logging != nil {
+		if initResult.ProtocolVersion < discoverProtocolVersion && supportsLegacyLogging(initResult.Capabilities) {
 			capabilities = append(capabilities, "logging")
 		}
 		if initResult.Capabilities.Completions != nil {
@@ -551,6 +553,12 @@ func buildServerNode(serverID string, spec ServerSpec, initResult *mcpsdk.Initia
 	}
 
 	return common.NewNode(serverID, []string{"MCPServer"}, props)
+}
+
+func supportsLegacyLogging(capabilities *mcpsdk.ServerCapabilities) bool {
+	// Logging remains observable on legacy protocol sessions during the SDK's
+	// deprecation window, so retain that evidence until legacy support ends.
+	return capabilities.Logging != nil //nolint:staticcheck
 }
 
 func buildUnreachableServerNode(
