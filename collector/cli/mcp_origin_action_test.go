@@ -29,6 +29,13 @@ func TestMCPOriginValidationCandidatesRequireObservedAnonymousStreamableHTTP(t *
 		},
 		ObservationDomains: []string{"mcp:target:sha256:one"},
 	}
+	configured := ingest.Node{
+		ID: "mcp-server", Kinds: []string{"MCPServer"},
+		Properties: map[string]any{
+			"endpoint": "https://mcp.example/mcp", "transport": "http",
+		},
+		ObservationDomains: []string{"config:path:sha256:one"},
+	}
 	tests := []struct {
 		name    string
 		mutate  func(*ingest.Node)
@@ -51,7 +58,7 @@ func TestMCPOriginValidationCandidatesRequireObservedAnonymousStreamableHTTP(t *
 				test.mutate(&node)
 			}
 			view := buildPlannerView(
-				ingest.GraphData{Nodes: []ingest.Node{node}}, nil, map[string]bool{}, false, test.stealth,
+				ingest.GraphData{Nodes: []ingest.Node{configured, node}}, nil, map[string]bool{}, false, test.stealth,
 			)
 			candidates := (mcpOriginValidationAction{}).Candidates(view)
 			if len(candidates) != test.want {
@@ -59,8 +66,13 @@ func TestMCPOriginValidationCandidatesRequireObservedAnonymousStreamableHTTP(t *
 			}
 			if test.want == 1 {
 				candidate := candidates[0]
+				var source ingest.Node
+				if err := json.Unmarshal([]byte(candidate.Inputs["server_node"]), &source); err != nil {
+					t.Fatalf("decode candidate source: %v", err)
+				}
 				if candidate.Target.Address != "https://mcp.example/mcp" ||
 					candidate.Inputs["protocol_version"] != "2025-11-25" ||
+					len(source.ObservationDomains) != 1 || source.ObservationDomains[0] != "mcp:target:sha256:one" ||
 					candidate.CredentialID != "" || len(candidate.PathNodeIDs) != 1 {
 					t.Fatalf("candidate = %+v", candidate)
 				}
@@ -93,8 +105,9 @@ func TestMCPOriginValidationExecuteStoresOnlyBoundedEvidence(t *testing.T) {
 		Target: action.Target{Kind: "url", Address: server.URL, Meta: map[string]string{"node_id": "mcp-server"}},
 		Inputs: map[string]string{
 			"action_id": "sha256:action", "server_id": "mcp-server",
-			"protocol_version":    "2025-11-25",
-			"observation_domains": "mcp:target:sha256:one",
+			"protocol_version": "2025-11-25",
+			"server_node": `{"id":"mcp-server","kinds":["MCPServer"],"properties":{"endpoint":"` + server.URL +
+				`","transport":"http","protocol_version":"2025-11-25"},"observation_domains":["mcp:target:sha256:one"]}`,
 		},
 	}
 	result, err := (mcpOriginValidationAction{timeout: time.Second}).Execute(
@@ -109,7 +122,9 @@ func TestMCPOriginValidationExecuteStoresOnlyBoundedEvidence(t *testing.T) {
 	node := result.Graph.Nodes[0]
 	if node.ID != "mcp-server" || node.Properties["origin_validation_status"] != "accepted" ||
 		node.Properties["origin_validation_evidence"] != "matching_jsonrpc_response" ||
-		node.Properties["origin_validation_http_status"] != http.StatusOK {
+		node.Properties["origin_validation_http_status"] != http.StatusOK ||
+		node.Properties["endpoint"] != server.URL || node.Properties["transport"] != "http" ||
+		node.Properties["protocol_version"] != "2025-11-25" || node.PropertySemantics != "" {
 		t.Fatalf("node = %+v", node)
 	}
 	document, marshalErr := json.Marshal(result)
@@ -131,7 +146,11 @@ func TestMCPOriginValidationExecutePreservesIndeterminateOutcome(t *testing.T) {
 	candidate := Candidate{
 		Key:    "origin-candidate",
 		Target: action.Target{Kind: "url", Address: server.URL, Meta: map[string]string{"node_id": "mcp-server"}},
-		Inputs: map[string]string{"server_id": "mcp-server"},
+		Inputs: map[string]string{
+			"server_id": "mcp-server",
+			"server_node": `{"id":"mcp-server","kinds":["MCPServer"],"properties":{"endpoint":"` + server.URL +
+				`","transport":"http"}}`,
+		},
 	}
 	result, err := (mcpOriginValidationAction{timeout: time.Second}).Execute(
 		context.Background(), candidate, nil,
