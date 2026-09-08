@@ -13,6 +13,7 @@ func allProcessors() []PostProcessor {
 		&processors.Shadows{},
 		&processors.PoisonedDescription{},
 		&processors.PoisonedInstructions{},
+		&processors.MCPOriginValidation{},
 		// taints runs before can_reach so its cross-tool taint edges can
 		// influence the transitive reachability walk.
 		&processors.Taints{},
