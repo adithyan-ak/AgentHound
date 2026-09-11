@@ -145,6 +145,19 @@ func TestBuildImpactUsesCanonicalVariant(t *testing.T) {
 	}
 }
 
+func TestBuildImpactMCPOriginValidationNamesServer(t *testing.T) {
+	finding := &model.Finding{
+		EdgeKind: "MCP_ORIGIN_VALIDATION_FAILED",
+		SourceID: "mcp-server", SourceName: "local-mcp",
+		TargetID: "mcp-server", TargetName: "local-mcp",
+	}
+	impact := BuildImpact(finding, nil)
+	if impact == nil || !strings.Contains(impact.Summary, "local-mcp") ||
+		!strings.Contains(impact.BlastRadius, "local-mcp") {
+		t.Fatalf("impact = %+v", impact)
+	}
+}
+
 func TestFindingDetailMarshalEmitsRemediationCollectionsAsArrays(t *testing.T) {
 	path := &AttackPath{
 		Nodes: []PathNode{

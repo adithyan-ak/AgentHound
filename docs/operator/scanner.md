@@ -21,7 +21,7 @@ An invalid positional target fails before configured network enumeration begins.
 
 | Mode | Collection and actions |
 |---|---|
-| Active | Uses configured authentication, reuses compatible credentials, verifies MCP resource access, and runs eligible reversible ContextForge probes. |
+| Active | Uses configured authentication, reuses compatible credentials, verifies MCP resource access and Streamable HTTP Origin handling, and runs eligible reversible ContextForge probes. |
 | Active with `--deep` | Adds recursive instruction collection, bounded Qdrant point references, expensive probes, and bounded Ollama embedding verification. |
 | `--stealth` | Performs anonymous read-only collection and exact configured authentication. Credential reuse, compute, tool invocation, and mutation are disabled. |
 | `--stealth --deep` | Adds deep filesystem and payload reads while retaining stealth restrictions. |
@@ -77,9 +77,10 @@ The CLI prints the path, line, primary rule, and matched excerpt for each non-cl
 
 ## Verification actions
 
-The active planner performs three bounded actions when their prerequisites are present:
+The active planner performs four bounded actions when their prerequisites are present:
 
 - MCP credential access first reads the exact resource anonymously. If that succeeds, AgentHound records public access and saves the content without presenting a credential. Otherwise, it follows with an authenticated read of the same resource.
+- MCP Origin validation sends one anonymous `ping` with `Origin: https://agenthound.invalid` only after the same Streamable HTTP endpoint initialized anonymously. HTTP 403 records rejection; a response with the exact JSON-RPC request ID records acceptance; every other response is indeterminate. The probe does not initialize a session, follow redirects, or contact the `.invalid` origin.
 - The ContextForge description round trip writes a scan-specific marker, observes it through MCP, restores the original immediately, and confirms restoration.
 - Deep Ollama verification invokes a bounded embedding request to prove compute access.
 

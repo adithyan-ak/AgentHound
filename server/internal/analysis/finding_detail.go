@@ -361,6 +361,10 @@ var impactTemplates = map[string]struct {
 		summary:     "Instruction file %s contains suspicious content that requires review.",
 		blastRadius: "This signal identifies content to inspect; it does not establish malicious intent or instruction execution.",
 	},
+	"MCP_ORIGIN_VALIDATION_FAILED": {
+		summary:     "MCP server %s processed a request carrying a deliberately invalid Origin instead of rejecting it with HTTP 403.",
+		blastRadius: "A browser-controlled origin may be able to send requests to %s when network reachability and browser access conditions permit.",
+	},
 }
 
 func BuildImpact(f *model.Finding, path *AttackPath) *Impact {
