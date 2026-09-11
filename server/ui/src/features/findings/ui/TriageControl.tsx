@@ -29,6 +29,7 @@ export function TriageControl({ findingId, status, compact = false }: TriageCont
   const meta = TRIAGE_META[status] ?? TRIAGE_META.new;
 
   return (
+    <span className="inline-flex flex-wrap items-center gap-1" onClick={(e) => e.stopPropagation()}>
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
         <button
@@ -38,6 +39,8 @@ export function TriageControl({ findingId, status, compact = false }: TriageCont
             "border-border bg-black/30 text-foreground/80 hover:border-mauve-7 hover:text-foreground",
             compact ? "px-1.5 py-0.5 text-[9px]" : "px-2.5 py-1 text-[11px]",
           )}
+          disabled={setTriage.isPending}
+          aria-busy={setTriage.isPending}
           aria-label="Set triage status"
         >
           <span
@@ -45,6 +48,7 @@ export function TriageControl({ findingId, status, compact = false }: TriageCont
             style={{ backgroundColor: meta.color, boxShadow: `0 0 6px -1px ${meta.color}` }}
           />
           <span style={{ color: meta.color }}>{compact ? meta.short : meta.label}</span>
+          {setTriage.isPending && <span className="text-muted-foreground">Saving…</span>}
           <ChevronDown className="h-3 w-3 opacity-60" strokeWidth={2.5} />
         </button>
       </DropdownMenu.Trigger>
@@ -86,5 +90,14 @@ export function TriageControl({ findingId, status, compact = false }: TriageCont
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
+    {setTriage.isError && (
+      <span role="alert" className="text-xs text-destructive">
+        Status save failed.{' '}
+        <button className="underline" onClick={() => {
+          if (setTriage.variables) setTriage.mutate(setTriage.variables);
+        }}>Retry</button>
+      </span>
+    )}
+    </span>
   );
 }

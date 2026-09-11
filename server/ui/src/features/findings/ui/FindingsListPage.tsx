@@ -144,6 +144,10 @@ export function FindingsListPage() {
     dir: "asc",
   });
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkPending, setBulkPending] = useState(false);
+  const [bulkResult, setBulkResult] = useState<{
+    saved: number; failed: string[]; status: TriageStatus;
+  } | null>(null);
   const [cursor, setCursor] = useState(0);
   const [copied, setCopied] = useState(false);
   const [railOpen, setRailOpen] = useState(true);
@@ -394,8 +398,20 @@ export function FindingsListPage() {
     setTimeout(() => setCopied(false), 1500);
   }
 
-  function bulkSetStatus(status: TriageStatus) {
-    for (const id of selected) setTriage.mutate({ fingerprint: id, status });
+  async function bulkSetStatus(status: TriageStatus, ids = [...selected]) {
+    if (bulkPending || ids.length === 0) return;
+    setBulkPending(true);
+    setBulkResult(null);
+    const results = await Promise.allSettled(
+      ids.map((fingerprint) => setTriage.mutateAsync({ fingerprint, status })),
+    );
+    const failed = ids.filter((_, index) => results[index]!.status === "rejected");
+    const saved = new Set(ids.filter((_, index) => results[index]!.status === "fulfilled"));
+    setSelected((previous) => new Set([
+      ...[...previous].filter((id) => !saved.has(id)), ...failed,
+    ]));
+    setBulkResult({ saved: saved.size, failed, status });
+    setBulkPending(false);
   }
 
   function setSortKey(key: SortKey) {
@@ -561,6 +577,17 @@ export function FindingsListPage() {
           as clean.
         </DataStateNotice>
       )}
+      {bulkPending && <p role="status" className="text-sm text-muted-foreground">Saving triage changes…</p>}
+      {bulkResult && (
+        <div role={bulkResult.failed.length ? "alert" : "status"} className="text-sm">
+          {bulkResult.saved} saved · {bulkResult.failed.length} failed.
+          {bulkResult.failed.length > 0 && (
+            <button className="ml-2 text-primary underline" onClick={() => void bulkSetStatus(bulkResult.status, bulkResult.failed)}>
+              Retry failed items
+            </button>
+          )}
+        </div>
+      )}
       {registerContent}
     </div>
   );
@@ -687,7 +714,7 @@ export function FindingsListPage() {
               {pad2(selected.size)} selected
             </span>
             <span className="mx-1 h-4 w-px bg-border/70" />
-            <BulkStatusMenu onPick={bulkSetStatus} />
+            <BulkStatusMenu disabled={bulkPending} onPick={(status) => void bulkSetStatus(status)} />
             <button
               onClick={exportSelected}
               className="inline-flex items-center gap-1.5 rounded-[3px] border border-border bg-black/30 px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.06em] text-foreground/80 transition-colors hover:border-primary/50 hover:text-primary"
@@ -1162,11 +1189,11 @@ function GroupSection({
   );
 }
 
-function BulkStatusMenu({ onPick }: { onPick: (s: TriageStatus) => void }) {
+function BulkStatusMenu({ onPick, disabled }: { onPick: (s: TriageStatus) => void; disabled: boolean }) {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button className="inline-flex items-center gap-1.5 rounded-[3px] border border-border bg-black/30 px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.06em] text-foreground/80 transition-colors hover:border-primary/50 hover:text-primary">
+        <button disabled={disabled} className="inline-flex items-center gap-1.5 rounded-[3px] border border-border bg-black/30 px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.06em] text-foreground/80 transition-colors hover:border-primary/50 hover:text-primary">
           Set status
         </button>
       </DropdownMenu.Trigger>
