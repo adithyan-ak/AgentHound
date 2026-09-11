@@ -1,4 +1,4 @@
-.PHONY: build build-collector build-server build-all test lint check security-check integration upstream-test cross-build docker docker-collector docker-server docker-standard up down clean seed release ui-build ui-check ui-dev ui-test standard standard-run standard-stop deps-check size-check installer-test version-check sync-version docs-check prerelease preflight-build preflight-collector preflight-server preflight-docker preflight-docker-compose preflight-server-running
+.PHONY: build build-collector build-server build-all test lint check security-check integration upstream-test cross-build docker docker-collector docker-server up down clean seed release ui-build ui-check ui-dev ui-test deps-check size-check installer-test version-check sync-version docs-check prerelease preflight-build preflight-collector preflight-server preflight-docker preflight-docker-compose preflight-server-running
 
 # Release tooling is pinned independently of the project's Go version.
 # Go may download the tool's newer required toolchain on the first local run.
@@ -104,11 +104,7 @@ docker-collector: preflight-docker
 docker-server: preflight-docker
 	docker build -f docker/Dockerfile.agenthound-server -t agenthound:server .
 
-docker-standard: preflight-docker
-	docker build -f docker/Dockerfile.standard -t agenthound:standard .
-
-# `docker` builds both split images (server + collector). The all-in-one
-# standard image is built explicitly via `make docker-standard` (or `make standard`).
+# `docker` builds both split images (server + collector).
 docker: docker-collector docker-server
 
 up: preflight-docker-compose
@@ -128,26 +124,6 @@ seed: preflight-server-running
 release: ui-build
 	$(GORELEASER) check
 	$(GORELEASER) release --clean --snapshot
-
-standard: preflight-docker
-	docker build -f docker/Dockerfile.standard -t agenthound:latest .
-
-standard-run: preflight-docker
-	# Build the image first if it doesn't exist locally. agenthound:latest
-	# is built by `make standard`; running `make standard-run` on a fresh
-	# checkout without that image would otherwise fail (or worse, pull an
-	# unrelated image from a default registry).
-	@if ! docker image inspect agenthound:latest >/dev/null 2>&1; then \
-		echo ">>> agenthound:latest not found locally; building first (this takes a few minutes)"; \
-		$(MAKE) standard; \
-	fi
-	# Bind on loopback only — the server has no application-layer auth.
-	# Override with -p 0.0.0.0:8080:8080 only inside a network you trust.
-	docker run -d --name agenthound -p 127.0.0.1:8080:8080 \
-		-v agenthound-data:/data --restart unless-stopped agenthound:latest
-
-standard-stop: preflight-docker
-	docker stop agenthound && docker rm agenthound
 
 deps-check:
 	@bash scripts/deps-check.sh
