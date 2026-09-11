@@ -1,3 +1,0 @@
-#!/bin/sh
-export PATH="/usr/lib/postgresql/13/bin:$PATH"
-exec gosu postgres postgres -D /data/postgres -c shared_buffers=128MB -c log_destination=stderr -c listen_addresses=127.0.0.1
