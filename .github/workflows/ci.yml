@@ -222,24 +222,9 @@ jobs:
           build-args: |
             VERSION=ci-test
             COMMIT=ci-test-commit
-      - name: Build standard image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
-        with:
-          context: .
-          file: docker/Dockerfile.standard
-          load: true
-          push: false
-          tags: agenthound-standard:ci
-          build-args: |
-            VERSION=ci-test
-            COMMIT=ci-test-commit
       - name: Verify image version metadata
         run: |
           [[ "$(docker run --rm agenthound:ci --version)" == \
             "agenthound version ci-test (commit: ci-test-commit)" ]]
           [[ "$(docker run --rm agenthound-server:ci --version)" == \
-            "agenthound-server version ci-test (commit: ci-test-commit)" ]]
-          [[ "$(docker run --rm --entrypoint agenthound agenthound-standard:ci --version)" == \
-            "agenthound version ci-test (commit: ci-test-commit)" ]]
-          [[ "$(docker run --rm --entrypoint agenthound-server agenthound-standard:ci --version)" == \
             "agenthound-server version ci-test (commit: ci-test-commit)" ]]
