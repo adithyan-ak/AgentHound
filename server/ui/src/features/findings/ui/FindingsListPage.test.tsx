@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Finding } from "@entities/finding/model";
@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   useFindings: vi.fn(),
   useProjectionState: vi.fn(),
   mutate: vi.fn(),
+  mutateAsync: vi.fn(),
 }));
 
 vi.mock("@entities/finding", async (importOriginal) => {
@@ -14,7 +15,7 @@ vi.mock("@entities/finding", async (importOriginal) => {
   return {
     ...actual,
     useFindings: mocks.useFindings,
-    useSetTriage: () => ({ mutate: mocks.mutate }),
+    useSetTriage: () => ({ mutate: mocks.mutate, mutateAsync: mocks.mutateAsync }),
   };
 });
 
@@ -325,4 +326,29 @@ describe("FindingsListPage request and snapshot states", () => {
     expect(screen.getByText("high finding")).toBeInTheDocument();
     expect(screen.queryByText("medium finding")).not.toBeInTheDocument();
   });
+});
+
+
+it("summarizes partial bulk saves and retries only failed findings", async () => {
+  Element.prototype.scrollIntoView = vi.fn();
+  mocks.useProjectionState.mockReturnValue(completePosture);
+  mocks.useFindings.mockReturnValue({
+    data: [finding("one", "high"), finding("two", "medium")],
+    snapshot: currentScope, isLoading: false, isError: false,
+  });
+  mocks.mutateAsync.mockImplementation(({ fingerprint }: { fingerprint: string }) =>
+    fingerprint === "two" ? Promise.reject(new Error("rejected")) : Promise.resolve(),
+  );
+  renderPage();
+  for (const checkbox of screen.getAllByRole("checkbox").slice(1)) fireEvent.click(checkbox);
+  fireEvent.keyDown(screen.getByRole("button", { name: "Set status" }), { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Triaging" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("1 saved · 1 failed");
+  expect(screen.getAllByRole("checkbox").filter((el) => (el as HTMLInputElement).checked)).toHaveLength(1);
+  mocks.mutateAsync.mockClear();
+  mocks.mutateAsync.mockResolvedValue(undefined);
+  fireEvent.click(screen.getByRole("button", { name: "Retry failed items" }));
+  await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("1 saved · 0 failed"));
+  expect(mocks.mutateAsync).toHaveBeenCalledExactlyOnceWith({ fingerprint: "two", status: "triaging" });
+  expect(screen.queryByRole("button", { name: "Retry failed items" })).not.toBeInTheDocument();
 });
