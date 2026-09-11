@@ -1,3 +1,0 @@
-#!/bin/sh
-/opt/neo4j/bin/neo4j stop 2>/dev/null
-sleep 5
