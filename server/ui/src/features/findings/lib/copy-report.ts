@@ -3,7 +3,9 @@ import type {
   AttackPath,
   FindingDetail,
   RemediationStep,
+  PublishedFindingScope,
 } from "@entities/finding/model";
+import { isCurrentPublishedFindingScope } from "@entities/finding/model";
 import { formatFindingEvidenceState } from "./evidence-label";
 
 /**
@@ -11,9 +13,30 @@ import { formatFindingEvidenceState } from "./evidence-label";
  * selection). Path-level detail requires per-finding fetches, so this stays a
  * summary — id, severity, relationship, endpoints, OWASP, ATLAS, confidence.
  */
-export function buildFindingsTableMarkdown(findings: Finding[]): string {
+export function buildFindingsTableMarkdown(
+  findings: Finding[],
+  context: {
+    snapshot?: PublishedFindingScope;
+    refreshFailed?: boolean;
+    coverageLimited?: boolean;
+  } = {},
+): string {
   const lines: string[] = [];
   lines.push(`## AgentHound Findings (${findings.length})`);
+  const { snapshot, refreshFailed } = context;
+  if (snapshot?.available) {
+    lines.push(`**Snapshot:** ${markdownText(snapshot.scanId)} | Revision: ${snapshot.revision ?? "unknown"} | Published: ${markdownText(snapshot.publishedAt ?? "unknown")}`);
+    if (refreshFailed) {
+      lines.push("**Freshness:** Refresh failed; current status is unknown. These are cached findings.");
+    } else if (!isCurrentPublishedFindingScope(snapshot)) {
+      lines.push("**Freshness:** Stale snapshot; these findings are not a current-state verdict.");
+    }
+  } else {
+    lines.push("**Snapshot:** Unavailable; snapshot identity and current status cannot be established.");
+  }
+  if (context.coverageLimited || snapshot?.coverageLimited || (snapshot?.activeCoverageLimitations?.length ?? 0) > 0) {
+    lines.push("**Coverage:** Limited in the recorded snapshot; missing evidence is not proof of absence.");
+  }
   lines.push("");
   lines.push(
     "| Severity | Finding | Variant | Evidence | Relationship | Source → Target | OWASP | MITRE ATLAS | Conf |",
@@ -66,7 +89,7 @@ export function buildMarkdownReport(
   }
   if (snapshot) {
     lines.push(
-      `**Snapshot:** ${snapshot.scan_id} | Projection: ${snapshot.projection_status} | Evidence: ${snapshot.evidence_state}${snapshot.stale ? " | stale" : ""}`,
+      `**Snapshot:** ${snapshot.scan_id} | Revision: ${snapshot.revision ?? "unknown"} | Published: ${snapshot.published_at ?? "unknown"} | Projection: ${snapshot.projection_status} | Evidence: ${snapshot.evidence_state}${snapshot.stale ? " | stale" : ""}`,
     );
   }
   lines.push("");

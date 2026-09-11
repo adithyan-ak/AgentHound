@@ -389,7 +389,11 @@ export function FindingsListPage() {
   function exportSelected() {
     const chosen = ordered.filter((f) => selected.has(f.id));
     if (chosen.length === 0) return;
-    void navigator.clipboard.writeText(buildFindingsTableMarkdown(chosen));
+    void navigator.clipboard.writeText(buildFindingsTableMarkdown(chosen, {
+      snapshot,
+      refreshFailed: cachedRefreshError,
+      coverageLimited: limitedCoverage,
+    }));
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   }
