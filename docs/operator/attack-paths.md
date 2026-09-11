@@ -32,6 +32,7 @@ These self-node findings intentionally have no hop graph or attack cost. Agent r
 | Execution | `CAN_EXECUTE` | Which tools expose shell or code execution on a host? |
 | Exfiltration | `CAN_EXFILTRATE_VIA` | Where can sensitive access combine with an outbound channel? |
 | Tool and instruction integrity | `SHADOWS`, `POISONED_DESCRIPTION`, `INSTRUCTION_SIGNAL`, `POISONED_INSTRUCTIONS`, `POISONS_CONTEXT` | Which descriptions or instruction sources contain reviewable steering signals or strong poisoning evidence? |
+| MCP transport security | `MCP_ORIGIN_VALIDATION_FAILED` | Did an anonymously reachable Streamable HTTP endpoint process a request carrying a deliberately invalid Origin? |
 | Untrusted data flow | `TAINTS`, `IFC_VIOLATION` | Can attacker-controlled input reach a compatible or high-impact tool? |
 | A2A trust | `CAN_IMPERSONATE`, `CONFUSED_DEPUTY`, cross-protocol `CAN_REACH` | Where can delegation, similarity, weak authentication, or host correlation cross boundaries? |
 

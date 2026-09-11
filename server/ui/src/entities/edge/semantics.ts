@@ -100,6 +100,11 @@ export const EDGE_EXPLOIT = {
     detail:
       "A read-only probe read this resource without any credential. This is a recorded fact, not an automatic finding: it is only a policy concern where authentication was expected.",
   },
+  MCP_ORIGIN_VALIDATION_FAILED: {
+    title: "Invalid Origin accepted",
+    detail:
+      "An anonymous active probe sent an invalid Origin and received a matching MCP response or a newly allocated session. Streamable HTTP servers should reject untrusted origins with HTTP 403.",
+  },
   CONFUSED_DEPUTY: {
     title: "Confused-deputy route",
     detail:
@@ -149,6 +154,7 @@ export const EDGE_DESCRIPTION = {
   INGESTS_UNTRUSTED: "Tool ingests untrusted resource",
   CREDENTIAL_ACCESS_OBSERVED: "Credential access to resource observed",
   PUBLIC_ACCESS_OBSERVED: "Resource observed publicly accessible",
+  MCP_ORIGIN_VALIDATION_FAILED: "MCP endpoint accepted invalid Origin",
   HAS_ACCESS_TO: "Tool can access resource",
   CAN_EXECUTE: "Tool can execute on host",
   SHADOWS: "Tool shadows another tool",

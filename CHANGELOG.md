@@ -4,6 +4,7 @@
 
 ### Changed
 
+- The legacy all-in-one `standard` Docker image and its Make targets have been removed; use the split collector and server images or the Compose deployment instead.
 - Public Compose deployments now pin the coordinated AgentHound server release, and release publication verifies the signed production image before making the GitHub release public.
 - Server ingestion now reports collector, artifact-contract, and server versions while retaining backward compatibility with supported historical V1 artifacts.
 

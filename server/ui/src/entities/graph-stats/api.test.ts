@@ -8,12 +8,19 @@ vi.mock("@shared/api/client", () => ({
 }));
 
 function response(body: unknown) {
-  return { json: vi.fn().mockResolvedValue(body) };
+  return { ok: true, status: 200, json: vi.fn().mockResolvedValue(body) };
 }
 
 describe("fetchGraphStats", () => {
   beforeEach(() => {
     getMock.mockReset();
+  });
+
+  it("preserves absent publication without inventing empty statistics", async () => {
+    getMock.mockReturnValue({ status: 409, ok: false, json: async () => ({
+      error: { code: "PROJECTION_CONFLICT", details: { reason: "absent" } },
+    }) });
+    await expect(fetchGraphStats()).rejects.toMatchObject({ code: "PROJECTION_CONFLICT", reason: "absent" });
   });
 
   it("decodes the publication identity", async () => {

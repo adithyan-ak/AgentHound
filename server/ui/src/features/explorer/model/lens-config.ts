@@ -184,6 +184,7 @@ export const LENS_LIST: LensDefinition[] = [
       "CAN_EXFILTRATE_VIA",
       "CAN_IMPERSONATE",
       "INGESTS_UNTRUSTED",
+      "MCP_ORIGIN_VALIDATION_FAILED",
       "CONFUSED_DEPUTY",
       "IFC_VIOLATION",
       "PUBLIC_ACCESS_OBSERVED",
@@ -230,6 +231,12 @@ export const LENS_LIST: LensDefinition[] = [
         id: "INGESTS_UNTRUSTED",
         label: "Ingests Untrusted",
         description: "Tool → untrusted input resource",
+        defaultEnabled: true,
+      },
+      {
+        id: "MCP_ORIGIN_VALIDATION_FAILED",
+        label: "Invalid Origin Accepted",
+        description: "MCP server accepted an invalid Origin",
         defaultEnabled: true,
       },
       {
@@ -468,6 +475,7 @@ export const EDGE_PRIMARY_LENS = {
   INGESTS_UNTRUSTED: "attack-surface",
   CREDENTIAL_ACCESS_OBSERVED: "credentials",
   PUBLIC_ACCESS_OBSERVED: "attack-surface",
+  MCP_ORIGIN_VALIDATION_FAILED: "attack-surface",
   HAS_ACCESS_TO: "attack-surface",
   CAN_EXECUTE: "attack-surface",
   CAN_REACH: "attack-surface",
