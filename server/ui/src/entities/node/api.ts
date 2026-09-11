@@ -48,6 +48,7 @@ async function fetchNodePage(
     if (detail.code === "PROJECTION_CONFLICT") {
       throw new ProjectionConflictError(
         typeof detail.message === "string" ? detail.message : undefined,
+        (detail.details as { reason?: string } | undefined)?.reason,
       );
     }
     if (detail.code !== "REVISION_CONFLICT") {

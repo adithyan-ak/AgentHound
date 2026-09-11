@@ -201,6 +201,9 @@ func TestMCPCollectorObservesRawTasksFromDiscover(t *testing.T) {
 	if got := serverNode.Properties["protocol_version"]; got != protocolVersion {
 		t.Fatalf("protocol_version = %#v, want %q", got, protocolVersion)
 	}
+	if got := serverNode.Properties["observed_transport"]; got != ObservedTransportStreamableHTTP {
+		t.Fatalf("observed_transport = %#v, want %q", got, ObservedTransportStreamableHTTP)
+	}
 	if got := serverNode.Properties["has_tasks_capability"]; got != true {
 		t.Fatalf("has_tasks_capability = %#v, want true", got)
 	}

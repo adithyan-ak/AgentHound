@@ -97,6 +97,9 @@ func (c *MCPCollector) enumerateServer(ctx context.Context, spec ServerSpec, sca
 	handshakeMethod := capabilityObserver.handshakeMethod(initResult.ProtocolVersion)
 
 	serverNode := buildServerNode(serverID, spec, initResult, c.engine)
+	if spec.Transport == "http" {
+		serverNode.Properties["observed_transport"] = ObservedTransportStreamableHTTP
+	}
 	applyCapabilityWireObservation(&serverNode, capabilityObserver)
 	result.Nodes = append(result.Nodes, serverNode)
 	result.Outcomes = append(result.Outcomes, methodOutcome(spec, handshakeMethod, ingest.OutcomeComplete, 1, nil))
@@ -201,6 +204,7 @@ func (c *MCPCollector) retryWithSSE(ctx context.Context, spec ServerSpec, scanID
 	handshakeMethod := capabilityObserver.handshakeMethod(initResult.ProtocolVersion)
 
 	serverNode := buildServerNode(serverID, spec, initResult, c.engine)
+	serverNode.Properties["observed_transport"] = ObservedTransportLegacySSE
 	applyCapabilityWireObservation(&serverNode, capabilityObserver)
 	result.Nodes = append(result.Nodes, serverNode)
 	result.Outcomes = append(result.Outcomes, methodOutcome(spec, handshakeMethod, ingest.OutcomeComplete, 1, nil))

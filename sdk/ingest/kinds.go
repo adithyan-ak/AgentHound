@@ -151,7 +151,7 @@ var RawEdgeKinds = map[string]bool{
 	"STORED_IN":                  true,
 }
 
-// AllowedEdgeKinds includes all 34 edge kinds (21 raw + 13 composite) for Neo4j writer dispatch.
+// AllowedEdgeKinds includes all 35 edge kinds (21 raw + 14 composite) for Neo4j writer dispatch.
 var AllowedEdgeKinds = map[string]bool{
 	// Raw (collector-produced)
 	"TRUSTS_SERVER":              true,
@@ -176,19 +176,20 @@ var AllowedEdgeKinds = map[string]bool{
 	"USES_BACKEND":               true,
 	"STORED_IN":                  true,
 	// Composite (post-processor produced)
-	"HAS_ACCESS_TO":         true,
-	"CAN_EXECUTE":           true,
-	"CAN_REACH":             true,
-	"CAN_EXFILTRATE_VIA":    true,
-	"SHADOWS":               true,
-	"POISONED_DESCRIPTION":  true,
-	"CAN_IMPERSONATE":       true,
-	"INSTRUCTION_SIGNAL":    true,
-	"POISONED_INSTRUCTIONS": true,
-	"CONFUSED_DEPUTY":       true,
-	"TAINTS":                true,
-	"IFC_VIOLATION":         true,
-	"POISONS_CONTEXT":       true,
+	"HAS_ACCESS_TO":                true,
+	"CAN_EXECUTE":                  true,
+	"CAN_REACH":                    true,
+	"CAN_EXFILTRATE_VIA":           true,
+	"SHADOWS":                      true,
+	"POISONED_DESCRIPTION":         true,
+	"CAN_IMPERSONATE":              true,
+	"INSTRUCTION_SIGNAL":           true,
+	"POISONED_INSTRUCTIONS":        true,
+	"CONFUSED_DEPUTY":              true,
+	"TAINTS":                       true,
+	"IFC_VIOLATION":                true,
+	"POISONS_CONTEXT":              true,
+	"MCP_ORIGIN_VALIDATION_FAILED": true,
 }
 
 // AllowedCollectors are the valid collector identifiers in ingest meta.
@@ -259,14 +260,15 @@ var EdgeKindEndpoints = map[string]EdgeEndpoints{
 	// It does not claim observed agent invocation. PUBLIC_ACCESS_OBSERVED
 	// records an anonymous read of a resource (MCPServer→MCPResource) — a fact,
 	// not an auto-finding.
-	"CREDENTIAL_ACCESS_OBSERVED": {SourceKinds: []string{"Credential"}, TargetKinds: []string{"MCPResource"}},
-	"PUBLIC_ACCESS_OBSERVED":     {SourceKinds: []string{"MCPServer"}, TargetKinds: []string{"MCPResource"}},
-	"USES_BACKEND":               {SourceKinds: []string{"AIService", "OpenWebUIInstance"}, TargetKinds: []string{"AIService", "ArtifactStore", "OllamaInstance", "QdrantInstance"}},
-	"STORED_IN":                  {SourceKinds: []string{"ModelArtifact"}, TargetKinds: []string{"ArtifactStore"}},
-	"CONFUSED_DEPUTY":            {SourceKinds: []string{"A2AAgent"}, TargetKinds: []string{"A2AAgent"}},
-	"TAINTS":                     {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
-	"IFC_VIOLATION":              {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
-	"POISONS_CONTEXT":            {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
+	"CREDENTIAL_ACCESS_OBSERVED":   {SourceKinds: []string{"Credential"}, TargetKinds: []string{"MCPResource"}},
+	"PUBLIC_ACCESS_OBSERVED":       {SourceKinds: []string{"MCPServer"}, TargetKinds: []string{"MCPResource"}},
+	"USES_BACKEND":                 {SourceKinds: []string{"AIService", "OpenWebUIInstance"}, TargetKinds: []string{"AIService", "ArtifactStore", "OllamaInstance", "QdrantInstance"}},
+	"STORED_IN":                    {SourceKinds: []string{"ModelArtifact"}, TargetKinds: []string{"ArtifactStore"}},
+	"CONFUSED_DEPUTY":              {SourceKinds: []string{"A2AAgent"}, TargetKinds: []string{"A2AAgent"}},
+	"TAINTS":                       {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
+	"IFC_VIOLATION":                {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
+	"POISONS_CONTEXT":              {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
+	"MCP_ORIGIN_VALIDATION_FAILED": {SourceKinds: []string{"MCPServer"}, TargetKinds: []string{"MCPServer"}},
 }
 
 // endpointKindAllowed reports whether kind is a member of allowed.

@@ -91,6 +91,10 @@ var findingsMeta = map[string]findingMeta{
 		owasp:    []string{"ASI03"},
 		atlas:    []string{"AML.T0051"},
 	},
+	"MCP_ORIGIN_VALIDATION_FAILED": {
+		category: "Transport Security",
+		title:    "MCP endpoint accepted an invalid Origin",
+	},
 	"CAN_IMPERSONATE": {
 		category: "Agent Impersonation",
 		title:    "Possible agent impersonation",
@@ -145,6 +149,9 @@ type findingDescriptionContext struct {
 	target                   findingActor
 	exfiltrationCapabilities []string
 	confidence               float64
+	originHTTPStatus         int
+	originResponseEvidence   string
+	originProbeValue         string
 }
 
 // formatFindingDescription names both endpoint roles explicitly. For
@@ -191,6 +198,15 @@ func formatFindingDescription(metaKey string, ctx findingDescriptionContext) str
 		return fmt.Sprintf("%s reaches sensitive sink %s across the configured information-flow boundary", source, target)
 	case "POISONS_CONTEXT":
 		return fmt.Sprintf("Content from %s may enter context used by high-capability %s", source, target)
+	case "MCP_ORIGIN_VALIDATION_FAILED":
+		evidence := "a matching MCP response"
+		if ctx.originResponseEvidence == "session_allocated" {
+			evidence = "an allocated MCP session"
+		}
+		return fmt.Sprintf(
+			"%s processed a request carrying disallowed Origin %s with HTTP %d and %s instead of rejecting it with HTTP 403",
+			source, ctx.originProbeValue, ctx.originHTTPStatus, evidence,
+		)
 	default:
 		return fmt.Sprintf("Composite edge %s detected between %s and %s", metaKey, source, target)
 	}
@@ -307,6 +323,9 @@ RETURN src.objectid AS source_id,
 	       r.proof_credential_status AS proof_credential_status,
 	       r.proof_credential_resource_addressed AS proof_credential_resource_addressed,
 	       r.proof_cleanup_status AS proof_cleanup_status,
+	       r.http_status AS origin_http_status,
+	       r.response_evidence AS origin_response_evidence,
+	       r.probe_origin AS origin_probe_value,
        detector_evidence_nodes AS exact_evidence_nodes,
        detector_evidence_edges AS exact_evidence_edges,
        r.evidence_synthetic_edge AS exact_evidence_synthetic_edge
@@ -397,6 +416,9 @@ func QueryFindings(ctx context.Context, db graph.GraphDB, severity string) ([]mo
 			},
 			exfiltrationCapabilities: channels,
 			confidence:               confidence,
+			originHTTPStatus:         intVal(row, "origin_http_status"),
+			originResponseEvidence:   stringVal(row, "origin_response_evidence"),
+			originProbeValue:         stringVal(row, "origin_probe_value"),
 		})
 
 		finding := model.Finding{
@@ -480,7 +502,8 @@ func buildFindingEvidence(
 	state := model.FindingEvidenceUnknown
 	if detector != "" {
 		state = model.FindingEvidenceInferred
-		if edgeKind == "POISONED_DESCRIPTION" || edgeKind == "POISONED_INSTRUCTIONS" || edgeKind == "INSTRUCTION_SIGNAL" {
+		if edgeKind == "POISONED_DESCRIPTION" || edgeKind == "POISONED_INSTRUCTIONS" ||
+			edgeKind == "INSTRUCTION_SIGNAL" || edgeKind == "MCP_ORIGIN_VALIDATION_FAILED" {
 			state = model.FindingEvidenceObserved
 		}
 	}
@@ -692,7 +715,8 @@ func classifySeverity(edgeKind string, crossProtocol bool, confidence float64, t
 	case "POISONED_DESCRIPTION", "SHADOWS", "POISONED_INSTRUCTIONS",
 		"CONFUSED_DEPUTY", "IFC_VIOLATION", "POISONS_CONTEXT":
 		return "high"
-	case "CAN_IMPERSONATE", "CAN_EXECUTE", "HAS_ACCESS_TO", "TAINTS", "INSTRUCTION_SIGNAL":
+	case "CAN_IMPERSONATE", "CAN_EXECUTE", "HAS_ACCESS_TO", "TAINTS", "INSTRUCTION_SIGNAL",
+		"MCP_ORIGIN_VALIDATION_FAILED":
 		return "medium"
 	default:
 		return "low"
