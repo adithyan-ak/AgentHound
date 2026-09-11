@@ -6,7 +6,12 @@ import { Dashboard } from "@features/dashboard";
 import { StatCards } from "@features/dashboard/ui/StatCards";
 import { ExposureGauge } from "@features/dashboard/ui/ExposureGauge";
 import type { Finding } from "@entities/finding/model";
+import { ProjectionConflictError } from "@shared/api/conflicts";
+import { fetchScans, fetchLatestPublishedScan, fetchLatestCompletedScan } from "@entities/scan/api";
+import { useHealth } from "@entities/health";
 import { useProjectionState } from "@entities/posture";
+
+vi.mock("@entities/health", () => ({ useHealth: vi.fn() }));
 
 const publishedScan = vi.hoisted(() => ({
   id: "scan-1",
@@ -343,6 +348,12 @@ describe("Dashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     publishedScan.collection_status = "complete";
+    vi.mocked(fetchScans).mockResolvedValue([publishedScan] as Awaited<ReturnType<typeof fetchScans>>);
+    vi.mocked(fetchLatestCompletedScan).mockResolvedValue(publishedScan as Awaited<ReturnType<typeof fetchLatestCompletedScan>>);
+    vi.mocked(fetchLatestPublishedScan).mockResolvedValue(publishedScan as Awaited<ReturnType<typeof fetchLatestPublishedScan>>);
+    vi.mocked(useHealth).mockReturnValue({
+      data: { status: "ok", postgres: "ok", neo4j: "ok" }, isLoading: false, isError: false,
+    } as ReturnType<typeof useHealth>);
     mockedUseProjectionState.mockReturnValue(completeProjectionState());
     mockedFetchNodeCollection.mockReset();
     mockedFetchNodeCollection.mockResolvedValue(nodeCollection([]));
@@ -360,6 +371,44 @@ describe("Dashboard", () => {
         stale: false,
       },
     });
+  });
+
+  it.each(["ready", "postgres", "neo4j", "history", "publication", "graph"])("handles first-use state: %s", async (scenario) => {
+    vi.mocked(fetchScans).mockResolvedValue(scenario === "history" ? [publishedScan] as Awaited<ReturnType<typeof fetchScans>> : []);
+    mockedFetchFindings.mockResolvedValue({
+      findings: [],
+      scope: { mode: "published", scanId: "", revision: null, publishedAt: null, projectionStatus: "unknown", snapshotStatus: "unknown", available: false, stale: false },
+    });
+    vi.mocked(fetchLatestPublishedScan).mockResolvedValue(undefined);
+    vi.mocked(fetchLatestCompletedScan).mockResolvedValue(undefined);
+    vi.mocked(useHealth).mockReturnValue({
+      data: { status: "ok", postgres: scenario === "postgres" ? "unavailable" : "ok", neo4j: scenario === "neo4j" ? "unavailable" : "ok" },
+      isLoading: false, isError: false,
+    } as ReturnType<typeof useHealth>);
+    mockedUseProjectionState.mockReturnValue({
+      ...completeProjectionState(),
+      data: {
+        status: scenario === "publication" ? "incomplete" : "unknown",
+        dirty_coverage: [], active_coverage_roots: [], active_coverage_limitations: [],
+        updated_at: "2026-09-10T00:00:00Z",
+      },
+    } as ReturnType<typeof useProjectionState>);
+    mockedUseGraphStats.mockReturnValue({
+      data: undefined, isLoading: false, isError: true,
+      error: new ProjectionConflictError(undefined, "absent"),
+    } as unknown as ReturnType<typeof useGraphStats>);
+    mockedFetchNodeCollection.mockRejectedValue(scenario === "graph" ? new Error("connection lost") : new ProjectionConflictError(undefined, "absent"));
+    render(<Dashboard />, { wrapper: createWrapper() });
+    if (scenario === "ready") {
+      expect(await screen.findByText("Ready for your first import")).toBeInTheDocument();
+      expect(screen.getByText(/security posture has not been assessed/)).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Go to Scans" })).toHaveAttribute("href", "/scans");
+      expect(screen.queryByText("Dashboard unavailable")).not.toBeInTheDocument();
+    } else {
+      expect(await screen.findByText("Dashboard unavailable")).toBeInTheDocument();
+      expect(screen.queryByText("Ready for your first import")).not.toBeInTheDocument();
+    }
+    expect(screen.queryByText("Low Risk")).not.toBeInTheDocument();
   });
 
   it("renders an error state when graph stats fail", () => {

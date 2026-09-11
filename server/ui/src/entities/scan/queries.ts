@@ -58,10 +58,12 @@ export function useScanPage(
   });
 }
 
+// React Query rejects undefined query results; null means the lookup succeeded
+// and no matching scan exists yet. Transport failures still reject normally.
 export function useLatestCompletedScan(poll = false) {
   return useQuery({
     queryKey: qk.latestScan("completed"),
-    queryFn: fetchLatestCompletedScan,
+    queryFn: async () => (await fetchLatestCompletedScan()) ?? null,
     refetchInterval: poll ? 2_000 : false,
   });
 }
@@ -69,7 +71,7 @@ export function useLatestCompletedScan(poll = false) {
 export function useLatestPublishedScan(poll = false) {
   return useQuery({
     queryKey: qk.latestScan("published"),
-    queryFn: fetchLatestPublishedScan,
+    queryFn: async () => (await fetchLatestPublishedScan()) ?? null,
     refetchInterval: poll ? 2_000 : false,
   });
 }
