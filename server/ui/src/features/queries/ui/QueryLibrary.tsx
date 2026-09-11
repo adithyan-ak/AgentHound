@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { BookOpen, Play, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { usePreBuiltQueries, useRunPreBuiltQuery } from "@entities/prebuilt";
-import type { PreBuiltQuery, TraversalMetadata } from "@entities/prebuilt";
+import type { PreBuiltQuery, PreBuiltResult } from "@entities/prebuilt";
 import { Skeleton } from "@shared/ui/primitives/skeleton";
 import { DataStateNotice } from "@shared/ui/feedback";
 import { severityColor } from "@shared/theme/tokens";
@@ -38,10 +38,7 @@ export function QueryLibrary() {
   } = usePreBuiltQueries();
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [resultRows, setResultRows] = useState<Record<string, unknown>[]>([]);
-  const [activeQuery, setActiveQuery] = useState<PreBuiltQuery | null>(null);
-  const [resultMetadata, setResultMetadata] =
-    useState<TraversalMetadata | null>(null);
+  const [result, setResult] = useState<PreBuiltResult | null>(null);
 
   const runQuery = useRunPreBuiltQuery();
 
@@ -51,16 +48,8 @@ export function QueryLibrary() {
       return;
     }
     setExpandedId(query.id);
-    setResultRows([]);
-    setActiveQuery(null);
-    setResultMetadata(null);
-    runQuery.mutate(query.id, {
-      onSuccess: (data) => {
-        setResultRows(data.rows);
-        setActiveQuery(data.query);
-        setResultMetadata(data.metadata ?? null);
-      },
-    });
+    setResult(null);
+    runQuery.mutate(query.id, { onSuccess: setResult });
   }
 
   const grouped = new Map<string, PreBuiltQuery[]>();
@@ -217,11 +206,12 @@ export function QueryLibrary() {
                                     ? runQuery.error.message
                                     : "Query failed"}
                                 </div>
-                              ) : activeQuery ? (
+                              ) : result ? (
                                 <QueryResult
-                                  rows={resultRows}
-                                  query={activeQuery}
-                                  metadata={resultMetadata ?? undefined}
+                                  rows={result.rows}
+                                  query={result.query}
+                                  metadata={result.metadata}
+                                  projection={result.projection}
                                 />
                               ) : null}
                             </div>
