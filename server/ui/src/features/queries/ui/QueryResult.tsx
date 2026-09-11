@@ -1,5 +1,6 @@
 import type {
   PreBuiltQuery,
+  ProjectionIdentity,
   TraversalMetadata,
 } from "@entities/prebuilt/api";
 
@@ -7,6 +8,7 @@ interface QueryResultProps {
   rows: Record<string, unknown>[];
   query: PreBuiltQuery;
   metadata?: TraversalMetadata;
+  projection?: ProjectionIdentity;
 }
 
 function isStructuredValue(value: unknown): value is object {
@@ -23,7 +25,20 @@ function formatStructured(value: object): string {
   return JSON.stringify(value, null, 2) ?? "\u2014";
 }
 
-export function QueryResult({ rows, query, metadata }: QueryResultProps) {
+export function QueryResult({ rows, query, metadata, projection }: QueryResultProps) {
+  const limitedCoverage = projection?.coverageLimited === true;
+  const publication = projection ? (
+    <div className="mb-2 break-all font-mono text-[10px] text-muted-foreground">
+      Snapshot: {projection.scanId} · Revision: {projection.revision}
+    </div>
+  ) : null;
+  const coverageWarning = limitedCoverage ? (
+    <div role="alert" className="mb-2 rounded-[3px] border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
+      Collection coverage is limited in this snapshot ({projection.coverageLimitationCount} limited scopes).
+      Missing evidence is not proof of absence. This is a snapshot-wide limitation,
+      not a count of scopes affected by this query.
+    </div>
+  ) : null;
   const incomplete =
     metadata !== undefined && (!metadata.complete || metadata.truncated);
   const warning = incomplete ? (
@@ -41,11 +56,15 @@ export function QueryResult({ rows, query, metadata }: QueryResultProps) {
   if (rows.length === 0) {
     return (
       <>
+        {publication}
+        {coverageWarning}
         {warning}
         <div className="py-4 text-center font-mono text-xs uppercase tracking-[0.1em] text-muted-foreground">
           {incomplete
             ? `Result unavailable for "${query.name}" because traversal did not complete`
-            : `No results for "${query.name}"`}
+            : limitedCoverage
+              ? `No matches in available evidence for "${query.name}"; collection coverage is limited`
+              : `No results for "${query.name}"`}
         </div>
       </>
     );
@@ -55,6 +74,8 @@ export function QueryResult({ rows, query, metadata }: QueryResultProps) {
 
   return (
     <div>
+      {publication}
+      {coverageWarning}
       {warning}
       <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
         {rows.length} row{rows.length !== 1 ? "s" : ""}

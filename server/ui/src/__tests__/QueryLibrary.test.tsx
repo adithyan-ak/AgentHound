@@ -125,5 +125,24 @@ describe("QueryLibrary", () => {
     });
 
     expect(screen.getByText("85")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
+  it.each([{ rows: [] }, { rows: [{ name: "retained evidence" }] }])("preserves collection limitations alongside results: %j", async ({ rows }) => {
+    mockedFetchQueries.mockResolvedValue(mockQueries);
+    mockedRunQuery.mockResolvedValue({
+      query: mockQueries[0]!, rows,
+      projection: { scanId: "limited-scan", revision: 7, coverageLimited: true, coverageLimitationCount: 3 },
+    });
+    render(<QueryLibrary />, { wrapper: createWrapper() });
+    fireEvent.click((await screen.findByText("Agents with Shell Access")).closest("button")!);
+    expect(await screen.findByRole("alert")).toHaveTextContent("3 limited scopes");
+    expect(screen.getByText(/Snapshot: limited-scan/)).toHaveTextContent("Revision: 7");
+    if (rows.length) {
+      expect(screen.getByText("retained evidence")).toBeInTheDocument();
+    } else {
+      expect(screen.getByText(/No matches in available evidence/)).toBeInTheDocument();
+      expect(screen.queryByText(/No results for/)).not.toBeInTheDocument();
+    }
+  });
+
 });
