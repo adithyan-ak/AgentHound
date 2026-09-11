@@ -2,9 +2,11 @@ package appdb
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -361,6 +363,11 @@ func TestIntegrationScansCRUD(t *testing.T) {
 
 	scanID := "test-scan-" + time.Now().Format("20060102150405")
 
+	// A large retained journal must not grow the history response.
+	actions := make([]any, 1000)
+	for i := range actions {
+		actions[i] = map[string]any{"id": fmt.Sprintf("action-%d", i), "error": strings.Repeat("x", 240)}
+	}
 	// Create
 	scan := &model.Scan{
 		ID:        scanID,
@@ -368,6 +375,11 @@ func TestIntegrationScansCRUD(t *testing.T) {
 		Status:    model.ScanStatusRunning,
 		StartedAt: time.Now().UTC(),
 		Metadata: map[string]any{
+			"submitted":      map[string]any{"nodes": 12, "edges": 34},
+			"artifact_extra": map[string]any{"scan_execution": map[string]any{"actions": actions}},
+			"scan_execution": map[string]any{"version": 1, "mode": "active", "deep": false,
+				"status": "completed", "started_at": "2026-09-10T00:00:00Z", "updated_at": "2026-09-10T00:00:01Z",
+				"summary": map[string]any{"actions_attempted": 1000, "actions_succeeded": 0, "actions_failed": 1000, "actions_skipped": 0, "cleanup_failures": 0}},
 			"ruleset": map[string]any{
 				"authenticity": "unverified",
 				"entries": []any{map[string]any{
@@ -412,6 +424,13 @@ func TestIntegrationScansCRUD(t *testing.T) {
 		t.Fatalf("persisted canonical matcher = %#v", entry["effective_matcher"])
 	}
 
+	detailJSON, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detailJSON) < 240000 {
+		t.Fatalf("detail lost journal: %d bytes", len(detailJSON))
+	}
 	// List
 	scans, err := store.ListScans(ctx, 10, 0)
 	if err != nil {
@@ -421,6 +440,40 @@ func TestIntegrationScansCRUD(t *testing.T) {
 		t.Error("expected at least 1 scan in list")
 	}
 
+	found := false
+	for _, listed := range scans {
+		if listed.ID != scanID {
+			continue
+		}
+		found = true
+		if _, exists := listed.Metadata["artifact_extra"]; exists {
+			t.Fatal("list retained full artifact")
+		}
+		if listed.Metadata["scan_execution"] == nil {
+			t.Fatal("list lost execution summary")
+		}
+		rules, ok := listed.Metadata["ruleset"].(map[string]any)
+		if !ok || len(rules) != 0 {
+			t.Fatalf("ruleset marker = %#v", listed.Metadata["ruleset"])
+		}
+		payload, err := json.Marshal(listed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(payload) > 2000 {
+			t.Fatalf("list row grew with journal: %d bytes", len(payload))
+		}
+		var wire struct{ Submitted model.ScanCounts }
+		if err := json.Unmarshal(payload, &wire); err != nil {
+			t.Fatal(err)
+		}
+		if wire.Submitted.Nodes != 12 || wire.Submitted.Edges != 34 {
+			t.Fatalf("lost submitted counts: %+v", wire.Submitted)
+		}
+	}
+	if !found {
+		t.Fatal("scan missing from history page")
+	}
 	// Cleanup
 	_, _ = pool.Exec(ctx, "DELETE FROM scans WHERE id = $1", scanID)
 }

@@ -74,16 +74,18 @@ export function RulesLibrary() {
     scansWithProvenance.find(
       (scan) => scan.publication_status === "published",
     ) ?? scansWithProvenance[0];
+  const defaultScanQuery = useScan(requestedScanId ? null : defaultScan?.id ?? null);
+  const selectedScanQuery = requestedScanId ? requestedScanQuery : defaultScanQuery;
   const selectedScan =
     (requestedScanId
       ? requestedScanQuery.data?.metadata?.ruleset != null
         ? requestedScanQuery.data
         : null
-      : defaultScan) ?? null;
+      : defaultScanQuery.data) ?? null;
   const invalidRequestedScan =
     requestedScanId != null &&
-    !requestedScanQuery.isLoading &&
-    !requestedScanQuery.isError &&
+    !selectedScanQuery.isLoading &&
+    !selectedScanQuery.isError &&
     selectedScan == null;
   const provenance = selectedScan
     ? scanRulesetProvenance(selectedScan)
@@ -179,12 +181,12 @@ export function RulesLibrary() {
                 onChange={(event) => selectScan(event.target.value)}
                 disabled={
                   scansQuery.isLoading ||
-                  requestedScanQuery.isLoading ||
+                  selectedScanQuery.isLoading ||
                   scansWithProvenance.length === 0
                 }
                 className="h-8 w-full rounded-[3px] border border-border bg-black/40 px-2 font-mono text-[11px] text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50"
               >
-                {(invalidRequestedScan || requestedScanQuery.isError) && (
+                {(invalidRequestedScan || selectedScanQuery.isError) && (
                   <option value="">Requested scan unavailable</option>
                 )}
                 {scansWithProvenance.length === 0 && (
@@ -217,15 +219,15 @@ export function RulesLibrary() {
                 : "The scan-history request failed."}
             </DataStateNotice>
           )}
-          {requestedScanId && requestedScanQuery.isError && (
+          {selectedScanQuery.isError && (
             <DataStateNotice
               tone="error"
-              title="Requested scan provenance unavailable"
+              title="Scan provenance unavailable"
               className="mt-3"
             >
-              {requestedScanQuery.error instanceof Error
-                ? requestedScanQuery.error.message
-                : `Scan ${requestedScanId} could not be loaded.`}
+              {selectedScanQuery.error instanceof Error
+                ? selectedScanQuery.error.message
+                : `Scan ${requestedScanId ?? defaultScan?.id} could not be loaded.`}
             </DataStateNotice>
           )}
           {invalidRequestedScan && (
@@ -239,7 +241,7 @@ export function RulesLibrary() {
           )}
           {!scansQuery.isLoading &&
             !scansQuery.isError &&
-            !requestedScanQuery.isLoading &&
+            !selectedScanQuery.isLoading &&
             scansWithProvenance.length === 0 && (
               <DataStateNotice
                 tone="warning"
