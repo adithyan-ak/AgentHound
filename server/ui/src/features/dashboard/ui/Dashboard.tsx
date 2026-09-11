@@ -1,5 +1,7 @@
 import { Link } from "react-router-dom";
 import { AlertCircle, ScanSearch, ArrowRight } from "lucide-react";
+import { useHealth } from "@entities/health";
+import { ProjectionConflictError } from "@shared/api/conflicts";
 import { useGraphStats } from "@entities/graph-stats";
 import { useFindings } from "@entities/finding";
 import { useNodes } from "@entities/node";
@@ -28,7 +30,7 @@ import { CrossProtocol } from "./CrossProtocol";
 import { Chokepoints } from "./Chokepoints";
 import { RecentScans } from "./RecentScans";
 
-function EmptyState() {
+function EmptyState({ firstImport = false }: { firstImport?: boolean }) {
   return (
     <div className="card-elevated relative mt-4 flex flex-col items-center justify-center gap-4 overflow-hidden rounded-md px-6 py-16 text-center">
       <span aria-hidden className="absolute left-0 top-0 h-px w-16 bg-primary/80" />
@@ -37,11 +39,12 @@ function EmptyState() {
       </div>
       <div className="space-y-1.5">
         <h2 className="font-mono text-base font-semibold uppercase tracking-[0.08em] text-foreground">
-          No attack surface mapped
+          {firstImport ? "Ready for your first import" : "No attack surface mapped"}
         </h2>
         <p className="mx-auto max-w-md text-sm text-muted-foreground">
-          Run a scan to discover your agent, MCP, and A2A infrastructure. Once ingested, your
-          exposure index, findings, and attack paths will appear here.
+          {firstImport
+            ? "Import a scan artifact from Scans to begin analysis. No evidence has been imported, so security posture has not been assessed."
+            : "Run a scan to discover your agent, MCP, and A2A infrastructure. Once ingested, your exposure index, findings, and attack paths will appear here."}
         </p>
       </div>
       <code className="rounded-[3px] border border-border bg-black/50 px-3 py-1.5 font-mono text-sm text-primary">
@@ -132,6 +135,31 @@ export function Dashboard() {
   const scansQuery = useScans(20);
   const latestPublishedQuery = useLatestPublishedScan();
   const postureQuery = useProjectionState();
+  const healthQuery = useHealth();
+  // An absent graph alone cannot establish first use: failed imports and
+  // unavailable dependencies must never be presented as an empty installation.
+  const firstImport =
+    !scansQuery.isLoading && !scansQuery.isError && scansQuery.data?.length === 0 &&
+    !latestPublishedQuery.isLoading && !latestPublishedQuery.isError &&
+    latestPublishedQuery.data === null &&
+    !postureQuery.isLoading && !postureQuery.isError &&
+    postureQuery.data?.status === "unknown" &&
+    !postureQuery.data.scan_id && !postureQuery.data.published_scan_id &&
+    postureQuery.data.published_revision == null && !postureQuery.data.error &&
+    postureQuery.data.dirty_coverage.length === 0 &&
+    postureQuery.data.active_coverage_roots.length === 0 &&
+    postureQuery.data.active_coverage_limitations.length === 0 &&
+    !healthQuery.isLoading && !healthQuery.isError &&
+    healthQuery.data?.status === "ok" &&
+    healthQuery.data.neo4j === "ok" && healthQuery.data.postgres === "ok" &&
+    [statsQuery, nodesQuery].every((query) =>
+      query.data === undefined && query.isError &&
+      query.error instanceof ProjectionConflictError && query.error.reason === "absent",
+    ) &&
+    !findingsQuery.isLoading && !findingsQuery.isError &&
+    findingsQuery.data?.length === 0 &&
+    findingsQuery.snapshot?.available === false &&
+    !findingsQuery.snapshot.scanId && findingsQuery.snapshot.revision == null;
 
   const required = [
     ["graph statistics", statsQuery],
@@ -142,7 +170,8 @@ export function Dashboard() {
     ["projection state", postureQuery],
   ] as const;
   const coldFailures = required.filter(
-    ([, query]) => query.isError && query.data === undefined,
+    ([, query]) => query.isError && query.data === undefined &&
+      !(firstImport && (query === statsQuery || query === nodesQuery)),
   );
   const cachedFailures = required.filter(
     ([, query]) => query.isError && query.data !== undefined,
@@ -151,9 +180,15 @@ export function Dashboard() {
     cachedFailures.length > 0
       ? Math.min(...cachedFailures.map(([, query]) => query.dataUpdatedAt))
       : 0;
-  const isLoading =
-    coldFailures.length === 0 &&
-    required.some(([, query]) => query.isLoading);
+  const awaitingFirstUseState =
+    coldFailures.length > 0 &&
+    coldFailures.every(([, query]) =>
+      query.error instanceof ProjectionConflictError && query.error.reason === "absent",
+    ) &&
+    (required.some(([, query]) => query.isLoading) || healthQuery.isLoading);
+  const isLoading = awaitingFirstUseState || (
+    coldFailures.length === 0 && required.some(([, query]) => query.isLoading)
+  );
   const stats = statsQuery.data;
   const scans = scansQuery.data ?? [];
   const posture = postureQuery.data;
@@ -282,7 +317,7 @@ export function Dashboard() {
             </div>
           }
           error={<ErrorState detail={errorDetail} />}
-          empty={<EmptyState />}
+          empty={<EmptyState firstImport={firstImport} />}
         >
           {verdictsWithheld ? (
             <IncompleteState

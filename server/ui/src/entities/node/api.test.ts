@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ProjectionConflictError } from "@shared/api/conflicts";
 import { fetchNodeCollection } from "./api";
 
 const getMock = vi.hoisted(() => vi.fn());
@@ -145,7 +144,7 @@ describe("fetchNodeCollection", () => {
           error: {
             code: "PROJECTION_CONFLICT",
             message: "stable published projection unavailable",
-            details: { actual_revision: 2 },
+            details: { reason: "absent", actual_revision: 2 },
           },
         }),
         {
@@ -155,8 +154,8 @@ describe("fetchNodeCollection", () => {
       ),
     );
 
-    await expect(fetchNodeCollection()).rejects.toBeInstanceOf(
-      ProjectionConflictError,
-    );
+    await expect(fetchNodeCollection()).rejects.toMatchObject({
+      code: "PROJECTION_CONFLICT", reason: "absent",
+    });
   });
 });

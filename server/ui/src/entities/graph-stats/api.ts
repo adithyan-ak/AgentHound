@@ -1,3 +1,4 @@
+import { ProjectionConflictError } from "@shared/api/conflicts";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@shared/api/client";
 import { qk } from "@shared/api/query-keys";
@@ -52,10 +53,21 @@ function counts(value: unknown, path: string): Record<string, number> {
 }
 
 export async function fetchGraphStats(): Promise<GraphStats> {
-  const body = record(
-    await api.get("graph/stats").json<unknown>(),
-    "graph stats",
-  );
+  const response = await api.get("graph/stats", { throwHttpErrors: false });
+  if (response.status === 409) {
+    const envelope = record(await response.json<unknown>(), "graph conflict");
+    const error = record(envelope.error, "graph conflict.error");
+    if (error.code === "PROJECTION_CONFLICT") {
+      throw new ProjectionConflictError(
+        typeof error.message === "string" ? error.message : undefined,
+        (error.details as { reason?: string } | undefined)?.reason,
+      );
+    }
+  }
+  if (!response.ok) {
+    throw new Error(`graph statistics request failed with status ${response.status}`);
+  }
+  const body = record(await response.json<unknown>(), "graph stats");
   const projection = record(body.projection, "graph stats.projection");
   if (
     typeof projection.scan_id !== "string" ||
