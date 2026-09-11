@@ -25,7 +25,18 @@ const scanSelectColumns = `id, collector, status, started_at, completed_at,
 	graph_total_nodes_before, graph_total_edges_before,
 	graph_total_nodes_after, graph_total_edges_after,
 	coalesce(comparable_to_scan_id, ''), published_revision, published_at,
-	lifecycle_updated_at, coalesce(metadata, '{}'::jsonb)`
+	lifecycle_updated_at, `
+
+const scanDetailColumns = scanSelectColumns + `coalesce(metadata, '{}'::jsonb)`
+
+// List rows carry the promoted execution summary and a ruleset-availability
+// marker. Journals, collection outcomes and rule entries belong to detail reads.
+const scanListColumns = scanSelectColumns + `jsonb_strip_nulls(jsonb_build_object(
+    'submitted', metadata->'submitted',
+    'scan_execution', metadata->'scan_execution',
+    'ruleset', CASE WHEN metadata->'ruleset' IS NOT NULL
+        AND metadata->'ruleset' <> 'null'::jsonb THEN '{}'::jsonb END
+))`
 
 type ScanFailure struct {
 	ID               string
@@ -539,7 +550,7 @@ func (s *ScanStore) RecoverInterruptedIngests(ctx context.Context) ([]string, er
 
 func (s *ScanStore) GetScan(ctx context.Context, id string) (*model.Scan, error) {
 	scan, err := scanScan(s.pool.QueryRow(ctx,
-		`SELECT `+scanSelectColumns+` FROM scans WHERE id = $1`, id))
+		`SELECT `+scanDetailColumns+` FROM scans WHERE id = $1`, id))
 	if err != nil {
 		return nil, fmt.Errorf("get scan: %w", err)
 	}
@@ -599,7 +610,7 @@ func (s *ScanStore) ListScansPage(
 	}
 
 	rows, err := tx.Query(ctx,
-		`SELECT `+scanSelectColumns+`
+		`SELECT `+scanListColumns+`
 		 FROM scans ORDER BY `+scanListOrderClause(order)+` LIMIT $1 OFFSET $2`, limit+1, offset)
 	if err != nil {
 		return nil, ScanPageInfo{}, fmt.Errorf("list scans: %w", err)

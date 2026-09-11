@@ -13,7 +13,40 @@ vi.mock("@entities/rule", () => ({
   }),
 }));
 
-vi.mock("@entities/scan", () => ({
+vi.mock("@entities/scan", () => {
+  const currentScan = {
+        id: "scan-with-rules",
+        collector: "mcp",
+        status: "completed",
+        started_at: "2026-07-11T00:00:00Z",
+        completed_at: "2026-07-11T00:01:00Z",
+        submitted: { nodes: 1, edges: 1 },
+        write_rows: { nodes: 1, edges: 1 },
+        graph_totals: { before: null, after: null },
+        publication_status: "published",
+        metadata: {
+          ruleset: {
+            digest: "sha256:effective-rules",
+            load_state: "complete",
+            authenticity: "unverified",
+            entries: [
+              {
+                type: "text",
+                id: "custom-rule",
+                version: 2,
+                semantic_sha256: "sha256:custom-rule",
+                source: "custom",
+                effective_matcher: {
+                  type: "regex",
+                  pattern: "effective",
+                },
+              },
+            ],
+            errors: [],
+          },
+        },
+      };
+  return ({
   useScan: (id: string | null) => ({
     data:
       id === "older-scan"
@@ -49,51 +82,21 @@ vi.mock("@entities/scan", () => ({
               },
             },
           }
-        : undefined,
+        : id === currentScan.id ? currentScan : undefined,
     isLoading: false,
     isError: false,
     error: null,
   }),
   useScans: () => ({
     data: [
-      {
-        id: "scan-with-rules",
-        collector: "mcp",
-        status: "completed",
-        started_at: "2026-07-11T00:00:00Z",
-        completed_at: "2026-07-11T00:01:00Z",
-        submitted: { nodes: 1, edges: 1 },
-        write_rows: { nodes: 1, edges: 1 },
-        graph_totals: { before: null, after: null },
-        publication_status: "published",
-        metadata: {
-          ruleset: {
-            digest: "sha256:effective-rules",
-            load_state: "complete",
-            authenticity: "unverified",
-            entries: [
-              {
-                type: "text",
-                id: "custom-rule",
-                version: 2,
-                semantic_sha256: "sha256:custom-rule",
-                source: "custom",
-                effective_matcher: {
-                  type: "regex",
-                  pattern: "effective",
-                },
-              },
-            ],
-            errors: [],
-          },
-        },
-      },
+      { ...currentScan, metadata: { ruleset: {} } },
     ],
     isLoading: false,
     isError: false,
     error: null,
   }),
-}));
+});
+});
 
 describe("RulesLibrary", () => {
   it("shows scan-specific provenance separately from current server rules", () => {

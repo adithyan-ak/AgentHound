@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { ShieldCheck, Trash2 } from "lucide-react";
+import { FileText, ShieldCheck, Trash2 } from "lucide-react";
 import type { Scan } from "@entities/scan";
 import { useDeleteScan } from "@entities/scan";
 import {
@@ -20,6 +20,8 @@ import {
   FEEDBACK,
   NODE_KIND_COLORS,
 } from "@shared/theme/tokens";
+
+import { ScanExecutionDetail } from "./ScanExecutionDetail";
 
 interface ScanHistoryProps {
   scans: Scan[];
@@ -60,6 +62,7 @@ function Th({ children, className }: { children?: ReactNode; className?: string 
 }
 
 export function ScanHistory({ scans, onDeleted }: ScanHistoryProps) {
+  const [detailScanId, setDetailScanId] = useState<string | null>(null);
   const [confirmScan, setConfirmScan] = useState<Scan | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -277,6 +280,12 @@ export function ScanHistory({ scans, onDeleted }: ScanHistoryProps) {
                   </td>
                   <td className="px-3 py-2.5 align-middle">
                     <div className="flex justify-end gap-1">
+                      <button
+                        onClick={() => setDetailScanId(scan.id)}
+                        aria-label={`View execution details for scan ${scan.id}`}
+                        title="View execution details"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-[3px] text-muted-foreground hover:text-primary"
+                      ><FileText className="h-3.5 w-3.5" /></button>
                       {scan.metadata?.ruleset != null && (
                         <Link
                           to={`/rules?scan=${encodeURIComponent(scan.id)}`}
@@ -307,6 +316,16 @@ export function ScanHistory({ scans, onDeleted }: ScanHistoryProps) {
           </tbody>
         </table>
       </div>
+
+      <Dialog open={detailScanId !== null} onOpenChange={(open) => !open && setDetailScanId(null)}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Scan execution details</DialogTitle>
+            <DialogDescription>Recorded actions, affected scope, and cleanup outcomes.</DialogDescription>
+          </DialogHeader>
+          {detailScanId && <ScanExecutionDetail key={detailScanId} scanId={detailScanId} />}
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={!!confirmScan}

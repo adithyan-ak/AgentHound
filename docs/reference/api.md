@@ -57,7 +57,7 @@ The ingest body is a complete V1 envelope:
 
 The full schema requires collection identity, timestamps, coverage semantics, valid node and edge kinds, and consistent property types. Use the collector artifact directly rather than constructing envelopes by hand.
 
-Scan execution data remains under `meta.extra.scan_execution`. The server stores the complete record in `metadata.artifact_extra.scan_execution` and promotes its mode, deep flag, status, timestamps, and summary for scan-history views.
+Scan execution data remains under `meta.extra.scan_execution`. The server stores the complete record in `metadata.artifact_extra.scan_execution` and promotes its mode, deep flag, status, timestamps, and summary for scan-history views. `GET /api/v1/scans` returns only submitted counts, this promoted execution summary, and an empty `metadata.ruleset` object when ruleset provenance is available. The empty object is an availability marker, not a complete manifest. `GET /api/v1/scans/{id}` retains full metadata, including the execution journal, collection details, and ruleset entries; the UI loads these when inspecting a scan or its provenance.
 
 ## Findings
 
