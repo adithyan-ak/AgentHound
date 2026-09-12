@@ -59,6 +59,40 @@ func TestInstructionEvidenceFromFindingRejectsProjectionMismatch(t *testing.T) {
 	}
 }
 
+func TestInstructionEvidenceFromDestructiveContextPath(t *testing.T) {
+	finding := &model.Finding{
+		EdgeKind:   "POISONS_CONTEXT",
+		Variant:    model.FindingVariantDestructiveToolSink,
+		SourceID:   "instruction-1",
+		SourceKind: "InstructionFile",
+		ExactEvidence: &model.ExactFindingEvidence{Nodes: []model.ExactFindingEvidenceNode{
+			{
+				ID: "unrelated-instruction", Kinds: []string{"InstructionFile"},
+				Properties: map[string]any{},
+			},
+			{
+				ID: "instruction-1", Kinds: []string{"InstructionFile"}, Properties: map[string]any{
+					"path": "/work/AGENTS.md", "type": "agents.md", "hash": "sha256:abc",
+					"instruction_verdict": "poisoning", "instruction_scope": "exact_project",
+					"instruction_signal_count": int64(1), "instruction_signal_truncated": false,
+					"instruction_evidence_version": int64(1), "size_bytes": int64(100),
+					"modified_at":               "2026-08-20T12:00:00Z",
+					"instruction_evidence_json": `{"version":1,"verdict":"poisoning","total_signals":1,"truncated":false,"signals":[{"rule_id":"rule","label":"Rule","severity":"high","strength":"primary","raw_offset":1,"line":4,"column":2,"match":"x","context_before":"","context_after":""}]}`,
+				},
+			},
+		}},
+	}
+	evidence := InstructionEvidenceFromFinding(finding)
+	if evidence == nil || evidence.Path != "/work/AGENTS.md" || evidence.Signals[0].Line != 4 {
+		t.Fatalf("instruction path evidence = %+v", evidence)
+	}
+
+	finding.Variant = model.FindingVariantDefault
+	if evidence := InstructionEvidenceFromFinding(finding); evidence != nil {
+		t.Fatalf("generic POISONS_CONTEXT exposed instruction evidence: %+v", evidence)
+	}
+}
+
 func TestAttackPathFromExactEvidenceUsesPersistedWitness(t *testing.T) {
 	finding := &model.Finding{
 		SourceID: "source",
@@ -142,6 +176,18 @@ func TestBuildImpactUsesCanonicalVariant(t *testing.T) {
 	impact := BuildImpact(finding, nil)
 	if !strings.Contains(impact.Summary, "usable material is not present") {
 		t.Fatalf("summary = %q", impact.Summary)
+	}
+}
+
+func TestBuildImpactDestructiveToolSinkDoesNotClaimExecution(t *testing.T) {
+	impact := BuildImpact(&model.Finding{
+		EdgeKind: "TAINTS", Variant: model.FindingVariantDestructiveToolSink,
+		SourceName: "poisoned input", TargetName: "delete records",
+	}, nil)
+	for _, phrase := range []string{"destructiveHint=true", "untrusted", "did not invoke", "did not", "observe an effect"} {
+		if !strings.Contains(impact.Summary+" "+impact.BlastRadius, phrase) {
+			t.Errorf("impact = %+v, missing %q", impact, phrase)
+		}
 	}
 }
 

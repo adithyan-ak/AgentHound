@@ -2,6 +2,7 @@ package processors
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/adithyan-ak/agenthound/server/internal/graph"
@@ -28,17 +29,20 @@ func (p *IfcViolation) Process(ctx context.Context, db graph.GraphDB, scanID str
 
 	// source_collector='mcp' records detector provenance. Composite lifecycle is
 	// epoch-wide because another domain can invalidate this edge indirectly.
-	cypher := `
+	cypher := fmt.Sprintf(`
 MATCH witness = (untrusted:MCPTool)-[:INGESTS_UNTRUSTED]->(:MCPResource)<-[:HAS_ACCESS_TO*1..3]-(sensitive:MCPTool)
 WHERE untrusted <> sensitive
-  AND any(cap IN sensitive.capability_surface WHERE cap IN ['credential_access', 'file_write', 'email_send'])
+  AND (
+    any(cap IN sensitive.capability_surface WHERE cap IN ['credential_access', 'file_write', 'email_send'])
+    OR %s
+  )
 MERGE (untrusted)-[e:IFC_VIOLATION]->(sensitive)
 SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true,
     e.source_collector = 'mcp', e.confidence = 0.6, e.risk_weight = 0.3,
     e.evidence_version = 1,
     e.evidence_node_ids = [node IN nodes(witness) | node.objectid],
     e.evidence_relationship_ids = [relationship IN relationships(witness) | id(relationship)]
-RETURN count(*) AS written`
+RETURN count(*) AS written`, destructiveSinkPredicate("sensitive"))
 
 	n, err := db.ExecuteWrite(ctx, cypher, map[string]any{"scan_id": scanID})
 	if err != nil {

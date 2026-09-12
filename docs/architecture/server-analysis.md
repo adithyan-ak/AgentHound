@@ -50,6 +50,13 @@ Every base rebuild starts from inferred evidence, so a later current projection 
 
 The instruction processor reads only validated structured evidence. A signal in any scope, or a poisoning verdict from recursive deep collection, becomes medium `INSTRUCTION_SIGNAL`. A poisoning verdict in an exact project or user instruction scope becomes high `POISONED_INSTRUCTIONS`. The projections are mutually exclusive and include the InstructionFile as exact evidence.
 
+When the same agent loads a strongly poisoned exact-scope file and trusts an
+MCP tool with an explicit non-read-only destructive hint, the processor also
+emits `InstructionFile -POISONS_CONTEXT-> MCPTool`. The evidence contains the
+file, agent, server, tool, and the three raw relationships joining them. This
+reuses the existing context-poisoning edge and finding fingerprint rather than
+creating a parallel destructive-action graph.
+
 Finding construction parses the evidence again from the immutable snapshot and exposes it only on finding detail. Instruction projections do not create `LOADS_INSTRUCTIONS`; agent exposure and risk require that observed raw relationship independently.
 
 ## Findings and publication

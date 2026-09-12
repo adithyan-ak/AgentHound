@@ -20,6 +20,7 @@ const FINDING_VARIANTS = new Set<Finding["variant"]>([
   "credential_chain_reference",
   "credential_node_reference",
   "cross_protocol_host_correlation",
+  "destructive_tool_sink",
 ]);
 
 const FINDING_EVIDENCE_STATES = new Set<FindingEvidence["state"]>([

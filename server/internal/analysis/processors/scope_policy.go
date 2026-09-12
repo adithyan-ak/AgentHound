@@ -26,6 +26,18 @@ func compatibleScopePredicate(left, right string) string {
   )`, left, right)
 }
 
+// destructiveSinkPredicate matches only an explicitly supplied destructive
+// MCP annotation that is not contradicted by readOnlyHint=true. Missing
+// destructive hints deliberately do not inherit the protocol's permissive
+// default: this predicate is for high-signal security findings, not client
+// invocation behavior.
+func destructiveSinkPredicate(tool string) string {
+	return fmt.Sprintf(`(
+    %[1]s.mcp_annotation_destructive_hint = true
+    AND coalesce(%[1]s.mcp_annotation_read_only_hint, false) = false
+  )`, tool)
+}
+
 type scopeCoordinates struct {
 	kind             string
 	id               string

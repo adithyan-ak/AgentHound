@@ -320,6 +320,34 @@ func TestBuildRemediation_RetainsFindingVariantAlongsideWitnessSteps(t *testing.
 	}
 }
 
+func TestBuildRemediation_DestructiveToolSinkUsesThreeBoundedActions(t *testing.T) {
+	finding := &model.Finding{
+		EdgeKind: "TAINTS", Variant: model.FindingVariantDestructiveToolSink,
+		SourceID: "source", SourceName: "Untrusted input", SourceKind: "MCPTool",
+		TargetID: "target", TargetName: "Delete records", TargetKind: "MCPTool",
+	}
+	steps := BuildRemediation(nil, finding)
+	if len(steps) != 3 {
+		t.Fatalf("steps = %+v, want verify, gate, and break-path actions", steps)
+	}
+	for i, want := range []string{
+		"Verify the tool's destructive behavior",
+		"Gate the destructive tool",
+		"Break the untrusted influence path",
+	} {
+		if steps[i].Step != i+1 || steps[i].Title != want {
+			t.Errorf("step %d = %+v, want title %q", i, steps[i], want)
+		}
+	}
+	joined := steps[0].Description + steps[1].Description + steps[2].Description
+	if !strings.Contains(joined, "untrusted hint") ||
+		!strings.Contains(joined, "human approval") ||
+		!strings.Contains(joined, "Remove or restrict") ||
+		strings.Contains(strings.ToLower(joined), "change the annotation") {
+		t.Fatalf("destructive remediation wording = %q", joined)
+	}
+}
+
 func TestBuildRemediation_RetainsExfiltrationChannelsWithPath(t *testing.T) {
 	path := &AttackPath{
 		Nodes: []PathNode{

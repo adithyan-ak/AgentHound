@@ -97,7 +97,10 @@ MATCH (a)-[sink_trust:TRUSTS_SERVER]->(sink_server:MCPServer)
       -[sink_provides:PROVIDES_TOOL]->(snk:MCPTool)
 WHERE src <> snk
   AND %s
-  AND any(cap IN snk.capability_surface WHERE cap IN ['shell_access', 'code_execution', 'credential_access', 'email_send'])
+  AND (
+    any(cap IN snk.capability_surface WHERE cap IN ['shell_access', 'code_execution', 'credential_access', 'email_send'])
+    OR %s
+  )
 WITH a, source_server, source_trust, source_provides,
      src, sink_server, sink_trust, sink_provides, snk
 ORDER BY sink_server.objectid
@@ -130,7 +133,10 @@ SET e.scan_id = $scan_id, e.last_seen = datetime(), e.is_composite = true,
     e.evidence_relationship_ids = [
       id(source_trust), id(source_provides), id(sink_trust), id(sink_provides)
     ]
-RETURN count(DISTINCT [src, snk]) AS written`, compatibleScopePredicate("source_server", "sink_server"))
+RETURN count(DISTINCT [src, snk]) AS written`,
+		compatibleScopePredicate("source_server", "sink_server"),
+		destructiveSinkPredicate("snk"),
+	)
 
 	poisonsN, err := db.ExecuteWrite(ctx, poisonsCypher, map[string]any{"scan_id": scanID})
 	if err != nil {

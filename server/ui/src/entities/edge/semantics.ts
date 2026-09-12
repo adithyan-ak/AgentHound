@@ -118,7 +118,7 @@ export const EDGE_EXPLOIT = {
   POISONS_CONTEXT: {
     title: "Context poisoning route",
     detail:
-      "Content controlled through the source tool can enter context consumed by the target tool, creating a prompt-injection route.",
+      "Content controlled through the source tool or instruction file can enter context consumed by the target tool, creating a prompt-injection route.",
   },
 } satisfies Record<EdgeKind, EdgeExploit | null>;
 
@@ -161,7 +161,7 @@ export const EDGE_DESCRIPTION = {
   CONFUSED_DEPUTY: "Agent can misuse delegated authority",
   TAINTS: "Untrusted flow taints tool",
   IFC_VIOLATION: "Flow violates information policy",
-  POISONS_CONTEXT: "Tool can poison another tool's context",
+  POISONS_CONTEXT: "Source content may poison tool context",
 } satisfies Record<EdgeKind, string>;
 
 type CredentialEvidenceState = "observed" | "reference" | "unknown";

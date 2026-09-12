@@ -61,7 +61,7 @@ Scan execution data remains under `meta.extra.scan_execution`. The server stores
 
 ## Findings
 
-Finding list entries include severity, category, affected endpoints, confidence, variant, evidence state, framework mappings, and triage. A scan-verified path includes a bounded `evidence.proof` object. Resource contents and raw credential values stay on their graph nodes instead of being copied into finding metadata.
+Finding list entries include severity, category, affected endpoints, confidence, variant, evidence state, framework mappings, and triage. The `destructive_tool_sink` variant identifies an inferred `TAINTS`, `IFC_VIOLATION`, or `POISONS_CONTEXT` path to an MCP tool with an explicit non-read-only destructive server hint; it is not proof of invocation or impact. A scan-verified path includes a bounded `evidence.proof` object. Resource contents and raw credential values stay on their graph nodes instead of being copied into finding metadata.
 
 Finding detail adds the exact evidence nodes and edges selected during publication. `INSTRUCTION_SIGNAL` and `POISONED_INSTRUCTIONS` details also include `instruction_evidence`: file path, scope, verdict, metadata, total and truncation counts, retained source-exact excerpts with positions, and decoded previews when an encoded payload contributes to the verdict. For encoded signals, `match` may be a bounded excerpt of a larger token and is selected to contain the bytes corresponding to the decisive decoded semantics. This larger object is intentionally absent from finding lists.
 

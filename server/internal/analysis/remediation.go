@@ -9,7 +9,8 @@ import (
 )
 
 func BuildRemediation(path *AttackPath, f *model.Finding) []RemediationStep {
-	if evidence := InstructionEvidenceFromFinding(f); evidence != nil && len(evidence.Signals) > 0 {
+	if evidence := InstructionEvidenceFromFinding(f); evidence != nil && len(evidence.Signals) > 0 &&
+		(f.EdgeKind == "POISONED_INSTRUCTIONS" || f.EdgeKind == "INSTRUCTION_SIGNAL") {
 		primary := evidence.Signals[0]
 		title := "Review the instruction signal"
 		if f.EdgeKind == "POISONED_INSTRUCTIONS" {
@@ -80,7 +81,9 @@ func normalizeRemediationSteps(steps []RemediationStep) []RemediationStep {
 
 func buildFindingOnlyRemediation(f *model.Finding) []RemediationStep {
 	if scoped := buildFindingScopedRemediation(f); len(scoped) > 0 {
-		scoped[0].Step = 1
+		for i := range scoped {
+			scoped[i].Step = i + 1
+		}
 		return scoped
 	}
 
@@ -128,6 +131,43 @@ func buildFindingScopedRemediation(f *model.Finding) []RemediationStep {
 		Target:   target,
 	}
 	switch {
+	case f.Variant == model.FindingVariantDestructiveToolSink:
+		steps := []RemediationStep{
+			{
+				EdgeKind: f.EdgeKind, Source: source, Target: target,
+				Title: "Verify the tool's destructive behavior",
+				Description: fmt.Sprintf(
+					"Inspect the implementation of %s and confirm what destructive updates it can perform. The server-supplied annotation is an untrusted hint, not proof of behavior.",
+					typedRemediationActor(target, "tool"),
+				),
+			},
+			{
+				EdgeKind: f.EdgeKind, Source: source, Target: target,
+				Title: "Gate the destructive tool",
+				Description: fmt.Sprintf(
+					"Apply least privilege and require human approval for destructive invocations of %s at the agent or runtime control layer.",
+					typedRemediationActor(target, "tool"),
+				),
+			},
+		}
+		breakStep := RemediationStep{
+			EdgeKind: f.EdgeKind, Source: source, Target: target,
+			Title: "Break the untrusted influence path",
+			Description: fmt.Sprintf(
+				"Remove or restrict the poisoned or untrusted content path from %s to %s.",
+				typedRemediationActor(source, "source"),
+				typedRemediationActor(target, "tool"),
+			),
+		}
+		if evidence := InstructionEvidenceFromFinding(f); evidence != nil && len(evidence.Signals) > 0 {
+			primary := evidence.Signals[0]
+			breakStep.Description = fmt.Sprintf(
+				"Inspect %s:%d at rule %s and remove or explicitly authorize the matched instruction before the file is loaded by the agent.",
+				evidence.Path, primary.Line, primary.RuleID,
+			)
+		}
+		steps = append(steps, breakStep)
+		return steps
 	case f.Variant == model.FindingVariantCredentialObservedMaterial:
 		step.Title = "Rotate observed credential material"
 		step.Description = fmt.Sprintf(

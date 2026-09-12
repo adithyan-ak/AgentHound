@@ -7,7 +7,7 @@ import { ATLAS_TITLES } from "../lib/owasp-titles";
 import { formatFindingEvidenceState } from "../lib/evidence-label";
 import { cn } from "@shared/lib/utils";
 import { SEVERITY, SEVERITY_BY_KEY } from "@shared/theme/tokens";
-import { useTriage } from "@entities/finding";
+import { isInstructionSelfFinding, useTriage } from "@entities/finding";
 import type { FindingDetail } from "@entities/finding/model";
 import type { TriageStatus } from "@shared/model/triage";
 
@@ -51,6 +51,7 @@ export function FindingHeader({ detail, prevId, nextId, onCopyReport }: FindingH
   const [copied, setCopied] = useState(false);
   const [copiedField, setCopiedField] = useState<"path" | "hash" | null>(null);
   const instruction = detail.instruction_evidence;
+  const instructionSelfFinding = isInstructionSelfFinding(f);
 
   // The detail's finding comes from the graph (no inline triage), so the
   // dossier control fetches the standalone triage state for this row.
@@ -144,7 +145,7 @@ export function FindingHeader({ detail, prevId, nextId, onCopyReport }: FindingH
             </span>
 
             <h1 className="mt-2 text-[19px] font-semibold leading-snug tracking-tight text-foreground">
-              {instruction ? instructionBasename(instruction.path) : f.title}
+              {instructionSelfFinding && instruction ? instructionBasename(instruction.path) : f.title}
             </h1>
 
             {instruction && (
@@ -162,32 +163,42 @@ export function FindingHeader({ detail, prevId, nextId, onCopyReport }: FindingH
             )}
 
             {/* Source -> Target */}
-            {!instruction && <div className="mt-2.5 flex flex-wrap items-center gap-2 font-mono text-sm">
-              <MiniHexIcon kind={f.source_kind} />
-              <span className="font-medium text-foreground">
-                {f.source_name || f.source_id.slice(0, 12)}
-              </span>
-              <ArrowRight className="h-3.5 w-3.5 text-primary/50" />
-              <MiniHexIcon kind={f.target_kind} />
-              <span className="font-medium text-foreground">
-                {f.target_name || f.target_id.slice(0, 12)}
-              </span>
-            </div>}
+            {!instructionSelfFinding && (
+              <div className="mt-2.5 flex flex-wrap items-center gap-2 font-mono text-sm">
+                <MiniHexIcon kind={f.source_kind} />
+                <span className="font-medium text-foreground">
+                  {f.source_name || f.source_id.slice(0, 12)}
+                </span>
+                <ArrowRight className="h-3.5 w-3.5 text-primary/50" />
+                <MiniHexIcon kind={f.target_kind} />
+                <span className="font-medium text-foreground">
+                  {f.target_name || f.target_id.slice(0, 12)}
+                </span>
+              </div>
+            )}
 
             {/* Metadata chips */}
             <div className="mt-3 flex flex-wrap items-center gap-1.5">
               <Chip>
                 <span className="text-primary/70">ID</span> {f.id.slice(0, 8)}
               </Chip>
-              {!instruction && typeof hops === "number" && (
+              {!instructionSelfFinding && typeof hops === "number" && (
                 <Chip>
                   <span className="tabular-nums">{hops}</span> hops
                 </Chip>
               )}
-              {!instruction && <Chip>
-                <span className="tabular-nums">{Math.round(f.confidence * 100)}%</span> conf
-              </Chip>}
-              {instruction ? (
+              {!instructionSelfFinding && (
+                <Chip>
+                  <span className="tabular-nums">{Math.round(f.confidence * 100)}%</span> conf
+                </Chip>
+              )}
+              {!instructionSelfFinding && (
+                <>
+                  <Chip>{f.variant.replace(/_/g, " ")}</Chip>
+                  <Chip>{formatFindingEvidenceState(f.evidence.state)}</Chip>
+                </>
+              )}
+              {instruction && (
                 <>
                   <Chip className="text-primary/80">{instruction.verdict === "poisoning" ? "Instruction Poisoning" : "Instruction Signal"}</Chip>
                   <Chip>{instruction.scope.replace(/_/g, " ")}</Chip>
@@ -205,11 +216,6 @@ export function FindingHeader({ detail, prevId, nextId, onCopyReport }: FindingH
                       {copiedField === "hash" ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
                     </button>
                   </Chip>
-                </>
-              ) : (
-                <>
-                  <Chip>{f.variant.replace(/_/g, " ")}</Chip>
-                  <Chip>{formatFindingEvidenceState(f.evidence.state)}</Chip>
                 </>
               )}
               {detail.snapshot.stale && (

@@ -266,7 +266,7 @@ var EdgeKindEndpoints = map[string]EdgeEndpoints{
 	"CONFUSED_DEPUTY":            {SourceKinds: []string{"A2AAgent"}, TargetKinds: []string{"A2AAgent"}},
 	"TAINTS":                     {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
 	"IFC_VIOLATION":              {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
-	"POISONS_CONTEXT":            {SourceKinds: []string{"MCPTool"}, TargetKinds: []string{"MCPTool"}},
+	"POISONS_CONTEXT":            {SourceKinds: []string{"MCPTool", "InstructionFile"}, TargetKinds: []string{"MCPTool"}},
 }
 
 // endpointKindAllowed reports whether kind is a member of allowed.

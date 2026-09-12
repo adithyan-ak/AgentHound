@@ -10,6 +10,11 @@ import (
 
 type Normalizer struct{}
 
+const (
+	mcpAnnotationDestructiveHintProperty = "mcp_annotation_destructive_hint"
+	mcpAnnotationReadOnlyHintProperty    = "mcp_annotation_read_only_hint"
+)
+
 func NewNormalizer() *Normalizer {
 	return &Normalizer{}
 }
@@ -43,6 +48,9 @@ func (n *Normalizer) Normalize(data *ingest.IngestData) []ingest.NormalizationWa
 			// is accepted by validation but never becomes current graph state.
 			delete(node.Properties, "is_suspicious")
 		}
+		if hasKind(node.Kinds, "MCPTool") {
+			materializeMCPToolAnnotationHints(node.Properties)
+		}
 
 		// Set objectid
 		node.Properties["objectid"] = node.ID
@@ -61,6 +69,27 @@ func (n *Normalizer) Normalize(data *ingest.IngestData) []ingest.NormalizationWa
 	}
 
 	return warnings
+}
+
+// materializeMCPToolAnnotationHints projects only the protocol hints used by
+// graph analysis. The reserved top-level properties are always replaced from
+// the nested annotations object so an artifact cannot provide contradictory
+// queryable values. The original annotations value is retained and is later
+// serialized as exact evidence by normalizeProps.
+func materializeMCPToolAnnotationHints(props map[string]any) {
+	delete(props, mcpAnnotationDestructiveHintProperty)
+	delete(props, mcpAnnotationReadOnlyHintProperty)
+
+	annotations, ok := props["annotations"].(map[string]any)
+	if !ok {
+		return
+	}
+	if destructive, ok := annotations["destructive_hint"].(bool); ok {
+		props[mcpAnnotationDestructiveHintProperty] = destructive
+	}
+	if readOnly, ok := annotations["read_only_hint"].(bool); ok {
+		props[mcpAnnotationReadOnlyHintProperty] = readOnly
+	}
 }
 
 func (n *Normalizer) normalizeProps(

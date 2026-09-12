@@ -60,6 +60,24 @@ describe("authentication property chips", () => {
   });
 });
 
+describe("MCP tool annotation property chips", () => {
+  it("shows only an explicitly materialized destructive hint", () => {
+    expect(
+      getPropertyChips("MCPTool", {
+        mcp_annotation_destructive_hint: true,
+      }),
+    ).toContain("server hint: destructive");
+    expect(
+      getPropertyChips("MCPTool", {
+        mcp_annotation_destructive_hint: false,
+      }),
+    ).not.toContain("server hint: destructive");
+    expect(getPropertyChips("MCPTool", {})).not.toContain(
+      "server hint: destructive",
+    );
+  });
+});
+
 describe("typed resource property chips", () => {
   it("shows the stable distinguishing metadata", () => {
     expect(

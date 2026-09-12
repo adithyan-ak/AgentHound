@@ -224,11 +224,21 @@ func stringMapVal(values map[string]any, key string) string {
 }
 
 func InstructionEvidenceFromFinding(f *model.Finding) *InstructionEvidence {
-	if f == nil || (f.EdgeKind != "INSTRUCTION_SIGNAL" && f.EdgeKind != "POISONED_INSTRUCTIONS") || f.ExactEvidence == nil {
+	if f == nil || f.ExactEvidence == nil {
+		return nil
+	}
+	instructionSelfFinding := f.EdgeKind == "INSTRUCTION_SIGNAL" || f.EdgeKind == "POISONED_INSTRUCTIONS"
+	instructionDestructivePath := f.EdgeKind == "POISONS_CONTEXT" &&
+		f.Variant == model.FindingVariantDestructiveToolSink &&
+		f.SourceKind == "InstructionFile"
+	if !instructionSelfFinding && !instructionDestructivePath {
 		return nil
 	}
 	for _, node := range f.ExactEvidence.Nodes {
 		if !containsKind(node.Kinds, "InstructionFile") {
+			continue
+		}
+		if instructionDestructivePath && node.ID != f.SourceID {
 			continue
 		}
 		raw, _ := node.Properties["instruction_evidence_json"].(string)
@@ -281,6 +291,9 @@ func instructionProjectionMatches(edgeKind string, verdict sharedinstruction.Ver
 	case "INSTRUCTION_SIGNAL":
 		return verdict == sharedinstruction.VerdictSignal ||
 			(verdict == sharedinstruction.VerdictPoisoning && scope == sharedinstruction.ScopeDeep)
+	case "POISONS_CONTEXT":
+		return verdict == sharedinstruction.VerdictPoisoning &&
+			(scope == sharedinstruction.ScopeExactProject || scope == sharedinstruction.ScopeExactUser)
 	default:
 		return false
 	}
@@ -361,11 +374,17 @@ var impactTemplates = map[string]struct {
 		summary:     "Instruction file %s contains suspicious content that requires review.",
 		blastRadius: "This signal identifies content to inspect; it does not establish malicious intent or instruction execution.",
 	},
+	"DESTRUCTIVE_TOOL_SINK": {
+		summary:     "Content from %s has an inferred influence path to tool %s, whose MCP server reported destructiveHint=true.",
+		blastRadius: "If the influenced context leads to invocation, the tool may perform destructive updates. The server annotation is untrusted, and AgentHound did not invoke the tool or observe an effect.",
+	},
 }
 
 func BuildImpact(f *model.Finding, path *AttackPath) *Impact {
 	edgeKind := f.EdgeKind
-	if edgeKind == "CAN_REACH" {
+	if f.Variant == model.FindingVariantDestructiveToolSink {
+		edgeKind = "DESTRUCTIVE_TOOL_SINK"
+	} else if edgeKind == "CAN_REACH" {
 		switch f.Variant {
 		case model.FindingVariantCredentialObservedMaterial:
 			edgeKind = "CAN_REACH_CREDENTIAL_CHAIN_OBSERVED"

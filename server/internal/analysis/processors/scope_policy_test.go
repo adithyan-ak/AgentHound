@@ -43,6 +43,18 @@ func TestScopesCompatibleMatrix(t *testing.T) {
 	}
 }
 
+func TestDestructiveSinkPredicateRequiresExplicitNonReadOnlyHint(t *testing.T) {
+	predicate := destructiveSinkPredicate("tool")
+	for _, required := range []string{
+		"tool.mcp_annotation_destructive_hint = true",
+		"coalesce(tool.mcp_annotation_read_only_hint, false) = false",
+	} {
+		if !strings.Contains(predicate, required) {
+			t.Fatalf("destructive sink predicate missing %q:\n%s", required, predicate)
+		}
+	}
+}
+
 func TestCrossVantageProcessorsUseExactCompatibilityPredicate(t *testing.T) {
 	for name, processor := range map[string]evidenceProcessor{
 		"can_reach":       &CanReach{},
