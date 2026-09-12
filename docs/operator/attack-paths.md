@@ -23,6 +23,12 @@ Finding detail shows the canonical path and every retained signal with its rule,
 
 These self-node findings intentionally have no hop graph or attack cost. Agent risk changes only when the graph separately contains observed `LOADS_INSTRUCTIONS` evidence for the file.
 
+Strong poisoning in an exact project or user instruction file can also produce
+an inferred `POISONS_CONTEXT` path when the same agent loads that file and
+trusts a tool whose MCP server explicitly reports `destructiveHint=true`. That
+path shows both the matched instruction signals and the supporting graph. It
+does not claim the tool was invoked or that the server annotation is accurate.
+
 ## Main path families
 
 | Family | Primary edges | Question answered |
@@ -80,6 +86,19 @@ agenthound-server query --prebuilt cross-protocol-paths
 ```
 
 Validate process isolation, identities, authorization, and an authorized end-to-end call before treating the correlation as exploitable.
+
+## Destructive tool sinks
+
+`TAINTS`, `IFC_VIOLATION`, and `POISONS_CONTEXT` findings use the
+`destructive_tool_sink` variant when their target MCP tool explicitly reports
+`destructiveHint=true` without `readOnlyHint=true`. These findings are high
+severity and remain inferred. AgentHound does not create a finding merely
+because a destructive tool exists, does not infer destructiveness from names or
+missing annotations, and does not invoke the tool.
+
+The remediation order is: verify the implementation, gate destructive
+invocations with least privilege or human approval, then remove or restrict the
+untrusted influence path. Editing the annotation alone is not remediation.
 
 ## Findings and traversal
 

@@ -32,7 +32,8 @@ export interface Finding {
     | "credential_chain_observed_material"
     | "credential_chain_reference"
     | "credential_node_reference"
-    | "cross_protocol_host_correlation";
+    | "cross_protocol_host_correlation"
+    | "destructive_tool_sink";
   evidence: FindingEvidence;
   owasp_map: string[];
   atlas_map: string[];
@@ -54,6 +55,15 @@ export interface FindingEvidence {
   exposure_status?: string;
   correlation?: string;
   proof?: FindingProof;
+}
+
+export function isInstructionSelfFinding(
+  finding: Pick<Finding, "edge_kind">,
+): boolean {
+  return (
+    finding.edge_kind === "INSTRUCTION_SIGNAL" ||
+    finding.edge_kind === "POISONED_INSTRUCTIONS"
+  );
 }
 
 export interface FindingProof {

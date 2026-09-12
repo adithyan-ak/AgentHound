@@ -48,7 +48,15 @@ func TestIfcViolation_ProcessSuccess(t *testing.T) {
 	}
 
 	cypher, _ := calls[0].Args[0].(string)
-	for _, want := range []string{"IFC_VIOLATION", "*1..3", "capability_surface", "credential_access", "source_collector = 'mcp'"} {
+	for _, want := range []string{
+		"IFC_VIOLATION",
+		"*1..3",
+		"capability_surface",
+		"credential_access",
+		"sensitive.mcp_annotation_destructive_hint = true",
+		"coalesce(sensitive.mcp_annotation_read_only_hint, false) = false",
+		"source_collector = 'mcp'",
+	} {
 		if !contains(cypher, want) {
 			t.Errorf("Cypher missing load-bearing predicate %q; query:\n%s", want, cypher)
 		}

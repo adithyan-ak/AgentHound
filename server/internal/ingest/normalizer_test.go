@@ -134,6 +134,80 @@ func TestNormalizerSerializesComplexValues(t *testing.T) {
 	}
 }
 
+func TestNormalizerMaterializesMCPToolAnnotationHints(t *testing.T) {
+	data := normalizerFixture(&ingest.IngestData{
+		Graph: ingest.GraphData{Nodes: []ingest.Node{{
+			ID:    "tool",
+			Kinds: []string{"MCPTool"},
+			Properties: map[string]any{
+				"annotations": map[string]any{
+					"destructive_hint": true,
+					"read_only_hint":   false,
+					"open_world_hint":  true,
+				},
+				mcpAnnotationDestructiveHintProperty: false,
+				mcpAnnotationReadOnlyHintProperty:    true,
+			},
+		}}},
+	})
+
+	NewNormalizer().Normalize(data)
+	props := data.Graph.Nodes[0].Properties
+	if props[mcpAnnotationDestructiveHintProperty] != true ||
+		props[mcpAnnotationReadOnlyHintProperty] != false {
+		t.Fatalf("materialized MCP annotation hints = %+v", props)
+	}
+	if _, ok := props["annotations"].(string); !ok {
+		t.Fatalf("annotations = %T, want retained JSON string", props["annotations"])
+	}
+	if _, exists := props["mcp_annotation_open_world_hint"]; exists {
+		t.Fatal("unused open-world hint was materialized")
+	}
+}
+
+func TestNormalizerMCPToolAnnotationProjectionRequiresBooleans(t *testing.T) {
+	data := normalizerFixture(&ingest.IngestData{
+		Graph: ingest.GraphData{Nodes: []ingest.Node{{
+			ID:    "tool",
+			Kinds: []string{"MCPTool"},
+			Properties: map[string]any{
+				"annotations": map[string]any{
+					"destructive_hint": "true",
+					"read_only_hint":   float64(0),
+				},
+				mcpAnnotationDestructiveHintProperty: true,
+				mcpAnnotationReadOnlyHintProperty:    true,
+			},
+		}}},
+	})
+
+	NewNormalizer().Normalize(data)
+	props := data.Graph.Nodes[0].Properties
+	if _, exists := props[mcpAnnotationDestructiveHintProperty]; exists {
+		t.Fatal("malformed destructive hint reached queryable graph state")
+	}
+	if _, exists := props[mcpAnnotationReadOnlyHintProperty]; exists {
+		t.Fatal("malformed read-only hint reached queryable graph state")
+	}
+}
+
+func TestNormalizerDoesNotProjectAnnotationHintsForOtherNodeKinds(t *testing.T) {
+	data := normalizerFixture(&ingest.IngestData{
+		Graph: ingest.GraphData{Nodes: []ingest.Node{{
+			ID:    "server",
+			Kinds: []string{"MCPServer"},
+			Properties: map[string]any{
+				"annotations": map[string]any{"destructive_hint": true},
+			},
+		}}},
+	})
+
+	NewNormalizer().Normalize(data)
+	if _, exists := data.Graph.Nodes[0].Properties[mcpAnnotationDestructiveHintProperty]; exists {
+		t.Fatal("MCP tool annotation hint was projected onto another node kind")
+	}
+}
+
 func TestNormalizerClassifiesDroppedPropertyAsPublicationUnsafe(t *testing.T) {
 	data := &ingest.IngestData{
 		Graph: ingest.GraphData{

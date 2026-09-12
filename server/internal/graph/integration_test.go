@@ -1166,11 +1166,12 @@ func TestIntegrationCompleteObservationReplacesStaleManagedProperties(t *testing
 
 	first := ingest.Node{
 		ID:                 ids[0],
-		Kinds:              []string{"MCPServer"},
+		Kinds:              []string{"MCPTool"},
 		ObservationDomains: []string{scope},
 		Properties: map[string]any{
-			"name":           "server",
-			"stale_property": "must-disappear",
+			"name":                            "tool",
+			"stale_property":                  "must-disappear",
+			"mcp_annotation_destructive_hint": true,
 		},
 	}
 	if _, err := writer.WriteObservationNodes(
@@ -1182,7 +1183,7 @@ func TestIntegrationCompleteObservationReplacesStaleManagedProperties(t *testing
 		t.Fatalf("write first managed observation: %v", err)
 	}
 	second := first
-	second.Properties = map[string]any{"name": "server-updated"}
+	second.Properties = map[string]any{"name": "tool-updated"}
 	if _, err := writer.WriteObservationNodes(
 		ctx,
 		[]ingest.Node{second},
@@ -1197,6 +1198,7 @@ func TestIntegrationCompleteObservationReplacesStaleManagedProperties(t *testing
 		`MATCH (n) WHERE n.objectid IN $ids
 		RETURN n.objectid AS id,
 		       n.stale_property AS stale_property,
+		       n.mcp_annotation_destructive_hint AS destructive_hint,
 		       n.observation_properties_complete AS properties_complete`,
 		map[string]any{"ids": ids},
 	)
@@ -1207,7 +1209,7 @@ func TestIntegrationCompleteObservationReplacesStaleManagedProperties(t *testing
 		t.Fatalf("rows = %v, want one node", rows)
 	}
 	for _, row := range rows {
-		if row["stale_property"] != nil {
+		if row["stale_property"] != nil || row["destructive_hint"] != nil {
 			t.Fatalf("stale property survived on %v: %v", row["id"], row)
 		}
 		if complete, _ := row["properties_complete"].(bool); !complete {
@@ -1252,11 +1254,12 @@ func TestIntegrationPartialObservationRetainsOmittedProperties(t *testing.T) {
 
 	first := ingest.Node{
 		ID:                 ids[0],
-		Kinds:              []string{"MCPServer"},
+		Kinds:              []string{"MCPTool"},
 		ObservationDomains: []string{scope},
 		Properties: map[string]any{
-			"name":           "before",
-			"stale_property": "retain-until-complete",
+			"name":                            "before",
+			"stale_property":                  "retain-until-complete",
+			"mcp_annotation_destructive_hint": true,
 		},
 	}
 	if _, err := writer.WriteObservationNodes(
@@ -1271,7 +1274,7 @@ func TestIntegrationPartialObservationRetainsOmittedProperties(t *testing.T) {
 	partialExisting.Properties = map[string]any{"name": "observed-partial"}
 	partialNew := ingest.Node{
 		ID:                 ids[1],
-		Kinds:              []string{"MCPServer"},
+		Kinds:              []string{"MCPTool"},
 		ObservationDomains: []string{scope},
 		Properties:         map[string]any{"name": "new-partial"},
 	}
@@ -1290,6 +1293,7 @@ func TestIntegrationPartialObservationRetainsOmittedProperties(t *testing.T) {
 		RETURN n.objectid AS id,
 		       n.name AS name,
 		       n.stale_property AS stale_property,
+		       n.mcp_annotation_destructive_hint AS destructive_hint,
 		       n.observation_properties_complete AS properties_complete
 		ORDER BY id`,
 		map[string]any{"ids": ids},
@@ -1300,6 +1304,7 @@ func TestIntegrationPartialObservationRetainsOmittedProperties(t *testing.T) {
 	if len(rows) != 2 ||
 		rows[0]["name"] != "observed-partial" ||
 		rows[0]["stale_property"] != "retain-until-complete" ||
+		rows[0]["destructive_hint"] != true ||
 		rows[0]["properties_complete"] != true ||
 		rows[1]["name"] != "new-partial" ||
 		rows[1]["properties_complete"] != true {
@@ -1316,14 +1321,15 @@ func TestIntegrationPartialObservationRetainsOmittedProperties(t *testing.T) {
 	}
 	rows, err = reader.Query(
 		ctx,
-		`MATCH (n:MCPServer {objectid: $id})
-		RETURN n.stale_property AS stale_property`,
+		`MATCH (n:MCPTool {objectid: $id})
+		RETURN n.stale_property AS stale_property,
+		       n.mcp_annotation_destructive_hint AS destructive_hint`,
 		map[string]any{"id": ids[0]},
 	)
 	if err != nil {
 		t.Fatalf("read complete replacement: %v", err)
 	}
-	if len(rows) != 1 || rows[0]["stale_property"] != nil {
+	if len(rows) != 1 || rows[0]["stale_property"] != nil || rows[0]["destructive_hint"] != nil {
 		t.Fatalf("complete replacement retained stale property: %+v", rows)
 	}
 }

@@ -680,6 +680,7 @@ components:
             - credential_chain_reference
             - credential_node_reference
             - cross_protocol_host_correlation
+            - destructive_tool_sink
         evidence:
           $ref: "#/components/schemas/FindingEvidence"
         owasp_map:

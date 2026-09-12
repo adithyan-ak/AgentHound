@@ -5,6 +5,7 @@ import { Stack, Sidebar } from "@shared/ui/layout";
 import { isEditableTarget } from "@shared/lib";
 import {
   findingDetailErrorPresentation,
+  isInstructionSelfFinding,
   useFindingDetail,
 } from "@entities/finding";
 import { useFindingsNavigation } from "../model/useFindingsNavigation";
@@ -90,6 +91,7 @@ export function FindingDetailPage() {
   }
 
   const f = detail.finding;
+  const instructionSelfFinding = isInstructionSelfFinding(f);
 
   function handleCopyReport() {
     const md = buildMarkdownReport(
@@ -117,45 +119,49 @@ export function FindingDetailPage() {
             <InstructionEvidencePanel evidence={detail.instruction_evidence} />
           )}
 
-          {!detail.instruction_evidence && <AttackPathDiagram
-            path={detail.attack_path}
-            severity={f.severity}
-            sourceId={f.source_id}
-            sourceName={f.source_name}
-            sourceKind={f.source_kind}
-            targetId={f.target_id}
-            targetName={f.target_name}
-            targetKind={f.target_kind}
-            activeHop={activeHop}
-            onHopSelect={setActiveHop}
-          />}
+          {!instructionSelfFinding && (
+            <AttackPathDiagram
+              path={detail.attack_path}
+              severity={f.severity}
+              sourceId={f.source_id}
+              sourceName={f.source_name}
+              sourceKind={f.source_kind}
+              targetId={f.target_id}
+              targetName={f.target_name}
+              targetKind={f.target_kind}
+              activeHop={activeHop}
+              onHopSelect={setActiveHop}
+            />
+          )}
 
-          {detail.instruction_evidence ? (
+          {instructionSelfFinding ? (
             <div className="grid gap-3 lg:grid-cols-3">
               <FindingImpact impact={detail.impact} path={null} />
               <FindingRemediation steps={detail.remediation} />
               <FindingReferences finding={f} />
             </div>
-          ) : <Sidebar
-            sidePosition="right"
-            sideWidth="22rem"
-            contentMin="58%"
-            side={
-              <Stack gap="0.75rem">
-                <FindingProof evidence={f.evidence} />
-                <FindingImpact impact={detail.impact} path={detail.attack_path} />
-                <FindingRemediation steps={detail.remediation} />
-                <FindingReferences finding={f} />
-              </Stack>
-            }
-            main={
-              <HopEvidenceTimeline
-                path={detail.attack_path}
-                activeHop={activeHop}
-                onHopSelect={setActiveHop}
-              />
-            }
-          />}
+          ) : (
+            <Sidebar
+              sidePosition="right"
+              sideWidth="22rem"
+              contentMin="58%"
+              side={
+                <Stack gap="0.75rem">
+                  <FindingProof evidence={f.evidence} />
+                  <FindingImpact impact={detail.impact} path={detail.attack_path} />
+                  <FindingRemediation steps={detail.remediation} />
+                  <FindingReferences finding={f} />
+                </Stack>
+              }
+              main={
+                <HopEvidenceTimeline
+                  path={detail.attack_path}
+                  activeHop={activeHop}
+                  onHopSelect={setActiveHop}
+                />
+              }
+            />
+          )}
         </Stack>
       </div>
     </div>

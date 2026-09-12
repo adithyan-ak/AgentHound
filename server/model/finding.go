@@ -11,6 +11,7 @@ const (
 	FindingVariantCredentialReference          FindingVariant = "credential_chain_reference"
 	FindingVariantCredentialNodeReference      FindingVariant = "credential_node_reference"
 	FindingVariantCrossProtocolHostCorrelation FindingVariant = "cross_protocol_host_correlation"
+	FindingVariantDestructiveToolSink          FindingVariant = "destructive_tool_sink"
 )
 
 type FindingEvidenceState string

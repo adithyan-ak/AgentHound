@@ -34,13 +34,13 @@ func TestPoisonedInstructions_ProcessSuccess(t *testing.T) {
 	if stats.ProcessorName != "poisoned_instructions" {
 		t.Errorf("ProcessorName = %q", stats.ProcessorName)
 	}
-	if stats.EdgesCreated != 2 {
-		t.Errorf("EdgesCreated = %d, want 2", stats.EdgesCreated)
+	if stats.EdgesCreated != 3 {
+		t.Errorf("EdgesCreated = %d, want 3", stats.EdgesCreated)
 	}
 
 	calls := mock.CallsTo("ExecuteWrite")
-	if len(calls) != 2 {
-		t.Fatalf("ExecuteWrite called %d times, want 2", len(calls))
+	if len(calls) != 3 {
+		t.Fatalf("ExecuteWrite called %d times, want 3", len(calls))
 	}
 	for _, call := range calls {
 		params, _ := call.Args[1].(map[string]any)
@@ -59,6 +59,26 @@ func TestPoisonedInstructions_ProcessSuccess(t *testing.T) {
 		!strings.Contains(signalQuery, "f.instruction_verdict = 'signal'") ||
 		!strings.Contains(signalQuery, "f.instruction_scope = 'deep'") {
 		t.Fatalf("signal projection does not include signals and deep poisoning:\n%s", signalQuery)
+	}
+	destructivePathQuery, _ := calls[2].Args[0].(string)
+	for _, want := range []string{
+		"(a:AgentInstance)-[loads:LOADS_INSTRUCTIONS]->(f:InstructionFile)",
+		"(a)-[sink_trust:TRUSTS_SERVER]->(sink_server:MCPServer)",
+		"[sink_provides:PROVIDES_TOOL]->(snk:MCPTool)",
+		"f.instruction_scope IN ['exact_project', 'exact_user']",
+		"snk.mcp_annotation_destructive_hint = true",
+		"coalesce(snk.mcp_annotation_read_only_hint, false) = false",
+		"})[..20] AS sinks",
+		"head(collect({",
+		"MERGE (f)-[e:POISONS_CONTEXT]->(snk)",
+		"e.source_collector = 'config'",
+		"id(witness.loads)",
+		"id(witness.trust)",
+		"id(witness.provides)",
+	} {
+		if !strings.Contains(destructivePathQuery, want) {
+			t.Errorf("destructive instruction path missing %q:\n%s", want, destructivePathQuery)
+		}
 	}
 }
 

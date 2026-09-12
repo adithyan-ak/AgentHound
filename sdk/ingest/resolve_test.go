@@ -84,6 +84,9 @@ func TestEdgeKindEndpoints_ReflectsProducedVariants(t *testing.T) {
 	if !TargetKindAllowed("EXPOSES", "OllamaInstance") {
 		t.Fatal("EXPOSES must permit OllamaInstance producer labels")
 	}
+	if !EndpointKindsAllowed("POISONS_CONTEXT", "InstructionFile", "MCPTool") {
+		t.Fatal("POISONS_CONTEXT must permit instruction-origin destructive paths")
+	}
 }
 
 func TestEndpointKindAllowed_FailsClosedForUnknownEdge(t *testing.T) {

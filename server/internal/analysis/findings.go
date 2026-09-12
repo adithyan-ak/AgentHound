@@ -309,23 +309,25 @@ RETURN src.objectid AS source_id,
        tgt.merge_key AS target_merge_key,
        tgt.material_status AS target_material_status,
        tgt.exposure_status AS target_exposure_status,
-	       r.evidence_version AS evidence_version,
-	       r.reach_evidence_state AS reach_evidence_state,
-	       r.proof_action AS proof_action,
-	       r.proof_action_id AS proof_action_id,
-	       r.proof_verified_at AS proof_verified_at,
-	       r.proof_type AS proof_type,
-	       r.proof_outcome AS proof_outcome,
-	       r.proof_control_stage AS proof_control_stage,
-	       r.proof_control_status AS proof_control_status,
-	       r.proof_control_resource_addressed AS proof_control_resource_addressed,
-	       r.proof_credential_stage AS proof_credential_stage,
-	       r.proof_credential_status AS proof_credential_status,
-	       r.proof_credential_resource_addressed AS proof_credential_resource_addressed,
-	       r.proof_cleanup_status AS proof_cleanup_status,
-	       r.http_status AS origin_http_status,
-	       r.response_evidence AS origin_response_evidence,
-	       r.probe_origin AS origin_probe_value,
+	   tgt.mcp_annotation_destructive_hint AS target_mcp_annotation_destructive_hint,
+	   tgt.mcp_annotation_read_only_hint AS target_mcp_annotation_read_only_hint,
+	   r.evidence_version AS evidence_version,
+       r.reach_evidence_state AS reach_evidence_state,
+       r.proof_action AS proof_action,
+       r.proof_action_id AS proof_action_id,
+       r.proof_verified_at AS proof_verified_at,
+       r.proof_type AS proof_type,
+       r.proof_outcome AS proof_outcome,
+       r.proof_control_stage AS proof_control_stage,
+       r.proof_control_status AS proof_control_status,
+       r.proof_control_resource_addressed AS proof_control_resource_addressed,
+       r.proof_credential_stage AS proof_credential_stage,
+	   r.proof_credential_status AS proof_credential_status,
+	   r.proof_credential_resource_addressed AS proof_credential_resource_addressed,
+	   r.proof_cleanup_status AS proof_cleanup_status,
+	   r.http_status AS origin_http_status,
+	   r.response_evidence AS origin_response_evidence,
+	   r.probe_origin AS origin_probe_value,
        detector_evidence_nodes AS exact_evidence_nodes,
        detector_evidence_edges AS exact_evidence_edges,
        r.evidence_synthetic_edge AS exact_evidence_synthetic_edge
@@ -387,6 +389,12 @@ func QueryFindings(ctx context.Context, db graph.GraphDB, severity string) ([]mo
 		default:
 			sev = classifySeverity(edgeKind, crossProtocol, confidence, targetSensitivity)
 		}
+		if isDestructiveToolSinkFinding(row) {
+			variant = model.FindingVariantDestructiveToolSink
+			evidence.State = model.FindingEvidenceInferred
+			evidence.MatchType = "mcp_annotation_destructive_hint"
+			sev = "high"
+		}
 		// Same-scan proof upgrade: when the CAN_REACH processor correlates a
 		// CREDENTIAL_ACCESS_OBSERVED edge, the composite edge carries
 		// reach_evidence_state=verified and confidence is raised to 1.0. This
@@ -406,8 +414,15 @@ func QueryFindings(ctx context.Context, db graph.GraphDB, severity string) ([]mo
 				title:    edgeKind + " finding",
 			}
 		}
+		if variant == model.FindingVariantDestructiveToolSink {
+			// Keep the base edge's OWASP and ATLAS mappings: the variant adds
+			// impact context without changing the detector that established the
+			// influence path.
+			meta.category = "Destructive Impact"
+			meta.title = "Inferred path to a server-declared destructive tool"
+		}
 
-		description := formatFindingDescription(metaKey, findingDescriptionContext{
+		descriptionContext := findingDescriptionContext{
 			source: findingActor{
 				id: sourceID, name: sourceName, kind: sourceKind,
 			},
@@ -419,7 +434,11 @@ func QueryFindings(ctx context.Context, db graph.GraphDB, severity string) ([]mo
 			originHTTPStatus:         intVal(row, "origin_http_status"),
 			originResponseEvidence:   stringVal(row, "origin_response_evidence"),
 			originProbeValue:         stringVal(row, "origin_probe_value"),
-		})
+		}
+		description := formatFindingDescription(metaKey, descriptionContext)
+		if variant == model.FindingVariantDestructiveToolSink {
+			description = formatDestructiveToolSinkDescription(descriptionContext)
+		}
 
 		finding := model.Finding{
 			ID:            findingFingerprint(edgeKind, sourceID, targetID),
@@ -450,6 +469,28 @@ func QueryFindings(ctx context.Context, db graph.GraphDB, severity string) ([]mo
 	}
 
 	return findings, nil
+}
+
+func isDestructiveToolSinkFinding(row map[string]any) bool {
+	if stringVal(row, "target_kind") != "MCPTool" ||
+		!boolVal(row, "target_mcp_annotation_destructive_hint") ||
+		boolVal(row, "target_mcp_annotation_read_only_hint") {
+		return false
+	}
+	switch stringVal(row, "edge_kind") {
+	case "TAINTS", "IFC_VIOLATION", "POISONS_CONTEXT":
+		return true
+	default:
+		return false
+	}
+}
+
+func formatDestructiveToolSinkDescription(ctx findingDescriptionContext) string {
+	return fmt.Sprintf(
+		"Content from %s has an inferred influence path to %s, whose MCP server reported destructiveHint=true. The annotation is untrusted, and AgentHound did not invoke the tool or observe an effect.",
+		formatFindingActor(ctx.source, "source"),
+		formatFindingActor(ctx.target, "target"),
+	)
 }
 
 func isCredentialChainFinding(row map[string]any) bool {

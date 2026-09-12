@@ -28,6 +28,9 @@ export function getPropertyChips(kind: string, properties: Record<string, unknow
       break;
     }
     case "MCPTool": {
+      if (properties.mcp_annotation_destructive_hint === true) {
+        chips.push("server hint: destructive");
+      }
       const caps = properties.capability_surface;
       if (Array.isArray(caps)) {
         for (const c of caps.slice(0, 2)) {

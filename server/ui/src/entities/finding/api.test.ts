@@ -204,6 +204,17 @@ describe("published finding scope", () => {
     });
   });
 
+  it("accepts the destructive tool sink finding variant", async () => {
+    const response = await mocks.json();
+    mocks.json.mockResolvedValue({
+      ...response,
+      findings: [{ ...finding(), variant: "destructive_tool_sink" }],
+    });
+
+    const result = await fetchFindings();
+    expect(result.findings[0]?.variant).toBe("destructive_tool_sink");
+  });
+
   it("rejects verified evidence without its proof contract", async () => {
     mocks.json.mockResolvedValue({
       findings: [{ ...finding(), evidence: { state: "verified", channels: [] } }],

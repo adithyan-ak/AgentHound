@@ -71,6 +71,8 @@ func TestShadows_ProcessSuccess(t *testing.T) {
 		"collect({",
 		"})[..20] AS sinks",
 		"e.evidence_relationship_ids",
+		"snk.mcp_annotation_destructive_hint = true",
+		"coalesce(snk.mcp_annotation_read_only_hint, false) = false",
 	} {
 		if !contains(poisonsCypher, want) {
 			t.Errorf("POISONS_CONTEXT pass missing %q (agent-scope/cap regression), got:\n%s", want, poisonsCypher)

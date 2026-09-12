@@ -5,6 +5,7 @@ import type {
   RemediationStep,
 } from "@entities/finding/model";
 import { formatFindingEvidenceState } from "./evidence-label";
+import { isInstructionSelfFinding } from "@entities/finding/model";
 
 /**
  * Markdown export: a summary table of multiple findings (the register
@@ -42,6 +43,7 @@ export function buildMarkdownReport(
 ): string {
   const lines: string[] = [];
   const findingChannels = finding.evidence.channels ?? [];
+  const instructionSelfFinding = isInstructionSelfFinding(finding);
 
   lines.push(
     `## [${markdownText(finding.severity.toUpperCase())}] ${markdownText(finding.title)}`,
@@ -49,7 +51,7 @@ export function buildMarkdownReport(
   lines.push("");
 
   lines.push(
-    instructionEvidence
+    instructionSelfFinding
       ? `**Finding:** ${finding.id}`
       : `**Finding:** ${finding.id} | Confidence: ${Math.round(finding.confidence * 100)}%`,
   );
@@ -57,7 +59,7 @@ export function buildMarkdownReport(
   lines.push(
     `**Classification:** ${finding.category} | Variant: ${finding.variant} | Evidence: ${formatFindingEvidenceState(finding.evidence.state)}`,
   );
-  if (!instructionEvidence) {
+  if (!instructionSelfFinding) {
     lines.push(`**Source:** ${markdownText(finding.source_name || finding.source_id)} (${markdownText(finding.source_kind)})`);
     lines.push(`**Target:** ${markdownText(finding.target_name || finding.target_id)} (${markdownText(finding.target_kind)})`);
   }
@@ -116,7 +118,7 @@ export function buildMarkdownReport(
     lines.push("");
   }
 
-  if (!instructionEvidence && path && path.edges.length > 0) {
+  if (!instructionSelfFinding && path && path.edges.length > 0) {
     const linear = isExactLinearEvidence(path);
     lines.push(
       `### ${linear ? "Attack Path" : "Evidence Graph"} (${path.edges.length} ${linear ? "hops" : "relationships"})`,
@@ -152,7 +154,7 @@ export function buildMarkdownReport(
       );
     }
     lines.push("");
-  } else if (!instructionEvidence) {
+  } else if (!instructionSelfFinding) {
     lines.push("### Evidence Graph");
     lines.push(
       "No relationship graph is available for this published finding; the source and target above are not presented as a connected hop.",

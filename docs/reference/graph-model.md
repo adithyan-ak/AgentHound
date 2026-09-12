@@ -59,6 +59,21 @@ Planner candidate identity includes the endpoint and `value_hash`, so duplicate 
 
 The evidence contains only bounded excerpts, not the complete instruction file.
 
+### MCP tool annotation evidence
+
+The original MCP `annotations` object is retained as JSON. In addition, the
+server projects two boolean properties onto `MCPTool` nodes so analysis can
+query them without changing the collector artifact contract:
+
+| Property | Meaning |
+|---|---|
+| `mcp_annotation_destructive_hint` | The server explicitly supplied a boolean `destructiveHint`; only `true` can identify a destructive sink. |
+| `mcp_annotation_read_only_hint` | The server-supplied `readOnlyHint`; `true` prevents the tool from being treated as a destructive sink. |
+
+MCP annotations are untrusted server hints. Missing annotations do not inherit
+protocol defaults for security-finding classification, and the projected
+properties do not prove tool behavior or invocation.
+
 ## Raw edges
 
 Raw edges come from collectors or same-scan proof actions.
@@ -93,7 +108,7 @@ New typed-resource and backend edges include `evidence_state`: `configured` prov
 | `POISONED_DESCRIPTION` | MCPTool → MCPTool | Description content contains an injection signal. |
 | `INSTRUCTION_SIGNAL` | InstructionFile → InstructionFile | A standalone local signal, or strong evidence seen only in recursive deep scope, requires review. |
 | `POISONED_INSTRUCTIONS` | InstructionFile → InstructionFile | Strong, locally correlated poisoning evidence occurs in an exact project or user instruction scope. |
-| `POISONS_CONTEXT` | MCPTool → MCPTool | An injection-bearing tool shares agent context with a high-impact tool. |
+| `POISONS_CONTEXT` | MCPTool/InstructionFile → MCPTool | An injection-bearing tool or strongly poisoned applicable instruction file shares agent context with a high-impact or explicitly destructive tool. |
 | `TAINTS` | MCPTool → MCPTool | Untrusted input can flow between compatible tool schemas. |
 | `IFC_VIOLATION` | MCPTool → MCPTool | Untrusted input can reach a high-impact sink through shared resources. |
 | `CAN_IMPERSONATE` | A2AAgent → A2AAgent | Skill similarity exceeds the impersonation threshold. |

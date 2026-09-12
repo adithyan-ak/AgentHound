@@ -53,3 +53,97 @@ describe("buildMarkdownReport proof", () => {
     expect(report).toContain("not observed agent invocation or downstream impact");
   });
 });
+
+describe("buildMarkdownReport destructive instruction path", () => {
+  it("retains instruction evidence, endpoints, confidence, and relationship evidence", () => {
+    const finding: Finding = {
+      id: "bbbbbbbbbbbbbbbb",
+      severity: "high",
+      category: "Destructive Impact",
+      title: "Inferred path to a server-declared destructive tool",
+      description:
+        "The annotation is untrusted, and AgentHound did not invoke the tool or observe an effect.",
+      edge_kind: "POISONS_CONTEXT",
+      source_id: "instruction",
+      source_name: "/work/AGENTS.md",
+      source_kind: "InstructionFile",
+      target_id: "tool",
+      target_name: "Delete records",
+      target_kind: "MCPTool",
+      confidence: 0.6,
+      variant: "destructive_tool_sink",
+      evidence: {
+        state: "inferred",
+        match_type: "mcp_annotation_destructive_hint",
+        channels: [],
+      },
+      owasp_map: ["MCP05"],
+      atlas_map: ["AML.T0051"],
+    };
+    const report = buildMarkdownReport(
+      finding,
+      {
+        nodes: [
+          { id: "agent", kinds: ["AgentInstance"], properties: { name: "Agent" } },
+          { id: "instruction", kinds: ["InstructionFile"], properties: { name: "AGENTS.md" } },
+          { id: "tool", kinds: ["MCPTool"], properties: { name: "Delete records" } },
+        ],
+        edges: [
+          {
+            source: "agent",
+            target: "instruction",
+            kind: "LOADS_INSTRUCTIONS",
+            properties: {},
+            synthetic: false,
+          },
+        ],
+        shape: "linear",
+        continuity: { state: "continuous", component_count: 1, missing_node_ids: [] },
+        direction: "mixed",
+        completeness: { state: "complete", reasons: [] },
+        cost: {
+          state: "incomplete",
+          value: null,
+          reasons: ["non_forward_evidence"],
+          missing_weight_edge_indexes: [],
+        },
+        total_risk_weight: null,
+      },
+      [],
+      undefined,
+      {
+        version: 1,
+        verdict: "poisoning",
+        scope: "exact_project",
+        path: "/work/AGENTS.md",
+        type: "agents.md",
+        hash: "sha256:abc",
+        size_bytes: 100,
+        modified_at: "2026-08-20T12:00:00Z",
+        total_signals: 1,
+        truncated: false,
+        signals: [
+          {
+            rule_id: "rule",
+            label: "Rule",
+            severity: "high",
+            strength: "primary",
+            raw_offset: 1,
+            line: 4,
+            column: 2,
+            match: "ignore controls",
+            context_before: "",
+            context_after: "",
+          },
+        ],
+      },
+    );
+
+    expect(report).toContain("Confidence: 60%");
+    expect(report).toContain("**Source:** /work/AGENTS.md (InstructionFile)");
+    expect(report).toContain("**Target:** Delete records (MCPTool)");
+    expect(report).toContain("### Matched Instruction Evidence");
+    expect(report).toContain("### Evidence Graph (1 relationships)");
+    expect(report).toContain("Agent -[LOADS_INSTRUCTIONS]-> AGENTS.md");
+  });
+});

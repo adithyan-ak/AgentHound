@@ -266,6 +266,111 @@ func TestQueryFindings_CrossProtocolIsCalibratedHypothesis(t *testing.T) {
 	}
 }
 
+func TestQueryFindings_DestructiveToolSinkVariant(t *testing.T) {
+	for _, edgeKind := range []string{"TAINTS", "IFC_VIOLATION", "POISONS_CONTEXT"} {
+		t.Run(edgeKind, func(t *testing.T) {
+			row := map[string]any{
+				"source_id": "source", "source_name": "Poisoned input", "source_kind": "MCPTool",
+				"target_id": "target", "target_name": "Delete records", "target_kind": "MCPTool",
+				"edge_kind": edgeKind, "confidence": 0.6,
+				"source_collector":                       "mcp",
+				"target_mcp_annotation_destructive_hint": true,
+				"target_mcp_annotation_read_only_hint":   false,
+			}
+			findings, err := QueryFindings(context.Background(), &graph.MockGraphDB{
+				QueryResult: []map[string]any{row},
+			}, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(findings) != 1 {
+				t.Fatalf("findings = %d, want 1", len(findings))
+			}
+			finding := findings[0]
+			if finding.Variant != model.FindingVariantDestructiveToolSink ||
+				finding.Severity != "high" ||
+				finding.Category != "Destructive Impact" ||
+				finding.Title != "Inferred path to a server-declared destructive tool" ||
+				finding.Evidence.State != model.FindingEvidenceInferred ||
+				finding.Evidence.MatchType != "mcp_annotation_destructive_hint" {
+				t.Fatalf("destructive finding = %+v", finding)
+			}
+			for _, phrase := range []string{
+				"Poisoned input",
+				"Delete records",
+				"destructiveHint=true",
+				"annotation is untrusted",
+				"did not invoke",
+			} {
+				if !strings.Contains(finding.Description, phrase) {
+					t.Errorf("description %q missing %q", finding.Description, phrase)
+				}
+			}
+
+			baseMeta := findingsMeta[edgeKind]
+			if !sameStrings(finding.OWASPMap, baseMeta.owasp) || !sameStrings(finding.ATLASMap, baseMeta.atlas) {
+				t.Errorf("framework mappings changed: OWASP=%v ATLAS=%v", finding.OWASPMap, finding.ATLASMap)
+			}
+		})
+	}
+}
+
+func TestQueryFindings_DestructiveVariantPreservesFingerprint(t *testing.T) {
+	base := map[string]any{
+		"source_id": "source", "source_name": "Source", "source_kind": "MCPTool",
+		"target_id": "target", "target_name": "Target", "target_kind": "MCPTool",
+		"edge_kind": "TAINTS", "confidence": 0.7, "source_collector": "mcp",
+	}
+	query := func(row map[string]any) model.Finding {
+		t.Helper()
+		findings, err := QueryFindings(context.Background(), &graph.MockGraphDB{
+			QueryResult: []map[string]any{row},
+		}, "")
+		if err != nil || len(findings) != 1 {
+			t.Fatalf("QueryFindings() = %+v, %v", findings, err)
+		}
+		return findings[0]
+	}
+
+	generic := query(base)
+	destructiveRow := make(map[string]any, len(base)+1)
+	for key, value := range base {
+		destructiveRow[key] = value
+	}
+	destructiveRow["target_mcp_annotation_destructive_hint"] = true
+	destructive := query(destructiveRow)
+	if generic.ID != destructive.ID || generic.EdgeKind != destructive.EdgeKind ||
+		destructive.Variant != model.FindingVariantDestructiveToolSink {
+		t.Fatalf("finding identity changed: generic=%+v destructive=%+v", generic, destructive)
+	}
+}
+
+func TestIsDestructiveToolSinkFindingRequiresExactEvidenceShape(t *testing.T) {
+	base := map[string]any{
+		"edge_kind": "TAINTS", "target_kind": "MCPTool",
+		"target_mcp_annotation_destructive_hint": true,
+	}
+	if !isDestructiveToolSinkFinding(base) {
+		t.Fatal("explicit destructive non-read-only sink was not recognized")
+	}
+	for _, mutate := range []func(map[string]any){
+		func(row map[string]any) { delete(row, "target_mcp_annotation_destructive_hint") },
+		func(row map[string]any) { row["target_mcp_annotation_destructive_hint"] = false },
+		func(row map[string]any) { row["target_mcp_annotation_read_only_hint"] = true },
+		func(row map[string]any) { row["edge_kind"] = "SHADOWS" },
+		func(row map[string]any) { row["target_kind"] = "MCPResource" },
+	} {
+		row := make(map[string]any, len(base))
+		for key, value := range base {
+			row[key] = value
+		}
+		mutate(row)
+		if isDestructiveToolSinkFinding(row) {
+			t.Fatalf("non-qualifying row matched: %+v", row)
+		}
+	}
+}
+
 func TestQueryFindings_CanReachHighSensitivity(t *testing.T) {
 	mock := &graph.MockGraphDB{
 		QueryResult: []map[string]any{
