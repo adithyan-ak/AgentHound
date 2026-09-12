@@ -89,6 +89,20 @@ func TestBuildRemediation_NilPath(t *testing.T) {
 	}
 }
 
+func TestBuildRemediation_MCPOriginValidation(t *testing.T) {
+	finding := &model.Finding{
+		EdgeKind: "MCP_ORIGIN_VALIDATION_FAILED",
+		SourceID: "mcp-server", SourceName: "http://127.0.0.1:3000/mcp", SourceKind: "MCPServer",
+		TargetID: "mcp-server", TargetName: "http://127.0.0.1:3000/mcp", TargetKind: "MCPServer",
+	}
+	steps := BuildRemediation(nil, finding)
+	if len(steps) != 1 || steps[0].Title != "Enforce MCP Origin validation" ||
+		!strings.Contains(steps[0].Description, "HTTP 403") ||
+		!strings.Contains(steps[0].Description, "loopback") {
+		t.Fatalf("steps = %+v", steps)
+	}
+}
+
 func TestBuildRemediation_EmptyEdges(t *testing.T) {
 	path := &AttackPath{
 		Nodes: []PathNode{{ID: "n1", Properties: map[string]any{}}},

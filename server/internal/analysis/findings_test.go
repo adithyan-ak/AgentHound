@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -80,6 +81,42 @@ func TestQueryFindings_AllEdgeKinds(t *testing.T) {
 		}
 		if f.ID == "" {
 			t.Errorf("findings[%d].ID is empty", i)
+		}
+	}
+}
+
+func TestQueryFindings_MCPOriginValidationIsObservedAndConcrete(t *testing.T) {
+	mock := &graph.MockGraphDB{QueryResult: []map[string]any{{
+		"source_id": "mcp-server", "source_name": "http://127.0.0.1:3000/mcp", "source_kind": "MCPServer",
+		"target_id": "mcp-server", "target_name": "http://127.0.0.1:3000/mcp", "target_kind": "MCPServer",
+		"edge_kind": "MCP_ORIGIN_VALIDATION_FAILED", "confidence": 1.0,
+		"source_collector": "scan", "origin_http_status": int64(http.StatusOK),
+		"origin_response_evidence": "matching_jsonrpc_response",
+		"origin_probe_value":       "https://agenthound.invalid",
+	}}}
+
+	findings, err := QueryFindings(context.Background(), mock, "")
+	if err != nil {
+		t.Fatalf("QueryFindings: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v", findings)
+	}
+	finding := findings[0]
+	if finding.Title != "MCP endpoint accepted an invalid Origin" ||
+		finding.Category != "Transport Security" || finding.Severity != "medium" ||
+		finding.Evidence.State != model.FindingEvidenceObserved {
+		t.Fatalf("finding = %+v", finding)
+	}
+	for _, required := range []string{
+		"MCP server http://127.0.0.1:3000/mcp",
+		"https://agenthound.invalid",
+		"HTTP 200",
+		"matching MCP response",
+		"HTTP 403",
+	} {
+		if !strings.Contains(finding.Description, required) {
+			t.Errorf("description missing %q: %s", required, finding.Description)
 		}
 	}
 }

@@ -36,6 +36,11 @@ type ServerSpec struct {
 	Ambiguity string
 }
 
+const (
+	ObservedTransportStreamableHTTP = "streamable_http"
+	ObservedTransportLegacySSE      = "legacy_sse"
+)
+
 // canonicalMCPHeaders converts HTTP field names to the exact canonical form
 // used by net/http before profile comparison or request construction. JSON
 // objects may contain case variants such as "Authorization" and

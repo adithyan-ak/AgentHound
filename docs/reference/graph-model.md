@@ -113,6 +113,7 @@ New typed-resource and backend edges include `evidence_state`: `configured` prov
 | `IFC_VIOLATION` | MCPTool → MCPTool | Untrusted input can reach a high-impact sink through shared resources. |
 | `CAN_IMPERSONATE` | A2AAgent → A2AAgent | Skill similarity exceeds the impersonation threshold. |
 | `CONFUSED_DEPUTY` | A2AAgent → A2AAgent | A weaker caller can delegate into a stronger callee. |
+| `MCP_ORIGIN_VALIDATION_FAILED` | MCPServer → MCPServer | The endpoint processed a bounded MCP request carrying a deliberately invalid Origin instead of returning HTTP 403. |
 
 Composite edges carry `source_collector`, confidence, risk weight, and processor-specific evidence. They are regenerated from the current raw projection rather than accepted from collector input.
 

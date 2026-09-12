@@ -421,6 +421,7 @@ func (r *scanRuntime) runPlanner(timeout time.Duration) error {
 		serviceCollectAction{timeout: minDuration(timeout, 30*time.Second)},
 		a2aCredentialAction{insecure: r.insecure, timeout: minDuration(timeout, 30*time.Second)},
 		credentialReachAction{insecure: r.insecure, timeout: minDuration(timeout, 30*time.Second)},
+		mcpOriginValidationAction{insecure: r.insecure, timeout: minDuration(timeout, 10*time.Second)},
 		contextForgeRoundTripAction{insecure: r.insecure, policy: r.policy},
 		ollamaEmbeddingAction{timeout: minDuration(timeout, 30*time.Second)},
 	}

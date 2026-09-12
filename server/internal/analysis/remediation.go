@@ -200,6 +200,12 @@ func buildFindingScopedRemediation(f *model.Finding) []RemediationStep {
 			channelText,
 			typedRemediationActor(target, "tool"),
 		)
+	case f.EdgeKind == "MCP_ORIGIN_VALIDATION_FAILED":
+		step.Title = "Enforce MCP Origin validation"
+		step.Description = fmt.Sprintf(
+			"Configure %s to allow only trusted browser origins and return HTTP 403 for disallowed Origin values. Bind local-only servers to loopback as an additional boundary.",
+			typedRemediationActor(source, "MCP server"),
+		)
 	default:
 		return []RemediationStep{}
 	}

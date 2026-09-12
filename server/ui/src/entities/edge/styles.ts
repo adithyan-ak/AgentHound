@@ -45,6 +45,7 @@ export const EDGE_CATEGORY_MAP = {
   // public access is a neutral structural fact (never an auto-finding).
   CREDENTIAL_ACCESS_OBSERVED: "attack",
   PUBLIC_ACCESS_OBSERVED: "structure",
+  MCP_ORIGIN_VALIDATION_FAILED: "attack",
   USES_BACKEND: "structure",
   STORED_IN: "structure",
   CONFUSED_DEPUTY: "attack",
@@ -80,6 +81,7 @@ export const EDGE_COMPOSITE_MAP = {
   INGESTS_UNTRUSTED: false,
   CREDENTIAL_ACCESS_OBSERVED: false,
   PUBLIC_ACCESS_OBSERVED: false,
+  MCP_ORIGIN_VALIDATION_FAILED: true,
   USES_BACKEND: false,
   STORED_IN: false,
   HAS_ACCESS_TO: true,

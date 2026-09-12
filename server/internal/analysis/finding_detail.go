@@ -378,6 +378,10 @@ var impactTemplates = map[string]struct {
 		summary:     "Content from %s has an inferred influence path to tool %s, whose MCP server reported destructiveHint=true.",
 		blastRadius: "If the influenced context leads to invocation, the tool may perform destructive updates. The server annotation is untrusted, and AgentHound did not invoke the tool or observe an effect.",
 	},
+	"MCP_ORIGIN_VALIDATION_FAILED": {
+		summary:     "MCP server %s processed a request carrying a deliberately invalid Origin instead of rejecting it with HTTP 403.",
+		blastRadius: "A browser-controlled origin may be able to send requests to %s when network reachability and browser access conditions permit.",
+	},
 }
 
 func BuildImpact(f *model.Finding, path *AttackPath) *Impact {

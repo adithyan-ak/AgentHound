@@ -1,3 +1,0 @@
-#!/bin/sh
-export PATH="/usr/lib/postgresql/13/bin:$PATH"
-gosu postgres pg_ctl -D /data/postgres stop -m fast -w 2>/dev/null

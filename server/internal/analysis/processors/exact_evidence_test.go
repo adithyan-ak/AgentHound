@@ -23,6 +23,7 @@ func TestCompositeCypherProcessorsPersistExactWitnessReferences(t *testing.T) {
 		"can_exfiltrate":                 &CanExfiltrate{},
 		"poisoned_description":           &PoisonedDescription{},
 		"poisoned_instructions":          &PoisonedInstructions{},
+		"mcp_origin_validation":          &MCPOriginValidation{},
 		"confused_deputy":                &ConfusedDeputy{},
 		"shadows":                        &Shadows{},
 		"taints":                         &Taints{},
