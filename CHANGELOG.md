@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- A2A scans now detect agent name collisions: cards advertising the same normalized name under distinct identities emit `NAME_COLLIDES_WITH` edges, and a new medium-severity `a2a-agent-name-collision` prebuilt query surfaces the fail-open routing surface (CWE-706).
+
 ### Changed
 
 - The legacy all-in-one `standard` Docker image and its Make targets have been removed; use the split collector and server images or the Compose deployment instead.

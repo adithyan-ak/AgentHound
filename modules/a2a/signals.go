@@ -2,6 +2,7 @@ package a2a
 
 import (
 	"net/url"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -22,6 +23,115 @@ type DelegationEdge struct {
 type AuthDomainEdge struct {
 	AgentID1 string
 	AgentID2 string
+}
+
+// Name-collision detection.
+//
+// A2A defines AgentCard.name as human-readable metadata with no uniqueness
+// guarantee and no stable identifier. A collision becomes a security issue
+// when a host promotes that remote-controlled name into an authority-bearing
+// routing selector (registry key, agent-tree lookup, generated tool name,
+// workflow node, client map key, or broker topic/queue): a peer advertising
+// the same name can then receive tasks addressed to the trusted peer
+// (CWE-706, "Agent Name Collision Attacks in Multi-Agent Systems").
+//
+// A network scanner cannot observe a target host's resolver from the
+// outside, so this signal reports the observable precondition: two distinct
+// admitted agents sharing one normalized name within the same collection
+// scope. A hit is a fail-open routing surface, not proof of wrong-peer
+// dispatch; score the concrete deployment path, not the abstract duplicate.
+
+// NameCollisionMatchType distinguishes byte-identical names from names that
+// collide only after normalization. Hosts that normalize names before
+// routing (e.g. case-folding registries) are exposed by both.
+type NameCollisionMatchType string
+
+const (
+	NameCollisionExact      NameCollisionMatchType = "exact"
+	NameCollisionNormalized NameCollisionMatchType = "normalized"
+)
+
+// NameCollision is one pair of distinct agents whose cards advertise the
+// same normalized name. AgentID1 sorts before AgentID2.
+type NameCollision struct {
+	AgentID1       string
+	AgentID2       string
+	NormalizedName string
+	MatchType      NameCollisionMatchType
+}
+
+// NormalizeAgentName canonicalizes a card name for collision comparison.
+// It mirrors the Cypher predicate (toLower(trim(a.name))) used by the
+// prebuilt "a2a-agent-name-collision" query so both detectors agree.
+func NormalizeAgentName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+// DetectNameCollisions returns every pair of distinct agents whose cards
+// advertise the same normalized name, ordered deterministically by agent
+// ID. Cards without a name, and pairs resolving to the same agent node
+// (the same card observed twice), are skipped.
+func DetectNameCollisions(cards []*AgentCardData) []NameCollision {
+	type namedAgent struct {
+		id         string
+		name       string
+		normalized string
+	}
+	var agents []namedAgent
+	seen := make(map[string]bool, len(cards))
+	for _, c := range cards {
+		if c == nil {
+			continue
+		}
+		normalized := NormalizeAgentName(c.Name)
+		if normalized == "" {
+			continue
+		}
+		id := agentNodeID(c)
+		if seen[id] {
+			// The same agent observed twice must not multiply pairs.
+			continue
+		}
+		seen[id] = true
+		agents = append(agents, namedAgent{
+			id:         id,
+			name:       c.Name,
+			normalized: normalized,
+		})
+	}
+
+	var collisions []NameCollision
+	for i := 0; i < len(agents); i++ {
+		for j := i + 1; j < len(agents); j++ {
+			if agents[i].id == agents[j].id {
+				continue
+			}
+			if agents[i].normalized != agents[j].normalized {
+				continue
+			}
+			first, second := agents[i].id, agents[j].id
+			if first > second {
+				first, second = second, first
+			}
+			matchType := NameCollisionNormalized
+			if agents[i].name == agents[j].name {
+				matchType = NameCollisionExact
+			}
+			collisions = append(collisions, NameCollision{
+				AgentID1:       first,
+				AgentID2:       second,
+				NormalizedName: agents[i].normalized,
+				MatchType:      matchType,
+			})
+		}
+	}
+	sort.Slice(collisions, func(a, b int) bool {
+		if collisions[a].AgentID1 != collisions[b].AgentID1 {
+			return collisions[a].AgentID1 < collisions[b].AgentID1
+		}
+		return collisions[a].AgentID2 < collisions[b].AgentID2
+	})
+	return collisions
 }
 
 func DeriveAuthMethod(

@@ -28,8 +28,8 @@ func TestGet_InvalidID(t *testing.T) {
 func TestList_Count(t *testing.T) {
 	queries := List()
 	// Keep the registered inventory explicit so accidental removals fail loudly.
-	if len(queries) != 19 {
-		t.Fatalf("expected 19 pre-built queries, got %d", len(queries))
+	if len(queries) != 20 {
+		t.Fatalf("expected 20 pre-built queries, got %d", len(queries))
 	}
 }
 
