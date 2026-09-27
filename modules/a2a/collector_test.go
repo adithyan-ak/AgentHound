@@ -1074,3 +1074,107 @@ func TestCollector_OutputFormat(t *testing.T) {
 		t.Error("missing 'graph' in output")
 	}
 }
+
+func TestCollector_NameCollisionEdge(t *testing.T) {
+	base := loadFixture(t, "agent_card_v030.json")
+	serve := func(name, url string) *httptest.Server {
+		var raw map[string]any
+		if err := json.Unmarshal(base, &raw); err != nil {
+			t.Fatalf("decode fixture: %v", err)
+		}
+		raw["name"] = name
+		raw["url"] = url
+		body, err := json.Marshal(raw)
+		if err != nil {
+			t.Fatalf("encode fixture: %v", err)
+		}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(body)
+		}))
+		t.Cleanup(srv.Close)
+		return srv
+	}
+
+	// Normalization-equivalent names on distinct identities: the collision
+	// surface from "Agent Name Collision Attacks in Multi-Agent Systems".
+	srv1 := serve("Payments", "https://a.example.com/a2a")
+	srv2 := serve(" payments ", "https://b.example.com/a2a")
+
+	c := NewA2ACollector()
+	data, err := c.Collect(context.Background(), collector.CollectOptions{
+		TargetURLs: []string{srv1.URL, srv2.URL},
+		ScanID:     "test-scan-name-collision",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var collisions []ingest.Edge
+	for _, e := range data.Graph.Edges {
+		if e.Kind == "NAME_COLLIDES_WITH" {
+			collisions = append(collisions, e)
+		}
+	}
+	if len(collisions) != 1 {
+		t.Fatalf("expected 1 NAME_COLLIDES_WITH edge, got %d", len(collisions))
+	}
+	edge := collisions[0]
+	if edge.SourceKind != "A2AAgent" || edge.TargetKind != "A2AAgent" {
+		t.Errorf("unexpected edge kinds: %q -> %q", edge.SourceKind, edge.TargetKind)
+	}
+	if edge.Source == edge.Target {
+		t.Errorf("collision edge is a self-loop: %q", edge.Source)
+	}
+	if got := edge.Properties["match_type"]; got != "normalized" {
+		t.Errorf("expected match_type %q, got %v", "normalized", got)
+	}
+	if got := edge.Properties["normalized_name"]; got != "payments" {
+		t.Errorf("expected normalized_name %q, got %v", "payments", got)
+	}
+	if got := edge.Properties["confidence"]; got != 1.0 {
+		t.Errorf("expected confidence 1.0, got %v", got)
+	}
+	if got := edge.Properties["evidence_state"]; got != "observed" {
+		t.Errorf("expected evidence_state %q, got %v", "observed", got)
+	}
+}
+
+func TestCollector_DistinctNamesHaveNoCollisionEdge(t *testing.T) {
+	base := loadFixture(t, "agent_card_v030.json")
+	serve := func(name, url string) *httptest.Server {
+		var raw map[string]any
+		if err := json.Unmarshal(base, &raw); err != nil {
+			t.Fatalf("decode fixture: %v", err)
+		}
+		raw["name"] = name
+		raw["url"] = url
+		body, err := json.Marshal(raw)
+		if err != nil {
+			t.Fatalf("encode fixture: %v", err)
+		}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(body)
+		}))
+		t.Cleanup(srv.Close)
+		return srv
+	}
+
+	srv1 := serve("Payments", "https://a.example.com/a2a")
+	srv2 := serve("Ledger", "https://b.example.com/a2a")
+
+	c := NewA2ACollector()
+	data, err := c.Collect(context.Background(), collector.CollectOptions{
+		TargetURLs: []string{srv1.URL, srv2.URL},
+		ScanID:     "test-scan-no-name-collision",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, e := range data.Graph.Edges {
+		if e.Kind == "NAME_COLLIDES_WITH" {
+			t.Errorf("unexpected NAME_COLLIDES_WITH edge for distinct names: %+v", e)
+		}
+	}
+}

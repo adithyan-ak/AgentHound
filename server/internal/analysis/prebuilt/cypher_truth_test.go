@@ -133,3 +133,47 @@ func TestCrossProtocolQueryLabelsHostCorrelationHypothesis(t *testing.T) {
 		t.Fatalf("cross-protocol query metadata overstates correlation: %+v", query)
 	}
 }
+
+func TestA2AAgentNameCollisionQueryGuards(t *testing.T) {
+	q := CypherA2AAgentNameCollision
+	for _, clause := range []string{
+		"MATCH (a1:A2AAgent), (a2:A2AAgent)",
+		"a1.objectid < a2.objectid",
+		"a1.name IS NOT NULL",
+		"a2.name IS NOT NULL",
+		"toLower(trim(a1.name)) = toLower(trim(a2.name))",
+		"toLower(trim(a1.name)) <> ''",
+		"ORDER BY normalized_name",
+	} {
+		if !strings.Contains(q, clause) {
+			t.Errorf("name-collision query missing guard %q:\n%s", clause, q)
+		}
+	}
+	// The query must compare genuinely different agents, never a node to itself.
+	if strings.Contains(q, "a1.objectid = a2.objectid") {
+		t.Errorf("name-collision query matches a node to itself:\n%s", q)
+	}
+	// The finding is a routing surface, not a proven exploit; the query text
+	// must not smuggle in an exploitability claim.
+	for _, claim := range []string{"exploit", "vulnerable", "compromised"} {
+		if strings.Contains(strings.ToLower(q), claim) {
+			t.Errorf("name-collision query overclaims with %q:\n%s", claim, q)
+		}
+	}
+}
+
+func TestA2AAgentNameCollisionQueryRegistered(t *testing.T) {
+	q, ok := Get("a2a-agent-name-collision")
+	if !ok {
+		t.Fatal("a2a-agent-name-collision not registered")
+	}
+	if q.Severity != "medium" {
+		t.Errorf("expected medium severity, got %q", q.Severity)
+	}
+	if q.Category != "Vulnerabilities" {
+		t.Errorf("expected Vulnerabilities category, got %q", q.Category)
+	}
+	if q.Cypher != CypherA2AAgentNameCollision {
+		t.Error("registered cypher does not match CypherA2AAgentNameCollision")
+	}
+}

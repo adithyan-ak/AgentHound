@@ -306,3 +306,31 @@ RETURN t1.name AS tool_name,
        s1.objectid AS server_a_id,
        s2.objectid AS server_b_id
 ORDER BY tool_name`
+
+// CypherA2AAgentNameCollision finds A2A agents that advertise the same
+// normalized (trimmed, lower-cased) card name under distinct identities.
+// A2A defines AgentCard.name as human-readable metadata with no uniqueness
+// guarantee; when a host promotes that name into an authority-bearing
+// routing selector, a colliding peer can receive tasks addressed to the
+// trusted agent (CWE-706, agent name collision). Distinct objectids ensure
+// we compare genuinely different agents, and the non-empty guard keeps
+// nameless cards out of the result. A hit is a fail-open routing surface,
+// not proof of wrong-peer dispatch: confirm whether the deployment resolves
+// agents by stable identity before treating it as exploitable.
+const CypherA2AAgentNameCollision = `
+MATCH (a1:A2AAgent), (a2:A2AAgent)
+WHERE a1.objectid < a2.objectid
+  AND a1.name IS NOT NULL
+  AND a2.name IS NOT NULL
+  AND toLower(trim(a1.name)) = toLower(trim(a2.name))
+  AND toLower(trim(a1.name)) <> ''
+RETURN toLower(trim(a1.name)) AS normalized_name,
+       a1.name AS agent_a_name,
+       a2.name AS agent_b_name,
+       a1.url AS agent_a_url,
+       a2.url AS agent_b_url,
+       a1.provider AS agent_a_provider,
+       a2.provider AS agent_b_provider,
+       a1.objectid AS agent_a_id,
+       a2.objectid AS agent_b_id
+ORDER BY normalized_name`

@@ -270,6 +270,31 @@ func (c *A2ACollector) Collect(ctx context.Context, opts collector.CollectOption
 		)
 		addEdge(edge)
 	}
+
+	collisions := DetectNameCollisions(allCards)
+	collisionSeen := make(map[string]bool, len(collisions))
+	for _, nc := range collisions {
+		relationKey := nc.AgentID1 + "\x00" + nc.AgentID2
+		if collisionSeen[relationKey] {
+			continue
+		}
+		collisionSeen[relationKey] = true
+		// The collision itself is deterministic (byte-level name
+		// comparison), so confidence is 1.0. The risk weight stays
+		// modest: a shared name is a fail-open routing surface, not proof
+		// that the scanned deployment dispatches by card name.
+		props := common.NewEdgeProps(scanID, 1.0, 0.3)
+		props["evidence_state"] = "observed"
+		props["match_type"] = string(nc.MatchType)
+		props["normalized_name"] = nc.NormalizedName
+		edge := common.NewEdge(nc.AgentID1, nc.AgentID2, "NAME_COLLIDES_WITH", "A2AAgent", "A2AAgent", props)
+		setRelationObservationScopes(
+			&edge,
+			agentScopes[nc.AgentID1],
+			agentScopes[nc.AgentID2],
+		)
+		addEdge(edge)
+	}
 	for key := range coverage {
 		report.CoverageKeys = append(report.CoverageKeys, key)
 	}

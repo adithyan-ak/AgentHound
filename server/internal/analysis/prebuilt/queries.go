@@ -205,6 +205,16 @@ func init() {
 			OWASPMap:    []string{"MCP05", "ASI03"},
 			ATLASMap:    []string{"AML.T0110"},
 		},
+		"a2a-agent-name-collision": {
+			ID:          "a2a-agent-name-collision",
+			Name:        "A2A Agent Name Collisions",
+			Description: "Finds A2A agents whose cards advertise the same normalized name under distinct identities. A host that routes by card name can dispatch one agent's tasks to the other (CWE-706 agent name collision); confirm the deployment resolves agents by stable identity before treating this as exploitable.",
+			Category:    "Vulnerabilities",
+			Severity:    "medium",
+			Cypher:      CypherA2AAgentNameCollision,
+			OWASPMap:    []string{"ASI03"},
+			ATLASMap:    []string{"AML.T0110"},
+		},
 	}
 }
 

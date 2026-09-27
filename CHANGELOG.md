@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- A2A scans now detect agent name collisions: cards advertising the same normalized name under distinct identities emit `NAME_COLLIDES_WITH` edges, and a new medium-severity `a2a-agent-name-collision` prebuilt query surfaces the fail-open routing surface (CWE-706).
+
 ### Changed
 
 - Public Compose deployments now pin the coordinated AgentHound server release, and release publication verifies the signed production image before making the GitHub release public.

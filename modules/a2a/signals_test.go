@@ -211,3 +211,103 @@ func TestDetectSameAuthDomain_NoOAuth(t *testing.T) {
 		t.Errorf("expected 0 edges for apiKey-only agents, got %d", len(edges))
 	}
 }
+
+func TestDetectNameCollisions(t *testing.T) {
+	card := func(name, url string) *AgentCardData {
+		return &AgentCardData{Name: name, URL: url}
+	}
+	cards := []*AgentCardData{
+		card("Payments", "https://a.example.com/a2a"),
+		card("payments", "https://b.example.com/a2a"), // normalized-only collision
+		card("Payments", "https://c.example.com/a2a"), // exact collision
+		card("Ledger", "https://d.example.com/a2a"),   // distinct: no collision
+		card("   ", "https://e.example.com/a2a"),      // blank name: skipped
+		card("", "https://f.example.com/a2a"),         // empty name: skipped
+		card("Payments", "https://a.example.com/a2a"), // same agent twice: skipped
+		nil, // nil card: skipped
+	}
+
+	collisions := DetectNameCollisions(cards)
+	if len(collisions) != 3 {
+		t.Fatalf("expected 3 collision pairs, got %d: %+v", len(collisions), collisions)
+	}
+
+	byPair := make(map[string]NameCollision)
+	for _, nc := range collisions {
+		if nc.NormalizedName != "payments" {
+			t.Errorf("expected normalized name %q, got %q", "payments", nc.NormalizedName)
+		}
+		if nc.AgentID1 > nc.AgentID2 {
+			t.Errorf("pair not ordered: %q > %q", nc.AgentID1, nc.AgentID2)
+		}
+		byPair[nc.AgentID1+"\x00"+nc.AgentID2] = nc
+	}
+
+	idA := agentNodeID(card("Payments", "https://a.example.com/a2a"))
+	idB := agentNodeID(card("payments", "https://b.example.com/a2a"))
+	idC := agentNodeID(card("Payments", "https://c.example.com/a2a"))
+
+	pairAB := idA + "\x00" + idB
+	if idA > idB {
+		pairAB = idB + "\x00" + idA
+	}
+	if nc, ok := byPair[pairAB]; !ok {
+		t.Errorf("missing normalized collision pair a/b")
+	} else if nc.MatchType != NameCollisionNormalized {
+		t.Errorf("pair a/b: expected match type %q, got %q", NameCollisionNormalized, nc.MatchType)
+	}
+
+	pairAC := idA + "\x00" + idC
+	if idA > idC {
+		pairAC = idC + "\x00" + idA
+	}
+	if nc, ok := byPair[pairAC]; !ok {
+		t.Errorf("missing exact collision pair a/c")
+	} else if nc.MatchType != NameCollisionExact {
+		t.Errorf("pair a/c: expected match type %q, got %q", NameCollisionExact, nc.MatchType)
+	}
+
+	pairBC := idB + "\x00" + idC
+	if idB > idC {
+		pairBC = idC + "\x00" + idB
+	}
+	if nc, ok := byPair[pairBC]; !ok {
+		t.Errorf("missing normalized collision pair b/c")
+	} else if nc.MatchType != NameCollisionNormalized {
+		t.Errorf("pair b/c: expected match type %q, got %q", NameCollisionNormalized, nc.MatchType)
+	}
+
+	// Deterministic ordering across runs.
+	again := DetectNameCollisions(cards)
+	for i := range collisions {
+		if collisions[i] != again[i] {
+			t.Fatalf("non-deterministic output at index %d", i)
+		}
+	}
+}
+
+func TestDetectNameCollisionsNoCollisions(t *testing.T) {
+	cards := []*AgentCardData{
+		{Name: "Payments", URL: "https://a.example.com/a2a"},
+		{Name: "Ledger", URL: "https://b.example.com/a2a"},
+	}
+	if collisions := DetectNameCollisions(cards); len(collisions) != 0 {
+		t.Fatalf("expected no collisions, got %+v", collisions)
+	}
+	if collisions := DetectNameCollisions(nil); len(collisions) != 0 {
+		t.Fatalf("expected no collisions for nil input, got %+v", collisions)
+	}
+}
+
+func TestNormalizeAgentName(t *testing.T) {
+	for in, want := range map[string]string{
+		"Payments":     "payments",
+		"  PayMents  ": "payments",
+		"":             "",
+		"   ":          "",
+	} {
+		if got := NormalizeAgentName(in); got != want {
+			t.Errorf("NormalizeAgentName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
